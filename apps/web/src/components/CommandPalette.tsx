@@ -1831,51 +1831,53 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  const activeFocusName =
-    activeFocusId === ALL_FOCUS_ID
-      ? "All"
-      : (visibleFocuses.find((focus) => focus.id === activeFocusId)?.name ?? "All");
-  const focusActionItems: CommandPaletteActionItem[] = [
-    {
-      kind: "action",
-      value: `focus:${ALL_FOCUS_ID}`,
-      searchTerms: ["all", "every project", "unfiltered"],
-      title: "All",
-      description: activeFocusId === ALL_FOCUS_ID ? "Current focus" : undefined,
-      icon: <Layers3Icon className={ITEM_ICON_CLASS} />,
-      run: async () => {
-        setActiveFocusId(ALL_FOCUS_ID);
-      },
-    },
-    ...visibleFocuses.map(
-      (focus): CommandPaletteActionItem => ({
+  if (visibleFocuses.length > 0) {
+    const activeFocusName =
+      activeFocusId === ALL_FOCUS_ID
+        ? "All"
+        : (visibleFocuses.find((focus) => focus.id === activeFocusId)?.name ?? "All");
+    const focusActionItems: CommandPaletteActionItem[] = [
+      {
         kind: "action",
-        value: `focus:${focus.id}`,
-        searchTerms: [focus.name, "focus", "projects"],
-        title: focus.name,
-        description: activeFocusId === focus.id ? "Current focus" : undefined,
-        icon: <FocusPaletteIcon iconName={focus.iconName} accentColor={focus.accentColor} />,
+        value: `focus:${ALL_FOCUS_ID}`,
+        searchTerms: ["all", "every project", "unfiltered"],
+        title: "All",
+        description: activeFocusId === ALL_FOCUS_ID ? "Current focus" : undefined,
+        icon: <Layers3Icon className={ITEM_ICON_CLASS} />,
         run: async () => {
-          setActiveFocusId(focus.id);
+          setActiveFocusId(ALL_FOCUS_ID);
         },
-      }),
-    ),
-  ];
-  actionItems.push({
-    kind: "submenu",
-    value: "action:switch-focus",
-    searchTerms: [
-      "switch focus",
-      "filter projects",
-      activeFocusName,
-      ...visibleFocuses.map((focus) => focus.name),
-    ],
-    title: "Switch Focus…",
-    description: activeFocusName,
-    icon: <FocusIcon className={ITEM_ICON_CLASS} />,
-    addonIcon: <FocusIcon className={ADDON_ICON_CLASS} />,
-    groups: [{ value: "focuses", label: "Focuses", items: focusActionItems }],
-  });
+      },
+      ...visibleFocuses.map(
+        (focus): CommandPaletteActionItem => ({
+          kind: "action",
+          value: `focus:${focus.id}`,
+          searchTerms: [focus.name, "focus", "projects"],
+          title: focus.name,
+          description: activeFocusId === focus.id ? "Current focus" : undefined,
+          icon: <FocusPaletteIcon iconName={focus.iconName} accentColor={focus.accentColor} />,
+          run: async () => {
+            setActiveFocusId(focus.id);
+          },
+        }),
+      ),
+    ];
+    actionItems.push({
+      kind: "submenu",
+      value: "action:switch-focus",
+      searchTerms: [
+        "switch focus",
+        "filter projects",
+        activeFocusName,
+        ...visibleFocuses.map((focus) => focus.name),
+      ],
+      title: "Switch Focus…",
+      description: activeFocusName,
+      icon: <FocusIcon className={ITEM_ICON_CLASS} />,
+      addonIcon: <FocusIcon className={ADDON_ICON_CLASS} />,
+      groups: [{ value: "focuses", label: "Focuses", items: focusActionItems }],
+    });
+  }
 
   actionItems.push({
     kind: "action",

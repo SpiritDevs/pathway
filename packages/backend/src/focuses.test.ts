@@ -113,4 +113,67 @@ describe("Focus definitions", () => {
     await owner.mutation(api.focuses.unassignProject, { projectKey: PROJECT });
     await expect(owner.query(api.focuses.list, {})).resolves.toMatchObject({ assignments: [] });
   });
+
+  it("creates initial assignments atomically and moves projects from another Focus", async () => {
+    const t = harness();
+    await seedUser(t, "user-one");
+    const owner = asUser(t, "user-one");
+    await owner.mutation(api.focuses.create, {
+      ...createFocus(WORK, "Work", "a"),
+      projectKeys: [PROJECT],
+    });
+
+    await owner.mutation(api.focuses.create, {
+      ...createFocus(PERSONAL, "Personal", "b"),
+      projectKeys: [PROJECT, "environment-a:project-b"],
+    });
+
+    const readModel = await owner.query(api.focuses.list, {});
+    expect(readModel.assignments).toHaveLength(2);
+    expect(readModel.assignments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ focusId: PERSONAL, projectKey: PROJECT }),
+        expect.objectContaining({ focusId: PERSONAL, projectKey: "environment-a:project-b" }),
+      ]),
+    );
+  });
+
+  it("rejects empty and untrimmed Focus ids", async () => {
+    const t = harness();
+    await seedUser(t, "user-one");
+    const owner = asUser(t, "user-one");
+
+    await expect(owner.mutation(api.focuses.create, createFocus("", "Empty"))).rejects.toThrow(
+      "A Focus id must be a trimmed non-empty string",
+    );
+    await expect(
+      owner.mutation(api.focuses.create, createFocus(` ${WORK} `, "Untrimmed")),
+    ).rejects.toThrow("A Focus id must be a trimmed non-empty string");
+    await expect(owner.query(api.focuses.list, {})).resolves.toEqual({
+      focuses: [],
+      assignments: [],
+    });
+  });
+
+  it("rejects malformed project keys in create and assignProject", async () => {
+    const t = harness();
+    await seedUser(t, "user-one");
+    const owner = asUser(t, "user-one");
+
+    for (const projectKey of ["", "missing-colon", ` ${PROJECT} `]) {
+      await expect(
+        owner.mutation(api.focuses.create, {
+          ...createFocus(WORK, "Work"),
+          projectKeys: [projectKey],
+        }),
+      ).rejects.toThrow("A Focus project key must contain an environment id and project id");
+    }
+    await owner.mutation(api.focuses.create, createFocus(WORK, "Work"));
+    for (const projectKey of ["", "missing-colon", ` ${PROJECT} `]) {
+      await expect(
+        owner.mutation(api.focuses.assignProject, { focusId: WORK, projectKey }),
+      ).rejects.toThrow("A Focus project key must contain an environment id and project id");
+    }
+    await expect(owner.query(api.focuses.list, {})).resolves.toMatchObject({ assignments: [] });
+  });
 });

@@ -159,8 +159,8 @@ export function FocusStrip(props: {
 }) {
   const [editorFocusId, setEditorFocusId] = useState<FocusId | null | undefined>(undefined);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  // Snapshot at open: marking all read zeroes the live count while the tray is still showing.
   const [trayUnreadCount, setTrayUnreadCount] = useState(0);
+  const [trayNotifications, setTrayNotifications] = useState<ReadonlyArray<FocusNotification>>([]);
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
   const orderedFocuses = useMemo(() => sortFocuses(props.focuses), [props.focuses]);
   const shownFocuses = useMemo(
@@ -227,6 +227,7 @@ export function FocusStrip(props: {
   const openNotifications = useCallback(() => {
     setEditorFocusId(undefined);
     setTrayUnreadCount(props.unreadCount);
+    setTrayNotifications([...props.notifications]);
     setNotificationsOpen(true);
     void props.mutations?.markAllNotificationsRead().catch((error: unknown) => {
       toastManager.add({
@@ -235,7 +236,7 @@ export function FocusStrip(props: {
         description: error instanceof Error ? error.message : "The notifications stayed unread.",
       });
     });
-  }, [props.mutations, props.unreadCount]);
+  }, [props.mutations, props.notifications, props.unreadCount]);
   const selectNotification = useCallback(
     (notification: FocusNotification) => {
       props.onNotificationSelect(notification);
@@ -299,6 +300,7 @@ export function FocusStrip(props: {
                   active={props.activeFocusId === focus.id}
                   onSelect={() => props.onActiveFocusChange(focus.id)}
                   onEdit={() => {
+                    if (props.mutations === null) return;
                     setNotificationsOpen(false);
                     setEditorFocusId(focus.id);
                   }}
@@ -307,21 +309,23 @@ export function FocusStrip(props: {
             </SortableContext>
           </DndContext>
         </div>
-        <div className="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
-          <FocusNotificationBadge unreadCount={props.unreadCount} onOpen={openNotifications} />
-          <button
-            type="button"
-            aria-label="Create Focus"
-            title="Create Focus"
-            onClick={() => {
-              setNotificationsOpen(false);
-              setEditorFocusId(null);
-            }}
-            className="flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-          >
-            <PlusIcon className="size-3.5" />
-          </button>
-        </div>
+        {props.mutations === null ? null : (
+          <div className="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
+            <FocusNotificationBadge unreadCount={props.unreadCount} onOpen={openNotifications} />
+            <button
+              type="button"
+              aria-label="Create Focus"
+              title="Create Focus"
+              onClick={() => {
+                setNotificationsOpen(false);
+                setEditorFocusId(null);
+              }}
+              className="flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            >
+              <PlusIcon className="size-3.5" />
+            </button>
+          </div>
+        )}
       </div>
       {notificationsOpen ? (
         <PopoverPopup
@@ -333,7 +337,7 @@ export function FocusStrip(props: {
           viewportClassName="p-0"
         >
           <FocusNotificationTray
-            notifications={props.notifications}
+            notifications={trayNotifications}
             unreadCount={trayUnreadCount}
             focuses={orderedFocuses}
             assignments={props.assignments}

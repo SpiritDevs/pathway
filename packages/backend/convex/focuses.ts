@@ -3,7 +3,7 @@ import { FOCUS_NAME_MAX_CHARS } from "@spiritdevs/contracts/focus";
 import { v } from "convex/values";
 
 import type { Doc, Id } from "./_generated/dataModel.js";
-import type { QueryCtx } from "./_generated/server.js";
+import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import { mutation, query } from "./_generated/server.js";
 import { backendError } from "./lib/errors.ts";
 import { requireUser } from "./lib/identity.ts";
@@ -48,6 +48,13 @@ function focusName(value: string): string {
   return name;
 }
 
+function focusId(value: string): string {
+  if (value.length === 0 || value !== value.trim()) {
+    throw backendError("invalid-arguments", "A Focus id must be a trimmed non-empty string.");
+  }
+  return value;
+}
+
 function accentColor(value: string): string {
   const color = value.trim();
   if (!/^#[0-9a-fA-F]{6}$/.test(color)) {
@@ -57,14 +64,13 @@ function accentColor(value: string): string {
 }
 
 function focusProjectKey(value: string): string {
-  const projectKey = trimRequired(value, "A project key");
-  if (!/^[^:]+:.+$/.test(projectKey)) {
+  if (value.length === 0 || value !== value.trim() || !/^[^:]+:.+$/.test(value)) {
     throw backendError(
       "invalid-arguments",
       "A Focus project key must contain an environment id and project id.",
     );
   }
-  return projectKey;
+  return value;
 }
 
 function encodeFocus(row: Doc<"focuses">) {
@@ -90,6 +96,32 @@ async function ownedFocus(
     .unique();
   if (row === null) throw backendError("entity-not-found", "No such Focus.");
   return row;
+}
+
+async function upsertProjectAssignment(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  focusId: Id<"focuses">,
+  projectKey: string,
+): Promise<void> {
+  const existing = await ctx.db
+    .query("focusAssignments")
+    .withIndex("by_user_and_project", (q) => q.eq("userId", userId).eq("projectKey", projectKey))
+    .unique();
+  if (existing?.focusId === focusId) return;
+
+  const now = Date.now();
+  if (existing === null) {
+    await ctx.db.insert("focusAssignments", {
+      userId,
+      focusId,
+      projectKey,
+      createdAt: now,
+      updatedAt: now,
+    });
+  } else {
+    await ctx.db.patch(existing._id, { focusId, updatedAt: now });
+  }
 }
 
 function compareFocus(left: Doc<"focuses">, right: Doc<"focuses">): number {
@@ -139,16 +171,19 @@ export const create = mutation({
     iconName: v.string(),
     accentColor: v.string(),
     orderKey: v.optional(v.string()),
+    projectKeys: v.optional(v.array(v.string())),
   },
   returns: focusResult,
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
-    if (args.id === "all") {
+    const id = focusId(args.id);
+    const projectKeys = (args.projectKeys ?? []).map(focusProjectKey);
+    if (id === "all") {
       throw backendError("invalid-arguments", "The All Focus id is reserved.");
     }
     const duplicate = await ctx.db
       .query("focuses")
-      .withIndex("by_user_and_domain_id", (q) => q.eq("userId", user._id).eq("id", args.id))
+      .withIndex("by_user_and_domain_id", (q) => q.eq("userId", user._id).eq("id", id))
       .unique();
     if (duplicate !== null) throw backendError("entity-conflict", "That Focus already exists.");
 
@@ -159,7 +194,7 @@ export const create = mutation({
       .first();
     const now = Date.now();
     const rowId = await ctx.db.insert("focuses", {
-      id: args.id,
+      id,
       userId: user._id,
       name: focusName(args.name),
       iconName: trimRequired(args.iconName, "A Focus icon"),
@@ -171,6 +206,9 @@ export const create = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    for (const projectKey of projectKeys) {
+      await upsertProjectAssignment(ctx, user._id, rowId, projectKey);
+    }
     const row = await ctx.db.get(rowId);
     if (row === null) throw backendError("entity-not-found", "The Focus insert vanished.");
     return encodeFocus(row);
@@ -238,26 +276,7 @@ export const assignProject = mutation({
     const user = await requireUser(ctx);
     const focus = await ownedFocus(ctx, user._id, args.focusId);
     const projectKey = focusProjectKey(args.projectKey);
-    const existing = await ctx.db
-      .query("focusAssignments")
-      .withIndex("by_user_and_project", (q) =>
-        q.eq("userId", user._id).eq("projectKey", projectKey),
-      )
-      .unique();
-    if (existing?.focusId === focus._id) return null;
-
-    const now = Date.now();
-    if (existing === null) {
-      await ctx.db.insert("focusAssignments", {
-        userId: user._id,
-        focusId: focus._id,
-        projectKey,
-        createdAt: now,
-        updatedAt: now,
-      });
-    } else {
-      await ctx.db.patch(existing._id, { focusId: focus._id, updatedAt: now });
-    }
+    await upsertProjectAssignment(ctx, user._id, focus._id, projectKey);
     return null;
   },
 });

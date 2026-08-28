@@ -97,12 +97,8 @@ export function FocusEditor(props: {
           iconName,
           accentColor,
           orderKey: focusOrderKeyAfter(ordered.at(-1)?.orderKey ?? null),
+          projectKeys: [...selectedProjectKeys],
         });
-        await Promise.all(
-          [...selectedProjectKeys].map((projectKey) =>
-            props.mutations!.assignProject({ focusId, projectKey }),
-          ),
-        );
       } else {
         await props.mutations.update({
           focusId: focus.id,

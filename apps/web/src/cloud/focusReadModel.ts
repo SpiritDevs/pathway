@@ -51,6 +51,7 @@ export const FOCUS_FUNCTION_REFERENCES = {
       readonly iconName: string;
       readonly accentColor: string;
       readonly orderKey?: string;
+      readonly projectKeys?: ReadonlyArray<FocusProjectKey>;
     },
     Focus
   >("focuses:create"),
@@ -88,6 +89,7 @@ export interface FocusMutations {
     readonly iconName: string;
     readonly accentColor: string;
     readonly orderKey?: string;
+    readonly projectKeys?: ReadonlyArray<FocusProjectKey>;
   }) => Promise<Focus>;
   readonly update: (input: {
     readonly focusId: FocusId;
