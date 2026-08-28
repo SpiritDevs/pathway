@@ -1,5 +1,9 @@
-import type { OrchestrationV2ProjectedTurnItem, VcsStatusResult } from "@spiritdevs/contracts";
-import { assert, describe, it } from "vite-plus/test";
+import type {
+  GitRunStackedActionResult,
+  OrchestrationV2ProjectedTurnItem,
+  VcsStatusResult,
+} from "@spiritdevs/contracts";
+import { assert, describe, expect, it } from "vite-plus/test";
 import {
   actionIncludesCommitStep,
   buildPushRecoveryPrompt,
@@ -7,8 +11,10 @@ import {
   buildMenuItems,
   canScopeCommitToThread,
   collectThreadTouchedPaths,
+  formatLegacyPushAutoSettlementCountdown,
   formatGitActionElapsed,
   isPushCommandFailure,
+  legacyPushAutoSettlementActivityKey,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
   resolveDefaultBranchActionDialogCopy,
@@ -19,8 +25,23 @@ import {
   resolveScopedCommitFilePaths,
   resolveThreadBranchUpdate,
   resolveThreadBranchMetadataPatch,
+  shouldWarnAboutLegacyPushAutoSettlement,
   splitWorkingTreeFilesByThread,
 } from "./GitActionsControl.logic";
+
+function actionResult(
+  action: GitRunStackedActionResult["action"] = "commit_push",
+  pushStatus: GitRunStackedActionResult["push"]["status"] = "pushed",
+): GitRunStackedActionResult {
+  return {
+    action,
+    branch: { status: "skipped_not_requested" },
+    commit: { status: "created", commitSha: "abcdef0", subject: "Fix it" },
+    push: pushStatus === "pushed" ? { status: "pushed", branch: "main" } : { status: pushStatus },
+    pr: { status: "skipped_not_requested" },
+    toast: { title: "Pushed", cta: { kind: "none" } },
+  };
+}
 
 function status(overrides: Partial<VcsStatusResult> = {}): VcsStatusResult {
   return {
@@ -129,6 +150,76 @@ describe("git action result toast timing", () => {
       timeout: 0,
       dismissAfterVisibleMs: 10_000,
     });
+  });
+});
+
+describe("legacy push auto-settlement warning", () => {
+  it("warns only when an older server will settle a default-branch push", () => {
+    expect(
+      shouldWarnAboutLegacyPushAutoSettlement({
+        capability: true,
+        result: actionResult(),
+        isDefaultRef: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldWarnAboutLegacyPushAutoSettlement({
+        capability: false,
+        result: actionResult(),
+        isDefaultRef: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldWarnAboutLegacyPushAutoSettlement({
+        capability: true,
+        result: actionResult(),
+        isDefaultRef: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldWarnAboutLegacyPushAutoSettlement({
+        capability: true,
+        result: actionResult("create_pr"),
+        isDefaultRef: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldWarnAboutLegacyPushAutoSettlement({
+        capability: true,
+        result: actionResult("commit_push_pr"),
+        isDefaultRef: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("counts down and notices activity while the legacy server owns settlement", () => {
+    expect(formatLegacyPushAutoSettlementCountdown(null, 1_000)).toBeNull();
+    expect(formatLegacyPushAutoSettlementCountdown(11_000, 1_000)).toBe(
+      "Settling thread in 10s unless activity resumes.",
+    );
+    expect(formatLegacyPushAutoSettlementCountdown(11_000, 12_000)).toBe(
+      "Settling thread in 0s unless activity resumes.",
+    );
+
+    const activity = {
+      latestUserMessageAt: "2026-08-14T00:00:00.000Z",
+      latestRun: null,
+      runtime: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+      pendingBackgroundTasks: [],
+      settledOverride: null,
+      snoozedUntil: null,
+      pinnedAt: null,
+      archivedAt: null,
+    } as const;
+    expect(legacyPushAutoSettlementActivityKey(activity)).not.toBe(
+      legacyPushAutoSettlementActivityKey({
+        ...activity,
+        latestUserMessageAt: "2026-08-14T00:00:01.000Z",
+      }),
+    );
   });
 });
 

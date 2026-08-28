@@ -1,3 +1,4 @@
+import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/shell";
 import type {
   GitRunStackedActionResult,
   GitStackedAction,
@@ -12,6 +13,63 @@ import {
 } from "../sourceControlPresentation";
 
 export type GitActionIconName = "commit" | "push" | "pr";
+
+export const LEGACY_PUSH_AUTO_SETTLE_DELAY_MS = 10_000;
+
+export function legacyPushAutoSettlementActivityKey(
+  thread: Pick<
+    EnvironmentThreadShell,
+    | "latestUserMessageAt"
+    | "latestRun"
+    | "runtime"
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "hasActionableProposedPlan"
+    | "pendingBackgroundTasks"
+    | "settledOverride"
+    | "snoozedUntil"
+    | "pinnedAt"
+    | "archivedAt"
+  >,
+): string {
+  return JSON.stringify({
+    latestUserMessageAt: thread.latestUserMessageAt,
+    latestRun: thread.latestRun,
+    runtime: thread.runtime,
+    hasPendingApprovals: thread.hasPendingApprovals,
+    hasPendingUserInput: thread.hasPendingUserInput,
+    hasActionableProposedPlan: thread.hasActionableProposedPlan,
+    pendingBackgroundTasks: thread.pendingBackgroundTasks,
+    settledOverride: thread.settledOverride,
+    snoozedUntil: thread.snoozedUntil,
+    pinnedAt: thread.pinnedAt,
+    archivedAt: thread.archivedAt,
+  });
+}
+
+export function shouldWarnAboutLegacyPushAutoSettlement(input: {
+  readonly capability: boolean;
+  readonly result: GitRunStackedActionResult;
+  readonly isDefaultRef: boolean;
+}): boolean {
+  const createsPullRequest =
+    input.result.action === "create_pr" || input.result.action === "commit_push_pr";
+  return (
+    input.capability &&
+    input.result.push.status === "pushed" &&
+    input.isDefaultRef &&
+    !createsPullRequest
+  );
+}
+
+export function formatLegacyPushAutoSettlementCountdown(
+  deadlineMs: number | null,
+  nowMs: number,
+): string | null {
+  if (deadlineMs === null) return null;
+  const secondsRemaining = Math.max(0, Math.ceil((deadlineMs - nowMs) / 1_000));
+  return `Settling thread in ${secondsRemaining}s unless activity resumes.`;
+}
 
 export type GitDialogAction = "commit" | "push" | "create_pr";
 
