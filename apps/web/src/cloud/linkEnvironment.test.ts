@@ -314,6 +314,7 @@ describe("web cloud link environment client", () => {
           relayUrl: "https://relay.example.test",
           relayIssuer: "https://relay.example.test",
           managedTunnelActive: true,
+          managedTunnelLocalPort: 3_000,
           publishAgentActivity: false,
         }),
       );
@@ -328,6 +329,7 @@ describe("web cloud link environment client", () => {
           relayUrl: "https://relay.example.test",
           relayIssuer: "https://relay.example.test",
           managedTunnelActive: true,
+          managedTunnelLocalPort: 3_000,
           publishAgentActivity: false,
         }),
       );

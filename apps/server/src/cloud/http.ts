@@ -71,9 +71,12 @@ import {
 } from "./serviceProtocol.ts";
 import {
   CLOUD_ENDPOINT_RUNTIME_CONFIG,
+  CLOUD_MANAGED_TUNNEL_LOCAL_PORT,
   CLOUD_LINKED_USER_ID,
   CLOUD_MINT_PUBLIC_KEY,
+  decodeManagedTunnelLocalPort,
   encodeEndpointRuntimeConfigJson,
+  encodeManagedTunnelLocalPort,
   PUBLISH_AGENT_ACTIVITY_SECRET,
   RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
   RELAY_ISSUER_SECRET,
@@ -278,6 +281,15 @@ function endpointRequestPort(url: URL): number {
   return Number(url.port || (url.protocol === "https:" ? 443 : 80));
 }
 
+export function managedTunnelLocalPortFromRequest(
+  request: HttpServerRequest.HttpServerRequest,
+): number | null {
+  const requestUrl = requestAbsoluteUrl(request);
+  if (requestUrl === null || hasForwardedAuthorityHeaders(request)) return null;
+  const url = new URL(requestUrl);
+  return isLoopbackHostname(url.hostname) ? endpointRequestPort(url) : null;
+}
+
 function isAllowedEndpointOrigin(input: {
   readonly origin: RelayManagedEndpointOrigin;
   readonly requestUrl: string;
@@ -479,6 +491,7 @@ const cloudLinkProofHandler = Effect.fn("environment.cloud.linkProof")(
 export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConfig")(function* (
   dependencies: CloudHttpDependencies,
   payload: RelayEnvironmentConfigRequest,
+  managedTunnelLocalPort?: number,
 ) {
   yield* validateRelayConfigPayload(payload);
   yield* validateCloudMintPublicKey(payload.cloudMintPublicKey);
@@ -511,8 +524,15 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
       CLOUD_ENDPOINT_RUNTIME_CONFIG,
       stringToBytes(endpointRuntimeJson),
     );
+    if (managedTunnelLocalPort !== undefined) {
+      const encodedPort = yield* encodeManagedTunnelLocalPort(managedTunnelLocalPort);
+      yield* dependencies.secrets.set(CLOUD_MANAGED_TUNNEL_LOCAL_PORT, stringToBytes(encodedPort));
+    } else {
+      yield* dependencies.secrets.remove(CLOUD_MANAGED_TUNNEL_LOCAL_PORT);
+    }
   } else {
     yield* dependencies.secrets.remove(CLOUD_ENDPOINT_RUNTIME_CONFIG);
+    yield* dependencies.secrets.remove(CLOUD_MANAGED_TUNNEL_LOCAL_PORT);
   }
   return { ok, endpointRuntimeStatus } satisfies EnvironmentCloudRelayConfigResult;
 });
@@ -520,7 +540,17 @@ export const applyCloudRelayConfig = Effect.fn("environment.cloud.applyRelayConf
 const cloudRelayConfigHandler = Effect.fn("environment.cloud.relayConfig")(
   function* (dependencies: CloudHttpDependencies, payload: RelayEnvironmentConfigRequest) {
     yield* requireEnvironmentScope(AuthRelayWriteScope);
-    return yield* applyCloudRelayConfig(dependencies, payload);
+    if (!payload.endpointRuntime) {
+      return yield* applyCloudRelayConfig(dependencies, payload);
+    }
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const managedTunnelLocalPort = managedTunnelLocalPortFromRequest(request);
+    if (managedTunnelLocalPort === null) {
+      return yield* new EnvironmentHttpBadRequestError({
+        message: "Invalid managed endpoint origin.",
+      });
+    }
+    return yield* applyCloudRelayConfig(dependencies, payload, managedTunnelLocalPort);
   },
   Effect.catchIf(
     ServerSecretStore.isSecretStoreError,
@@ -626,14 +656,18 @@ const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesi
       schema: RelayEnvironmentLinkResponse,
     });
     yield* setCliDesiredCloudLink(true, mode);
-    return yield* applyCloudRelayConfig(dependencies, {
-      relayUrl,
-      relayIssuer: link.relayIssuer,
-      cloudUserId: link.cloudUserId,
-      environmentCredential: link.environmentCredential,
-      cloudMintPublicKey: link.cloudMintPublicKey,
-      endpointRuntime: link.endpointRuntime,
-    });
+    return yield* applyCloudRelayConfig(
+      dependencies,
+      {
+        relayUrl,
+        relayIssuer: link.relayIssuer,
+        cloudUserId: link.cloudUserId,
+        environmentCredential: link.environmentCredential,
+        cloudMintPublicKey: link.cloudMintPublicKey,
+        endpointRuntime: link.endpointRuntime,
+      },
+      endpointRequestPort(localUrl),
+    );
   },
   Effect.catchIf(
     ServerSecretStore.isSecretStoreError,
@@ -764,20 +798,30 @@ export const releaseManagedTunnelOnShutdown = Effect.fn(
   return true;
 });
 
-const readCloudLinkState = Effect.fn("environment.cloud.readLinkState")(function* (
+export const readCloudLinkState = Effect.fn("environment.cloud.readLinkState")(function* (
   dependencies: CloudHttpDependencies,
 ) {
-  const [cloudUserId, relayUrl, relayIssuer, endpointRuntimeConfig, publishAgentActivity] =
-    yield* Effect.all(
-      [
-        dependencies.secrets.get(CLOUD_LINKED_USER_ID),
-        dependencies.secrets.get(RELAY_URL_SECRET),
-        dependencies.secrets.get(RELAY_ISSUER_SECRET),
-        dependencies.secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG),
-        dependencies.secrets.get(PUBLISH_AGENT_ACTIVITY_SECRET),
-      ],
-      { concurrency: 5 },
-    );
+  const [
+    cloudUserId,
+    relayUrl,
+    relayIssuer,
+    endpointRuntimeConfig,
+    managedTunnelLocalPort,
+    publishAgentActivity,
+  ] = yield* Effect.all(
+    [
+      dependencies.secrets.get(CLOUD_LINKED_USER_ID),
+      dependencies.secrets.get(RELAY_URL_SECRET),
+      dependencies.secrets.get(RELAY_ISSUER_SECRET),
+      dependencies.secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG),
+      dependencies.secrets.get(CLOUD_MANAGED_TUNNEL_LOCAL_PORT),
+      dependencies.secrets.get(PUBLISH_AGENT_ACTIVITY_SECRET),
+    ],
+    { concurrency: 6 },
+  );
+  const decodedManagedTunnelLocalPort = Option.flatMap(managedTunnelLocalPort, (bytes) =>
+    decodeManagedTunnelLocalPort(bytesToString(bytes)),
+  );
   return {
     linked: Option.isSome(cloudUserId),
     cloudUserId: Option.isSome(cloudUserId) ? bytesToString(cloudUserId.value) : null,
@@ -786,6 +830,9 @@ const readCloudLinkState = Effect.fn("environment.cloud.readLinkState")(function
     // The managed tunnel runtime config is only stored for managed links; a
     // publish-only link leaves it absent.
     managedTunnelActive: Option.isSome(endpointRuntimeConfig),
+    managedTunnelLocalPort: Option.isSome(endpointRuntimeConfig)
+      ? Option.getOrNull(decodedManagedTunnelLocalPort)
+      : null,
     publishAgentActivity: Option.isSome(publishAgentActivity)
       ? bytesToString(publishAgentActivity.value) === "true"
       : false,
@@ -836,9 +883,10 @@ const cloudUnlinkHandler = Effect.fn("environment.cloud.unlink")(
         dependencies.secrets.remove(RELAY_ENVIRONMENT_CREDENTIAL_SECRET),
         dependencies.secrets.remove(CLOUD_MINT_PUBLIC_KEY),
         dependencies.secrets.remove(CLOUD_ENDPOINT_RUNTIME_CONFIG),
+        dependencies.secrets.remove(CLOUD_MANAGED_TUNNEL_LOCAL_PORT),
         dependencies.secrets.remove(PUBLISH_AGENT_ACTIVITY_SECRET),
       ],
-      { concurrency: 7 },
+      { concurrency: 8 },
     );
     yield* setCliDesiredCloudLink(false);
     return { ok: true, endpointRuntimeStatus } satisfies EnvironmentCloudRelayConfigResult;

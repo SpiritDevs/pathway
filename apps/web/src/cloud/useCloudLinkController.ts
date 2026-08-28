@@ -160,6 +160,8 @@ export function resolveCloudAccountMembership(input: {
 export function isAlwaysOnCloudLinkState(input: {
   readonly linked: boolean;
   readonly managedTunnelActive: boolean;
+  readonly managedTunnelLocalPort?: number | null;
+  readonly currentLocalHttpPort?: number | null;
   readonly publishAgentActivity: boolean;
   readonly linkedRelayUrl: string | null;
   readonly configuredRelayUrl: string | null;
@@ -168,6 +170,7 @@ export function isAlwaysOnCloudLinkState(input: {
   return (
     input.linked &&
     input.managedTunnelActive &&
+    managedTunnelTargetsCurrentPort(input) &&
     input.publishAgentActivity &&
     // An environment the account no longer lists is unreachable through the
     // relay no matter how healthy its local link and tunnel look, and only a
@@ -182,6 +185,8 @@ export function isAlwaysOnCloudLinkState(input: {
 export function shouldRelinkCloudEnvironment(input: {
   readonly linked: boolean;
   readonly managedTunnelActive: boolean;
+  readonly managedTunnelLocalPort?: number | null;
+  readonly currentLocalHttpPort?: number | null;
   readonly desiredManagedTunnel: boolean;
   readonly linkedRelayUrl: string | null;
   readonly configuredRelayUrl: string | null;
@@ -190,10 +195,42 @@ export function shouldRelinkCloudEnvironment(input: {
   return (
     !input.linked ||
     input.managedTunnelActive !== input.desiredManagedTunnel ||
+    (input.desiredManagedTunnel && !managedTunnelTargetsCurrentPort(input)) ||
     (input.accountMembership ?? "unknown") === "absent" ||
     input.configuredRelayUrl === null ||
     normalizeSecureRelayUrl(input.linkedRelayUrl ?? "") !== input.configuredRelayUrl
   );
+}
+
+function managedTunnelTargetsCurrentPort(input: {
+  readonly managedTunnelLocalPort?: number | null;
+  readonly currentLocalHttpPort?: number | null;
+}): boolean {
+  // Older environment servers omit the field. They cannot persist the port,
+  // so treating omission as drift would make a newer client relink forever.
+  if (input.managedTunnelLocalPort === undefined) return true;
+  // Remote web and mobile clients see the public endpoint, not the host's
+  // loopback port. Only the directly connected host can diagnose port drift.
+  if (input.currentLocalHttpPort === null || input.currentLocalHttpPort === undefined) return true;
+  return (
+    input.managedTunnelLocalPort !== null &&
+    input.managedTunnelLocalPort === input.currentLocalHttpPort
+  );
+}
+
+export function localHttpPort(httpBaseUrl: string | null): number | null {
+  if (httpBaseUrl === null) return null;
+  try {
+    const url = new URL(httpBaseUrl);
+    const hostname = url.hostname
+      .trim()
+      .toLowerCase()
+      .replace(/^\[(.*)\]$/u, "$1");
+    if (hostname !== "127.0.0.1" && hostname !== "::1" && hostname !== "localhost") return null;
+    return Number(url.port || (url.protocol === "https:" ? 443 : 80));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -202,8 +239,8 @@ export function shouldRelinkCloudEnvironment(input: {
  * a single relay link, so consumers express the full desired state and
  * `reconcileCloudState` applies it: unlink when neither is wanted, otherwise
  * (re)link with the mode the managed-tunnel bit implies and set the publish
- * preference. Re-linking only happens when the managed-tunnel mode actually
- * changes, so flipping publish alone is cheap.
+ * preference. Re-linking also repairs a managed tunnel whose installed local
+ * port no longer matches the running environment.
  */
 export function useCloudLinkController(options: { readonly reportFailures?: boolean } = {}) {
   const { getToken, isSignedIn } = useAuth();
@@ -332,6 +369,10 @@ export function useCloudLinkController(options: { readonly reportFailures?: bool
         shouldRelinkCloudEnvironment({
           linked,
           managedTunnelActive,
+          ...(primaryCloudLinkState.data?.managedTunnelLocalPort !== undefined
+            ? { managedTunnelLocalPort: primaryCloudLinkState.data.managedTunnelLocalPort }
+            : {}),
+          currentLocalHttpPort: localHttpPort(target.httpBaseUrl),
           desiredManagedTunnel: desired.managedTunnel,
           linkedRelayUrl,
           configuredRelayUrl,
@@ -424,9 +465,14 @@ export function useAlwaysOnCloudLink(): void {
   const lastHandledManualRelink = useRef(retryStatus.manualRelinkRequestId);
 
   const target = controller.linkState.target;
+  const currentLocalHttpPort = localHttpPort(target?.httpBaseUrl ?? null);
   const isSatisfied = isAlwaysOnCloudLinkState({
     linked: controller.linked,
     managedTunnelActive: controller.managedTunnelActive,
+    ...(controller.linkState.data?.managedTunnelLocalPort !== undefined
+      ? { managedTunnelLocalPort: controller.linkState.data.managedTunnelLocalPort }
+      : {}),
+    currentLocalHttpPort,
     publishAgentActivity: controller.publishAgentActivity,
     linkedRelayUrl: controller.linkState.data?.relayUrl ?? null,
     configuredRelayUrl: resolveCloudPublicConfig().relayUrl,
@@ -448,6 +494,8 @@ export function useAlwaysOnCloudLink(): void {
       manualRelinkRequestId: retryStatus.manualRelinkRequestId,
       manualRetryRequestId: retryStatus.manualRetryRequestId,
       phase: retryStatus.phase,
+      currentLocalHttpPort,
+      managedTunnelLocalPort: controller.linkState.data?.managedTunnelLocalPort ?? null,
       targetReady: target !== null,
     });
     // #endregion DEBUG
