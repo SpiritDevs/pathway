@@ -5,6 +5,7 @@ import type { EnvironmentConnectionPhase } from "../connection/presentation.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
   canNavigateUp,
+  ensureBrowseDirectoryPath,
   getBrowseDirectoryPath,
   getBrowseLeafPathSegment,
   getBrowseParentPath,
@@ -44,6 +45,40 @@ export function filterFilesystemBrowseEntries(
     query.length > 0 ? (visibleEntries.find((entry) => entry.name === query) ?? null) : null;
 
   return { visibleEntries, exactEntry };
+}
+
+/**
+ * Complete the leaf currently being browsed, like shell Tab completion.
+ *
+ * A sole match completes the directory and adds its trailing separator. Multiple matches advance
+ * only through their shared prefix, leaving the user at the first character they need to choose.
+ */
+export function completeFilesystemBrowsePath(
+  query: string,
+  entries: ReadonlyArray<FilesystemBrowseEntry>,
+): string | null {
+  const leaf = getBrowseLeafPathSegment(query);
+  const { visibleEntries } = filterFilesystemBrowseEntries(entries, leaf);
+  const firstEntry = visibleEntries[0];
+  if (!firstEntry) {
+    return null;
+  }
+
+  let commonPrefixLength = firstEntry.name.length;
+  for (const entry of visibleEntries.slice(1)) {
+    const comparableLength = Math.min(commonPrefixLength, entry.name.length);
+    let index = 0;
+    while (
+      index < comparableLength &&
+      firstEntry.name[index]?.toLowerCase() === entry.name[index]?.toLowerCase()
+    ) {
+      index += 1;
+    }
+    commonPrefixLength = index;
+  }
+
+  const completedPath = `${getBrowseDirectoryPath(query)}${firstEntry.name.slice(0, commonPrefixLength)}`;
+  return visibleEntries.length === 1 ? ensureBrowseDirectoryPath(completedPath) : completedPath;
 }
 
 export function createBrowseNavigationCoordinator() {

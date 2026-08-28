@@ -8,6 +8,7 @@ type CommandPaletteContentProps = Omit<ComponentProps<typeof Command>, "children
   readonly children: ReactNode;
   readonly escapeLabel?: ReactNode;
   readonly footerActionLabel?: ReactNode;
+  readonly footerCompleteLabel?: ReactNode;
   readonly footerTrailing?: ReactNode;
   readonly inputAccessory?: ReactNode;
   readonly inputProps: ComponentProps<typeof CommandInput>;
@@ -25,6 +26,7 @@ export function CommandPaletteContent({
   children,
   escapeLabel = "Close",
   footerActionLabel,
+  footerCompleteLabel,
   footerTrailing,
   inputAccessory,
   inputProps,
@@ -56,6 +58,12 @@ export function CommandPaletteContent({
               <KbdGroup className="items-center gap-1.5">
                 <Kbd>Enter</Kbd>
                 <span>{footerActionLabel}</span>
+              </KbdGroup>
+            ) : null}
+            {footerCompleteLabel !== undefined ? (
+              <KbdGroup className="items-center gap-1.5">
+                <Kbd>Tab</Kbd>
+                <span>{footerCompleteLabel}</span>
               </KbdGroup>
             ) : null}
             {showBackHint ? (

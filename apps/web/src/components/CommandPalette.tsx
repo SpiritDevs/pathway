@@ -17,6 +17,7 @@ import {
 import { threadSearchMatchKey } from "@spiritdevs/client-runtime/state/thread-search";
 import {
   canPreloadBrowsePath,
+  completeFilesystemBrowsePath,
   createBrowseNavigationCoordinator,
   filterFilesystemBrowseEntries,
   getFilesystemBrowsePath,
@@ -2707,6 +2708,22 @@ function OpenCommandPaletteDialog(props: {
       return;
     }
 
+    if (
+      isBrowsing &&
+      event.key === "Tab" &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey
+    ) {
+      const completion = completeFilesystemBrowsePath(query, browseEntries);
+      if (completion !== null) {
+        event.preventDefault();
+        handleQueryChange(completion);
+        return;
+      }
+    }
+
     const shouldSubmitBrowsePath =
       canSubmitBrowsePath &&
       event.key === "Enter" &&
@@ -2966,6 +2983,7 @@ function OpenCommandPaletteDialog(props: {
       aria-label="Command palette"
       autoHighlight={isBrowsing || isRemoteProjectCloneFlow ? false : "always"}
       footerActionLabel={footerActionLabel}
+      footerCompleteLabel={isBrowsing ? "Complete" : undefined}
       footerTrailing={footerTrailing}
       inputAccessory={inputAccessory}
       inputProps={{
