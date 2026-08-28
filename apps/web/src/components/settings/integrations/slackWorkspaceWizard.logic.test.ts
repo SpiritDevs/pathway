@@ -2,6 +2,7 @@ import { DEFAULT_ISSUE_AUTOMATION_SETTINGS } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  activeSlackEnvironmentOptions,
   appendSlackConditionNode,
   createDefaultSlackRoutingRule,
   createEmptySlackWorkspaceDraft,
@@ -155,6 +156,25 @@ describe("Slack environment project catalog", () => {
       slackCatalogForEnvironment(catalog, "environment-1").projects.map((project) => project.id),
     ).toEqual(["project-1", "project-3"]);
     expect(slackCatalogForEnvironment(catalog, null).projects).toEqual([]);
+  });
+
+  it("uses environment display labels without exposing environment IDs", () => {
+    const environmentId = "82d76fc5-9480-4b12-8d5d-9154fd3774e2";
+
+    expect(
+      activeSlackEnvironmentOptions([
+        {
+          environmentId,
+          state: "active",
+          descriptor: { label: "Corey's Mac" },
+        },
+        {
+          environmentId: "offline-environment-id",
+          state: "inactive",
+          descriptor: { label: "Offline server" },
+        },
+      ]),
+    ).toEqual([{ id: environmentId, name: "Corey's Mac" }]);
   });
 });
 
