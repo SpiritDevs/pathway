@@ -128,6 +128,7 @@ export class ProjectionStoreV2 extends Context.Service<ProjectionStoreV2, Projec
 ) {}
 
 export const ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION = 2;
+const LATEST_VISIBLE_MESSAGE_PREVIEW_MAX_CHARS = 200;
 
 function upsertById<T extends { readonly id: string }>(items: ReadonlyArray<T>, next: T): Array<T> {
   const index = items.findIndex((item) => item.id === next.id);
@@ -899,7 +900,7 @@ export function threadShellFromProjection(
         : {
             id: latestVisibleMessage.id,
             role: latestVisibleMessage.role,
-            text: latestVisibleMessage.text,
+            text: latestVisibleMessage.text.slice(0, LATEST_VISIBLE_MESSAGE_PREVIEW_MAX_CHARS),
             updatedAt: latestVisibleMessage.updatedAt,
           },
     latestUserMessageAt: latestUserMessage?.updatedAt ?? null,
@@ -1084,7 +1085,10 @@ function shellFromState(input: {
         : {
             id: input.state.latestVisibleMessage.id,
             role: input.state.latestVisibleMessage.role,
-            text: input.state.latestVisibleMessage.text,
+            text: input.state.latestVisibleMessage.text.slice(
+              0,
+              LATEST_VISIBLE_MESSAGE_PREVIEW_MAX_CHARS,
+            ),
             updatedAt: input.state.latestVisibleMessage.updatedAt,
           },
     latestUserMessageAt: input.state.latestUserMessageAt,
