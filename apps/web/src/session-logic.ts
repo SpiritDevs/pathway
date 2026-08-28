@@ -349,6 +349,22 @@ export function timelineEntryIsPersistentResourceCard(entry: TimelineEntry): boo
   );
 }
 
+const projectedChatMessageByTurnItem = new WeakMap<OrchestrationV2TurnItem, ChatMessage>();
+
+function cachedMessageHasCurrentAttachmentUrls(
+  item: Extract<OrchestrationV2TurnItem, { readonly type: "user_message" }>,
+  message: ChatMessage,
+  attachmentUrlById: ReadonlyMap<string, string> | undefined,
+): boolean {
+  if (item.attachments.length === 0) return true;
+  if (message.attachments?.length !== item.attachments.length) return false;
+  return item.attachments.every(
+    (attachment, index) =>
+      message.attachments?.[index]?.previewUrl ===
+      (attachmentUrlById?.get(attachment.id) || undefined),
+  );
+}
+
 function projectedItemCreatedAt(row: OrchestrationV2ProjectedTurnItem): string {
   return DateTime.formatIso(row.item.startedAt ?? row.item.updatedAt);
 }
@@ -564,27 +580,36 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
     const attempt = resolveAttempt(item);
     const attemptMetadata = attempt === undefined ? {} : { attempt };
     if (item.type === "user_message" || item.type === "assistant_message") {
-      const message: ChatMessage = {
-        id: item.messageId,
-        role: item.type === "user_message" ? "user" : "assistant",
-        text: item.text,
-        ...(item.type === "user_message" && item.attachments.length > 0
-          ? {
-              attachments: item.attachments.map((attachment) => {
-                const previewUrl = input.attachmentUrlById?.get(attachment.id);
-                return previewUrl ? { ...attachment, previewUrl } : attachment;
-              }),
-            }
-          : {}),
-        runId: item.runId,
-        streaming: item.type === "assistant_message" && item.streaming,
-        ...(item.type === "user_message"
-          ? { createdBy: item.createdBy, creationSource: item.creationSource }
-          : {}),
-        createdAt,
-        updatedAt: DateTime.formatIso(item.updatedAt),
-        ...(item.type === "user_message" ? { inputIntent: item.inputIntent } : {}),
-      };
+      const cachedMessage = projectedChatMessageByTurnItem.get(item);
+      const message =
+        cachedMessage !== undefined &&
+        (item.type === "assistant_message" ||
+          cachedMessageHasCurrentAttachmentUrls(item, cachedMessage, input.attachmentUrlById))
+          ? cachedMessage
+          : ({
+              id: item.messageId,
+              role: item.type === "user_message" ? "user" : "assistant",
+              text: item.text,
+              ...(item.type === "user_message" && item.attachments.length > 0
+                ? {
+                    attachments: item.attachments.map((attachment) => {
+                      const previewUrl = input.attachmentUrlById?.get(attachment.id);
+                      return previewUrl ? { ...attachment, previewUrl } : attachment;
+                    }),
+                  }
+                : {}),
+              runId: item.runId,
+              streaming: item.type === "assistant_message" && item.streaming,
+              ...(item.type === "user_message"
+                ? { createdBy: item.createdBy, creationSource: item.creationSource }
+                : {}),
+              createdAt,
+              updatedAt: DateTime.formatIso(item.updatedAt),
+              ...(item.type === "user_message" ? { inputIntent: item.inputIntent } : {}),
+            } satisfies ChatMessage);
+      if (message !== cachedMessage) {
+        projectedChatMessageByTurnItem.set(item, message);
+      }
       committedMessageIds.add(message.id);
       entries.push({
         id: message.id,

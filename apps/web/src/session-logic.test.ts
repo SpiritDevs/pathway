@@ -374,6 +374,82 @@ describe("V2 session presentation", () => {
     }
   });
 
+  it("preserves unchanged message identity when another turn item updates", () => {
+    const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
+    const later = DateTime.makeUnsafe("2026-06-20T00:00:01.000Z");
+    const threadId = ThreadId.make("thread-message-identity");
+    const runId = RunId.make("run-message-identity");
+    const common = {
+      threadId,
+      runId,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      status: "running" as const,
+      title: null,
+      startedAt: now,
+      completedAt: null,
+      updatedAt: now,
+    };
+    const userItem = {
+      ...common,
+      id: TurnItemId.make("item-user-identity"),
+      ordinal: 0,
+      type: "user_message" as const,
+      messageId: MessageId.make("message-user-identity"),
+      inputIntent: "turn_start" as const,
+      text: "Start",
+      attachments: [],
+      createdBy: "user" as const,
+      creationSource: "web" as const,
+    } satisfies OrchestrationV2TurnItem;
+    const assistantItem = {
+      ...common,
+      id: TurnItemId.make("item-assistant-identity"),
+      ordinal: 1,
+      type: "assistant_message" as const,
+      messageId: MessageId.make("message-assistant-identity"),
+      text: "Working",
+      streaming: true,
+    } satisfies OrchestrationV2TurnItem;
+    const updatedAssistantItem = {
+      ...assistantItem,
+      text: "Working now",
+      updatedAt: later,
+    } satisfies OrchestrationV2TurnItem;
+    const project = (
+      items: ReadonlyArray<OrchestrationV2TurnItem>,
+    ): ReadonlyArray<OrchestrationV2ProjectedTurnItem> =>
+      items.map((item, position) => ({
+        position,
+        visibility: "local",
+        sourceThreadId: threadId,
+        sourceItemId: item.id,
+        item,
+      }));
+
+    const firstEntries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: project([userItem, assistantItem]),
+      optimisticMessages: [],
+    }).filter(
+      (entry): entry is Extract<TimelineEntry, { readonly kind: "message" }> =>
+        entry.kind === "message",
+    );
+    const updatedEntries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: project([userItem, updatedAssistantItem]),
+      optimisticMessages: [],
+    }).filter(
+      (entry): entry is Extract<TimelineEntry, { readonly kind: "message" }> =>
+        entry.kind === "message",
+    );
+
+    expect(updatedEntries[0]?.message).toBe(firstEntries[0]?.message);
+    expect(updatedEntries[1]?.message).not.toBe(firstEntries[1]?.message);
+    expect(updatedEntries[1]?.message.text).toBe("Working now");
+  });
+
   it("waits for a dispatched turn item before adding queued input to the timeline", () => {
     const projection = makeThreadProjectionFixture();
     const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
