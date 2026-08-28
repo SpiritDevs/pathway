@@ -7818,6 +7818,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               )
             );
           }
+          // The final provider event can commit after the arm command reads
+          // the projection but before its metadata event lands. Treat the arm
+          // event itself as a readiness edge so that ordering cannot strand
+          // the one-shot request after the terminal event was filtered out.
+          if (
+            event.type === "thread.metadata-updated" &&
+            event.payload.settleAfterCompletion === true
+          ) {
+            return true;
+          }
           if (!armed) return false;
           if (event.type === "subagent.updated") {
             return isTerminalDelegatedTaskStatus(event.payload.status);

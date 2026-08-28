@@ -885,6 +885,91 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("settles when the final terminal event commits before the arm event", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const eventSink = yield* EventSinkV2;
+      const threadId = ThreadId.make("runtime-layer-raced-settle-after-completion-thread");
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-raced-settle-after-completion-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-raced-settle-after-completion-project"),
+        title: "Raced settle after completion",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-raced-settle-after-completion-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-raced-settle-after-completion-message"),
+        text: "Finish while settlement is being armed.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+
+      const active = yield* orchestrator.getThreadProjection(threadId);
+      const activeRun = active.runs.find((run) => run.status === "starting");
+      assert.isDefined(activeRun);
+
+      const settledEvents = yield* Queue.unbounded<void>();
+      const afterSequence = yield* orchestrator.getThreadEventSequence(threadId);
+      yield* eventSink.stream({ threadId, afterSequence }).pipe(
+        Stream.runForEach((stored) =>
+          stored.event.type === "thread.settled"
+            ? Queue.offer(settledEvents, undefined)
+            : Effect.void,
+        ),
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+
+      const completedAt = yield* DateTime.now;
+      yield* eventSink.write({
+        commandId: CommandId.make("runtime-layer-raced-settle-after-completion-events"),
+        events: [
+          {
+            id: EventId.make("runtime-layer-raced-settle-after-completion-run-completed"),
+            type: "run.updated",
+            threadId,
+            runId: activeRun.id,
+            ...(activeRun.rootNodeId === null ? {} : { nodeId: activeRun.rootNodeId }),
+            providerInstanceId: activeRun.providerInstanceId,
+            occurredAt: completedAt,
+            payload: { ...activeRun, status: "completed", completedAt },
+          },
+          {
+            id: EventId.make("runtime-layer-raced-settle-after-completion-armed"),
+            type: "thread.metadata-updated",
+            threadId,
+            occurredAt: completedAt,
+            payload: {
+              ...active.thread,
+              settleAfterCompletion: true,
+              updatedAt: completedAt,
+            },
+          },
+        ],
+      });
+
+      yield* Queue.take(settledEvents);
+      const settled = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(settled.runs[0]?.status, "completed");
+      assert.equal(settled.thread.settledOverride, "settled");
+      assert.isFalse(settled.thread.settleAfterCompletion);
+    }),
+  );
+
   it.effect("settles an armed thread after startup reconciliation terminalizes its run", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
