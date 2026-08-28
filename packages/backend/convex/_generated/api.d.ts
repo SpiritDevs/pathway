@@ -17,6 +17,8 @@ import type * as crons from "../crons.js";
 import type * as emailTags from "../emailTags.js";
 import type * as environmentCommands from "../environmentCommands.js";
 import type * as environments from "../environments.js";
+import type * as focusNotifications from "../focusNotifications.js";
+import type * as focuses from "../focuses.js";
 import type * as invitations from "../invitations.js";
 import type * as issueAttachments from "../issueAttachments.js";
 import type * as issueAutomation from "../issueAutomation.js";
@@ -54,6 +56,8 @@ declare const fullApi: ApiFromModules<{
   emailTags: typeof emailTags;
   environmentCommands: typeof environmentCommands;
   environments: typeof environments;
+  focusNotifications: typeof focusNotifications;
+  focuses: typeof focuses;
   invitations: typeof invitations;
   issueAttachments: typeof issueAttachments;
   issueAutomation: typeof issueAutomation;

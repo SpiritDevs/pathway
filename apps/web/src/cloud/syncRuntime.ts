@@ -90,6 +90,7 @@ import {
 } from "./syncReset";
 import { publishCloudSyncTabState, publishCompanySyncStatus } from "./syncStatus";
 import { deriveCompanySyncStatus, type CompanySyncStatus } from "./syncStatus.logic";
+import { useFocusReadModelRuntime } from "./focusReadModel";
 import {
   classifyConvexSyncTransportError,
   convexFunctionName,
@@ -1330,6 +1331,8 @@ export function discoverCompanyEnvironmentConnections(
  */
 export function CloudSyncRuntime(): null {
   const { getToken, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const accountScope = useCloudSyncScope();
+  const focusTokenFetcher = useMemo(() => makeClerkConvexTokenFetcher(getToken), [getToken]);
 
   useEffect(() => {
     // #region DEBUG
@@ -1345,6 +1348,13 @@ export function CloudSyncRuntime(): null {
       deactivateCloudSyncConvexTokenFetcher();
     };
   }, [getToken]);
+
+  useFocusReadModelRuntime({
+    enabled: shouldRunCloudSyncRuntime(isSignedIn),
+    accountScope,
+    convexUrl: resolveCloudSyncConvexUrl(),
+    fetchToken: focusTokenFetcher,
+  });
 
   // Start discovery as soon as Clerk has a signed-in identity. Before onboarding creates a
   // workspace, `companies.listMine` legitimately yields an empty list and then reacts to the

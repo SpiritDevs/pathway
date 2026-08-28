@@ -87,6 +87,13 @@ const roleAssignmentScope = v.union(v.literal("company"), v.literal("team"));
 
 const membershipState = v.union(v.literal("active"), v.literal("locked"), v.literal("left"));
 
+const attentionEventKind = v.union(
+  v.literal("finished-unsettled"),
+  v.literal("pending-approval"),
+  v.literal("awaiting-input"),
+  v.literal("failed"),
+);
+
 const issueStatusCategory = v.union(
   v.literal("backlog"),
   v.literal("unstarted"),
@@ -180,6 +187,57 @@ export default defineSchema({
   })
     .index("by_clerk_subject", ["clerkSubject"])
     .index("by_email", ["email"]),
+
+  /** Account-owned Agent Threads filters. Selection stays local to each client. */
+  focuses: defineTable({
+    id: domainId,
+    userId: v.id("users"),
+    name: v.string(),
+    iconName: v.string(),
+    accentColor: v.string(),
+    orderKey: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_and_domain_id", ["userId", "id"])
+    .index("by_user_and_order", ["userId", "orderKey"]),
+
+  /** One row per project makes exclusive assignment a single indexed transactional write. */
+  focusAssignments: defineTable({
+    userId: v.id("users"),
+    focusId: v.id("focuses"),
+    projectKey: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_and_project", ["userId", "projectKey"])
+    .index("by_focus", ["focusId"]),
+
+  /** Relay-authored Attention Events, addressed by the Clerk subject used by relay tables. */
+  focusNotifications: defineTable({
+    eventId: v.string(),
+    userId: v.string(),
+    environmentId: v.string(),
+    environmentPublicKey: v.string(),
+    threadId: v.string(),
+    projectKey: v.string(),
+    eventKind: attentionEventKind,
+    createdAt: v.number(),
+  })
+    .index("by_user_and_event", ["userId", "eventId"])
+    .index("by_user_and_created_at", ["userId", "createdAt"]),
+
+  /** One cross-machine mark-all-read watermark plus the next bounded retention scan time. */
+  focusNotificationStates: defineTable({
+    userId: v.string(),
+    readThrough: v.number(),
+    nextCleanupAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_next_cleanup", ["nextCleanupAt"]),
 
   companies: defineTable({
     id: domainId,
