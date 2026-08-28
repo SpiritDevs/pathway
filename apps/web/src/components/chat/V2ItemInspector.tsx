@@ -5,7 +5,7 @@ import type {
   ThreadId,
 } from "@spiritdevs/contracts";
 import { ExternalLinkIcon, GitBranchIcon, RotateCcwIcon } from "lucide-react";
-import { memo, type ReactNode } from "react";
+import { memo, type ReactNode, useMemo } from "react";
 
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
@@ -51,7 +51,10 @@ function DataField(props: { readonly label: string; readonly children: ReactNode
 }
 
 function StructuredValue({ value }: { readonly value: unknown }) {
-  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  const text = useMemo(
+    () => (typeof value === "string" ? value : JSON.stringify(value, null, 2)),
+    [value],
+  );
   if (!text) return null;
   return (
     <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/50 bg-background/60 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground select-text">
