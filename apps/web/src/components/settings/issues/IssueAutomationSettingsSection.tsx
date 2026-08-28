@@ -5,6 +5,7 @@ import type {
   IssueAutomationSettings,
   ModelSelection,
 } from "@spiritdevs/contracts";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import {
   ISSUE_AUTOMATION_MAX_AUDITORS_PER_RULE,
   ISSUE_AUTOMATION_MAX_AUDIT_RULES,
@@ -332,12 +333,15 @@ function AuditRuleCard({
 
 export function IssueAutomationSettingsSection({
   automation: externalAutomation,
+  companyId: externalCompanyId,
   onSave,
 }: {
   readonly automation?: IssueAutomationSettings | undefined;
+  readonly companyId?: CompanyId | null | undefined;
   readonly onSave?: ((settings: IssueAutomationSettings) => void) | undefined;
 } = {}) {
-  const { contentCompanyId: companyId } = useCompanySettings();
+  const { contentCompanyId } = useCompanySettings();
+  const companyId = externalCompanyId === undefined ? contentCompanyId : externalCompanyId;
   const { store } = useCompanyIssuesStore(companyId);
   const statuses = store.statuses;
   const settings = usePrimarySettings();

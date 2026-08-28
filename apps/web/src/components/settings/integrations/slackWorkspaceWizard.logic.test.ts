@@ -1,3 +1,4 @@
+import { DEFAULT_ISSUE_AUTOMATION_SETTINGS } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -9,6 +10,7 @@ import {
   nextSlackWizardStep,
   removeSlackConditionNode,
   resolveSlackWizardNavigation,
+  slackAutomationForOwner,
   SLACK_ROUTING_LIMITS,
   slackCatalogForEnvironment,
   slackConditionNodeCount,
@@ -48,6 +50,18 @@ const everyMessageRule = (): SlackRoutingRule => ({
 });
 
 describe("Slack workspace wizard navigation", () => {
+  it("does not reuse automation settings after the workspace owner changes", () => {
+    const automation = {
+      ownerId: "company-1",
+      settings: DEFAULT_ISSUE_AUTOMATION_SETTINGS,
+      configured: true,
+      enabled: true,
+    };
+
+    expect(slackAutomationForOwner(automation, "company-1")).toBe(automation);
+    expect(slackAutomationForOwner(automation, "company-2")).toBeNull();
+  });
+
   it("returns users to the first incomplete step when they jump ahead", () => {
     expect(resolveSlackWizardNavigation(0, 4, createEmptySlackWorkspaceDraft())).toEqual({
       step: 0,

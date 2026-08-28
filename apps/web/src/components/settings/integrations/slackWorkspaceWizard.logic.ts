@@ -1,3 +1,5 @@
+import type { IssueAutomationSettings } from "@spiritdevs/contracts";
+
 export const SLACK_WORKSPACE_WIZARD_STEPS = [
   "Connect Slack",
   "Route issues",
@@ -135,6 +137,13 @@ export interface SlackWorkspaceWizardDraft {
   readonly rules: readonly SlackRoutingRule[];
 }
 
+export interface SlackWizardAutomationContext {
+  readonly ownerId: string;
+  readonly settings: IssueAutomationSettings;
+  readonly configured: boolean;
+  readonly enabled: boolean;
+}
+
 export type SlackReadinessState = "ready" | "warning" | "blocked";
 
 export interface SlackWizardReadiness {
@@ -184,6 +193,13 @@ export function createEmptySlackWorkspaceDraft(): SlackWorkspaceWizardDraft {
     backupEnvironmentIds: [],
     rules: [],
   };
+}
+
+export function slackAutomationForOwner(
+  automation: SlackWizardAutomationContext,
+  ownerId: string | null,
+): SlackWizardAutomationContext | null {
+  return automation.ownerId === ownerId ? automation : null;
 }
 
 export function slackCatalogForEnvironment(

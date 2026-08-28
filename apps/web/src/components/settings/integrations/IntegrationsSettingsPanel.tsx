@@ -76,6 +76,7 @@ import {
 import {
   SlackWorkspaceWizardSheet,
   type SlackWorkspaceActivationResult,
+  type SlackWizardAutomationContext,
 } from "./SlackWorkspaceWizardSheet";
 
 type SheetState =
@@ -375,18 +376,8 @@ function SlackWorkspaceWizardController({
   const [initialDraft, setInitialDraft] = useState<SlackWorkspaceWizardDraft | null>(
     integrationId === null ? { ...createEmptySlackWorkspaceDraft(), ownerId } : null,
   );
-  const [wizardAutomation, setWizardAutomation] = useState<{
-    readonly ownerId: CompanyId;
-    readonly summary: CompanyAutomationSettingsSummary | null;
-  }>({ ownerId, summary: automation });
   const [integrationState, setIntegrationState] = useState<"draft" | "active" | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setWizardAutomation((current) =>
-      current.ownerId === ownerId ? { ownerId, summary: automation } : current,
-    );
-  }, [automation, ownerId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -431,16 +422,19 @@ function SlackWorkspaceWizardController({
         throw new Error("Choose the primary environment that will run this Slack listener.");
       }
       const companyId = CompanyId.make(draft.ownerId);
-      await client.setControllerPool({
-        companyId,
-        integrationId: draft.integrationId,
-        preferredEnvironmentId: draft.preferredEnvironmentId,
-        backupEnvironmentIds: draft.backupEnvironmentIds,
-      });
+      const saveControllerPool = () =>
+        client.setControllerPool({
+          companyId,
+          integrationId: draft.integrationId!,
+          preferredEnvironmentId: draft.preferredEnvironmentId,
+          backupEnvironmentIds: draft.backupEnvironmentIds,
+        });
       if (draft.watchId === null) {
         const definitions = await client.listWatchDefinitions(companyId, draft.integrationId);
         const existing = definitions.find((definition) => definition.channelId === draft.channelId);
         if (existing !== undefined) {
+          await saveControllerPool();
+          await onChanged(companyId);
           return {
             ...draft,
             channelName: existing.channelName,
@@ -462,6 +456,7 @@ function SlackWorkspaceWizardController({
         rules: draft.rules.map(ruleToContract),
         expectedRevision: draft.watchRevision,
       });
+      await saveControllerPool();
       const nextDraft = {
         ...draft,
         watchId: saved.id,
@@ -497,9 +492,6 @@ function SlackWorkspaceWizardController({
 
   return (
     <SlackWorkspaceWizardSheet
-      automationConfigured={wizardAutomation.summary !== null}
-      automationEnabled={wizardAutomation.summary?.enabled ?? false}
-      automationSettings={wizardAutomation.summary?.settings ?? automationFallback}
       getOwnerCatalog={(selectedOwnerId) =>
         ownerCatalogs.get(selectedOwnerId) ?? {
           environments: [],
@@ -510,6 +502,12 @@ function SlackWorkspaceWizardController({
         }
       }
       initialDraft={initialDraft}
+      initialAutomation={{
+        ownerId,
+        settings: automation?.settings ?? automationFallback,
+        configured: automation !== null,
+        enabled: automation?.enabled ?? false,
+      }}
       mode={
         integrationState === "active" ? "active" : integrationState === "draft" ? "draft" : "new"
       }
@@ -590,7 +588,6 @@ function SlackWorkspaceWizardController({
         });
         const checkedAutomation =
           automationRules.length === 0 ? null : await client.getAutomation(selectedOwnerId);
-        setWizardAutomation({ ownerId: selectedOwnerId, summary: checkedAutomation });
         const environments = ownerEnvironmentIds.get(selectedOwnerId) ?? [];
         const selectedControllers = [preferredEnvironmentId, ...draft.backupEnvironmentIds].filter(
           (environmentId): environmentId is string => environmentId !== null,
@@ -641,20 +638,39 @@ function SlackWorkspaceWizardController({
           },
         ];
       }}
-      onSaveAutomation={async (settings) => {
+      onLoadAutomation={async (selectedOwnerId): Promise<SlackWizardAutomationContext> => {
+        const selectedCompanyId = CompanyId.make(selectedOwnerId);
+        const summary = await client.getAutomation(selectedCompanyId);
+        return {
+          ownerId: selectedOwnerId,
+          settings: summary?.settings ?? automationFallback,
+          configured: summary !== null,
+          enabled: summary?.enabled ?? false,
+        };
+      }}
+      onSaveAutomation={async (
+        selectedOwnerId,
+        settings,
+      ): Promise<SlackWizardAutomationContext> => {
         if (!canManage) {
           throw new Error(
             "The integrations.manage permission is required to configure issue automation.",
           );
         }
-        const current = await client.getAutomation(wizardAutomation.ownerId);
+        const selectedCompanyId = CompanyId.make(selectedOwnerId);
+        const current = await client.getAutomation(selectedCompanyId);
         const saved = await client.saveAutomation({
-          companyId: wizardAutomation.ownerId,
+          companyId: selectedCompanyId,
           settings,
           expectedRevision: current?.revision ?? null,
         });
-        setWizardAutomation({ ownerId: wizardAutomation.ownerId, summary: saved });
-        await onChanged(wizardAutomation.ownerId);
+        await onChanged(selectedCompanyId);
+        return {
+          ownerId: selectedOwnerId,
+          settings: saved.settings,
+          configured: true,
+          enabled: saved.enabled,
+        };
       }}
       onComplete={(draft) => {
         if (draft.ownerId !== null) void onChanged(CompanyId.make(draft.ownerId));

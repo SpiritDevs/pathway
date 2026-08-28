@@ -1,4 +1,5 @@
 import type { IssueAutomationSettings } from "@spiritdevs/contracts";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import {
   CheckCircle2Icon,
   CircleAlertIcon,
@@ -35,6 +36,7 @@ import {
   defaultSlackActivationStages,
   nextSlackWizardStep,
   resolveSlackWizardNavigation,
+  slackAutomationForOwner,
   slackCatalogForEnvironment,
   slackRoutingRulesError,
   slackRuleError,
@@ -51,6 +53,7 @@ import {
   type SlackWorkspaceIdentity,
   type SlackWorkspaceWizardDraft,
   type SlackWorkspaceWizardStep,
+  type SlackWizardAutomationContext,
   type SlackWizardReadiness,
   type SlackWizardValidationContext,
 } from "./slackWorkspaceWizard.logic";
@@ -71,6 +74,8 @@ export interface SlackWorkspaceActivationResult {
   readonly outcome: "healthy" | "active-warning";
   readonly message?: string | null;
 }
+
+export type { SlackWizardAutomationContext } from "./slackWorkspaceWizard.logic";
 
 export type SlackActivationProgressReporter = (
   stageId: SlackActivationStage["id"],
@@ -96,10 +101,12 @@ export interface SlackWorkspaceWizardSheetProps {
   readonly onCheckReadiness: (
     draft: SlackWorkspaceWizardDraft,
   ) => Promise<readonly SlackWizardReadiness[]>;
-  readonly automationSettings: IssueAutomationSettings;
-  readonly automationConfigured: boolean;
-  readonly automationEnabled: boolean;
-  readonly onSaveAutomation: (settings: IssueAutomationSettings) => Promise<void>;
+  readonly initialAutomation: SlackWizardAutomationContext;
+  readonly onLoadAutomation: (ownerId: string) => Promise<SlackWizardAutomationContext>;
+  readonly onSaveAutomation: (
+    ownerId: string,
+    settings: IssueAutomationSettings,
+  ) => Promise<SlackWizardAutomationContext>;
   readonly onActivate: (
     draft: SlackWorkspaceWizardDraft,
     reportProgress: SlackActivationProgressReporter,
@@ -181,9 +188,8 @@ export function SlackWorkspaceWizardSheet({
   onListChannels,
   onSaveDraft,
   onCheckReadiness,
-  automationSettings,
-  automationConfigured,
-  automationEnabled,
+  initialAutomation,
+  onLoadAutomation,
   onSaveAutomation,
   onActivate,
   onDeleteDraft,
@@ -198,6 +204,9 @@ export function SlackWorkspaceWizardSheet({
   const [channelState, setChannelState] = useState<AsyncState>("idle");
   const [readiness, setReadiness] = useState<readonly SlackWizardReadiness[]>([]);
   const [readinessState, setReadinessState] = useState<AsyncState>("idle");
+  const [automationContext, setAutomationContext] =
+    useState<SlackWizardAutomationContext>(initialAutomation);
+  const [automationLoadState, setAutomationLoadState] = useState<AsyncState>("idle");
   const [automationSaveState, setAutomationSaveState] = useState<AsyncState>("idle");
   const [activationStages, setActivationStages] = useState<readonly SlackActivationStage[]>(
     defaultSlackActivationStages,
@@ -207,6 +216,7 @@ export function SlackWorkspaceWizardSheet({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [expandedRuleId, setExpandedRuleId] = useState<string | null>(null);
   const requestVersionRef = useRef(0);
+  const automationRequestOwnerRef = useRef<string | null>(null);
   const wasOpenRef = useRef(false);
 
   const selectedOwner = owners.find((owner) => owner.id === draft.ownerId) ?? null;
@@ -215,6 +225,8 @@ export function SlackWorkspaceWizardSheet({
     () => slackCatalogForEnvironment(ownerCatalog, draft.preferredEnvironmentId),
     [draft.preferredEnvironmentId, ownerCatalog],
   );
+  const selectedAutomation = slackAutomationForOwner(automationContext, draft.ownerId);
+  const automationConfigured = selectedAutomation?.configured ?? false;
 
   const validationContext = useMemo<SlackWizardValidationContext>(
     () => ({
@@ -258,13 +270,44 @@ export function SlackWorkspaceWizardSheet({
     setChannelState("idle");
     setReadiness([]);
     setReadinessState("idle");
+    setAutomationContext(initialAutomation);
+    setAutomationLoadState("idle");
     setAutomationSaveState("idle");
+    automationRequestOwnerRef.current = null;
     setActivationStages(defaultSlackActivationStages());
     setActivationState("idle");
     setError(null);
     setSuccessMessage(null);
     setExpandedRuleId(nextDraft.rules[0]?.id ?? null);
-  }, [initialDraft, open]);
+  }, [initialAutomation, initialDraft, open]);
+
+  useEffect(() => {
+    if (
+      !open ||
+      draft.ownerId === null ||
+      automationContext.ownerId === draft.ownerId ||
+      automationRequestOwnerRef.current === draft.ownerId
+    ) {
+      return;
+    }
+    let cancelled = false;
+    automationRequestOwnerRef.current = draft.ownerId;
+    setAutomationLoadState("loading");
+    void onLoadAutomation(draft.ownerId)
+      .then((next) => {
+        if (cancelled) return;
+        setAutomationContext(next);
+        setAutomationLoadState("ready");
+      })
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        setAutomationLoadState("error");
+        setError(cause instanceof Error ? cause.message : "Could not load issue automation.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [automationContext.ownerId, draft.ownerId, onLoadAutomation, open]);
 
   const loadChannels = useCallback(
     async (ownerId: string, integrationId: string) => {
@@ -383,10 +426,12 @@ export function SlackWorkspaceWizardSheet({
   };
 
   const saveAutomation = async (next: IssueAutomationSettings) => {
+    if (draft.ownerId === null || selectedAutomation === null) return;
     setAutomationSaveState("loading");
     setError(null);
     try {
-      await onSaveAutomation(next);
+      const saved = await onSaveAutomation(draft.ownerId, next);
+      setAutomationContext(saved);
       setAutomationSaveState("ready");
     } catch (cause) {
       setAutomationSaveState("error");
@@ -508,6 +553,7 @@ export function SlackWorkspaceWizardSheet({
         <Button
           disabled={
             activationState === "loading" ||
+            automationLoadState === "loading" ||
             automationSaveState === "loading" ||
             (step === 3 && !automationConfigured)
           }
@@ -619,10 +665,12 @@ export function SlackWorkspaceWizardSheet({
       ) : step === 3 ? (
         <IssueAutomationSetupStep
           configured={automationConfigured}
-          enabled={automationEnabled}
+          enabled={selectedAutomation?.enabled ?? false}
+          loading={selectedAutomation === null || automationLoadState === "loading"}
           onSave={(next) => void saveAutomation(next)}
+          ownerId={draft.ownerId}
           saveState={automationSaveState}
-          settings={automationSettings}
+          settings={selectedAutomation?.settings ?? automationContext.settings}
         />
       ) : (
         <AutomateAndActivateStep
@@ -1088,12 +1136,16 @@ function IssueAutomationSetupStep({
   settings,
   configured,
   enabled,
+  loading,
+  ownerId,
   saveState,
   onSave,
 }: {
   readonly settings: IssueAutomationSettings;
   readonly configured: boolean;
   readonly enabled: boolean;
+  readonly loading: boolean;
+  readonly ownerId: string | null;
   readonly saveState: AsyncState;
   readonly onSave: (settings: IssueAutomationSettings) => void;
 }) {
@@ -1108,33 +1160,51 @@ function IssueAutomationSetupStep({
         </p>
       </div>
 
-      <Alert controlAlignment="first-line" variant={configured ? "success" : "warning"}>
-        {configured ? <CheckCircle2Icon /> : <CircleAlertIcon />}
-        <AlertTitle>{configured ? "Automation configured" : "Configuration required"}</AlertTitle>
-        <AlertDescription>
-          {configured
-            ? enabled
-              ? "Company automation is enabled. Changes below save automatically."
-              : "These settings are saved. Company automation will be enabled when Slack intake is activated."
-            : "Review the defaults below, configure a fallback worker if routes assign issues, then save these settings."}
-        </AlertDescription>
-      </Alert>
-
-      <div className={saveState === "loading" ? "pointer-events-none opacity-70" : undefined}>
-        <IssueAutomationSettingsSection automation={settings} onSave={onSave} />
-      </div>
-
-      {!configured ? (
-        <div className="flex items-center justify-between gap-3 border-t pt-4">
-          <p className="text-xs text-muted-foreground">
-            You can refine these settings later from Integrations.
-          </p>
-          <Button disabled={saveState === "loading"} onClick={() => onSave(settings)} type="button">
-            {saveState === "loading" ? <Spinner className="size-4" /> : null}
-            Use these settings
-          </Button>
+      {loading ? (
+        <div className="flex min-h-24 items-center justify-center gap-2 rounded-lg border border-dashed text-xs text-muted-foreground">
+          <Spinner className="size-4" /> Loading this workspace's automation settings…
         </div>
-      ) : null}
+      ) : (
+        <>
+          <Alert controlAlignment="first-line" variant={configured ? "success" : "warning"}>
+            {configured ? <CheckCircle2Icon /> : <CircleAlertIcon />}
+            <AlertTitle>
+              {configured ? "Automation configured" : "Configuration required"}
+            </AlertTitle>
+            <AlertDescription>
+              {configured
+                ? enabled
+                  ? "Company automation is enabled. Changes below save automatically."
+                  : "These settings are saved. Company automation will be enabled when Slack intake is activated."
+                : "Review the defaults below, configure a fallback worker if routes assign issues, then save these settings."}
+            </AlertDescription>
+          </Alert>
+
+          <div className={saveState === "loading" ? "pointer-events-none opacity-70" : undefined}>
+            <IssueAutomationSettingsSection
+              automation={settings}
+              companyId={ownerId === null ? null : CompanyId.make(ownerId)}
+              onSave={onSave}
+            />
+          </div>
+
+          {!configured ? (
+            <div className="flex items-center justify-between gap-3 border-t pt-4">
+              <p className="text-xs text-muted-foreground">
+                You can refine these settings later from Integrations.
+              </p>
+              <Button
+                disabled={saveState === "loading"}
+                onClick={() => onSave(settings)}
+                type="button"
+              >
+                {saveState === "loading" ? <Spinner className="size-4" /> : null}
+                Use these settings
+              </Button>
+            </div>
+          ) : null}
+        </>
+      )}
     </section>
   );
 }
