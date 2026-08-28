@@ -18,6 +18,7 @@ import {
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  canSettle,
   canSnooze,
   effectiveSettled,
   effectiveSnoozed,
@@ -3307,6 +3308,9 @@ export default function Sidebar() {
         const supportsSettlement =
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement ===
           true;
+        const supportsSettleAfterCompletion =
+          serverConfigs.get(thread.environmentId)?.environment.capabilities
+            .threadSettleAfterCompletion === true;
         const supportsSnooze =
           serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
         const supportsPinning =
@@ -3326,12 +3330,17 @@ export default function Sidebar() {
               branch: thread.branch ?? null,
               isPinned,
               isSettled,
+              settleAfterCompletionActive: thread.settleAfterCompletion,
+              canSettleAfterCompletion:
+                !canSettle(thread, { now: new Date().toISOString() }) ||
+                (thread.pendingBackgroundTasks?.length ?? 0) > 0,
               isSnoozed,
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
               isRunning: threadRuntimeIsActive(thread.runtime),
               supports: {
                 settlement: supportsSettlement,
+                settleAfterCompletion: supportsSettleAfterCompletion,
                 snooze: supportsSnooze,
                 pinning: supportsPinning,
                 titleRegeneration: supportsTitleRegeneration,
@@ -3375,6 +3384,9 @@ export default function Sidebar() {
           }
           case "settle":
             attemptSettle(threadRef);
+            return;
+          case "settle-after-completion":
+            attemptSettleAfterCompletion(threadRef, !thread.settleAfterCompletion);
             return;
           case "unsettle":
             attemptUnsettle(threadRef);
@@ -3497,6 +3509,7 @@ export default function Sidebar() {
       archiveThread,
       attemptPin,
       attemptSettle,
+      attemptSettleAfterCompletion,
       attemptSnooze,
       attemptUnpin,
       attemptUnsettle,

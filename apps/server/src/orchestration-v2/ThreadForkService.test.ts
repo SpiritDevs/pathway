@@ -55,6 +55,7 @@ function makeSourceThread(): OrchestrationV2AppThread {
     archivedAt: null,
     settledOverride: null,
     settledAt: null,
+    settleAfterCompletion: true,
     lastVisitedAt: null,
     snoozedUntil,
     snoozedAt,
@@ -127,6 +128,7 @@ it.effect("keeps a fork awake when its source thread is snoozed", () =>
 
     assert.isNull(result.targetThread.snoozedUntil);
     assert.isNull(result.targetThread.snoozedAt);
+    assert.isFalse(result.targetThread.settleAfterCompletion);
     assert.equal(result.targetThread.projectId, sourceThread.projectId);
     assert.equal(result.targetThread.providerInstanceId, sourceThread.providerInstanceId);
     assert.deepEqual(result.targetThread.modelSelection, sourceThread.modelSelection);

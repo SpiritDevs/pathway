@@ -6,11 +6,19 @@ const baseState: ThreadActionMenuState = {
   branch: null,
   isPinned: false,
   isSettled: false,
+  settleAfterCompletionActive: false,
+  canSettleAfterCompletion: true,
   isSnoozed: false,
   canSnoozeNow: true,
   isRegeneratingTitle: false,
   isRunning: false,
-  supports: { settlement: true, snooze: true, pinning: true, titleRegeneration: true },
+  supports: {
+    settlement: true,
+    settleAfterCompletion: true,
+    snooze: true,
+    pinning: true,
+    titleRegeneration: true,
+  },
   snoozePresets: [
     { id: "hour", label: "In 1 hour", whenLabel: "3:00 PM", snoozedUntil: "2026-08-07T15:00:00Z" },
   ],
@@ -25,7 +33,13 @@ describe("buildThreadActionMenuItems", () => {
     expect(
       ids({
         ...baseState,
-        supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
+        supports: {
+          settlement: false,
+          settleAfterCompletion: false,
+          snooze: false,
+          pinning: false,
+          titleRegeneration: false,
+        },
       }),
     ).toEqual(["rename", "mark-unread", "copy-path", "copy-thread-id", "archive", "delete"]);
   });
@@ -43,6 +57,26 @@ describe("buildThreadActionMenuItems", () => {
       expect.arrayContaining(["unpin", "unsettle", "unsnooze"]),
     );
     expect(ids(baseState)).toEqual(expect.arrayContaining(["pin", "settle", "snooze"]));
+  });
+
+  it("offers normal deferred-settlement and cancellation actions", () => {
+    const action = buildThreadActionMenuItems(baseState).find(
+      (item) => item.id === "settle-after-completion",
+    );
+    expect(action).toMatchObject({ label: "Settle after completion", disabled: false });
+
+    const cancel = buildThreadActionMenuItems({
+      ...baseState,
+      settleAfterCompletionActive: true,
+      canSettleAfterCompletion: false,
+    }).find((item) => item.id === "settle-after-completion");
+    expect(cancel).toMatchObject({ label: "Cancel settle after completion", disabled: false });
+
+    const idle = buildThreadActionMenuItems({
+      ...baseState,
+      canSettleAfterCompletion: false,
+    }).find((item) => item.id === "settle-after-completion");
+    expect(idle).toMatchObject({ label: "Settle after completion", disabled: true });
   });
 
   it("disables snooze when the thread cannot snooze, keeping presets visible", () => {
@@ -77,7 +111,13 @@ describe("buildThreadActionMenuItems", () => {
     expect(
       ids({
         ...baseState,
-        supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
+        supports: {
+          settlement: false,
+          settleAfterCompletion: false,
+          snooze: false,
+          pinning: false,
+          titleRegeneration: false,
+        },
       }),
     ).toContain("archive");
   });

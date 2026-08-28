@@ -6,6 +6,7 @@ import {
   squashAtomCommandFailure,
 } from "@spiritdevs/client-runtime/state/runtime";
 import {
+  canSettle,
   canSnooze,
   effectiveSettled,
   effectiveSnoozed,
@@ -26,6 +27,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import {
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
+  readEnvironmentSupportsSettleAfterCompletion,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsTitleRegeneration,
   readThreadShell,
@@ -68,6 +70,7 @@ export function useThreadActionMenu(input: {
   const { threadRef, projectCwd, changeRequestState, onStartRename } = input;
   const {
     settleThread,
+    setSettleAfterCompletion,
     unsettleThread,
     snoozeThread,
     unsnoozeThread,
@@ -118,6 +121,9 @@ export function useThreadActionMenu(input: {
         const now = new Date();
         const supports = {
           settlement: readEnvironmentSupportsSettlement(threadRef.environmentId),
+          settleAfterCompletion: readEnvironmentSupportsSettleAfterCompletion(
+            threadRef.environmentId,
+          ),
           snooze: readEnvironmentSupportsSnooze(threadRef.environmentId),
           pinning: readEnvironmentSupportsPinning(threadRef.environmentId),
           titleRegeneration: readEnvironmentSupportsTitleRegeneration(threadRef.environmentId),
@@ -137,6 +143,10 @@ export function useThreadActionMenu(input: {
               autoSettleAfterDays,
               changeRequestState,
             }),
+          settleAfterCompletionActive: thread.settleAfterCompletion,
+          canSettleAfterCompletion:
+            !canSettle(thread, { now: now.toISOString() }) ||
+            (thread.pendingBackgroundTasks?.length ?? 0) > 0,
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
@@ -204,6 +214,14 @@ export function useThreadActionMenu(input: {
           }
           case "settle":
             await reportFailure("Failed to settle thread", () => settleThread(threadRef));
+            return;
+          case "settle-after-completion":
+            await reportFailure(
+              thread.settleAfterCompletion
+                ? "Failed to cancel settle after completion"
+                : "Failed to settle after completion",
+              () => setSettleAfterCompletion(threadRef, !thread.settleAfterCompletion),
+            );
             return;
           case "unsettle":
             await reportFailure("Failed to un-settle thread", () => unsettleThread(threadRef));
@@ -325,6 +343,7 @@ export function useThreadActionMenu(input: {
       onStartRename,
       pinThread,
       projectCwd,
+      setSettleAfterCompletion,
       settleThread,
       snoozeThread,
       threadRef,

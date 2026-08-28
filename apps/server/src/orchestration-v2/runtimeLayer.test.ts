@@ -1107,7 +1107,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("cancels a settle-after-completion request", () =>
+  it.effect("cancels a settle-after-completion request explicitly and when pinning", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
       const threadId = ThreadId.make("runtime-layer-cancel-settle-after-completion-thread");
@@ -1154,6 +1154,22 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const projection = yield* orchestrator.getThreadProjection(threadId);
       assert.isFalse(projection.thread.settleAfterCompletion);
       assert.isNull(projection.thread.settledOverride);
+
+      yield* orchestrator.dispatch({
+        type: "thread.settle-after-completion.set",
+        commandId: CommandId.make("runtime-layer-cancel-settle-after-completion-rearm"),
+        threadId,
+        enabled: true,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pin",
+        commandId: CommandId.make("runtime-layer-cancel-settle-after-completion-pin"),
+        threadId,
+      });
+
+      const pinned = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNotNull(pinned.thread.pinnedAt);
+      assert.isFalse(pinned.thread.settleAfterCompletion);
     }),
   );
 

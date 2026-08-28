@@ -1813,10 +1813,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           // silently outranking them — an explicit settle is un-settled and a
           // snooze's return ticket is spent (the thread is on top NOW).
           const alreadyPinned = thread.pinnedAt != null;
-          const promotes = thread.settledOverride === "settled" || thread.snoozedUntil != null;
+          const promotes =
+            thread.settledOverride === "settled" ||
+            thread.snoozedUntil != null ||
+            thread.settleAfterCompletion === true;
           return {
             ...thread,
             pinnedAt: alreadyPinned ? thread.pinnedAt : now,
+            settleAfterCompletion: false,
             // A fresh pin takes the client's slot in the arranged order; on a
             // re-pin the existing key wins so raced duplicates cannot move a
             // thread the user already placed.
@@ -7563,6 +7567,48 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     };
   });
 
+  // Completion items are high-volume. Keep the durable flag mirrored in a
+  // tiny process-local index so unarmed threads never take the dispatch lock
+  // or decode a full projection on those paths. If startup seeding fails, the
+  // conservative fallback preserves correctness until the process restarts.
+  const initialShell = yield* projectionStore
+    .getShellSnapshot()
+    .pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Unable to seed settle-after-completion index", { cause }).pipe(
+          Effect.as(null),
+        ),
+      ),
+    );
+  const settleAfterCompletionIndexComplete = initialShell !== null;
+  const settleAfterCompletionThreadIds = new Set(
+    initialShell === null
+      ? []
+      : [...initialShell.threads, ...initialShell.archivedThreads]
+          .filter((thread) => thread.settleAfterCompletion === true)
+          .map((thread) => String(thread.id)),
+  );
+  const maySettleAfterCompletion = (threadId: ThreadId) =>
+    !settleAfterCompletionIndexComplete || settleAfterCompletionThreadIds.has(String(threadId));
+  const syncSettleAfterCompletionIndex = (event: OrchestrationV2DomainEvent) => {
+    switch (event.type) {
+      case "thread.created":
+      case "thread.archived":
+      case "thread.deleted":
+      case "thread.settled":
+      case "thread.pinned":
+      case "thread.metadata-updated":
+        if (event.payload.settleAfterCompletion === true) {
+          settleAfterCompletionThreadIds.add(String(event.threadId));
+        } else {
+          settleAfterCompletionThreadIds.delete(String(event.threadId));
+        }
+        break;
+      default:
+        break;
+    }
+  };
+
   const dispatchWithReceiptEffect = Effect.fn("orchestrationV2.dispatch.withReceipt")(function* (
     command: OrchestrationV2Command,
   ): Effect.fn.Return<OrchestratorV2DispatchResult, OrchestratorV2Error> {
@@ -7655,6 +7701,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         detail: committed.receipt.error ?? "Previously rejected.",
       });
     }
+    for (const stored of committed.storedEvents) {
+      syncSettleAfterCompletionIndex(stored.event);
+    }
     if (command.type === "delegated_task.wake-policy") {
       yield* mapDispatchError(command)(offerDelegatedCompletionDeliveries(command.parentThreadId));
     }
@@ -7724,7 +7773,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* threadDispatch.withLock(
           parentThreadId,
           finalizeAppOwnedSubagent(threadId).pipe(
-            Effect.andThen(settleAfterCompletionIfReady(parentThreadId)),
+            Effect.andThen(
+              maySettleAfterCompletion(parentThreadId)
+                ? settleAfterCompletionIfReady(parentThreadId)
+                : Effect.void,
+            ),
           ),
         );
       }
@@ -7735,7 +7788,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             yield* finalizeDelegatedCompletionDelivery(threadId, stored.event.payload.id);
             yield* startNextQueuedRun(threadId);
           }
-          yield* settleAfterCompletionIfReady(threadId);
+          if (maySettleAfterCompletion(threadId)) {
+            yield* settleAfterCompletionIfReady(threadId);
+          }
         }),
       );
     });
@@ -7750,11 +7805,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       eventSink.stream({ afterSequence }).pipe(
         Stream.filter((stored) => {
           const event = stored.event;
+          syncSettleAfterCompletionIndex(event);
+          const armed = maySettleAfterCompletion(event.threadId);
+          const runtimeReconciliation = String(stored.commandId).startsWith(
+            "command:runtime-reconcile:",
+          );
           if (event.type === "run.updated") {
-            return ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
-              event.payload.status,
+            return (
+              (!runtimeReconciliation || armed) &&
+              ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
+                event.payload.status,
+              )
             );
           }
+          if (!armed) return false;
           if (event.type === "subagent.updated") {
             return isTerminalDelegatedTaskStatus(event.payload.status);
           }
