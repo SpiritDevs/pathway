@@ -1,10 +1,15 @@
 export const SLACK_WORKSPACE_WIZARD_STEPS = [
   "Connect Slack",
   "Route issues",
-  "Automate & activate",
+  "Automate routes",
+  "Issue automation",
+  "Activate",
 ] as const;
 
-export type SlackWorkspaceWizardStep = 0 | 1 | 2;
+export type SlackWorkspaceWizardStep = 0 | 1 | 2 | 3 | 4;
+
+const BASIC_SLACK_WORKSPACE_WIZARD_STEPS: readonly SlackWorkspaceWizardStep[] = [0, 1, 2, 4];
+const AUTOMATED_SLACK_WORKSPACE_WIZARD_STEPS: readonly SlackWorkspaceWizardStep[] = [0, 1, 2, 3, 4];
 
 export const SLACK_ROUTING_LIMITS = {
   rulesPerChannel: 25,
@@ -47,9 +52,15 @@ export interface SlackStatusOption {
   readonly color?: string | null;
 }
 
+export interface SlackEnvironmentOption {
+  readonly id: string;
+  readonly name: string;
+}
+
 export interface SlackProjectOption {
   readonly id: string;
   readonly name: string;
+  readonly environmentIds: readonly string[];
   readonly ready?: boolean;
   readonly readinessDetail?: string | null;
 }
@@ -61,6 +72,7 @@ export interface SlackCycleOption {
 }
 
 export interface SlackOwnerCatalog {
+  readonly environments: readonly SlackEnvironmentOption[];
   readonly teams: readonly SlackTeamOption[];
   readonly statuses: readonly SlackStatusOption[];
   readonly projects: readonly SlackProjectOption[];
@@ -118,6 +130,8 @@ export interface SlackWorkspaceWizardDraft {
   readonly channelName: string | null;
   readonly watchId: string | null;
   readonly watchRevision: number | null;
+  readonly preferredEnvironmentId: string | null;
+  readonly backupEnvironmentIds: readonly string[];
   readonly rules: readonly SlackRoutingRule[];
 }
 
@@ -142,10 +156,12 @@ export interface SlackActivationStage {
 export interface SlackWizardValidationContext {
   readonly ownerIds?: ReadonlySet<string>;
   readonly channelIds?: ReadonlySet<string>;
+  readonly environmentIds?: ReadonlySet<string>;
   readonly teamIds?: ReadonlySet<string>;
   readonly projectIds?: ReadonlySet<string>;
   readonly statusIds?: ReadonlySet<string>;
   readonly cycleIds?: ReadonlySet<string>;
+  readonly automationConfigured?: boolean;
   readonly readiness?: readonly SlackWizardReadiness[];
 }
 
@@ -164,7 +180,22 @@ export function createEmptySlackWorkspaceDraft(): SlackWorkspaceWizardDraft {
     channelName: null,
     watchId: null,
     watchRevision: null,
+    preferredEnvironmentId: null,
+    backupEnvironmentIds: [],
     rules: [],
+  };
+}
+
+export function slackCatalogForEnvironment(
+  catalog: SlackOwnerCatalog,
+  environmentId: string | null,
+): SlackOwnerCatalog {
+  return {
+    ...catalog,
+    projects:
+      environmentId === null
+        ? []
+        : catalog.projects.filter((project) => project.environmentIds.includes(environmentId)),
   };
 }
 
@@ -191,7 +222,7 @@ export function defaultSlackActivationStages(): readonly SlackActivationStage[] 
   return [
     { id: "configuration", label: "Save workspace configuration", state: "pending" },
     { id: "routing", label: "Publish routing rules", state: "pending" },
-    { id: "controller", label: "Select a healthy controller", state: "pending" },
+    { id: "controller", label: "Confirm listener environments", state: "pending" },
     { id: "health", label: "Confirm the first healthy poll", state: "pending" },
   ];
 }
@@ -234,6 +265,24 @@ export function slackConditionSummary(node: SlackConditionNode): string {
 
 export function slackRuleUsesAutomation(rule: SlackRoutingRule): boolean {
   return rule.investigation.kind !== "off" || rule.assignment !== "off";
+}
+
+export function slackWizardVisibleSteps(
+  rules: readonly SlackRoutingRule[],
+): readonly SlackWorkspaceWizardStep[] {
+  return rules.some(slackRuleUsesAutomation)
+    ? AUTOMATED_SLACK_WORKSPACE_WIZARD_STEPS
+    : BASIC_SLACK_WORKSPACE_WIZARD_STEPS;
+}
+
+export function nextSlackWizardStep(
+  step: SlackWorkspaceWizardStep,
+  rules: readonly SlackRoutingRule[],
+): SlackWorkspaceWizardStep {
+  if (step === 0) return 1;
+  if (step === 1) return 2;
+  if (step === 2) return rules.some(slackRuleUsesAutomation) ? 3 : 4;
+  return 4;
 }
 
 export function slackRuleRequiresProject(rule: SlackRoutingRule): boolean {
@@ -365,11 +414,33 @@ export function slackWizardStepError(
     if (context.channelIds && !context.channelIds.has(draft.channelId)) {
       return "Choose an available Slack channel.";
     }
+    if (!draft.preferredEnvironmentId) {
+      return "Choose the primary environment that will run this Slack listener.";
+    }
+    if (context.environmentIds && !context.environmentIds.has(draft.preferredEnvironmentId)) {
+      return "Choose an available primary environment.";
+    }
+    if (
+      draft.backupEnvironmentIds.some(
+        (environmentId) =>
+          environmentId === draft.preferredEnvironmentId ||
+          (context.environmentIds !== undefined && !context.environmentIds.has(environmentId)),
+      )
+    ) {
+      return "Choose a different available backup environment.";
+    }
     return null;
   }
   const routingError = slackRoutingRulesError(draft.rules, context);
   if (routingError) return routingError;
-  if (step === 2 && context.readiness?.some((item) => item.state === "blocked")) {
+  if (
+    step === 3 &&
+    draft.rules.some(slackRuleUsesAutomation) &&
+    context.automationConfigured !== true
+  ) {
+    return "Save issue automation settings before continuing.";
+  }
+  if (step === 4 && context.readiness?.some((item) => item.state === "blocked")) {
     return "Resolve the blocked activation checks before activating.";
   }
   return null;
