@@ -1,4 +1,5 @@
 import type { Focus, FocusAssignment, FocusNotification } from "@spiritdevs/contracts/focus";
+import type { ActiveFocusId } from "@spiritdevs/client-runtime/state/focuses";
 import type { LucideIcon } from "lucide-react";
 import {
   BellIcon,
@@ -80,22 +81,25 @@ export function FocusNotificationTray(props: {
   readonly unreadCount: number;
   readonly focuses: ReadonlyArray<Focus>;
   readonly assignments: ReadonlyArray<FocusAssignment>;
+  readonly activeFocusId: ActiveFocusId;
   readonly threadTitlesByKey: ReadonlyMap<string, string>;
   readonly projectNamesByKey: ReadonlyMap<string, string>;
   readonly onSelect: (notification: FocusNotification) => void;
 }) {
-  const rows = useMemo(
+  const groups = useMemo(
     () =>
       buildFocusNotificationRows({
         notifications: props.notifications,
         unreadCount: props.unreadCount,
         focuses: props.focuses,
         assignments: props.assignments,
+        activeFocusId: props.activeFocusId,
         threadTitlesByKey: props.threadTitlesByKey,
         projectNamesByKey: props.projectNamesByKey,
       }),
     [
       props.assignments,
+      props.activeFocusId,
       props.focuses,
       props.notifications,
       props.projectNamesByKey,
@@ -109,15 +113,28 @@ export function FocusNotificationTray(props: {
       <div className="border-b border-border/60 px-3 py-2">
         <div className="text-xs font-medium text-foreground">Notifications</div>
       </div>
-      {rows.length === 0 ? (
+      {groups.length === 0 ? (
         <div className="flex flex-col items-center gap-2 px-6 py-8 text-center text-xs text-muted-foreground/60">
           <BellIcon aria-hidden className="size-4" />
           <span>You're all caught up</span>
         </div>
       ) : (
-        <ul className="max-h-[min(26rem,calc(100vh-8rem))] space-y-0.5 overflow-y-auto p-1.5">
-          {rows.map((row) => (
-            <FocusNotificationRow key={row.notification.id} row={row} onSelect={props.onSelect} />
+        <ul className="max-h-[min(26rem,calc(100vh-8rem))] overflow-y-auto p-1.5">
+          {groups.map((group) => (
+            <li key={group.focusId}>
+              <div className="px-2.5 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                {group.focusName}
+              </div>
+              <ul className="space-y-0.5">
+                {group.rows.map((row) => (
+                  <FocusNotificationRow
+                    key={row.notification.id}
+                    row={row}
+                    onSelect={props.onSelect}
+                  />
+                ))}
+              </ul>
+            </li>
           ))}
         </ul>
       )}

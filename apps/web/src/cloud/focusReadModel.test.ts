@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ALL_FOCUS_ID,
   activeFocusIdStorageKey,
+  persistActiveFocusSelection,
   readActiveFocusId,
   writeActiveFocusId,
   type ActiveFocusStorage,
@@ -72,6 +73,35 @@ describe("active Focus persistence", () => {
         storage,
       }),
     ).toBe(ALL_FOCUS_ID);
+  });
+
+  it("preserves a requested Focus while its projects are hidden", () => {
+    const { storage, values } = memoryStorage();
+    const overrides = persistActiveFocusSelection({
+      scope: "account-a",
+      requestedId: WORK,
+      overrides: new Map(),
+      storage,
+    });
+
+    expect(overrides.get("account-a")).toBe(WORK);
+    expect(values.get(activeFocusIdStorageKey("account-a"))).toBe(WORK);
+    expect(
+      readActiveFocusId({
+        scope: "account-a",
+        readModel: READ_MODEL,
+        visibleProjectKeys: new Set(),
+        storage,
+      }),
+    ).toBe(ALL_FOCUS_ID);
+    expect(
+      readActiveFocusId({
+        scope: "account-a",
+        readModel: READ_MODEL,
+        visibleProjectKeys: new Set([PROJECT]),
+        storage,
+      }),
+    ).toBe(WORK);
   });
 
   it("writes All explicitly and tolerates unavailable storage", () => {

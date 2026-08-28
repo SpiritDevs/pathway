@@ -187,6 +187,21 @@ export function writeActiveFocusId(options: {
   return options.activeFocusId;
 }
 
+export function persistActiveFocusSelection(options: {
+  readonly scope: string | null;
+  readonly requestedId: ActiveFocusId;
+  readonly overrides: ReadonlyMap<string, ActiveFocusId>;
+  readonly storage: ActiveFocusStorage | null;
+}): ReadonlyMap<string, ActiveFocusId> {
+  writeActiveFocusId({
+    scope: options.scope,
+    activeFocusId: options.requestedId,
+    storage: options.storage,
+  });
+  if (options.scope === null) return options.overrides;
+  return new Map(options.overrides).set(options.scope, options.requestedId);
+}
+
 function ambientLocalStorage(): ActiveFocusStorage | null {
   try {
     return typeof window === "undefined" ? null : window.localStorage;
@@ -244,22 +259,14 @@ export const activeFocusIdAtom = Atom.writable(
   },
   (context, requestedId: ActiveFocusId) => {
     const scope = context.get(activeFocusAccountScopeAtom);
-    const readModel = context.get(focusReadModelAtom);
-    const activeFocusId =
-      readModel === null
-        ? requestedId
-        : resolveActiveFocusId({
-            preferredId: requestedId,
-            focuses: readModel.focuses,
-            assignments: readModel.assignments,
-            visibleProjectKeys: context.get(visibleFocusProjectKeysAtom),
-          });
-    writeActiveFocusId({ scope, activeFocusId, storage: ambientLocalStorage() });
+    const overrides = persistActiveFocusSelection({
+      scope,
+      requestedId,
+      overrides: context.get(activeFocusOverridesAtom),
+      storage: ambientLocalStorage(),
+    });
     if (scope !== null) {
-      context.set(
-        activeFocusOverridesAtom,
-        new Map(context.get(activeFocusOverridesAtom)).set(scope, activeFocusId),
-      );
+      context.set(activeFocusOverridesAtom, overrides);
     }
     context.refreshSelf();
   },

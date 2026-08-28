@@ -147,6 +147,7 @@ import {
   getVisibleThreadsForCollapsibleShelf,
   hasUnseenCompletion,
   isTrailingDoubleClick,
+  mergeActiveThreadOrderPreference,
   orderItemsByPreferredIds,
   planPinnedReorder,
   resolveAdjacentThreadId,
@@ -3029,10 +3030,8 @@ export default function Sidebar() {
     },
     [orderedPinnedThreads, reorderPinnedThread, reorderablePinnedKeys],
   );
-  // Active-inbox drop: persist the whole visible order, not a delta. Saving
-  // every key (not just the moved one) both freezes the arrangement the user
-  // was looking at and self-prunes keys of threads that have left the
-  // section since the previous drop.
+  // An unscoped drop persists the whole visible order and self-prunes keys of
+  // threads that left the section. Scoped drops keep hidden arranged keys.
   const handleActiveDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeKey = String(event.active.id);
@@ -3044,9 +3043,15 @@ export default function Sidebar() {
       const fromIndex = keys.indexOf(activeKey);
       const toIndex = keys.indexOf(overKey);
       if (fromIndex === -1 || toIndex === -1) return;
-      setActiveOrderPreference(arrayMove(keys, fromIndex, toIndex));
+      setActiveOrderPreference(
+        mergeActiveThreadOrderPreference({
+          savedOrder: activeOrderPreference,
+          visibleOrder: arrayMove(keys, fromIndex, toIndex),
+          scoped: scopedProjectKeys !== null,
+        }),
+      );
     },
-    [orderedActiveThreads, setActiveOrderPreference],
+    [activeOrderPreference, orderedActiveThreads, scopedProjectKeys, setActiveOrderPreference],
   );
   // One snooze per thread at a time — same double-dispatch guard as settle.
   const snoozingThreadKeysRef = useRef(new Set<string>());

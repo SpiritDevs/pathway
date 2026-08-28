@@ -21,6 +21,7 @@ import {
   isContextMenuPointerDown,
   isSidebarSubagentThread,
   isTrailingDoubleClick,
+  mergeActiveThreadOrderPreference,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
   planPinnedReorder,
@@ -690,6 +691,45 @@ describe("orderItemsByPreferredIds", () => {
       "physical-a",
       "physical-b",
     ]);
+  });
+});
+
+describe("mergeActiveThreadOrderPreference", () => {
+  it("reorders visible keys without losing hidden or previously unarranged keys", () => {
+    const merged = mergeActiveThreadOrderPreference({
+      savedOrder: ["hidden-a", "visible-a", "hidden-b", "visible-b", "hidden-c"],
+      visibleOrder: ["visible-b", "visible-new", "visible-a"],
+      scoped: true,
+    });
+
+    expect(merged).toEqual([
+      "hidden-a",
+      "visible-b",
+      "hidden-b",
+      "visible-new",
+      "hidden-c",
+      "visible-a",
+    ]);
+    expect(merged.filter((key) => key.startsWith("hidden"))).toEqual([
+      "hidden-a",
+      "hidden-b",
+      "hidden-c",
+    ]);
+    expect(merged.filter((key) => key.startsWith("visible"))).toEqual([
+      "visible-b",
+      "visible-new",
+      "visible-a",
+    ]);
+  });
+
+  it("replaces and prunes the preference when the inbox is unscoped", () => {
+    expect(
+      mergeActiveThreadOrderPreference({
+        savedOrder: ["stale", "visible-a", "hidden"],
+        visibleOrder: ["visible-b", "visible-a"],
+        scoped: false,
+      }),
+    ).toEqual(["visible-b", "visible-a"]);
   });
 });
 

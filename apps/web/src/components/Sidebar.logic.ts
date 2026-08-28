@@ -398,6 +398,22 @@ export function orderItemsByPreferredIds<TItem, TId>(input: {
   return [...ordered, ...remaining];
 }
 
+export function mergeActiveThreadOrderPreference(input: {
+  readonly savedOrder: readonly string[];
+  readonly visibleOrder: readonly string[];
+  readonly scoped: boolean;
+}): string[] {
+  if (!input.scoped) return [...input.visibleOrder];
+
+  const visibleKeys = new Set(input.visibleOrder);
+  let visibleIndex = 0;
+  const merged = input.savedOrder.map((savedKey) => {
+    if (!visibleKeys.has(savedKey)) return savedKey;
+    return input.visibleOrder[visibleIndex++]!;
+  });
+  return [...merged, ...input.visibleOrder.slice(visibleIndex)];
+}
+
 export function getVisibleSidebarThreadIds<TThreadId>(
   renderedProjects: readonly {
     shouldShowThreadPanel?: boolean;

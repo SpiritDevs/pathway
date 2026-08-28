@@ -337,6 +337,7 @@ export function FocusStrip(props: {
             unreadCount={trayUnreadCount}
             focuses={orderedFocuses}
             assignments={props.assignments}
+            activeFocusId={props.activeFocusId}
             threadTitlesByKey={props.threadTitlesByKey}
             projectNamesByKey={props.projectNamesByKey}
             onSelect={selectNotification}
