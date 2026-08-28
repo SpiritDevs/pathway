@@ -1,4 +1,4 @@
-import { EnvironmentId, type VcsRef } from "@spiritdevs/contracts";
+import { EnvironmentId, ThreadId, type VcsRef } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   dedupeRemoteBranchesWithLocalMatches,
@@ -6,6 +6,7 @@ import {
   resolveEnvironmentOptionLabel,
   resolveBranchSelectionTarget,
   resolveCurrentWorkspaceLabel,
+  resolveDisplayedBranch,
   resolveDraftEnvModeAfterBranchChange,
   resolveEffectiveEnvMode,
   resolveEnvModeLabel,
@@ -17,6 +18,8 @@ import {
   resolveLocalCheckoutBranchMismatch,
   resolvePreviousWorktreeLabel,
   resolvePreviousWorktreeSeed,
+  resolvePendingBranchSelection,
+  resolveScopedBranchSelection,
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
   shouldShowComposerContextStrip,
@@ -177,6 +180,52 @@ describe("resolveBranchToolbarValue", () => {
         currentGitBranch: "main",
       }),
     ).toBe("main");
+  });
+});
+
+describe("pending branch selection", () => {
+  it("keeps the requested branch visible while canonical status is stale", () => {
+    const pendingBranch = resolvePendingBranchSelection("feature/selected", "main");
+
+    expect(
+      resolveDisplayedBranch({
+        pendingBranch,
+        canonicalBranch: "main",
+      }),
+    ).toBe("feature/selected");
+  });
+
+  it("releases the requested branch once canonical status confirms it", () => {
+    const pendingBranch = resolvePendingBranchSelection("feature/selected", "feature/selected");
+
+    expect(pendingBranch).toBeNull();
+    expect(
+      resolveDisplayedBranch({
+        pendingBranch,
+        canonicalBranch: "feature/selected",
+      }),
+    ).toBe("feature/selected");
+  });
+
+  it("only exposes a pending branch to the thread that requested it", () => {
+    const pendingBranch = {
+      environmentId: EnvironmentId.make("env-a"),
+      threadId: ThreadId.make("thread-a"),
+      branch: "feature/selected",
+    };
+
+    expect(
+      resolveScopedBranchSelection(pendingBranch, {
+        environmentId: EnvironmentId.make("env-a"),
+        threadId: ThreadId.make("thread-a"),
+      }),
+    ).toBe("feature/selected");
+    expect(
+      resolveScopedBranchSelection(pendingBranch, {
+        environmentId: EnvironmentId.make("env-a"),
+        threadId: ThreadId.make("thread-b"),
+      }),
+    ).toBeUndefined();
   });
 });
 

@@ -7,6 +7,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
@@ -75,6 +76,10 @@ function makeTestLayer(state: {
   localInvalidationCalls: number;
   remoteInvalidationCalls: number;
   remoteStatusRefreshUpstreamValues?: Array<boolean | undefined>;
+  readLocalStatus?: () => Effect.Effect<VcsStatusLocalResult>;
+  readRemoteStatus?: (
+    options: { readonly refreshUpstream?: boolean } | undefined,
+  ) => Effect.Effect<VcsStatusRemoteResult | null>;
 }) {
   return VcsStatusBroadcaster.layer.pipe(
     Layer.provideMerge(NodeServices.layer),
@@ -82,15 +87,15 @@ function makeTestLayer(state: {
     Layer.provide(
       Layer.mock(GitWorkflowService.GitWorkflowService)({
         localStatus: () =>
-          Effect.sync(() => {
+          Effect.suspend(() => {
             state.localStatusCalls += 1;
-            return state.currentLocalStatus;
+            return state.readLocalStatus?.() ?? Effect.succeed(state.currentLocalStatus);
           }),
         remoteStatus: (_input, options) =>
-          Effect.sync(() => {
+          Effect.suspend(() => {
             state.remoteStatusCalls += 1;
             state.remoteStatusRefreshUpstreamValues?.push(options?.refreshUpstream);
-            return state.currentRemoteStatus;
+            return state.readRemoteStatus?.(options) ?? Effect.succeed(state.currentRemoteStatus);
           }),
         invalidateLocalStatus: () =>
           Effect.sync(() => {
@@ -315,6 +320,180 @@ describe("VcsStatusBroadcaster", () => {
       assert.equal(state.remoteInvalidationCalls, 0);
     }).pipe(Effect.provide(makeTestLayer(state)));
   });
+
+  it.effect(
+    "refreshes remote status after a local mutation without rescanning local status",
+    () => {
+      const state = {
+        currentLocalStatus: baseLocalStatus,
+        currentRemoteStatus: baseRemoteStatus,
+        localStatusCalls: 0,
+        remoteStatusCalls: 0,
+        localInvalidationCalls: 0,
+        remoteInvalidationCalls: 0,
+      };
+
+      return Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        yield* broadcaster.getStatus({ cwd: "/repo" });
+
+        state.currentLocalStatus = {
+          ...baseLocalStatus,
+          refName: "feature/selected",
+        };
+        state.currentRemoteStatus = {
+          ...baseRemoteStatus,
+          aheadCount: 2,
+        };
+
+        yield* broadcaster.refreshLocalStatus("/repo");
+        yield* broadcaster.refreshRemoteStatusAfterLocalMutation("/repo");
+        const cached = yield* broadcaster.getStatus({ cwd: "/repo" });
+
+        assert.deepStrictEqual(cached, {
+          ...state.currentLocalStatus,
+          ...state.currentRemoteStatus,
+        });
+        assert.equal(state.localStatusCalls, 2);
+        assert.equal(state.remoteStatusCalls, 2);
+        assert.equal(state.localInvalidationCalls, 2);
+        assert.equal(state.remoteInvalidationCalls, 1);
+      }).pipe(Effect.provide(makeTestLayer(state)));
+    },
+  );
+
+  it.effect("does not let an older local refresh overwrite a newer result", () =>
+    Effect.gen(function* () {
+      const firstRefreshStarted = yield* Deferred.make<void>();
+      const releaseFirstRefresh = yield* Deferred.make<void>();
+      const firstStatus = { ...baseLocalStatus, refName: "feature/first" };
+      const secondStatus = { ...baseLocalStatus, refName: "feature/second" };
+      let localStatusAttempt = 0;
+      const state = {
+        currentLocalStatus: baseLocalStatus,
+        currentRemoteStatus: baseRemoteStatus,
+        localStatusCalls: 0,
+        remoteStatusCalls: 0,
+        localInvalidationCalls: 0,
+        remoteInvalidationCalls: 0,
+        readLocalStatus: () => {
+          localStatusAttempt += 1;
+          return localStatusAttempt === 1
+            ? Deferred.succeed(firstRefreshStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseFirstRefresh)),
+                Effect.as(firstStatus),
+              )
+            : Effect.succeed(secondStatus);
+        },
+      };
+
+      const program = Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const firstRefreshFiber = yield* broadcaster
+          .refreshLocalStatus("/repo")
+          .pipe(Effect.forkChild);
+
+        yield* Deferred.await(firstRefreshStarted);
+        yield* broadcaster.refreshLocalStatus("/repo");
+        yield* Deferred.succeed(releaseFirstRefresh, undefined);
+        yield* Fiber.join(firstRefreshFiber);
+
+        const cached = yield* broadcaster.getStatus({ cwd: "/repo" });
+        assert.equal(cached.refName, secondStatus.refName);
+        assert.equal(state.localStatusCalls, 2);
+      });
+
+      yield* program.pipe(Effect.provide(makeTestLayer(state)));
+    }),
+  );
+
+  it.effect("does not let an older local refresh overwrite a newer full refresh", () =>
+    Effect.gen(function* () {
+      const firstRefreshStarted = yield* Deferred.make<void>();
+      const releaseFirstRefresh = yield* Deferred.make<void>();
+      const firstStatus = { ...baseLocalStatus, refName: "feature/first" };
+      const fullRefreshStatus = { ...baseLocalStatus, refName: "feature/full-refresh" };
+      let localStatusAttempt = 0;
+      const state = {
+        currentLocalStatus: baseLocalStatus,
+        currentRemoteStatus: baseRemoteStatus,
+        localStatusCalls: 0,
+        remoteStatusCalls: 0,
+        localInvalidationCalls: 0,
+        remoteInvalidationCalls: 0,
+        readLocalStatus: () => {
+          localStatusAttempt += 1;
+          return localStatusAttempt === 1
+            ? Deferred.succeed(firstRefreshStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseFirstRefresh)),
+                Effect.as(firstStatus),
+              )
+            : Effect.succeed(fullRefreshStatus);
+        },
+      };
+
+      const program = Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const firstRefreshFiber = yield* broadcaster
+          .refreshLocalStatus("/repo")
+          .pipe(Effect.forkChild);
+
+        yield* Deferred.await(firstRefreshStarted);
+        yield* broadcaster.refreshStatus("/repo");
+        yield* Deferred.succeed(releaseFirstRefresh, undefined);
+        yield* Fiber.join(firstRefreshFiber);
+
+        const cached = yield* broadcaster.getStatus({ cwd: "/repo" });
+        assert.equal(cached.refName, fullRefreshStatus.refName);
+        assert.equal(state.localStatusCalls, 2);
+      });
+
+      yield* program.pipe(Effect.provide(makeTestLayer(state)));
+    }),
+  );
+
+  it.effect("does not let an older remote refresh overwrite a mutation refresh", () =>
+    Effect.gen(function* () {
+      const firstRemoteRefreshStarted = yield* Deferred.make<void>();
+      const releaseFirstRemoteRefresh = yield* Deferred.make<void>();
+      const staleRemoteStatus = { ...baseRemoteStatus, aheadCount: 1 };
+      const mutationRemoteStatus = { ...baseRemoteStatus, aheadCount: 2 };
+      let remoteStatusAttempt = 0;
+      const state = {
+        currentLocalStatus: baseLocalStatus,
+        currentRemoteStatus: baseRemoteStatus,
+        localStatusCalls: 0,
+        remoteStatusCalls: 0,
+        localInvalidationCalls: 0,
+        remoteInvalidationCalls: 0,
+        readRemoteStatus: () => {
+          remoteStatusAttempt += 1;
+          return remoteStatusAttempt === 1
+            ? Deferred.succeed(firstRemoteRefreshStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseFirstRemoteRefresh)),
+                Effect.as(staleRemoteStatus),
+              )
+            : Effect.succeed(mutationRemoteStatus);
+        },
+      };
+
+      const program = Effect.gen(function* () {
+        const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const firstRefreshFiber = yield* broadcaster.refreshStatus("/repo").pipe(Effect.forkChild);
+
+        yield* Deferred.await(firstRemoteRefreshStarted);
+        yield* broadcaster.refreshRemoteStatusAfterLocalMutation("/repo");
+        yield* Deferred.succeed(releaseFirstRemoteRefresh, undefined);
+        yield* Fiber.join(firstRefreshFiber);
+
+        const cached = yield* broadcaster.getStatus({ cwd: "/repo" });
+        assert.equal(cached.aheadCount, mutationRemoteStatus.aheadCount);
+        assert.equal(state.remoteStatusCalls, 2);
+      });
+
+      yield* program.pipe(Effect.provide(makeTestLayer(state)));
+    }),
+  );
 
   it.effect("normalizes symlinked CWDs before cache lookup and workflow calls", () => {
     const seenCwds: string[] = [];

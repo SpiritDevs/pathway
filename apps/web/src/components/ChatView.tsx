@@ -323,7 +323,12 @@ import {
   deriveAgentPanelModel,
   projectedSubagentsToRuntime,
 } from "@spiritdevs/client-runtime/state/subagentRuntime";
-import { resolveEffectiveEnvMode, resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
+import {
+  resolveEffectiveEnvMode,
+  resolveLocalCheckoutBranchMismatch,
+  resolveScopedBranchSelection,
+  type ScopedBranchSelection,
+} from "./BranchToolbar.logic";
 import {
   getProviderStatusBannerKey,
   ProviderStatusBanner,
@@ -1603,7 +1608,8 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [pendingServerThreadEnvMode, setPendingServerThreadEnvMode] =
     useState<DraftThreadEnvMode | null>(null);
-  const [pendingServerThreadBranch, setPendingServerThreadBranch] = useState<string | null>();
+  const [pendingServerThreadBranch, setPendingServerThreadBranch] =
+    useState<ScopedBranchSelection>();
   const [
     pendingServerThreadStartFromOriginByThreadId,
     setPendingServerThreadStartFromOriginByThreadId,
@@ -5003,10 +5009,32 @@ function ChatViewContent(props: ChatViewProps) {
   const envMode: DraftThreadEnvMode = canOverrideServerThreadEnvMode
     ? (pendingServerThreadEnvMode ?? draftThread?.envMode ?? derivedEnvMode)
     : derivedEnvMode;
+  const activeServerThreadEnvironmentId = activeThread?.environmentId;
+  const activeServerThreadId = activeThread?.id;
+  const scopedPendingServerThreadBranch =
+    activeServerThreadEnvironmentId !== undefined && activeServerThreadId !== undefined
+      ? resolveScopedBranchSelection(pendingServerThreadBranch, {
+          environmentId: activeServerThreadEnvironmentId,
+          threadId: activeServerThreadId,
+        })
+      : undefined;
   const activeThreadBranch =
-    canOverrideServerThreadEnvMode && pendingServerThreadBranch !== undefined
-      ? pendingServerThreadBranch
+    canOverrideServerThreadEnvMode && scopedPendingServerThreadBranch !== undefined
+      ? scopedPendingServerThreadBranch
       : (activeThread?.branch ?? null);
+  const setActiveThreadBranchOverride = useCallback(
+    (branch: string | null) => {
+      if (activeServerThreadEnvironmentId === undefined || activeServerThreadId === undefined) {
+        return;
+      }
+      setPendingServerThreadBranch({
+        environmentId: activeServerThreadEnvironmentId,
+        threadId: activeServerThreadId,
+        branch,
+      });
+    },
+    [activeServerThreadEnvironmentId, activeServerThreadId],
+  );
   const startFromOrigin = isLocalDraftThread
     ? (draftThread?.startFromOrigin ?? false)
     : canOverrideServerThreadEnvMode
@@ -7984,7 +8012,7 @@ function ChatViewContent(props: ChatViewProps) {
     ...(canOverrideServerThreadEnvMode
       ? {
           activeThreadBranchOverride: activeThreadBranch,
-          onActiveThreadBranchOverrideChange: setPendingServerThreadBranch,
+          onActiveThreadBranchOverrideChange: setActiveThreadBranchOverride,
         }
       : {}),
     startFromOrigin,
@@ -8446,7 +8474,7 @@ function ChatViewContent(props: ChatViewProps) {
                                     ? {
                                         activeThreadBranchOverride: activeThreadBranch,
                                         onActiveThreadBranchOverrideChange:
-                                          setPendingServerThreadBranch,
+                                          setActiveThreadBranchOverride,
                                       }
                                     : {})}
                                   envLocked={envLocked}
