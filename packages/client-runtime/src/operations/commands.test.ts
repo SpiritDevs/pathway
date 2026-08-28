@@ -38,7 +38,9 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import { v2Now, v2Projection, v2ThreadId } from "../state/orchestrationV2TestFixtures.ts";
 import {
   archiveThread,
+  attachPullRequest,
   createProject,
+  detachPullRequest,
   forkThreadFromRun,
   launchThreadContinuation,
   mergeThreadBack,
@@ -76,6 +78,14 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly launches?: OrchestrationV2ThreadLaunchInput[];
   readonly continuationLaunches?: OrchestrationV2ContinuationLaunchInput[];
   readonly projection?: OrchestrationV2ThreadProjection;
+  readonly resolvedPullRequest?: {
+    readonly number: number;
+    readonly title: string;
+    readonly url: string;
+    readonly baseBranch: string;
+    readonly headBranch: string;
+    readonly state: "open" | "closed" | "merged";
+  };
 }) {
   const client = {
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
@@ -121,6 +131,17 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
           updatedAt: "2026-06-06T00:00:00.000Z",
           deletedAt: null,
         };
+      }),
+    [WS_METHODS.gitResolvePullRequest]: () =>
+      Effect.succeed({
+        pullRequest: input.resolvedPullRequest ?? {
+          number: 47,
+          title: "Attach published PR",
+          url: "https://github.com/SpiritDevs/pathway/pull/47",
+          baseBranch: "main",
+          headBranch: "feature/attach-pr",
+          state: "open",
+        },
       }),
   } as unknown as WsRpcProtocolClient;
   const session: RpcSession.RpcSession = {
@@ -272,6 +293,65 @@ describe("V2 environment commands", () => {
 
       expect(commands).toEqual([
         { type: "thread.archive", commandId: "queued-command", threadId: "thread-1" },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("resolves and attaches a pull request through the source-control marker command", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+
+      const pullRequest = yield* attachPullRequest({
+        commandId: CommandId.make("attach-pr-command"),
+        threadId: ThreadId.make("thread-1"),
+        cwd: "/workspace/pathway",
+        reference: "https://github.com/SpiritDevs/pathway/pull/47",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(pullRequest.number).toBe(47);
+      expect(commands).toEqual([
+        {
+          type: "thread.source-control.record",
+          commandId: "attach-pr-command",
+          threadId: "thread-1",
+          committed: false,
+          pullRequestAction: "attached",
+          pullRequest: {
+            number: 47,
+            url: "https://github.com/SpiritDevs/pathway/pull/47",
+          },
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("records a detached pull request without claiming a push or commit", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+
+      yield* detachPullRequest({
+        commandId: CommandId.make("detach-pr-command"),
+        threadId: ThreadId.make("thread-1"),
+        pullRequest: {
+          number: 47,
+          url: "https://github.com/SpiritDevs/pathway/pull/47",
+        },
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(commands).toEqual([
+        {
+          type: "thread.source-control.record",
+          commandId: "detach-pr-command",
+          threadId: "thread-1",
+          committed: false,
+          pullRequestAction: "detached",
+          pullRequest: {
+            number: 47,
+            url: "https://github.com/SpiritDevs/pathway/pull/47",
+          },
+        },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );

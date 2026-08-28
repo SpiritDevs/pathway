@@ -5,11 +5,86 @@ import {
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  resolveActiveAttachedPullRequestItemId,
   replaceEditableUserMessageText,
   splitEditableUserMessageText,
   resolveTimelineToolPresentation,
   shouldPreserveAssistantLineBreaks,
+  type MessagesTimelineRow,
 } from "./MessagesTimeline.logic";
+
+function sourceControlRow(input: {
+  readonly id: string;
+  readonly action: "attached" | "detached";
+  readonly number: number;
+  readonly url: string;
+  readonly visibility?: "local" | "inherited";
+}): MessagesTimelineRow {
+  return {
+    kind: "event",
+    id: input.id,
+    createdAt: "2026-08-29T00:00:00.000Z",
+    projectedItem: {
+      visibility: input.visibility ?? "local",
+      sourceThreadId: "thread-1",
+      item: {
+        id: input.id,
+        type: "source_control",
+        pullRequestAction: input.action,
+        pullRequest: { number: input.number, url: input.url },
+      },
+    },
+  } as unknown as MessagesTimelineRow;
+}
+
+describe("active pull request attachment", () => {
+  it("does not clear a newer attachment when a stale detach arrives", () => {
+    const first = sourceControlRow({
+      id: "attach-1",
+      action: "attached",
+      number: 1,
+      url: "https://github.com/acme/repo/pull/1",
+    });
+    const second = sourceControlRow({
+      id: "attach-2",
+      action: "attached",
+      number: 2,
+      url: "https://github.com/acme/repo/pull/2",
+    });
+    const staleDetach = sourceControlRow({
+      id: "detach-1",
+      action: "detached",
+      number: 1,
+      url: "https://github.com/acme/repo/pull/1",
+    });
+
+    expect(resolveActiveAttachedPullRequestItemId([first, second, staleDetach])).toBe("attach-2");
+  });
+
+  it("clears the matching attachment and ignores inherited state", () => {
+    const attached = sourceControlRow({
+      id: "attach-2",
+      action: "attached",
+      number: 2,
+      url: "https://github.com/acme/repo/pull/2",
+    });
+    const inherited = sourceControlRow({
+      id: "inherited-attach",
+      action: "attached",
+      number: 3,
+      url: "https://github.com/acme/repo/pull/3",
+      visibility: "inherited",
+    });
+    const detached = sourceControlRow({
+      id: "detach-2",
+      action: "detached",
+      number: 2,
+      url: "https://github.com/acme/repo/pull/2",
+    });
+
+    expect(resolveActiveAttachedPullRequestItemId([attached, inherited, detached])).toBeNull();
+  });
+});
 
 describe("editable user message text", () => {
   it("preserves structured context while replacing the user's text", () => {

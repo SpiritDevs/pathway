@@ -909,6 +909,16 @@ export const OrchestrationV2ProviderFailure = Schema.Struct({
 });
 export type OrchestrationV2ProviderFailure = typeof OrchestrationV2ProviderFailure.Type;
 
+const validSourceControlPullRequestAction = Schema.makeFilter(
+  (input: {
+    readonly pullRequestAction?: "attached" | "detached" | undefined;
+    readonly pullRequest: { readonly number: number; readonly url: string } | null;
+  }) =>
+    input.pullRequestAction === undefined ||
+    input.pullRequest !== null ||
+    "A source-control pull request action requires a pull request.",
+);
+
 /**
  * Provider-reported retry progress. Some providers expose all fields (Claude),
  * while others only expose `willRetry` and encode counters in display text
@@ -1124,6 +1134,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("source_control"),
     committed: Schema.Boolean,
+    pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached"])),
     // Absent on historical markers and pushes that had nothing new to commit.
     commitSha: Schema.optional(TrimmedNonEmptyString),
     pullRequest: Schema.NullOr(
@@ -1132,7 +1143,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
         url: Schema.String,
       }),
     ),
-  }),
+  }).check(validSourceControlPullRequestAction),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("thread_created"),
@@ -1832,6 +1843,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("source_control"),
     committed: Schema.Boolean,
+    pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached"])),
     // Absent on historical markers and pushes that had nothing new to commit.
     commitSha: Schema.optional(TrimmedNonEmptyString),
     pullRequest: Schema.NullOr(
@@ -1840,7 +1852,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
         url: Schema.String,
       }),
     ),
-  }),
+  }).check(validSourceControlPullRequestAction),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("thread_created"),
@@ -2141,6 +2153,7 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     committed: Schema.Boolean,
+    pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached"])),
     commitSha: Schema.optional(TrimmedNonEmptyString),
     pullRequest: Schema.NullOr(
       Schema.Struct({
@@ -2148,7 +2161,7 @@ export const OrchestrationV2Command = Schema.Union([
         url: Schema.String,
       }),
     ),
-  }),
+  }).check(validSourceControlPullRequestAction),
   Schema.Struct({
     type: Schema.Literal("thread.unsettle"),
     commandId: CommandId,

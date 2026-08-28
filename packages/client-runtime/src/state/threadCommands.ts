@@ -4,9 +4,11 @@ import { Atom } from "effect/unstable/reactivity";
 import { createAtomCommandScheduler, createEnvironmentCommand } from "./runtime.ts";
 import {
   type ArchiveThreadInput,
+  type AttachPullRequestInput,
   type CancelQueuedRunInput,
   type CreateThreadInput,
   type DeleteThreadInput,
+  type DetachPullRequestInput,
   type EditQueuedRunInput,
   type EditAndRestartMessageInput,
   type InterruptThreadTurnInput,
@@ -36,9 +38,11 @@ import {
   type UpdateThreadMetadataInput,
   type VisitThreadInput,
   archiveThread,
+  attachPullRequest,
   cancelQueuedRun,
   createThread,
   deleteThread,
+  detachPullRequest,
   editQueuedRun,
   editAndRestartMessage,
   interruptThreadTurn,
@@ -73,9 +77,11 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 
 export type {
   ArchiveThreadInput,
+  AttachPullRequestInput,
   CancelQueuedRunInput,
   CreateThreadInput,
   DeleteThreadInput,
+  DetachPullRequestInput,
   EditQueuedRunInput,
   EditAndRestartMessageInput,
   InterruptThreadTurnInput,
@@ -132,6 +138,18 @@ export function createThreadEnvironmentAtoms<R, E>(
     archive: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:archive",
       execute: (input: ArchiveThreadInput) => archiveThread(input),
+      scheduler,
+      concurrency,
+    }),
+    attachPullRequest: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:attach-pull-request",
+      execute: (input: AttachPullRequestInput) => attachPullRequest(input),
+      scheduler,
+      concurrency,
+    }),
+    detachPullRequest: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:detach-pull-request",
+      execute: (input: DetachPullRequestInput) => detachPullRequest(input),
       scheduler,
       concurrency,
     }),

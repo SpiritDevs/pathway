@@ -279,6 +279,14 @@ export function showContextMenuFallback<T extends string>(
         }
 
         inner.appendChild(button);
+        if (item.separatorAfter) {
+          const separator = document.createElement("div");
+          separator.setAttribute("role", "separator");
+          separator.className = "my-1 h-px bg-border";
+          separator.style.cssText =
+            "height:1px;margin:0.25rem 0;background:var(--border);pointer-events:none;";
+          inner.appendChild(separator);
+        }
       }
 
       menu.appendChild(inner);

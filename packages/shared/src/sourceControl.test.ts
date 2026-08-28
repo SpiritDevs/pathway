@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   detectSourceControlProviderFromRemoteUrl,
+  getChangeRequestTerminologyFromUrl,
   getChangeRequestTerminologyForKind,
   resolveChangeRequestPresentation,
   sourceControlMarkerLabel,
@@ -32,6 +33,27 @@ describe("source control timeline markers", () => {
         pullRequest: { number: 47, url: "https://example.com/pull/47" },
       }),
     ).toBe("Committed, pushed, and PR created");
+    expect(
+      sourceControlMarkerLabel({
+        ...sourceControlItem,
+        pullRequestAction: "attached",
+        pullRequest: { number: 47, url: "https://example.com/pull/47" },
+      }),
+    ).toBe("PR attached");
+    expect(
+      sourceControlMarkerLabel({
+        ...sourceControlItem,
+        pullRequestAction: "detached",
+        pullRequest: { number: 47, url: "https://example.com/pull/47" },
+      }),
+    ).toBe("PR detached");
+    expect(
+      sourceControlMarkerLabel({
+        ...sourceControlItem,
+        pullRequestAction: "attached",
+        pullRequest: { number: 47, url: "https://gitlab.com/acme/repo/-/merge_requests/47" },
+      }),
+    ).toBe("MR attached");
   });
 });
 
@@ -41,6 +63,11 @@ describe("source control presentation", () => {
       shortLabel: "MR",
       singular: "merge request",
     });
+    expect(
+      getChangeRequestTerminologyFromUrl(
+        "https://gitlab.example.com/acme/repo/-/merge_requests/47",
+      ),
+    ).toEqual({ shortLabel: "MR", singular: "merge request" });
   });
 
   it("uses pull request terminology for GitHub-compatible providers", () => {

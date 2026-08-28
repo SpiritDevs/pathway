@@ -24,6 +24,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@spiritdevs/client-runtime/state/runtime";
+import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceControl";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import React, {
@@ -111,6 +112,7 @@ import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { projectEnvironment } from "../state/projects";
+import { threadEnvironment } from "../state/threads";
 import {
   claimWorkspaceBasenameLookup,
   needsWorkspaceBasenameLookup,
@@ -118,6 +120,7 @@ import {
   WORKSPACE_BASENAME_LOOKUP_LIMIT,
 } from "../workspaceBasenameLookup";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
+import { parsePullRequestReference } from "~/pullRequestReference";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import {
@@ -1366,6 +1369,7 @@ function areMarkdownFileLinkPropsEqual(
 }
 
 interface ChatMarkdownComponentsContext {
+  readonly attachPullRequest: ((href: string) => Promise<void>) | undefined;
   readonly cwd: string | undefined;
   readonly diffThemeName: DiffThemeName;
   readonly fileLinkParentSuffixByPath: ReadonlyMap<string, string>;
@@ -1394,6 +1398,7 @@ interface ChatMarkdownComponentsContext {
 // dependency values as before.
 function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Components {
   const {
+    attachPullRequest,
     cwd,
     diffThemeName,
     fileLinkParentSuffixByPath,
@@ -1530,6 +1535,9 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
         const isSameDocumentLink = href?.startsWith("#") ?? false;
         const onClick = props.onClick;
         const canOpenInPreview = Boolean(threadRef) && isPreviewSupportedInRuntime();
+        const pullRequestReference = href ? parsePullRequestReference(href) : null;
+        const canAttachPullRequest =
+          threadRef !== undefined && cwd !== undefined && pullRequestReference !== null;
         const link = (
           <a
             {...props}
@@ -1543,7 +1551,7 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
               }
             }}
             onContextMenu={(event) => {
-              if (!canOpenInPreview || !href || !faviconHost) return;
+              if ((!canOpenInPreview && !canAttachPullRequest) || !href || !faviconHost) return;
               event.preventDefault();
               event.stopPropagation();
               const api = readLocalApi();
@@ -1552,17 +1560,26 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
                 href,
                 position: { x: event.clientX, y: event.clientY },
                 showContextMenu: (items, position) => api.contextMenu.show(items, position),
-                openInPreview: async (target) => {
-                  const result = await openExternalLinkInPreview(target);
-                  if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-                    reportMarkdownActionFailure(
-                      { operation: "open-link-in-preview", target },
-                      result.cause,
-                    );
-                  }
-                },
+                ...(canOpenInPreview
+                  ? {
+                      openInPreview: async (target: string) => {
+                        const result = await openExternalLinkInPreview(target);
+                        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+                          reportMarkdownActionFailure(
+                            { operation: "open-link-in-preview", target },
+                            result.cause,
+                          );
+                        }
+                      },
+                    }
+                  : {}),
                 openExternal: (target) => api.shell.openExternal(target),
                 copyLink: (target) => writeTextToClipboard(target, "link"),
+                ...(canAttachPullRequest && attachPullRequest
+                  ? {
+                      attachPullRequest,
+                    }
+                  : {}),
                 reportFailure: (operation, cause) => {
                   reportMarkdownActionFailure({ operation, target: href }, cause);
                 },
@@ -1705,6 +1722,46 @@ function ChatMarkdown({
   const openPreview = useAtomCommand(previewEnvironment.open, {
     reportFailure: false,
   });
+  const attachPullRequestCommand = useAtomCommand(threadEnvironment.attachPullRequest, {
+    reportFailure: false,
+  });
+  const threadServerConfig = useAtomValue(
+    serverEnvironment.configValueAtom(threadRef?.environmentId ?? null),
+  );
+  const supportsPullRequestAttachments =
+    threadServerConfig?.environment.capabilities.threadPullRequestAttachments === true;
+  const attachPullRequest = useCallback(
+    async (target: string) => {
+      if (!threadRef || !cwd || !supportsPullRequestAttachments) return;
+      const terminology = getChangeRequestTerminologyFromUrl(target);
+      const result = await attachPullRequestCommand({
+        environmentId: threadRef.environmentId,
+        input: {
+          threadId: threadRef.threadId,
+          cwd,
+          reference: target,
+        },
+      });
+      if (result._tag === "Failure") {
+        if (isAtomCommandInterrupted(result)) return;
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: `Failed to attach ${terminology.shortLabel}`,
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+        throw error;
+      }
+      toastManager.add({
+        type: "success",
+        title: `${getChangeRequestTerminologyFromUrl(result.value.url).shortLabel} #${result.value.number} attached`,
+        description: result.value.title,
+      });
+    },
+    [attachPullRequestCommand, cwd, supportsPullRequestAttachments, threadRef],
+  );
   const preparedConnection = usePreparedConnection(threadRef?.environmentId ?? null);
   const environmentId = useActiveEnvironmentId();
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
@@ -1857,6 +1914,8 @@ function ChatMarkdown({
   const markdownComponents = useMemo<Components>(
     () =>
       createChatMarkdownComponents({
+        attachPullRequest:
+          threadRef && cwd && supportsPullRequestAttachments ? attachPullRequest : undefined,
         cwd,
         diffThemeName,
         fileLinkParentSuffixByPath,
@@ -1875,6 +1934,7 @@ function ChatMarkdown({
         threadRef,
       }),
     [
+      attachPullRequest,
       cwd,
       diffThemeName,
       fileLinkParentSuffixByPath,
@@ -1889,6 +1949,7 @@ function ChatMarkdown({
       openMarkdownFileInPreview,
       resolvedTheme,
       skills,
+      supportsPullRequestAttachments,
       threadRef,
     ],
   );

@@ -21,6 +21,12 @@ describe("parsePullRequestReference", () => {
     );
   });
 
+  it("rejects Bitbucket pull request URLs until repository-scoped resolution is supported", () => {
+    expect(
+      parsePullRequestReference("https://bitbucket.org/acme/pathway/pull-requests/42"),
+    ).toBeNull();
+  });
+
   it("accepts legacy Azure DevOps pull request URLs", () => {
     expect(
       parsePullRequestReference(

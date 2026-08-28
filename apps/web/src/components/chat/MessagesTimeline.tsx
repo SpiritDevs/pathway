@@ -10,6 +10,10 @@ import {
   type ThreadId,
 } from "@spiritdevs/contracts";
 import { parseScopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@spiritdevs/client-runtime/state/runtime";
 import { canForkProjectedAssistantItem } from "@spiritdevs/client-runtime/state/thread-workflows";
 import { isUsageLimitFailure } from "@spiritdevs/client-runtime/state/usage-limit-recovery";
 import { resolveChatListAnchoredEndSpace } from "@spiritdevs/shared/chatList";
@@ -31,6 +35,7 @@ import {
   type ReactNode,
 } from "react";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
+import { useAtomValue } from "@effect/atom-react";
 import { FileDiff } from "@pierre/diffs/react";
 import {
   type TimelineEntry,
@@ -96,6 +101,7 @@ import {
   resolveTimelineMinimapIndexFromPointer,
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
+  resolveActiveAttachedPullRequestItemId,
   replaceEditableUserMessageText,
   splitEditableUserMessageText,
   shouldPreserveAssistantLineBreaks,
@@ -138,6 +144,10 @@ import {
 } from "./V2LifecycleRow";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { UsageLimitRecoveryActions } from "./UsageLimitRecoveryActions";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { threadEnvironment } from "../../state/threads";
+import { serverEnvironment } from "../../state/server";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 
 import {
   buildInlineTerminalContextText,
@@ -196,6 +206,8 @@ interface TimelineRowSharedState {
   onOpenIssueContext: (context: IssueContextSelection) => void;
   onPanelSurfaceOpen: () => void;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  onDetachPullRequest: (pullRequest: { readonly number: number; readonly url: string }) => void;
+  activeAttachedPullRequestItemId: string | null;
   onContinueFromRun: (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => void;
   onRecoverUsageLimit: (input: {
     readonly runId: RunId;
@@ -608,6 +620,42 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const threadRef = useMemo(() => parseScopedThreadKey(routeThreadKey), [routeThreadKey]);
+  const threadServerConfig = useAtomValue(
+    serverEnvironment.configValueAtom(activeThreadEnvironmentId),
+  );
+  const supportsPullRequestAttachments =
+    threadServerConfig?.environment.capabilities.threadPullRequestAttachments === true;
+  const resolvedActiveAttachedPullRequestItemId = useMemo(
+    () => resolveActiveAttachedPullRequestItemId(rows),
+    [rows],
+  );
+  const activeAttachedPullRequestItemId = supportsPullRequestAttachments
+    ? resolvedActiveAttachedPullRequestItemId
+    : null;
+  const detachPullRequest = useAtomCommand(threadEnvironment.detachPullRequest, {
+    reportFailure: false,
+  });
+  const onDetachPullRequest = useCallback(
+    (pullRequest: { readonly number: number; readonly url: string }) => {
+      if (threadRef === null || !supportsPullRequestAttachments) return;
+      void detachPullRequest({
+        environmentId: threadRef.environmentId,
+        input: { threadId: threadRef.threadId, pullRequest },
+      }).then((result) => {
+        if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to detach PR",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      });
+    },
+    [detachPullRequest, supportsPullRequestAttachments, threadRef],
+  );
   // Run status/timestamps churn on every stream event; the shared row context
   // must not change with them or every timeline row re-renders per event.
   const runs = useStableHandoffRuns(runsProp);
@@ -721,7 +769,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       timestampFormat,
       timestampNowMs,
       routeThreadKey,
-      threadRef: parseScopedThreadKey(routeThreadKey),
+      threadRef,
       markdownCwd,
       resolvedTheme,
       workspaceRoot,
@@ -749,6 +797,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenIssueContext,
       onPanelSurfaceOpen,
       onOpenThread,
+      onDetachPullRequest,
+      activeAttachedPullRequestItemId,
       onContinueFromRun,
       onRecoverUsageLimit,
       onWaitUntilUsageReset,
@@ -762,6 +812,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       timestampFormat,
       timestampNowMs,
       routeThreadKey,
+      threadRef,
       markdownCwd,
       resolvedTheme,
       workspaceRoot,
@@ -788,6 +839,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenIssueContext,
       onPanelSurfaceOpen,
       onOpenThread,
+      onDetachPullRequest,
+      activeAttachedPullRequestItemId,
       onContinueFromRun,
       onRecoverUsageLimit,
       onWaitUntilUsageReset,
@@ -1956,6 +2009,9 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
         runs={ctx.runs}
         subagents={ctx.subagents}
         onOpenThread={ctx.onOpenThread}
+        onDetachPullRequest={
+          item.id === ctx.activeAttachedPullRequestItemId ? ctx.onDetachPullRequest : undefined
+        }
       />
     );
   }

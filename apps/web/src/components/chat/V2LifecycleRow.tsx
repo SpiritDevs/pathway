@@ -8,7 +8,10 @@ import type {
   ThreadId,
 } from "@spiritdevs/contracts";
 import type { TimestampFormat } from "@spiritdevs/contracts/settings";
-import { sourceControlMarkerLabel } from "@spiritdevs/shared/sourceControl";
+import {
+  getChangeRequestTerminologyFromUrl,
+  sourceControlMarkerLabel,
+} from "@spiritdevs/shared/sourceControl";
 import {
   ArrowRightLeftIcon,
   ArrowRightIcon,
@@ -17,6 +20,7 @@ import {
   ChevronDownIcon,
   ExternalLinkIcon,
   GitCommitHorizontalIcon,
+  GitPullRequestIcon,
   GitForkIcon,
   MessageSquareIcon,
   MessagesSquareIcon,
@@ -32,6 +36,7 @@ import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { PROVIDER_ICON_BY_PROVIDER, getTriggerDisplayModelName } from "./providerIconUtils";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { readLocalApi } from "../../localApi";
 
 const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
   "run_interrupt_request",
@@ -89,6 +94,9 @@ export function V2LifecycleRow(props: {
   readonly runs: ReadonlyArray<HandoffTimelineRun>;
   readonly subagents: ReadonlyArray<SubagentTimelineModel>;
   readonly onOpenThread: (threadId: ThreadId) => void;
+  readonly onDetachPullRequest?:
+    | ((pullRequest: { readonly number: number; readonly url: string }) => void)
+    | undefined;
 }) {
   const { item } = props;
   if (item.type === "run_interrupt_request") {
@@ -201,10 +209,14 @@ export function V2LifecycleRow(props: {
   }
   if (item.type === "source_control") {
     const commitSha = item.commitSha;
+    const changeRequestLabel =
+      item.pullRequest === null
+        ? "PR"
+        : getChangeRequestTerminologyFromUrl(item.pullRequest.url).shortLabel;
     return (
       <TimelineSystemDivider
         label={sourceControlMarkerLabel(item)}
-        icon={GitCommitHorizontalIcon}
+        icon={item.pullRequestAction === undefined ? GitCommitHorizontalIcon : GitPullRequestIcon}
         detail={
           commitSha === undefined && item.pullRequest === null ? null : (
             <span className="inline-flex min-w-0 items-center gap-1.5">
@@ -222,7 +234,37 @@ export function V2LifecycleRow(props: {
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center gap-1 font-medium underline-offset-2 hover:underline"
-                  aria-label={`Open PR #${item.pullRequest.number}`}
+                  aria-label={`Open ${changeRequestLabel} #${item.pullRequest.number}`}
+                  title={
+                    props.onDetachPullRequest
+                      ? `Open ${changeRequestLabel}. Right-click to detach from thread.`
+                      : undefined
+                  }
+                  onContextMenu={(event) => {
+                    if (!props.onDetachPullRequest || item.pullRequest === null) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const api = readLocalApi();
+                    if (!api) return;
+                    void api.contextMenu
+                      .show(
+                        [
+                          {
+                            id: "detach-pull-request",
+                            label: `Detach ${changeRequestLabel} from thread`,
+                          },
+                        ],
+                        { x: event.clientX, y: event.clientY },
+                      )
+                      .then((action) => {
+                        if (action === "detach-pull-request" && item.pullRequest !== null) {
+                          props.onDetachPullRequest?.(item.pullRequest);
+                        }
+                      })
+                      .catch((cause: unknown) => {
+                        console.error("[source-control-marker] context menu failed", cause);
+                      });
+                  }}
                 >
                   #{item.pullRequest.number}
                   <ExternalLinkIcon aria-hidden="true" className="size-2.5" />

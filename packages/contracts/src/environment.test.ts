@@ -16,7 +16,20 @@ const descriptor = {
 describe("ExecutionEnvironmentDescriptor", () => {
   it("treats a missing pull-request capability as unsupported under version skew", () => {
     expect(decodeDescriptor(descriptor).capabilities.pullRequests).toBeUndefined();
+    expect(decodeDescriptor(descriptor).capabilities.threadPullRequestAttachments).toBeUndefined();
     expect(decodeDescriptor(descriptor).capabilities.projectDirectoryInspection).toBeUndefined();
+  });
+
+  it("preserves the thread pull-request attachment capability", () => {
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: {
+          ...descriptor.capabilities,
+          threadPullRequestAttachments: true,
+        },
+      }).capabilities.threadPullRequestAttachments,
+    ).toBe(true);
   });
 
   it("preserves an advertised pull-request capability", () => {
