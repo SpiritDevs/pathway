@@ -111,6 +111,11 @@ export interface VisitThreadInput extends ThreadCommandInput {
 
 export type MarkThreadUnreadInput = ThreadCommandInput;
 
+export interface AttachPullRequestInput extends ThreadCommandInput {
+  readonly cwd: string;
+  readonly reference: string;
+}
+
 /** Ask the server to take the Preview browser away from the agent. The
     allocated command id becomes the takeover id every later command fences on. */
 export type RequestBrowserTakeoverInput = ThreadCommandInput;
@@ -420,6 +425,26 @@ export const settleThread = Effect.fn("EnvironmentCommands.settleThread")(functi
   input: SettleThreadInput,
 ) {
   return yield* simpleThreadCommand("thread.settle", input);
+});
+
+export const attachPullRequest = Effect.fn("EnvironmentCommands.attachPullRequest")(function* (
+  input: AttachPullRequestInput,
+) {
+  const resolved = yield* request(WS_METHODS.gitResolvePullRequest, {
+    cwd: input.cwd,
+    reference: input.reference,
+  });
+  yield* dispatch({
+    type: "thread.source-control.record",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    committed: false,
+    pullRequest: {
+      number: resolved.pullRequest.number,
+      url: resolved.pullRequest.url,
+    },
+  });
+  return resolved.pullRequest;
 });
 
 export const pinThread = Effect.fn("EnvironmentCommands.pinThread")(function* (

@@ -78,6 +78,7 @@ function normalizeContextMenuItems(source: readonly ContextMenuItem[]): ContextM
       label: sourceItem.label,
       destructive: sourceItem.destructive === true,
       disabled: sourceItem.disabled === true,
+      separatorAfter: sourceItem.separatorAfter === true,
     };
 
     if (sourceItem.children) {
@@ -165,6 +166,9 @@ export const make = Effect.gen(function* () {
       }
 
       template.push(itemOption);
+      if (item.separatorAfter) {
+        template.push({ type: "separator" });
+      }
     }
 
     return template;

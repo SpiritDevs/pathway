@@ -21,6 +21,12 @@ describe("parsePullRequestReference", () => {
     );
   });
 
+  it("accepts Bitbucket pull request URLs", () => {
+    expect(parsePullRequestReference("https://bitbucket.org/acme/pathway/pull-requests/42")).toBe(
+      "https://bitbucket.org/acme/pathway/pull-requests/42",
+    );
+  });
+
   it("accepts legacy Azure DevOps pull request URLs", () => {
     expect(
       parsePullRequestReference(

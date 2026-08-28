@@ -113,6 +113,27 @@ describe("ElectronMenu", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect("renders an explicit separator after a context-menu item", () =>
+    Effect.gen(function* () {
+      buildFromTemplateMock.mockImplementation(() => ({
+        popup: (options: Electron.PopupOptions) => options.callback?.(),
+      }));
+      const electronMenu = yield* ElectronMenu.ElectronMenu;
+
+      yield* electronMenu.showContextMenu({
+        window: makeWindow(),
+        items: [
+          { id: "attach", label: "Attach PR to thread", separatorAfter: true },
+          { id: "copy", label: "Copy Link" },
+        ],
+        position: Option.none(),
+      });
+
+      assert.equal(buildFromTemplateMock.mock.calls[0]?.[0][1]?.type, "separator");
+      assert.equal(buildFromTemplateMock.mock.calls[0]?.[0][2]?.label, "Copy Link");
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("defers popupTemplate side effects until the returned Effect runs", () =>
     Effect.gen(function* () {
       const popupMock = vi.fn();

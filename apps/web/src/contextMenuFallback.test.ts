@@ -25,6 +25,7 @@ class FakeElement {
   style: Record<string, string> & { cssText?: string } = {};
   dataset: Record<string, string> = {};
   className = "";
+  attributes: Record<string, string> = {};
   disabled = false;
   type = "";
   private textValue = "";
@@ -53,6 +54,10 @@ class FakeElement {
     const existing = this.listeners.get(type) ?? [];
     existing.push(listener);
     this.listeners.set(type, existing);
+  }
+
+  setAttribute(name: string, value: string) {
+    this.attributes[name] = value;
   }
 
   dispatchEvent(event: FakeDomEvent) {
@@ -183,6 +188,21 @@ afterEach(() => {
 });
 
 describe("showContextMenuFallback", () => {
+  it("renders explicit item separators", async () => {
+    const selectionPromise = showContextMenuFallback([
+      { id: "attach", label: "Attach PR to thread", separatorAfter: true },
+      { id: "copy", label: "Copy Link" },
+    ]);
+
+    expect(
+      (document as unknown as FakeDocument)
+        .querySelectorAll("div")
+        .some((element) => element.attributes.role === "separator"),
+    ).toBe(true);
+    findButton("Copy Link")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await expect(selectionPromise).resolves.toBe("copy");
+  });
+
   it("resolves a clicked flat menu item", async () => {
     const selectionPromise = showContextMenuFallback([
       { id: "rename", label: "Rename" },

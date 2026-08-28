@@ -1,14 +1,20 @@
 import type { ContextMenuItem } from "@spiritdevs/contracts";
 
-export type ExternalLinkContextMenuAction = "open-in-preview" | "open-external" | "copy-link";
+export type ExternalLinkContextMenuAction =
+  | "attach-pull-request"
+  | "open-in-preview"
+  | "open-external"
+  | "copy-link";
 
 export type ExternalLinkContextMenuFailureOperation =
   | "show-link-context-menu"
+  | "attach-pull-request"
   | "open-link-in-preview"
   | "open-link-external"
   | "copy-link";
 
 const FAILURE_OPERATION_BY_ACTION = {
+  "attach-pull-request": "attach-pull-request",
   "open-in-preview": "open-link-in-preview",
   "open-external": "open-link-external",
   "copy-link": "copy-link",
@@ -30,6 +36,7 @@ interface ShowExternalLinkContextMenuOptions {
   readonly openInPreview: (href: string) => Promise<void>;
   readonly openExternal: (href: string) => Promise<void>;
   readonly copyLink: (href: string) => Promise<unknown>;
+  readonly attachPullRequest?: ((href: string) => Promise<unknown>) | undefined;
   readonly reportFailure: (
     operation: ExternalLinkContextMenuFailureOperation,
     cause: unknown,
@@ -62,18 +69,33 @@ export async function showExternalLinkContextMenu({
   openInPreview,
   openExternal,
   copyLink,
+  attachPullRequest,
   reportFailure,
 }: ShowExternalLinkContextMenuOptions): Promise<void> {
   let action: ExternalLinkContextMenuAction | null;
   try {
-    action = await showContextMenu(EXTERNAL_LINK_CONTEXT_MENU_ITEMS, position);
+    action = await showContextMenu(
+      attachPullRequest
+        ? [
+            {
+              id: "attach-pull-request",
+              label: "Attach PR to thread",
+              separatorAfter: true,
+            },
+            ...EXTERNAL_LINK_CONTEXT_MENU_ITEMS,
+          ]
+        : EXTERNAL_LINK_CONTEXT_MENU_ITEMS,
+      position,
+    );
   } catch (cause) {
     reportFailure("show-link-context-menu", cause);
     return;
   }
 
   try {
-    if (action === "open-in-preview") {
+    if (action === "attach-pull-request") {
+      await attachPullRequest?.(href);
+    } else if (action === "open-in-preview") {
       await openInPreview(href);
     } else if (action === "open-external") {
       await openExternal(href);

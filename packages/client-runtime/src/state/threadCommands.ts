@@ -4,6 +4,7 @@ import { Atom } from "effect/unstable/reactivity";
 import { createAtomCommandScheduler, createEnvironmentCommand } from "./runtime.ts";
 import {
   type ArchiveThreadInput,
+  type AttachPullRequestInput,
   type CancelQueuedRunInput,
   type CreateThreadInput,
   type DeleteThreadInput,
@@ -36,6 +37,7 @@ import {
   type UpdateThreadMetadataInput,
   type VisitThreadInput,
   archiveThread,
+  attachPullRequest,
   cancelQueuedRun,
   createThread,
   deleteThread,
@@ -73,6 +75,7 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 
 export type {
   ArchiveThreadInput,
+  AttachPullRequestInput,
   CancelQueuedRunInput,
   CreateThreadInput,
   DeleteThreadInput,
@@ -132,6 +135,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     archive: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:archive",
       execute: (input: ArchiveThreadInput) => archiveThread(input),
+      scheduler,
+      concurrency,
+    }),
+    attachPullRequest: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:attach-pull-request",
+      execute: (input: AttachPullRequestInput) => attachPullRequest(input),
       scheduler,
       concurrency,
     }),

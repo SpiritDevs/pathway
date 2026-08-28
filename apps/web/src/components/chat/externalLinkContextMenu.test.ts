@@ -6,7 +6,9 @@ import {
   showExternalLinkContextMenu,
 } from "./externalLinkContextMenu";
 
-function createHarness(selection: "open-in-preview" | "open-external" | "copy-link" | null) {
+function createHarness(
+  selection: "attach-pull-request" | "open-in-preview" | "open-external" | "copy-link" | null,
+) {
   const showContextMenu = vi.fn().mockResolvedValue(selection);
   const openInPreview = vi.fn().mockResolvedValue(undefined);
   const openExternal = vi.fn().mockResolvedValue(undefined);
@@ -43,6 +45,34 @@ describe("external chat link context menu", () => {
     expect(harness.openInPreview).not.toHaveBeenCalled();
     expect(harness.openExternal).not.toHaveBeenCalled();
     expect(harness.copyLink).not.toHaveBeenCalled();
+  });
+
+  it("puts the attach action first with a separator for pull request links", async () => {
+    const harness = createHarness("attach-pull-request");
+    const attachPullRequest = vi.fn().mockResolvedValue(undefined);
+    const href = "https://github.com/SpiritDevs/pathway/pull/47";
+
+    await showExternalLinkContextMenu({
+      href,
+      position: { x: 12, y: 24 },
+      attachPullRequest,
+      ...harness,
+    });
+
+    expect(harness.showContextMenu).toHaveBeenCalledWith(
+      [
+        {
+          id: "attach-pull-request",
+          label: "Attach PR to thread",
+          separatorAfter: true,
+        },
+        { id: "open-in-preview", label: "Open in integrated browser" },
+        { id: "open-external", label: "Open in system browser" },
+        { id: "copy-link", label: "Copy Link" },
+      ],
+      { x: 12, y: 24 },
+    );
+    expect(attachPullRequest).toHaveBeenCalledWith(href);
   });
 
   it("copies the exact destination without opening it", async () => {
