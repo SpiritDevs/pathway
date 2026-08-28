@@ -101,6 +101,7 @@ import {
   shouldPreserveAssistantLineBreaks,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
+  type WorkingPresentation,
   TIMELINE_MINIMAP_MIN_ITEMS,
   type TimelineLatestRun,
 } from "./MessagesTimeline.logic";
@@ -245,6 +246,7 @@ const NOOP_PANEL_SURFACE_OPEN = () => undefined;
 
 interface MessagesTimelineProps {
   isWorking: boolean;
+  workingPresentation?: WorkingPresentation;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
   pendingBackgroundTasks?: ReadonlyArray<{
@@ -324,6 +326,7 @@ const LOCAL_DAY_CLOCK_RECHECK_MS = 60_000;
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
+  workingPresentation = "activity",
   activeTurnInProgress,
   activeTurnStartedAt,
   pendingBackgroundTasks = null,
@@ -585,6 +588,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         expandedRunIds,
         expandedAttemptIds,
         isWorking,
+        workingPresentation,
         activeTurnStartedAt,
         pendingBackgroundTasks,
         turnDiffSummaryByAssistantMessageId,
@@ -596,6 +600,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedRunIds,
       expandedAttemptIds,
       isWorking,
+      workingPresentation,
       activeTurnStartedAt,
       pendingBackgroundTasks,
       turnDiffSummaryByAssistantMessageId,
@@ -2163,23 +2168,53 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
 }
 
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
+  const isConnecting = row.presentation !== "activity";
   return (
     <div className="py-0.5 pl-1.5">
-      <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground/70 tabular-nums">
+      <div
+        role={isConnecting ? "status" : undefined}
+        className={cn(
+          "flex gap-2 pt-1 text-[11px] text-muted-foreground/70 tabular-nums",
+          isConnecting ? "items-start" : "items-center",
+        )}
+      >
         <span className="inline-flex items-center gap-[3px]">
           <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse" />
           <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:200ms]" />
           <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:400ms]" />
         </span>
-        <span>
-          {row.createdAt ? (
-            <>
-              Working for <WorkingTimer createdAt={row.createdAt} />
-            </>
-          ) : (
-            "Working..."
-          )}
-        </span>
+        {isConnecting ? (
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="font-medium text-foreground/70">
+              {row.presentation === "connecting-complete"
+                ? "Work completed"
+                : row.presentation === "connecting-settled"
+                  ? "Agent stopped"
+                  : row.presentation === "connecting-neutral"
+                    ? "Still connecting"
+                    : "Agent is working…"}
+            </span>
+            <span className="text-muted-foreground/55">
+              {row.presentation === "connecting-complete"
+                ? "Still connecting to load this chat."
+                : row.presentation === "connecting-settled"
+                  ? "The agent is no longer working. Still connecting to load this chat."
+                  : row.presentation === "connecting-neutral"
+                    ? "Loading the latest thread details."
+                    : "Still connecting to this chat. The agent is continuing in the background."}
+            </span>
+          </span>
+        ) : (
+          <span>
+            {row.createdAt ? (
+              <>
+                Working for <WorkingTimer createdAt={row.createdAt} />
+              </>
+            ) : (
+              "Working..."
+            )}
+          </span>
+        )}
       </div>
     </div>
   );

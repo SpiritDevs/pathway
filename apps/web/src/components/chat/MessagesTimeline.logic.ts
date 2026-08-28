@@ -194,6 +194,13 @@ export type TimelineLatestRun = Pick<
   "runId" | "status" | "startedAt" | "completedAt"
 >;
 
+export type WorkingPresentation =
+  | "activity"
+  | "connecting"
+  | "connecting-complete"
+  | "connecting-settled"
+  | "connecting-neutral";
+
 export type MessagesTimelineRow =
   | {
       kind: "work";
@@ -243,7 +250,12 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
-  | { kind: "working"; id: string; createdAt: string | null }
+  | {
+      kind: "working";
+      id: string;
+      createdAt: string | null;
+      presentation: WorkingPresentation;
+    }
   | {
       kind: "waiting-background";
       id: string;
@@ -548,6 +560,7 @@ export function deriveMessagesTimelineRows(input: {
   expandedRunIds?: ReadonlySet<RunId>;
   expandedAttemptIds?: ReadonlySet<RunAttemptId>;
   isWorking: boolean;
+  workingPresentation?: WorkingPresentation;
   activeTurnStartedAt: string | null;
   pendingBackgroundTasks?: ReadonlyArray<{
     readonly taskId: string;
@@ -722,11 +735,12 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  if (input.isWorking) {
+  if (input.isWorking || (input.workingPresentation ?? "activity") !== "activity") {
     nextRows.push({
       kind: "working",
       id: "working-indicator-row",
       createdAt: input.activeTurnStartedAt,
+      presentation: input.workingPresentation ?? "activity",
     });
   } else if (input.pendingBackgroundTasks && input.pendingBackgroundTasks.length > 0) {
     // Root run settled but finite provider background work remains. Show Waiting
@@ -773,7 +787,9 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
   switch (a.kind) {
     case "working":
-      return a.createdAt === (b as typeof a).createdAt;
+      return (
+        a.createdAt === (b as typeof a).createdAt && a.presentation === (b as typeof a).presentation
+      );
 
     case "waiting-background": {
       const bw = b as typeof a;

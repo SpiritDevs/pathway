@@ -6,7 +6,7 @@ import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
 import {
-  promotedDraftThreadIsFilteredOut,
+  promotedDraftThreadIsUnavailable,
   resolveThreadRouteRef,
   resolveThreadRouteRenderState,
 } from "../threadRoutes";
@@ -33,18 +33,19 @@ function ChatThreadRouteView() {
     threadRef ? store.getDraftThreadByRef(threadRef) : null,
   );
   const unfilteredSnapshot = shell.data === null ? null : Option.getOrNull(shell.data.snapshot);
-  const promotedThreadFilteredOut = promotedDraftThreadIsFilteredOut({
+  const promotedThreadUnavailable = promotedDraftThreadIsUnavailable({
     hasPromotedThread: draftThreadExists,
     promotedThreadExists:
       threadRef !== null &&
       (unfilteredSnapshot?.threads.some((thread) => thread.id === threadRef.threadId) ?? false),
     promotedThreadVisible: serverThreadShell !== null,
+    promotedThreadDeleted: serverThreadStatus === "deleted",
   });
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,
     serverThreadExists: serverThreadShell !== null,
     serverThreadDeleted: serverThreadStatus === "deleted",
-    draftThreadExists: draftThreadExists && !promotedThreadFilteredOut,
+    draftThreadExists: draftThreadExists && !promotedThreadUnavailable,
   });
   const serverThreadStarted = threadHasStarted(serverThreadShell);
 

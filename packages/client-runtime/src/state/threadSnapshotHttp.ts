@@ -101,13 +101,13 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
         fetchEnvironmentThreadSnapshot({ prepared, threadId, signer }).pipe(
           Effect.map((snapshot): ThreadSnapshotLoadResult => ({ _tag: "Snapshot", snapshot })),
           Effect.provideService(HttpClient.HttpClient, httpClient),
-          // A genuinely missing thread is terminal. A new subscription cannot receive the
-          // deletion event that happened before it existed, so collapsing this into the generic
-          // fallback result would make the socket path retry the missing thread forever.
+          // A cloud-discovered or draft-promoting shell can reach the client before the owning
+          // environment commits thread.create. Keep 404 distinct for diagnostics so thread state
+          // can use its bounded materialization retries before deciding the id is genuinely deleted.
           Effect.catchTags({
             EnvironmentResourceNotFoundError: () =>
               Effect.logDebug(
-                "Thread snapshot not found over HTTP; treating the thread as deleted.",
+                "Thread snapshot not found over HTTP; waiting for the thread stream.",
               ).pipe(
                 Effect.annotateLogs({ threadId }),
                 Effect.as<ThreadSnapshotLoadResult>({ _tag: "NotFound" }),

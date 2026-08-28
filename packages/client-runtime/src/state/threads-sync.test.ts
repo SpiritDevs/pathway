@@ -32,6 +32,7 @@ import { v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
   makeEnvironmentThreadState,
+  THREAD_NOT_FOUND_MAX_ATTEMPTS,
   ThreadSnapshotLoader,
   type EnvironmentThreadState,
 } from "./threads.ts";
@@ -96,6 +97,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const latest = yield* Ref.make<EnvironmentThreadState>(EMPTY_ENVIRONMENT_THREAD_STATE);
   const retryCount = yield* Ref.make(0);
   const subscriptionCount = yield* Ref.make(0);
+  const subscriptionStarts = yield* Queue.unbounded<number>();
   const loaderCalls = yield* Ref.make(0);
   const lastSubscribeAfterSequence = yield* Ref.make<number | undefined>(undefined);
   const lastRequestCompletionMarker = yield* Ref.make(false);
@@ -118,6 +120,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     }) =>
       Stream.unwrap(
         Ref.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
+          Effect.tap((count) => Queue.offer(subscriptionStarts, count)),
           Effect.andThen(Ref.set(lastSubscribeAfterSequence, input.afterSequence)),
           Effect.andThen(
             Ref.set(lastRequestCompletionMarker, input.requestCompletionMarker === true),
@@ -207,6 +210,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     latest,
     retryCount,
     subscriptionCount,
+    subscriptionStarts,
     loaderCalls,
     lastSubscribeAfterSequence,
     lastRequestCompletionMarker,
@@ -215,6 +219,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     savedThreads,
     removedThreads,
     wakeups,
+    clearSession: SubscriptionRef.set(supervisorSession, Option.none()),
     replaceSession: SubscriptionRef.set(
       supervisorSession,
       Option.some(testSession(client, options)),
@@ -349,20 +354,60 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect("treats an HTTP 404 as a terminally deleted thread", () =>
+  it.effect("recovers when HTTP and the first stream attempt precede thread creation", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ httpNotFound: true });
 
+      expect(yield* Queue.take(harness.subscriptionStarts)).toBe(1);
+      yield* Queue.offer(harness.inputs, new Error("thread has not materialized"));
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.error));
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("250 millis");
+      expect(yield* Queue.take(harness.subscriptionStarts)).toBe(2);
+      yield* Queue.offer(
+        harness.inputs,
+        snapshot({
+          ...BASE_PROJECTION,
+          thread: { ...BASE_PROJECTION.thread, title: "Materialized thread" },
+        }),
+      );
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          value.status === "live" &&
+          Option.isSome(value.data) &&
+          value.data.value.thread.title === "Materialized thread",
+      );
+
+      expect(Option.getOrThrow(state.data).thread.title).toBe("Materialized thread");
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([]);
+    }),
+  );
+
+  it.effect("marks a permanently missing thread deleted after bounded resubscriptions", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ httpNotFound: true });
+
+      expect(yield* Queue.take(harness.subscriptionStarts)).toBe(1);
+      for (let attempt = 2; attempt <= THREAD_NOT_FOUND_MAX_ATTEMPTS; attempt += 1) {
+        yield* harness.clearSession;
+        yield* Effect.yieldNow;
+        yield* harness.replaceSession;
+        expect(yield* Queue.take(harness.subscriptionStarts)).toBe(attempt);
+      }
+      yield* harness.clearSession;
+      yield* Effect.yieldNow;
+      yield* harness.replaceSession;
       const state = yield* awaitThreadState(
         harness.observed,
         (value) => value.status === "deleted",
       );
-      yield* TestClock.adjust("1 second");
-      yield* Effect.yieldNow;
 
       expect(Option.isNone(state.data)).toBe(true);
-      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
-      expect(yield* Ref.get(harness.subscriptionCount)).toBe(0);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(2);
+      expect(yield* Ref.get(harness.subscriptionCount)).toBe(THREAD_NOT_FOUND_MAX_ATTEMPTS);
       expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
     }),
   );
@@ -389,8 +434,7 @@ describe("EnvironmentThreads", () => {
   it.effect("removes cached data when the thread is deleted", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_PROJECTION });
-      yield* Queue.offer(harness.inputs, snapshot(BASE_PROJECTION));
-      yield* Queue.offer(harness.inputs, deleted());
+      yield* Queue.offer(harness.inputs, deleted(CACHED_SNAPSHOT_SEQUENCE + 1));
 
       const state = yield* awaitThreadState(
         harness.observed,

@@ -32,6 +32,12 @@ import {
   type EnvironmentThreadStatus,
 } from "./threadState.ts";
 
+// Cloud and draft shells can lead the owning server's thread.create commit by
+// a few seconds. Keep that first 404 retryable, but bound the ambiguity so a
+// deleted or invalid id still reaches the terminal deleted state. At the
+// subscription's 250ms retry cadence this allows about ten seconds to materialize.
+export const THREAD_NOT_FOUND_MAX_ATTEMPTS = 40;
+
 function statusWithoutLiveData(
   data: Option.Option<OrchestrationV2ThreadProjection>,
 ): EnvironmentThreadStatus {
@@ -83,6 +89,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Option.match(cached, { onNone: () => 0, onSome: (snapshot) => snapshot.snapshotSequence }),
   );
   const awaitingCompletion = yield* Ref.make(false);
+  const notFoundAttempts = yield* Ref.make(0);
   const persistence = yield* Queue.sliding<OrchestrationV2ThreadDetailSnapshot>(1);
 
   const persist = Effect.fn("EnvironmentThreadState.persist")(function* (
@@ -148,6 +155,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     thread: OrchestrationV2ThreadProjection,
   ) {
     const waiting = yield* Ref.get(awaitingCompletion);
+    yield* Ref.set(notFoundAttempts, 0);
     yield* SubscriptionRef.set(state, {
       data: Option.some(thread),
       status: waiting ? "synchronizing" : "live",
@@ -258,6 +266,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
         let current = yield* SubscriptionRef.get(state);
         if (Option.isNone(current.data) && current.status !== "deleted") {
+          const missingAttempts = yield* Ref.get(notFoundAttempts);
+          const shouldConfirmDeletion = missingAttempts >= THREAD_NOT_FOUND_MAX_ATTEMPTS;
           const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
             Effect.flatMap(
               Option.match({
@@ -272,21 +282,28 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               }),
             ),
           );
-          const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
-          if (httpSnapshot._tag === "NotFound") {
-            yield* setDeleted();
-            // Deleted is terminal for this keyed state. Keeping the subscription input pending
-            // prevents the socket fallback from retrying a thread the authoritative HTTP endpoint
-            // has already confirmed does not exist.
-            return yield* Effect.never;
-          }
-          if (httpSnapshot._tag === "Snapshot") {
-            yield* applyItem({
-              kind: "snapshot",
-              snapshotSequence: httpSnapshot.snapshot.snapshotSequence,
-              projection: httpSnapshot.snapshot.projection,
-            });
-            current = yield* SubscriptionRef.get(state);
+          if (missingAttempts === 0 || shouldConfirmDeletion) {
+            const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
+            if (httpSnapshot._tag === "NotFound") {
+              if (shouldConfirmDeletion) {
+                yield* setDeleted();
+                return yield* Effect.never;
+              }
+              yield* Ref.set(notFoundAttempts, 1);
+            } else if (httpSnapshot._tag === "Snapshot") {
+              yield* applyItem({
+                kind: "snapshot",
+                snapshotSequence: httpSnapshot.snapshot.snapshotSequence,
+                projection: httpSnapshot.snapshot.projection,
+              });
+              current = yield* SubscriptionRef.get(state);
+            } else if (shouldConfirmDeletion) {
+              // A transport or auth failure cannot confirm deletion. Start a
+              // fresh retry window and let the socket path keep recovering.
+              yield* Ref.set(notFoundAttempts, 1);
+            }
+          } else {
+            yield* Ref.update(notFoundAttempts, (attempts) => attempts + 1);
           }
         }
 
