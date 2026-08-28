@@ -28,9 +28,10 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { resolveDefaultThreadEnvMode } from "@spiritdevs/shared/threadEnvMode";
-import { readThreadShell, useProjects, useThreadShell } from "../state/entities";
+import { readThreadShell, useProjects, useServerConfigs, useThreadShell } from "../state/entities";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
 import { readPathwayProjectFileDefaultThreadEnvMode } from "../lib/pathwayProjectFileDefaults";
+import { resolveDefaultProviderModelSelection } from "../providerInstances";
 import { primaryServerSettingsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKeys, useUiStateStore } from "../uiStateStore";
@@ -63,6 +64,7 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
 
 export function useNewThreadHandler() {
   const projects = useProjects();
+  const serverConfigs = useServerConfigs();
   // New-thread defaults are a user preference, and the settings UI only ever
   // edits the primary environment's settings.json. Reading the target
   // environment's own settings here would silently reset remote projects to
@@ -135,6 +137,12 @@ export function useNewThreadHandler() {
           candidate.id === projectRef.projectId &&
           candidate.environmentId === projectRef.environmentId,
       );
+      const projectModelSelection = project?.defaultModelSelection
+        ? resolveDefaultProviderModelSelection(
+            serverConfigs.get(projectRef.environmentId)?.providers ?? [],
+            project.defaultModelSelection,
+          )
+        : null;
       // The shared resolver owns the priority order. The pathway.json read is
       // skipped entirely when a higher-priority source decides, and its
       // query atom caches per project after the first call.
@@ -253,7 +261,7 @@ export function useNewThreadHandler() {
               ...(carryRuntimeMode ? { runtimeMode: carryRuntimeMode } : {}),
               ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
             });
-            applyStickyState(emptyStoredDraftThread.draftId, project?.defaultModelSelection);
+            applyStickyState(emptyStoredDraftThread.draftId, projectModelSelection);
           }
           // The workspace context must also ride along here: when projectRef
           // targets a different physical member of the logical project,
@@ -385,7 +393,7 @@ export function useNewThreadHandler() {
         });
         // A project's configured new-thread model is authoritative. Sticky
         // last-used state remains the fallback for projects without one.
-        applyStickyState(draftId, project?.defaultModelSelection);
+        applyStickyState(draftId, projectModelSelection);
 
         if (options?.navigate !== false) {
           await router.navigate({
@@ -397,7 +405,14 @@ export function useNewThreadHandler() {
         return { draftId, threadId };
       })();
     },
-    [getCurrentRouteTarget, primaryServerSettings, projectGroupingSettings, projects, router],
+    [
+      getCurrentRouteTarget,
+      primaryServerSettings,
+      projectGroupingSettings,
+      projects,
+      router,
+      serverConfigs,
+    ],
   );
 }
 
