@@ -21,6 +21,7 @@ export type AttentionEventId = typeof AttentionEventId.Type;
 export const FocusNotificationId = makeFocusEntityId("FocusNotificationId");
 export type FocusNotificationId = typeof FocusNotificationId.Type;
 
+export const FOCUS_NOTIFICATION_MAX_PER_USER = 200;
 export const FOCUS_NAME_MAX_CHARS = 60;
 export const FocusName = TrimmedNonEmptyString.check(Schema.isMaxLength(FOCUS_NAME_MAX_CHARS));
 export type FocusName = typeof FocusName.Type;

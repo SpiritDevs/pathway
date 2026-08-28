@@ -169,7 +169,7 @@ describe("Focus notifications", () => {
     await expect(h.t.mutation(internal.focusNotifications.pruneExpired, {})).resolves.toBe(1);
   });
 
-  it("evicts the oldest event when a user exceeds two hundred notifications", async () => {
+  it("evicts the oldest event and lists the full retained log by default", async () => {
     const h = harness();
     await seed(h);
     for (let index = 0; index <= 200; index += 1) {
@@ -181,7 +181,7 @@ describe("Focus notifications", () => {
       if (index === 99) await h.user.mutation(api.focusNotifications.markAllRead, {});
     }
 
-    const rows = await h.user.query(api.focusNotifications.list, { limit: 200 });
+    const rows = await h.user.query(api.focusNotifications.list, {});
     expect(rows).toHaveLength(200);
     expect(rows.at(-1)?.eventId).toBe("event-001");
     await expect(h.user.query(api.focusNotifications.unreadCount, {})).resolves.toBe(101);

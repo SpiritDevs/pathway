@@ -8,6 +8,7 @@ import {
   type ActiveFocusId,
 } from "@spiritdevs/client-runtime/state/focuses";
 import {
+  FOCUS_NOTIFICATION_MAX_PER_USER,
   FocusId,
   FocusNotification as FocusNotificationSchema,
   FocusProjectKey,
@@ -310,7 +311,7 @@ export function useFocusReadModelRuntime(options: {
       ),
       client.onUpdate(
         FOCUS_FUNCTION_REFERENCES.notifications,
-        {},
+        { limit: FOCUS_NOTIFICATION_MAX_PER_USER },
         (value) => {
           const decoded = decodeFocusNotifications(value);
           if (Option.isSome(decoded)) appAtomRegistry.set(focusNotificationsAtom, decoded.value);

@@ -1,4 +1,5 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
+import { FOCUS_NOTIFICATION_MAX_PER_USER } from "@spiritdevs/contracts/focus";
 import { v } from "convex/values";
 
 import type { Doc } from "./_generated/dataModel.js";
@@ -27,7 +28,7 @@ const notificationResult = v.object({
 
 const READ_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 const UNREAD_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
-const MAX_NOTIFICATIONS_PER_USER = 200;
+const MAX_NOTIFICATIONS_PER_USER = FOCUS_NOTIFICATION_MAX_PER_USER;
 const CLEANUP_USER_BATCH_SIZE = 50;
 const NO_CLEANUP_DUE = 8_640_000_000_000_000;
 
@@ -188,7 +189,10 @@ export const list = query({
   returns: v.array(notificationResult),
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
-    const limit = Math.max(1, Math.min(Math.trunc(args.limit ?? 50), MAX_NOTIFICATIONS_PER_USER));
+    const limit = Math.max(
+      1,
+      Math.min(Math.trunc(args.limit ?? MAX_NOTIFICATIONS_PER_USER), MAX_NOTIFICATIONS_PER_USER),
+    );
     const rows = await ctx.db
       .query("focusNotifications")
       .withIndex("by_user_and_created_at", (q) => q.eq("userId", user.clerkSubject))
