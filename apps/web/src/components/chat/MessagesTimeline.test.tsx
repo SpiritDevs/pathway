@@ -542,6 +542,35 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("rounded-2xl bg-accent p-3");
   });
 
+  it("shows retry beneath only the failed latest user message", () => {
+    const baseEntry = buildUserTimelineEntry("Try this again");
+    const entry = {
+      ...baseEntry,
+      message: { ...baseEntry.message, createdBy: "user" as const },
+    };
+    const previousEntry = {
+      ...entry,
+      id: "entry-previous",
+      message: { ...entry.message, id: MessageId.make("message-previous") },
+    };
+    const retryMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[previousEntry, entry]}
+        retryableUserMessageId={entry.message.id}
+      />,
+    );
+    const normalMarkup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[entry]} />,
+    );
+
+    expect(retryMarkup).toContain('aria-label="Retry message"');
+    expect(retryMarkup).toContain('data-user-message-retry="true"');
+    expect(retryMarkup.match(/data-user-message-retry="true"/g)).toHaveLength(1);
+    expect(retryMarkup).toContain("opacity-100");
+    expect(normalMarkup).not.toContain('aria-label="Retry message"');
+  });
+
   it("preserves arbitrary XML-like tags and comparisons in rendered user messages", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(

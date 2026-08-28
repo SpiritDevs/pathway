@@ -326,6 +326,21 @@ export function resolveEditableV2UserMessageId(
   return hasBaseline ? latestUserItem.messageId : null;
 }
 
+export function resolveRetryableV2UserMessageId(
+  projection: OrchestrationV2ThreadProjection | null | undefined,
+): MessageId | null {
+  const editableMessageId = resolveEditableV2UserMessageId(projection);
+  if (editableMessageId === null || !projection) return null;
+  const latestUserItem = projection.visibleTurnItems.findLast(
+    (row) => row.item.type === "user_message",
+  )?.item;
+  if (latestUserItem?.type !== "user_message" || latestUserItem.messageId !== editableMessageId) {
+    return null;
+  }
+  const run = projection.runs.find((candidate) => candidate.id === latestUserItem.runId);
+  return run?.status === "failed" ? editableMessageId : null;
+}
+
 export interface PullRequestDialogState {
   initialReference: string | null;
   key: number;
