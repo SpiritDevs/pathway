@@ -159,6 +159,8 @@ export function FocusStrip(props: {
 }) {
   const [editorFocusId, setEditorFocusId] = useState<FocusId | null | undefined>(undefined);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  // Snapshot at open: marking all read zeroes the live count while the tray is still showing.
+  const [trayUnreadCount, setTrayUnreadCount] = useState(0);
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
   const orderedFocuses = useMemo(() => sortFocuses(props.focuses), [props.focuses]);
   const shownFocuses = useMemo(
@@ -224,6 +226,7 @@ export function FocusStrip(props: {
   );
   const openNotifications = useCallback(() => {
     setEditorFocusId(undefined);
+    setTrayUnreadCount(props.unreadCount);
     setNotificationsOpen(true);
     void props.mutations?.markAllNotificationsRead().catch((error: unknown) => {
       toastManager.add({
@@ -232,7 +235,7 @@ export function FocusStrip(props: {
         description: error instanceof Error ? error.message : "The notifications stayed unread.",
       });
     });
-  }, [props.mutations]);
+  }, [props.mutations, props.unreadCount]);
   const selectNotification = useCallback(
     (notification: FocusNotification) => {
       props.onNotificationSelect(notification);
@@ -331,7 +334,7 @@ export function FocusStrip(props: {
         >
           <FocusNotificationTray
             notifications={props.notifications}
-            unreadCount={props.unreadCount}
+            unreadCount={trayUnreadCount}
             focuses={orderedFocuses}
             assignments={props.assignments}
             threadTitlesByKey={props.threadTitlesByKey}
