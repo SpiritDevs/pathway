@@ -1901,6 +1901,17 @@ describe("composerDraftStore sticky composer settings", () => {
       activeProvider: "codex",
     });
   });
+
+  it("clears a reused draft's stale model when no default or sticky selection exists", () => {
+    const store = useComposerDraftStore.getState();
+    const threadId = ThreadId.make("thread-clear-stale-project-model");
+    const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+
+    store.applyStickyState(threadRef, modelSelection(CODEX_DRIVER, "gpt-5.6-sol"));
+    store.applyStickyState(threadRef);
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+  });
 });
 
 describe("composerDraftStore provider-scoped option updates", () => {

@@ -2854,27 +2854,16 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           set((state) => {
             const stickyMap = state.stickyModelSelectionByProvider;
             const stickyActiveProvider = state.stickyActiveProvider;
-            if (
-              Object.keys(stickyMap).length === 0 &&
-              stickyActiveProvider === null &&
-              normalizedProjectSelection === null
-            ) {
-              return state;
-            }
             const existing = state.draftsByThreadKey[threadKey];
             const base = existing ?? createEmptyThreadDraft();
-            const nextMap = { ...base.modelSelectionByProvider };
+            const nextMap: Partial<Record<ProviderInstanceId, ModelSelection>> = {};
             for (const [provider, selection] of Object.entries(stickyMap)) {
               if (selection) {
                 // Iteration key comes from the instance-keyed sticky map,
                 // so coerce the string back to `ProviderInstanceId` for
                 // the typed lookup.
                 const instanceKey = provider as ProviderInstanceId;
-                const current = nextMap[instanceKey];
-                nextMap[instanceKey] = {
-                  ...selection,
-                  model: current?.model ?? selection.model,
-                };
+                nextMap[instanceKey] = selection;
               }
             }
             if (normalizedProjectSelection) {
