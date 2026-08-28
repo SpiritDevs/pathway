@@ -1189,6 +1189,77 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const settled = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(settled.thread.settledOverride, "settled");
       assert.isFalse(settled.thread.settleAfterCompletion);
+
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("runtime-layer-background-only-unsettle"),
+        threadId,
+        reason: "user",
+      });
+      const secondPendingAt = yield* DateTime.now;
+      const idleProviderThread = settled.providerThreads.find(
+        (candidate) => candidate.id === providerThread.id,
+      );
+      assert.isDefined(idleProviderThread);
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("runtime-layer-background-only-provider-thread-pending-again"),
+            type: "provider-thread.updated",
+            threadId,
+            driver: idleProviderThread.driver,
+            providerInstanceId: idleProviderThread.providerInstanceId,
+            occurredAt: secondPendingAt,
+            payload: {
+              ...idleProviderThread,
+              pendingBackgroundTasks: [
+                {
+                  taskId: "background-task-2",
+                  description: "Finish another background task",
+                  taskType: "command_execution",
+                },
+              ],
+              updatedAt: secondPendingAt,
+            },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.settle-after-completion.set",
+        commandId: CommandId.make("runtime-layer-background-only-settle-arm-again"),
+        threadId,
+        enabled: true,
+      });
+
+      const rearmed = yield* orchestrator.getThreadProjection(threadId);
+      const secondPendingProviderThread = rearmed.providerThreads.find(
+        (candidate) => candidate.id === providerThread.id,
+      );
+      assert.isDefined(secondPendingProviderThread);
+      const secondCompletedAt = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("runtime-layer-background-only-provider-thread-completed-again"),
+            type: "provider-thread.updated",
+            threadId,
+            driver: secondPendingProviderThread.driver,
+            providerInstanceId: secondPendingProviderThread.providerInstanceId,
+            occurredAt: secondCompletedAt,
+            payload: {
+              ...secondPendingProviderThread,
+              pendingBackgroundTasks: [],
+              updatedAt: secondCompletedAt,
+            },
+          },
+        ],
+      });
+
+      yield* Queue.take(settledEvents);
+      const settledAgain = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(settledAgain.runs.at(-1)?.id, activeRun.id);
+      assert.equal(settledAgain.thread.settledOverride, "settled");
+      assert.isFalse(settledAgain.thread.settleAfterCompletion);
     }),
   );
 

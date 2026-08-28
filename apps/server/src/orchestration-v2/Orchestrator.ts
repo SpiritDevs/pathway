@@ -7765,7 +7765,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const settled = yield* dispatchWithReceiptAttempt(
         {
           type: "thread.settle",
-          commandId: CommandId.make(`command:settle-after-completion:${threadId}:${latestRunId}`),
+          commandId: CommandId.make(
+            `command:settle-after-completion:${threadId}:${latestRunId}:${snapshot.snapshotSequence}`,
+          ),
           threadId,
         },
         snapshot.snapshotSequence,
