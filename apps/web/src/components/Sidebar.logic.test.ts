@@ -42,6 +42,7 @@ import {
   sortScopedProjectsForSidebar,
   sortSettledThreadsForSidebar,
   sortSidebarV2ProjectGroups,
+  settleActionLabel,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import {
@@ -1059,6 +1060,42 @@ describe("formatWorkingDurationLabel", () => {
   it("clamps negative and non-finite elapsed values to zero", () => {
     expect(formatWorkingDurationLabel(-5_000)).toBe("0s");
     expect(formatWorkingDurationLabel(Number.NaN)).toBe("0s");
+  });
+});
+
+describe("settleActionLabel", () => {
+  it("reveals the deferred action only while Control is held on a supported server", () => {
+    expect(
+      settleActionLabel({
+        controlKeyHeld: false,
+        settleAfterCompletionSupported: true,
+        settleAfterCompletionActive: false,
+      }),
+    ).toBe("Settle thread");
+    expect(
+      settleActionLabel({
+        controlKeyHeld: true,
+        settleAfterCompletionSupported: false,
+        settleAfterCompletionActive: false,
+      }),
+    ).toBe("Settle thread");
+    expect(
+      settleActionLabel({
+        controlKeyHeld: true,
+        settleAfterCompletionSupported: true,
+        settleAfterCompletionActive: false,
+      }),
+    ).toBe("Settle after completion");
+  });
+
+  it("turns the Control-modified action into cancellation while armed", () => {
+    expect(
+      settleActionLabel({
+        controlKeyHeld: true,
+        settleAfterCompletionSupported: true,
+        settleAfterCompletionActive: true,
+      }),
+    ).toBe("Cancel settle after completion");
   });
 });
 

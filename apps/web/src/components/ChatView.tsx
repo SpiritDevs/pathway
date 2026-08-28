@@ -5150,6 +5150,8 @@ function ChatViewContent(props: ChatViewProps) {
   const pullRequestSurfaceAvailable =
     supportsPullRequests && activeThreadPr !== null && threadRepository !== null;
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
+  const supportsSettleAfterCompletion =
+    serverConfig?.environment.capabilities.threadSettleAfterCompletion === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
   const [usageLimitWaitPending, setUsageLimitWaitPending] = useState(false);
   const onWaitUntilUsageReset = useCallback(
@@ -5220,6 +5222,28 @@ function ChatViewContent(props: ChatViewProps) {
     nowMinute,
     supportsSettlement,
   ]);
+  const activeThreadSettleAfterCompletion =
+    supportsSettleAfterCompletion && activeThreadShell?.settleAfterCompletion === true;
+  const settleAfterCompletionMutation = useAtomCommand(threadEnvironment.setSettleAfterCompletion, {
+    reportFailure: false,
+  });
+  const handleCancelSettleAfterCompletion = useCallback(async () => {
+    if (!activeThreadRef) return;
+    const result = await settleAfterCompletionMutation({
+      environmentId: activeThreadRef.environmentId,
+      input: { threadId: activeThreadRef.threadId, enabled: false },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to cancel settle after completion",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    }
+  }, [activeThreadRef, settleAfterCompletionMutation]);
   const unsettleThreadMutation = useAtomCommand(threadEnvironment.unsettle, {
     reportFailure: false,
   });
@@ -8306,6 +8330,8 @@ function ChatViewContent(props: ChatViewProps) {
   const panelToggleControls = (
     <PanelLayoutControls
       {...panelToggleControlProps}
+      settleAfterCompletionActive={activeThreadSettleAfterCompletion}
+      onCancelSettleAfterCompletion={() => void handleCancelSettleAfterCompletion()}
       showThreadPanelControl={!inlineRightPanelOwnsTitleBar}
     />
   );

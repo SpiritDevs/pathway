@@ -47,6 +47,7 @@ const AGENT_THREAD_SHELL_FIELDS = new Set([
   "archivedAt",
   "settledOverride",
   "settledAt",
+  "settleAfterCompletion",
   "snoozedUntil",
   "snoozedAt",
   "pinnedAt",

@@ -4,6 +4,7 @@ import {
   Minimize2Icon,
   PanelBottomIcon,
   PanelRightIcon,
+  TimerIcon,
 } from "lucide-react";
 import { memo, type ReactElement, type ReactNode, type RefObject } from "react";
 
@@ -16,6 +17,7 @@ export interface PanelLayoutControlsProps {
   showThreadPanelControl?: boolean;
   showTerminalControl?: boolean;
   showRightPanelControl?: boolean;
+  settleAfterCompletionActive?: boolean;
   terminalAvailable: boolean;
   terminalOpen: boolean;
   terminalShortcutLabel: string | null;
@@ -33,12 +35,14 @@ export interface PanelLayoutControlsProps {
   onToggleTerminal: () => void;
   onToggleThreadPanel: () => void;
   onToggleRightPanel: () => void;
+  onCancelSettleAfterCompletion?: () => void;
 }
 
 export const PanelLayoutControls = memo(function PanelLayoutControls({
   showThreadPanelControl = true,
   showTerminalControl = true,
   showRightPanelControl = true,
+  settleAfterCompletionActive = false,
   terminalAvailable,
   terminalOpen,
   terminalShortcutLabel,
@@ -54,6 +58,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
   onToggleTerminal,
   onToggleThreadPanel,
   onToggleRightPanel,
+  onCancelSettleAfterCompletion,
 }: PanelLayoutControlsProps) {
   const threadPanelToggle = (
     <Toggle
@@ -90,6 +95,25 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
       className="mr-px flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
       data-panel-layout-controls
     >
+      {settleAfterCompletionActive && onCancelSettleAfterCompletion ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Toggle
+                className="shrink-0 bg-sky-500/15 text-sky-600 hover:bg-sky-500/20 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 [-webkit-app-region:no-drag]"
+                pressed
+                onPressedChange={onCancelSettleAfterCompletion}
+                aria-label="Cancel settle after completion"
+                variant="ghost"
+                size="sm"
+              >
+                <TimerIcon className="size-4" />
+              </Toggle>
+            }
+          />
+          <TooltipPopup side="bottom">Cancel settle after completion</TooltipPopup>
+        </Tooltip>
+      ) : null}
       {showThreadPanelControl ? (
         threadPanelPresentation === "popover" ? (
           <Popover

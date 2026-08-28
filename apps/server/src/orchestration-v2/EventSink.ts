@@ -73,6 +73,34 @@ export class EventSinkStreamError extends Schema.TaggedErrorClass<EventSinkStrea
 export const EventSinkV2Error = Schema.Union([EventSinkWriteError, EventSinkStreamError]);
 export type EventSinkV2Error = typeof EventSinkV2Error.Type;
 
+interface EventSinkCommitCommandInput {
+  readonly commandId: CommandId;
+  readonly threadId: ThreadId;
+  readonly commandType: string;
+  readonly acceptedAt: DateTime.Utc;
+  readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
+  readonly effects: ReadonlyArray<PendingOrchestrationEffectV2>;
+  readonly cancelUnsettledEffects?: {
+    readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
+    readonly reason: string;
+  };
+}
+
+interface EventSinkCommitCommandResult {
+  readonly receipt: CommandReceiptV2;
+  readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
+  readonly committed: boolean;
+  readonly cancelledEffectCount: number;
+}
+
+interface EventSinkConditionalCommitCommandResult {
+  readonly preconditionMatched: boolean;
+  readonly receipt: CommandReceiptV2 | null;
+  readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
+  readonly committed: boolean;
+  readonly cancelledEffectCount: number;
+}
+
 /**
  * SERVICE DEFINITION
  */
@@ -120,26 +148,12 @@ export interface EventSinkV2Shape {
     },
     EventSinkV2Error
   >;
-  readonly commitCommand: (input: {
-    readonly commandId: CommandId;
-    readonly threadId: ThreadId;
-    readonly commandType: string;
-    readonly acceptedAt: DateTime.Utc;
-    readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
-    readonly effects: ReadonlyArray<PendingOrchestrationEffectV2>;
-    readonly cancelUnsettledEffects?: {
-      readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
-      readonly reason: string;
-    };
-  }) => Effect.Effect<
-    {
-      readonly receipt: CommandReceiptV2;
-      readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
-      readonly committed: boolean;
-      readonly cancelledEffectCount: number;
-    },
-    EventSinkV2Error
-  >;
+  readonly commitCommand: (
+    input: EventSinkCommitCommandInput,
+  ) => Effect.Effect<EventSinkCommitCommandResult, EventSinkV2Error>;
+  readonly commitCommandIfThreadSequence: (
+    input: EventSinkCommitCommandInput & { readonly expectedThreadSequence: number },
+  ) => Effect.Effect<EventSinkConditionalCommitCommandResult, EventSinkV2Error>;
   readonly commitRejectedCommand: (input: {
     readonly commandId: CommandId;
     readonly threadId: ThreadId;
@@ -392,10 +406,33 @@ const baseLayer: Layer.Layer<
       });
 
     const commitCommandEffect = Effect.fn("orchestrationV2.EventSink.commitCommand")(function* (
-      input: Parameters<EventSinkV2Shape["commitCommand"]>[0],
+      input: EventSinkCommitCommandInput & { readonly expectedThreadSequence?: number },
     ) {
       const result = yield* sql.withTransaction(
         Effect.gen(function* () {
+          if (input.expectedThreadSequence !== undefined) {
+            const existingReceipt = yield* commandReceipts.getByCommandId(input.commandId);
+            if (Option.isSome(existingReceipt)) {
+              const existing = yield* existingCommandResult(input.commandId);
+              return {
+                ...existing,
+                preconditionMatched: true as const,
+                committed: false as const,
+                cancelledEffectIds: [],
+              };
+            }
+            const currentSequence = yield* eventStore.latestSequence({ threadId: input.threadId });
+            if (currentSequence !== input.expectedThreadSequence) {
+              return {
+                preconditionMatched: false as const,
+                receipt: null,
+                storedEvents: [] as const,
+                committed: false as const,
+                cancelledEffectIds: [] as const,
+              };
+            }
+          }
+
           const reserved = yield* commandReceipts.insertIfAbsent({
             commandId: input.commandId,
             threadId: input.threadId,
@@ -407,7 +444,12 @@ const baseLayer: Layer.Layer<
           });
           if (!reserved) {
             const existing = yield* existingCommandResult(input.commandId);
-            return { ...existing, committed: false as const, cancelledEffectIds: [] };
+            return {
+              ...existing,
+              preconditionMatched: true as const,
+              committed: false as const,
+              cancelledEffectIds: [],
+            };
           }
 
           const normalized = yield* normalizeEvents(input.events);
@@ -440,18 +482,27 @@ const baseLayer: Layer.Layer<
                   threadId: input.threadId,
                   ...input.cancelUnsettledEffects,
                 });
-          return { receipt, storedEvents, committed: true as const, cancelledEffectIds };
+          return {
+            receipt,
+            storedEvents,
+            preconditionMatched: true as const,
+            committed: true as const,
+            cancelledEffectIds,
+          };
         }),
       );
-      yield* effectOutbox.signalCancellations(result.cancelledEffectIds);
-      if (result.committed && input.effects.length > 0) {
-        yield* effectOutbox.notifyAvailable(input.effects.length);
-      }
-      if (result.committed) {
-        yield* eventStore.publishCommitted(result.storedEvents);
-        yield* PubSub.publishAll(liveEvents, result.storedEvents);
+      if (result.preconditionMatched) {
+        yield* effectOutbox.signalCancellations(result.cancelledEffectIds);
+        if (result.committed && input.effects.length > 0) {
+          yield* effectOutbox.notifyAvailable(input.effects.length);
+        }
+        if (result.committed) {
+          yield* eventStore.publishCommitted(result.storedEvents);
+          yield* PubSub.publishAll(liveEvents, result.storedEvents);
+        }
       }
       return {
+        preconditionMatched: result.preconditionMatched,
         receipt: result.receipt,
         storedEvents: result.storedEvents,
         committed: result.committed,
@@ -586,6 +637,29 @@ const baseLayer: Layer.Layer<
           ),
         ),
       commitCommand: (input) =>
+        commitCommandEffect(input).pipe(
+          Effect.flatMap((result) =>
+            result.receipt === null
+              ? Effect.die(
+                  new Error(`Unconditional command ${input.commandId} failed a precondition.`),
+                )
+              : Effect.succeed({
+                  receipt: result.receipt,
+                  storedEvents: result.storedEvents,
+                  committed: result.committed,
+                  cancelledEffectCount: result.cancelledEffectCount,
+                }),
+          ),
+          Effect.mapError(
+            (cause) =>
+              new EventSinkWriteError({
+                commandId: input.commandId,
+                eventCount: input.events.length,
+                cause,
+              }),
+          ),
+        ),
+      commitCommandIfThreadSequence: (input) =>
         commitCommandEffect(input).pipe(
           Effect.mapError(
             (cause) =>

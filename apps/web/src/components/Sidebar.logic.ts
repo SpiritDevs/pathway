@@ -710,6 +710,17 @@ export function formatWorkingDurationLabel(elapsedMs: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+export function settleActionLabel(input: {
+  controlKeyHeld: boolean;
+  settleAfterCompletionSupported: boolean;
+  settleAfterCompletionActive: boolean;
+}): "Settle thread" | "Settle after completion" | "Cancel settle after completion" {
+  if (!input.controlKeyHeld || !input.settleAfterCompletionSupported) return "Settle thread";
+  return input.settleAfterCompletionActive
+    ? "Cancel settle after completion"
+    : "Settle after completion";
+}
+
 export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
 }): ThreadStatusPill | null {

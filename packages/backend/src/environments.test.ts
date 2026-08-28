@@ -70,6 +70,7 @@ const descriptor = (
     projectDirectoryInspection,
     connectionProbe: true,
     pushAutoSettlement: true,
+    threadSettleAfterCompletion: true,
   },
 });
 
@@ -997,6 +998,7 @@ describe("environment registry", () => {
       id: "thread-one",
       projectId: PROJECT_ID,
       title: "Cloud-visible thread",
+      settleAfterCompletion: false,
       latestVisibleMessage: {
         id: "message-one",
         role: "assistant",

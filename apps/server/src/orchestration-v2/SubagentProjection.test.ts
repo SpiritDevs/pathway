@@ -54,6 +54,7 @@ function makeParentThread(): OrchestrationV2AppThread {
     archivedAt: null,
     settledOverride: null,
     settledAt: null,
+    settleAfterCompletion: true,
     lastVisitedAt: null,
     snoozedUntil,
     snoozedAt,
@@ -80,6 +81,7 @@ it("keeps a subagent child awake when its parent thread is snoozed", () => {
 
   assert.isNull(childThread.snoozedUntil);
   assert.isNull(childThread.snoozedAt);
+  assert.isFalse(childThread.settleAfterCompletion);
   assert.equal(childThread.projectId, parentThread.projectId);
   assert.equal(childThread.runtimeMode, parentThread.runtimeMode);
   assert.equal(childThread.interactionMode, parentThread.interactionMode);

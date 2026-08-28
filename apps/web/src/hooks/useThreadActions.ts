@@ -31,6 +31,7 @@ import {
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsPinReorder,
   readEnvironmentSupportsSettlement,
+  readEnvironmentSupportsSettleAfterCompletion,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsVisitedTracking,
   readEnvironmentThreadRefs,
@@ -180,6 +181,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const settleThreadMutation = useAtomCommand(threadEnvironment.settle, {
+    reportFailure: false,
+  });
+  const settleAfterCompletionMutation = useAtomCommand(threadEnvironment.setSettleAfterCompletion, {
     reportFailure: false,
   });
   const unsettleThreadMutation = useAtomCommand(threadEnvironment.unsettle, {
@@ -574,6 +578,26 @@ export function useThreadActions() {
     [unsettleThreadMutation],
   );
 
+  const setSettleAfterCompletion = useCallback(
+    async (target: ScopedThreadRef, enabled: boolean) => {
+      if (!readEnvironmentSupportsSettleAfterCompletion(target.environmentId)) {
+        return AsyncResult.failure(
+          Cause.fail(
+            new ThreadSettlementUnsupportedError({
+              environmentId: target.environmentId,
+              threadId: target.threadId,
+            }),
+          ),
+        );
+      }
+      return settleAfterCompletionMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, enabled },
+      });
+    },
+    [settleAfterCompletionMutation],
+  );
+
   const pinThread = useCallback(
     async (target: ScopedThreadRef, opts: { orderKey?: string } = {}) => {
       // Version skew: never send the command to a server that predates it.
@@ -741,6 +765,7 @@ export function useThreadActions() {
       deleteThread,
       confirmAndDeleteThread,
       settleThread,
+      setSettleAfterCompletion,
       unsettleThread,
       snoozeThread,
       unsnoozeThread,
@@ -757,6 +782,7 @@ export function useThreadActions() {
       pinThread,
       reorderPinnedThread,
       settleThread,
+      setSettleAfterCompletion,
       snoozeThread,
       unarchiveThread,
       unpinThread,

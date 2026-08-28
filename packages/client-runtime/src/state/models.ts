@@ -98,6 +98,7 @@ export interface EnvironmentThreadShell {
   readonly archivedAt: string | null;
   readonly settledOverride: "settled" | "active" | null;
   readonly settledAt: string | null;
+  readonly settleAfterCompletion: boolean;
   readonly snoozedUntil: string | null;
   readonly snoozedAt: string | null;
   readonly pinnedAt: string | null;
@@ -213,6 +214,7 @@ export function presentThreadShell(
     archivedAt: nullableIso(thread.archivedAt),
     settledOverride: thread.settledOverride,
     settledAt: nullableIso(thread.settledAt),
+    settleAfterCompletion: thread.settleAfterCompletion === true,
     snoozedUntil: nullableIso(thread.snoozedUntil ?? null),
     snoozedAt: nullableIso(thread.snoozedAt ?? null),
     pinnedAt: nullableIso(thread.pinnedAt ?? null),
