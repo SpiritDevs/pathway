@@ -1647,7 +1647,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       !projection.runs.some((run) =>
         ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
       ) &&
-      !projection.runtimeRequests.some((request) => request.status === "pending")
+      !projection.runtimeRequests.some((request) => request.status === "pending") &&
+      (threadShellFromProjection(projection).pendingBackgroundTasks?.length ?? 0) === 0
     ) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
@@ -1914,7 +1915,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         case "thread.settle":
           return "thread.settled" as const;
         case "thread.settle-after-completion.set":
-          return "thread.settle-after-completion-updated" as const;
+          // The optional field rides an established event discriminator so
+          // older clients can keep decoding this thread's event stream.
+          return "thread.metadata-updated" as const;
         case "thread.unsettle":
           return "thread.unsettled" as const;
         case "thread.snooze":
@@ -7697,6 +7700,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const handleTerminalRun = (stored: OrchestrationV2StoredEvent) =>
     Effect.gen(function* () {
       const threadId = stored.event.threadId;
+      if (String(stored.commandId).startsWith("command:runtime-reconcile:")) {
+        // Runtime recovery owns terminalization and queue cancellation. Only
+        // recheck the one-shot request once that committed projection is idle.
+        yield* threadDispatch.withLock(threadId, settleAfterCompletionIfReady(threadId));
+        return;
+      }
       const isTerminalRunEvent =
         stored.event.type === "run.updated" &&
         ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
@@ -7740,7 +7749,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     Effect.flatMap((afterSequence) =>
       eventSink.stream({ afterSequence }).pipe(
         Stream.filter((stored) => {
-          if (String(stored.commandId).startsWith("command:runtime-reconcile:")) return false;
           const event = stored.event;
           if (event.type === "run.updated") {
             return ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(

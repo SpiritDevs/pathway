@@ -224,7 +224,6 @@ export const layer: Layer.Layer<
       "thread.deleted",
       "thread.settled",
       "thread.unsettled",
-      "thread.settle-after-completion-updated",
       "thread.snoozed",
       "thread.unsnoozed",
       "thread.pinned",
