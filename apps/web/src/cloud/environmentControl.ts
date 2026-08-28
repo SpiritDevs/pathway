@@ -1,4 +1,8 @@
-import type { EnvironmentCloudRegistrationInfo, EnvironmentId } from "@spiritdevs/contracts";
+import type {
+  EnvironmentCloudRegistrationInfo,
+  EnvironmentId,
+  RepositoryIdentity,
+} from "@spiritdevs/contracts";
 import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import type { CompanyId, CompanyPermission } from "@spiritdevs/contracts/company";
 import {
@@ -211,6 +215,19 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
     },
     { readonly deleted: boolean }
   >("cloudProjects:deleteCompanyProject"),
+  mergeCompanyProjects: mutationReference<
+    {
+      readonly companyId: CompanyId;
+      readonly sourceCloudProjectId: string;
+      readonly targetCloudProjectId: string;
+      readonly repositoryIdentity: RepositoryIdentity;
+    },
+    {
+      readonly movedBindings: number;
+      readonly movedThreads: number;
+      readonly movedIssues: number;
+    }
+  >("cloudProjects:mergeCompanyProjects"),
 } as const;
 
 const FRIENDLY_ERROR_MESSAGES: Readonly<Record<string, string>> = {
@@ -354,6 +371,17 @@ export interface EnvironmentControlClient {
     readonly companyId: CompanyId;
     readonly cloudProjectId: string;
   }) => Promise<{ readonly deleted: boolean }>;
+  /** Collapses a duplicate into the target and makes one Git repository authoritative. */
+  readonly mergeCompanyProjects: (args: {
+    readonly companyId: CompanyId;
+    readonly sourceCloudProjectId: string;
+    readonly targetCloudProjectId: string;
+    readonly repositoryIdentity: RepositoryIdentity;
+  }) => Promise<{
+    readonly movedBindings: number;
+    readonly movedThreads: number;
+    readonly movedIssues: number;
+  }>;
   readonly close: () => Promise<void>;
 }
 
@@ -526,6 +554,12 @@ export function makeEnvironmentControlClient(options: {
         ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.deleteCompanyProject,
         args,
       ),
+    mergeCompanyProjects: (args) =>
+      cloudProjectMutationResult<{
+        readonly movedBindings: number;
+        readonly movedThreads: number;
+        readonly movedIssues: number;
+      }>(ENVIRONMENT_CONTROL_FUNCTION_REFERENCES.mergeCompanyProjects, args),
     close: () => (ownsClient ? client.close() : Promise.resolve()),
   };
 }

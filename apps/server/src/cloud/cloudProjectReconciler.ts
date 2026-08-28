@@ -1,17 +1,113 @@
-/** Applies authoritative cloud project deletions to this environment's local event store. */
+/** Applies authoritative cloud project deletion and repository intents to this environment. */
 import type { CloudSyncEntity } from "@spiritdevs/client-runtime/sync";
-import { CommandId, type EnvironmentId, ProjectId, type Project } from "@spiritdevs/contracts";
+import {
+  CommandId,
+  type EnvironmentId,
+  ProjectId,
+  type Project,
+  type RepositoryIdentity,
+} from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import * as Effect from "effect/Effect";
 
 import type { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import type * as ProjectService from "../project/ProjectService.ts";
+import type * as ProcessRunner from "../processRunner.ts";
 
 export interface RevokedEnvironmentProject {
   readonly bindingId: string;
   readonly localProjectId: ProjectId;
   readonly updatedAt: number;
 }
+
+export interface AuthoritativeEnvironmentRepository {
+  readonly bindingId: string;
+  readonly localProjectId: ProjectId;
+  readonly repositoryIdentity: RepositoryIdentity;
+  readonly updatedAt: number;
+}
+
+export const authoritativeEnvironmentRepositoryIntentKey = (
+  repository: AuthoritativeEnvironmentRepository,
+): string =>
+  `${repository.bindingId}:${repository.repositoryIdentity.canonicalKey}:${repository.updatedAt}`;
+
+/** Repository choices addressed to one environment by active project bindings. */
+export function authoritativeEnvironmentRepositories(
+  entities: Iterable<CloudSyncEntity>,
+  environmentId: EnvironmentId,
+): ReadonlyArray<AuthoritativeEnvironmentRepository> {
+  const projects = new Map<string, Extract<CloudSyncEntity, { entityKind: "cloudProject" }>>();
+  const bindings: Extract<CloudSyncEntity, { entityKind: "environmentBinding" }>[] = [];
+  for (const entity of entities) {
+    if (entity.entityKind === "cloudProject") projects.set(String(entity.id), entity);
+    if (
+      entity.entityKind === "environmentBinding" &&
+      entity.environmentId === environmentId &&
+      entity.status === "active"
+    ) {
+      bindings.push(entity);
+    }
+  }
+  return bindings.flatMap((binding) => {
+    const project = projects.get(String(binding.cloudProjectId));
+    if (project?.repositoryIdentity == null) return [];
+    return [
+      {
+        bindingId: String(binding.id),
+        localProjectId: ProjectId.make(String(binding.localProjectId)),
+        repositoryIdentity: project.repositoryIdentity,
+        updatedAt: Math.max(binding.updatedAt, project.updatedAt),
+      },
+    ];
+  });
+}
+
+/** Applies the selected remote to the named checkout without touching files or branches. */
+export const reconcileAuthoritativeEnvironmentRepositories = Effect.fn(
+  "cloud.project_reconciler.repository",
+)(function* (input: {
+  readonly repositories: ReadonlyArray<AuthoritativeEnvironmentRepository>;
+  readonly projects: ProjectService.ProjectService["Service"];
+  readonly processRunner: ProcessRunner.ProcessRunner["Service"];
+}) {
+  if (input.repositories.length === 0) return [];
+  const snapshot = yield* input.projects.snapshot;
+  const projects = new Map(snapshot.projects.map((project) => [project.id, project]));
+  const settled: string[] = [];
+  for (const repository of input.repositories) {
+    const project = projects.get(repository.localProjectId);
+    if (project?.workspaceRoot == null) continue;
+    const intentKey = authoritativeEnvironmentRepositoryIntentKey(repository);
+    if (project.repositoryIdentity?.canonicalKey === repository.repositoryIdentity.canonicalKey) {
+      settled.push(intentKey);
+      continue;
+    }
+    const remoteName = repository.repositoryIdentity.locator.remoteName;
+    const remotes = yield* input.processRunner
+      .run({ command: "git", args: ["-C", project.workspaceRoot, "remote"] })
+      .pipe(Effect.option);
+    if (remotes._tag === "None" || remotes.value.code !== 0) continue;
+    const hasRemote = remotes.value.stdout
+      .split("\n")
+      .some((candidate) => candidate.trim() === remoteName);
+    const result = yield* input.processRunner
+      .run({
+        command: "git",
+        args: [
+          "-C",
+          project.workspaceRoot,
+          "remote",
+          hasRemote ? "set-url" : "add",
+          remoteName,
+          repository.repositoryIdentity.locator.remoteUrl,
+        ],
+      })
+      .pipe(Effect.option);
+    if (result._tag === "Some" && result.value.code === 0) settled.push(intentKey);
+  }
+  return settled;
+});
 
 export const revokedEnvironmentProjectIntentKey = (binding: RevokedEnvironmentProject): string =>
   `${binding.bindingId}:${binding.updatedAt}`;

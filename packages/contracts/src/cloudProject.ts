@@ -41,6 +41,7 @@ import {
   OrchestrationV2LatestVisibleMessageSummaryJson,
   OrchestrationV2ThreadShellJson,
 } from "./orchestrationV2.ts";
+import { RepositoryIdentity } from "./environment.ts";
 
 const makeCloudProjectEntityId = <Brand extends string>(brand: Brand) =>
   TrimmedNonEmptyString.pipe(Schema.brand(brand));
@@ -76,6 +77,8 @@ export const CloudProject = Schema.Struct({
    * are asked to choose, so they are asked once rather than on every start.
    */
   preferredBindingId: Schema.NullOr(EnvironmentBindingId),
+  /** Repository chosen by the user when several checkouts disagree. */
+  repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   archivedAt: Schema.NullOr(CloudTimestamp),
   createdAt: CloudTimestamp,
   updatedAt: CloudTimestamp,

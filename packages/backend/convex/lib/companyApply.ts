@@ -272,6 +272,7 @@ export function encodeCloudProject(doc: Doc<"cloudProjects">): unknown {
     teamIds: doc.teamIds,
     defaultWorkflowOwner: doc.defaultWorkflowOwner,
     preferredBindingId: doc.preferredBindingId,
+    ...(doc.repositoryIdentity === undefined ? {} : { repositoryIdentity: doc.repositoryIdentity }),
     archivedAt: doc.archivedAt,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,

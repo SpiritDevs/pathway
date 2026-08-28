@@ -32,6 +32,7 @@ import {
   ChevronDownIcon,
   CopyIcon,
   EllipsisIcon,
+  GitMergeIcon,
   MonitorIcon,
   PencilIcon,
   PlusIcon,
@@ -85,6 +86,7 @@ import { ProjectFavicon } from "../ProjectFavicon";
 import { AddProjectConnectionDialog } from "../projects/AddProjectConnectionDialog";
 import { AttachProjectDirectoryDialog } from "../projects/AttachProjectDirectoryDialog";
 import { MoveProjectWizard } from "../projects/MoveProjectWizard";
+import { MergeProjectDialog } from "../projects/MergeProjectDialog";
 import { PendingProjectSetup } from "../projects/PendingProjectSetup";
 import {
   clearWorkspaceProjectRemovalPending,
@@ -145,6 +147,8 @@ export const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, st
   repository_path: "Group by repository path",
   separate: "Keep separate",
 };
+
+const EMPTY_WORKSPACE_PROJECTS: ReadonlyArray<WorkspaceProject> = [];
 
 function memberKey(member: { environmentId: string; id: string }): string {
   return `${member.environmentId}:${member.id}`;
@@ -223,6 +227,7 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
         replica: companySettings.replica,
         environmentControl,
       }}
+      workspaceProjects={workspaceProjects}
     />
   );
 }
@@ -387,10 +392,12 @@ export function ProjectDetail({
   group,
   workspaceProject = null,
   companyContext = null,
+  workspaceProjects = EMPTY_WORKSPACE_PROJECTS,
 }: {
   group: SidebarProjectSnapshot;
   workspaceProject?: WorkspaceProject | null;
   companyContext?: ProjectCompanyContext | null;
+  workspaceProjects?: ReadonlyArray<WorkspaceProject>;
 }) {
   const navigate = useNavigate();
   const settings = usePrimarySettings();
@@ -436,6 +443,16 @@ export function ProjectDetail({
         null);
   const [moveDestination, setMoveDestination] = useState<CompanyId | null>(null);
   const [moveWizardOpen, setMoveWizardOpen] = useState(false);
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const mergeCandidates = useMemo(() => {
+    if (workspaceProject === null || owningCompany === null) return [];
+    return workspaceProjects.filter(
+      (candidate) =>
+        candidate.cloudProjectId !== null &&
+        candidate.cloudProjectId !== workspaceProject.cloudProjectId &&
+        candidate.companyIds.includes(String(owningCompany.id)),
+    );
+  }, [owningCompany, workspaceProject, workspaceProjects]);
   const connectionCatalog = useMemo(
     () => buildProjectConnectionCatalog(companyContext?.replica?.view.values() ?? []),
     [companyContext?.replica],
@@ -1255,7 +1272,39 @@ export function ProjectDetail({
                 </Select>
               }
             />
+            <SettingsRow
+              title="Merge duplicate"
+              description="Combine another project with this one and choose the Git repository all connections should use."
+              control={
+                <Button
+                  variant="outline"
+                  disabled={
+                    mergeCandidates.length === 0 ||
+                    owningCompany === null ||
+                    companyContext?.environmentControl == null
+                  }
+                  onClick={() => setMergeDialogOpen(true)}
+                >
+                  <GitMergeIcon />
+                  Merge project
+                </Button>
+              }
+            />
           </SettingsSection>
+        ) : null}
+
+        {workspaceProject !== null &&
+        owningCompany !== null &&
+        companyContext?.environmentControl != null ? (
+          <MergeProjectDialog
+            open={mergeDialogOpen}
+            onOpenChange={setMergeDialogOpen}
+            project={workspaceProject}
+            candidates={mergeCandidates}
+            companyId={owningCompany.id as CompanyId}
+            environmentControl={companyContext.environmentControl}
+            onMerged={() => void navigate({ to: "/settings/projects", replace: true })}
+          />
         ) : null}
 
         <SettingsSection

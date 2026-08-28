@@ -459,6 +459,8 @@ export default defineSchema({
     teamIds: v.array(domainId),
     defaultWorkflowOwner: v.union(workflowOwner, v.null()),
     preferredBindingId: v.union(domainId, v.null()),
+    /** User-selected repository identity shared by every checkout after a merge. */
+    repositoryIdentity: v.optional(v.union(repositoryIdentityArg, v.null())),
     archivedAt: v.union(v.number(), v.null()),
     createdAt: v.number(),
     updatedAt: v.number(),

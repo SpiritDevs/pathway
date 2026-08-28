@@ -81,6 +81,7 @@ describe("environment control function references", () => {
       setPreferredEnvironmentBinding: "cloudProjects:setPreferredEnvironmentBinding",
       releaseEnvironmentProject: "cloudProjects:releaseEnvironmentProject",
       deleteCompanyProject: "cloudProjects:deleteCompanyProject",
+      mergeCompanyProjects: "cloudProjects:mergeCompanyProjects",
     });
   });
 
@@ -409,6 +410,52 @@ describe("environment control function references", () => {
       },
     ]);
     expect(fake.calls).toEqual([]);
+  });
+
+  it("merges projects with the selected repository", async () => {
+    const fake = fakeClient();
+    const calls: Array<{ readonly name: string; readonly args: unknown }> = [];
+    const httpClient: EnvironmentControlHttpClient = {
+      setAuth: vi.fn(),
+      mutation: async (reference, args) => {
+        calls.push({ name: getFunctionName(reference), args });
+        return { movedBindings: 1, movedThreads: 2, movedIssues: 3 };
+      },
+    };
+    const control = makeEnvironmentControlClient({
+      convexUrl: "https://example.convex.cloud",
+      fetchToken: vi.fn(async () => "token"),
+      client: fake.client,
+      httpClient,
+    });
+    const repositoryIdentity = {
+      canonicalKey: "github.com/spiritdevs/pathway",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "https://github.com/SpiritDevs/pathway.git",
+      },
+    };
+
+    await expect(
+      control.mergeCompanyProjects({
+        companyId: COMPANY_ID,
+        sourceCloudProjectId: "duplicate",
+        targetCloudProjectId: "pathway",
+        repositoryIdentity,
+      }),
+    ).resolves.toEqual({ movedBindings: 1, movedThreads: 2, movedIssues: 3 });
+    expect(calls).toEqual([
+      {
+        name: "cloudProjects:mergeCompanyProjects",
+        args: {
+          companyId: COMPANY_ID,
+          sourceCloudProjectId: "duplicate",
+          targetCloudProjectId: "pathway",
+          repositoryIdentity,
+        },
+      },
+    ]);
   });
 
   it("sets the preferred environment binding for future project work", async () => {

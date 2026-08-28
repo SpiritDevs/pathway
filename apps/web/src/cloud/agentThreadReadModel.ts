@@ -88,6 +88,7 @@ export function companyScopedEnvironmentProjects(
   if (replica === undefined) return EMPTY_PROJECTS;
   if (!hasPathwayEnvironmentRegistration(replica, environmentId)) return EMPTY_PROJECTS;
   const bindings: EnvironmentBindingEntity[] = [];
+  const cloudProjects = new Map<string, CloudProjectSyncEntity>();
   let caseInsensitive = false;
   for (const value of replica.view.values()) {
     if (
@@ -104,14 +105,38 @@ export function companyScopedEnvironmentProjects(
       value.status === "active"
     ) {
       bindings.push(value);
+      continue;
     }
+    if (isCloudProject(value)) cloudProjects.set(String(value.id), value);
   }
-  const filtered = projects.filter((project) =>
-    bindings.some((binding) =>
-      environmentBindingMatchesProject(binding, { ...project, environmentId }, caseInsensitive),
-    ),
-  );
-  return filtered.length === projects.length ? projects : filtered;
+  let changed = false;
+  const scoped: OrchestrationProjectShell[] = [];
+  for (const project of projects) {
+    const binding = bindings.find((candidate) =>
+      environmentBindingMatchesProject(candidate, { ...project, environmentId }, caseInsensitive),
+    );
+    if (binding === undefined) {
+      changed = true;
+      continue;
+    }
+    const authoritative = cloudProjects.get(String(binding.cloudProjectId))?.repositoryIdentity;
+    if (
+      authoritative == null ||
+      authoritative.canonicalKey === project.repositoryIdentity?.canonicalKey
+    ) {
+      scoped.push(project);
+      continue;
+    }
+    changed = true;
+    scoped.push({
+      ...project,
+      repositoryIdentity: {
+        ...authoritative,
+        ...(project.workspaceRoot === null ? {} : { rootPath: project.workspaceRoot }),
+      },
+    });
+  }
+  return changed ? scoped : projects;
 }
 
 export function companyScopedEnvironmentThreads(

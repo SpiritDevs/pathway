@@ -2,12 +2,15 @@ import type { CloudSyncEntity } from "@spiritdevs/client-runtime/sync";
 import { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { CloudProjectId, EnvironmentBindingId } from "@spiritdevs/contracts/cloudProject";
 import { CompanyId } from "@spiritdevs/contracts/company";
+import { describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { describe, expect, it, vi } from "vite-plus/test";
 
 import type { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import type * as ProjectService from "../project/ProjectService.ts";
+import type * as ProcessRunner from "../processRunner.ts";
 import {
+  authoritativeEnvironmentRepositories,
+  reconcileAuthoritativeEnvironmentRepositories,
   reconcileRevokedEnvironmentProjects,
   revokedEnvironmentProjects,
 } from "./cloudProjectReconciler.ts";
@@ -89,50 +92,157 @@ describe("cloud project deletion reconciliation", () => {
     ]);
   });
 
-  it("force-deletes a live local project and settles its durable intent", async () => {
-    const projectId = ProjectId.make("project");
-    const dispatch = vi.fn(
-      (_command: Parameters<OrchestrationEngineService["Service"]["dispatch"]>[0]) => Effect.void,
-    );
-    const projects = {
-      snapshot: Effect.succeed({
-        projects: [
-          {
-            id: projectId,
-            title: "Pathway",
-            workspaceRoot: "/work/pathway",
-            repositoryIdentity: null,
-            faviconPath: null,
-            defaultModelSelection: null,
-            scripts: [],
-            createdAt: "2026-08-20T00:00:00.000Z",
-            updatedAt: "2026-08-20T00:00:00.000Z",
-            deletedAt: null,
-          },
-        ],
-        updatedAt: "2026-08-20T00:00:00.000Z",
-      }),
-    } as unknown as ProjectService.ProjectService["Service"];
-    const orchestration = {
-      dispatch,
-    } as unknown as OrchestrationEngineService["Service"];
+  it.effect("force-deletes a live local project and settles its durable intent", () =>
+    Effect.gen(function* () {
+      const projectId = ProjectId.make("project");
+      const dispatch = vi.fn(
+        (_command: Parameters<OrchestrationEngineService["Service"]["dispatch"]>[0]) => Effect.void,
+      );
+      const projects = {
+        snapshot: Effect.succeed({
+          projects: [
+            {
+              id: projectId,
+              title: "Pathway",
+              workspaceRoot: "/work/pathway",
+              repositoryIdentity: null,
+              faviconPath: null,
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: "2026-08-20T00:00:00.000Z",
+              updatedAt: "2026-08-20T00:00:00.000Z",
+              deletedAt: null,
+            },
+          ],
+          updatedAt: "2026-08-20T00:00:00.000Z",
+        }),
+      } as unknown as ProjectService.ProjectService["Service"];
+      const orchestration = {
+        dispatch,
+      } as unknown as OrchestrationEngineService["Service"];
 
-    const reconciled = await Effect.runPromise(
-      reconcileRevokedEnvironmentProjects({
+      const reconciled = yield* reconcileRevokedEnvironmentProjects({
         companyId: CompanyId.make("company"),
         environmentId: CURRENT,
         revoked: [{ bindingId: "binding", localProjectId: projectId, updatedAt: 7 }],
         projects,
         orchestration,
-      }),
-    );
+      });
 
-    expect(dispatch).toHaveBeenCalledOnce();
-    expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
-      type: "project.delete",
-      projectId,
-      force: true,
-    });
-    expect(reconciled).toEqual(["binding:7"]);
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+        type: "project.delete",
+        projectId,
+        force: true,
+      });
+      expect(reconciled).toEqual(["binding:7"]);
+    }),
+  );
+});
+
+describe("cloud project repository reconciliation", () => {
+  const identity = {
+    canonicalKey: "github.com/spiritdevs/pathway",
+    locator: {
+      source: "git-remote" as const,
+      remoteName: "origin",
+      remoteUrl: "https://github.com/SpiritDevs/pathway.git",
+    },
+    displayName: "spiritdevs/pathway",
+  };
+
+  it("joins an active binding to its project's authoritative repository", () => {
+    const project: CloudSyncEntity = {
+      entityKind: "cloudProject",
+      id: CloudProjectId.make("cloud-project"),
+      name: "Pathway",
+      description: "",
+      teamIds: [],
+      defaultWorkflowOwner: null,
+      preferredBindingId: null,
+      repositoryIdentity: identity,
+      archivedAt: null,
+      createdAt: 1,
+      updatedAt: 8,
+    };
+    expect(
+      authoritativeEnvironmentRepositories(
+        [
+          project,
+          binding({ id: "binding", localProjectId: "project", status: "active", updatedAt: 5 }),
+        ],
+        CURRENT,
+      ),
+    ).toEqual([
+      {
+        bindingId: "binding",
+        localProjectId: ProjectId.make("project"),
+        repositoryIdentity: identity,
+        updatedAt: 8,
+      },
+    ]);
   });
+
+  it.effect("updates the selected Git remote for an online checkout", () =>
+    Effect.gen(function* () {
+      const projectId = ProjectId.make("project");
+      const run = vi.fn((input: ProcessRunner.ProcessRunInput) =>
+        Effect.succeed({
+          stdout: input.args.at(-1) === "remote" ? "origin\n" : "",
+          stderr: "",
+          code: 0,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdoutInvalidUtf8: false,
+          stderrInvalidUtf8: false,
+        }),
+      );
+      const projects = {
+        snapshot: Effect.succeed({
+          projects: [
+            {
+              id: projectId,
+              title: "Pathway",
+              workspaceRoot: "/work/pathway",
+              repositoryIdentity: null,
+              faviconPath: null,
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: "2026-08-20T00:00:00.000Z",
+              updatedAt: "2026-08-20T00:00:00.000Z",
+              deletedAt: null,
+            },
+          ],
+          updatedAt: "2026-08-20T00:00:00.000Z",
+        }),
+      } as unknown as ProjectService.ProjectService["Service"];
+
+      const reconciled = yield* reconcileAuthoritativeEnvironmentRepositories({
+        repositories: [
+          {
+            bindingId: "binding",
+            localProjectId: projectId,
+            repositoryIdentity: identity,
+            updatedAt: 8,
+          },
+        ],
+        projects,
+        processRunner: { run } as unknown as ProcessRunner.ProcessRunner["Service"],
+      });
+
+      expect(run.mock.calls.map(([input]) => input.args)).toEqual([
+        ["-C", "/work/pathway", "remote"],
+        [
+          "-C",
+          "/work/pathway",
+          "remote",
+          "set-url",
+          "origin",
+          "https://github.com/SpiritDevs/pathway.git",
+        ],
+      ]);
+      expect(reconciled).toEqual(["binding:github.com/spiritdevs/pathway:8"]);
+    }),
+  );
 });

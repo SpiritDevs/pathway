@@ -45,6 +45,7 @@ import {
 } from "@spiritdevs/contracts/cloudSync";
 import { CloudProjectId, EnvironmentBindingId } from "@spiritdevs/contracts/cloudProject";
 import { CloudTimestamp, TeamId, WorkflowOwner } from "@spiritdevs/contracts/company";
+import { RepositoryIdentity } from "@spiritdevs/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -190,6 +191,7 @@ const cloudProjectSyncEntityFields = {
   teamIds: Schema.Array(TeamId),
   defaultWorkflowOwner: Schema.NullOr(WorkflowOwner),
   preferredBindingId: Schema.NullOr(EnvironmentBindingId),
+  repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   archivedAt: Schema.NullOr(CloudTimestamp),
   createdAt: CloudTimestamp,
   updatedAt: CloudTimestamp,

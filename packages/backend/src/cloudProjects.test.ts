@@ -309,6 +309,105 @@ describe("checkoutless project setup", () => {
   });
 });
 
+describe("company project merge", () => {
+  it("moves duplicate connections and threads while preserving the selected repository", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const duplicate = await t.run(async (ctx) => {
+      const projectId = await ctx.db.insert("cloudProjects", {
+        id: PENDING_PROJECT_ID,
+        companyId: ids.companyId,
+        name: "Pathway duplicate",
+        description: "",
+        teamIds: [],
+        defaultWorkflowOwner: null,
+        preferredBindingId: null,
+        archivedAt: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+        deletedAt: null,
+        version: 0,
+      });
+      const bindingId = await ctx.db.insert("environmentBindings", {
+        id: "0198c0de-aaaa-7aaa-8aaa-000000000007",
+        companyId: ids.companyId,
+        cloudProjectId: projectId,
+        environmentId: "environment-laptop",
+        localProjectId: "local-pathway-laptop",
+        localWorkspaceRoot: "/Users/corey/GitHub/pathway",
+        repositoryIdentity: {
+          canonicalKey: "github.com/spiritdevs/pathway",
+          locator: {
+            source: "git-remote",
+            remoteName: "origin",
+            remoteUrl: "https://github.com/SpiritDevs/pathway.git",
+          },
+          rootPath: "/Users/corey/GitHub/pathway",
+          displayName: "spiritdevs/pathway",
+        },
+        repositoryKey: "github.com/spiritdevs/pathway",
+        status: "active",
+        lastSeenAt: NOW,
+        createdAt: NOW,
+        updatedAt: NOW,
+        version: 0,
+      });
+      const threadId = await ctx.db.insert("agentThreads", {
+        id: "environment-laptop:thread-2",
+        companyId: ids.companyId,
+        environmentId: "environment-laptop",
+        cloudProjectId: projectId,
+        localProjectId: "local-pathway-laptop",
+        threadId: "thread-2",
+        shell: { id: "thread-2", projectId: "local-pathway-laptop" },
+        updatedAt: NOW,
+        version: 0,
+      });
+      return { projectId, bindingId, threadId };
+    });
+    const repositoryIdentity = {
+      canonicalKey: "github.com/spiritdevs/pathway",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "https://github.com/SpiritDevs/pathway.git",
+      },
+      rootPath: "/Users/corey/GitHub/pathway",
+      displayName: "spiritdevs/pathway",
+    };
+
+    const result = await asOwner(t).mutation(api.cloudProjects.mergeCompanyProjects, {
+      companyId: COMPANY_ID,
+      sourceCloudProjectId: PENDING_PROJECT_ID,
+      targetCloudProjectId: PROJECT_ID,
+      repositoryIdentity,
+    });
+
+    const state = await t.run(async (ctx) => ({
+      target: await ctx.db.get(ids.projectId),
+      source: await ctx.db.get(duplicate.projectId),
+      binding: await ctx.db.get(duplicate.bindingId),
+      thread: await ctx.db.get(duplicate.threadId),
+    }));
+    expect(result).toEqual({ movedBindings: 1, movedThreads: 1, movedIssues: 0 });
+    expect(state.target?.repositoryIdentity).toEqual({
+      canonicalKey: repositoryIdentity.canonicalKey,
+      locator: repositoryIdentity.locator,
+      displayName: repositoryIdentity.displayName,
+    });
+    expect(state.source?.deletedAt).toEqual(expect.any(Number));
+    expect(state.binding).toMatchObject({
+      cloudProjectId: ids.projectId,
+      repositoryKey: repositoryIdentity.canonicalKey,
+      repositoryIdentity: {
+        ...repositoryIdentity,
+        rootPath: "/Users/corey/GitHub/pathway",
+      },
+    });
+    expect(state.thread?.cloudProjectId).toBe(ids.projectId);
+  });
+});
+
 describe("company project deletion", () => {
   it("tombstones the shared project and leaves durable revocations for offline checkouts", async () => {
     const t = harness();

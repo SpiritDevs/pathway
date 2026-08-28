@@ -69,6 +69,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import { forkParkedFiber } from "../serverActivation.ts";
 import { RELAY_ENVIRONMENT_CREDENTIAL_SECRET, RELAY_URL_SECRET } from "./config.ts";
 import {
@@ -95,6 +96,9 @@ import {
 import { convexUrlConfig } from "./publicConfig.ts";
 import { makeSyncSqliteExecutor } from "./syncSqliteExecutor.ts";
 import {
+  authoritativeEnvironmentRepositories,
+  authoritativeEnvironmentRepositoryIntentKey,
+  reconcileAuthoritativeEnvironmentRepositories,
   reconcileRevokedEnvironmentProjects,
   revokedEnvironmentProjectIntentKey,
   revokedEnvironmentProjects,
@@ -669,6 +673,7 @@ const runCloudSyncCompany = Effect.fn("cloud.sync_daemon.run_company")(function*
 }) {
   const projects = yield* Effect.serviceOption(ProjectService.ProjectService);
   const orchestration = yield* Effect.serviceOption(OrchestrationEngineService);
+  const processRunner = yield* Effect.serviceOption(ProcessRunner.ProcessRunner);
   const transport = yield* input.transport({
     settings: input.settings,
     companyId: input.companyId,
@@ -691,7 +696,8 @@ const runCloudSyncCompany = Effect.fn("cloud.sync_daemon.run_company")(function*
     Effect.provideService(SyncTransport, transport),
   );
   const reconciledProjectDeletions = yield* Ref.make<ReadonlySet<string>>(new Set());
-  const reconcileProjectDeletions =
+  const reconciledProjectRepositories = yield* Ref.make<ReadonlySet<string>>(new Set());
+  const reconcileCloudProjects =
     Option.isSome(projects) && Option.isSome(orchestration)
       ? SubscriptionRef.changes(engine.state).pipe(
           Stream.runForEach((state) =>
@@ -701,24 +707,45 @@ const runCloudSyncCompany = Effect.fn("cloud.sync_daemon.run_company")(function*
                 state.confirmed.values(),
                 input.environmentId,
               ).filter((binding) => !settled.has(revokedEnvironmentProjectIntentKey(binding)));
-              if (pending.length === 0) return;
-
-              const reconciled = yield* reconcileRevokedEnvironmentProjects({
-                companyId: input.companyId,
-                environmentId: input.environmentId,
-                revoked: pending,
+              if (pending.length > 0) {
+                const reconciled = yield* reconcileRevokedEnvironmentProjects({
+                  companyId: input.companyId,
+                  environmentId: input.environmentId,
+                  revoked: pending,
+                  projects: projects.value,
+                  orchestration: orchestration.value,
+                });
+                if (reconciled.length > 0) {
+                  yield* Ref.update(
+                    reconciledProjectDeletions,
+                    (current) => new Set([...current, ...reconciled]),
+                  );
+                }
+              }
+              if (Option.isNone(processRunner)) return;
+              const settledRepositories = yield* Ref.get(reconciledProjectRepositories);
+              const pendingRepositories = authoritativeEnvironmentRepositories(
+                state.confirmed.values(),
+                input.environmentId,
+              ).filter(
+                (repository) =>
+                  !settledRepositories.has(authoritativeEnvironmentRepositoryIntentKey(repository)),
+              );
+              if (pendingRepositories.length === 0) return;
+              const reconciledRepositories = yield* reconcileAuthoritativeEnvironmentRepositories({
+                repositories: pendingRepositories,
                 projects: projects.value,
-                orchestration: orchestration.value,
+                processRunner: processRunner.value,
               });
-              if (reconciled.length > 0) {
+              if (reconciledRepositories.length > 0) {
                 yield* Ref.update(
-                  reconciledProjectDeletions,
-                  (current) => new Set([...current, ...reconciled]),
+                  reconciledProjectRepositories,
+                  (current) => new Set([...current, ...reconciledRepositories]),
                 );
               }
             }).pipe(
               Effect.catchCause((cause) =>
-                Effect.logWarning("Cloud project deletion reconciliation failed; it will retry", {
+                Effect.logWarning("Cloud project reconciliation failed; it will retry", {
                   companyId: input.companyId,
                   environmentId: input.environmentId,
                   cause,
@@ -795,7 +822,7 @@ const runCloudSyncCompany = Effect.fn("cloud.sync_daemon.run_company")(function*
   });
   yield* input.engineRegistry.withIssueEngine(
     { environmentId: input.environmentId, engine },
-    Effect.raceFirst(supervise, reconcileProjectDeletions),
+    Effect.raceFirst(supervise, reconcileCloudProjects),
   );
 });
 

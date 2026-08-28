@@ -8,8 +8,11 @@ import type { MutationCtx } from "./_generated/server.js";
 import { mutation, internalMutation } from "./_generated/server.js";
 import {
   appendCompanyChanges,
+  encodeAgentThread,
+  encodeCapturedEmail,
   encodeCloudProject,
   encodeEnvironmentBinding,
+  encodeEnvironmentCommand,
   type CompanyChange,
 } from "./lib/companyApply.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
@@ -20,7 +23,7 @@ import {
   requirePermission,
   requireRecordPermission,
 } from "./lib/identity.ts";
-import { encodeIssue } from "./lib/issueApply.ts";
+import { encodeIssue, encodeIssueMilestone } from "./lib/issueApply.ts";
 import { domainIdArg, repositoryIdentityArg } from "./lib/validators.ts";
 
 function trimmed(value: string, label: string): string {
@@ -182,6 +185,39 @@ function withoutProjectRoutingRules(
   return { rules: remaining, changed: remaining.length !== rules.length };
 }
 
+function replaceProjectReactionRoutes(
+  trigger: unknown,
+  fromProjectId: string,
+  toProjectId: string,
+) {
+  const value = record(trigger);
+  if (value === null || !Array.isArray(value["reactionRoutes"])) return trigger;
+  let changed = false;
+  const reactionRoutes = value["reactionRoutes"].map((route) => {
+    const routeValue = record(route);
+    if (routeValue?.["cloudProjectId"] !== fromProjectId) return route;
+    changed = true;
+    return { ...routeValue, cloudProjectId: toProjectId };
+  });
+  if (!changed) return trigger;
+  return {
+    ...value,
+    reactionRoutes,
+  };
+}
+
+function replaceProjectRoutingRules(rules: unknown, fromProjectId: string, toProjectId: string) {
+  if (!Array.isArray(rules)) return rules;
+  let changed = false;
+  const updated = rules.map((rule) => {
+    const ruleValue = record(rule);
+    if (ruleValue?.["cloudProjectId"] !== fromProjectId) return rule;
+    changed = true;
+    return { ...ruleValue, cloudProjectId: toProjectId };
+  });
+  return changed ? updated : rules;
+}
+
 function hasSlackRoutes(configurationVersion: 2 | undefined, trigger: unknown, rules: unknown) {
   if (configurationVersion === 2) return Array.isArray(rules) && rules.length > 0;
   const value = record(trigger);
@@ -238,6 +274,7 @@ export const createCompanyProject = mutation({
       teamIds: [],
       defaultWorkflowOwner: null,
       preferredBindingId: null,
+      repositoryIdentity: null,
       archivedAt: null,
       createdAt: now,
       updatedAt: now,
@@ -416,6 +453,7 @@ export const ensureEnvironmentProject = mutation({
         teamIds: [],
         defaultWorkflowOwner: null,
         preferredBindingId: null,
+        repositoryIdentity: repositoryIdentity ?? null,
         archivedAt: null,
         createdAt: now,
         updatedAt: now,
@@ -430,10 +468,19 @@ export const ensureEnvironmentProject = mutation({
       // replica necessarily gets a turn to remove it. The Convex tombstone is authoritative: an
       // outbound observation may never resurrect a project the company already deleted.
       return project.id;
-    } else if (project.name !== name || project.archivedAt !== null) {
+    } else if (
+      project.name !== name ||
+      project.archivedAt !== null ||
+      ((project.repositoryIdentity === undefined || project.repositoryIdentity === null) &&
+        repositoryIdentity != null)
+    ) {
       await ctx.db.patch(project._id, {
         name,
         archivedAt: null,
+        ...((project.repositoryIdentity === undefined || project.repositoryIdentity === null) &&
+        repositoryIdentity != null
+          ? { repositoryIdentity }
+          : {}),
         updatedAt: now,
       });
       project = await ctx.db.get(project._id);
@@ -738,6 +785,316 @@ export const revokeStaleEnvironmentBindings = internalMutation({
       });
     }
     return null;
+  },
+});
+
+/**
+ * Collapses two company projects into one durable identity.
+ *
+ * The target survives. Every checkout and project-owned record moves to it in the same Convex
+ * transaction, while the selected repository becomes authoritative for every binding. Connected
+ * environments consume that repository decision from the company feed and update their Git
+ * remote; offline environments do the same when they reconnect.
+ */
+export const mergeCompanyProjects = mutation({
+  args: {
+    companyId: domainIdArg,
+    sourceCloudProjectId: domainIdArg,
+    targetCloudProjectId: domainIdArg,
+    repositoryIdentity: repositoryIdentityArg,
+  },
+  returns: v.object({
+    movedBindings: v.number(),
+    movedThreads: v.number(),
+    movedIssues: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    if (args.sourceCloudProjectId === args.targetCloudProjectId) {
+      throw backendError("invalid-arguments", "Choose two different projects to merge.");
+    }
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const source = await ctx.db
+      .query("cloudProjects")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.sourceCloudProjectId),
+      )
+      .unique();
+    const target = await ctx.db
+      .query("cloudProjects")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.targetCloudProjectId),
+      )
+      .unique();
+    if (
+      source === null ||
+      source.deletedAt !== null ||
+      target === null ||
+      target.deletedAt !== null
+    ) {
+      throw backendError("entity-not-found", "One of the projects is no longer available.");
+    }
+    requireRecordPermission(actor, "projects.manage", source.teamIds);
+    requireRecordPermission(actor, "projects.manage", target.teamIds);
+
+    const [
+      sourceBindings,
+      targetBindings,
+      sourceThreads,
+      sourceMilestones,
+      sourceEmails,
+      commands,
+      sourceIssues,
+      automationJobs,
+      slackWatches,
+      slackIntents,
+    ] = await Promise.all([
+      ctx.db
+        .query("environmentBindings")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
+        )
+        .collect(),
+      ctx.db
+        .query("environmentBindings")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", target._id),
+        )
+        .collect(),
+      ctx.db
+        .query("agentThreads")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
+        )
+        .collect(),
+      ctx.db
+        .query("issueMilestones")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", source.id),
+        )
+        .collect(),
+      ctx.db
+        .query("capturedEmails")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
+        )
+        .collect(),
+      ctx.db
+        .query("environmentCommands")
+        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
+        .collect(),
+      ctx.db
+        .query("issues")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("projectId", source.id),
+        )
+        .collect(),
+      ctx.db
+        .query("issueAutomationJobs")
+        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
+        .collect(),
+      ctx.db
+        .query("slackChannelWatches")
+        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
+        .collect(),
+      ctx.db
+        .query("slackIssueAutomationIntents")
+        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
+        .collect(),
+    ]);
+
+    const targetConnectionKeys = new Set(
+      targetBindings
+        .filter((binding) => binding.status !== "revoked")
+        .map((binding) => `${binding.environmentId}:${binding.localProjectId}`),
+    );
+    const duplicateConnection = sourceBindings.find(
+      (binding) =>
+        binding.status !== "revoked" &&
+        targetConnectionKeys.has(`${binding.environmentId}:${binding.localProjectId}`),
+    );
+    if (duplicateConnection !== undefined) {
+      throw backendError(
+        "foreign-id-conflict",
+        "The projects already contain the same environment connection.",
+      );
+    }
+    const selectableRepositoryKeys = new Set(
+      [
+        source.repositoryIdentity?.canonicalKey,
+        target.repositoryIdentity?.canonicalKey,
+        ...sourceBindings.map((binding) => binding.repositoryIdentity?.canonicalKey),
+        ...targetBindings.map((binding) => binding.repositoryIdentity?.canonicalKey),
+      ].filter((key): key is string => key !== undefined),
+    );
+    if (!selectableRepositoryKeys.has(args.repositoryIdentity.canonicalKey)) {
+      throw backendError(
+        "invalid-arguments",
+        "Choose a Git repository already detected on one of these projects.",
+      );
+    }
+
+    const { rootPath: _selectedRootPath, ...authoritativeRepositoryIdentity } =
+      args.repositoryIdentity;
+    const now = Date.now();
+    const changes: CompanyChange[] = [];
+    const updatedBindings: Doc<"environmentBindings">[] = [];
+    for (const binding of [...targetBindings, ...sourceBindings]) {
+      if (binding.status === "revoked") continue;
+      await ctx.db.patch(binding._id, {
+        cloudProjectId: target._id,
+        repositoryIdentity: {
+          ...authoritativeRepositoryIdentity,
+          rootPath: binding.localWorkspaceRoot,
+        },
+        repositoryKey: authoritativeRepositoryIdentity.canonicalKey,
+        updatedAt: now,
+      });
+      const updated = await ctx.db.get(binding._id);
+      if (updated === null) throw backendError("entity-not-found", "A project binding vanished.");
+      updatedBindings.push(updated);
+      changes.push({
+        entityKind: "environmentBinding",
+        entityId: updated.id,
+        changeKind: "upsert",
+        versionDocId: updated._id,
+        payload: await encodeEnvironmentBinding(ctx, updated),
+      });
+    }
+
+    for (const thread of sourceThreads) {
+      await ctx.db.patch(thread._id, { cloudProjectId: target._id, updatedAt: now });
+      const updated = await ctx.db.get(thread._id);
+      if (updated === null) throw backendError("entity-not-found", "An agent thread vanished.");
+      changes.push({
+        entityKind: "agentThread",
+        entityId: updated.id,
+        changeKind: "upsert",
+        teamIds: [...new Set([...source.teamIds, ...target.teamIds])],
+        versionDocId: updated._id,
+        payload: await encodeAgentThread(ctx, updated),
+      });
+    }
+    for (const email of sourceEmails) {
+      await ctx.db.patch(email._id, { cloudProjectId: target._id, updatedAt: now });
+      const updated = await ctx.db.get(email._id);
+      if (updated === null) throw backendError("entity-not-found", "A captured email vanished.");
+      changes.push({
+        entityKind: "capturedEmail",
+        entityId: updated.id,
+        changeKind: "upsert",
+        teamIds: [...new Set([...source.teamIds, ...target.teamIds])],
+        versionDocId: updated._id,
+        payload: await encodeCapturedEmail(ctx, updated),
+      });
+    }
+    for (const milestone of sourceMilestones) {
+      await ctx.db.patch(milestone._id, { cloudProjectId: target.id, updatedAt: now });
+      const updated = await ctx.db.get(milestone._id);
+      if (updated === null) throw backendError("entity-not-found", "A milestone vanished.");
+      if (updated.deletedAt === null) {
+        changes.push({
+          entityKind: "issueMilestone",
+          entityId: updated.id,
+          changeKind: "upsert",
+          teamIds: [...new Set([...source.teamIds, ...target.teamIds])],
+          versionDocId: updated._id,
+          payload: encodeIssueMilestone(actor.company, updated),
+        });
+      }
+    }
+    for (const issue of sourceIssues) {
+      await ctx.db.patch(issue._id, { projectId: target.id, updatedAt: now });
+      const updated = await ctx.db.get(issue._id);
+      if (updated === null) throw backendError("entity-not-found", "An issue vanished.");
+      if (updated.deletedAt === null) {
+        changes.push({
+          entityKind: "issue",
+          entityId: updated.id,
+          changeKind: "upsert",
+          teamIds: updated.teamIds,
+          versionDocId: updated._id,
+          payload: encodeIssue(actor.company, updated),
+        });
+      }
+    }
+
+    for (const command of commands.filter((row) => row.cloudProjectId === source._id)) {
+      await ctx.db.patch(command._id, { cloudProjectId: target._id, updatedAt: now });
+      const updated = await ctx.db.get(command._id);
+      if (updated === null) throw backendError("entity-not-found", "A command vanished.");
+      changes.push({
+        entityKind: "environmentCommand",
+        entityId: updated.id,
+        changeKind: "upsert",
+        versionDocId: updated._id,
+        payload: await encodeEnvironmentCommand(ctx, updated),
+      });
+    }
+    for (const job of automationJobs.filter((row) => row.cloudProjectId === source._id)) {
+      await ctx.db.patch(job._id, { cloudProjectId: target._id, updatedAt: now });
+    }
+    for (const intent of slackIntents.filter((row) => row.cloudProjectId === source._id)) {
+      await ctx.db.patch(intent._id, { cloudProjectId: target._id, updatedAt: now });
+    }
+    for (const watch of slackWatches) {
+      const direct = watch.cloudProjectId === source._id;
+      const trigger = replaceProjectReactionRoutes(watch.trigger, source.id, target.id);
+      const rules = replaceProjectRoutingRules(watch.rules, source.id, target.id);
+      if (!direct && trigger === watch.trigger && rules === watch.rules) continue;
+      await ctx.db.patch(watch._id, {
+        ...(direct ? { cloudProjectId: target._id } : {}),
+        ...(trigger === watch.trigger ? {} : { trigger }),
+        ...(rules === watch.rules ? {} : { rules }),
+        revision: watch.revision + 1,
+        updatedAt: now,
+      });
+    }
+
+    const combinedTeamIds = [...new Set([...target.teamIds, ...source.teamIds])];
+    const preferredBindingId =
+      target.preferredBindingId ??
+      (source.preferredBindingId !== null &&
+      updatedBindings.some((binding) => binding.id === source.preferredBindingId)
+        ? source.preferredBindingId
+        : (updatedBindings.find((binding) => binding.status === "active")?.id ?? null));
+    await ctx.db.patch(target._id, {
+      teamIds: combinedTeamIds,
+      preferredBindingId,
+      repositoryIdentity: authoritativeRepositoryIdentity,
+      updatedAt: now,
+    });
+    const updatedTarget = await ctx.db.get(target._id);
+    if (updatedTarget === null)
+      throw backendError("entity-not-found", "The target project vanished.");
+    changes.push({
+      entityKind: "cloudProject",
+      entityId: updatedTarget.id,
+      changeKind: "upsert",
+      teamIds: combinedTeamIds,
+      versionDocId: updatedTarget._id,
+      payload: encodeCloudProject(updatedTarget),
+    });
+
+    await ctx.db.patch(source._id, { preferredBindingId: null, deletedAt: now, updatedAt: now });
+    changes.push({
+      entityKind: "cloudProject",
+      entityId: source.id,
+      changeKind: "tombstone",
+      teamIds: source.teamIds,
+      versionDocId: source._id,
+      payload: null,
+    });
+
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes,
+    });
+    return {
+      movedBindings: sourceBindings.filter((binding) => binding.status !== "revoked").length,
+      movedThreads: sourceThreads.length,
+      movedIssues: sourceIssues.filter((issue) => issue.deletedAt === null).length,
+    };
   },
 });
 
