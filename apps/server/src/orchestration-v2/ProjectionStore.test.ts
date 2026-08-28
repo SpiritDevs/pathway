@@ -27,6 +27,7 @@ import {
   isTurnItemAtOrBeforeRun,
   ProjectionStoreV2,
   layer as projectionStoreLayer,
+  threadShellFromProjection,
 } from "./ProjectionStore.ts";
 
 const TestLayer = Layer.mergeAll(
@@ -73,6 +74,85 @@ it("selects only run-bound history when selecting fork context through a run", (
 });
 
 it.layer(TestLayer)("ProjectionStoreV2", (it) => {
+  it.effect("truncates latest visible message text in thread shells", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:projection-message-preview");
+      const projectId = ProjectId.make("project:projection-message-preview");
+      const oversizedText = "x".repeat(201);
+      const expectedPreview = oversizedText.slice(0, 200);
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-message-preview:thread"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId,
+          title: "Latest message preview",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: {
+            parentThreadId: null,
+            relationshipToParent: null,
+            rootThreadId: threadId,
+          },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-message-preview:message"),
+        type: "message.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "agent",
+          creationSource: "provider",
+          id: MessageId.make("message:projection-message-preview"),
+          threadId,
+          runId: null,
+          nodeId: null,
+          role: "assistant",
+          text: oversizedText,
+          attachments: [],
+          streaming: false,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const projection = yield* projectionStore.getThreadProjection(threadId);
+      const snapshotShell = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      const threadShell = yield* projectionStore.getThreadShell(threadId);
+
+      assert.equal(projection.messages[0]?.text, oversizedText);
+      assert.equal(
+        threadShellFromProjection(projection).latestVisibleMessage?.text,
+        expectedPreview,
+      );
+      assert.equal(snapshotShell?.latestVisibleMessage?.text, expectedPreview);
+      assert.equal(threadShell?.latestVisibleMessage?.text, expectedPreview);
+    }),
+  );
+
   it.effect("does not treat visited or marked-unread state as thread activity", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStoreV2;
