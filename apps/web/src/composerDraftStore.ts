@@ -58,9 +58,9 @@ import {
   normalizeIssueContexts,
 } from "./lib/issueContext";
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import { useShallow } from "zustand/react/shallow";
-import { createDebouncedStorage, createMemoryStorage } from "./lib/storage";
+import { createDebouncedJSONStorage, createMemoryStorage } from "./lib/storage";
 import { getDefaultServerModel } from "./providerModels";
 import { UnifiedSettings } from "@spiritdevs/contracts/settings";
 import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
@@ -78,9 +78,10 @@ export type DraftId = typeof DraftId.Type;
 
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
 
-const composerDebouncedStorage = createDebouncedStorage(
+const composerDebouncedStorage = createDebouncedJSONStorage<ComposerPersistStorageState>(
   typeof localStorage !== "undefined" ? localStorage : createMemoryStorage(),
   COMPOSER_PERSIST_DEBOUNCE_MS,
+  partializeComposerPersistStorageState,
 );
 
 // Flush pending composer draft writes before page unload to prevent data loss.
@@ -276,6 +277,7 @@ const PersistedComposerDraftStoreState = Schema.Struct({
   stickyActiveProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
 });
 type PersistedComposerDraftStoreState = typeof PersistedComposerDraftStoreState.Type;
+type ComposerPersistStorageState = ComposerDraftStoreState | PersistedComposerDraftStoreState;
 
 const PersistedComposerDraftStoreStorage = Schema.Struct({
   version: Schema.Number,
@@ -2186,6 +2188,12 @@ function partializeComposerDraftStoreState(
   };
 }
 
+function partializeComposerPersistStorageState(
+  state: ComposerPersistStorageState,
+): PersistedComposerDraftStoreState {
+  return "getComposerDraft" in state ? partializeComposerDraftStoreState(state) : state;
+}
+
 function normalizeCurrentPersistedComposerDraftStoreState(
   persistedState: unknown,
 ): PersistedComposerDraftStoreState {
@@ -3855,9 +3863,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
     {
       name: COMPOSER_DRAFT_STORAGE_KEY,
       version: COMPOSER_DRAFT_STORAGE_VERSION,
-      storage: createJSONStorage(() => composerDebouncedStorage),
+      storage: composerDebouncedStorage,
       migrate: migratePersistedComposerDraftStoreState,
-      partialize: partializeComposerDraftStoreState,
       merge: (persistedState, currentState) => {
         const normalizedPersisted =
           normalizeCurrentPersistedComposerDraftStoreState(persistedState);

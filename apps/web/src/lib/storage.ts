@@ -1,4 +1,5 @@
 import { Debouncer } from "@tanstack/react-pacer";
+import type { PersistStorage, StorageValue } from "zustand/middleware";
 
 export interface StateStorage<R = unknown> {
   getItem: (name: string) => string | null | Promise<string | null>;
@@ -7,6 +8,10 @@ export interface StateStorage<R = unknown> {
 }
 
 export interface DebouncedStorage<R = unknown> extends StateStorage<R> {
+  flush: () => void;
+}
+
+export interface DebouncedPersistStorage<S, R = unknown> extends PersistStorage<S, R> {
   flush: () => void;
 }
 
@@ -53,6 +58,45 @@ export function createDebouncedStorage(
 
   return {
     getItem: (name) => resolvedStorage.getItem(name),
+    setItem: (name, value) => {
+      debouncedSetItem.maybeExecute(name, value);
+    },
+    removeItem: (name) => {
+      debouncedSetItem.cancel();
+      resolvedStorage.removeItem(name);
+    },
+    flush: () => {
+      debouncedSetItem.flush();
+    },
+  };
+}
+
+export function createDebouncedJSONStorage<S>(
+  baseStorage: Partial<StateStorage> | null | undefined,
+  debounceMs: number,
+  partialize: (state: S) => unknown,
+): DebouncedPersistStorage<S> {
+  const resolvedStorage = resolveStorage(baseStorage);
+  const parse = (value: string | null): StorageValue<S> | null =>
+    value === null ? null : (JSON.parse(value) as StorageValue<S>);
+  const debouncedSetItem = new Debouncer(
+    (name: string, value: StorageValue<S>) => {
+      resolvedStorage.setItem(
+        name,
+        JSON.stringify({
+          ...value,
+          state: partialize(value.state),
+        }),
+      );
+    },
+    { wait: debounceMs },
+  );
+
+  return {
+    getItem: (name) => {
+      const value = resolvedStorage.getItem(name);
+      return value instanceof Promise ? value.then(parse) : parse(value);
+    },
     setItem: (name, value) => {
       debouncedSetItem.maybeExecute(name, value);
     },
