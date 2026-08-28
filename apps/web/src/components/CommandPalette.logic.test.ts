@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { ALL_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@spiritdevs/contracts";
+import {
+  FocusId,
+  FocusProjectKey,
+  type Focus,
+  type FocusAssignment,
+} from "@spiritdevs/contracts/focus";
 import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
@@ -9,9 +16,76 @@ import {
   buildThreadActionItems,
   enumerateCommandPaletteItems,
   filterCommandPaletteGroups,
+  nextFocusId,
   reduceCommandPaletteUiState,
   type CommandPaletteGroup,
+  visibleFocusesForProjectKeys,
 } from "./CommandPalette.logic";
+
+const FOCUS_WORK = FocusId.make("focus-work");
+const FOCUS_PERSONAL = FocusId.make("focus-personal");
+const FOCUS_HIDDEN = FocusId.make("focus-hidden");
+
+function makeFocus(id: FocusId, name: string, orderKey: string): Focus {
+  return {
+    id,
+    name,
+    iconName: "Briefcase",
+    accentColor: "#3366ff",
+    orderKey,
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
+const FOCUSES = [
+  makeFocus(FOCUS_PERSONAL, "Personal", "z"),
+  makeFocus(FOCUS_HIDDEN, "Hidden", "n"),
+  makeFocus(FOCUS_WORK, "Work", "a"),
+];
+const ASSIGNMENTS: ReadonlyArray<FocusAssignment> = [
+  {
+    focusId: FOCUS_WORK,
+    projectKey: FocusProjectKey.make("environment-a:project-a"),
+    createdAt: 1,
+    updatedAt: 1,
+  },
+  {
+    focusId: FOCUS_PERSONAL,
+    projectKey: FocusProjectKey.make("environment-b:project-b"),
+    createdAt: 1,
+    updatedAt: 1,
+  },
+  {
+    focusId: FOCUS_HIDDEN,
+    projectKey: FocusProjectKey.make("environment-c:project-c"),
+    createdAt: 1,
+    updatedAt: 1,
+  },
+];
+
+describe("Focus switching", () => {
+  const visibleFocuses = visibleFocusesForProjectKeys({
+    focuses: FOCUSES,
+    assignments: ASSIGNMENTS,
+    visibleProjectKeys: new Set(["environment-a:project-a", "environment-b:project-b"]),
+  });
+
+  it("sorts visible Focuses and omits Focuses outside the current company scope", () => {
+    expect(visibleFocuses.map((focus) => focus.id)).toEqual([FOCUS_WORK, FOCUS_PERSONAL]);
+  });
+
+  it("cycles All through each visible Focus and wraps back to All", () => {
+    expect(nextFocusId({ activeFocusId: ALL_FOCUS_ID, visibleFocuses })).toBe(FOCUS_WORK);
+    expect(nextFocusId({ activeFocusId: FOCUS_WORK, visibleFocuses })).toBe(FOCUS_PERSONAL);
+    expect(nextFocusId({ activeFocusId: FOCUS_PERSONAL, visibleFocuses })).toBe(ALL_FOCUS_ID);
+  });
+
+  it("returns All when there are no visible Focuses or the active Focus is stale", () => {
+    expect(nextFocusId({ activeFocusId: ALL_FOCUS_ID, visibleFocuses: [] })).toBe(ALL_FOCUS_ID);
+    expect(nextFocusId({ activeFocusId: FOCUS_HIDDEN, visibleFocuses })).toBe(ALL_FOCUS_ID);
+  });
+});
 
 describe("browseInputEndPaddingClass", () => {
   it("reserves the widest space for the create action", () => {

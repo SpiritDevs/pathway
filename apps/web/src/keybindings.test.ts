@@ -133,6 +133,11 @@ const DEFAULT_BINDINGS = compile([
     command: "themeEditor.toggle",
   },
   {
+    shortcut: modShortcut("g", { altKey: true }),
+    command: "focus.cycle",
+    whenAst: whenAnd(whenIdentifier("agentThreadsView"), whenNot(whenIdentifier("terminalFocus"))),
+  },
+  {
     shortcut: modShortcut("m", { shiftKey: true }),
     command: "modelPicker.toggle",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
@@ -352,6 +357,13 @@ describe("shortcutLabelForCommand", () => {
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "modelPicker.toggle", "Linux"),
       "Ctrl+Shift+M",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "focus.cycle", {
+        platform: "MacIntel",
+        context: { agentThreadsView: true, terminalFocus: false },
+      }),
+      "⌥⌘G",
     );
     assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "editor.openFavorite", "Linux"),
@@ -587,6 +599,36 @@ describe("chat/editor shortcuts", () => {
         { platform: "Win32" },
       ),
       "themeEditor.toggle",
+    );
+  });
+
+  it("matches focus.cycle only in Agent Threads and outside terminal focus", () => {
+    const macShortcut = event({
+      key: "©",
+      code: "KeyG",
+      metaKey: true,
+      altKey: true,
+    });
+    assert.strictEqual(
+      resolveShortcutCommand(macShortcut, DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { agentThreadsView: true, terminalFocus: false },
+      }),
+      "focus.cycle",
+    );
+    assert.notStrictEqual(
+      resolveShortcutCommand(macShortcut, DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { agentThreadsView: false, terminalFocus: false },
+      }),
+      "focus.cycle",
+    );
+    assert.notStrictEqual(
+      resolveShortcutCommand(event({ key: "g", ctrlKey: true, altKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux",
+        context: { agentThreadsView: true, terminalFocus: true },
+      }),
+      "focus.cycle",
     );
   });
 

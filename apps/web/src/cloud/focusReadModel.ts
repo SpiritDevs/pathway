@@ -140,7 +140,7 @@ function ambientLocalStorage(): ActiveFocusStorage | null {
 
 const decodeFocusReadModel = Schema.decodeUnknownOption(FocusReadModelSchema);
 
-const visibleFocusProjectKeysAtom = Atom.make((get): ReadonlySet<string> => {
+export const visibleFocusProjectKeysAtom = Atom.make((get): ReadonlySet<string> => {
   return new Set(
     get(environmentProjects.projectsAtom).map((project) =>
       scopedProjectKey(scopeProjectRef(project.environmentId, project.id)),

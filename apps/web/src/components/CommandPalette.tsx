@@ -37,14 +37,17 @@ import {
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@spiritdevs/contracts";
 import { CompanyId } from "@spiritdevs/contracts/company";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  CircleDotIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
+  FocusIcon,
   FolderIcon,
   FolderPlusIcon,
+  Layers3Icon,
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
@@ -53,6 +56,7 @@ import {
   SquarePenIcon,
   TextSearchIcon,
 } from "lucide-react";
+import { DynamicIcon, iconNames, type IconName } from "lucide-react/dynamic";
 import {
   useCallback,
   useDeferredValue,
@@ -65,7 +69,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { environmentCatalog } from "../connection/catalog";
@@ -132,9 +136,11 @@ import {
   getCommandPaletteInputPlaceholder,
   getCommandPaletteMode,
   ITEM_ICON_CLASS,
+  nextFocusId,
   RECENT_THREAD_LIMIT,
   reduceCommandPaletteUiState,
   type SearchOverlayMode,
+  visibleFocusesForProjectKeys,
 } from "./CommandPalette.logic";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
@@ -179,10 +185,60 @@ import {
   type ProjectRepositoryChoice,
 } from "./projects/projectRepositoryChoice.logic";
 import { activeCompanyIdAtom, companyListAtom } from "../cloud/activeCompany";
+import {
+  activeFocusIdAtom,
+  ALL_FOCUS_ID,
+  focusAssignmentsAtom,
+  focusListAtom,
+  visibleFocusProjectKeysAtom,
+} from "../cloud/focusReadModel";
 import { useEnvironmentControl } from "../cloud/useEnvironmentControl";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 const EMPTY_REPOSITORY_CHOICE_CANDIDATES: ReadonlyArray<SidebarProjectSnapshot> = [];
+const LUCIDE_ICON_NAMES = new Set<string>(iconNames);
+
+function resolveFocusIconName(iconName: string): IconName | null {
+  const normalized = iconName
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replaceAll("_", "-")
+    .toLowerCase();
+  return LUCIDE_ICON_NAMES.has(normalized) ? (normalized as IconName) : null;
+}
+
+function FocusPaletteIconFallback() {
+  return <CircleDotIcon className="size-full" />;
+}
+
+function FocusPaletteIcon(props: { readonly iconName: string; readonly accentColor: string }) {
+  const iconName = resolveFocusIconName(props.iconName);
+  return (
+    <span className={ITEM_ICON_CLASS} style={{ color: props.accentColor }}>
+      {iconName === null ? (
+        <CircleDotIcon className="size-full" />
+      ) : (
+        <DynamicIcon name={iconName} fallback={FocusPaletteIconFallback} className="size-full" />
+      )}
+    </span>
+  );
+}
+
+function isAgentThreadsPath(pathname: string): boolean {
+  return pathname === "/threads" || pathname.startsWith("/threads/");
+}
+
+function useFocusSelection() {
+  const activeFocusId = useAtomValue(activeFocusIdAtom);
+  const focuses = useAtomValue(focusListAtom);
+  const assignments = useAtomValue(focusAssignmentsAtom);
+  const visibleProjectKeys = useAtomValue(visibleFocusProjectKeysAtom);
+  const setActiveFocusId = useAtomSet(activeFocusIdAtom);
+  const visibleFocuses = useMemo(
+    () => visibleFocusesForProjectKeys({ focuses, assignments, visibleProjectKeys }),
+    [assignments, focuses, visibleProjectKeys],
+  );
+  return { activeFocusId, setActiveFocusId, visibleFocuses };
+}
 
 // #region DEBUG
 function debugAgentThreadProjectCreate(
@@ -461,7 +517,9 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
+  const pathname = useLocation({ select: (location) => location.pathname });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const { activeFocusId, setActiveFocusId, visibleFocuses } = useFocusSelection();
   const { theme, themeHalves, resolvedTheme } = useTheme();
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
   // Hosted here rather than inside the palette popup: picking "Name only" closes the palette,
@@ -529,8 +587,16 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           terminalOpen,
           previewFocus: isPreviewFocused(),
           previewOpen,
+          agentThreadsView: isAgentThreadsPath(pathname),
         },
       });
+      if (command === "focus.cycle") {
+        if (state.open || !isAgentThreadsPath(pathname)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setActiveFocusId(nextFocusId({ activeFocusId, visibleFocuses }));
+        return;
+      }
       if (command === "themeEditor.toggle") {
         event.preventDefault();
         event.stopPropagation();
@@ -551,7 +617,20 @@ export function CommandPalette({ children }: { children: ReactNode }) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [keybindings, previewOpen, resolvedTheme, terminalOpen, theme, themeHalves, toggleMode]);
+  }, [
+    activeFocusId,
+    keybindings,
+    pathname,
+    previewOpen,
+    resolvedTheme,
+    setActiveFocusId,
+    state.open,
+    terminalOpen,
+    theme,
+    themeHalves,
+    toggleMode,
+    visibleFocuses,
+  ]);
 
   useEffect(
     () =>
@@ -697,6 +776,7 @@ function OpenCommandPaletteDialog(props: {
   const updateClientSettings = useUpdateClientSettings();
   const activeCompanyId = useAtomValue(activeCompanyIdAtom);
   const companies = useAtomValue(companyListAtom);
+  const { activeFocusId, setActiveFocusId, visibleFocuses } = useFocusSelection();
   const environmentControl = useEnvironmentControl();
   const workspaceProjects = useWorkspaceProjects();
   const createProject = useAtomCommand(projectEnvironment.create, {
@@ -1750,6 +1830,52 @@ function OpenCommandPaletteDialog(props: {
       groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
     });
   }
+
+  const activeFocusName =
+    activeFocusId === ALL_FOCUS_ID
+      ? "All"
+      : (visibleFocuses.find((focus) => focus.id === activeFocusId)?.name ?? "All");
+  const focusActionItems: CommandPaletteActionItem[] = [
+    {
+      kind: "action",
+      value: `focus:${ALL_FOCUS_ID}`,
+      searchTerms: ["all", "every project", "unfiltered"],
+      title: "All",
+      description: activeFocusId === ALL_FOCUS_ID ? "Current focus" : undefined,
+      icon: <Layers3Icon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        setActiveFocusId(ALL_FOCUS_ID);
+      },
+    },
+    ...visibleFocuses.map(
+      (focus): CommandPaletteActionItem => ({
+        kind: "action",
+        value: `focus:${focus.id}`,
+        searchTerms: [focus.name, "focus", "projects"],
+        title: focus.name,
+        description: activeFocusId === focus.id ? "Current focus" : undefined,
+        icon: <FocusPaletteIcon iconName={focus.iconName} accentColor={focus.accentColor} />,
+        run: async () => {
+          setActiveFocusId(focus.id);
+        },
+      }),
+    ),
+  ];
+  actionItems.push({
+    kind: "submenu",
+    value: "action:switch-focus",
+    searchTerms: [
+      "switch focus",
+      "filter projects",
+      activeFocusName,
+      ...visibleFocuses.map((focus) => focus.name),
+    ],
+    title: "Switch Focus…",
+    description: activeFocusName,
+    icon: <FocusIcon className={ITEM_ICON_CLASS} />,
+    addonIcon: <FocusIcon className={ADDON_ICON_CLASS} />,
+    groups: [{ value: "focuses", label: "Focuses", items: focusActionItems }],
+  });
 
   actionItems.push({
     kind: "action",
