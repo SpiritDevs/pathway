@@ -632,6 +632,12 @@ function turnItemText(item: OrchestrationV2TurnItem): string | null {
       return `Forked to thread ${item.targetThreadId}.`;
     case "source_control": {
       const commit = item.commitSha === undefined ? "" : ` Commit ${item.commitSha}.`;
+      if (item.pullRequestAction === "attached" && item.pullRequest !== null) {
+        return `PR attached: #${item.pullRequest.number} (${item.pullRequest.url}).`;
+      }
+      if (item.pullRequestAction === "detached" && item.pullRequest !== null) {
+        return `PR detached: #${item.pullRequest.number} (${item.pullRequest.url}).`;
+      }
       return item.pullRequest === null
         ? item.committed
           ? `Pushed and committed.${commit}`

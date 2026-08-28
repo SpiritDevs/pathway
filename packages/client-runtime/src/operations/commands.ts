@@ -116,6 +116,10 @@ export interface AttachPullRequestInput extends ThreadCommandInput {
   readonly reference: string;
 }
 
+export interface DetachPullRequestInput extends ThreadCommandInput {
+  readonly pullRequest: { readonly number: number; readonly url: string };
+}
+
 /** Ask the server to take the Preview browser away from the agent. The
     allocated command id becomes the takeover id every later command fences on. */
 export type RequestBrowserTakeoverInput = ThreadCommandInput;
@@ -439,12 +443,26 @@ export const attachPullRequest = Effect.fn("EnvironmentCommands.attachPullReques
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     committed: false,
+    pullRequestAction: "attached",
     pullRequest: {
       number: resolved.pullRequest.number,
       url: resolved.pullRequest.url,
     },
   });
   return resolved.pullRequest;
+});
+
+export const detachPullRequest = Effect.fn("EnvironmentCommands.detachPullRequest")(function* (
+  input: DetachPullRequestInput,
+) {
+  yield* dispatch({
+    type: "thread.source-control.record",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    committed: false,
+    pullRequestAction: "detached",
+    pullRequest: input.pullRequest,
+  });
 });
 
 export const pinThread = Effect.fn("EnvironmentCommands.pinThread")(function* (

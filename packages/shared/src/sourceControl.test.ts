@@ -32,6 +32,20 @@ describe("source control timeline markers", () => {
         pullRequest: { number: 47, url: "https://example.com/pull/47" },
       }),
     ).toBe("Committed, pushed, and PR created");
+    expect(
+      sourceControlMarkerLabel({
+        ...sourceControlItem,
+        pullRequestAction: "attached",
+        pullRequest: { number: 47, url: "https://example.com/pull/47" },
+      }),
+    ).toBe("PR attached");
+    expect(
+      sourceControlMarkerLabel({
+        ...sourceControlItem,
+        pullRequestAction: "detached",
+        pullRequest: { number: 47, url: "https://example.com/pull/47" },
+      }),
+    ).toBe("PR detached");
   });
 });
 

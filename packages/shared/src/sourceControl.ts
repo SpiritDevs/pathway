@@ -7,6 +7,8 @@ import type {
 export function sourceControlMarkerLabel(
   item: Extract<OrchestrationV2TurnItem, { readonly type: "source_control" }>,
 ): string {
+  if (item.pullRequestAction === "attached") return "PR attached";
+  if (item.pullRequestAction === "detached") return "PR detached";
   if (item.pullRequest !== null) {
     return item.committed ? "Committed, pushed, and PR created" : "Pushed and PR created";
   }

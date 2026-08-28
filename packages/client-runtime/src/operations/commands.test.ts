@@ -40,6 +40,7 @@ import {
   archiveThread,
   attachPullRequest,
   createProject,
+  detachPullRequest,
   forkThreadFromRun,
   launchThreadContinuation,
   mergeThreadBack,
@@ -315,6 +316,37 @@ describe("V2 environment commands", () => {
           commandId: "attach-pr-command",
           threadId: "thread-1",
           committed: false,
+          pullRequestAction: "attached",
+          pullRequest: {
+            number: 47,
+            url: "https://github.com/SpiritDevs/pathway/pull/47",
+          },
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("records a detached pull request without claiming a push or commit", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+
+      yield* detachPullRequest({
+        commandId: CommandId.make("detach-pr-command"),
+        threadId: ThreadId.make("thread-1"),
+        pullRequest: {
+          number: 47,
+          url: "https://github.com/SpiritDevs/pathway/pull/47",
+        },
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(commands).toEqual([
+        {
+          type: "thread.source-control.record",
+          commandId: "detach-pr-command",
+          threadId: "thread-1",
+          committed: false,
+          pullRequestAction: "detached",
           pullRequest: {
             number: 47,
             url: "https://github.com/SpiritDevs/pathway/pull/47",
