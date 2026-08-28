@@ -541,6 +541,13 @@ export function threadHasStarted(thread: Thread | null | undefined): boolean {
   return Boolean(thread && (thread.latestRun !== null || thread.itemCount > 0 || thread.runtime));
 }
 
+export function threadProjectionIsPending(
+  thread: Thread | null | undefined,
+  projectionAvailable: boolean,
+): boolean {
+  return !projectionAvailable && threadHasStarted(thread);
+}
+
 // A live runtime carries its provider driver directly. Settled threads no
 // longer have that runtime, so their persisted instance selection must be
 // resolved through the current provider catalogue before it can become a

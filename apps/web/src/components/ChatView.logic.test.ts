@@ -44,6 +44,7 @@ import {
   shouldShowBranchMismatchBanner,
   shouldShowComposerContextStrip,
   shouldWriteThreadErrorToCurrentServerThread,
+  threadProjectionIsPending,
   visibleTurnItemsForThreadPresentation,
 } from "./ChatView.logic";
 
@@ -79,6 +80,25 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     ...overrides,
   });
 }
+
+describe("threadProjectionIsPending", () => {
+  it("uses a started shell as the temporary chat state until detail arrives", () => {
+    const startedThread = makeThread({
+      latestRun: {
+        runId: RunId.make("run-1"),
+        status: "running",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    });
+
+    expect(threadProjectionIsPending(startedThread, false)).toBe(true);
+    expect(threadProjectionIsPending(startedThread, true)).toBe(false);
+    expect(threadProjectionIsPending(makeThread(), false)).toBe(false);
+  });
+});
 
 describe("loadQueuedComposerImages", () => {
   it("downloads queued image attachments as editable composer files", async () => {

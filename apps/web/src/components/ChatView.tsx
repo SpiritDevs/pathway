@@ -412,6 +412,7 @@ import {
   revokeUserMessagePreviewUrls,
   shouldShowComposerContextStrip,
   startNewThreadForProject,
+  threadProjectionIsPending,
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -1756,6 +1757,10 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const isServerThread = serverThread !== null;
   const activeThread = isServerThread ? serverThread : localDraftThread;
+  const isThreadProjectionPending = threadProjectionIsPending(
+    serverThread,
+    serverProjection !== null,
+  );
   const serverLatestRun = useMemo(
     () => (serverProjection === null ? null : deriveLatestThreadRun(serverProjection)),
     [serverProjection],
@@ -1778,9 +1783,21 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const supportsProviderSwitchingViaHandoff =
     activeProviderSession?.capabilities.sessions.supportsProviderSwitchingViaHandoff === true;
-  const activeLatestRun = isServerThread ? serverLatestRun : (activeThread?.latestRun ?? null);
-  const activeActivityRun = isServerThread ? serverActivityRun : (activeThread?.latestRun ?? null);
-  const activeRuntime = isServerThread ? serverRuntime : (activeThread?.runtime ?? null);
+  const activeLatestRun = isServerThread
+    ? serverProjection === null
+      ? (activeThread?.latestRun ?? null)
+      : serverLatestRun
+    : (activeThread?.latestRun ?? null);
+  const activeActivityRun = isServerThread
+    ? serverProjection === null
+      ? (activeThread?.latestRun ?? null)
+      : serverActivityRun
+    : (activeThread?.latestRun ?? null);
+  const activeRuntime = isServerThread
+    ? serverProjection === null
+      ? (activeThread?.runtime ?? null)
+      : serverRuntime
+    : (activeThread?.runtime ?? null);
   const parentSubagentThreadId =
     activeThread?.lineage.relationshipToParent === "subagent"
       ? activeThread.lineage.parentThreadId
@@ -8424,6 +8441,7 @@ function ChatViewContent(props: ChatViewProps) {
               <MessagesTimeline
                 key={activeThread.id}
                 isWorking={isWorking}
+                workingPresentation={isThreadProjectionPending ? "connecting" : "activity"}
                 activeTurnInProgress={isWorking || !latestRunSettled}
                 activeTurnStartedAt={activeWorkStartedAt}
                 pendingBackgroundTasks={pendingBackgroundTasks}
@@ -8498,11 +8516,12 @@ function ChatViewContent(props: ChatViewProps) {
             <div
               ref={setComposerOverlayElement}
               data-chat-composer-overlay="true"
-              className={
+              className={cn(
+                isThreadProjectionPending && "hidden",
                 isDraftHeroState
                   ? "pointer-events-none absolute inset-0 z-20 flex items-center"
-                  : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2"
-              }
+                  : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2",
+              )}
             >
               <div
                 ref={draftHeroTransition.transitionGroupRef}

@@ -273,13 +273,6 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             ),
           );
           const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
-          if (httpSnapshot._tag === "NotFound") {
-            yield* setDeleted();
-            // Deleted is terminal for this keyed state. Keeping the subscription input pending
-            // prevents the socket fallback from retrying a thread the authoritative HTTP endpoint
-            // has already confirmed does not exist.
-            return yield* Effect.never;
-          }
           if (httpSnapshot._tag === "Snapshot") {
             yield* applyItem({
               kind: "snapshot",

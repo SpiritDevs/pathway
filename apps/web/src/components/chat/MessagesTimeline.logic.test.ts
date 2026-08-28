@@ -1179,6 +1179,26 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
   });
 
+  it("marks the working row as a connecting placeholder while thread detail catches up", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [],
+      isWorking: true,
+      workingPresentation: "connecting",
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows).toEqual([
+      {
+        kind: "working",
+        id: "working-indicator-row",
+        createdAt: "2026-01-01T00:00:00Z",
+        presentation: "connecting",
+      },
+    ]);
+  });
+
   it("only shows assistant metadata on the terminal assistant message", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [
@@ -1328,6 +1348,33 @@ describe("deriveMessagesTimelineRows", () => {
 });
 
 describe("computeStableMessagesTimelineRows", () => {
+  it("replaces the working row when its presentation changes", () => {
+    const baseInput = {
+      timelineEntries: [],
+      isWorking: true,
+      activeTurnStartedAt: "2026-01-01T00:00:00Z",
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    };
+    const connectingRows = deriveMessagesTimelineRows({
+      ...baseInput,
+      workingPresentation: "connecting",
+    });
+    const activityRows = deriveMessagesTimelineRows({
+      ...baseInput,
+      workingPresentation: "activity",
+    });
+    const initial = computeStableMessagesTimelineRows(connectingRows, {
+      byId: new Map(),
+      result: [],
+    });
+
+    const updated = computeStableMessagesTimelineRows(activityRows, initial);
+
+    expect(updated).not.toBe(initial);
+    expect(updated.result[0]).toMatchObject({ presentation: "activity" });
+  });
+
   it("returns the previous result when row order and content are unchanged", () => {
     const firstUserMessage = {
       id: "user-1" as never,

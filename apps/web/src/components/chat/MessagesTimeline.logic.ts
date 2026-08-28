@@ -243,7 +243,12 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
-  | { kind: "working"; id: string; createdAt: string | null }
+  | {
+      kind: "working";
+      id: string;
+      createdAt: string | null;
+      presentation: "activity" | "connecting";
+    }
   | {
       kind: "waiting-background";
       id: string;
@@ -548,6 +553,7 @@ export function deriveMessagesTimelineRows(input: {
   expandedRunIds?: ReadonlySet<RunId>;
   expandedAttemptIds?: ReadonlySet<RunAttemptId>;
   isWorking: boolean;
+  workingPresentation?: "activity" | "connecting";
   activeTurnStartedAt: string | null;
   pendingBackgroundTasks?: ReadonlyArray<{
     readonly taskId: string;
@@ -727,6 +733,7 @@ export function deriveMessagesTimelineRows(input: {
       kind: "working",
       id: "working-indicator-row",
       createdAt: input.activeTurnStartedAt,
+      presentation: input.workingPresentation ?? "activity",
     });
   } else if (input.pendingBackgroundTasks && input.pendingBackgroundTasks.length > 0) {
     // Root run settled but finite provider background work remains. Show Waiting
@@ -773,7 +780,9 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
   switch (a.kind) {
     case "working":
-      return a.createdAt === (b as typeof a).createdAt;
+      return (
+        a.createdAt === (b as typeof a).createdAt && a.presentation === (b as typeof a).presentation
+      );
 
     case "waiting-background": {
       const bw = b as typeof a;
