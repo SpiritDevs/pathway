@@ -1,6 +1,6 @@
 import {
   ALL_FOCUS_ID,
-  sortFocuses,
+  visibleFocuses,
   type ActiveFocusId,
 } from "@spiritdevs/client-runtime/state/focuses";
 import {
@@ -26,12 +26,7 @@ export function visibleFocusesForProjectKeys(input: {
   readonly assignments: ReadonlyArray<FocusAssignment>;
   readonly visibleProjectKeys: ReadonlySet<string>;
 }): ReadonlyArray<Focus> {
-  const visibleFocusIds = new Set(
-    input.assignments
-      .filter((assignment) => input.visibleProjectKeys.has(assignment.projectKey))
-      .map((assignment) => assignment.focusId),
-  );
-  return sortFocuses(input.focuses).filter((focus) => visibleFocusIds.has(focus.id));
+  return visibleFocuses(input);
 }
 
 export function nextFocusId(input: {

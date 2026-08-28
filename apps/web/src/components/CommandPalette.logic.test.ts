@@ -75,6 +75,16 @@ describe("Focus switching", () => {
     expect(visibleFocuses.map((focus) => focus.id)).toEqual([FOCUS_WORK, FOCUS_PERSONAL]);
   });
 
+  it("keeps a Focus with no assignments visible in the cycle", () => {
+    const FOCUS_EMPTY = FocusId.make("focus-empty");
+    const withEmpty = visibleFocusesForProjectKeys({
+      focuses: [...FOCUSES, makeFocus(FOCUS_EMPTY, "Empty", "m")],
+      assignments: ASSIGNMENTS,
+      visibleProjectKeys: new Set(["environment-a:project-a", "environment-b:project-b"]),
+    });
+    expect(withEmpty.map((focus) => focus.id)).toEqual([FOCUS_WORK, FOCUS_EMPTY, FOCUS_PERSONAL]);
+  });
+
   it("cycles All through each visible Focus and wraps back to All", () => {
     expect(nextFocusId({ activeFocusId: ALL_FOCUS_ID, visibleFocuses })).toBe(FOCUS_WORK);
     expect(nextFocusId({ activeFocusId: FOCUS_WORK, visibleFocuses })).toBe(FOCUS_PERSONAL);

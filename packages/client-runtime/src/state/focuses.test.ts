@@ -8,9 +8,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ALL_FOCUS_ID,
+  focusIsVisible,
   groupSearchResultsByFocus,
   resolveActiveFocusId,
   scopedProjectKeysForFocus,
+  visibleFocuses,
 } from "./focuses.ts";
 
 const WORK = FocusId.make("focus-work");
@@ -69,6 +71,48 @@ describe("Focus project scoping", () => {
         visibleProjectKeys: new Set([WORK_PROJECT]),
       }),
     ).toBe(ALL_FOCUS_ID);
+  });
+
+  it("keeps an empty Focus selectable — only assigned-but-hidden Focuses fall back", () => {
+    expect(
+      resolveActiveFocusId({
+        preferredId: WORK,
+        focuses: [focus(WORK, "a")],
+        assignments: [],
+        visibleProjectKeys: new Set(),
+      }),
+    ).toBe(WORK);
+  });
+});
+
+describe("Focus visibility", () => {
+  it("shows an empty Focus and one with a company-visible assignment; hides assigned-but-invisible", () => {
+    const assignments = [assignment(WORK, WORK_PROJECT)];
+    const visibleProjectKeys: ReadonlySet<string> = new Set([PERSONAL_PROJECT]);
+
+    expect(focusIsVisible({ focusId: PERSONAL, assignments, visibleProjectKeys })).toBe(true);
+    expect(focusIsVisible({ focusId: WORK, assignments, visibleProjectKeys })).toBe(false);
+    expect(
+      focusIsVisible({ focusId: WORK, assignments, visibleProjectKeys: new Set([WORK_PROJECT]) }),
+    ).toBe(true);
+  });
+
+  it("sorts and filters the strip's Focus list by the same rule", () => {
+    const focuses = [focus(PERSONAL, "b"), focus(WORK, "a")];
+    const assignments = [assignment(WORK, WORK_PROJECT), assignment(PERSONAL, PERSONAL_PROJECT)];
+
+    expect(
+      visibleFocuses({
+        focuses,
+        assignments,
+        visibleProjectKeys: new Set([WORK_PROJECT]),
+      }).map((entry) => entry.id),
+    ).toEqual([WORK]);
+    expect(
+      visibleFocuses({ focuses, assignments: [], visibleProjectKeys: new Set() }).map(
+        (entry) => entry.id,
+      ),
+    ).toEqual([WORK, PERSONAL]);
   });
 });
 

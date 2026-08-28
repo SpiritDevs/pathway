@@ -60,6 +60,35 @@ export function scopedProjectKeysForFocus(
   );
 }
 
+/** A Focus hides only when its assignments all fall outside the visible projects; an empty Focus stays visible. */
+export function focusIsVisible(input: {
+  readonly focusId: FocusId;
+  readonly assignments: ReadonlyArray<Pick<FocusAssignment, "focusId" | "projectKey">>;
+  readonly visibleProjectKeys: ReadonlySet<string>;
+}): boolean {
+  let assigned = false;
+  for (const assignment of input.assignments) {
+    if (assignment.focusId !== input.focusId) continue;
+    if (input.visibleProjectKeys.has(assignment.projectKey)) return true;
+    assigned = true;
+  }
+  return !assigned;
+}
+
+export function visibleFocuses(input: {
+  readonly focuses: ReadonlyArray<Focus>;
+  readonly assignments: ReadonlyArray<Pick<FocusAssignment, "focusId" | "projectKey">>;
+  readonly visibleProjectKeys: ReadonlySet<string>;
+}): ReadonlyArray<Focus> {
+  return sortFocuses(input.focuses).filter((focus) =>
+    focusIsVisible({
+      focusId: focus.id,
+      assignments: input.assignments,
+      visibleProjectKeys: input.visibleProjectKeys,
+    }),
+  );
+}
+
 export function resolveActiveFocusId(input: {
   readonly preferredId: ActiveFocusId;
   readonly focuses: ReadonlyArray<Pick<Focus, "id">>;
@@ -68,11 +97,11 @@ export function resolveActiveFocusId(input: {
 }): ActiveFocusId {
   if (input.preferredId === ALL_FOCUS_ID) return ALL_FOCUS_ID;
   if (!input.focuses.some((focus) => focus.id === input.preferredId)) return ALL_FOCUS_ID;
-  return input.assignments.some(
-    (assignment) =>
-      assignment.focusId === input.preferredId &&
-      input.visibleProjectKeys.has(assignment.projectKey),
-  )
+  return focusIsVisible({
+    focusId: input.preferredId,
+    assignments: input.assignments,
+    visibleProjectKeys: input.visibleProjectKeys,
+  })
     ? input.preferredId
     : ALL_FOCUS_ID;
 }

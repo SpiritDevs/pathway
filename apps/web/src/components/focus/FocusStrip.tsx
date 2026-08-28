@@ -12,6 +12,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   ALL_FOCUS_ID,
   sortFocuses,
+  visibleFocuses,
   type ActiveFocusId,
 } from "@spiritdevs/client-runtime/state/focuses";
 import type { Focus, FocusAssignment, FocusId } from "@spiritdevs/contracts/focus";
@@ -148,14 +149,15 @@ export function FocusStrip(props: {
   const [editorFocusId, setEditorFocusId] = useState<FocusId | null | undefined>(undefined);
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
   const orderedFocuses = useMemo(() => sortFocuses(props.focuses), [props.focuses]);
-  const visibleFocuses = useMemo(() => {
-    const focusIdsWithVisibleProjects = new Set(
-      props.assignments
-        .filter((assignment) => props.visibleProjectKeys.has(assignment.projectKey))
-        .map((assignment) => assignment.focusId),
-    );
-    return orderedFocuses.filter((focus) => focusIdsWithVisibleProjects.has(focus.id));
-  }, [orderedFocuses, props.assignments, props.visibleProjectKeys]);
+  const shownFocuses = useMemo(
+    () =>
+      visibleFocuses({
+        focuses: props.focuses,
+        assignments: props.assignments,
+        visibleProjectKeys: props.visibleProjectKeys,
+      }),
+    [props.focuses, props.assignments, props.visibleProjectKeys],
+  );
   const editingFocus =
     editorFocusId == null
       ? null
@@ -251,10 +253,10 @@ export function FocusStrip(props: {
             onDragEnd={handleDragEnd}
           >
             <SortableContext
-              items={visibleFocuses.map((focus) => focus.id)}
+              items={shownFocuses.map((focus) => focus.id)}
               strategy={horizontalListSortingStrategy}
             >
-              {visibleFocuses.map((focus) => (
+              {shownFocuses.map((focus) => (
                 <SortableFocusTab
                   key={focus.id}
                   focus={focus}
