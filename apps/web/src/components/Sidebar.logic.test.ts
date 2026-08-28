@@ -17,6 +17,7 @@ import {
   getVisibleSidebarThreadIds,
   getVisibleThreadsForProject,
   hasUnseenCompletion,
+  intersectSidebarProjectScopes,
   isContextMenuPointerDown,
   isSidebarSubagentThread,
   isTrailingDoubleClick,
@@ -33,6 +34,7 @@ import {
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
   searchSidebarThreadsByTitle,
+  filterSidebarWorkspaceProjectsForFocus,
   shouldClearThreadSelectionOnMouseDown,
   shouldNavigateAfterProjectRemoval,
   shouldShowSidebarV2Duration,
@@ -84,6 +86,48 @@ describe("animatePinnedLayoutChanges", () => {
 
   it("keeps layout movement while the user is sorting", () => {
     expect(animatePinnedLayoutChanges({ ...baseArgs, isSorting: true })).toBe(true);
+  });
+});
+
+describe("Focus and project sidebar scoping", () => {
+  it("intersects Focus and project scopes while preserving null as unfiltered", () => {
+    const projectScope = new Set(["environment-a:project-a", "environment-b:project-b"]);
+    const focusScope = new Set(["environment-b:project-b", "environment-c:project-c"]);
+
+    expect(intersectSidebarProjectScopes(null, null)).toBeNull();
+    expect(intersectSidebarProjectScopes(projectScope, null)).toBe(projectScope);
+    expect(intersectSidebarProjectScopes(null, focusScope)).toBe(focusScope);
+    expect([...intersectSidebarProjectScopes(projectScope, focusScope)!]).toEqual([
+      "environment-b:project-b",
+    ]);
+  });
+
+  it("lists only workspace projects backed by a project in the active Focus", () => {
+    const projects = [
+      {
+        id: "work",
+        group: {
+          memberProjectRefs: [
+            { environmentId: "environment-a", projectId: "project-a" },
+            { environmentId: "environment-b", projectId: "project-b" },
+          ],
+        },
+      },
+      {
+        id: "personal",
+        group: {
+          memberProjectRefs: [{ environmentId: "environment-c", projectId: "project-c" }],
+        },
+      },
+      { id: "cloud-only", group: null },
+    ];
+
+    expect(
+      filterSidebarWorkspaceProjectsForFocus(projects, new Set(["environment-b:project-b"])).map(
+        (project) => project.id,
+      ),
+    ).toEqual(["work"]);
+    expect(filterSidebarWorkspaceProjectsForFocus(projects, null)).toBe(projects);
   });
 });
 

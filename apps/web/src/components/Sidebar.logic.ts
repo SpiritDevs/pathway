@@ -129,6 +129,35 @@ export function filterSidebarV2VisibleThreads<
   );
 }
 
+export function intersectSidebarProjectScopes(
+  projectScope: ReadonlySet<string> | null,
+  focusScope: ReadonlySet<string> | null,
+): ReadonlySet<string> | null {
+  if (projectScope === null) return focusScope;
+  if (focusScope === null) return projectScope;
+  const [smaller, larger] =
+    projectScope.size <= focusScope.size ? [projectScope, focusScope] : [focusScope, projectScope];
+  return new Set([...smaller].filter((projectKey) => larger.has(projectKey)));
+}
+
+export function filterSidebarWorkspaceProjectsForFocus<
+  T extends {
+    readonly group: {
+      readonly memberProjectRefs: ReadonlyArray<{
+        readonly environmentId: string;
+        readonly projectId: string;
+      }>;
+    } | null;
+  },
+>(projects: ReadonlyArray<T>, focusScope: ReadonlySet<string> | null): ReadonlyArray<T> {
+  if (focusScope === null) return projects;
+  return projects.filter((project) =>
+    project.group?.memberProjectRefs.some((projectRef) =>
+      focusScope.has(`${projectRef.environmentId}:${projectRef.projectId}`),
+    ),
+  );
+}
+
 export function getSidebarForkParentThreadId(
   thread: Pick<SidebarThreadSummary, "forkedFrom" | "lineage">,
 ) {

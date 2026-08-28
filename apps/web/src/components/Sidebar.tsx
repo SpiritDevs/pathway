@@ -1,5 +1,5 @@
 import { autoAnimate } from "@formkit/auto-animate";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtom, useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
   DndContext,
@@ -33,6 +33,7 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@spiritdevs/client-runtime/environment";
+import { ALL_FOCUS_ID, groupSearchResultsByFocus } from "@spiritdevs/client-runtime/state/focuses";
 import {
   threadIsVisibleAt,
   type Issue,
@@ -48,12 +49,14 @@ import {
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDashedIcon,
+  CircleDotIcon,
   ClockIcon,
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
   MessageSquareIcon,
   MessagesSquareIcon,
+  Layers3Icon,
   PinIcon,
   PlusIcon,
   SearchIcon,
@@ -66,6 +69,7 @@ import {
   XIcon,
 } from "lucide-react";
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -154,6 +158,8 @@ import {
   sortPinnedThreadsForSidebar,
   sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
+  filterSidebarWorkspaceProjectsForFocus,
+  intersectSidebarProjectScopes,
   useThreadJumpHintVisibility,
 } from "./Sidebar.logic";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -186,7 +192,16 @@ import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import {
+  Menu,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSub,
+  MenuSubPopup,
+  MenuSubTrigger,
+  MenuTrigger,
+} from "./ui/menu";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -198,6 +213,18 @@ import {
   type ComposerThreadDraftState,
   type DraftSessionState,
 } from "../composerDraftStore";
+import {
+  activeFocusIdAtom,
+  activeFocusProjectKeysAtom,
+  focusAssignmentsAtom,
+  focusListAtom,
+  focusMutationsAtom,
+  visibleFocusProjectKeysAtom,
+} from "../cloud/focusReadModel";
+import { FocusProjectKey } from "@spiritdevs/contracts/focus";
+import { FocusStrip } from "./focus/FocusStrip";
+import { FocusQuickAssignItems } from "./focus/FocusQuickAssign";
+import { FocusIcon } from "./focus/FocusIcon";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -1768,6 +1795,12 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 
 export default function Sidebar() {
   const projects = useProjects();
+  const focuses = useAtomValue(focusListAtom);
+  const focusAssignments = useAtomValue(focusAssignmentsAtom);
+  const activeFocusProjectKeys = useAtomValue(activeFocusProjectKeysAtom);
+  const visibleFocusProjectKeys = useAtomValue(visibleFocusProjectKeysAtom);
+  const focusMutations = useAtomValue(focusMutationsAtom);
+  const [activeFocusId, setActiveFocusId] = useAtom(activeFocusIdAtom);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const agentThreads = useMemo(
@@ -1944,6 +1977,10 @@ export default function Sidebar() {
     [agentThreads, sidebarProjectSortOrder, unsortedProjectGroups],
   );
   const workspaceProjects = useWorkspaceProjects();
+  const focusScopedWorkspaceProjects = useMemo(
+    () => filterSidebarWorkspaceProjectsForFocus(workspaceProjects, activeFocusProjectKeys),
+    [activeFocusProjectKeys, workspaceProjects],
+  );
   const threadStartAvailability = workspaceThreadStartAvailability(workspaceProjects);
 
   useEffect(() => {
@@ -1952,7 +1989,9 @@ export default function Sidebar() {
     // #endregion DEBUG
   }, [projects.length, threadStartAvailability, workspaceProjects.length]);
 
-  const singleProjectGroup = projectGroups.length === 1 ? (projectGroups[0] ?? null) : null;
+  const singleWorkspaceProject =
+    focusScopedWorkspaceProjects.length === 1 ? (focusScopedWorkspaceProjects[0] ?? null) : null;
+  const singleProjectGroup = singleWorkspaceProject?.group ?? null;
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   // Threads on non-primary environments (T3 Connect, hosted) resolve their
   // provider entry from their own environment's config: default instance ids
@@ -2013,7 +2052,7 @@ export default function Sidebar() {
   );
   const projectDisplayNameByKey = useMemo(
     () =>
-      new Map(
+      new Map<string, string>(
         projectGroups.flatMap((group) =>
           group.memberProjects.map(
             (project) => [`${project.environmentId}:${project.id}`, group.displayName] as const,
@@ -2021,6 +2060,25 @@ export default function Sidebar() {
         ),
       ),
     [projectGroups],
+  );
+  const focusEditorProjects = useMemo(
+    () =>
+      projects
+        .map((project) => {
+          const projectKey = FocusProjectKey.make(`${project.environmentId}:${project.id}`);
+          return {
+            projectKey,
+            name: projectDisplayNameByKey.get(String(projectKey)) ?? project.title,
+            environmentLabel: environmentLabelById.get(project.environmentId) ?? null,
+          };
+        })
+        .toSorted(
+          (left, right) =>
+            left.name.localeCompare(right.name) ||
+            left.environmentLabel?.localeCompare(right.environmentLabel ?? "") ||
+            left.projectKey.localeCompare(right.projectKey),
+        ),
+    [environmentLabelById, projectDisplayNameByKey, projects],
   );
 
   // now is quantized to the minute so effectiveSettled memoization doesn't
@@ -2075,7 +2133,7 @@ export default function Sidebar() {
           ) ?? null),
     [projectScopeKey, scopedProjectGroup, workspaceProjects],
   );
-  const scopedProjectKeys = useMemo(
+  const projectScopedProjectKeys = useMemo(
     () =>
       scopedProjectGroup !== null
         ? new Set(
@@ -2090,6 +2148,13 @@ export default function Sidebar() {
           : null,
     [scopedCheckoutlessProject, scopedProjectGroup],
   );
+  const scopedProjectKeys = useMemo(
+    () => intersectSidebarProjectScopes(projectScopedProjectKeys, activeFocusProjectKeys),
+    [activeFocusProjectKeys, projectScopedProjectKeys],
+  );
+  useEffect(() => {
+    setProjectScopeKey(null);
+  }, [activeFocusId]);
   useEffect(() => {
     if (
       projectScopeKey !== null &&
@@ -2132,7 +2197,7 @@ export default function Sidebar() {
   // hidden now, and bulk actions must never count or touch invisible rows.
   useEffect(() => {
     clearSelection();
-  }, [clearSelection, projectScopeKey]);
+  }, [activeFocusId, clearSelection, projectScopeKey]);
 
   const handleProjectSettings = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
@@ -2279,14 +2344,54 @@ export default function Sidebar() {
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
+  // Search is global within the active company. Neither the Focus nor the project picker narrows it.
   const searchableThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...snoozedThreads, ...settledThreads],
-    [activeThreads, pinnedThreads, settledThreads, snoozedThreads],
+    () => filterSidebarV2VisibleThreads(agentThreads, null),
+    [agentThreads],
   );
-  const threadSearchResults = useMemo(
+  const ungroupedThreadSearchResults = useMemo(
     () => searchSidebarThreadsByTitle(searchableThreads, threadSearchQuery),
     [searchableThreads, threadSearchQuery],
   );
+  const focusSearchGroups = useMemo(
+    () =>
+      groupSearchResultsByFocus({
+        results: ungroupedThreadSearchResults,
+        focuses,
+        assignments: focusAssignments,
+        activeFocusId,
+        projectKey: (thread) => `${thread.environmentId}:${thread.projectId}`,
+      }),
+    [activeFocusId, focusAssignments, focuses, ungroupedThreadSearchResults],
+  );
+  const groupThreadSearchResults = activeFocusId !== ALL_FOCUS_ID || focusSearchGroups.length > 1;
+  const threadSearchResults = useMemo(
+    () =>
+      groupThreadSearchResults
+        ? focusSearchGroups.flatMap((group) => group.results)
+        : ungroupedThreadSearchResults,
+    [focusSearchGroups, groupThreadSearchResults, ungroupedThreadSearchResults],
+  );
+  const threadSearchResultIndexByKey = useMemo(
+    () =>
+      new Map(
+        threadSearchResults.map(
+          (thread, index) =>
+            [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), index] as const,
+        ),
+      ),
+    [threadSearchResults],
+  );
+  const focusIdByProjectKey = useMemo(() => {
+    const validFocusIds = new Set(focuses.map((focus) => focus.id));
+    return new Map<string, (typeof focuses)[number]["id"]>(
+      focusAssignments.flatMap((assignment) =>
+        validFocusIds.has(assignment.focusId)
+          ? ([[assignment.projectKey, assignment.focusId]] as const)
+          : [],
+      ),
+    );
+  }, [focusAssignments, focuses]);
   const threadSearchResultOrderKey = threadSearchResults
     .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)))
     .join("\0");
@@ -2325,7 +2430,7 @@ export default function Sidebar() {
   // filter context changes so a scope/search flip never inherits a deep
   // page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
-  const settledResetKey = projectScopeKey ?? "all";
+  const settledResetKey = `${activeFocusId}:${projectScopeKey ?? "all"}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -2524,10 +2629,13 @@ export default function Sidebar() {
   }, []);
   const selectThreadSearchResult = useCallback(
     (thread: EnvironmentThreadShell) => {
+      setActiveFocusId(
+        focusIdByProjectKey.get(`${thread.environmentId}:${thread.projectId}`) ?? ALL_FOCUS_ID,
+      );
       clearThreadSearch();
       navigateToThread(scopeThreadRef(thread.environmentId, thread.id));
     },
-    [clearThreadSearch, navigateToThread],
+    [clearThreadSearch, focusIdByProjectKey, navigateToThread, setActiveFocusId],
   );
   const handleThreadSearchKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {
@@ -3647,24 +3755,52 @@ export default function Sidebar() {
             {workspaceProjects.length > 0 ? (
               <div className="flex items-center gap-1">
                 {singleProjectGroup ? (
-                  <SidebarMenuButton
-                    aria-label={`Project settings for ${singleProjectGroup.displayName}`}
-                    className="min-w-0 flex-1 ps-[calc(var(--sidebar-row-content-inset)-1px)] focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                    onClick={(event) => {
-                      void handleProjectSettings(event, singleProjectGroup);
-                    }}
-                  >
-                    <ProjectFavicon
-                      environmentId={singleProjectGroup.environmentId}
-                      cwd={singleProjectGroup.workspaceRoot}
-                      faviconPath={singleProjectGroup.faviconPath}
-                      className="size-4 shrink-0"
-                    />
-                    <span className="min-w-0 flex-1 truncate">
-                      {singleProjectGroup.displayName}
-                    </span>
-                    <SettingsIcon className="-mr-px size-4 shrink-0" />
-                  </SidebarMenuButton>
+                  <>
+                    <SidebarMenuButton
+                      aria-label={`Project settings for ${singleProjectGroup.displayName}`}
+                      className="min-w-0 flex-1 ps-[calc(var(--sidebar-row-content-inset)-1px)] focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                      onClick={(event) => {
+                        void handleProjectSettings(event, singleProjectGroup);
+                      }}
+                    >
+                      <ProjectFavicon
+                        environmentId={singleProjectGroup.environmentId}
+                        cwd={singleProjectGroup.workspaceRoot}
+                        faviconPath={singleProjectGroup.faviconPath}
+                        className="size-4 shrink-0"
+                      />
+                      <span className="min-w-0 flex-1 truncate">
+                        {singleProjectGroup.displayName}
+                      </span>
+                      <SettingsIcon className="-mr-px size-4 shrink-0" />
+                    </SidebarMenuButton>
+                    <Menu>
+                      <MenuTrigger
+                        render={
+                          <SidebarMenuButton
+                            size="icon"
+                            type="button"
+                            aria-label={`Assign ${singleProjectGroup.displayName} to a Focus`}
+                            className="shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                          />
+                        }
+                      >
+                        <CircleDotIcon />
+                      </MenuTrigger>
+                      <MenuPopup align="end" className="min-w-44">
+                        <FocusQuickAssignItems
+                          projectKeys={
+                            singleWorkspaceProject?.group?.memberProjectRefs.map(
+                              (projectRef) => `${projectRef.environmentId}:${projectRef.projectId}`,
+                            ) ?? []
+                          }
+                          focuses={focuses}
+                          assignments={focusAssignments}
+                          mutations={focusMutations}
+                        />
+                      </MenuPopup>
+                    </Menu>
+                  </>
                 ) : (
                   <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
                     <MenuTrigger
@@ -3705,7 +3841,7 @@ export default function Sidebar() {
                           <FolderIcon className="size-4 shrink-0" />
                           <span className="min-w-0 truncate text-sm">All projects</span>
                         </MenuRadioItem>
-                        {workspaceProjects.map((workspaceProject) => {
+                        {focusScopedWorkspaceProjects.map((workspaceProject) => {
                           const scopeKey = workspaceProject.projectKey;
                           const project = workspaceProject.group;
                           return (
@@ -3729,11 +3865,34 @@ export default function Sidebar() {
                                 {workspaceProject.displayName}
                               </span>
                               {project === null ? null : (
+                                <MenuSub>
+                                  <MenuSubTrigger
+                                    aria-label={`Assign ${workspaceProject.displayName} to a Focus`}
+                                    className="ml-auto min-h-6 shrink-0 gap-1 px-1.5 py-0 text-[10px] text-muted-foreground"
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                    onClick={(event) => event.stopPropagation()}
+                                  >
+                                    Focus
+                                  </MenuSubTrigger>
+                                  <MenuSubPopup className="min-w-44">
+                                    <FocusQuickAssignItems
+                                      projectKeys={project.memberProjectRefs.map(
+                                        (projectRef) =>
+                                          `${projectRef.environmentId}:${projectRef.projectId}`,
+                                      )}
+                                      focuses={focuses}
+                                      assignments={focusAssignments}
+                                      mutations={focusMutations}
+                                    />
+                                  </MenuSubPopup>
+                                </MenuSub>
+                              )}
+                              {project === null ? null : (
                                 <button
                                   type="button"
                                   aria-label={`Project settings for ${workspaceProject.displayName}`}
                                   title={`Project settings for ${workspaceProject.displayName}`}
-                                  className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-icon-muted outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                                  className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-icon-muted outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                                   onPointerDown={(event) => event.stopPropagation()}
                                   onClick={(event) => {
                                     void handleProjectSettings(event, project);
@@ -3789,48 +3948,82 @@ export default function Sidebar() {
                   aria-label="Thread search results"
                   className="flex flex-col gap-px"
                 >
-                  {threadSearchResults.map((thread, index) => {
-                    const threadKey = scopedThreadKey(
-                      scopeThreadRef(thread.environmentId, thread.id),
-                    );
-                    return (
-                      <SidebarSearchResultRow
-                        key={threadKey}
-                        thread={thread}
-                        issue={
-                          thread.environmentId === primaryEnvironmentId
-                            ? (startWorkIssuesByThread.get(thread.id) ?? null)
-                            : null
-                        }
-                        projectCwd={
-                          projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
-                        }
-                        projectFaviconPath={
-                          projectFaviconPathByKey.get(
-                            `${thread.environmentId}:${thread.projectId}`,
-                          ) ?? null
-                        }
-                        projectTitle={
-                          projectDisplayNameByKey.get(
-                            `${thread.environmentId}:${thread.projectId}`,
-                          ) ?? null
-                        }
-                        environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
-                        sideChats={sideChatsByParentKey.get(threadKey) ?? []}
-                        providerEntryByInstanceId={
-                          providerEntriesByEnvironment.get(thread.environmentId) ??
-                          EMPTY_PROVIDER_ENTRIES
-                        }
-                        isHighlighted={activeSearchResultIndex === index}
-                        isRouteActive={routeThreadKey === threadKey}
-                        resultId={`sidebar-thread-search-result-${index}`}
-                        onHighlight={() => setActiveSearchResultIndex(index)}
-                        onSelect={() => selectThreadSearchResult(thread)}
-                        onOpenSideChat={openSideChat}
-                        onOpenIssue={openIssue}
-                      />
-                    );
-                  })}
+                  {(groupThreadSearchResults
+                    ? focusSearchGroups
+                    : [
+                        {
+                          focusId: ALL_FOCUS_ID,
+                          focus: null,
+                          results: threadSearchResults,
+                        },
+                      ]
+                  ).map((group) => (
+                    <Fragment key={group.focusId}>
+                      {groupThreadSearchResults ? (
+                        <li
+                          role="presentation"
+                          className="mt-2 flex h-5 items-center gap-1.5 px-2.5 text-[10px] font-semibold text-sidebar-muted-foreground first:mt-0"
+                        >
+                          {group.focus ? (
+                            <FocusIcon
+                              iconName={group.focus.iconName}
+                              color={group.focus.accentColor}
+                              className="size-3 shrink-0"
+                            />
+                          ) : (
+                            <Layers3Icon className="size-3 shrink-0" />
+                          )}
+                          <span className="truncate">{group.focus?.name ?? "All"}</span>
+                        </li>
+                      ) : null}
+                      {group.results.map((thread) => {
+                        const threadKey = scopedThreadKey(
+                          scopeThreadRef(thread.environmentId, thread.id),
+                        );
+                        const index = threadSearchResultIndexByKey.get(threadKey) ?? 0;
+                        return (
+                          <SidebarSearchResultRow
+                            key={threadKey}
+                            thread={thread}
+                            issue={
+                              thread.environmentId === primaryEnvironmentId
+                                ? (startWorkIssuesByThread.get(thread.id) ?? null)
+                                : null
+                            }
+                            projectCwd={
+                              projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
+                              null
+                            }
+                            projectFaviconPath={
+                              projectFaviconPathByKey.get(
+                                `${thread.environmentId}:${thread.projectId}`,
+                              ) ?? null
+                            }
+                            projectTitle={
+                              projectDisplayNameByKey.get(
+                                `${thread.environmentId}:${thread.projectId}`,
+                              ) ?? null
+                            }
+                            environmentLabel={
+                              environmentLabelById.get(thread.environmentId) ?? null
+                            }
+                            sideChats={sideChatsByParentKey.get(threadKey) ?? []}
+                            providerEntryByInstanceId={
+                              providerEntriesByEnvironment.get(thread.environmentId) ??
+                              EMPTY_PROVIDER_ENTRIES
+                            }
+                            isHighlighted={activeSearchResultIndex === index}
+                            isRouteActive={routeThreadKey === threadKey}
+                            resultId={`sidebar-thread-search-result-${index}`}
+                            onHighlight={() => setActiveSearchResultIndex(index)}
+                            onSelect={() => selectThreadSearchResult(thread)}
+                            onOpenSideChat={openSideChat}
+                            onOpenIssue={openIssue}
+                          />
+                        );
+                      })}
+                    </Fragment>
+                  ))}
                 </ul>
               </TooltipProvider>
             ) : (
@@ -4179,6 +4372,15 @@ export default function Sidebar() {
           ) : null}
         </SidebarGroup>
       </SidebarContent>
+      <FocusStrip
+        focuses={focuses}
+        assignments={focusAssignments}
+        visibleProjectKeys={visibleFocusProjectKeys}
+        activeFocusId={activeFocusId}
+        onActiveFocusChange={setActiveFocusId}
+        editorProjects={focusEditorProjects}
+        mutations={focusMutations}
+      />
     </>
   );
 }

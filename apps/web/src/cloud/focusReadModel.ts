@@ -79,6 +79,50 @@ export const FOCUS_FUNCTION_REFERENCES = {
   markAllRead: mutationReference<{}, null>("focusNotifications:markAllRead"),
 } as const;
 
+export interface FocusMutations {
+  readonly create: (input: {
+    readonly id: FocusId;
+    readonly name: string;
+    readonly iconName: string;
+    readonly accentColor: string;
+    readonly orderKey?: string;
+  }) => Promise<Focus>;
+  readonly update: (input: {
+    readonly focusId: FocusId;
+    readonly name?: string;
+    readonly iconName?: string;
+    readonly accentColor?: string;
+  }) => Promise<Focus>;
+  readonly reorder: (input: {
+    readonly focusId: FocusId;
+    readonly orderKey: string;
+  }) => Promise<null>;
+  readonly remove: (input: { readonly focusId: FocusId }) => Promise<null>;
+  readonly assignProject: (input: {
+    readonly focusId: FocusId;
+    readonly projectKey: FocusProjectKey;
+  }) => Promise<null>;
+  readonly unassignProject: (input: { readonly projectKey: FocusProjectKey }) => Promise<null>;
+  readonly markAllNotificationsRead: () => Promise<null>;
+}
+
+export const focusMutationsAtom = Atom.make<FocusMutations | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("focuses:mutations"),
+);
+
+function makeFocusMutations(client: ConvexClient): FocusMutations {
+  return {
+    create: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.create, input),
+    update: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.update, input),
+    reorder: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.reorder, input),
+    remove: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.remove, input),
+    assignProject: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.assignProject, input),
+    unassignProject: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.unassignProject, input),
+    markAllNotificationsRead: () => client.mutation(FOCUS_FUNCTION_REFERENCES.markAllRead, {}),
+  };
+}
+
 export interface ActiveFocusStorage {
   readonly getItem: (key: string) => string | null;
   readonly setItem: (key: string, value: string) => void;
@@ -217,11 +261,14 @@ export function useFocusReadModelRuntime(options: {
   useEffect(() => {
     if (!options.enabled || options.accountScope === null || options.convexUrl === null) {
       appAtomRegistry.set(focusReadModelAtom, null);
+      appAtomRegistry.set(focusMutationsAtom, null);
       return;
     }
 
     const client = new ConvexClient(options.convexUrl);
     client.setAuth(options.fetchToken);
+    const mutations = makeFocusMutations(client);
+    appAtomRegistry.set(focusMutationsAtom, mutations);
     const unsubscribe = client.onUpdate(
       FOCUS_FUNCTION_REFERENCES.readModel,
       {},
@@ -235,6 +282,9 @@ export function useFocusReadModelRuntime(options: {
 
     return () => {
       unsubscribe();
+      if (appAtomRegistry.get(focusMutationsAtom) === mutations) {
+        appAtomRegistry.set(focusMutationsAtom, null);
+      }
       void client.close();
       appAtomRegistry.set(focusReadModelAtom, null);
     };
