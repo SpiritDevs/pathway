@@ -110,6 +110,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       pre-settlement servers, so clients treat missing as unsupported and
       never send the commands under version skew. */
   threadSettlement: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.settle-after-completion.set and projects the
+      one-shot request on thread shells. Kept separate from threadSettlement
+      so newer clients never send it to older servers. */
+  threadSettleAfterCompletion: Schema.optionalKey(Schema.Boolean),
   /** @deprecated Retained so registry records from older servers continue to decode and current
       clients can warn when a connected older server still settles after pushes. */
   pushAutoSettlement: Schema.optionalKey(Schema.Boolean),

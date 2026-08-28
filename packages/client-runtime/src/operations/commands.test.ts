@@ -50,6 +50,7 @@ import {
   promoteQueuedRun,
   reorderQueuedRun,
   revertThreadCheckpoint,
+  setSettleAfterCompletion,
   settleThread,
   startThreadTurn,
   unsettleThread,
@@ -828,7 +829,7 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
-  it.effect("dispatches settle and unsettle commands without timestamps", () =>
+  it.effect("dispatches settle lifecycle commands without timestamps", () =>
     Effect.gen(function* () {
       const dispatched: OrchestrationV2Command[] = [];
       const supervisor = yield* makeSupervisor({ commands: dispatched, projects: [] });
@@ -842,6 +843,11 @@ describe("V2 environment commands", () => {
         threadId: ThreadId.make("thread-1"),
         reason: "user",
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      yield* setSettleAfterCompletion({
+        commandId: CommandId.make("settle-after-completion-command"),
+        threadId: ThreadId.make("thread-1"),
+        enabled: true,
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
 
       expect(dispatched).toEqual([
         {
@@ -854,6 +860,12 @@ describe("V2 environment commands", () => {
           commandId: "unsettle-command",
           threadId: "thread-1",
           reason: "user",
+        },
+        {
+          type: "thread.settle-after-completion.set",
+          commandId: "settle-after-completion-command",
+          threadId: "thread-1",
+          enabled: true,
         },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),

@@ -174,6 +174,7 @@ export const make = Effect.gen(function* () {
       pullRequests: true,
       threadPullRequestAttachments: true,
       threadSettlement: true,
+      threadSettleAfterCompletion: true,
       threadSnooze: true,
       threadPinning: true,
       threadPinReorder: true,

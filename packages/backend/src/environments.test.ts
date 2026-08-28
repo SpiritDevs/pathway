@@ -70,6 +70,7 @@ const descriptor = (
     projectDirectoryInspection,
     connectionProbe: true,
     pushAutoSettlement: true,
+    threadSettleAfterCompletion: true,
   },
 });
 

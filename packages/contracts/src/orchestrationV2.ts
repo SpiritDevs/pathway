@@ -397,6 +397,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   settledAt: Schema.NullOr(Schema.DateTimeUtc).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** One-shot request to settle once all current and queued work is terminal. */
+  settleAfterCompletion: Schema.optional(Schema.Boolean),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -1223,6 +1225,7 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.deleted",
       "thread.settled",
       "thread.unsettled",
+      "thread.settle-after-completion-updated",
       "thread.snoozed",
       "thread.unsnoozed",
       "thread.pinned",
@@ -1429,6 +1432,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   archivedAt: Schema.NullOr(Schema.DateTimeUtc),
   settledOverride: Schema.NullOr(Schema.Literals(["settled", "active"])),
   settledAt: Schema.NullOr(Schema.DateTimeUtc),
+  settleAfterCompletion: Schema.optional(Schema.Boolean),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   /** Omitted by servers that predate thread pinning. */
@@ -1988,6 +1992,7 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
       "thread.deleted",
       "thread.settled",
       "thread.unsettled",
+      "thread.settle-after-completion-updated",
       "thread.snoozed",
       "thread.unsnoozed",
       "thread.pinned",
@@ -2147,6 +2152,12 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.settle"),
     commandId: CommandId,
     threadId: ThreadId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.settle-after-completion.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    enabled: Schema.Boolean,
   }),
   Schema.Struct({
     type: Schema.Literal("thread.source-control.record"),

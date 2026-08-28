@@ -206,6 +206,7 @@ export function applyToProjection(
     case "thread.deleted":
     case "thread.settled":
     case "thread.unsettled":
+    case "thread.settle-after-completion-updated":
     case "thread.snoozed":
     case "thread.unsnoozed":
     case "thread.pinned":
@@ -915,6 +916,7 @@ export function threadShellFromProjection(
     archivedAt: projection.thread.archivedAt,
     settledOverride: projection.thread.settledOverride,
     settledAt: projection.thread.settledAt,
+    settleAfterCompletion: projection.thread.settleAfterCompletion ?? false,
     snoozedUntil: projection.thread.snoozedUntil ?? null,
     snoozedAt: projection.thread.snoozedAt ?? null,
     pinnedAt: projection.thread.pinnedAt ?? null,
@@ -1101,6 +1103,7 @@ function shellFromState(input: {
     archivedAt: input.state.thread.archivedAt,
     settledOverride: input.state.thread.settledOverride,
     settledAt: input.state.thread.settledAt,
+    settleAfterCompletion: input.state.thread.settleAfterCompletion ?? false,
     snoozedUntil: input.state.thread.snoozedUntil ?? null,
     snoozedAt: input.state.thread.snoozedAt ?? null,
     pinnedAt: input.state.thread.pinnedAt ?? null,
@@ -1125,6 +1128,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           case "thread.deleted":
           case "thread.settled":
           case "thread.unsettled":
+          case "thread.settle-after-completion-updated":
           case "thread.snoozed":
           case "thread.unsnoozed":
           case "thread.pinned":
@@ -1927,6 +1931,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event.type !== "thread.deleted" &&
           event.type !== "thread.settled" &&
           event.type !== "thread.unsettled" &&
+          event.type !== "thread.settle-after-completion-updated" &&
           event.type !== "thread.snoozed" &&
           event.type !== "thread.unsnoozed" &&
           event.type !== "thread.pinned" &&

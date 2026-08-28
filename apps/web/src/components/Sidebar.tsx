@@ -62,6 +62,7 @@ import {
   SquarePenIcon,
   TicketIcon,
   TerminalIcon,
+  TimerIcon,
   Undo2Icon,
   XIcon,
 } from "lucide-react";
@@ -153,6 +154,7 @@ import {
   sortLogicalProjectsForSidebar,
   sortPinnedThreadsForSidebar,
   sortSettledThreadsForSidebar,
+  settleActionLabel,
   sortThreadsForSidebar,
   useThreadJumpHintVisibility,
 } from "./Sidebar.logic";
@@ -770,6 +772,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // False on environments whose server predates thread.settle/unsettle:
   // the lifecycle affordances hide entirely rather than fail on click.
   settlementSupported: boolean;
+  settleAfterCompletionSupported: boolean;
+  controlKeyHeld: boolean;
   // Same contract for thread.snooze/unsnooze.
   snoozeSupported: boolean;
   // Renders the pin glyph. Pinned cards keep the full settle/snooze quick
@@ -811,6 +815,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   renamingTitle: string;
   onContextMenu: (threadRef: ScopedThreadRef, position: { x: number; y: number }) => void;
   onSettle: (threadRef: ScopedThreadRef) => void;
+  onSettleAfterCompletionChange: (threadRef: ScopedThreadRef, enabled: boolean) => void;
   onUnsettle: (threadRef: ScopedThreadRef) => void;
   onSnooze: (threadRef: ScopedThreadRef, preset: SnoozePreset) => void;
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
@@ -829,6 +834,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     onAcknowledgeWoke,
     onRenameTitleChange,
     onSettle,
+    onSettleAfterCompletionChange,
     onSnooze,
     onStartRename,
     onThreadActivate,
@@ -1086,10 +1092,25 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     (event: ReactMouseEvent) => {
       event.preventDefault();
       event.stopPropagation();
+      if (event.ctrlKey && props.settleAfterCompletionSupported) {
+        onSettleAfterCompletionChange(threadRef, !thread.settleAfterCompletion);
+        return;
+      }
       onSettle(threadRef);
     },
-    [onSettle, threadRef],
+    [
+      onSettle,
+      onSettleAfterCompletionChange,
+      props.settleAfterCompletionSupported,
+      thread.settleAfterCompletion,
+      threadRef,
+    ],
   );
+  const settleTooltip = settleActionLabel({
+    controlKeyHeld: props.controlKeyHeld,
+    settleAfterCompletionSupported: props.settleAfterCompletionSupported,
+    settleAfterCompletionActive: thread.settleAfterCompletion,
+  });
   const handleUnsettleClick = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
@@ -1363,17 +1384,24 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   <TooltipPopup side="top">Un-settle thread</TooltipPopup>
                 </Tooltip>
               ) : (
-                <button
-                  type="button"
-                  aria-label="Settle thread"
-                  onClick={handleSettleClick}
-                  className={cn(
-                    "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
-                    isWoke && "group-hover/sidebar-row:static",
-                  )}
-                >
-                  <CheckIcon className="size-3" />
-                </button>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={settleTooltip}
+                        onClick={handleSettleClick}
+                        className={cn(
+                          "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
+                          isWoke && "group-hover/sidebar-row:static",
+                        )}
+                      />
+                    }
+                  >
+                    <CheckIcon className="size-3" />
+                  </TooltipTrigger>
+                  <TooltipPopup>{settleTooltip}</TooltipPopup>
+                </Tooltip>
               )}
             </span>
             {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
@@ -1519,6 +1547,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
                           </span>
                         ) : null}
+                        {thread.settleAfterCompletion ? (
+                          <TimerIcon
+                            aria-label="Settle after completion active"
+                            role="img"
+                            className="size-3.5 shrink-0 text-sky-600 dark:text-sky-400"
+                          />
+                        ) : null}
                       </span>
                     )
                   ) : (
@@ -1551,7 +1586,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                           render={
                             <button
                               type="button"
-                              aria-label="Settle thread"
+                              aria-label={settleTooltip}
                               onClick={handleSettleClick}
                               className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
                             />
@@ -1560,7 +1595,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                           <CheckIcon className="size-3.5" />
                           Settle
                         </TooltipTrigger>
-                        <TooltipPopup>Settle thread</TooltipPopup>
+                        <TooltipPopup>{settleTooltip}</TooltipPopup>
                       </Tooltip>
                     ) : null}
                   </span>
@@ -1786,6 +1821,7 @@ export default function Sidebar() {
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     settleThread,
+    setSettleAfterCompletion,
     unsettleThread,
     snoozeThread,
     unsnoozeThread,
@@ -2712,6 +2748,26 @@ export default function Sidebar() {
       })();
     },
     [unsettleThread],
+  );
+  const attemptSettleAfterCompletion = useCallback(
+    (threadRef: ScopedThreadRef, enabled: boolean) => {
+      void (async () => {
+        const result = await setSettleAfterCompletion(threadRef, enabled);
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: enabled
+                ? "Failed to settle after completion"
+                : "Failed to cancel settle after completion",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
+      })();
+    },
+    [setSettleAfterCompletion],
   );
   const attemptUnsnooze = useCallback(
     (threadRef: ScopedThreadRef) => {
@@ -3895,6 +3951,11 @@ export default function Sidebar() {
                           serverConfigs.get(thread.environmentId)?.environment.capabilities
                             .threadSettlement === true
                         }
+                        settleAfterCompletionSupported={
+                          serverConfigs.get(thread.environmentId)?.environment.capabilities
+                            .threadSettleAfterCompletion === true
+                        }
+                        controlKeyHeld={shortcutModifiers.ctrlKey}
                         snoozeSupported={
                           serverConfigs.get(thread.environmentId)?.environment.capabilities
                             .threadSnooze === true
@@ -3953,6 +4014,7 @@ export default function Sidebar() {
                         renamingTitle={renamingThreadKey === threadKey ? renamingTitle : ""}
                         onContextMenu={handleThreadContextMenu}
                         onSettle={attemptSettle}
+                        onSettleAfterCompletionChange={attemptSettleAfterCompletion}
                         onUnsettle={attemptUnsettle}
                         onSnooze={attemptSnooze}
                         onUnsnooze={attemptUnsnooze}

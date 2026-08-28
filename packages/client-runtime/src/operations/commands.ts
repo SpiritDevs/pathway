@@ -81,6 +81,10 @@ export type ArchiveThreadInput = ThreadCommandInput;
 export type UnarchiveThreadInput = ThreadCommandInput;
 export type SettleThreadInput = ThreadCommandInput;
 
+export interface SettleAfterCompletionInput extends ThreadCommandInput {
+  readonly enabled: boolean;
+}
+
 export interface UnsettleThreadInput extends ThreadCommandInput {
   readonly reason: "user";
 }
@@ -464,6 +468,17 @@ export const detachPullRequest = Effect.fn("EnvironmentCommands.detachPullReques
     pullRequest: input.pullRequest,
   });
 });
+
+export const setSettleAfterCompletion = Effect.fn("EnvironmentCommands.setSettleAfterCompletion")(
+  function* (input: SettleAfterCompletionInput) {
+    return yield* dispatch({
+      type: "thread.settle-after-completion.set",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      enabled: input.enabled,
+    });
+  },
+);
 
 export const pinThread = Effect.fn("EnvironmentCommands.pinThread")(function* (
   input: PinThreadInput,

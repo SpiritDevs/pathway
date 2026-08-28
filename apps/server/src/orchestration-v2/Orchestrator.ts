@@ -54,6 +54,7 @@ import {
   emptyProjection,
   isTurnItemAtOrBeforeRun,
   ProjectionStoreV2,
+  threadShellFromProjection,
 } from "./ProjectionStore.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
@@ -239,6 +240,7 @@ function commandThreadId(command: OrchestrationV2Command): ThreadId {
     case "thread.unarchive":
     case "thread.delete":
     case "thread.settle":
+    case "thread.settle-after-completion.set":
     case "thread.source-control.record":
     case "thread.unsettle":
     case "thread.snooze":
@@ -1537,6 +1539,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.unarchive"
           | "thread.delete"
           | "thread.settle"
+          | "thread.settle-after-completion.set"
           | "thread.unsettle"
           | "thread.snooze"
           | "thread.unsnooze"
@@ -1600,6 +1603,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     if (
       (command.type === "thread.settle" ||
+        command.type === "thread.settle-after-completion.set" ||
         command.type === "thread.unsettle" ||
         command.type === "thread.snooze" ||
         command.type === "thread.unsnooze" ||
@@ -1635,6 +1639,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandId: command.commandId,
         commandType: command.type,
         cause: `Thread ${command.threadId} has active or blocked work and cannot be settled.`,
+      });
+    }
+    if (
+      command.type === "thread.settle-after-completion.set" &&
+      command.enabled &&
+      !projection.runs.some((run) =>
+        ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+      ) &&
+      !projection.runtimeRequests.some((request) => request.status === "pending")
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} has no active or queued work.`,
       });
     }
 
@@ -1717,13 +1735,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const updatedThread: OrchestrationV2AppThread = (() => {
       switch (command.type) {
         case "thread.archive":
-          return { ...thread, archivedAt: now, titleRegeneration: null, updatedAt: now };
+          return {
+            ...thread,
+            archivedAt: now,
+            settleAfterCompletion: false,
+            titleRegeneration: null,
+            updatedAt: now,
+          };
         case "thread.unarchive":
           return { ...thread, archivedAt: null, updatedAt: now };
         case "thread.delete":
           return {
             ...thread,
             deletedAt: thread.deletedAt ?? now,
+            settleAfterCompletion: false,
             titleRegeneration: null,
             updatedAt: now,
           };
@@ -1737,9 +1762,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...thread,
             settledOverride: "settled",
             settledAt: alreadySettled ? thread.settledAt : now,
+            settleAfterCompletion: false,
             pinnedAt: null,
             pinOrderKey: null,
             updatedAt: alreadySettled ? thread.updatedAt : now,
+          };
+        }
+        case "thread.settle-after-completion.set": {
+          const unchanged = (thread.settleAfterCompletion ?? false) === command.enabled;
+          return {
+            ...thread,
+            settleAfterCompletion: command.enabled,
+            updatedAt: unchanged ? thread.updatedAt : now,
           };
         }
         case "thread.unsettle": {
@@ -1879,6 +1913,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.deleted" as const;
         case "thread.settle":
           return "thread.settled" as const;
+        case "thread.settle-after-completion.set":
+          return "thread.settle-after-completion-updated" as const;
         case "thread.unsettle":
           return "thread.unsettled" as const;
         case "thread.snooze":
@@ -7430,6 +7466,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.unarchive":
       case "thread.delete":
       case "thread.settle":
+      case "thread.settle-after-completion.set":
       case "thread.unsettle":
       case "thread.snooze":
       case "thread.unsnooze":
@@ -7628,26 +7665,70 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const dispatchWithReceipt = (command: OrchestrationV2Command) =>
     threadDispatch.withLock(commandThreadId(command), dispatchWithReceiptEffect(command));
 
+  /** Complete the one-shot request only after every run and runtime request is
+      terminal and the normalized background roster is empty. Callers already
+      hold this thread's dispatch lock, so the readiness check and synthetic
+      settle command cannot race a queued-run promotion or a user cancellation. */
+  const settleAfterCompletionIfReady = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const projection = yield* projectionStore.getThreadProjection(threadId);
+      if (
+        projection.thread.settleAfterCompletion !== true ||
+        projection.thread.archivedAt !== null ||
+        projection.thread.deletedAt !== null ||
+        projection.runs.some((run) =>
+          ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+        ) ||
+        projection.runtimeRequests.some((request) => request.status === "pending") ||
+        (threadShellFromProjection(projection).pendingBackgroundTasks?.length ?? 0) > 0
+      ) {
+        return false;
+      }
+
+      const latestRunId = projection.runs.at(-1)?.id ?? "no-run";
+      yield* dispatchWithReceiptEffect({
+        type: "thread.settle",
+        commandId: CommandId.make(`command:settle-after-completion:${threadId}:${latestRunId}`),
+        threadId,
+      });
+      return true;
+    });
+
   const handleTerminalRun = (stored: OrchestrationV2StoredEvent) =>
     Effect.gen(function* () {
       const threadId = stored.event.threadId;
+      const isTerminalRunEvent =
+        stored.event.type === "run.updated" &&
+        ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
+          stored.event.payload.status,
+        );
       // finalize writes the parent thread and startNextQueuedRun writes this
       // thread, so each takes its own thread's lock, sequentially and never
       // nested: dispatchDelegatedTaskRequest already writes child events
       // while holding the parent lock, so nesting the parent lock inside the
       // child lock here would invert that order, and the keyed executor's
       // semaphores are neither reentrant nor deadlock-aware.
-      const parentThreadId = yield* appOwnedSubagentParentThreadId(threadId);
+      const parentThreadId = isTerminalRunEvent
+        ? yield* appOwnedSubagentParentThreadId(threadId)
+        : undefined;
       if (parentThreadId !== undefined) {
-        yield* threadDispatch.withLock(parentThreadId, finalizeAppOwnedSubagent(threadId));
-      }
-      if (stored.event.type === "run.updated") {
         yield* threadDispatch.withLock(
-          threadId,
-          finalizeDelegatedCompletionDelivery(threadId, stored.event.payload.id),
+          parentThreadId,
+          finalizeAppOwnedSubagent(threadId).pipe(
+            Effect.andThen(settleAfterCompletionIfReady(parentThreadId)),
+          ),
         );
       }
-      yield* threadDispatch.withLock(threadId, startNextQueuedRun(threadId));
+      yield* threadDispatch.withLock(
+        threadId,
+        Effect.gen(function* () {
+          if (isTerminalRunEvent && stored.event.type === "run.updated") {
+            yield* finalizeDelegatedCompletionDelivery(threadId, stored.event.payload.id);
+            yield* startNextQueuedRun(threadId);
+          }
+          yield* settleAfterCompletionIfReady(threadId);
+        }),
+      );
     });
 
   // Historical terminal events are already represented by the projections
@@ -7658,16 +7739,31 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const consumeTerminalEvents = Ref.get(terminalEventCursor).pipe(
     Effect.flatMap((afterSequence) =>
       eventSink.stream({ afterSequence }).pipe(
-        Stream.filter(
-          (stored) =>
-            stored.event.type === "run.updated" &&
-            !String(stored.commandId).startsWith("command:runtime-reconcile:") &&
-            (stored.event.payload.status === "completed" ||
-              stored.event.payload.status === "interrupted" ||
-              stored.event.payload.status === "failed" ||
-              stored.event.payload.status === "cancelled" ||
-              stored.event.payload.status === "rolled_back"),
-        ),
+        Stream.filter((stored) => {
+          if (String(stored.commandId).startsWith("command:runtime-reconcile:")) return false;
+          const event = stored.event;
+          if (event.type === "run.updated") {
+            return ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
+              event.payload.status,
+            );
+          }
+          if (event.type === "subagent.updated") {
+            return isTerminalDelegatedTaskStatus(event.payload.status);
+          }
+          if (event.type === "turn-item.updated") {
+            return (
+              ["command_execution", "dynamic_tool", "subagent"].includes(event.payload.type) &&
+              ["completed", "failed", "cancelled", "interrupted"].includes(event.payload.status)
+            );
+          }
+          if (event.type === "runtime-request.updated") {
+            return event.payload.status !== "pending";
+          }
+          return (
+            event.type === "provider-thread.updated" &&
+            (event.payload.pendingBackgroundTasks?.length ?? 0) === 0
+          );
+        }),
         Stream.runForEach((stored) =>
           handleTerminalEventWithPoisonIsolation({
             stored,
@@ -7792,6 +7888,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       Effect.logWarning("Failed to inspect delegated completion delivery during recovery", {
         cause,
       }),
+    ),
+  );
+
+  // The live terminal subscriber starts at the current high-water mark. A
+  // process can therefore restart after the terminal event committed but
+  // before its derived settle command did. Reconcile only armed threads from
+  // their current projection instead of replaying the event log.
+  yield* projectionStore.getShellSnapshot().pipe(
+    Effect.flatMap((shell) =>
+      Effect.forEach(
+        [...shell.threads, ...shell.archivedThreads].filter(
+          (thread) => thread.settleAfterCompletion === true,
+        ),
+        (thread) =>
+          threadDispatch.withLock(thread.id, settleAfterCompletionIfReady(thread.id)).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to recover settle-after-completion request", {
+                threadId: thread.id,
+                cause,
+              }),
+            ),
+          ),
+        { concurrency: 8, discard: true },
+      ),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Failed to inspect settle-after-completion requests", { cause }),
     ),
   );
 

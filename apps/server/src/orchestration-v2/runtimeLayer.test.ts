@@ -751,6 +751,186 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("settles an armed thread after its final run becomes terminal", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const eventSink = yield* EventSinkV2;
+      const threadId = ThreadId.make("runtime-layer-settle-after-completion-thread");
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-settle-after-completion-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-settle-after-completion-project"),
+        title: "Settle after completion",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-settle-after-completion-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-settle-after-completion-message"),
+        text: "Finish this run.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-settle-after-completion-queued-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-settle-after-completion-queued-message"),
+        text: "Finish this queued run too.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.settle-after-completion.set",
+        commandId: CommandId.make("runtime-layer-settle-after-completion-arm"),
+        threadId,
+        enabled: true,
+      });
+
+      const armed = yield* orchestrator.getThreadProjection(threadId);
+      const activeRun = armed.runs.find((run) => run.status === "starting");
+      const queuedRun = armed.runs.find((run) => run.status === "queued");
+      assert.isDefined(activeRun);
+      assert.isDefined(queuedRun);
+      assert.isTrue(armed.thread.settleAfterCompletion);
+      assert.isTrue(
+        (yield* orchestrator.getShellSnapshot()).threads.find((thread) => thread.id === threadId)
+          ?.settleAfterCompletion,
+      );
+
+      const settledEvents = yield* Queue.unbounded<void>();
+      const promotedRunIds = yield* Queue.unbounded<RunId>();
+      const afterSequence = yield* orchestrator.getThreadEventSequence(threadId);
+      yield* eventSink.stream({ threadId, afterSequence }).pipe(
+        Stream.runForEach((stored) => {
+          if (stored.event.type === "thread.settled") {
+            return Queue.offer(settledEvents, undefined);
+          }
+          if (stored.event.type === "run.updated" && stored.event.payload.status === "starting") {
+            return Queue.offer(promotedRunIds, stored.event.payload.id);
+          }
+          return Effect.void;
+        }),
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+
+      const completedAt = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("runtime-layer-settle-after-completion-run-completed"),
+            type: "run.updated",
+            threadId,
+            runId: activeRun.id,
+            ...(activeRun.rootNodeId === null ? {} : { nodeId: activeRun.rootNodeId }),
+            providerInstanceId: activeRun.providerInstanceId,
+            occurredAt: completedAt,
+            payload: { ...activeRun, status: "completed", completedAt },
+          },
+        ],
+      });
+
+      assert.equal(yield* Queue.take(promotedRunIds), queuedRun.id);
+      const afterFirstCompletion = yield* orchestrator.getThreadProjection(threadId);
+      const promotedRun = afterFirstCompletion.runs.find((run) => run.id === queuedRun.id);
+      assert.isDefined(promotedRun);
+      assert.equal(promotedRun.status, "starting");
+      assert.isTrue(afterFirstCompletion.thread.settleAfterCompletion);
+      assert.isNull(afterFirstCompletion.thread.settledOverride);
+
+      const queuedCompletedAt = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("runtime-layer-settle-after-completion-queued-run-completed"),
+            type: "run.updated",
+            threadId,
+            runId: promotedRun.id,
+            ...(promotedRun.rootNodeId === null ? {} : { nodeId: promotedRun.rootNodeId }),
+            providerInstanceId: promotedRun.providerInstanceId,
+            occurredAt: queuedCompletedAt,
+            payload: { ...promotedRun, status: "completed", completedAt: queuedCompletedAt },
+          },
+        ],
+      });
+
+      yield* Queue.take(settledEvents);
+      const settled = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(settled.thread.settledOverride, "settled");
+      assert.isFalse(settled.thread.settleAfterCompletion);
+      assert.isFalse(
+        (yield* orchestrator.getShellSnapshot()).threads.find((thread) => thread.id === threadId)
+          ?.settleAfterCompletion,
+      );
+    }),
+  );
+
+  it.effect("cancels a settle-after-completion request", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-cancel-settle-after-completion-thread");
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-cancel-settle-after-completion-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-cancel-settle-after-completion-project"),
+        title: "Cancel settle after completion",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: process.cwd(),
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-cancel-settle-after-completion-message"),
+        threadId,
+        messageId: MessageId.make("runtime-layer-cancel-settle-after-completion-message"),
+        text: "Keep this active.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.settle-after-completion.set",
+        commandId: CommandId.make("runtime-layer-cancel-settle-after-completion-arm"),
+        threadId,
+        enabled: true,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.settle-after-completion.set",
+        commandId: CommandId.make("runtime-layer-cancel-settle-after-completion-cancel"),
+        threadId,
+        enabled: false,
+      });
+
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.isFalse(projection.thread.settleAfterCompletion);
+      assert.isNull(projection.thread.settledOverride);
+    }),
+  );
+
   it.effect("cancels queued work when a thread is archived", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
