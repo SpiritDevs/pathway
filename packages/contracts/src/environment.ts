@@ -108,9 +108,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       pre-settlement servers, so clients treat missing as unsupported and
       never send the commands under version skew. */
   threadSettlement: Schema.optionalKey(Schema.Boolean),
-  /** Successful Pathway push actions start the server-owned settlement grace
-      period. Absent on older servers, so clients do not present a countdown
-      the server cannot complete. */
+  /** @deprecated Retained so registry records from older servers continue to decode. */
   pushAutoSettlement: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.snooze / thread.unsnooze commands. Same
       version-skew contract as threadSettlement. */

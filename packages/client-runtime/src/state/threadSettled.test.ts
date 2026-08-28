@@ -184,6 +184,17 @@ describe("effectiveSettled", () => {
     ).toBe(true);
   });
 
+  it("keeps a newly created pull request active until it merges", () => {
+    const thread = makeShell({ activityAt: "2026-04-09T23:59:59.999Z" });
+    const options = {
+      now: NOW,
+      autoSettleAfterDays: null,
+    };
+
+    expect(effectiveSettled(thread, { ...options, changeRequestState: "open" })).toBe(false);
+    expect(effectiveSettled(thread, { ...options, changeRequestState: "merged" })).toBe(true);
+  });
+
   it("never auto-settles a stale thread with an open change request", () => {
     const stale = makeShell({ activityAt: STALE });
     expect(

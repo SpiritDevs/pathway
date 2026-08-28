@@ -1,4 +1,3 @@
-import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/shell";
 import type {
   GitRunStackedActionResult,
   GitStackedAction,
@@ -13,37 +12,6 @@ import {
 } from "../sourceControlPresentation";
 
 export type GitActionIconName = "commit" | "push" | "pr";
-
-export function pushAutoSettlementActivityKey(
-  thread: Pick<
-    EnvironmentThreadShell,
-    | "latestUserMessageAt"
-    | "latestRun"
-    | "runtime"
-    | "hasPendingApprovals"
-    | "hasPendingUserInput"
-    | "hasActionableProposedPlan"
-    | "pendingBackgroundTasks"
-    | "settledOverride"
-    | "snoozedUntil"
-    | "pinnedAt"
-    | "archivedAt"
-  >,
-): string {
-  return JSON.stringify({
-    latestUserMessageAt: thread.latestUserMessageAt,
-    latestRun: thread.latestRun,
-    runtime: thread.runtime,
-    hasPendingApprovals: thread.hasPendingApprovals,
-    hasPendingUserInput: thread.hasPendingUserInput,
-    hasActionableProposedPlan: thread.hasActionableProposedPlan,
-    pendingBackgroundTasks: thread.pendingBackgroundTasks,
-    settledOverride: thread.settledOverride,
-    snoozedUntil: thread.snoozedUntil,
-    pinnedAt: thread.pinnedAt,
-    archivedAt: thread.archivedAt,
-  });
-}
 
 export type GitDialogAction = "commit" | "push" | "create_pr";
 
@@ -88,15 +56,6 @@ export type DefaultBranchConfirmableAction =
   | "commit_push_pr";
 
 export const GIT_ACTION_SUCCESS_VISIBLE_MS = 10_000;
-
-export function formatPushAutoSettlementCountdown(
-  deadlineMs: number | null,
-  nowMs: number,
-): string | null {
-  if (deadlineMs === null) return null;
-  const secondsRemaining = Math.max(0, Math.ceil((deadlineMs - nowMs) / 1_000));
-  return `Settling thread in ${secondsRemaining}s unless activity resumes.`;
-}
 
 export function isPushCommandFailure(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;

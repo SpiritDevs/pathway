@@ -60,7 +60,6 @@ import {
   PersistChatAttachmentsError,
   type PersistChatAttachmentsInput,
   RpcClientId,
-  shouldStartPushAutoSettlement,
   EnvironmentAuthorizationError,
   ThreadId,
   type TerminalAttachStreamEvent,
@@ -130,7 +129,6 @@ import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import { readWorkflowScript } from "./orchestration/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
-import { runPushAutoSettlementCountdown } from "./vcs/PushAutoSettlement.ts";
 import { sourceControlMarkerFromGitResult } from "./vcs/SourceControlMarker.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
@@ -2007,41 +2005,7 @@ const makeWsRpcLayer = (
                               })
                               .pipe(Effect.ignoreCause({ log: true }), Effect.asVoid)
                           : Effect.void;
-                      const settlementThreadId = input.threadId;
-                      const scheduleSettlement =
-                        settlementThreadId !== undefined && result.push.status === "pushed"
-                          ? gitWorkflow.localStatus({ cwd: input.cwd }).pipe(
-                              Effect.flatMap((status) =>
-                                shouldStartPushAutoSettlement(result, status.isDefaultRef)
-                                  ? runPushAutoSettlementCountdown(
-                                      {
-                                        readThread: (threadId) =>
-                                          threadManagement
-                                            .getThreadShell(threadId)
-                                            .pipe(Effect.orDie),
-                                        settleThread: ({ threadId, commandId }) =>
-                                          threadManagement
-                                            .dispatch({
-                                              type: "thread.settle",
-                                              commandId,
-                                              threadId,
-                                            })
-                                            .pipe(Effect.orDie),
-                                      },
-                                      {
-                                        threadId: settlementThreadId,
-                                        commandId: CommandId.make(`${input.actionId}:auto-settle`),
-                                      },
-                                    )
-                                  : Effect.void,
-                              ),
-                              Effect.ignoreCause({ log: true }),
-                              Effect.forkDetach,
-                              Effect.asVoid,
-                            )
-                          : Effect.void;
                       return recordMarker.pipe(
-                        Effect.andThen(scheduleSettlement),
                         Effect.andThen(
                           input.threadId === undefined
                             ? refreshGitStatus(input.cwd)
