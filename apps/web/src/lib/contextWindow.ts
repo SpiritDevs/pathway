@@ -18,6 +18,40 @@ export type ContextWindowSnapshot = NullableContextWindowUsage & {
   readonly updatedAt: string;
 };
 
+export function contextWindowSnapshotFromUsage(
+  usage: ThreadTokenUsageSnapshot,
+  updatedAt: string,
+): ContextWindowSnapshot {
+  const maxTokens = usage.maxTokens ?? null;
+  const usedPercentage =
+    maxTokens !== null && maxTokens > 0
+      ? Math.min(100, (usage.usedTokens / maxTokens) * 100)
+      : null;
+  return {
+    usedTokens: usage.usedTokens,
+    totalProcessedTokens: usage.totalProcessedTokens ?? null,
+    maxTokens,
+    remainingTokens:
+      maxTokens === null ? null : Math.max(0, Math.round(maxTokens - usage.usedTokens)),
+    usedPercentage,
+    remainingPercentage: usedPercentage === null ? null : Math.max(0, 100 - usedPercentage),
+    inputTokens: usage.inputTokens ?? null,
+    cachedInputTokens: usage.cachedInputTokens ?? null,
+    outputTokens: usage.outputTokens ?? null,
+    reasoningOutputTokens: usage.reasoningOutputTokens ?? null,
+    lastUsedTokens: usage.lastUsedTokens ?? null,
+    lastInputTokens: usage.lastInputTokens ?? null,
+    lastCachedInputTokens: usage.lastCachedInputTokens ?? null,
+    lastOutputTokens: usage.lastOutputTokens ?? null,
+    lastReasoningOutputTokens: usage.lastReasoningOutputTokens ?? null,
+    toolUses: usage.toolUses ?? null,
+    durationMs: usage.durationMs ?? null,
+    compactsAutomatically: usage.compactsAutomatically ?? null,
+    autoCompactThreshold: usage.autoCompactThreshold ?? null,
+    updatedAt,
+  };
+}
+
 /** Map a provider driver kind to a user-facing display name. */
 export function formatProviderDisplayName(provider: string | null | undefined): string {
   if (!provider) return "This agent";
@@ -56,34 +90,15 @@ export function deriveLatestContextWindowSnapshot(
       continue;
     }
 
-    const maxTokens = null;
-    const usedPercentage =
-      maxTokens !== null && maxTokens > 0 ? Math.min(100, (usedTokens / maxTokens) * 100) : null;
-    const remainingTokens =
-      maxTokens !== null ? Math.max(0, Math.round(maxTokens - usedTokens)) : null;
-    const remainingPercentage = usedPercentage !== null ? Math.max(0, 100 - usedPercentage) : null;
-
-    return {
-      usedTokens,
-      totalProcessedTokens: asFiniteNumber(payload.beforeTokenCount),
-      maxTokens,
-      remainingTokens,
-      usedPercentage,
-      remainingPercentage,
-      inputTokens: null,
-      cachedInputTokens: null,
-      outputTokens: null,
-      reasoningOutputTokens: null,
-      lastUsedTokens: null,
-      lastInputTokens: null,
-      lastCachedInputTokens: null,
-      lastOutputTokens: null,
-      lastReasoningOutputTokens: null,
-      toolUses: null,
-      durationMs: null,
-      compactsAutomatically: true,
-      updatedAt: DateTime.formatIso(payload.startedAt ?? payload.updatedAt),
-    };
+    const totalProcessedTokens = asFiniteNumber(payload.beforeTokenCount);
+    return contextWindowSnapshotFromUsage(
+      {
+        usedTokens,
+        ...(totalProcessedTokens === null ? {} : { totalProcessedTokens }),
+        compactsAutomatically: true,
+      },
+      DateTime.formatIso(payload.startedAt ?? payload.updatedAt),
+    );
   }
 
   return null;

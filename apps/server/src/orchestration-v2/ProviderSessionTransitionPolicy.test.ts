@@ -26,7 +26,7 @@ it("reuses compatible sessions and treats interaction mode as turn-scoped", () =
   );
 });
 
-it("uses the adapter's selection transition classification", () => {
+it("always creates a fresh handoff when the model slug changes", () => {
   assert.deepEqual(
     decideProviderSessionTransition({
       current: base,
@@ -37,7 +37,7 @@ it("uses the adapter's selection transition classification", () => {
       },
       selectionTransition: { type: "apply_on_next_turn" },
     }),
-    { type: "switch_model_in_session" },
+    { type: "create_with_handoff" },
   );
   assert.deepEqual(
     decideProviderSessionTransition({
@@ -59,7 +59,25 @@ it("uses the adapter's selection transition classification", () => {
       },
       selectionTransition: { type: "restart_session" },
     }),
-    { type: "restart_and_resume" },
+    { type: "create_with_handoff" },
+  );
+});
+
+it("preserves an adapter rejection when the model slug changes", () => {
+  assert.deepEqual(
+    decideProviderSessionTransition({
+      current: base,
+      target: {
+        ...base,
+        modelSelection: { ...base.modelSelection, model: "gpt-5.2-codex" },
+        available: true,
+      },
+      selectionTransition: {
+        type: "reject",
+        reason: "That model is unavailable for the active provider.",
+      },
+    }),
+    { type: "reject", reason: "That model is unavailable for the active provider." },
   );
 });
 
@@ -103,7 +121,10 @@ it("preserves a rejected selection when the workspace also changes", () => {
       current: base,
       target: {
         ...base,
-        modelSelection: { ...base.modelSelection, model: "gpt-5.2-codex" },
+        modelSelection: {
+          ...base.modelSelection,
+          options: [{ id: "reasoningEffort", value: "high" }],
+        },
         workspace: "/other",
         available: true,
       },
@@ -119,7 +140,10 @@ it("preserves a rejected selection when the workspace also changes", () => {
 it("preserves handoff and missing-classification outcomes across workspace changes", () => {
   const target = {
     ...base,
-    modelSelection: { ...base.modelSelection, model: "gpt-5.2-codex" },
+    modelSelection: {
+      ...base.modelSelection,
+      options: [{ id: "reasoningEffort", value: "high" }],
+    },
     workspace: "/other",
     available: true,
   };

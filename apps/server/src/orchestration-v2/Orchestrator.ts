@@ -315,6 +315,36 @@ function isBlockingRun(run: OrchestrationV2Run): boolean {
   );
 }
 
+function isTerminalRun(run: OrchestrationV2Run): boolean {
+  return (
+    run.status === "completed" ||
+    run.status === "interrupted" ||
+    run.status === "failed" ||
+    run.status === "cancelled" ||
+    run.status === "rolled_back"
+  );
+}
+
+function lastRunAssignedToProviderThread(
+  projection: OrchestrationV2ThreadProjection,
+  providerThread: OrchestrationV2ProviderThread,
+): OrchestrationV2Run | undefined {
+  return projection.runs.find((run) => run.ordinal === providerThread.lastRunOrdinal);
+}
+
+export function crossesProviderOrModelBoundary(input: {
+  readonly projection: OrchestrationV2ThreadProjection;
+  readonly activeProviderThread: OrchestrationV2ProviderThread | undefined;
+  readonly modelSelection: ModelSelection;
+}): boolean {
+  if (input.activeProviderThread === undefined) return false;
+  const assignedRun = lastRunAssignedToProviderThread(input.projection, input.activeProviderThread);
+  return (
+    input.activeProviderThread.providerInstanceId !== input.modelSelection.instanceId ||
+    (assignedRun !== undefined && assignedRun.modelSelection.model !== input.modelSelection.model)
+  );
+}
+
 /**
  * A parent thread is "live" for wake purposes while a run is still producing
  * agent output. A run parked at "waiting" is post-terminal drain, so its agent
@@ -3657,10 +3687,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const now = yield* DateTime.now;
       const ordinal = nextRunOrdinal(projection);
       const runId = idAllocator.derive.run({ threadId: command.threadId, ordinal });
-      const latestCompletedRun = projection.runs.findLast((run) => run.status === "completed");
-      const isProviderSwitch =
-        activeProviderThread !== undefined &&
-        activeProviderThread.providerInstanceId !== modelSelection.instanceId;
+      const latestSourceRun = projection.runs.findLast(isTerminalRun);
+      const isProviderSwitch = crossesProviderOrModelBoundary({
+        projection,
+        activeProviderThread,
+        modelSelection,
+      });
 
       if (
         pendingForkTransfer === undefined &&
@@ -4003,9 +4035,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             }),
         ),
       );
-      const targetProviderThread = isProviderSwitch
-        ? rootProviderThreadsForProvider(projection, modelSelection.instanceId)[0]
-        : activeProviderThread;
+      // A provider or model boundary always receives a fresh native thread.
+      // Reusing an older target thread would reintroduce the full native
+      // context that portable compaction is specifically meant to replace.
+      const targetProviderThread = isProviderSwitch ? undefined : activeProviderThread;
       const providerSessionId =
         targetProviderThread?.providerSessionId ??
         (yield* mapDispatchError(command)(
@@ -4154,29 +4187,27 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const requiresFullProviderSwitchContext =
         isProviderSwitch && pendingMergeBackTransfer !== undefined;
       const providerSwitchCoveredRuns =
-        !isProviderSwitch || latestCompletedRun === undefined
+        !isProviderSwitch || latestSourceRun === undefined
           ? []
           : projection.runs.filter(
               (run) =>
-                run.status === "completed" &&
+                isTerminalRun(run) &&
                 run.ordinal >
                   (requiresFullProviderSwitchContext
                     ? 0
                     : (targetProviderThread?.lastRunOrdinal ?? 0)) &&
-                run.ordinal <= latestCompletedRun.ordinal,
+                run.ordinal <= latestSourceRun.ordinal,
             );
       const providerSwitchItems =
         providerSwitchCoveredRuns.length === 0
           ? []
-          : [
-              ...projection.turnItems.filter(
-                (item) =>
-                  item.runId !== null &&
-                  providerSwitchCoveredRuns.some((run) => run.id === item.runId),
-              ),
-            ];
+          : projection.turnItems.filter(
+              (item) =>
+                item.runId !== null &&
+                providerSwitchCoveredRuns.some((run) => run.id === item.runId),
+            );
       const providerSwitchTransferId =
-        providerSwitchCoveredRuns.length === 0 || latestCompletedRun === undefined
+        providerSwitchCoveredRuns.length === 0 || latestSourceRun === undefined
           ? null
           : yield* mapDispatchError(command)(
               idAllocator.allocate.contextTransfer({
@@ -4200,7 +4231,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         );
       }
       const providerSwitchHandoff =
-        providerSwitchTransferId === null || latestCompletedRun === undefined
+        providerSwitchTransferId === null || latestSourceRun === undefined
           ? null
           : yield* contextHandoffService
               .prepareProviderHandoff({
@@ -4215,7 +4246,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   ),
                 ),
                 toProviderThreadId: ensuredProviderThread.id,
-                fromProviderInstanceId: latestCompletedRun.providerInstanceId,
+                fromProviderInstanceId: latestSourceRun.providerInstanceId,
                 toProviderInstanceId: modelSelection.instanceId,
                 coveredRunOrdinals: {
                   from: providerSwitchCoveredRuns[0]!.ordinal,
@@ -4226,6 +4257,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     ? "full_thread_summary"
                     : "delta_since_target_last_seen",
                 items: providerSwitchItems,
+                compactIfNeeded: true,
                 maxChars: capabilities.context.maxRecommendedHandoffChars,
                 createdAt: now,
               })
@@ -4485,42 +4517,68 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const handoffTurnItem: OrchestrationV2TurnItem | null =
         activeHandoff === null
           ? null
-          : {
-              id: idAllocator.derive.runSignalTurnItem({
+          : providerSwitchHandoff !== null
+            ? {
+                id: idAllocator.derive.runSignalTurnItem({
+                  runId,
+                  signal: `context-compaction:${activeHandoff.id}`,
+                }),
+                threadId: command.threadId,
                 runId,
-                signal: `context-handoff:${activeHandoff.id}`,
-              }),
-              threadId: command.threadId,
-              runId,
-              nodeId: rootNodeId,
-              providerThreadId: providerThread.id,
-              providerTurnId: null,
-              nativeItemRef: null,
-              parentItemId: null,
-              ordinal: ordinal * 100 - 1,
-              status: "completed",
-              title:
-                portableForkHandoff !== null
-                  ? "Fork context"
-                  : providerSwitchHandoff !== null
-                    ? "Provider handoff"
-                    : "Merge-back context",
-              startedAt: now,
-              completedAt: now,
-              updatedAt: now,
-              type: "handoff",
-              contextHandoffId: activeHandoff.id,
-              fromProviderThreadIds: activeHandoff.fromProviderThreadIds,
-              toProviderThreadId: activeHandoff.toProviderThreadId,
-              fromProviderInstanceIds: Array.from(
-                new Set(handoffSourceRuns.map((run) => run.providerInstanceId)),
-              ),
-              toProviderInstanceId: modelSelection.instanceId,
-              fromModelSelections: handoffFromModelSelections,
-              toModel: modelSelection.model,
-              strategy: activeHandoff.strategy,
-              summary: activeHandoff.summaryText,
-            };
+                nodeId: rootNodeId,
+                providerThreadId: providerThread.id,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: ordinal * 100 - 1,
+                status: activeHandoff.status === "pending" ? "running" : "completed",
+                title: "Context compaction",
+                startedAt: now,
+                completedAt: activeHandoff.status === "pending" ? null : now,
+                updatedAt: now,
+                type: "compaction",
+                driver: null,
+                kind: "model_switch",
+                contextHandoffId: activeHandoff.id,
+                toProviderInstanceId: modelSelection.instanceId,
+                toModel: modelSelection.model,
+                coveredRunOrdinals: activeHandoff.coveredRunOrdinals,
+                ...(activeHandoff.compaction?.generation === "not_needed"
+                  ? { method: "direct" as const }
+                  : {}),
+                summary: activeHandoff.summaryText,
+              }
+            : {
+                id: idAllocator.derive.runSignalTurnItem({
+                  runId,
+                  signal: `context-handoff:${activeHandoff.id}`,
+                }),
+                threadId: command.threadId,
+                runId,
+                nodeId: rootNodeId,
+                providerThreadId: providerThread.id,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: ordinal * 100 - 1,
+                status: "completed",
+                title: portableForkHandoff !== null ? "Fork context" : "Merge-back context",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                type: "handoff",
+                contextHandoffId: activeHandoff.id,
+                fromProviderThreadIds: activeHandoff.fromProviderThreadIds,
+                toProviderThreadId: activeHandoff.toProviderThreadId,
+                fromProviderInstanceIds: Array.from(
+                  new Set(handoffSourceRuns.map((run) => run.providerInstanceId)),
+                ),
+                toProviderInstanceId: modelSelection.instanceId,
+                fromModelSelections: handoffFromModelSelections,
+                toModel: modelSelection.model,
+                strategy: activeHandoff.strategy,
+                summary: activeHandoff.summaryText,
+              };
       const nativeForkResolution: OrchestrationV2ContextTransferResolution | null =
         !canResolveForkNatively || providerThread.nativeThreadRef === null
           ? null
@@ -4599,14 +4657,14 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       if (
         providerSwitchTransferId !== null &&
         providerSwitchHandoff !== null &&
-        latestCompletedRun !== undefined
+        latestSourceRun !== undefined
       ) {
         const transfer: OrchestrationV2ContextTransfer = {
           id: providerSwitchTransferId,
           type: "provider_handoff",
           sourceThreadId: command.threadId,
           targetThreadId: command.threadId,
-          sourcePoint: contextSourcePointForRun(projection, latestCompletedRun),
+          sourcePoint: contextSourcePointForRun(projection, latestSourceRun),
           basePoint:
             requiresFullProviderSwitchContext ||
             targetProviderThread?.lastRunOrdinal === null ||
@@ -4620,7 +4678,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     ? null
                     : contextSourcePointForRun(projection, baseRun);
                 })(),
-          sourceProviderInstanceId: latestCompletedRun.providerInstanceId,
+          sourceProviderInstanceId: latestSourceRun.providerInstanceId,
           targetProviderInstanceId: modelSelection.instanceId,
           targetRunId: runId,
           status: "consumed",
@@ -6180,6 +6238,29 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               status: "interrupted",
               title: "Workspace preparation interrupted",
               output: command.reason ?? "Interrupted before provider start",
+              completedAt: now,
+              updatedAt: now,
+            },
+          });
+        }
+        const compactionItem = projection.turnItems.find(
+          (candidate) =>
+            candidate.runId === run.id &&
+            candidate.type === "compaction" &&
+            (candidate.status === "pending" || candidate.status === "running"),
+        );
+        if (compactionItem?.type === "compaction") {
+          yield* emitEvent({
+            type: "turn-item.updated",
+            threadId: command.threadId,
+            runId: run.id,
+            ...(compactionItem.nodeId === null ? {} : { nodeId: compactionItem.nodeId }),
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: now,
+            payload: {
+              ...compactionItem,
+              status: "interrupted",
+              title: "Context compaction cancelled",
               completedAt: now,
               updatedAt: now,
             },

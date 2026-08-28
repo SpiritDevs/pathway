@@ -11,6 +11,7 @@ import {
   type Settings as ClaudeSdkSettings,
   type SDKAssistantMessage,
   type SDKAPIRetryMessage,
+  type SDKControlGetContextUsageResponse,
   type SDKMessage,
   type SDKResultMessage,
   type SDKUserMessage,
@@ -22,6 +23,10 @@ import {
   applyClaudePromptEffortPrefix,
   getProviderOptionDescriptors,
 } from "@spiritdevs/shared/model";
+import {
+  CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
+  formatClaudeResumeCompactionQuestion,
+} from "@spiritdevs/shared/claudeCompaction";
 import {
   type ChatAttachment,
   ClaudeSettings,
@@ -45,8 +50,10 @@ import {
   type ProviderInstanceId,
   type ProviderOptionSelections,
   type ProviderRequestKind,
+  type ProviderUserInputAnswers,
   type ProviderThreadId,
   type ThreadId,
+  type ThreadTokenUsageSnapshot,
 } from "@spiritdevs/contracts";
 
 import * as Cause from "effect/Cause";
@@ -129,6 +136,92 @@ export const CLAUDE_AGENT_SDK_QUERY_PROTOCOL = "claude-agent-sdk.query" as const
 export const CLAUDE_DRIVER_KIND = CLAUDE_PROVIDER;
 export const CLAUDE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CLAUDE_DRIVER_KIND);
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
+
+function finiteNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.round(value)
+    : undefined;
+}
+
+function finitePositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : undefined;
+}
+
+function claudeUsageTokenCount(value: unknown): number | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const usage = value as Record<string, unknown>;
+  const input =
+    (finiteNonNegativeInteger(usage.input_tokens) ?? 0) +
+    (finiteNonNegativeInteger(usage.cache_creation_input_tokens) ?? 0) +
+    (finiteNonNegativeInteger(usage.cache_read_input_tokens) ?? 0);
+  const output = finiteNonNegativeInteger(usage.output_tokens) ?? 0;
+  const total = finiteNonNegativeInteger(usage.total_tokens) ?? input + output;
+  return total > 0 ? total : undefined;
+}
+
+function claudeTokenUsageFromResult(
+  message: SDKResultMessage,
+  autoCompactWindow: string,
+): ThreadTokenUsageSnapshot | undefined {
+  const usage =
+    message.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
+      ? (message.usage as Record<string, unknown>)
+      : undefined;
+  const iterations = usage && Array.isArray(usage.iterations) ? usage.iterations : [];
+  const lastIteration = iterations.findLast(
+    (entry): entry is Record<string, unknown> =>
+      entry !== null && typeof entry === "object" && !Array.isArray(entry),
+  );
+  const usedTokens = claudeUsageTokenCount(lastIteration ?? usage);
+  if (usedTokens === undefined) return undefined;
+  const totalProcessedTokens = claudeUsageTokenCount(usage);
+  const contextWindows = Object.values(message.modelUsage ?? {}).flatMap((entry) => {
+    const value = finiteNonNegativeInteger(entry.contextWindow);
+    return value === undefined || value === 0 ? [] : [value];
+  });
+  const maxTokens = contextWindows.length === 0 ? undefined : Math.max(...contextWindows);
+  const autoCompactThreshold = autoCompactWindow
+    ? finiteNonNegativeInteger(Number(autoCompactWindow))
+    : undefined;
+  return {
+    usedTokens: maxTokens === undefined ? usedTokens : Math.min(usedTokens, maxTokens),
+    lastUsedTokens: usedTokens,
+    ...(totalProcessedTokens !== undefined && totalProcessedTokens > usedTokens
+      ? { totalProcessedTokens }
+      : {}),
+    ...(maxTokens === undefined ? {} : { maxTokens }),
+    compactsAutomatically: true,
+    ...(autoCompactThreshold === undefined ? {} : { autoCompactThreshold }),
+  };
+}
+
+function claudeTokenUsageFromContext(input: {
+  readonly usage: SDKControlGetContextUsageResponse;
+  readonly totalProcessedTokens?: number;
+  readonly configuredAutoCompactWindow: string;
+}): ThreadTokenUsageSnapshot | undefined {
+  const usedTokens = finitePositiveInteger(input.usage.totalTokens);
+  if (usedTokens === undefined) return undefined;
+  const maxTokens = finitePositiveInteger(input.usage.maxTokens);
+  const reportedThreshold = finitePositiveInteger(input.usage.autoCompactThreshold);
+  const configuredThreshold = input.configuredAutoCompactWindow
+    ? finitePositiveInteger(Number(input.configuredAutoCompactWindow))
+    : undefined;
+  return {
+    usedTokens: maxTokens === undefined ? usedTokens : Math.min(usedTokens, maxTokens),
+    lastUsedTokens: usedTokens,
+    ...(input.totalProcessedTokens !== undefined && input.totalProcessedTokens > usedTokens
+      ? { totalProcessedTokens: input.totalProcessedTokens }
+      : {}),
+    ...(maxTokens === undefined ? {} : { maxTokens }),
+    compactsAutomatically: input.usage.isAutoCompactEnabled,
+    ...((reportedThreshold ?? configuredThreshold) === undefined
+      ? {}
+      : { autoCompactThreshold: reportedThreshold ?? configuredThreshold! }),
+  };
+}
 
 export const ClaudeProviderCapabilitiesV2 = {
   sessions: {
@@ -279,6 +372,10 @@ export interface ClaudeAgentSdkQuerySession {
   readonly messages: Stream.Stream<SDKMessage, ClaudeAgentSdkQueryRunnerError>;
   readonly offer: (message: SDKUserMessage) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly setModel: (model: string) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
+  readonly getContextUsage?: Effect.Effect<
+    SDKControlGetContextUsageResponse,
+    ClaudeAgentSdkQueryRunnerError
+  >;
   readonly interrupt: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
   readonly close: Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
 }
@@ -582,6 +679,10 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
                 }),
               ),
             ),
+          getContextUsage: Effect.tryPromise({
+            try: () => queryRuntime.getContextUsage(),
+            catch: (cause) => queryRunnerError(cause, "getContextUsage"),
+          }),
           interrupt: Effect.tryPromise({
             try: () => queryRuntime.interrupt(),
             catch: (cause) => queryRunnerError(cause, "interrupt"),
@@ -670,6 +771,8 @@ export function makeClaudeQueryOptions(input: {
   readonly disallowedTools?: ReadonlyArray<string>;
   readonly permissionMode?: PermissionMode;
   readonly canUseTool?: CanUseTool;
+  readonly onUserDialog?: ClaudeQueryOptions["onUserDialog"];
+  readonly supportedDialogKinds?: ClaudeQueryOptions["supportedDialogKinds"];
   readonly allowDangerouslySkipPermissions?: boolean;
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection);
@@ -683,12 +786,21 @@ export function makeClaudeQueryOptions(input: {
     Object.keys(compiledSelection.settings).length === 0
       ? undefined
       : (compiledSelection.settings as ClaudeSdkSettings);
+  const autoCompactSettings = input.settings?.autoCompactWindow
+    ? ({ autoCompactWindow: Number(input.settings.autoCompactWindow) } as ClaudeSdkSettings)
+    : undefined;
   const querySettings =
-    selectionSettings === undefined
+    typeof input.sdkSettings === "string"
       ? input.sdkSettings
-      : typeof input.sdkSettings === "object" && input.sdkSettings !== null
-        ? ({ ...input.sdkSettings, ...selectionSettings } as ClaudeSdkSettings)
-        : selectionSettings;
+      : input.sdkSettings === undefined &&
+          selectionSettings === undefined &&
+          autoCompactSettings === undefined
+        ? undefined
+        : ({
+            ...input.sdkSettings,
+            ...selectionSettings,
+            ...autoCompactSettings,
+          } as ClaudeSdkSettings);
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
     tools: claudeAgentSdkQueryToolsForSdk(selectedTools),
@@ -708,6 +820,10 @@ export function makeClaudeQueryOptions(input: {
     ...(input.allowedTools === undefined ? {} : { allowedTools: [...input.allowedTools] }),
     ...(input.disallowedTools === undefined ? {} : { disallowedTools: [...input.disallowedTools] }),
     ...(input.canUseTool === undefined ? {} : { canUseTool: input.canUseTool }),
+    ...(input.onUserDialog === undefined ? {} : { onUserDialog: input.onUserDialog }),
+    ...(input.supportedDialogKinds === undefined
+      ? {}
+      : { supportedDialogKinds: input.supportedDialogKinds }),
     ...(input.allowDangerouslySkipPermissions === true
       ? { allowDangerouslySkipPermissions: true }
       : {}),
@@ -2170,11 +2286,18 @@ interface ActiveClaudeToolCall {
   readonly startedAt: DateTime.Utc;
 }
 
-interface PendingClaudeRuntimeRequest {
-  readonly requestId: OrchestrationV2RuntimeRequest["id"];
-  readonly requestKind: ProviderRequestKind;
-  readonly decision: Deferred.Deferred<ProviderApprovalDecision, never>;
-}
+type PendingClaudeRuntimeRequest =
+  | {
+      readonly type: "approval";
+      readonly requestId: OrchestrationV2RuntimeRequest["id"];
+      readonly requestKind: ProviderRequestKind;
+      readonly decision: Deferred.Deferred<ProviderApprovalDecision, never>;
+    }
+  | {
+      readonly type: "user_input";
+      readonly requestId: OrchestrationV2RuntimeRequest["id"];
+      readonly answers: Deferred.Deferred<ProviderUserInputAnswers | null, never>;
+    };
 
 export interface ClaudeAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
@@ -2221,6 +2344,7 @@ export function makeClaudeAdapterV2(
         });
         const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
         const activeTurn = yield* Ref.make<ActiveClaudeTurnContext | null>(null);
+        const openingTurn = yield* Ref.make<ActiveClaudeTurnContext | null>(null);
         const interruptedTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const steeredTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
@@ -3517,6 +3641,104 @@ export function makeClaudeAdapterV2(
           return { node, request, turnItem };
         });
 
+        const buildResumeCompactionRequestArtifacts = Effect.fnUntraced(function* (input: {
+          readonly context: ActiveClaudeTurnContext;
+          readonly nativeRequestId: string;
+          readonly question: string;
+        }) {
+          const createdAt = yield* DateTime.now;
+          const requestId = yield* idAllocator.allocate.runtimeRequest({
+            driver: CLAUDE_PROVIDER,
+            providerTurnId: input.context.providerTurnId,
+            nativeRequestId: input.nativeRequestId,
+          });
+          const providerSessionId = input.context.input.providerThread.providerSessionId;
+          if (providerSessionId === null) {
+            return yield* new ProviderAdapterProtocolError({
+              driver: CLAUDE_PROVIDER,
+              detail: `Provider thread ${input.context.input.providerThread.id} is missing a provider session id.`,
+            });
+          }
+          const nodeId = idAllocator.derive.approvalNode({ requestId });
+          const ordinal = yield* resolveItemOrdinal(
+            input.context,
+            `${input.nativeRequestId}:resume-compaction`,
+          );
+          const nativeItemRef = {
+            driver: CLAUDE_PROVIDER,
+            nativeId: input.nativeRequestId,
+            strength: "strong" as const,
+          };
+          const node: OrchestrationV2ExecutionNode = {
+            id: nodeId,
+            threadId: input.context.input.threadId,
+            runId: input.context.input.runId,
+            parentNodeId: input.context.input.rootNodeId,
+            rootNodeId: input.context.input.rootNodeId,
+            kind: "user_input_request",
+            status: "waiting",
+            countsForRun: false,
+            providerThreadId: input.context.input.providerThread.id,
+            providerTurnId: input.context.providerTurnId,
+            nativeItemRef,
+            runtimeRequestId: requestId,
+            checkpointScopeId: null,
+            startedAt: createdAt,
+            completedAt: null,
+          };
+          const request: OrchestrationV2RuntimeRequest = {
+            id: requestId,
+            nodeId,
+            providerTurnId: input.context.providerTurnId,
+            nativeRequestRef: nativeItemRef,
+            kind: "user_input",
+            status: "pending",
+            responseCapability: { type: "live", providerSessionId },
+            createdAt,
+            resolvedAt: null,
+          };
+          const turnItem: OrchestrationV2TurnItem = {
+            id: idAllocator.derive.approvalTurnItem({ requestId }),
+            threadId: input.context.input.threadId,
+            runId: input.context.input.runId,
+            nodeId,
+            providerThreadId: input.context.input.providerThread.id,
+            providerTurnId: input.context.providerTurnId,
+            nativeItemRef,
+            parentItemId: null,
+            ordinal,
+            status: "waiting",
+            title: null,
+            startedAt: createdAt,
+            completedAt: null,
+            updatedAt: createdAt,
+            type: "user_input_request",
+            requestId,
+            questions: [
+              {
+                id: "resume-compaction",
+                header: "Resume session",
+                question: input.question,
+                options: [
+                  {
+                    label: "Compact and continue",
+                    description: "Resume with a summary and use fewer tokens.",
+                  },
+                  {
+                    label: "Keep full history",
+                    description: "Resume without changing the conversation.",
+                  },
+                  {
+                    label: CLAUDE_RESUME_COMPACTION_NEVER_ANSWER,
+                    description: "Keep full history and skip future resume prompts.",
+                  },
+                ],
+              },
+            ],
+          };
+          return { node, request, turnItem };
+        });
+
         const finalizeActiveTurn = Effect.fnUntraced(function* (input: {
           readonly context: ActiveClaudeTurnContext;
           readonly status: Extract<
@@ -3526,6 +3748,7 @@ export function makeClaudeAdapterV2(
           readonly completedAt: DateTime.Utc;
           readonly failure?: OrchestrationV2ProviderFailure;
           readonly threadDisposition?: "reusable" | "broken";
+          readonly tokenUsage?: ThreadTokenUsageSnapshot;
         }) {
           for (const toolCall of input.context.toolCalls.values()) {
             const artifacts = buildToolCallArtifacts({
@@ -3702,6 +3925,7 @@ export function makeClaudeAdapterV2(
                     input.context.input.runOrdinal,
                   lastRunOrdinal: input.context.input.runOrdinal,
                   pendingBackgroundTasks: claudePendingBackgroundTasksFromRoster(roster),
+                  ...(input.tokenUsage === undefined ? {} : { tokenUsage: input.tokenUsage }),
                   status: input.status === "completed" ? "active" : "idle",
                   updatedAt: input.completedAt,
                 };
@@ -4185,6 +4409,53 @@ export function makeClaudeAdapterV2(
             return;
           }
 
+          if (message.type === "system" && Reflect.get(message, "subtype") === "compact_boundary") {
+            const metadata = Reflect.get(message, "compact_metadata");
+            const record =
+              metadata !== null && typeof metadata === "object" && !Array.isArray(metadata)
+                ? (metadata as Record<string, unknown>)
+                : {};
+            const beforeTokenCount = finiteNonNegativeInteger(record.pre_tokens);
+            const afterTokenCount = finiteNonNegativeInteger(record.post_tokens);
+            const updatedAt = yield* DateTime.now;
+            const nativeItemId = `compact-boundary:${context.providerTurnId}:${beforeTokenCount ?? "unknown"}:${afterTokenCount ?? "unknown"}`;
+            const ordinal = yield* resolveItemOrdinal(context, nativeItemId);
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CLAUDE_PROVIDER,
+              turnItem: {
+                id: idAllocator.derive.turnItemFromProviderItem({
+                  driver: CLAUDE_PROVIDER,
+                  nativeItemId,
+                }),
+                threadId: context.input.threadId,
+                runId: context.input.runId,
+                nodeId: context.input.rootNodeId,
+                providerThreadId: context.input.providerThread.id,
+                providerTurnId: context.providerTurnId,
+                nativeItemRef: {
+                  driver: CLAUDE_PROVIDER,
+                  nativeId: nativeItemId,
+                  strength: "strong",
+                },
+                parentItemId: null,
+                ordinal,
+                status: "completed",
+                title: "Claude context compaction",
+                startedAt: updatedAt,
+                completedAt: updatedAt,
+                updatedAt,
+                type: "compaction",
+                driver: CLAUDE_PROVIDER,
+                kind: "provider_native",
+                method: "native",
+                ...(beforeTokenCount === undefined ? {} : { beforeTokenCount }),
+                ...(afterTokenCount === undefined ? {} : { afterTokenCount }),
+              },
+            });
+            return;
+          }
+
           if (isClaudeBackgroundTasksChangedMessage(message)) {
             yield* applyBackgroundTaskRosterMessage({
               nativeThreadId: liveQuery.nativeThreadId,
@@ -4489,10 +4760,25 @@ export function makeClaudeAdapterV2(
               return next;
             });
             const resultFailure = interrupted ? null : providerFailureFromResult(message);
+            const totalProcessedTokens = claudeUsageTokenCount(message.usage);
+            const queriedContextUsage = input.query.getContextUsage
+              ? yield* input.query.getContextUsage.pipe(
+                  Effect.timeoutOption("1 second"),
+                  Effect.catchCause(() => Effect.succeed(Option.none())),
+                )
+              : Option.none<SDKControlGetContextUsageResponse>();
+            const tokenUsage = Option.isSome(queriedContextUsage)
+              ? claudeTokenUsageFromContext({
+                  usage: queriedContextUsage.value,
+                  ...(totalProcessedTokens === undefined ? {} : { totalProcessedTokens }),
+                  configuredAutoCompactWindow: adapterOptions.settings.autoCompactWindow,
+                })
+              : claudeTokenUsageFromResult(message, adapterOptions.settings.autoCompactWindow);
             yield* finalizeActiveTurn({
               context,
               status: interrupted ? "interrupted" : terminalStatusFromResult(message),
               completedAt,
+              ...(tokenUsage === undefined ? {} : { tokenUsage }),
               ...(resultFailure === null ? {} : { failure: resultFailure }),
             });
           }
@@ -4551,6 +4837,7 @@ export function makeClaudeAdapterV2(
           yield* Ref.update(pendingRuntimeRequests, (current) => {
             const updated = new Map(current);
             updated.set(String(artifacts.request.id), {
+              type: "approval",
               requestId: artifacts.request.id,
               requestKind,
               decision,
@@ -4582,6 +4869,9 @@ export function makeClaudeAdapterV2(
             runFork(Deferred.succeed(decision, "cancel"));
           };
           callbackOptions.signal.addEventListener("abort", abort, { once: true });
+          if (callbackOptions.signal.aborted) {
+            abort();
+          }
           const resolvedDecision = yield* Deferred.await(decision).pipe(
             Effect.ensuring(
               Ref.update(pendingRuntimeRequests, (current) => {
@@ -4605,6 +4895,104 @@ export function makeClaudeAdapterV2(
 
         const canUseTool: CanUseTool = (toolName, toolInput, callbackOptions) =>
           runPromise(canUseToolEffect(toolName, toolInput, callbackOptions));
+
+        const handleResumeDialog = Effect.fn("ClaudeAdapterV2.handleResumeDialog")(function* (
+          request: Parameters<NonNullable<ClaudeQueryOptions["onUserDialog"]>>[0],
+          callbackOptions: Parameters<NonNullable<ClaudeQueryOptions["onUserDialog"]>>[1],
+        ) {
+          if (request.dialogKind !== "resume_return") {
+            return { behavior: "cancelled" as const };
+          }
+          const context = (yield* Ref.get(activeTurn)) ?? (yield* Ref.get(openingTurn));
+          if (context === null) {
+            return { behavior: "cancelled" as const };
+          }
+          if (context.input.message.text.trim() === "/compact") {
+            return { behavior: "completed" as const, result: "compact" as const };
+          }
+          const question = formatClaudeResumeCompactionQuestion({
+            ageMinutes:
+              typeof request.payload.sessionAgeMinutes === "number"
+                ? Math.max(0, Math.floor(request.payload.sessionAgeMinutes))
+                : 0,
+            estimatedTokens:
+              typeof request.payload.estimatedTokens === "number"
+                ? Math.max(0, Math.floor(request.payload.estimatedTokens))
+                : 0,
+          });
+          const nativeRequestId = `resume-compaction:${context.providerTurnId}`;
+          const artifacts = yield* buildResumeCompactionRequestArtifacts({
+            context,
+            nativeRequestId,
+            question,
+          });
+          const answers = yield* Deferred.make<ProviderUserInputAnswers | null, never>();
+          yield* Ref.update(pendingRuntimeRequests, (current) => {
+            const updated = new Map(current);
+            updated.set(String(artifacts.request.id), {
+              type: "user_input",
+              requestId: artifacts.request.id,
+              answers,
+            });
+            return updated;
+          });
+          yield* Effect.all(
+            [
+              emitProviderEvent({
+                type: "node.updated",
+                driver: CLAUDE_PROVIDER,
+                node: artifacts.node,
+              }),
+              emitProviderEvent({
+                type: "runtime_request.updated",
+                driver: CLAUDE_PROVIDER,
+                runtimeRequest: artifacts.request,
+              }),
+              emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CLAUDE_PROVIDER,
+                turnItem: artifacts.turnItem,
+              }),
+            ],
+            { concurrency: 1 },
+          );
+          const abort = () => runFork(Deferred.succeed(answers, null));
+          callbackOptions.signal.addEventListener("abort", abort, { once: true });
+          if (callbackOptions.signal.aborted) abort();
+          const resolved = yield* Deferred.await(answers).pipe(
+            Effect.ensuring(
+              Ref.update(pendingRuntimeRequests, (current) => {
+                const updated = new Map(current);
+                updated.delete(String(artifacts.request.id));
+                return updated;
+              }),
+            ),
+          );
+          callbackOptions.signal.removeEventListener("abort", abort);
+          if (resolved === null) return { behavior: "cancelled" as const };
+          const selection = resolved["resume-compaction"];
+          const action =
+            selection === "Compact and continue"
+              ? "compact"
+              : selection === CLAUDE_RESUME_COMPACTION_NEVER_ANSWER
+                ? "never"
+                : "continue";
+          return { behavior: "completed" as const, result: action };
+        });
+
+        const onUserDialog: NonNullable<ClaudeQueryOptions["onUserDialog"]> = (
+          request,
+          callbackOptions,
+        ) =>
+          runPromise(
+            handleResumeDialog(request, callbackOptions).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("claude-v2.resume-compaction-dialog.failed", { cause }).pipe(
+                  Effect.as({ behavior: "cancelled" as const }),
+                ),
+              ),
+            ),
+          );
 
         const openQuery = Effect.fnUntraced(function* (
           turnInput: ProviderAdapterV2TurnInput,
@@ -4679,6 +5067,8 @@ export function makeClaudeAdapterV2(
                       allowDangerouslySkipPermissions: queryPolicy.allowDangerouslySkipPermissions,
                     }),
                 ...(shouldInstallClaudePermissionCallback(queryPolicy) ? { canUseTool } : {}),
+                onUserDialog,
+                supportedDialogKinds: ["resume_return"],
               }),
             })
             .pipe(
@@ -4808,8 +5198,18 @@ export function makeClaudeAdapterV2(
                   attachmentsDir,
                   fileSystem,
                 });
-            const querySession = yield* openQuery(turnInput, nativeThreadId);
+            yield* Ref.set(openingTurn, context);
+            const querySession = yield* openQuery(turnInput, nativeThreadId).pipe(
+              Effect.onExit((exit) =>
+                Exit.isSuccess(exit)
+                  ? Effect.void
+                  : Ref.update(openingTurn, (current) =>
+                      current?.providerTurnId === providerTurnId ? null : current,
+                    ),
+              ),
+            );
             yield* Ref.set(activeTurn, context);
+            yield* Ref.set(openingTurn, null);
             yield* emitProviderEvent({
               type: "provider_turn.updated",
               driver: CLAUDE_PROVIDER,
@@ -5154,6 +5554,20 @@ export function makeClaudeAdapterV2(
                   cause: new ProviderAdapterProtocolError({
                     driver: CLAUDE_PROVIDER,
                     detail: `No pending Claude runtime request ${requestInput.requestId}.`,
+                  }),
+                });
+              }
+              if (pending.type === "user_input") {
+                if (requestInput.answers !== undefined) {
+                  yield* Deferred.succeed(pending.answers, requestInput.answers);
+                  return;
+                }
+                return yield* new ProviderAdapterRuntimeRequestResponseError({
+                  driver: CLAUDE_PROVIDER,
+                  requestId: requestInput.requestId,
+                  cause: new ProviderAdapterProtocolError({
+                    driver: CLAUDE_PROVIDER,
+                    detail: `Claude user-input request ${requestInput.requestId} requires answers.`,
                   }),
                 });
               }

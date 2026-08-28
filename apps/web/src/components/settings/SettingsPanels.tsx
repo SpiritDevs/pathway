@@ -480,6 +480,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     settings.textGenerationModelSelection ?? null,
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
+  const isContextCompactionModelDirty = !Equal.equals(
+    settings.contextCompactionModelSelection ?? null,
+    DEFAULT_UNIFIED_SETTINGS.contextCompactionModelSelection ?? null,
+  );
   const isBackgroundActivityDirty = hasChangedBackgroundActivitySettings(settings);
 
   const changedSettingLabels = useMemo(
@@ -537,9 +541,11 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Delete confirmation"]
         : []),
       ...(isTextGenerationModelDirty ? ["Text generation model"] : []),
+      ...(isContextCompactionModelDirty ? ["Context compaction model"] : []),
     ],
     [
       isTextGenerationModelDirty,
+      isContextCompactionModelDirty,
       isBackgroundActivityDirty,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
@@ -655,6 +661,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
+      contextCompactionModelSelection: DEFAULT_UNIFIED_SETTINGS.contextCompactionModelSelection,
       fontFamilySans: DEFAULT_UNIFIED_SETTINGS.fontFamilySans,
       fontFamilyComposer: DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer,
       fontFamilyCode: DEFAULT_UNIFIED_SETTINGS.fontFamilyCode,
@@ -1918,6 +1925,34 @@ export function GeneralSettingsPanel() {
     settings.textGenerationModelSelection ?? null,
     DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection ?? null,
   );
+  const contextCompactionModelSelection = resolveAppModelSelectionState(
+    {
+      ...settings,
+      textGenerationModelSelection: settings.contextCompactionModelSelection,
+    },
+    serverProviders,
+  );
+  const contextCompactionInstanceId = contextCompactionModelSelection.instanceId;
+  const contextCompactionModel = contextCompactionModelSelection.model;
+  const contextCompactionModelOptions = contextCompactionModelSelection.options;
+  const contextCompactionInstanceEntry = textGenerationModelInstanceEntries.find(
+    (entry) => entry.instanceId === contextCompactionInstanceId,
+  );
+  const contextCompactionProvider: ProviderDriverKind =
+    contextCompactionInstanceEntry?.driverKind ?? DEFAULT_DRIVER_KIND;
+  const contextCompactionModelOptionsByInstance = getCustomModelOptionsByInstance(
+    {
+      ...settings,
+      textGenerationModelSelection: settings.contextCompactionModelSelection,
+    },
+    serverProviders,
+    contextCompactionInstanceId,
+    contextCompactionModel,
+  );
+  const isContextCompactionModelDirty = !Equal.equals(
+    settings.contextCompactionModelSelection ?? null,
+    DEFAULT_UNIFIED_SETTINGS.contextCompactionModelSelection ?? null,
+  );
   const resolvedBackgroundActivity = resolveServerBackgroundActivitySettings(settings);
   const activeBackgroundActivityProfile = resolvedBackgroundActivity.profile;
   const backgroundActivityProfileOption = resolveBackgroundActivityProfileOption(settings);
@@ -2478,6 +2513,72 @@ export function GeneralSettingsPanel() {
                       serverProviders,
                     ),
                   });
+                }}
+              />
+            </div>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("context-compaction-model")}
+          description="Model used to summarize long context when a thread switches provider or model. Shorter context is handed off directly."
+          resetAction={
+            isContextCompactionModelDirty ? (
+              <SettingResetButton
+                label="context compaction model"
+                onClick={() =>
+                  updateSettings({
+                    contextCompactionModelSelection:
+                      DEFAULT_UNIFIED_SETTINGS.contextCompactionModelSelection,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <ProviderModelPicker
+                activeInstanceId={contextCompactionInstanceId}
+                model={contextCompactionModel}
+                lockedProvider={null}
+                instanceEntries={textGenerationModelInstanceEntries}
+                modelOptionsByInstance={contextCompactionModelOptionsByInstance}
+                triggerVariant="outline"
+                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                onInstanceModelChange={(instanceId, model) => {
+                  const resolved = resolveAppModelSelectionState(
+                    {
+                      ...settings,
+                      textGenerationModelSelection: createModelSelection(instanceId, model),
+                    },
+                    serverProviders,
+                  );
+                  updateSettings({ contextCompactionModelSelection: resolved });
+                }}
+              />
+              <TraitsPicker
+                provider={contextCompactionProvider}
+                models={contextCompactionInstanceEntry?.models ?? []}
+                model={contextCompactionModel}
+                prompt=""
+                onPromptChange={() => {}}
+                modelOptions={contextCompactionModelOptions}
+                allowPromptInjectedEffort={false}
+                triggerVariant="outline"
+                triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                onModelOptionsChange={(nextOptions) => {
+                  const resolved = resolveAppModelSelectionState(
+                    {
+                      ...settings,
+                      textGenerationModelSelection: createModelSelection(
+                        contextCompactionInstanceId,
+                        contextCompactionModel,
+                        nextOptions,
+                      ),
+                    },
+                    serverProviders,
+                  );
+                  updateSettings({ contextCompactionModelSelection: resolved });
                 }}
               />
             </div>

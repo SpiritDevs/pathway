@@ -14,6 +14,30 @@ import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
 
 const EARLIER_CONTENT_TRUNCATION_MARKER = "[Earlier content truncated]\n\n";
 
+export function buildContextCompactionPrompt(canonicalHistory: string): string {
+  return [
+    "Summarize this Pathway thread for a fresh coding-agent session.",
+    "Return markdown only, using exactly these section headings:",
+    "## Current goal and latest user intent",
+    "## Agreed decisions and explicit constraints",
+    "## Completed work and verification",
+    "## Current repository/workspace state and important files",
+    "## Unresolved problems and next action",
+    "## Exact identifiers, commands, and errors that still matter",
+    "",
+    "Rules:",
+    "- Preserve explicit user decisions, constraints, unfinished work, file paths, identifiers, commands, and relevant errors.",
+    "- Distinguish completed work from proposed work.",
+    "- Omit routine tool chatter, repetition, superseded plans, raw reasoning, and large patches already present in the workspace.",
+    "- Do not claim verification that did not happen.",
+    "- Do not include the new user message; it will be delivered separately.",
+    "- Keep the complete answer under 8,000 characters.",
+    "",
+    "Canonical thread history:",
+    limitSection(canonicalHistory, 120_000),
+  ].join("\n");
+}
+
 function policyInstruction(instruction: string | undefined): ReadonlyArray<string> {
   const trimmed = instruction?.trim();
   return trimmed ? ["", "Additional instructions:", limitSection(trimmed, 4_000)] : [];

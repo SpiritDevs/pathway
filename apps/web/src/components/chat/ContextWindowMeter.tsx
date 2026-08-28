@@ -1,6 +1,7 @@
 import { cn } from "~/lib/utils";
 import { type ContextWindowSnapshot, formatContextWindowTokens } from "~/lib/contextWindow";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { Button } from "../ui/button";
 import { formatContextWindowCompactionMessage } from "./ContextWindowMeter.logic";
 
 function formatPercentage(value: number | null): string | null {
@@ -16,6 +17,9 @@ function formatPercentage(value: number | null): string | null {
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot;
   modelDisplayName?: string | null;
+  onCompact?: (() => void) | undefined;
+  compactDisabled?: boolean;
+  compactDisabledReason?: string | null;
 }) {
   const { usage, modelDisplayName } = props;
   const usedPercentage = formatPercentage(usage.usedPercentage);
@@ -131,8 +135,19 @@ export function ContextWindowMeter(props: {
           ) : null}
           {usage.compactsAutomatically ? (
             <div className="mt-1 text-pretty text-secondary-label text-[11px] font-medium">
-              {formatContextWindowCompactionMessage(modelDisplayName)}
+              {formatContextWindowCompactionMessage(modelDisplayName, usage.autoCompactThreshold)}
             </div>
+          ) : null}
+          {props.onCompact ? (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={props.compactDisabled}
+              {...(props.compactDisabledReason ? { title: props.compactDisabledReason } : {})}
+              onClick={props.onCompact}
+            >
+              Compact context
+            </Button>
           ) : null}
         </div>
       </PopoverPopup>

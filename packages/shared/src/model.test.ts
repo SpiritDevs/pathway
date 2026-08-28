@@ -6,6 +6,7 @@ import {
 } from "@spiritdevs/contracts";
 
 import {
+  applyClaudePromptEffortPrefix,
   buildProviderOptionSelectionsFromDescriptors,
   createModelCapabilities,
   createModelSelection,
@@ -76,6 +77,12 @@ const claudeCaps: ModelCapabilities = createModelCapabilities({
 });
 
 describe("descriptor helpers", () => {
+  it("does not prefix Claude slash commands with ultrathink", () => {
+    expect(applyClaudePromptEffortPrefix("/compact", "ultrathink")).toBe("/compact");
+    expect(applyClaudePromptEffortPrefix("Explain this", "ultrathink")).toBe(
+      "Ultrathink:\nExplain this",
+    );
+  });
   it("applies selection values to capability descriptors", () => {
     expect(
       getProviderOptionDescriptors({

@@ -146,6 +146,7 @@ export function applyServerSettingsPatch(
   patch: ServerSettingsPatch,
 ): ServerSettings {
   const selectionPatch = patch.textGenerationModelSelection;
+  const compactionSelectionPatch = patch.contextCompactionModelSelection;
   const enrichmentSelectionPatch = patch.issueEnrichmentModelSelection;
   const {
     automaticGitFetchInterval,
@@ -234,6 +235,14 @@ export function applyServerSettingsPatch(
           textGenerationModelSelection: applyModelSelectionPatch(
             current.textGenerationModelSelection,
             selectionPatch,
+          ),
+        }
+      : {}),
+    ...(compactionSelectionPatch
+      ? {
+          contextCompactionModelSelection: applyModelSelectionPatch(
+            current.contextCompactionModelSelection,
+            compactionSelectionPatch,
           ),
         }
       : {}),

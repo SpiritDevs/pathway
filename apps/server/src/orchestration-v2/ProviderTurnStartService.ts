@@ -19,8 +19,13 @@ import * as Schema from "effect/Schema";
 import { EventSinkV2 } from "./EventSink.ts";
 import {
   ContextHandoffServiceV2,
+  contextCompactionSourceText,
   providerMessageWithContextHandoffs,
 } from "./ContextHandoffService.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
+import { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import { buildContextCompactionPrompt } from "../textGeneration/TextGenerationPrompts.ts";
+import { DEFAULT_CONTEXT_COMPACTION_MODEL_SELECTION } from "@spiritdevs/contracts/settings";
 import { IdAllocatorV2 } from "./IdAllocator.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
@@ -63,6 +68,8 @@ export const layer: Layer.Layer<
   | ProviderSessionManagerV2
   | RunExecutionServiceV2
   | RuntimePolicyV2
+  | ServerSettingsService
+  | TextGeneration
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
@@ -73,6 +80,8 @@ export const layer: Layer.Layer<
     const providerSessions = yield* ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicyV2;
+    const serverSettings = yield* ServerSettingsService;
+    const textGeneration = yield* TextGeneration;
 
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
@@ -97,8 +106,10 @@ export const layer: Layer.Layer<
       const checkpointScope = projection.checkpointScopes.find(
         (candidate) => candidate.id === rootNode?.checkpointScopeId,
       );
-      const handoffs = projection.contextHandoffs.filter(
-        (handoff) => handoff.targetRunId === run.id && handoff.status === "ready",
+      const targetHandoffs = projection.contextHandoffs.filter(
+        (handoff) =>
+          handoff.targetRunId === run.id &&
+          (handoff.status === "ready" || handoff.status === "pending"),
       );
       const nativeForkTransfer = projection.contextTransfers.find(
         (transfer) =>
@@ -157,6 +168,112 @@ export const layer: Layer.Layer<
           Effect.catchCause(() => Effect.succeed(false)),
         );
 
+      const sourceRunOrdinals = new Map(projection.runs.map((entry) => [entry.id, entry.ordinal]));
+      const pendingCompactions = targetHandoffs.filter(
+        (handoff) => handoff.compaction?.generation === "pending",
+      );
+      let preparedHandoffs = targetHandoffs.filter((handoff) => handoff.status === "ready");
+      if (pendingCompactions.length > 0) {
+        const contextCompactionModelSelection = yield* serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.contextCompactionModelSelection),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("orchestration-v2.context-compaction.settings-fallback", {
+              threadId: projection.thread.id,
+              runId: run.id,
+              cause,
+            }).pipe(Effect.as(DEFAULT_CONTEXT_COMPACTION_MODEL_SELECTION)),
+          ),
+        );
+        const compactionEvents: Array<OrchestrationV2DomainEvent> = [];
+        const prepared: Array<OrchestrationV2ContextHandoff> = [];
+        for (const handoff of pendingCompactions) {
+          const sourceItems = projection.turnItems.filter((item) => {
+            if (item.runId === null || item.runId === run.id) return false;
+            const sourceOrdinal = sourceRunOrdinals.get(item.runId);
+            return (
+              sourceOrdinal !== undefined &&
+              sourceOrdinal >= handoff.coveredRunOrdinals.from &&
+              sourceOrdinal <= handoff.coveredRunOrdinals.to
+            );
+          });
+          const sourceText = contextCompactionSourceText(sourceItems);
+          const generated = yield* Effect.result(
+            textGeneration
+              .investigate({
+                cwd: projection.thread.worktreePath ?? process.cwd(),
+                prompt: buildContextCompactionPrompt(sourceText),
+                modelSelection: contextCompactionModelSelection,
+              })
+              .pipe(Effect.timeout("60 seconds")),
+          );
+          const generatedText = generated?._tag === "Success" ? generated.success.text.trim() : "";
+          const usedFallback = generatedText.length === 0;
+          const summary = usedFallback
+            ? handoff.summaryText
+            : generatedText.slice(0, handoff.compaction!.maxSummaryChars);
+          if (generated._tag === "Failure") {
+            yield* Effect.logWarning("orchestration-v2.context-compaction.fallback", {
+              threadId: projection.thread.id,
+              runId: run.id,
+              contextHandoffId: handoff.id,
+              cause: generated.failure,
+            });
+          }
+          const completedAt = yield* DateTime.now;
+          const updatedHandoff: OrchestrationV2ContextHandoff = {
+            ...handoff,
+            status: "ready",
+            summaryText: summary,
+            compaction: {
+              ...handoff.compaction!,
+              generation: usedFallback ? "fallback" : "model",
+            },
+            updatedAt: completedAt,
+          };
+          prepared.push(updatedHandoff);
+          compactionEvents.push({
+            id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
+            type: "context-handoff.updated",
+            threadId: projection.thread.id,
+            runId: run.id,
+            providerInstanceId: run.providerInstanceId,
+            occurredAt: completedAt,
+            payload: updatedHandoff,
+          });
+          const compactionItem = projection.turnItems.find(
+            (item) => item.type === "compaction" && item.contextHandoffId === handoff.id,
+          );
+          if (compactionItem?.type === "compaction") {
+            compactionEvents.push({
+              id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
+              type: "turn-item.updated",
+              threadId: projection.thread.id,
+              runId: run.id,
+              ...(compactionItem.nodeId === null ? {} : { nodeId: compactionItem.nodeId }),
+              providerInstanceId: run.providerInstanceId,
+              occurredAt: completedAt,
+              payload: {
+                ...compactionItem,
+                status: "completed",
+                completedAt,
+                updatedAt: completedAt,
+                method: usedFallback ? "fallback" : "model",
+                summary,
+              },
+            });
+          }
+        }
+        const write = yield* eventSink.writeIfRunCurrent({
+          threadId: projection.thread.id,
+          runId: run.id,
+          activeAttemptId: attempt.id,
+          expectedStatus: "starting",
+          events: compactionEvents,
+        });
+        if (!write.committed) return;
+        preparedHandoffs = [...preparedHandoffs, ...prepared];
+      }
+
       const resolvedRuntimePolicy = yield* runtimePolicy.resolve({
         thread: projection.thread,
         modelSelection: run.modelSelection,
@@ -173,7 +290,7 @@ export const layer: Layer.Layer<
           ? {}
           : { resumeFromSession: existingSessionProjection }),
       });
-      let effectiveHandoffs = handoffs;
+      let effectiveHandoffs = preparedHandoffs;
       let nativeForkFallback: {
         readonly handoff: OrchestrationV2ContextHandoff;
         readonly transfer: OrchestrationV2ContextTransfer;
@@ -267,7 +384,7 @@ export const layer: Layer.Layer<
               updatedAt: createdAt,
             },
           };
-          effectiveHandoffs = [...handoffs, handoff];
+          effectiveHandoffs = [...preparedHandoffs, handoff];
           return yield* session.ensureThread({
             threadId: projection.thread.id,
             modelSelection: run.modelSelection,
@@ -324,7 +441,7 @@ export const layer: Layer.Layer<
           maxChars: session.providerSession.capabilities.context.maxRecommendedHandoffChars,
           createdAt,
         });
-        effectiveHandoffs = [...handoffs, handoff];
+        effectiveHandoffs = [...preparedHandoffs, handoff];
         yield* eventSink.write({
           events: [
             {

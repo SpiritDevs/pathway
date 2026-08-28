@@ -83,22 +83,20 @@ function testLayer(metadata: Readonly<Record<string, { continuationKey: string }
   return ProviderSwitch.layer.pipe(Layer.provide(registry));
 }
 
-it.effect(
-  "restarts and releases the current session for unsupported in-session model changes",
-  () =>
-    Effect.gen(function* () {
-      const service = yield* ProviderSwitch.ProviderSwitchServiceV2;
-      const result = yield* service.plan({
-        projection: projection(),
-        targetModelSelection: { instanceId: currentInstanceId, model: "gpt-5.2-codex" },
-      });
-      assert.equal(result.transition.type, "restart_and_resume");
-      assert.deepEqual(result.releaseProviderSessionIds, [currentSessionId]);
-    }).pipe(
-      Effect.provide(
-        testLayer({ [currentInstanceId]: { continuationKey: "codex:account:primary" } }),
-      ),
+it.effect("creates a fresh handoff and releases live sessions when the model slug changes", () =>
+  Effect.gen(function* () {
+    const service = yield* ProviderSwitch.ProviderSwitchServiceV2;
+    const result = yield* service.plan({
+      projection: projection(),
+      targetModelSelection: { instanceId: currentInstanceId, model: "gpt-5.2-codex" },
+    });
+    assert.equal(result.transition.type, "create_with_handoff");
+    assert.deepEqual(result.releaseProviderSessionIds, [currentSessionId]);
+  }).pipe(
+    Effect.provide(
+      testLayer({ [currentInstanceId]: { continuationKey: "codex:account:primary" } }),
     ),
+  ),
 );
 
 it.effect("distinguishes compatible and incompatible instances of the same driver", () =>
