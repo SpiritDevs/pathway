@@ -22,11 +22,14 @@ import {
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
@@ -58,6 +61,10 @@ export class AgentAwarenessRelay extends Context.Service<
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   }
 >()("@spiritdevs/pathway/relay/AgentAwarenessRelay") {}
+
+class AttentionEventRelayConfigUnavailableError extends Data.TaggedError(
+  "AttentionEventRelayConfigUnavailableError",
+)<{ readonly message: string }> {}
 
 export function eventThreadId(event: OrchestrationV2DomainEvent): ThreadId {
   return event.threadId;
@@ -498,44 +505,51 @@ export const make = Effect.gen(function* () {
       withRelayClientTracing,
     );
 
-  const publishAttentionEvent = (event: AttentionEvent) =>
-    Effect.gen(function* () {
-      const relayConfig = yield* readRelayConfig.pipe(Effect.orElseSucceed(() => null));
-      if (!relayConfig) {
-        yield* Effect.logDebug(
-          "Attention Event publish skipped; relay link credentials unavailable",
-          {
-            eventId: event.eventId,
-            threadId: event.threadId,
-          },
-        );
-        return;
-      }
-      const relayClient = yield* makeRelayClient(relayConfig);
-      const environmentId = yield* serverEnvironment.getEnvironmentId;
-      const proof = yield* makePublishProof({
-        privateKey: cloudLinkKeyPair.privateKey,
-        relayIssuer: relayConfig.issuer,
+  const publishAttentionEventUnsafe = Effect.fn("publishAttentionEventUnsafe")(function* (
+    event: AttentionEvent,
+  ) {
+    const relayConfig = yield* readRelayConfig;
+    if (!relayConfig) {
+      return yield* new AttentionEventRelayConfigUnavailableError({
+        message: "Relay link credentials unavailable",
+      });
+    }
+    const relayClient = yield* makeRelayClient(relayConfig);
+    const environmentId = yield* serverEnvironment.getEnvironmentId;
+    const proof = yield* makePublishProof({
+      privateKey: cloudLinkKeyPair.privateKey,
+      relayIssuer: relayConfig.issuer,
+      environmentId,
+      threadId: event.threadId,
+      state: null,
+      attentionEvents: [event],
+      publishActivity: false,
+      jti: yield* crypto.randomUUIDv4,
+    });
+    yield* relayClient.server.publishAgentActivity({
+      params: {
         environmentId,
         threadId: event.threadId,
+      },
+      payload: {
         state: null,
         attentionEvents: [event],
         publishActivity: false,
-        jti: yield* crypto.randomUUIDv4,
-      });
-      yield* relayClient.server.publishAgentActivity({
-        params: {
-          environmentId,
-          threadId: event.threadId,
-        },
-        payload: {
-          state: null,
-          attentionEvents: [event],
-          publishActivity: false,
-          proof,
-        },
-      });
-    }).pipe(
+        proof,
+      },
+    });
+  });
+
+  const publishAttentionEvent = (event: AttentionEvent) =>
+    publishAttentionEventUnsafe(event).pipe(
+      Effect.retry({
+        times: 5,
+        schedule: Schedule.exponential("5 seconds").pipe(
+          Schedule.modifyDelay(({ duration }) =>
+            Effect.succeed(Duration.min(duration, Duration.minutes(1))),
+          ),
+        ),
+      }),
       Effect.catchCause((cause) =>
         Effect.logWarning("Attention Event publish failed", {
           eventId: event.eventId,

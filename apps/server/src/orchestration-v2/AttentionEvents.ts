@@ -53,7 +53,7 @@ export function detectAttentionEventTransition(input: {
   }
   return {
     eventId: AttentionEventId.make(
-      `attention:${input.thread.id}:${transition.transitionId}:${transition.eventKind}`,
+      `attention:${input.environmentId}:${input.thread.id}:${transition.transitionId}:${transition.eventKind}`,
     ),
     threadId: input.thread.id,
     projectKey: FocusProjectKey.make(`${input.environmentId}:${input.thread.projectId}`),

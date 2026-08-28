@@ -51,7 +51,7 @@ it("detects each Attention Event from committed state transitions", () => {
     [
       {
         eventId: AttentionEventId.make(
-          "attention:thread:test:run:run:completed:finished-unsettled",
+          "attention:environment:test:thread:test:run:run:completed:finished-unsettled",
         ),
         threadId: thread.id,
         projectKey: FocusProjectKey.make("environment:test:project:test"),
@@ -59,7 +59,7 @@ it("detects each Attention Event from committed state transitions", () => {
       },
       {
         eventId: AttentionEventId.make(
-          "attention:thread:test:request:request:approval:pending-approval",
+          "attention:environment:test:thread:test:request:request:approval:pending-approval",
         ),
         threadId: thread.id,
         projectKey: FocusProjectKey.make("environment:test:project:test"),
@@ -67,14 +67,16 @@ it("detects each Attention Event from committed state transitions", () => {
       },
       {
         eventId: AttentionEventId.make(
-          "attention:thread:test:request:request:input:awaiting-input",
+          "attention:environment:test:thread:test:request:request:input:awaiting-input",
         ),
         threadId: thread.id,
         projectKey: FocusProjectKey.make("environment:test:project:test"),
         eventKind: "awaiting-input",
       },
       {
-        eventId: AttentionEventId.make("attention:thread:test:run:run:failed:failed"),
+        eventId: AttentionEventId.make(
+          "attention:environment:test:thread:test:run:run:failed:failed",
+        ),
         threadId: thread.id,
         projectKey: FocusProjectKey.make("environment:test:project:test"),
         eventKind: "failed",
@@ -118,4 +120,16 @@ it("mints the same event id when a terminal transition is observed again", () =>
   const retry = detectAttentionEventTransition({ environmentId, event: terminal, thread });
 
   assert.equal(first?.eventId, retry?.eventId);
+});
+
+it("mints different event ids for the same transition in different environments", () => {
+  const terminal = event("run.updated", { id: "run:stable", status: "failed" });
+  const first = detectAttentionEventTransition({ environmentId, event: terminal, thread });
+  const clone = detectAttentionEventTransition({
+    environmentId: EnvironmentId.make("environment:clone"),
+    event: terminal,
+    thread,
+  });
+
+  assert.notEqual(first?.eventId, clone?.eventId);
 });
