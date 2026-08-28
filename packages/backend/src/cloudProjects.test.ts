@@ -347,6 +347,89 @@ describe("company project deletion", () => {
     ]);
   });
 
+  it("removes every user's Focus assignments for each bound checkout", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    await t.run(async (ctx) => {
+      const owner = await ctx.db
+        .query("users")
+        .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", "project_owner"))
+        .unique();
+      if (owner === null) throw new Error("Expected the project owner.");
+      const otherUserId = await ctx.db.insert("users", {
+        clerkSubject: "other_user",
+        email: "other_user@example.test",
+        displayName: "Other User",
+        imageUrl: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      const ownerFocusId = await ctx.db.insert("focuses", {
+        id: "0198c0de-eeee-7eee-8eee-000000000001",
+        userId: owner._id,
+        name: "Owner Focus",
+        iconName: "Briefcase",
+        accentColor: "#3366ff",
+        orderKey: "a",
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      const otherFocusId = await ctx.db.insert("focuses", {
+        id: "0198c0de-eeee-7eee-8eee-000000000002",
+        userId: otherUserId,
+        name: "Other Focus",
+        iconName: "House",
+        accentColor: "#ff6633",
+        orderKey: "a",
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      await ctx.db.insert("environmentBindings", {
+        id: "0198c0de-eeee-7eee-8eee-000000000003",
+        companyId: ids.companyId,
+        cloudProjectId: ids.projectId,
+        environmentId: "environment-studio",
+        localProjectId: "local-pathway-studio",
+        localWorkspaceRoot: "/work/pathway-studio",
+        status: "active",
+        lastSeenAt: NOW,
+        createdAt: NOW,
+        updatedAt: NOW,
+        version: 0,
+      });
+      for (const [userId, focusId, projectKey] of [
+        [owner._id, ownerFocusId, `${ENVIRONMENT_ID}:${LOCAL_PROJECT_ID}`],
+        [otherUserId, otherFocusId, `${ENVIRONMENT_ID}:${LOCAL_PROJECT_ID}`],
+        [otherUserId, otherFocusId, "environment-studio:local-pathway-studio"],
+        [owner._id, ownerFocusId, `${ENVIRONMENT_ID}:other-project`],
+        [otherUserId, otherFocusId, "environment-other:other-project"],
+      ] as const) {
+        await ctx.db.insert("focusAssignments", {
+          userId,
+          focusId,
+          projectKey,
+          createdAt: NOW,
+          updatedAt: NOW,
+        });
+      }
+    });
+
+    await asOwner(t).mutation(api.cloudProjects.deleteCompanyProject, {
+      companyId: COMPANY_ID,
+      cloudProjectId: PROJECT_ID,
+    });
+
+    const assignments = await t.run(async (ctx) =>
+      (await ctx.db.query("focusAssignments").collect())
+        .map((assignment) => assignment.projectKey)
+        .sort(),
+    );
+    expect(assignments).toEqual([
+      `${ENVIRONMENT_ID}:other-project`,
+      "environment-other:other-project",
+    ]);
+  });
+
   it("removes project-owned issues, email, automation, commands, and Slack routes", async () => {
     const t = harness();
     const ids = await seed(t);

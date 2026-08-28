@@ -213,6 +213,7 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_user_and_project", ["userId", "projectKey"])
+    .index("by_project", ["projectKey"])
     .index("by_focus", ["focusId"]),
 
   /** Relay-authored Attention Events, addressed by the Clerk subject used by relay tables. */

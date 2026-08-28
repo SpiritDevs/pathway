@@ -193,6 +193,22 @@ function hasSlackRoutes(configurationVersion: 2 | undefined, trigger: unknown, r
   );
 }
 
+async function deleteProjectFocusAssignments(
+  ctx: MutationCtx,
+  bindings: ReadonlyArray<Doc<"environmentBindings">>,
+): Promise<void> {
+  const projectKeys = new Set(
+    bindings.map((binding) => `${binding.environmentId}:${binding.localProjectId}`),
+  );
+  for (const projectKey of projectKeys) {
+    const assignments = await ctx.db
+      .query("focusAssignments")
+      .withIndex("by_project", (q) => q.eq("projectKey", projectKey))
+      .collect();
+    for (const assignment of assignments) await ctx.db.delete(assignment._id);
+  }
+}
+
 /**
  * Creates a company project that no machine has a checkout of yet.
  *
@@ -844,6 +860,7 @@ export const deleteCompanyProject = mutation({
 
     const now = Date.now();
     const changes: CompanyChange[] = [];
+    await deleteProjectFocusAssignments(ctx, bindings);
     for (const binding of bindings) {
       if (binding.status === "revoked") continue;
       await ctx.db.patch(binding._id, {

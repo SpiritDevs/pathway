@@ -347,6 +347,94 @@ describe("relayPersistence", () => {
     ).rejects.toThrow("not linked to your account");
   });
 
+  it("removes only the unlinked account's Focus assignments for that environment", async () => {
+    const { t, relay } = testRelay();
+    await relay.mutation(api.relayPersistence.upsertEnvironmentLink, {
+      userId: "user-1",
+      environmentId: "environment-1",
+      environmentLabel: "Studio",
+      environmentPublicKey: "public-key-1",
+      endpointHttpBaseUrl: "https://environment.example.test",
+      endpointWsBaseUrl: "wss://environment.example.test",
+      endpointProviderKind: "manual",
+      notificationsEnabled: true,
+      liveActivitiesEnabled: true,
+      managedTunnelsEnabled: false,
+      createdByDeviceId: null,
+      now: "2026-08-14T00:00:00.000Z",
+    });
+    await t.run(async (ctx) => {
+      const userOneId = await ctx.db.insert("users", {
+        clerkSubject: "user-1",
+        email: "user-1@example.test",
+        displayName: "User One",
+        imageUrl: null,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      const userTwoId = await ctx.db.insert("users", {
+        clerkSubject: "user-2",
+        email: "user-2@example.test",
+        displayName: "User Two",
+        imageUrl: null,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      const userOneFocusId = await ctx.db.insert("focuses", {
+        id: "0198c0de-ffff-7fff-8fff-000000000001",
+        userId: userOneId,
+        name: "User One Focus",
+        iconName: "Briefcase",
+        accentColor: "#3366ff",
+        orderKey: "a",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      const userTwoFocusId = await ctx.db.insert("focuses", {
+        id: "0198c0de-ffff-7fff-8fff-000000000002",
+        userId: userTwoId,
+        name: "User Two Focus",
+        iconName: "House",
+        accentColor: "#ff6633",
+        orderKey: "a",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      for (const [userId, focusId, projectKey] of [
+        [userOneId, userOneFocusId, "environment-1:project-a"],
+        [userOneId, userOneFocusId, "environment-1:project-b"],
+        [userOneId, userOneFocusId, "environment-10:project-c"],
+        [userOneId, userOneFocusId, "environment-2:project-d"],
+        [userTwoId, userTwoFocusId, "environment-1:project-a"],
+      ] as const) {
+        await ctx.db.insert("focusAssignments", {
+          userId,
+          focusId,
+          projectKey,
+          createdAt: 1,
+          updatedAt: 1,
+        });
+      }
+    });
+
+    await relay.mutation(api.relayPersistence.revokeEnvironmentLinkWithCredentials, {
+      userId: "user-1",
+      environmentId: "environment-1",
+      now: "2026-08-14T00:01:00.000Z",
+    });
+
+    const assignments = await t.run(async (ctx) =>
+      (await ctx.db.query("focusAssignments").collect())
+        .map((assignment) => assignment.projectKey)
+        .sort(),
+    );
+    expect(assignments).toEqual([
+      "environment-10:project-c",
+      "environment-1:project-a",
+      "environment-2:project-d",
+    ]);
+  });
+
   it("prunes terminal rows even when older nonterminal rows fill the general time index", async () => {
     const { t, relay } = testRelay();
     await t.run(async (ctx) => {
