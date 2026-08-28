@@ -77,7 +77,7 @@ import {
   insertInlineTerminalContextPlaceholder,
   type TerminalContextDraft,
 } from "./lib/terminalContext";
-import { createDebouncedStorage } from "./lib/storage";
+import { createDebouncedJSONStorage, createDebouncedStorage } from "./lib/storage";
 
 function makeImage(input: {
   id: string;
@@ -231,6 +231,41 @@ function draftFor(threadId: ThreadId, environmentId: EnvironmentId = LEGACY_TEST
 
 function draftByKey(key: string) {
   return useComposerDraftStore.getState().draftsByThreadKey[key] ?? undefined;
+}
+
+type PersistedComposerDraftTestState = {
+  draftsByThreadKey?: Record<
+    string,
+    {
+      terminalContexts?: Array<Record<string, unknown>>;
+      elementContexts?: Array<Record<string, unknown>>;
+      issueContexts?: Array<Record<string, unknown>>;
+      reviewComments?: Array<Record<string, unknown>>;
+    }
+  >;
+};
+
+function flushComposerDraftStorage(): PersistedComposerDraftTestState {
+  const persistApi = useComposerDraftStore.persist as unknown as {
+    getOptions: () => {
+      storage: {
+        flush: () => void;
+        getItem: (
+          name: string,
+        ) =>
+          | { state: PersistedComposerDraftTestState; version?: number }
+          | null
+          | Promise<{ state: PersistedComposerDraftTestState; version?: number } | null>;
+      };
+    };
+  };
+  const storage = persistApi.getOptions().storage;
+  storage.flush();
+  const stored = storage.getItem(COMPOSER_DRAFT_STORAGE_KEY);
+  if (stored instanceof Promise) {
+    throw new Error("Expected synchronous composer draft storage in tests.");
+  }
+  return stored?.state ?? {};
 }
 
 describe("composerDraftStore addImages", () => {
@@ -625,14 +660,7 @@ describe("composerDraftStore terminal contexts", () => {
       .getState()
       .addTerminalContext(threadRef, makeTerminalContext({ id: "ctx-persist" }));
 
-    const persistApi = useComposerDraftStore.persist as unknown as {
-      getOptions: () => {
-        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
-      };
-    };
-    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
-      draftsByThreadKey?: Record<string, { terminalContexts?: Array<Record<string, unknown>> }>;
-    };
+    const persistedState = flushComposerDraftStorage();
 
     expect(
       persistedState.draftsByThreadKey?.[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]
@@ -797,16 +825,9 @@ describe("composerDraftStore element contexts", () => {
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
   });
 
-  it("persists element contexts via the partializer (round-trippable)", () => {
+  it("persists element contexts during the debounce flush (round-trippable)", () => {
     useComposerDraftStore.getState().addElementContext(threadRef, baseSelection);
-    const persistApi = useComposerDraftStore.persist as unknown as {
-      getOptions: () => {
-        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
-      };
-    };
-    const persisted = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
-      draftsByThreadKey?: Record<string, { elementContexts?: Array<Record<string, unknown>> }>;
-    };
+    const persisted = flushComposerDraftStorage();
     const entry =
       persisted.draftsByThreadKey?.[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]
         ?.elementContexts?.[0];
@@ -852,14 +873,7 @@ describe("composerDraftStore issue contexts", () => {
     store.removeIssueContext(threadRef, "issue-1");
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.issueContexts).toEqual([contexts[1]]);
 
-    const persistApi = useComposerDraftStore.persist as unknown as {
-      getOptions: () => {
-        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
-      };
-    };
-    const persisted = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
-      draftsByThreadKey?: Record<string, { issueContexts?: Array<Record<string, unknown>> }>;
-    };
+    const persisted = flushComposerDraftStorage();
     expect(
       persisted.draftsByThreadKey?.[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.issueContexts,
     ).toEqual([contexts[1]]);
@@ -904,14 +918,7 @@ describe("composerDraftStore review comments", () => {
   it("persists review comments and clears them with composer content", () => {
     const store = useComposerDraftStore.getState();
     store.addReviewComment(threadRef, comment);
-    const persistApi = useComposerDraftStore.persist as unknown as {
-      getOptions: () => {
-        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
-      };
-    };
-    const persisted = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
-      draftsByThreadKey?: Record<string, { reviewComments?: Array<Record<string, unknown>> }>;
-    };
+    const persisted = flushComposerDraftStorage();
 
     expect(
       persisted.draftsByThreadKey?.[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]
@@ -2101,5 +2108,56 @@ describe("createDebouncedStorage", () => {
     vi.advanceTimersByTime(300);
     expect(base.setItem).toHaveBeenCalledTimes(1);
     expect(base.setItem).toHaveBeenCalledWith("key", "v2");
+  });
+});
+
+describe("createDebouncedJSONStorage", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("partializes and stringifies only when the latest pending value flushes", () => {
+    const base = createMockStorage();
+    const partialize = vi.fn((state: { prompt: string; ignored: string }) => ({
+      prompt: state.prompt,
+    }));
+    const stringify = vi.spyOn(JSON, "stringify");
+    const storage = createDebouncedJSONStorage(base, 300, partialize);
+
+    storage.setItem("key", {
+      state: { prompt: "first", ignored: "old" },
+      version: 8,
+    });
+    storage.setItem("key", {
+      state: { prompt: "latest", ignored: "new" },
+      version: 8,
+    });
+
+    expect(partialize).not.toHaveBeenCalled();
+    expect(stringify).not.toHaveBeenCalled();
+    expect(base.setItem).not.toHaveBeenCalled();
+
+    storage.flush();
+
+    expect(partialize).toHaveBeenCalledTimes(1);
+    expect(partialize).toHaveBeenCalledWith({ prompt: "latest", ignored: "new" });
+    expect(stringify).toHaveBeenCalledTimes(1);
+    expect(base.setItem).toHaveBeenCalledWith("key", '{"state":{"prompt":"latest"},"version":8}');
+  });
+
+  it("parses the persisted state and version during rehydration", () => {
+    const base = createMockStorage();
+    base.getItem.mockReturnValueOnce('{"state":{"prompt":"saved"},"version":8}');
+    const storage = createDebouncedJSONStorage(base, 300, (state) => state);
+
+    expect(storage.getItem("key")).toEqual({
+      state: { prompt: "saved" },
+      version: 8,
+    });
   });
 });
