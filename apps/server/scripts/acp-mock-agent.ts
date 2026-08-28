@@ -68,6 +68,7 @@ const failPrompt = process.env.Pathway_ACP_FAIL_PROMPT === "1";
 const failSetConfigOption = process.env.Pathway_ACP_FAIL_SET_CONFIG_OPTION === "1";
 const exitOnSetConfigOption = process.env.Pathway_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const promptResponseText = process.env.Pathway_ACP_PROMPT_RESPONSE_TEXT;
+const promptResponseChunkSize = Number(process.env.Pathway_ACP_PROMPT_RESPONSE_CHUNK_SIZE ?? "0");
 const promptDelayMs = Number(process.env.Pathway_ACP_PROMPT_DELAY_MS ?? "0");
 const supportsSessionLifecycle = process.env.Pathway_ACP_SESSION_LIFECYCLE === "1";
 const advertisedAuthMethodId = process.env.Pathway_ACP_AUTH_METHOD_ID?.trim();
@@ -1368,13 +1369,27 @@ const program = Effect.gen(function* () {
         },
       });
 
-      yield* agent.client.sessionUpdate({
-        sessionId: requestedSessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: promptResponseText ?? "hello from mock" },
-        },
-      });
+      const responseText = promptResponseText ?? "hello from mock";
+      const responseChunks =
+        promptResponseChunkSize > 0
+          ? Array.from(
+              { length: Math.ceil(responseText.length / promptResponseChunkSize) },
+              (_, index) =>
+                responseText.slice(
+                  index * promptResponseChunkSize,
+                  (index + 1) * promptResponseChunkSize,
+                ),
+            )
+          : [responseText];
+      for (const text of responseChunks) {
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text },
+          },
+        });
+      }
 
       return { stopReason: "end_turn" };
     }),
