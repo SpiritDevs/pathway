@@ -345,6 +345,23 @@ export function crossesProviderOrModelBoundary(input: {
   );
 }
 
+export function planHandoffLifecycleRows(input: {
+  readonly portableForkHandoff: OrchestrationV2ContextHandoff | null;
+  readonly mergeBackHandoff: OrchestrationV2ContextHandoff | null;
+  readonly providerSwitchHandoff: OrchestrationV2ContextHandoff | null;
+}): ReadonlyArray<{
+  readonly kind: "handoff" | "compaction";
+  readonly handoff: OrchestrationV2ContextHandoff;
+}> {
+  const contextHandoff = input.portableForkHandoff ?? input.mergeBackHandoff;
+  return [
+    ...(contextHandoff === null ? [] : [{ kind: "handoff" as const, handoff: contextHandoff }]),
+    ...(input.providerSwitchHandoff === null
+      ? []
+      : [{ kind: "compaction" as const, handoff: input.providerSwitchHandoff }]),
+  ];
+}
+
 /**
  * A parent thread is "live" for wake purposes while a run is still producing
  * agent output. A run parked at "waiting" is post-terminal drain, so its agent
@@ -4495,33 +4512,34 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         text: dispatchText,
         attachments: command.attachments,
       };
-      const activeHandoff = portableForkHandoff ?? mergeBackHandoff ?? providerSwitchHandoff;
-      const handoffSourceRuns =
+      const handoffLifecycleRows = planHandoffLifecycleRows({
+        portableForkHandoff,
+        mergeBackHandoff,
+        providerSwitchHandoff,
+      });
+      const contextHandoffSourceRuns =
         portableForkHandoff !== null
           ? sourceRun === null
             ? []
             : [sourceRun]
-          : providerSwitchHandoff === null
-            ? mergeBackSourceRun === null
-              ? []
-              : [mergeBackSourceRun]
-            : providerSwitchCoveredRuns;
+          : mergeBackSourceRun === null
+            ? []
+            : [mergeBackSourceRun];
       const handoffFromModelSelections = Array.from(
         new Map(
-          handoffSourceRuns.map((run) => [
+          contextHandoffSourceRuns.map((run) => [
             `${run.modelSelection.instanceId}\u0000${run.modelSelection.model}`,
             run.modelSelection,
           ]),
         ).values(),
       );
-      const handoffTurnItem: OrchestrationV2TurnItem | null =
-        activeHandoff === null
-          ? null
-          : providerSwitchHandoff !== null
+      const handoffTurnItems: ReadonlyArray<OrchestrationV2TurnItem> = handoffLifecycleRows.map(
+        ({ kind, handoff }, index) =>
+          kind === "compaction"
             ? {
                 id: idAllocator.derive.runSignalTurnItem({
                   runId,
-                  signal: `context-compaction:${activeHandoff.id}`,
+                  signal: `context-compaction:${handoff.id}`,
                 }),
                 threadId: command.threadId,
                 runId,
@@ -4530,28 +4548,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 providerTurnId: null,
                 nativeItemRef: null,
                 parentItemId: null,
-                ordinal: ordinal * 100 - 1,
-                status: activeHandoff.status === "pending" ? "running" : "completed",
+                ordinal: ordinal * 100 - handoffLifecycleRows.length + index,
+                status: handoff.status === "pending" ? "running" : "completed",
                 title: "Context compaction",
                 startedAt: now,
-                completedAt: activeHandoff.status === "pending" ? null : now,
+                completedAt: handoff.status === "pending" ? null : now,
                 updatedAt: now,
                 type: "compaction",
                 driver: null,
                 kind: "model_switch",
-                contextHandoffId: activeHandoff.id,
+                contextHandoffId: handoff.id,
                 toProviderInstanceId: modelSelection.instanceId,
                 toModel: modelSelection.model,
-                coveredRunOrdinals: activeHandoff.coveredRunOrdinals,
-                ...(activeHandoff.compaction?.generation === "not_needed"
+                coveredRunOrdinals: handoff.coveredRunOrdinals,
+                ...(handoff.compaction?.generation === "not_needed"
                   ? { method: "direct" as const }
                   : {}),
-                summary: activeHandoff.summaryText,
+                summary: handoff.summaryText,
               }
             : {
                 id: idAllocator.derive.runSignalTurnItem({
                   runId,
-                  signal: `context-handoff:${activeHandoff.id}`,
+                  signal: `context-handoff:${handoff.id}`,
                 }),
                 threadId: command.threadId,
                 runId,
@@ -4560,25 +4578,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 providerTurnId: null,
                 nativeItemRef: null,
                 parentItemId: null,
-                ordinal: ordinal * 100 - 1,
+                ordinal: ordinal * 100 - handoffLifecycleRows.length + index,
                 status: "completed",
                 title: portableForkHandoff !== null ? "Fork context" : "Merge-back context",
                 startedAt: now,
                 completedAt: now,
                 updatedAt: now,
                 type: "handoff",
-                contextHandoffId: activeHandoff.id,
-                fromProviderThreadIds: activeHandoff.fromProviderThreadIds,
-                toProviderThreadId: activeHandoff.toProviderThreadId,
+                contextHandoffId: handoff.id,
+                fromProviderThreadIds: handoff.fromProviderThreadIds,
+                toProviderThreadId: handoff.toProviderThreadId,
                 fromProviderInstanceIds: Array.from(
-                  new Set(handoffSourceRuns.map((run) => run.providerInstanceId)),
+                  new Set(contextHandoffSourceRuns.map((run) => run.providerInstanceId)),
                 ),
                 toProviderInstanceId: modelSelection.instanceId,
                 fromModelSelections: handoffFromModelSelections,
                 toModel: modelSelection.model,
-                strategy: activeHandoff.strategy,
-                summary: activeHandoff.summaryText,
-              };
+                strategy: handoff.strategy,
+                summary: handoff.summaryText,
+              },
+      );
       const nativeForkResolution: OrchestrationV2ContextTransferResolution | null =
         !canResolveForkNatively || providerThread.nativeThreadRef === null
           ? null
@@ -4805,7 +4824,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ),
         ),
       });
-      if (handoffTurnItem !== null) {
+      for (const handoffTurnItem of handoffTurnItems) {
         yield* emitEvent({
           type: "turn-item.updated",
           threadId: command.threadId,

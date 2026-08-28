@@ -1,13 +1,15 @@
 import { assert, it } from "@effect/vitest";
 import {
+  ContextHandoffId,
   ProviderInstanceId,
   ProviderThreadId,
   RunId,
+  type OrchestrationV2ContextHandoff,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ThreadProjection,
 } from "@spiritdevs/contracts";
 
-import { crossesProviderOrModelBoundary } from "./Orchestrator.ts";
+import { crossesProviderOrModelBoundary, planHandoffLifecycleRows } from "./Orchestrator.ts";
 
 const codex = ProviderInstanceId.make("codex");
 const fable = ProviderInstanceId.make("fable");
@@ -72,5 +74,28 @@ it("compacts for provider changes but ignores option-only changes", () => {
         options: [{ id: "reasoningEffort", value: "high" }],
       },
     }),
+  );
+});
+
+it("keeps merge-back and model-switch lifecycle rows bound to their own handoffs", () => {
+  const mergeBackHandoff = {
+    id: ContextHandoffId.make("handoff:merge-back"),
+  } as unknown as OrchestrationV2ContextHandoff;
+  const providerSwitchHandoff = {
+    id: ContextHandoffId.make("handoff:provider-switch"),
+  } as unknown as OrchestrationV2ContextHandoff;
+
+  const rows = planHandoffLifecycleRows({
+    portableForkHandoff: null,
+    mergeBackHandoff,
+    providerSwitchHandoff,
+  });
+
+  assert.deepEqual(
+    rows.map((row) => ({ kind: row.kind, handoffId: row.handoff.id })),
+    [
+      { kind: "handoff", handoffId: mergeBackHandoff.id },
+      { kind: "compaction", handoffId: providerSwitchHandoff.id },
+    ],
   );
 });

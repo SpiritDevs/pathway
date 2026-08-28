@@ -28,8 +28,10 @@ import {
 
 import { getProviderInstanceEntry } from "../../providerInstances";
 import { formatShortTimestamp } from "../../timestampFormat";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { PROVIDER_ICON_BY_PROVIDER, getTriggerDisplayModelName } from "./providerIconUtils";
 import { TimelineSystemDivider } from "./TimelineSystemDivider";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 
 const LIFECYCLE_TYPES = new Set<OrchestrationV2TurnItem["type"]>([
   "run_interrupt_request",
@@ -290,7 +292,19 @@ function CompactionLifecycleRow(props: {
   readonly providerStatuses: ReadonlyArray<ServerProvider>;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const { copyToClipboard, isCopied: copied } = useCopyToClipboard<null>({
+    timeout: 1_500,
+    target: "compaction summary",
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy compaction summary",
+          description: error.message,
+        }),
+      );
+    },
+  });
   const { item } = props;
   const isRunning = item.status === "pending" || item.status === "running";
   const tokenDetail =
@@ -352,12 +366,7 @@ function CompactionLifecycleRow(props: {
             <button
               type="button"
               className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-              onClick={() => {
-                void navigator.clipboard.writeText(item.summary ?? "").then(() => {
-                  setCopied(true);
-                  window.setTimeout(() => setCopied(false), 1_500);
-                });
-              }}
+              onClick={() => copyToClipboard(item.summary ?? "", null)}
             >
               {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
               {copied ? "Copied" : "Copy"}
