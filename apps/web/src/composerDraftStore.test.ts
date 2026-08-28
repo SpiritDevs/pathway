@@ -1880,6 +1880,38 @@ describe("composerDraftStore sticky composer settings", () => {
       activeProvider: "claudeAgent",
     });
   });
+
+  it("uses the project default instead of the sticky last-used model for new drafts", () => {
+    const store = useComposerDraftStore.getState();
+    const threadId = ThreadId.make("thread-project-default-model");
+    const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+    const projectDefault = modelSelection(CODEX_DRIVER, "gpt-5.6-sol", {
+      reasoningEffort: "high",
+    });
+
+    store.setStickyModelSelection(
+      modelSelection(CODEX_DRIVER, "gpt-5.4", { reasoningEffort: "low" }),
+    );
+    store.applyStickyState(threadRef, projectDefault);
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toMatchObject({
+      modelSelectionByProvider: {
+        codex: projectDefault,
+      },
+      activeProvider: "codex",
+    });
+  });
+
+  it("clears a reused draft's stale model when no default or sticky selection exists", () => {
+    const store = useComposerDraftStore.getState();
+    const threadId = ThreadId.make("thread-clear-stale-project-model");
+    const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+
+    store.applyStickyState(threadRef, modelSelection(CODEX_DRIVER, "gpt-5.6-sol"));
+    store.applyStickyState(threadRef);
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+  });
 });
 
 describe("composerDraftStore provider-scoped option updates", () => {
