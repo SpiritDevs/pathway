@@ -15,7 +15,12 @@ import {
   visibleFocuses,
   type ActiveFocusId,
 } from "@spiritdevs/client-runtime/state/focuses";
-import type { Focus, FocusAssignment, FocusId } from "@spiritdevs/contracts/focus";
+import type {
+  Focus,
+  FocusAssignment,
+  FocusId,
+  FocusNotification,
+} from "@spiritdevs/contracts/focus";
 import { BellIcon, Layers3Icon, PlusIcon } from "lucide-react";
 import {
   memo,
@@ -32,6 +37,7 @@ import { Popover, PopoverPopup } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 import { FocusEditor, type FocusProjectOption } from "./FocusEditor";
 import { FocusIcon } from "./FocusIcon";
+import { FocusNotificationTray } from "./FocusNotificationTray";
 import { focusOrderKeyForMove } from "./FocusStrip.logic";
 
 export interface FocusNotificationBadgeProps {
@@ -144,9 +150,15 @@ export function FocusStrip(props: {
   readonly activeFocusId: ActiveFocusId;
   readonly onActiveFocusChange: (focusId: ActiveFocusId) => void;
   readonly editorProjects: ReadonlyArray<FocusProjectOption>;
+  readonly unreadCount: number;
+  readonly notifications: ReadonlyArray<FocusNotification>;
+  readonly threadTitlesByKey: ReadonlyMap<string, string>;
+  readonly projectNamesByKey: ReadonlyMap<string, string>;
+  readonly onNotificationSelect: (notification: FocusNotification) => void;
   readonly mutations: FocusMutations | null;
 }) {
   const [editorFocusId, setEditorFocusId] = useState<FocusId | null | undefined>(undefined);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
   const orderedFocuses = useMemo(() => sortFocuses(props.focuses), [props.focuses]);
   const shownFocuses = useMemo(
@@ -210,12 +222,33 @@ export function FocusStrip(props: {
     },
     [orderedFocuses, props.mutations],
   );
+  const openNotifications = useCallback(() => {
+    setEditorFocusId(undefined);
+    setNotificationsOpen(true);
+    void props.mutations?.markAllNotificationsRead().catch((error: unknown) => {
+      toastManager.add({
+        type: "error",
+        title: "Could not mark notifications read",
+        description: error instanceof Error ? error.message : "The notifications stayed unread.",
+      });
+    });
+  }, [props.mutations]);
+  const selectNotification = useCallback(
+    (notification: FocusNotification) => {
+      props.onNotificationSelect(notification);
+      setNotificationsOpen(false);
+    },
+    [props.onNotificationSelect],
+  );
 
   return (
     <Popover
-      open={editorFocusId !== undefined}
+      open={editorFocusId !== undefined || notificationsOpen}
       onOpenChange={(open) => {
-        if (!open) setEditorFocusId(undefined);
+        if (!open) {
+          setEditorFocusId(undefined);
+          setNotificationsOpen(false);
+        }
       }}
     >
       <div
@@ -262,26 +295,51 @@ export function FocusStrip(props: {
                   focus={focus}
                   active={props.activeFocusId === focus.id}
                   onSelect={() => props.onActiveFocusChange(focus.id)}
-                  onEdit={() => setEditorFocusId(focus.id)}
+                  onEdit={() => {
+                    setNotificationsOpen(false);
+                    setEditorFocusId(focus.id);
+                  }}
                 />
               ))}
             </SortableContext>
           </DndContext>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
-          <FocusNotificationBadge unreadCount={0} />
+          <FocusNotificationBadge unreadCount={props.unreadCount} onOpen={openNotifications} />
           <button
             type="button"
             aria-label="Create Focus"
             title="Create Focus"
-            onClick={() => setEditorFocusId(null)}
+            onClick={() => {
+              setNotificationsOpen(false);
+              setEditorFocusId(null);
+            }}
             className="flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
           >
             <PlusIcon className="size-3.5" />
           </button>
         </div>
       </div>
-      {editorFocusId !== undefined ? (
+      {notificationsOpen ? (
+        <PopoverPopup
+          anchor={stripElement}
+          side="top"
+          align="end"
+          sideOffset={6}
+          className="max-w-[calc(100vw-1rem)]"
+          viewportClassName="p-0"
+        >
+          <FocusNotificationTray
+            notifications={props.notifications}
+            unreadCount={props.unreadCount}
+            focuses={orderedFocuses}
+            assignments={props.assignments}
+            threadTitlesByKey={props.threadTitlesByKey}
+            projectNamesByKey={props.projectNamesByKey}
+            onSelect={selectNotification}
+          />
+        </PopoverPopup>
+      ) : editorFocusId !== undefined ? (
         <PopoverPopup
           anchor={stripElement}
           side="top"

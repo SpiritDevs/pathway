@@ -9,6 +9,7 @@ import {
 } from "@spiritdevs/client-runtime/state/focuses";
 import {
   FocusId,
+  FocusNotification as FocusNotificationSchema,
   FocusProjectKey,
   FocusReadModel as FocusReadModelSchema,
   type Focus,
@@ -111,6 +112,17 @@ export const focusMutationsAtom = Atom.make<FocusMutations | null>(null).pipe(
   Atom.withLabel("focuses:mutations"),
 );
 
+const EMPTY_FOCUS_NOTIFICATIONS: ReadonlyArray<FocusNotification> = Object.freeze([]);
+
+export const focusUnreadCountAtom = Atom.make(0).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("focuses:notification-unread-count"),
+);
+
+export const focusNotificationsAtom = Atom.make<ReadonlyArray<FocusNotification>>(
+  EMPTY_FOCUS_NOTIFICATIONS,
+).pipe(Atom.keepAlive, Atom.withLabel("focuses:notifications"));
+
 function makeFocusMutations(client: ConvexClient): FocusMutations {
   return {
     create: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.create, input),
@@ -183,6 +195,10 @@ function ambientLocalStorage(): ActiveFocusStorage | null {
 }
 
 const decodeFocusReadModel = Schema.decodeUnknownOption(FocusReadModelSchema);
+const decodeFocusUnreadCount = Schema.decodeUnknownOption(
+  Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+);
+const decodeFocusNotifications = Schema.decodeUnknownOption(Schema.Array(FocusNotificationSchema));
 
 export const visibleFocusProjectKeysAtom = Atom.make((get): ReadonlySet<string> => {
   return new Set(
@@ -262,6 +278,8 @@ export function useFocusReadModelRuntime(options: {
     if (!options.enabled || options.accountScope === null || options.convexUrl === null) {
       appAtomRegistry.set(focusReadModelAtom, null);
       appAtomRegistry.set(focusMutationsAtom, null);
+      appAtomRegistry.set(focusUnreadCountAtom, 0);
+      appAtomRegistry.set(focusNotificationsAtom, EMPTY_FOCUS_NOTIFICATIONS);
       return;
     }
 
@@ -269,24 +287,48 @@ export function useFocusReadModelRuntime(options: {
     client.setAuth(options.fetchToken);
     const mutations = makeFocusMutations(client);
     appAtomRegistry.set(focusMutationsAtom, mutations);
-    const unsubscribe = client.onUpdate(
-      FOCUS_FUNCTION_REFERENCES.readModel,
-      {},
-      (value) => {
-        const decoded = decodeFocusReadModel(value);
-        if (Option.isSome(decoded)) appAtomRegistry.set(focusReadModelAtom, decoded.value);
-        else console.warn("Convex returned an invalid Focus read model.");
-      },
-      (error) => console.warn("Could not subscribe to Focus definitions.", error),
-    );
+    const unsubscribes = [
+      client.onUpdate(
+        FOCUS_FUNCTION_REFERENCES.readModel,
+        {},
+        (value) => {
+          const decoded = decodeFocusReadModel(value);
+          if (Option.isSome(decoded)) appAtomRegistry.set(focusReadModelAtom, decoded.value);
+          else console.warn("Convex returned an invalid Focus read model.");
+        },
+        (error) => console.warn("Could not subscribe to Focus definitions.", error),
+      ),
+      client.onUpdate(
+        FOCUS_FUNCTION_REFERENCES.unreadCount,
+        {},
+        (value) => {
+          const decoded = decodeFocusUnreadCount(value);
+          if (Option.isSome(decoded)) appAtomRegistry.set(focusUnreadCountAtom, decoded.value);
+          else console.warn("Convex returned an invalid Focus notification unread count.");
+        },
+        (error) => console.warn("Could not subscribe to the Focus unread count.", error),
+      ),
+      client.onUpdate(
+        FOCUS_FUNCTION_REFERENCES.notifications,
+        {},
+        (value) => {
+          const decoded = decodeFocusNotifications(value);
+          if (Option.isSome(decoded)) appAtomRegistry.set(focusNotificationsAtom, decoded.value);
+          else console.warn("Convex returned invalid Focus notifications.");
+        },
+        (error) => console.warn("Could not subscribe to Focus notifications.", error),
+      ),
+    ];
 
     return () => {
-      unsubscribe();
+      for (const unsubscribe of unsubscribes) unsubscribe();
       if (appAtomRegistry.get(focusMutationsAtom) === mutations) {
         appAtomRegistry.set(focusMutationsAtom, null);
       }
       void client.close();
       appAtomRegistry.set(focusReadModelAtom, null);
+      appAtomRegistry.set(focusUnreadCountAtom, 0);
+      appAtomRegistry.set(focusNotificationsAtom, EMPTY_FOCUS_NOTIFICATIONS);
     };
   }, [options.accountScope, options.convexUrl, options.enabled, options.fetchToken]);
 }

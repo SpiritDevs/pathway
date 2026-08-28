@@ -121,7 +121,7 @@ import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import { useProjects, useThreadShells, useThreadTitlesByKey } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
@@ -219,9 +219,11 @@ import {
   focusAssignmentsAtom,
   focusListAtom,
   focusMutationsAtom,
+  focusNotificationsAtom,
+  focusUnreadCountAtom,
   visibleFocusProjectKeysAtom,
 } from "../cloud/focusReadModel";
-import { FocusProjectKey } from "@spiritdevs/contracts/focus";
+import { FocusProjectKey, type FocusNotification } from "@spiritdevs/contracts/focus";
 import { FocusStrip } from "./focus/FocusStrip";
 import { FocusQuickAssignItems } from "./focus/FocusQuickAssign";
 import { FocusIcon } from "./focus/FocusIcon";
@@ -1800,9 +1802,12 @@ export default function Sidebar() {
   const activeFocusProjectKeys = useAtomValue(activeFocusProjectKeysAtom);
   const visibleFocusProjectKeys = useAtomValue(visibleFocusProjectKeysAtom);
   const focusMutations = useAtomValue(focusMutationsAtom);
+  const focusNotifications = useAtomValue(focusNotificationsAtom);
+  const focusUnreadCount = useAtomValue(focusUnreadCountAtom);
   const [activeFocusId, setActiveFocusId] = useAtom(activeFocusIdAtom);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
+  const threadTitlesByKey = useThreadTitlesByKey();
   const agentThreads = useMemo(
     () => threads.filter((thread) => threadIsVisibleAt(thread, "agents")),
     [threads],
@@ -2636,6 +2641,13 @@ export default function Sidebar() {
       navigateToThread(scopeThreadRef(thread.environmentId, thread.id));
     },
     [clearThreadSearch, focusIdByProjectKey, navigateToThread, setActiveFocusId],
+  );
+  const selectFocusNotification = useCallback(
+    (notification: FocusNotification) => {
+      setActiveFocusId(focusIdByProjectKey.get(notification.projectKey) ?? ALL_FOCUS_ID);
+      navigateToThread(scopeThreadRef(notification.environmentId, notification.threadId));
+    },
+    [focusIdByProjectKey, navigateToThread, setActiveFocusId],
   );
   const handleThreadSearchKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {
@@ -4379,6 +4391,11 @@ export default function Sidebar() {
         activeFocusId={activeFocusId}
         onActiveFocusChange={setActiveFocusId}
         editorProjects={focusEditorProjects}
+        unreadCount={focusUnreadCount}
+        notifications={focusNotifications}
+        threadTitlesByKey={threadTitlesByKey}
+        projectNamesByKey={projectDisplayNameByKey}
+        onNotificationSelect={selectFocusNotification}
         mutations={focusMutations}
       />
     </>
