@@ -59,6 +59,21 @@ export interface SlackEnvironmentOption {
   readonly name: string;
 }
 
+export function activeSlackEnvironmentOptions(
+  registrations: ReadonlyArray<{
+    readonly environmentId: string;
+    readonly state: string;
+    readonly descriptor: { readonly label: string };
+  }>,
+): readonly SlackEnvironmentOption[] {
+  return registrations
+    .filter((registration) => registration.state === "active")
+    .map((registration) => ({
+      id: registration.environmentId,
+      name: registration.descriptor.label,
+    }));
+}
+
 export interface SlackProjectOption {
   readonly id: string;
   readonly name: string;

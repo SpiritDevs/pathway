@@ -63,6 +63,7 @@ import { CompanySectionCard, CompanySettingsEmptyState } from "../company/Compan
 import { CompanySettingsSheet } from "../company/CompanySettingsSheet";
 import { useCompanySettings } from "../company/useCompanySettings";
 import {
+  activeSlackEnvironmentOptions,
   createEmptySlackWorkspaceDraft,
   normalizeSlackPrefix,
   normalizeSlackReaction,
@@ -1766,18 +1767,9 @@ export function IntegrationsSettingsPanel() {
             : (directory.company?.owners.some((entry) => entry.membershipId === membershipId) ??
               false),
       });
-      const environments = environmentRegistrationsFromReplicaValues(ownerValues)
-        .filter((row) => row.state === "active")
-        .map((row) => ({
-          id: row.environmentId,
-          name:
-            typeof row.descriptor === "object" &&
-            row.descriptor !== null &&
-            "name" in row.descriptor &&
-            typeof row.descriptor.name === "string"
-              ? row.descriptor.name
-              : row.environmentId,
-        }));
+      const environments = activeSlackEnvironmentOptions(
+        environmentRegistrationsFromReplicaValues(ownerValues),
+      );
       const environmentIds = environments.map((environment) => environment.id);
       const activeEnvironmentIds = new Set(environmentIds);
       const activeBindings = ownerValues
@@ -1903,18 +1895,12 @@ export function IntegrationsSettingsPanel() {
   const values = useMemo(() => [...(filteredReplica?.view.values() ?? [])], [filteredReplica]);
   const environments = useMemo(
     () =>
-      environmentRegistrationsFromReplicaValues(values)
-        .filter((row) => row.state === "active")
-        .map((row) => ({
-          environmentId: row.environmentId,
-          label:
-            typeof row.descriptor === "object" &&
-            row.descriptor !== null &&
-            "name" in row.descriptor &&
-            typeof row.descriptor.name === "string"
-              ? row.descriptor.name
-              : row.environmentId,
-        })),
+      activeSlackEnvironmentOptions(environmentRegistrationsFromReplicaValues(values)).map(
+        (environment) => ({
+          environmentId: environment.id,
+          label: environment.name,
+        }),
+      ),
     [values],
   );
   const projects = useMemo(() => {
