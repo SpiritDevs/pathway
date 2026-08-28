@@ -278,7 +278,9 @@ export const layer: Layer.Layer<
             GROUP BY stream_id
           )
       `;
-      const supersededEntityRows = (eventType: "message.updated" | "node.updated") =>
+      const supersededEntityRows = (
+        eventType: "message.updated" | "node.updated" | "turn-item.updated",
+      ) =>
         sql<{ readonly sequence: number }>`
           SELECT sequence
           FROM orchestration_events
@@ -294,10 +296,14 @@ export const layer: Layer.Layer<
         `;
       const supersededMessageRows = yield* supersededEntityRows("message.updated");
       const supersededNodeRows = yield* supersededEntityRows("node.updated");
+      const supersededTurnItemRows = yield* supersededEntityRows("turn-item.updated");
       const deletedEventCount = yield* deleteEventsBatched(
-        [...supersededThreadStateRows, ...supersededMessageRows, ...supersededNodeRows].map(
-          (row) => row.sequence,
-        ),
+        [
+          ...supersededThreadStateRows,
+          ...supersededMessageRows,
+          ...supersededNodeRows,
+          ...supersededTurnItemRows,
+        ].map((row) => row.sequence),
       );
       const freelistRows = yield* sql<{ readonly freelist_count: number }>`PRAGMA freelist_count`;
       const pageSizeRows = yield* sql<{ readonly page_size: number }>`PRAGMA page_size`;

@@ -1926,6 +1926,7 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
       const threadId = ThreadId.make("thread:foundation-compact-v2");
       const thread = makeThread(threadId, now);
       const messageId = MessageId.make("message:foundation-compact-v2");
+      const turnItemId = TurnItemId.make("turn-item:foundation-compact-v2");
       const threadStateEvent = (
         suffix: string,
         type: "thread.visited" | "thread.metadata-updated",
@@ -1957,6 +1958,33 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
           updatedAt: now,
         },
       });
+      const turnItemEvent = (suffix: string, output: string): OrchestrationV2DomainEvent => ({
+        id: EventId.make(`event:foundation-compact-v2:${suffix}`),
+        type: "turn-item.updated",
+        threadId,
+        providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: turnItemId,
+          threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "completed",
+          title: null,
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          type: "dynamic_tool",
+          toolName: "compaction fixture",
+          input: {},
+          output,
+        },
+      });
 
       yield* eventSink.write({
         events: [
@@ -1966,14 +1994,16 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
           threadStateEvent("visit-2", "thread.visited"),
           messageEvent("message-1", "streaming"),
           messageEvent("message-2", "final"),
+          turnItemEvent("turn-item-1", "streaming"),
+          turnItemEvent("turn-item-2", "final"),
         ],
       });
 
       const summary = yield* maintenance.compactEventStore;
       // The in-memory persistence layer is shared by this suite, so the pass
       // may also collect superseded full-state events created by earlier
-      // cases. These three are the minimum introduced above.
-      assert.isAtLeast(summary.deletedEventCount, 3);
+      // cases. These four are the minimum introduced above.
+      assert.isAtLeast(summary.deletedEventCount, 4);
       assert.equal(summary.deletedReceiptCount, 0);
       const remaining = yield* sql<{ readonly event_id: string }>`
         SELECT event_id
@@ -1987,6 +2017,7 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
           "event:foundation-compact-v2:create",
           "event:foundation-compact-v2:visit-2",
           "event:foundation-compact-v2:message-2",
+          "event:foundation-compact-v2:turn-item-2",
         ],
       );
       assert.isTrue((yield* maintenance.verify).valid);

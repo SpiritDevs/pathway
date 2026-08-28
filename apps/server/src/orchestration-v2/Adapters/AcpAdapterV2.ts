@@ -1013,6 +1013,7 @@ interface ActiveTextSegment {
   readonly nativeItemId: string;
   readonly startedAt: DateTime.Utc;
   text: string;
+  lastEmittedAt: DateTime.Utc | null;
 }
 
 interface ActiveTextStream {
@@ -1253,6 +1254,7 @@ interface ActiveAcpSubagent {
   readonly parentProviderThreadId: ProviderThreadId;
   childSessionId: string | null;
   assistantText: string;
+  assistantTextLastEmittedAt: DateTime.Utc | null;
   nextChildOrdinal: number;
   /**
    * Whether a terminal carryover status has been projected to events.
@@ -1291,6 +1293,8 @@ type AcpCarryoverSubagents = {
   readonly rootTerminalStatus: "completed" | "interrupted" | "failed" | "cancelled";
   readonly subagents: ReadonlyArray<ActiveAcpSubagent>;
 };
+
+const TEXT_EMIT_INTERVAL_MS = 80;
 
 function acpTurnHasPendingRuntimeRequest(
   providerTurnId: OrchestrationV2ProviderTurn["id"],
@@ -1879,6 +1883,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           const segment = stream.current;
           if (segment === null || segment.text.length === 0) return;
           const now = yield* DateTime.now;
+          if (
+            !completed &&
+            segment.lastEmittedAt !== null &&
+            DateTime.toEpochMillis(now) - DateTime.toEpochMillis(segment.lastEmittedAt) <
+              TEXT_EMIT_INTERVAL_MS
+          ) {
+            return;
+          }
           const ordinal = yield* resolveItemOrdinal(context, segment.nativeItemId);
           const nodeId = idAllocator.derive.nodeFromProviderItem({
             driver,
@@ -1959,6 +1971,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               },
             });
             if (completed) yield* rememberSnapshotMessage(message);
+            segment.lastEmittedAt = now;
             return;
           }
           yield* emitProviderEvent({
@@ -1984,6 +1997,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               streaming: !completed,
             },
           });
+          segment.lastEmittedAt = now;
         });
 
         const closeTextStream = Effect.fnUntraced(function* (
@@ -2019,6 +2033,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               nativeItemId: `${context.nativeTurnId}:${kind}:${stream.nextSegment}`,
               startedAt: now,
               text: "",
+              lastEmittedAt: null,
             };
             stream.nextSegment += 1;
           }
@@ -2029,10 +2044,20 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
         const emitSubagentAssistant = Effect.fnUntraced(function* (
           subagent: ActiveAcpSubagent,
           text: string,
+          completed = false,
         ) {
-          if (text.length === 0) return;
+          if (text.length === 0 && (!completed || subagent.assistantText.length === 0)) return;
           subagent.assistantText += text;
           const now = yield* DateTime.now;
+          if (
+            !completed &&
+            subagent.assistantTextLastEmittedAt !== null &&
+            DateTime.toEpochMillis(now) -
+              DateTime.toEpochMillis(subagent.assistantTextLastEmittedAt) <
+              TEXT_EMIT_INTERVAL_MS
+          ) {
+            return;
+          }
           const nativeItemId = `${subagent.task.nativeTaskRef?.nativeId ?? subagent.task.id}:result`;
           const artifacts = makeSubagentConversationArtifacts({
             messageId: idAllocator.derive.messageFromProviderItem({ driver, nativeItemId }),
@@ -2053,6 +2078,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             driver,
             turnItem: artifacts.turnItem,
           });
+          subagent.assistantTextLastEmittedAt = now;
         });
 
         const projectSubagentNotification = Effect.fnUntraced(function* (
@@ -2102,6 +2128,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               return;
             }
           }
+          yield* closeTextStreams(context);
           const now = yield* DateTime.now;
           const nativeTaskId = existing?.task.nativeTaskRef?.nativeId ?? update.nativeTaskId;
           const nativeItemRef = {
@@ -2177,6 +2204,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             parentProviderThreadId: context.input.providerThread.id,
             childSessionId: null,
             assistantText: "",
+            assistantTextLastEmittedAt: null,
             nextChildOrdinal: 101,
             terminalStatusProjected: false,
           };
@@ -2268,12 +2296,12 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             );
           }
 
-          if (
-            taskStatus !== "running" &&
-            subagent.assistantText.length === 0 &&
-            update.result !== null
-          ) {
-            yield* emitSubagentAssistant(subagent, update.result);
+          if (updateIsTerminal) {
+            yield* emitSubagentAssistant(
+              subagent,
+              subagent.assistantText.length === 0 ? (update.result ?? "") : "",
+              true,
+            );
           }
           const result = subagent.assistantText || update.result;
           subagent.task = {
@@ -3990,7 +4018,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
           status: OrchestrationV2Subagent["status"],
           resultOverride?: string | null,
         ) {
+          const finalAssistantText =
+            subagent.assistantText.length === 0
+              ? (resultOverride ?? subagent.task.result ?? "")
+              : "";
           yield* mutateCarryoverSubagentStatus(subagent, status, resultOverride);
+          if (acpSubagentStatusIsTerminal(status)) {
+            yield* emitSubagentAssistant(subagent, finalAssistantText, true);
+          }
           const now = subagent.task.updatedAt;
           const nativeTaskId = subagent.task.nativeTaskRef?.nativeId ?? subagent.task.id;
           const nativeItemRef = {

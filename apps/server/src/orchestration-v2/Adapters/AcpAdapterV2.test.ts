@@ -1473,6 +1473,107 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.effect("coalesces rapid text chunks and flushes the complete final message", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const idAllocator = yield* IdAllocatorV2;
+      const path = yield* Path.Path;
+      const serverConfig = yield* ServerConfig;
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
+      const instanceId = ProviderInstanceId.make("acp-test");
+      const responseText = "abcdefghij";
+      const adapter = makeAcpAdapterV2({
+        crypto: yield* Crypto.Crypto,
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            environment: {
+              Pathway_ACP_PROMPT_RESPONSE_TEXT: responseText,
+              Pathway_ACP_PROMPT_RESPONSE_CHUNK_SIZE: "2",
+            },
+            protocolEvents,
+          }),
+        },
+        fileSystem,
+        idAllocator,
+        serverConfig,
+      });
+      const threadId = ThreadId.make("thread-acp-coalesced-text");
+      const runtimePolicy = ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-coalesced-text"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) => Queue.offer(events, event)),
+        Effect.forkScoped,
+      );
+      const providerThread = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const now = yield* DateTime.now;
+      yield* runtime.startTurn(
+        makeTurnInput({ threadId, providerThread, instanceId, runtimePolicy, now }),
+      );
+
+      const assistantMessages: Array<Extract<ProviderAdapterV2Event, { type: "message.updated" }>> =
+        [];
+      const assistantItems: Array<
+        Extract<
+          Extract<ProviderAdapterV2Event, { type: "turn_item.updated" }>["turnItem"],
+          { type: "assistant_message" }
+        >
+      > = [];
+      let terminal = false;
+      while (!terminal) {
+        const event = yield* Queue.take(events);
+        if (event.type === "message.updated" && event.message.role === "assistant") {
+          assistantMessages.push(event);
+        }
+        if (event.type === "turn_item.updated" && event.turnItem.type === "assistant_message") {
+          assistantItems.push(event.turnItem);
+        }
+        if (event.type === "turn.terminal") terminal = true;
+      }
+
+      assert.deepEqual(
+        assistantMessages.map((event) => ({
+          text: event.message.text,
+          streaming: event.message.streaming,
+        })),
+        [
+          { text: "ab", streaming: true },
+          { text: responseText, streaming: false },
+        ],
+      );
+      assert.deepEqual(
+        assistantItems.map((item) => ({ text: item.text, streaming: item.streaming })),
+        [
+          { text: "ab", streaming: true },
+          { text: responseText, streaming: false },
+        ],
+      );
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live("terminalizes an empty successful foreground Bash tool when the turn completes", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -6604,10 +6705,19 @@ describe("AcpAdapterV2", () => {
         let subagentStopResult: string | null | undefined;
         let subagentStopProviderThreadId: string | null | undefined;
         let subagentUpdatedResult: string | null | undefined;
+        let subagentFinalAssistantText: string | null = null;
         for (let attempt = 0; attempt < 64; attempt += 1) {
           const maybeEvent = yield* Queue.take(events).pipe(Effect.timeoutOption("50 millis"));
           if (Option.isNone(maybeEvent)) break;
           const event = maybeEvent.value;
+          if (
+            event.type === "message.updated" &&
+            event.message.threadId !== threadId &&
+            event.message.role === "assistant" &&
+            event.message.text === streamedSubagentText
+          ) {
+            subagentFinalAssistantText = event.message.text;
+          }
           if (
             event.type === "turn_item.updated" &&
             event.turnItem.type === "subagent" &&
@@ -6645,6 +6755,11 @@ describe("AcpAdapterV2", () => {
           subagentUpdatedResult,
           streamedSubagentText,
           "orphan Stop subagent.updated must also carry the streamed result",
+        );
+        assert.equal(
+          subagentFinalAssistantText,
+          streamedSubagentText,
+          "orphan Stop must flush the complete child assistant message before terminalizing it",
         );
 
         yield* Queue.clear(protocolEvents);
