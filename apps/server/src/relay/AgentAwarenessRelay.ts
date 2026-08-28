@@ -543,6 +543,7 @@ export const make = Effect.gen(function* () {
   const publishAttentionEvent = (event: AttentionEvent) =>
     publishAttentionEventUnsafe(event).pipe(
       Effect.retry({
+        while: (error) => !(error instanceof AttentionEventRelayConfigUnavailableError),
         times: 5,
         schedule: Schedule.exponential("5 seconds").pipe(
           Schedule.modifyDelay(({ duration }) =>
@@ -550,6 +551,12 @@ export const make = Effect.gen(function* () {
           ),
         ),
       }),
+      Effect.catchTag("AttentionEventRelayConfigUnavailableError", () =>
+        Effect.logDebug("Attention Event publish skipped; relay link credentials unavailable", {
+          eventId: event.eventId,
+          threadId: event.threadId,
+        }),
+      ),
       Effect.catchCause((cause) =>
         Effect.logWarning("Attention Event publish failed", {
           eventId: event.eventId,
