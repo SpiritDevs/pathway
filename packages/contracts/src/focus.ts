@@ -59,6 +59,14 @@ export const ATTENTION_EVENT_KINDS = [
 export const AttentionEventKind = Schema.Literals(ATTENTION_EVENT_KINDS);
 export type AttentionEventKind = typeof AttentionEventKind.Type;
 
+export const AttentionEvent = Schema.Struct({
+  eventId: AttentionEventId,
+  threadId: ThreadId,
+  projectKey: FocusProjectKey,
+  eventKind: AttentionEventKind,
+});
+export type AttentionEvent = typeof AttentionEvent.Type;
+
 export const FocusNotification = Schema.Struct({
   /** The Attention Event id is also the notification id within one user's feed. */
   id: FocusNotificationId,

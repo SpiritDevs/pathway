@@ -1,4 +1,5 @@
 import type {
+  AttentionEvent,
   EnvironmentId,
   OrchestrationV2DomainEvent,
   OrchestrationV2ThreadShell,
@@ -42,6 +43,10 @@ import {
 } from "../cloud/config.ts";
 import { getOrCreateEnvironmentKeyPairFromSecretStore } from "../cloud/environmentKeys.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import {
+  attentionTransitionForEvent,
+  detectAttentionEventTransition,
+} from "../orchestration-v2/AttentionEvents.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -164,6 +169,8 @@ const makePublishProof = Effect.fn("makePublishProof")(function* (input: {
   readonly environmentId: string;
   readonly threadId: ThreadId;
   readonly state: RelayAgentActivityState | null;
+  readonly attentionEvents?: ReadonlyArray<AttentionEvent>;
+  readonly publishActivity?: boolean;
   readonly jti: string;
 }) {
   const now = yield* DateTime.now;
@@ -178,6 +185,8 @@ const makePublishProof = Effect.fn("makePublishProof")(function* (input: {
     environmentId: input.environmentId as RelayAgentActivityPublishProofPayload["environmentId"],
     threadId: input.threadId,
     state: input.state,
+    ...(input.attentionEvents === undefined ? {} : { attentionEvents: input.attentionEvents }),
+    ...(input.publishActivity === undefined ? {} : { publishActivity: input.publishActivity }),
   } satisfies RelayAgentActivityPublishProofPayload;
   return yield* signRelayAgentActivityPublishProof({ privateKey: input.privateKey, payload });
 });
@@ -489,6 +498,55 @@ export const make = Effect.gen(function* () {
       withRelayClientTracing,
     );
 
+  const publishAttentionEvent = (event: AttentionEvent) =>
+    Effect.gen(function* () {
+      const relayConfig = yield* readRelayConfig.pipe(Effect.orElseSucceed(() => null));
+      if (!relayConfig) {
+        yield* Effect.logDebug(
+          "Attention Event publish skipped; relay link credentials unavailable",
+          {
+            eventId: event.eventId,
+            threadId: event.threadId,
+          },
+        );
+        return;
+      }
+      const relayClient = yield* makeRelayClient(relayConfig);
+      const environmentId = yield* serverEnvironment.getEnvironmentId;
+      const proof = yield* makePublishProof({
+        privateKey: cloudLinkKeyPair.privateKey,
+        relayIssuer: relayConfig.issuer,
+        environmentId,
+        threadId: event.threadId,
+        state: null,
+        attentionEvents: [event],
+        publishActivity: false,
+        jti: yield* crypto.randomUUIDv4,
+      });
+      yield* relayClient.server.publishAgentActivity({
+        params: {
+          environmentId,
+          threadId: event.threadId,
+        },
+        payload: {
+          state: null,
+          attentionEvents: [event],
+          publishActivity: false,
+          proof,
+        },
+      });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Attention Event publish failed", {
+          eventId: event.eventId,
+          threadId: event.threadId,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+      Effect.withSpan("AgentAwarenessRelay.publishAttentionEvent"),
+      withRelayClientTracing,
+    );
+
   const publishActiveThreadsUnsafe = Effect.gen(function* () {
     const publishAgentActivity = yield* readPublishAgentActivityEnabled.pipe(
       Effect.orElseSucceed(() => false),
@@ -542,6 +600,7 @@ export const make = Effect.gen(function* () {
     });
 
   const worker = yield* makeDrainableWorker(publishThread);
+  const attentionEventWorker = yield* makeDrainableWorker(publishAttentionEvent);
 
   schedulePublishConfirm = (threadId) =>
     Effect.forkDetach(
@@ -558,6 +617,7 @@ export const make = Effect.gen(function* () {
 
   const start: AgentAwarenessRelay["Service"]["start"] = Effect.fn("AgentAwarenessRelay.start")(
     function* () {
+      const environmentId = yield* serverEnvironment.getEnvironmentId;
       const [relayConfig, publishEnabled] = yield* Effect.all([
         readRelayConfig.pipe(Effect.orElseSucceed(() => null)),
         readPublishAgentActivityEnabled.pipe(Effect.orElseSucceed(() => false)),
@@ -589,22 +649,41 @@ export const make = Effect.gen(function* () {
         ),
       );
       yield* forkParked(
-        Stream.runForEach(threads.streamDomainEvents, (event) => {
-          const threadId = eventThreadId(event);
-          if (!shouldPublishAgentAwarenessEvent(event)) {
-            return Effect.logDebug(
-              "agent activity publishing ignored event without activity changes",
-              {
-                eventType: event.type,
-                threadId,
-              },
-            );
-          }
-          return Effect.logDebug("agent activity publishing queued thread publish", {
-            eventType: event.type,
-            threadId,
-          }).pipe(Effect.andThen(worker.enqueue(threadId)));
-        }),
+        Stream.runForEach(threads.streamDomainEvents, (event) =>
+          Effect.gen(function* () {
+            const threadId = eventThreadId(event);
+            if (!shouldPublishAgentAwarenessEvent(event)) {
+              yield* Effect.logDebug(
+                "agent activity publishing ignored event without activity changes",
+                {
+                  eventType: event.type,
+                  threadId,
+                },
+              );
+              return;
+            }
+            const transition = attentionTransitionForEvent(event);
+            const attentionEvent =
+              transition === null
+                ? null
+                : yield* threads
+                    .getThreadShell(threadId)
+                    .pipe(
+                      Effect.map((thread) =>
+                        thread === null
+                          ? null
+                          : detectAttentionEventTransition({ environmentId, event, thread }),
+                      ),
+                    );
+            yield* Effect.logDebug("agent activity publishing queued thread publish", {
+              eventType: event.type,
+              threadId,
+              attentionEventKind: attentionEvent?.eventKind ?? null,
+            });
+            yield* worker.enqueue(threadId);
+            if (attentionEvent !== null) yield* attentionEventWorker.enqueue(attentionEvent);
+          }),
+        ),
       );
     },
   );

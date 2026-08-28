@@ -1,4 +1,5 @@
 import { api } from "@spiritdevs/backend/convexApi";
+import type { AttentionEvent } from "@spiritdevs/contracts";
 import type {
   RelayAgentActivityAggregateState,
   RelayAgentActivityState,
@@ -16,6 +17,7 @@ import * as Option from "effect/Option";
 import { describe, expect, it } from "@effect/vitest";
 
 import * as AgentActivityRows from "../agentActivity/AgentActivityRows.ts";
+import * as FocusNotificationRecorder from "../agentActivity/FocusNotificationRecorder.ts";
 import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
 import * as Devices from "../agentActivity/Devices.ts";
 import * as LiveActivities from "../agentActivity/LiveActivities.ts";
@@ -361,6 +363,50 @@ describe("Convex relay repositories", () => {
         state: { phase: "running" },
       });
       expect(received).toHaveProperty("createdAt");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("records Attention Events through the relay control-plane mutation", () => {
+    const calls: Array<{ readonly reference: string; readonly args: unknown }> = [];
+    const layer = FocusNotificationRecorder.layer.pipe(
+      Layer.provide(
+        clientLayer({
+          mutation: (args, reference) => {
+            calls.push({ reference, args });
+            return Effect.succeed(2);
+          },
+        }),
+      ),
+    );
+    const event = {
+      eventId: "attention:event-1",
+      threadId: "thread-one",
+      projectKey: "env-one:project-one",
+      eventKind: "pending-approval",
+    } as AttentionEvent;
+
+    return Effect.gen(function* () {
+      const recorder = yield* FocusNotificationRecorder.FocusNotificationRecorder;
+      expect(
+        yield* recorder.record({
+          environmentId: "env-one",
+          environmentPublicKey: "public-key",
+          event,
+        }),
+      ).toBe(2);
+      expect(calls).toEqual([
+        {
+          reference: functionName(api.focusNotifications.record),
+          args: {
+            environmentId: "env-one",
+            environmentPublicKey: "public-key",
+            eventId: "attention:event-1",
+            threadId: "thread-one",
+            projectKey: "env-one:project-one",
+            eventKind: "pending-approval",
+          },
+        },
+      ]);
     }).pipe(Effect.provide(layer));
   });
 

@@ -48,13 +48,6 @@ function focusProjectKey(value: string): string {
   return projectKey;
 }
 
-function cloudTimestamp(value: number): number {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw backendError("invalid-arguments", "An Attention Event timestamp must be non-negative.");
-  }
-  return value;
-}
-
 function encodeNotification(row: Doc<"focusNotifications">) {
   return {
     id: row.eventId,
@@ -74,7 +67,10 @@ async function stateForUser(ctx: QueryCtx, userId: string) {
     .unique();
 }
 
-async function enforceCap(ctx: MutationCtx, userId: string): Promise<number> {
+async function enforceCap(
+  ctx: MutationCtx,
+  userId: string,
+): Promise<ReadonlyArray<Doc<"focusNotifications">>> {
   const rows = await ctx.db
     .query("focusNotifications")
     .withIndex("by_user_and_created_at", (q) => q.eq("userId", userId))
@@ -82,7 +78,23 @@ async function enforceCap(ctx: MutationCtx, userId: string): Promise<number> {
     .take(MAX_NOTIFICATIONS_PER_USER + 1);
   const excess = rows.slice(MAX_NOTIFICATIONS_PER_USER);
   for (const row of excess) await ctx.db.delete(row._id);
-  return excess.length;
+  return rows.slice(0, MAX_NOTIFICATIONS_PER_USER);
+}
+
+function nextCleanupAtForRows(
+  rows: ReadonlyArray<Doc<"focusNotifications">>,
+  readThrough: number,
+): number {
+  let nextCleanupAt = NO_CLEANUP_DUE;
+  for (const row of rows) {
+    nextCleanupAt = Math.min(
+      nextCleanupAt,
+      row.createdAt <= readThrough
+        ? row.createdAt + READ_RETENTION_MS
+        : row.createdAt + UNREAD_RETENTION_MS,
+    );
+  }
+  return nextCleanupAt;
 }
 
 export const record = mutation({
@@ -93,7 +105,6 @@ export const record = mutation({
     threadId: v.string(),
     projectKey: v.string(),
     eventKind: attentionEventKind,
-    createdAt: v.number(),
   },
   returns: v.number(),
   handler: async (ctx, args) => {
@@ -103,7 +114,7 @@ export const record = mutation({
     const environmentPublicKey = required(args.environmentPublicKey, "An environment public key");
     const threadId = required(args.threadId, "A thread id");
     const projectKey = focusProjectKey(args.projectKey);
-    const createdAt = cloudTimestamp(args.createdAt);
+    const now = Date.now();
     const links = await ctx.db
       .query("relayEnvironmentLinks")
       .withIndex("by_environment_key_and_revoked", (q) =>
@@ -123,6 +134,9 @@ export const record = mutation({
         .unique();
       if (duplicate !== null) continue;
 
+      const state = await stateForUser(ctx, userId);
+      const createdAt = Math.max(now, (state?.readThrough ?? -1) + 1);
+
       await ctx.db.insert("focusNotifications", {
         eventId,
         userId,
@@ -135,19 +149,18 @@ export const record = mutation({
       });
       inserted += 1;
 
-      const nextCleanupAt = createdAt + UNREAD_RETENTION_MS;
-      const state = await stateForUser(ctx, userId);
+      const keptRows = await enforceCap(ctx, userId);
+      const nextCleanupAt = nextCleanupAtForRows(keptRows, state?.readThrough ?? 0);
       if (state === null) {
         await ctx.db.insert("focusNotificationStates", {
           userId,
           readThrough: 0,
           nextCleanupAt,
-          updatedAt: Date.now(),
+          updatedAt: now,
         });
-      } else if (nextCleanupAt < state.nextCleanupAt) {
-        await ctx.db.patch(state._id, { nextCleanupAt, updatedAt: Date.now() });
+      } else if (nextCleanupAt !== state.nextCleanupAt) {
+        await ctx.db.patch(state._id, { nextCleanupAt, updatedAt: now });
       }
-      await enforceCap(ctx, userId);
     }
     return inserted;
   },

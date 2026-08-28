@@ -36,49 +36,55 @@ function harness() {
       subject: "user-1",
       tokenIdentifier: `${CLERK_ISSUER}|user-1`,
     }),
+    secondUser: t.withIdentity({
+      issuer: CLERK_ISSUER,
+      subject: "user-2",
+      tokenIdentifier: `${CLERK_ISSUER}|user-2`,
+    }),
   };
 }
 
 type Harness = ReturnType<typeof harness>;
 
-async function seed({ t }: Harness) {
+async function seed({ t }: Harness, linkedUserIds: ReadonlyArray<string> = ["user-1"]) {
   await t.run(async (ctx) => {
-    await ctx.db.insert("users", {
-      clerkSubject: "user-1",
-      email: "user-1@example.test",
-      displayName: "User One",
-      imageUrl: null,
-      createdAt: NOW,
-      updatedAt: NOW,
-    });
-    await ctx.db.insert("relayEnvironmentLinks", {
-      userId: "user-1",
-      environmentId: ENVIRONMENT_ID,
-      displayName: "Studio",
-      environmentLabel: "Studio",
-      environmentPublicKey: ENVIRONMENT_PUBLIC_KEY,
-      endpointHttpBaseUrl: "https://environment.example.test",
-      endpointWsBaseUrl: "wss://environment.example.test",
-      endpointProviderKind: "pathway_relay",
-      notificationsEnabled: true,
-      liveActivitiesEnabled: true,
-      managedTunnelsEnabled: true,
-      createdByDeviceId: null,
-      revokedAt: null,
-      createdAt: new Date(NOW).toISOString(),
-      updatedAt: new Date(NOW).toISOString(),
-    });
+    for (const [index, userId] of linkedUserIds.entries()) {
+      await ctx.db.insert("users", {
+        clerkSubject: userId,
+        email: `${userId}@example.test`,
+        displayName: `User ${index + 1}`,
+        imageUrl: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      await ctx.db.insert("relayEnvironmentLinks", {
+        userId,
+        environmentId: ENVIRONMENT_ID,
+        displayName: "Studio",
+        environmentLabel: "Studio",
+        environmentPublicKey: ENVIRONMENT_PUBLIC_KEY,
+        endpointHttpBaseUrl: "https://environment.example.test",
+        endpointWsBaseUrl: "wss://environment.example.test",
+        endpointProviderKind: "pathway_relay",
+        notificationsEnabled: true,
+        liveActivitiesEnabled: true,
+        managedTunnelsEnabled: true,
+        createdByDeviceId: null,
+        revokedAt: null,
+        createdAt: new Date(NOW).toISOString(),
+        updatedAt: new Date(NOW).toISOString(),
+      });
+    }
   });
 }
 
-const event = (eventId: string, createdAt = NOW) => ({
+const event = (eventId: string) => ({
   eventId,
   environmentId: ENVIRONMENT_ID,
   environmentPublicKey: ENVIRONMENT_PUBLIC_KEY,
   threadId: `thread-${eventId}`,
   projectKey: `${ENVIRONMENT_ID}:project-a`,
   eventKind: "finished-unsettled" as const,
-  createdAt,
 });
 
 describe("Focus notifications", () => {
@@ -110,6 +116,39 @@ describe("Focus notifications", () => {
     await expect(h.user.query(api.focusNotifications.unreadCount, {})).resolves.toBe(0);
   });
 
+  it("fans one relay event out to every linked user", async () => {
+    const h = harness();
+    await seed(h, ["user-1", "user-2"]);
+
+    await expect(h.relay.mutation(api.focusNotifications.record, event("fanout"))).resolves.toBe(2);
+    await expect(h.relay.mutation(api.focusNotifications.record, event("fanout"))).resolves.toBe(0);
+    await expect(h.user.query(api.focusNotifications.unreadCount, {})).resolves.toBe(1);
+    await expect(h.secondUser.query(api.focusNotifications.unreadCount, {})).resolves.toBe(1);
+    await expect(
+      h.t.run(async (ctx) => ctx.db.query("focusNotifications").collect()),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ userId: "user-1", eventId: "fanout" }),
+        expect.objectContaining({ userId: "user-2", eventId: "fanout" }),
+      ]),
+    );
+  });
+
+  it("stamps records from the transaction clock above the read watermark", async () => {
+    const h = harness();
+    await seed(h);
+
+    await h.relay.mutation(api.focusNotifications.record, event("first"));
+    await h.user.mutation(api.focusNotifications.markAllRead, {});
+    await h.relay.mutation(api.focusNotifications.record, event("after-watermark"));
+
+    await expect(h.user.query(api.focusNotifications.unreadCount, {})).resolves.toBe(1);
+    await expect(h.user.query(api.focusNotifications.list, {})).resolves.toEqual([
+      expect.objectContaining({ eventId: "after-watermark", createdAt: NOW + 1 }),
+      expect.objectContaining({ eventId: "first", createdAt: NOW }),
+    ]);
+  });
+
   it("retains read events for seven days and unread events for thirty days", async () => {
     const h = harness();
     await seed(h);
@@ -122,7 +161,8 @@ describe("Focus notifications", () => {
     await expect(h.t.mutation(internal.focusNotifications.pruneExpired, {})).resolves.toBe(1);
 
     const unreadCreatedAt = NOW + 7 * DAY + 1;
-    await h.relay.mutation(api.focusNotifications.record, event("unread-event", unreadCreatedAt));
+    vi.setSystemTime(unreadCreatedAt);
+    await h.relay.mutation(api.focusNotifications.record, event("unread-event"));
     vi.setSystemTime(unreadCreatedAt + 30 * DAY - 1);
     await expect(h.t.mutation(internal.focusNotifications.pruneExpired, {})).resolves.toBe(0);
     vi.setSystemTime(unreadCreatedAt + 30 * DAY);
@@ -133,14 +173,25 @@ describe("Focus notifications", () => {
     const h = harness();
     await seed(h);
     for (let index = 0; index <= 200; index += 1) {
+      vi.setSystemTime(NOW + index);
       await h.relay.mutation(
         api.focusNotifications.record,
-        event(`event-${index.toString().padStart(3, "0")}`, NOW + index),
+        event(`event-${index.toString().padStart(3, "0")}`),
       );
+      if (index === 99) await h.user.mutation(api.focusNotifications.markAllRead, {});
     }
 
     const rows = await h.user.query(api.focusNotifications.list, { limit: 200 });
     expect(rows).toHaveLength(200);
     expect(rows.at(-1)?.eventId).toBe("event-001");
+    await expect(h.user.query(api.focusNotifications.unreadCount, {})).resolves.toBe(101);
+    await expect(
+      h.t.run(async (ctx) =>
+        ctx.db
+          .query("focusNotificationStates")
+          .withIndex("by_user", (q) => q.eq("userId", "user-1"))
+          .unique(),
+      ),
+    ).resolves.toEqual(expect.objectContaining({ nextCleanupAt: NOW + 1 + 7 * DAY }));
   });
 });

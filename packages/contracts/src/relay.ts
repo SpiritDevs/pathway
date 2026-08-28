@@ -15,6 +15,7 @@ import {
   type CompanyPermission as CompanyPermissionType,
 } from "./company.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
+import { AttentionEvent } from "./focus.ts";
 
 export const RelayAgentAwarenessPlatform = Schema.Literal("ios");
 export type RelayAgentAwarenessPlatform = typeof RelayAgentAwarenessPlatform.Type;
@@ -197,6 +198,8 @@ export const RelayAgentActivityPublishProofPayload = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
   state: Schema.NullOr(RelayAgentActivityState),
+  attentionEvents: Schema.optional(Schema.Array(AttentionEvent)),
+  publishActivity: Schema.optional(Schema.Boolean),
 });
 export type RelayAgentActivityPublishProofPayload =
   typeof RelayAgentActivityPublishProofPayload.Type;
@@ -206,6 +209,8 @@ export const RelayAgentActivityPublishRequest = Schema.Struct({
   state: Schema.NullOr(RelayAgentActivityState).annotate({
     description: "Current agent-awareness state, or null to remove the published state.",
   }),
+  attentionEvents: Schema.optional(Schema.Array(AttentionEvent)),
+  publishActivity: Schema.optional(Schema.Boolean),
   proof: TrimmedNonEmptyString.annotate({
     description: "Environment-signed JWT covering this published activity state.",
   }),
