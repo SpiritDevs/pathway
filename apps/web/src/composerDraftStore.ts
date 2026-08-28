@@ -497,7 +497,14 @@ interface ComposerDraftStoreState {
       | null
       | undefined,
   ) => void;
-  applyStickyState: (threadRef: ComposerThreadTarget) => void;
+  /**
+   * Applies the remembered model state to a new draft. A project default, when
+   * supplied, is authoritative for the active selection.
+   */
+  applyStickyState: (
+    threadRef: ComposerThreadTarget,
+    projectModelSelection?: ModelSelection | null | undefined,
+  ) => void;
   setProviderModelOptions: (
     threadRef: ComposerThreadTarget,
     provider: ProviderDriverKind,
@@ -2838,15 +2845,20 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             };
           });
         },
-        applyStickyState: (threadRef) => {
+        applyStickyState: (threadRef, projectModelSelection) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
           if (threadKey.length === 0) {
             return;
           }
+          const normalizedProjectSelection = normalizeModelSelection(projectModelSelection);
           set((state) => {
             const stickyMap = state.stickyModelSelectionByProvider;
             const stickyActiveProvider = state.stickyActiveProvider;
-            if (Object.keys(stickyMap).length === 0 && stickyActiveProvider === null) {
+            if (
+              Object.keys(stickyMap).length === 0 &&
+              stickyActiveProvider === null &&
+              normalizedProjectSelection === null
+            ) {
               return state;
             }
             const existing = state.draftsByThreadKey[threadKey];
@@ -2865,16 +2877,24 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 };
               }
             }
+            if (normalizedProjectSelection) {
+              // New-thread project defaults beat the last model used elsewhere.
+              // Replace the complete selection so stale sticky options do not
+              // survive when both selections target the same provider instance.
+              nextMap[normalizedProjectSelection.instanceId] = normalizedProjectSelection;
+            }
+            const nextActiveProvider =
+              normalizedProjectSelection?.instanceId ?? stickyActiveProvider;
             if (
               Equal.equals(base.modelSelectionByProvider, nextMap) &&
-              base.activeProvider === stickyActiveProvider
+              base.activeProvider === nextActiveProvider
             ) {
               return state;
             }
             const nextDraft: ComposerThreadDraftState = {
               ...base,
               modelSelectionByProvider: nextMap,
-              activeProvider: stickyActiveProvider,
+              activeProvider: nextActiveProvider,
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {
