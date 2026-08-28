@@ -55,7 +55,7 @@ describe("filesystem browse model", () => {
     ];
 
     expect(completeFilesystemBrowsePath("~/gi", entries)).toBe("~/Git");
-    expect(completeFilesystemBrowsePath("~/Git", entries)).toBe("~/Git");
+    expect(completeFilesystemBrowsePath("~/Git", entries)).toBeNull();
   });
 
   it("does not complete when no visible directory matches", () => {

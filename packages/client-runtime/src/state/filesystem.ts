@@ -78,7 +78,9 @@ export function completeFilesystemBrowsePath(
   }
 
   const completedPath = `${getBrowseDirectoryPath(query)}${firstEntry.name.slice(0, commonPrefixLength)}`;
-  return visibleEntries.length === 1 ? ensureBrowseDirectoryPath(completedPath) : completedPath;
+  const completion =
+    visibleEntries.length === 1 ? ensureBrowseDirectoryPath(completedPath) : completedPath;
+  return completion === query ? null : completion;
 }
 
 export function createBrowseNavigationCoordinator() {
