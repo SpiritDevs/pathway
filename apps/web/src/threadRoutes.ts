@@ -30,7 +30,6 @@ export function promotedDraftCanNavigateToCanonicalThread(input: {
 export function resolveThreadRouteRenderState(input: {
   bootstrapComplete: boolean;
   serverThreadExists: boolean;
-  serverThreadDeleted: boolean;
   draftThreadExists: boolean;
 }): ThreadRouteRenderState {
   if (!input.bootstrapComplete) {
@@ -39,9 +38,10 @@ export function resolveThreadRouteRenderState(input: {
   if (input.draftThreadExists) {
     return "ready";
   }
-  if (input.serverThreadDeleted) {
-    return "missing";
-  }
+  // The shell list is the same data the sidebar renders, so it outranks the
+  // detail subscription's verdict: a freshly created thread can 404 on the
+  // detail channel long enough to be confirmed "deleted" while cloud sync
+  // already lists it. A genuinely deleted thread leaves the shell list too.
   return input.serverThreadExists ? "ready" : "missing";
 }
 
@@ -114,8 +114,12 @@ export function promotedDraftThreadIsUnavailable(input: {
   readonly promotedThreadVisible: boolean;
   readonly promotedThreadDeleted: boolean;
 }): boolean {
+  // While the thread is visible in the shell list it is reachable no matter
+  // what the detail subscription says: a "deleted" verdict can be a 404 racing
+  // the owning server's thread.create commit.
   return (
     input.hasPromotedThread &&
-    (input.promotedThreadDeleted || (input.promotedThreadExists && !input.promotedThreadVisible))
+    !input.promotedThreadVisible &&
+    (input.promotedThreadDeleted || input.promotedThreadExists)
   );
 }

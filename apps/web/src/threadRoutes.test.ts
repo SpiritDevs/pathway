@@ -124,11 +124,24 @@ describe("threadRoutes", () => {
     expect(
       promotedDraftThreadIsUnavailable({
         hasPromotedThread: true,
+        promotedThreadExists: false,
+        promotedThreadVisible: false,
+        promotedThreadDeleted: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps a promoted draft open while the thread shell stays visible", () => {
+    // A "deleted" detail verdict can be a 404 racing the owning server's
+    // thread.create commit; the visible shell wins.
+    expect(
+      promotedDraftThreadIsUnavailable({
+        hasPromotedThread: true,
         promotedThreadExists: true,
         promotedThreadVisible: true,
         promotedThreadDeleted: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("keeps a promoted draft mounted until its first user message is visible", () => {
@@ -157,7 +170,6 @@ describe("threadRoutes", () => {
       resolveThreadRouteRenderState({
         bootstrapComplete: true,
         serverThreadExists: true,
-        serverThreadDeleted: false,
         draftThreadExists: false,
       }),
     ).toBe("ready");
@@ -168,7 +180,6 @@ describe("threadRoutes", () => {
       resolveThreadRouteRenderState({
         bootstrapComplete: true,
         serverThreadExists: true,
-        serverThreadDeleted: false,
         draftThreadExists: false,
       }),
     ).toBe("ready");
@@ -176,7 +187,6 @@ describe("threadRoutes", () => {
       resolveThreadRouteRenderState({
         bootstrapComplete: true,
         serverThreadExists: false,
-        serverThreadDeleted: false,
         draftThreadExists: true,
       }),
     ).toBe("ready");
@@ -187,7 +197,6 @@ describe("threadRoutes", () => {
       resolveThreadRouteRenderState({
         bootstrapComplete: false,
         serverThreadExists: false,
-        serverThreadDeleted: false,
         draftThreadExists: false,
       }),
     ).toBe("loading");
@@ -195,18 +204,6 @@ describe("threadRoutes", () => {
       resolveThreadRouteRenderState({
         bootstrapComplete: true,
         serverThreadExists: false,
-        serverThreadDeleted: false,
-        draftThreadExists: false,
-      }),
-    ).toBe("missing");
-  });
-
-  it("redirects deleted server threads", () => {
-    expect(
-      resolveThreadRouteRenderState({
-        bootstrapComplete: true,
-        serverThreadExists: true,
-        serverThreadDeleted: true,
         draftThreadExists: false,
       }),
     ).toBe("missing");

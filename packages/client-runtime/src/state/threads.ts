@@ -34,9 +34,16 @@ import {
 
 // Cloud and draft shells can lead the owning server's thread.create commit by
 // a few seconds. Keep that first 404 retryable, but bound the ambiguity so a
-// deleted or invalid id still reaches the terminal deleted state. At the
-// subscription's 250ms retry cadence this allows about ten seconds to materialize.
+// deleted or invalid id still reaches the deleted state. At the subscription's
+// 250ms retry cadence this allows about ten seconds to materialize.
 export const THREAD_NOT_FOUND_MAX_ATTEMPTS = 40;
+
+// A deletion confirmed from a 404 stays provisional: shells can reference a
+// thread whose create commit takes longer than the bounded retry window (slow
+// clones, an environment that reconnects late). Keep probing at this cadence
+// so the thread can still materialize instead of staying unreachable for the
+// rest of the session.
+export const THREAD_DELETED_REPROBE_INTERVAL = "5 seconds";
 
 function statusWithoutLiveData(
   data: Option.Option<OrchestrationV2ThreadProjection>,
@@ -232,6 +239,41 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }
   });
 
+  const awaitPrepared = SubscriptionRef.get(supervisor.prepared).pipe(
+    Effect.flatMap(
+      Option.match({
+        onSome: Effect.succeed,
+        onNone: () =>
+          SubscriptionRef.changes(supervisor.prepared).pipe(
+            Stream.filter(Option.isSome),
+            Stream.map((value) => value.value),
+            Stream.runHead,
+            Effect.map(Option.getOrThrow),
+          ),
+      }),
+    ),
+  );
+
+  // Runs while the thread is in the deleted state with no data. Holds the
+  // socket subscription back (so a missing thread does not churn the 250ms
+  // retry loop) and probes over HTTP until the thread materializes, at which
+  // point the caller resumes the normal subscribe path.
+  const recoverDeletedThread = Effect.gen(function* () {
+    while (true) {
+      yield* Effect.sleep(THREAD_DELETED_REPROBE_INTERVAL);
+      const prepared = yield* awaitPrepared;
+      const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
+      if (httpSnapshot._tag === "Snapshot") {
+        yield* applyItem({
+          kind: "snapshot",
+          snapshotSequence: httpSnapshot.snapshot.snapshotSequence,
+          projection: httpSnapshot.snapshot.projection,
+        });
+        return yield* SubscriptionRef.get(state);
+      }
+    }
+  });
+
   yield* SubscriptionRef.changes(supervisor.state).pipe(
     Stream.runForEach((connectionState) => {
       switch (connectionProjectionPhase(connectionState)) {
@@ -265,31 +307,21 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         yield* setSynchronizing;
 
         let current = yield* SubscriptionRef.get(state);
-        if (Option.isNone(current.data) && current.status !== "deleted") {
+        if (Option.isNone(current.data) && current.status === "deleted") {
+          current = yield* recoverDeletedThread;
+        } else if (Option.isNone(current.data)) {
           const missingAttempts = yield* Ref.get(notFoundAttempts);
           const shouldConfirmDeletion = missingAttempts >= THREAD_NOT_FOUND_MAX_ATTEMPTS;
-          const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
-            Effect.flatMap(
-              Option.match({
-                onSome: Effect.succeed,
-                onNone: () =>
-                  SubscriptionRef.changes(supervisor.prepared).pipe(
-                    Stream.filter(Option.isSome),
-                    Stream.map((value) => value.value),
-                    Stream.runHead,
-                    Effect.map(Option.getOrThrow),
-                  ),
-              }),
-            ),
-          );
+          const prepared = yield* awaitPrepared;
           if (missingAttempts === 0 || shouldConfirmDeletion) {
             const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
             if (httpSnapshot._tag === "NotFound") {
               if (shouldConfirmDeletion) {
                 yield* setDeleted();
-                return yield* Effect.never;
+                current = yield* recoverDeletedThread;
+              } else {
+                yield* Ref.set(notFoundAttempts, 1);
               }
-              yield* Ref.set(notFoundAttempts, 1);
             } else if (httpSnapshot._tag === "Snapshot") {
               yield* applyItem({
                 kind: "snapshot",
