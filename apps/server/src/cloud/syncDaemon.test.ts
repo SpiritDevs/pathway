@@ -41,6 +41,8 @@ import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as TestClock from "effect/testing/TestClock";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
@@ -56,6 +58,7 @@ import {
   cloudSyncActor,
   cloudSyncClientId,
   cloudSyncDaemonLayer,
+  cloudProjectReconciliationStates,
   makeCloudSyncTokenProvider,
   readCloudSyncLink,
   resolveCloudSyncDaemon,
@@ -468,6 +471,24 @@ describe("cloud sync daemon gates", () => {
         environmentId: ENVIRONMENT_ID,
       });
     }),
+  );
+});
+
+describe("cloud project reconciliation scheduling", () => {
+  it.effect("re-emits the latest state after a quiet reconciliation failure", () =>
+    Effect.gen(function* () {
+      const state = yield* SubscriptionRef.make("current");
+      const observed = yield* cloudProjectReconciliationStates(state, Duration.seconds(10)).pipe(
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust(Duration.seconds(10));
+
+      expect(Array.from(yield* Fiber.join(observed))).toEqual(["current", "current"]);
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 });
 

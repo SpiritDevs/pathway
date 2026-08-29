@@ -163,6 +163,62 @@ async function registerEnvironment(
   });
 }
 
+async function seedMergeDuplicate(t: Harness, ids: Awaited<ReturnType<typeof seed>>) {
+  return await t.run(async (ctx) => {
+    const projectId = await ctx.db.insert("cloudProjects", {
+      id: PENDING_PROJECT_ID,
+      companyId: ids.companyId,
+      name: "Pathway duplicate",
+      description: "",
+      teamIds: [],
+      defaultWorkflowOwner: null,
+      preferredBindingId: null,
+      archivedAt: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+      version: 0,
+    });
+    const repositoryIdentity = {
+      canonicalKey: "github.com/spiritdevs/pathway",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "https://github.com/SpiritDevs/pathway.git",
+      },
+      rootPath: "/Users/corey/GitHub/pathway",
+      displayName: "spiritdevs/pathway",
+    };
+    const bindingId = await ctx.db.insert("environmentBindings", {
+      id: "0198c0de-aaaa-7aaa-8aaa-000000000007",
+      companyId: ids.companyId,
+      cloudProjectId: projectId,
+      environmentId: "environment-laptop",
+      localProjectId: "local-pathway-laptop",
+      localWorkspaceRoot: "/Users/corey/GitHub/pathway",
+      repositoryIdentity,
+      repositoryKey: repositoryIdentity.canonicalKey,
+      status: "active",
+      lastSeenAt: NOW,
+      createdAt: NOW,
+      updatedAt: NOW,
+      version: 0,
+    });
+    const threadId = await ctx.db.insert("agentThreads", {
+      id: "environment-laptop:thread-2",
+      companyId: ids.companyId,
+      environmentId: "environment-laptop",
+      cloudProjectId: projectId,
+      localProjectId: "local-pathway-laptop",
+      threadId: "thread-2",
+      shell: { id: "thread-2", projectId: "local-pathway-laptop" },
+      updatedAt: NOW,
+      version: 0,
+    });
+    return { projectId, bindingId, threadId, repositoryIdentity };
+  });
+}
+
 describe("checkoutless project setup", () => {
   it("binds a new local checkout to the explicitly selected company project", async () => {
     const t = harness();
@@ -306,6 +362,362 @@ describe("checkoutless project setup", () => {
         expect.objectContaining({ cloudProjectId: distinctProject?._id, status: "active" }),
       ]),
     );
+  });
+});
+
+describe("company project merge", () => {
+  it("moves duplicate connections and threads while preserving the selected repository", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ids.projectId, { teamIds: ["team-target"] });
+    });
+    const duplicate = await t.run(async (ctx) => {
+      const projectId = await ctx.db.insert("cloudProjects", {
+        id: PENDING_PROJECT_ID,
+        companyId: ids.companyId,
+        name: "Pathway duplicate",
+        description: "",
+        teamIds: [],
+        defaultWorkflowOwner: null,
+        preferredBindingId: null,
+        archivedAt: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+        deletedAt: null,
+        version: 0,
+      });
+      const bindingId = await ctx.db.insert("environmentBindings", {
+        id: "0198c0de-aaaa-7aaa-8aaa-000000000007",
+        companyId: ids.companyId,
+        cloudProjectId: projectId,
+        environmentId: "environment-laptop",
+        localProjectId: "local-pathway-laptop",
+        localWorkspaceRoot: "/Users/corey/GitHub/pathway",
+        repositoryIdentity: {
+          canonicalKey: "github.com/spiritdevs/pathway",
+          locator: {
+            source: "git-remote",
+            remoteName: "origin",
+            remoteUrl: "https://github.com/SpiritDevs/pathway.git",
+          },
+          rootPath: "/Users/corey/GitHub/pathway",
+          displayName: "spiritdevs/pathway",
+        },
+        repositoryKey: "github.com/spiritdevs/pathway",
+        status: "active",
+        lastSeenAt: NOW,
+        createdAt: NOW,
+        updatedAt: NOW,
+        version: 0,
+      });
+      const threadId = await ctx.db.insert("agentThreads", {
+        id: "environment-laptop:thread-2",
+        companyId: ids.companyId,
+        environmentId: "environment-laptop",
+        cloudProjectId: projectId,
+        localProjectId: "local-pathway-laptop",
+        threadId: "thread-2",
+        shell: { id: "thread-2", projectId: "local-pathway-laptop" },
+        updatedAt: NOW,
+        version: 0,
+      });
+      const issueViewId = await ctx.db.insert("issueViews", {
+        id: "0198c0de-aaaa-7aaa-8aaa-000000000008",
+        companyId: ids.companyId,
+        ownerMembershipId: ids.membershipId,
+        visibility: "company",
+        teamIds: [],
+        name: "Duplicate project work",
+        config: {
+          tab: "active",
+          projectIds: [PENDING_PROJECT_ID, PROJECT_ID],
+          grouping: "status",
+          sortMode: "manual",
+          viewMode: "list",
+        },
+        position: 0,
+        createdAt: NOW,
+        updatedAt: NOW,
+        deletedAt: null,
+        version: 0,
+      });
+      const commandId = await ctx.db.insert("environmentCommands", {
+        id: "0198c0de-aaaa-7aaa-8aaa-000000000009",
+        companyId: ids.companyId,
+        targetEnvironmentId: "environment-laptop",
+        cloudProjectId: projectId,
+        bindingId: "0198c0de-aaaa-7aaa-8aaa-000000000007",
+        kind: "startThread",
+        args: { projectId: "local-pathway-laptop" },
+        issuedByMembershipId: ids.membershipId,
+        onBehalfOfActor: { kind: "member", membershipId: MEMBERSHIP_ID },
+        state: "claimed",
+        claimedByEnvironmentId: "environment-laptop",
+        claimGeneration: 2,
+        claimExpiresAt: NOW + 60_000,
+        expiresAt: NOW + 120_000,
+        result: null,
+        error: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+        version: 0,
+      });
+      return { projectId, bindingId, threadId, issueViewId, commandId };
+    });
+    const repositoryIdentity = {
+      canonicalKey: "github.com/spiritdevs/pathway",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "https://github.com/SpiritDevs/pathway.git",
+      },
+      rootPath: "/Users/corey/GitHub/pathway",
+      displayName: "spiritdevs/pathway",
+    };
+
+    const result = await asOwner(t).mutation(api.cloudProjects.mergeCompanyProjects, {
+      companyId: COMPANY_ID,
+      sourceCloudProjectId: PENDING_PROJECT_ID,
+      targetCloudProjectId: PROJECT_ID,
+      repositoryIdentity,
+    });
+    await t.mutation(internal.cloudProjects.retargetMergedProjectIssueViews, {
+      companyId: ids.companyId,
+      sourceProjectId: PENDING_PROJECT_ID,
+      targetProjectId: PROJECT_ID,
+      cursor: null,
+    });
+
+    const state = await t.run(async (ctx) => ({
+      target: await ctx.db.get(ids.projectId),
+      source: await ctx.db.get(duplicate.projectId),
+      binding: await ctx.db.get(duplicate.bindingId),
+      thread: await ctx.db.get(duplicate.threadId),
+      issueView: await ctx.db.get(duplicate.issueViewId),
+      command: await ctx.db.get(duplicate.commandId),
+      changes: await ctx.db.query("syncChanges").collect(),
+    }));
+    expect(result).toEqual({ movedBindings: 1, movedThreads: 1, movedIssues: 0 });
+    expect(state.target?.repositoryIdentity).toEqual({
+      canonicalKey: repositoryIdentity.canonicalKey,
+      locator: repositoryIdentity.locator,
+      displayName: repositoryIdentity.displayName,
+    });
+    expect(state.target?.repositoryIdentityAuthority).toBe("merge");
+    expect(state.target?.teamIds).toEqual([]);
+    expect(state.source?.deletedAt).toEqual(expect.any(Number));
+    expect(state.binding).toMatchObject({
+      cloudProjectId: ids.projectId,
+      repositoryKey: repositoryIdentity.canonicalKey,
+      repositoryIdentity: {
+        ...repositoryIdentity,
+        rootPath: "/Users/corey/GitHub/pathway",
+      },
+    });
+    expect(state.thread?.cloudProjectId).toBe(ids.projectId);
+    expect(state.issueView?.config).toMatchObject({ projectIds: [PROJECT_ID] });
+    expect(state.command).toMatchObject({
+      cloudProjectId: ids.projectId,
+      bindingId: null,
+      state: "pending",
+      claimedByEnvironmentId: null,
+      claimGeneration: 3,
+      claimExpiresAt: null,
+    });
+    expect(state.changes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          entityKind: "agentThread",
+          entityId: `${ENVIRONMENT_ID}:thread-1`,
+        }),
+        expect.objectContaining({ entityKind: "issueMilestone", entityId: MILESTONE_ID }),
+        expect.objectContaining({
+          entityKind: "issueView",
+          entityId: "0198c0de-aaaa-7aaa-8aaa-000000000008",
+        }),
+      ]),
+    );
+  });
+
+  it("rejects a locator that was not detected with the selected canonical key", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const duplicate = await seedMergeDuplicate(t, ids);
+
+    await expect(
+      asOwner(t).mutation(api.cloudProjects.mergeCompanyProjects, {
+        companyId: COMPANY_ID,
+        sourceCloudProjectId: PENDING_PROJECT_ID,
+        targetCloudProjectId: PROJECT_ID,
+        repositoryIdentity: {
+          ...duplicate.repositoryIdentity,
+          locator: {
+            ...duplicate.repositoryIdentity.locator,
+            remoteUrl: "https://example.test/untrusted.git",
+          },
+        },
+      }),
+    ).rejects.toThrow("already detected");
+  });
+
+  it("rejects two active project bindings in the same environment", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const duplicate = await seedMergeDuplicate(t, ids);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ids.bindingId, { environmentId: "environment-laptop" });
+    });
+
+    await expect(
+      asOwner(t).mutation(api.cloudProjects.mergeCompanyProjects, {
+        companyId: COMPANY_ID,
+        sourceCloudProjectId: PENDING_PROJECT_ID,
+        targetCloudProjectId: PROJECT_ID,
+        repositoryIdentity: duplicate.repositoryIdentity,
+      }),
+    ).rejects.toThrow("both have active connections in one environment");
+  });
+
+  it("rejects oversized serialized payloads before moving project records", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const duplicate = await seedMergeDuplicate(t, ids);
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 4; index += 1) {
+        await ctx.db.insert("capturedEmails", {
+          id: `environment-laptop:large-message-${index}`,
+          companyId: ids.companyId,
+          environmentId: "environment-laptop",
+          cloudProjectId: duplicate.projectId,
+          localProjectId: "local-pathway-laptop",
+          messageId: `large-message-${index}`,
+          message: { subject: "x".repeat(600_000) },
+          updatedAt: NOW,
+          version: 0,
+        });
+      }
+    });
+
+    await expect(
+      asOwner(t).mutation(api.cloudProjects.mergeCompanyProjects, {
+        companyId: COMPANY_ID,
+        sourceCloudProjectId: PENDING_PROJECT_ID,
+        targetCloudProjectId: PROJECT_ID,
+        repositoryIdentity: duplicate.repositoryIdentity,
+      }),
+    ).rejects.toThrow("too much serialized project data");
+    const source = await t.run(async (ctx) => ctx.db.get(duplicate.projectId));
+    expect(source?.deletedAt).toBeNull();
+  });
+
+  it("ignores terminal command history when bounding merge work", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const duplicate = await seedMergeDuplicate(t, ids);
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 2_001; index += 1) {
+        await ctx.db.insert("environmentCommands", {
+          id: `0198c0de-eeee-7eee-8eee-${String(index).padStart(12, "0")}`,
+          companyId: ids.companyId,
+          targetEnvironmentId: ENVIRONMENT_ID,
+          cloudProjectId: duplicate.projectId,
+          bindingId: null,
+          kind: "statusQuery",
+          args: {},
+          issuedByMembershipId: ids.membershipId,
+          onBehalfOfActor: { kind: "member", membershipId: MEMBERSHIP_ID },
+          state: "succeeded",
+          claimedByEnvironmentId: null,
+          claimGeneration: 0,
+          claimExpiresAt: null,
+          expiresAt: NOW + 120_000,
+          result: null,
+          error: null,
+          createdAt: NOW,
+          updatedAt: NOW,
+          version: 0,
+        });
+      }
+    });
+
+    await expect(
+      asOwner(t).mutation(api.cloudProjects.mergeCompanyProjects, {
+        companyId: COMPANY_ID,
+        sourceCloudProjectId: PENDING_PROJECT_ID,
+        targetCloudProjectId: PROJECT_ID,
+        repositoryIdentity: duplicate.repositoryIdentity,
+      }),
+    ).resolves.toMatchObject({ movedBindings: 1, movedThreads: 1 });
+  });
+
+  it("does not reject a merge because the company has extensive saved-view history", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const duplicate = await seedMergeDuplicate(t, ids);
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 2_001; index += 1) {
+        await ctx.db.insert("issueViews", {
+          id: `0198c0de-dddd-7ddd-8ddd-${String(index).padStart(12, "0")}`,
+          companyId: ids.companyId,
+          ownerMembershipId: ids.membershipId,
+          visibility: "private",
+          teamIds: [],
+          name: `Deleted view ${index}`,
+          config: { tab: "active", projectIds: [] },
+          position: index,
+          createdAt: NOW,
+          updatedAt: NOW,
+          deletedAt: NOW,
+          version: 0,
+        });
+      }
+    });
+
+    await expect(
+      asOwner(t).mutation(api.cloudProjects.mergeCompanyProjects, {
+        companyId: COMPANY_ID,
+        sourceCloudProjectId: PENDING_PROJECT_ID,
+        targetCloudProjectId: PROJECT_ID,
+        repositoryIdentity: duplicate.repositoryIdentity,
+      }),
+    ).resolves.toMatchObject({ movedBindings: 1, movedThreads: 1 });
+  });
+
+  it("rejects an oversized merge before moving any records", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const duplicate = await seedMergeDuplicate(t, ids);
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 300; index += 1) {
+        await ctx.db.insert("agentThreads", {
+          id: `environment-laptop:overflow-${index}`,
+          companyId: ids.companyId,
+          environmentId: "environment-laptop",
+          cloudProjectId: duplicate.projectId,
+          localProjectId: "local-pathway-laptop",
+          threadId: `overflow-${index}`,
+          shell: { id: `overflow-${index}`, projectId: "local-pathway-laptop" },
+          updatedAt: NOW,
+          version: 0,
+        });
+      }
+    });
+
+    await expect(
+      asOwner(t).mutation(api.cloudProjects.mergeCompanyProjects, {
+        companyId: COMPANY_ID,
+        sourceCloudProjectId: PENDING_PROJECT_ID,
+        targetCloudProjectId: PROJECT_ID,
+        repositoryIdentity: duplicate.repositoryIdentity,
+      }),
+    ).rejects.toThrow("too many source threads");
+    const state = await t.run(async (ctx) => ({
+      source: await ctx.db.get(duplicate.projectId),
+      binding: await ctx.db.get(duplicate.bindingId),
+    }));
+    expect(state.source?.deletedAt).toBeNull();
+    expect(state.binding?.cloudProjectId).toBe(duplicate.projectId);
   });
 });
 

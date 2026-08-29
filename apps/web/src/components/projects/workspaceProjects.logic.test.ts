@@ -3,9 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
 import {
   buildWorkspaceProjects,
+  buildCompanyProjectMergeCandidates,
   cloudProjectKey,
   unassignedWorkspaceProjects,
   workspaceProjectAssignmentKey,
+  workspaceProjectCloudIdForCompany,
+  workspaceProjectMergeTarget,
   workspaceThreadStartAvailability,
   type WorkspaceProjectCandidate,
 } from "./workspaceProjects.logic";
@@ -41,7 +44,91 @@ function candidate(overrides: Partial<WorkspaceProjectCandidate>): WorkspaceProj
 }
 
 describe("workspace project list", () => {
+  it("keeps same-repository cloud rows distinct as merge candidates", () => {
+    const repositoryIdentity = {
+      canonicalKey: "github.com/spiritdevs/pathway",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "https://github.com/SpiritDevs/pathway.git",
+      },
+    };
+    const entities = [
+      {
+        entityKind: "cloudProject" as const,
+        id: "cloud-target",
+        name: "Pathway target",
+        description: "",
+        teamIds: [],
+        defaultWorkflowOwner: null,
+        preferredBindingId: null,
+        repositoryIdentity,
+        archivedAt: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        entityKind: "cloudProject" as const,
+        id: "cloud-duplicate",
+        name: "Pathway duplicate",
+        description: "",
+        teamIds: [],
+        defaultWorkflowOwner: null,
+        preferredBindingId: null,
+        repositoryIdentity,
+        archivedAt: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        entityKind: "environmentBinding" as const,
+        id: "binding-duplicate",
+        cloudProjectId: "cloud-duplicate",
+        environmentId: "environment-laptop",
+        localProjectId: "local-pathway",
+        localWorkspaceRoot: "/work/pathway",
+        repositoryIdentity,
+        status: "active" as const,
+        lastSeenAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+
+    expect(
+      buildCompanyProjectMergeCandidates({
+        companyId: "company-acme",
+        targetCloudProjectId: "cloud-target",
+        entities,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        displayName: "Pathway duplicate",
+        cloudProjectId: "cloud-duplicate",
+        checkoutCount: 1,
+        repositoryIdentity,
+        repositoryIdentities: [repositoryIdentity],
+      }),
+    ]);
+  });
+
   it("keeps a company project that no machine has a checkout of", () => {
+    const repositoryIdentity = {
+      canonicalKey: "github.com/spiritdevs/pathway",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "https://github.com/SpiritDevs/pathway.git",
+      },
+    };
+    const bindingRepositoryIdentity = {
+      canonicalKey: "github.com/spiritdevs/pathway-next",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "https://github.com/SpiritDevs/pathway-next.git",
+      },
+    };
     const projects = buildWorkspaceProjects({
       groups: [],
       candidates: [
@@ -51,6 +138,8 @@ describe("workspace project list", () => {
           companyIds: ["company-acme"],
           projectIds: ["cloud-planned"],
           isCompanyProject: true,
+          repositoryIdentity,
+          repositoryIdentities: [bindingRepositoryIdentity],
         }),
       ],
     });
@@ -62,6 +151,9 @@ describe("workspace project list", () => {
         group: null,
         checkoutCount: 0,
         cloudProjectId: "cloud-planned",
+        companyProjectIds: [{ companyId: "company-acme", cloudProjectId: "cloud-planned" }],
+        repositoryIdentity,
+        repositoryIdentities: [bindingRepositoryIdentity],
       },
     ]);
   });
@@ -93,6 +185,7 @@ describe("workspace project list", () => {
         group: pathway,
         checkoutCount: 2,
         cloudProjectId: "cloud-pathway",
+        companyProjectIds: [{ companyId: "company-acme", cloudProjectId: "cloud-pathway" }],
       },
     ]);
   });
@@ -137,6 +230,39 @@ describe("workspace project list", () => {
     });
     expect(projects).toHaveLength(1);
     expect(projects[0]?.companyIds).toEqual(["company-acme", "company-bolt"]);
+    expect(projects[0]?.companyProjectIds).toEqual([
+      { companyId: "company-acme", cloudProjectId: "cloud-shared" },
+      { companyId: "company-bolt", cloudProjectId: "cloud-shared" },
+    ]);
+  });
+
+  it("keeps each company paired with its own project id in a folded checkout group", () => {
+    const shared = group({ id: "local-shared", projectKey: "repo:shared", displayName: "Shared" });
+    const projects = buildWorkspaceProjects({
+      groups: [shared],
+      candidates: [
+        candidate({
+          id: "cloud-acme",
+          companyIds: ["company-acme"],
+          projectIds: ["local-shared"],
+          isCompanyProject: true,
+        }),
+        candidate({
+          id: "cloud-bolt",
+          companyIds: ["company-bolt"],
+          projectIds: ["local-shared"],
+          isCompanyProject: true,
+        }),
+      ],
+    });
+
+    expect(workspaceProjectCloudIdForCompany(projects[0]!, "company-acme")).toBe("cloud-acme");
+    expect(workspaceProjectCloudIdForCompany(projects[0]!, "company-bolt")).toBe("cloud-bolt");
+    expect(workspaceProjectMergeTarget(projects[0]!, null)).toBeNull();
+    expect(workspaceProjectMergeTarget(projects[0]!, "company-acme")).toEqual({
+      companyId: "company-acme",
+      cloudProjectId: "cloud-acme",
+    });
   });
 
   it("sorts by display name so the sidebar order does not depend on where a project came from", () => {

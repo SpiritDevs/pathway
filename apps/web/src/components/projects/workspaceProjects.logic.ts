@@ -10,6 +10,12 @@
  * @module components/projects/workspaceProjects.logic
  */
 import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
+import { CloudProjectSyncEntity, EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
+import type { RepositoryIdentity } from "@spiritdevs/contracts";
+import * as Schema from "effect/Schema";
+
+const isCloudProject = Schema.is(CloudProjectSyncEntity);
+const isEnvironmentBinding = Schema.is(EnvironmentBindingEntity);
 
 /** The subset of `IssueProjectOption` this merge needs, so the module stays testable in isolation. */
 export interface WorkspaceProjectCandidate {
@@ -18,6 +24,8 @@ export interface WorkspaceProjectCandidate {
   readonly companyIds: ReadonlyArray<string>;
   readonly projectIds: ReadonlyArray<string>;
   readonly isCompanyProject: boolean;
+  readonly repositoryIdentity?: RepositoryIdentity | null;
+  readonly repositoryIdentities?: ReadonlyArray<RepositoryIdentity>;
 }
 
 export interface WorkspaceProject {
@@ -32,6 +40,15 @@ export interface WorkspaceProject {
   readonly checkoutCount: number;
   /** The company-owned id, when this project has been registered. */
   readonly cloudProjectId: string | null;
+  /** Preserves which company owns which id when All Companies folds checkouts into one row. */
+  readonly companyProjectIds?: ReadonlyArray<{
+    readonly companyId: string;
+    readonly cloudProjectId: string;
+  }>;
+  /** Cloud-level identity remains available when every checkout is offline. */
+  readonly repositoryIdentity?: RepositoryIdentity;
+  /** Binding-derived choices stay current even when their environments disconnect. */
+  readonly repositoryIdentities?: ReadonlyArray<RepositoryIdentity>;
 }
 
 export type WorkspaceThreadStartAvailability = "unavailable" | "needs-checkout" | "available";
@@ -53,6 +70,93 @@ export function workspaceThreadStartAvailability(
 /** Company projects with no checkout need a route key that cannot collide with a grouping key. */
 export function cloudProjectKey(cloudProjectId: string): string {
   return `cloud:${cloudProjectId}`;
+}
+
+/** The unambiguous cloud-project id owned by one company within a folded workspace row. */
+export function workspaceProjectCloudIdForCompany(
+  project: WorkspaceProject,
+  companyId: string,
+): string | null {
+  const matches = (project.companyProjectIds ?? []).filter(
+    (candidate) => candidate.companyId === companyId,
+  );
+  if (matches.length === 1) return matches[0]!.cloudProjectId;
+  if (
+    matches.length === 0 &&
+    project.companyIds.length === 1 &&
+    project.companyIds[0] === companyId
+  ) {
+    return project.cloudProjectId;
+  }
+  return null;
+}
+
+/** A merge needs one company and that company's matching project id; All Companies can be ambiguous. */
+export function workspaceProjectMergeTarget(
+  project: WorkspaceProject,
+  scopedCompanyId: string | null,
+): { readonly companyId: string; readonly cloudProjectId: string } | null {
+  const companyId =
+    scopedCompanyId ?? (project.companyIds.length === 1 ? project.companyIds[0]! : null);
+  if (companyId === null) return null;
+  const cloudProjectId = workspaceProjectCloudIdForCompany(project, companyId);
+  return cloudProjectId === null ? null : { companyId, cloudProjectId };
+}
+
+/**
+ * Merge choices are physical company records, not logical workspace groups. Two cloud projects can
+ * already share one repository identity — that is often exactly why the user needs to merge them.
+ */
+export function buildCompanyProjectMergeCandidates(input: {
+  readonly companyId: string;
+  readonly targetCloudProjectId: string;
+  readonly entities: Iterable<unknown>;
+}): ReadonlyArray<WorkspaceProject> {
+  const projects: CloudProjectSyncEntity[] = [];
+  const bindingsByProject = new Map<string, EnvironmentBindingEntity[]>();
+  for (const entity of input.entities) {
+    if (isCloudProject(entity)) {
+      if (entity.archivedAt === null && String(entity.id) !== input.targetCloudProjectId) {
+        projects.push(entity);
+      }
+      continue;
+    }
+    if (!isEnvironmentBinding(entity) || entity.status === "revoked") continue;
+    const projectId = String(entity.cloudProjectId);
+    const bindings = bindingsByProject.get(projectId) ?? [];
+    bindings.push(entity);
+    bindingsByProject.set(projectId, bindings);
+  }
+
+  return projects
+    .map((project): WorkspaceProject => {
+      const cloudProjectId = String(project.id);
+      const bindings = bindingsByProject.get(cloudProjectId) ?? [];
+      const repositoryIdentities = bindings
+        .flatMap((binding) =>
+          binding.repositoryIdentity == null ? [] : [binding.repositoryIdentity],
+        )
+        .filter(
+          (identity, index, identities) =>
+            identities.findIndex(
+              (candidate) => candidate.canonicalKey === identity.canonicalKey,
+            ) === index,
+        );
+      return {
+        projectKey: cloudProjectKey(cloudProjectId),
+        displayName: project.name,
+        companyIds: [input.companyId],
+        group: null,
+        checkoutCount: bindings.length,
+        cloudProjectId,
+        companyProjectIds: [{ companyId: input.companyId, cloudProjectId }],
+        ...(project.repositoryIdentity == null
+          ? {}
+          : { repositoryIdentity: project.repositoryIdentity }),
+        ...(repositoryIdentities.length === 0 ? {} : { repositoryIdentities }),
+      };
+    })
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
 }
 
 /**
@@ -86,6 +190,33 @@ export function buildWorkspaceProjects(input: {
       group?.projectKey ??
       (candidate.isCompanyProject ? cloudProjectKey(candidate.id) : String(candidate.id));
     const existing = byKey.get(projectKey);
+    const repositoryIdentity =
+      candidate.repositoryIdentity ??
+      existing?.repositoryIdentity ??
+      group?.memberProjects.find((member) => member.repositoryIdentity != null)
+        ?.repositoryIdentity ??
+      null;
+    const repositoryIdentities = [
+      ...(existing?.repositoryIdentities ?? []),
+      ...(candidate.repositoryIdentities ?? []),
+    ].filter(
+      (identity, index, identities) =>
+        identities.findIndex((candidate) => candidate.canonicalKey === identity.canonicalKey) ===
+        index,
+    );
+    const companyProjectIds = [
+      ...(existing?.companyProjectIds ?? []),
+      ...(candidate.isCompanyProject
+        ? candidate.companyIds.map((companyId) => ({ companyId, cloudProjectId: candidate.id }))
+        : []),
+    ].filter(
+      (mapping, index, mappings) =>
+        mappings.findIndex(
+          (candidate) =>
+            candidate.companyId === mapping.companyId &&
+            candidate.cloudProjectId === mapping.cloudProjectId,
+        ) === index,
+    );
     // The same project id can arrive once per owning company. Keep one row and union the owners,
     // so a shared project is listed once rather than once per company.
     byKey.set(projectKey, {
@@ -97,6 +228,9 @@ export function buildWorkspaceProjects(input: {
       cloudProjectId: candidate.isCompanyProject
         ? candidate.id
         : (existing?.cloudProjectId ?? null),
+      ...(companyProjectIds.length === 0 ? {} : { companyProjectIds }),
+      ...(repositoryIdentity === null ? {} : { repositoryIdentity }),
+      ...(repositoryIdentities.length === 0 ? {} : { repositoryIdentities }),
     });
   }
 
@@ -104,6 +238,17 @@ export function buildWorkspaceProjects(input: {
   // the mistake that emptied the issue Project picker.
   for (const group of input.groups) {
     if (claimedGroupKeys.has(group.projectKey) || byKey.has(group.projectKey)) continue;
+    const repositoryIdentity = group.memberProjects.find(
+      (member) => member.repositoryIdentity != null,
+    )?.repositoryIdentity;
+    const repositoryIdentities = group.memberProjects
+      .map((member) => member.repositoryIdentity)
+      .filter((identity): identity is RepositoryIdentity => identity != null)
+      .filter(
+        (identity, index, identities) =>
+          identities.findIndex((candidate) => candidate.canonicalKey === identity.canonicalKey) ===
+          index,
+      );
     byKey.set(group.projectKey, {
       projectKey: group.projectKey,
       displayName: group.displayName,
@@ -111,6 +256,8 @@ export function buildWorkspaceProjects(input: {
       group,
       checkoutCount: group.groupedProjectCount,
       cloudProjectId: null,
+      ...(repositoryIdentity == null ? {} : { repositoryIdentity }),
+      ...(repositoryIdentities.length === 0 ? {} : { repositoryIdentities }),
     });
   }
 

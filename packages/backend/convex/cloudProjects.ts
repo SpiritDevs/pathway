@@ -8,8 +8,11 @@ import type { MutationCtx } from "./_generated/server.js";
 import { mutation, internalMutation } from "./_generated/server.js";
 import {
   appendCompanyChanges,
+  encodeAgentThread,
+  encodeCapturedEmail,
   encodeCloudProject,
   encodeEnvironmentBinding,
+  encodeEnvironmentCommand,
   type CompanyChange,
 } from "./lib/companyApply.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
@@ -20,13 +23,101 @@ import {
   requirePermission,
   requireRecordPermission,
 } from "./lib/identity.ts";
-import { encodeIssue } from "./lib/issueApply.ts";
+import { encodeIssue, encodeIssueMilestone, encodeIssueView } from "./lib/issueApply.ts";
 import { domainIdArg, repositoryIdentityArg } from "./lib/validators.ts";
+import { measureSerializedBytes } from "../src/sync/changeFeed.ts";
 
 function trimmed(value: string, label: string): string {
   const result = value.trim();
   if (result.length === 0) throw backendError("invalid-arguments", `${label} is required.`);
   return result;
+}
+
+/** Keeps a merge comfortably below Convex's single-transaction read/write limits. */
+const PROJECT_MERGE_MAX_AFFECTED_ROWS = 300;
+const PROJECT_MERGE_MAX_COMPANY_SCAN_ROWS = 2_000;
+const PROJECT_MERGE_MAX_SERIALIZED_BYTES = 4 * 1_024 * 1_024;
+// These records can each approach half a megabyte. Their query caps keep the read itself bounded
+// before the byte-aware aggregate check below can inspect the returned documents.
+const PROJECT_MERGE_MAX_COMMAND_ROWS = 8;
+const PROJECT_MERGE_MAX_CAPTURED_EMAIL_ROWS = 5;
+const PROJECT_MERGE_ISSUE_VIEW_PAGE_SIZE = 50;
+
+type StoredRepositoryIdentity = NonNullable<Doc<"environmentBindings">["repositoryIdentity"]>;
+
+function sameRepositoryIdentity(
+  left: StoredRepositoryIdentity,
+  right: StoredRepositoryIdentity,
+): boolean {
+  return (
+    left.canonicalKey === right.canonicalKey &&
+    left.locator.source === right.locator.source &&
+    left.locator.remoteName === right.locator.remoteName &&
+    left.locator.remoteUrl === right.locator.remoteUrl
+  );
+}
+
+/** Empty is company-wide, so it absorbs every narrower team scope. */
+function mergedProjectTeamIds(
+  sourceTeamIds: ReadonlyArray<string>,
+  targetTeamIds: ReadonlyArray<string>,
+): string[] {
+  return sourceTeamIds.length === 0 || targetTeamIds.length === 0
+    ? []
+    : [...new Set([...targetTeamIds, ...sourceTeamIds])];
+}
+
+function projectTeamScopeWidened(
+  previousTeamIds: ReadonlyArray<string>,
+  nextTeamIds: ReadonlyArray<string>,
+): boolean {
+  if (previousTeamIds.length === 0) return false;
+  if (nextTeamIds.length === 0) return true;
+  const previous = new Set(previousTeamIds);
+  return nextTeamIds.some((teamId) => !previous.has(teamId));
+}
+
+function assertBoundedProjectMergeRows(label: string, count: number, maximum: number): void {
+  if (count <= maximum) return;
+  throw backendError(
+    "invalid-arguments",
+    `This merge affects too many ${label} for one safe transaction. Reduce the project data or contact support.`,
+  );
+}
+
+function assertBoundedProjectMergeBytes(rows: Iterable<unknown>): void {
+  let bytes = 0;
+  for (const row of rows) {
+    // Each affected document is both patched and represented in the change feed. Counting it twice
+    // is intentionally conservative and keeps one large payload from exhausting the transaction.
+    bytes += measureSerializedBytes(row) * 2;
+    if (bytes <= PROJECT_MERGE_MAX_SERIALIZED_BYTES) continue;
+    throw backendError(
+      "invalid-arguments",
+      "This merge contains too much serialized project data for one safe transaction. Reduce the project data or contact support.",
+    );
+  }
+}
+
+async function collectActiveProjectCommands(
+  ctx: MutationCtx,
+  companyId: Id<"companies">,
+  cloudProjectId: Id<"cloudProjects">,
+): Promise<ReadonlyArray<Doc<"environmentCommands">>> {
+  const pending = await ctx.db
+    .query("environmentCommands")
+    .withIndex("by_company_project_and_state", (q) =>
+      q.eq("companyId", companyId).eq("cloudProjectId", cloudProjectId).eq("state", "pending"),
+    )
+    .take(PROJECT_MERGE_MAX_COMMAND_ROWS + 1);
+  if (pending.length > PROJECT_MERGE_MAX_COMMAND_ROWS) return pending;
+  const claimed = await ctx.db
+    .query("environmentCommands")
+    .withIndex("by_company_project_and_state", (q) =>
+      q.eq("companyId", companyId).eq("cloudProjectId", cloudProjectId).eq("state", "claimed"),
+    )
+    .take(PROJECT_MERGE_MAX_COMMAND_ROWS - pending.length + 1);
+  return [...pending, ...claimed];
 }
 
 interface ProjectIssueData {
@@ -182,6 +273,108 @@ function withoutProjectRoutingRules(
   return { rules: remaining, changed: remaining.length !== rules.length };
 }
 
+function replaceProjectReactionRoutes(
+  trigger: unknown,
+  fromProjectId: string,
+  toProjectId: string,
+) {
+  const value = record(trigger);
+  if (value === null || !Array.isArray(value["reactionRoutes"])) return trigger;
+  let changed = false;
+  const reactionRoutes = value["reactionRoutes"].map((route) => {
+    const routeValue = record(route);
+    if (routeValue?.["cloudProjectId"] !== fromProjectId) return route;
+    changed = true;
+    return { ...routeValue, cloudProjectId: toProjectId };
+  });
+  if (!changed) return trigger;
+  return {
+    ...value,
+    reactionRoutes,
+  };
+}
+
+function replaceProjectRoutingRules(rules: unknown, fromProjectId: string, toProjectId: string) {
+  if (!Array.isArray(rules)) return rules;
+  let changed = false;
+  const updated = rules.map((rule) => {
+    const ruleValue = record(rule);
+    if (ruleValue?.["cloudProjectId"] !== fromProjectId) return rule;
+    changed = true;
+    return { ...ruleValue, cloudProjectId: toProjectId };
+  });
+  return changed ? updated : rules;
+}
+
+function replaceIssueViewProjectIds(config: unknown, fromProjectId: string, toProjectId: string) {
+  const value = record(config);
+  if (value === null || !Array.isArray(value["projectIds"])) return config;
+  const projectIds = value["projectIds"];
+  if (!projectIds.includes(fromProjectId)) return config;
+  return {
+    ...value,
+    projectIds: [
+      ...new Set(
+        projectIds.map((projectId) => (projectId === fromProjectId ? toProjectId : projectId)),
+      ),
+    ],
+  };
+}
+
+/** Retargets saved views outside the merge transaction, one bounded company page at a time. */
+export const retargetMergedProjectIssueViews = internalMutation({
+  args: {
+    companyId: v.id("companies"),
+    sourceProjectId: domainIdArg,
+    targetProjectId: domainIdArg,
+    cursor: v.union(v.string(), v.null()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const company = await ctx.db.get(args.companyId);
+    if (company === null) return null;
+    const page = await ctx.db
+      .query("issueViews")
+      .withIndex("by_company_and_visibility", (q) => q.eq("companyId", args.companyId))
+      .paginate({ cursor: args.cursor, numItems: PROJECT_MERGE_ISSUE_VIEW_PAGE_SIZE });
+    const changes: CompanyChange[] = [];
+    for (const view of page.page) {
+      if (view.deletedAt !== null) continue;
+      const config = replaceIssueViewProjectIds(
+        view.config,
+        args.sourceProjectId,
+        args.targetProjectId,
+      );
+      if (config === view.config) continue;
+      await ctx.db.patch(view._id, { config, updatedAt: Date.now() });
+      const updated = await ctx.db.get(view._id);
+      if (updated === null) continue;
+      changes.push({
+        entityKind: "issueView",
+        entityId: updated.id,
+        changeKind: "upsert",
+        teamIds: updated.visibility === "teams" ? updated.teamIds : [],
+        versionDocId: updated._id,
+        payload: await encodeIssueView(ctx, company, updated),
+      });
+    }
+    if (changes.length > 0) {
+      await appendCompanyChanges(ctx, {
+        companyId: args.companyId,
+        actor: { kind: "system", source: "automation" },
+        changes,
+      });
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.cloudProjects.retargetMergedProjectIssueViews, {
+        ...args,
+        cursor: page.continueCursor,
+      });
+    }
+    return null;
+  },
+});
+
 function hasSlackRoutes(configurationVersion: 2 | undefined, trigger: unknown, rules: unknown) {
   if (configurationVersion === 2) return Array.isArray(rules) && rules.length > 0;
   const value = record(trigger);
@@ -238,6 +431,7 @@ export const createCompanyProject = mutation({
       teamIds: [],
       defaultWorkflowOwner: null,
       preferredBindingId: null,
+      repositoryIdentity: null,
       archivedAt: null,
       createdAt: now,
       updatedAt: now,
@@ -416,6 +610,7 @@ export const ensureEnvironmentProject = mutation({
         teamIds: [],
         defaultWorkflowOwner: null,
         preferredBindingId: null,
+        repositoryIdentity: repositoryIdentity ?? null,
         archivedAt: null,
         createdAt: now,
         updatedAt: now,
@@ -430,10 +625,19 @@ export const ensureEnvironmentProject = mutation({
       // replica necessarily gets a turn to remove it. The Convex tombstone is authoritative: an
       // outbound observation may never resurrect a project the company already deleted.
       return project.id;
-    } else if (project.name !== name || project.archivedAt !== null) {
+    } else if (
+      project.name !== name ||
+      project.archivedAt !== null ||
+      ((project.repositoryIdentity === undefined || project.repositoryIdentity === null) &&
+        repositoryIdentity != null)
+    ) {
       await ctx.db.patch(project._id, {
         name,
         archivedAt: null,
+        ...((project.repositoryIdentity === undefined || project.repositoryIdentity === null) &&
+        repositoryIdentity != null
+          ? { repositoryIdentity }
+          : {}),
         updatedAt: now,
       });
       project = await ctx.db.get(project._id);
@@ -738,6 +942,478 @@ export const revokeStaleEnvironmentBindings = internalMutation({
       });
     }
     return null;
+  },
+});
+
+/**
+ * Collapses two company projects into one durable identity.
+ *
+ * The target survives. Every checkout and project-owned record moves to it in the same Convex
+ * transaction, while the selected repository becomes authoritative for every binding. Connected
+ * environments consume that repository decision from the company feed and update their Git
+ * remote; offline environments do the same when they reconnect.
+ */
+export const mergeCompanyProjects = mutation({
+  args: {
+    companyId: domainIdArg,
+    sourceCloudProjectId: domainIdArg,
+    targetCloudProjectId: domainIdArg,
+    repositoryIdentity: repositoryIdentityArg,
+  },
+  returns: v.object({
+    movedBindings: v.number(),
+    movedThreads: v.number(),
+    movedIssues: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    if (args.sourceCloudProjectId === args.targetCloudProjectId) {
+      throw backendError("invalid-arguments", "Choose two different projects to merge.");
+    }
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const source = await ctx.db
+      .query("cloudProjects")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.sourceCloudProjectId),
+      )
+      .unique();
+    const target = await ctx.db
+      .query("cloudProjects")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.targetCloudProjectId),
+      )
+      .unique();
+    if (
+      source === null ||
+      source.deletedAt !== null ||
+      target === null ||
+      target.deletedAt !== null
+    ) {
+      throw backendError("entity-not-found", "One of the projects is no longer available.");
+    }
+    requireRecordPermission(actor, "projects.manage", source.teamIds);
+    requireRecordPermission(actor, "projects.manage", target.teamIds);
+
+    const combinedTeamIds = mergedProjectTeamIds(source.teamIds, target.teamIds);
+    const replayTargetScope = projectTeamScopeWidened(target.teamIds, combinedTeamIds);
+    const projectRowLimit = PROJECT_MERGE_MAX_AFFECTED_ROWS + 1;
+    const companyScanLimit = PROJECT_MERGE_MAX_COMPANY_SCAN_ROWS + 1;
+
+    const [
+      sourceBindings,
+      targetBindings,
+      sourceThreads,
+      targetThreads,
+      sourceMilestones,
+      targetMilestones,
+      sourceEmails,
+      targetEmails,
+      commands,
+      sourceIssues,
+      automationJobs,
+      slackWatches,
+      slackIntents,
+    ] = await Promise.all([
+      ctx.db
+        .query("environmentBindings")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
+        )
+        .take(projectRowLimit),
+      ctx.db
+        .query("environmentBindings")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", target._id),
+        )
+        .take(projectRowLimit),
+      ctx.db
+        .query("agentThreads")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
+        )
+        .take(projectRowLimit),
+      replayTargetScope
+        ? ctx.db
+            .query("agentThreads")
+            .withIndex("by_company_and_project", (q) =>
+              q.eq("companyId", actor.company._id).eq("cloudProjectId", target._id),
+            )
+            .take(projectRowLimit)
+        : Promise.resolve([]),
+      ctx.db
+        .query("issueMilestones")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", source.id),
+        )
+        .take(projectRowLimit),
+      replayTargetScope
+        ? ctx.db
+            .query("issueMilestones")
+            .withIndex("by_company_and_project", (q) =>
+              q.eq("companyId", actor.company._id).eq("cloudProjectId", target.id),
+            )
+            .take(projectRowLimit)
+        : Promise.resolve([]),
+      ctx.db
+        .query("capturedEmails")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
+        )
+        .take(PROJECT_MERGE_MAX_CAPTURED_EMAIL_ROWS + 1),
+      replayTargetScope
+        ? ctx.db
+            .query("capturedEmails")
+            .withIndex("by_company_and_project", (q) =>
+              q.eq("companyId", actor.company._id).eq("cloudProjectId", target._id),
+            )
+            .take(PROJECT_MERGE_MAX_CAPTURED_EMAIL_ROWS + 1)
+        : Promise.resolve([]),
+      collectActiveProjectCommands(ctx, actor.company._id, source._id),
+      ctx.db
+        .query("issues")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("projectId", source.id),
+        )
+        .take(projectRowLimit),
+      ctx.db
+        .query("issueAutomationJobs")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
+        )
+        .take(projectRowLimit),
+      ctx.db
+        .query("slackChannelWatches")
+        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
+        .take(companyScanLimit),
+      ctx.db
+        .query("slackIssueAutomationIntents")
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
+        )
+        .take(projectRowLimit),
+    ]);
+
+    for (const [label, rows] of [
+      ["source bindings", sourceBindings],
+      ["target bindings", targetBindings],
+      ["source threads", sourceThreads],
+      ["target threads", targetThreads],
+      ["source milestones", sourceMilestones],
+      ["target milestones", targetMilestones],
+      ["source issues", sourceIssues],
+      ["automation jobs", automationJobs],
+      ["Slack automation intents", slackIntents],
+    ] as const) {
+      assertBoundedProjectMergeRows(label, rows.length, PROJECT_MERGE_MAX_AFFECTED_ROWS);
+    }
+    assertBoundedProjectMergeRows(
+      "source captured emails",
+      sourceEmails.length,
+      PROJECT_MERGE_MAX_CAPTURED_EMAIL_ROWS,
+    );
+    assertBoundedProjectMergeRows(
+      "target captured emails",
+      targetEmails.length,
+      PROJECT_MERGE_MAX_CAPTURED_EMAIL_ROWS,
+    );
+    assertBoundedProjectMergeRows(
+      "environment commands",
+      commands.length,
+      PROJECT_MERGE_MAX_COMMAND_ROWS,
+    );
+    assertBoundedProjectMergeRows(
+      "Slack watches",
+      slackWatches.length,
+      PROJECT_MERGE_MAX_COMPANY_SCAN_ROWS,
+    );
+
+    const targetEnvironmentIds = new Set(
+      targetBindings
+        .filter((binding) => binding.status !== "revoked")
+        .map((binding) => binding.environmentId),
+    );
+    const duplicateConnection = sourceBindings.find(
+      (binding) => binding.status !== "revoked" && targetEnvironmentIds.has(binding.environmentId),
+    );
+    if (duplicateConnection !== undefined) {
+      throw backendError(
+        "foreign-id-conflict",
+        "The projects both have active connections in one environment. Remove one connection before merging.",
+      );
+    }
+    const storedRepositoryIdentities = [
+      source.repositoryIdentity,
+      target.repositoryIdentity,
+      ...sourceBindings.map((binding) => binding.repositoryIdentity),
+      ...targetBindings.map((binding) => binding.repositoryIdentity),
+    ].filter((identity): identity is StoredRepositoryIdentity => identity != null);
+    const selectedRepositoryIdentity = storedRepositoryIdentities.find((identity) =>
+      sameRepositoryIdentity(identity, args.repositoryIdentity),
+    );
+    if (selectedRepositoryIdentity === undefined) {
+      throw backendError(
+        "invalid-arguments",
+        "Choose a Git repository already detected on one of these projects.",
+      );
+    }
+
+    const { rootPath: _selectedRootPath, ...authoritativeRepositoryIdentity } =
+      selectedRepositoryIdentity;
+    const sourceCommands = commands;
+    const sourceAutomationJobs = automationJobs;
+    const sourceSlackIntents = slackIntents;
+    const affectedSlackWatches = slackWatches.flatMap((watch) => {
+      const direct = watch.cloudProjectId === source._id;
+      const trigger = replaceProjectReactionRoutes(watch.trigger, source.id, target.id);
+      const rules = replaceProjectRoutingRules(watch.rules, source.id, target.id);
+      return direct || trigger !== watch.trigger || rules !== watch.rules
+        ? [{ watch, direct, trigger, rules }]
+        : [];
+    });
+    const affectedRowCount =
+      [...targetBindings, ...sourceBindings].filter((binding) => binding.status !== "revoked")
+        .length +
+      sourceThreads.length +
+      targetThreads.length +
+      sourceMilestones.length +
+      targetMilestones.length +
+      sourceEmails.length +
+      targetEmails.length +
+      sourceIssues.length +
+      sourceCommands.length +
+      sourceAutomationJobs.length +
+      sourceSlackIntents.length +
+      affectedSlackWatches.length +
+      2;
+    assertBoundedProjectMergeRows(
+      "project records",
+      affectedRowCount,
+      PROJECT_MERGE_MAX_AFFECTED_ROWS,
+    );
+    assertBoundedProjectMergeBytes([
+      source,
+      target,
+      ...sourceBindings,
+      ...targetBindings,
+      ...sourceThreads,
+      ...targetThreads,
+      ...sourceMilestones,
+      ...targetMilestones,
+      ...sourceEmails,
+      ...targetEmails,
+      ...sourceIssues,
+      ...sourceCommands,
+      ...sourceAutomationJobs,
+      ...sourceSlackIntents,
+      ...affectedSlackWatches,
+    ]);
+    const now = Date.now();
+    const changes: CompanyChange[] = [];
+    const updatedBindings: Doc<"environmentBindings">[] = [];
+    for (const binding of [...targetBindings, ...sourceBindings]) {
+      if (binding.status === "revoked") continue;
+      await ctx.db.patch(binding._id, {
+        cloudProjectId: target._id,
+        repositoryIdentity: {
+          ...authoritativeRepositoryIdentity,
+          rootPath: binding.localWorkspaceRoot,
+        },
+        repositoryKey: authoritativeRepositoryIdentity.canonicalKey,
+        updatedAt: now,
+      });
+      const updated = await ctx.db.get(binding._id);
+      if (updated === null) throw backendError("entity-not-found", "A project binding vanished.");
+      updatedBindings.push(updated);
+      changes.push({
+        entityKind: "environmentBinding",
+        entityId: updated.id,
+        changeKind: "upsert",
+        versionDocId: updated._id,
+        payload: await encodeEnvironmentBinding(ctx, updated),
+      });
+    }
+
+    for (const thread of sourceThreads) {
+      await ctx.db.patch(thread._id, { cloudProjectId: target._id, updatedAt: now });
+      const updated = await ctx.db.get(thread._id);
+      if (updated === null) throw backendError("entity-not-found", "An agent thread vanished.");
+      changes.push({
+        entityKind: "agentThread",
+        entityId: updated.id,
+        changeKind: "upsert",
+        teamIds: combinedTeamIds,
+        versionDocId: updated._id,
+        payload: await encodeAgentThread(ctx, updated),
+      });
+    }
+    for (const email of sourceEmails) {
+      await ctx.db.patch(email._id, { cloudProjectId: target._id, updatedAt: now });
+      const updated = await ctx.db.get(email._id);
+      if (updated === null) throw backendError("entity-not-found", "A captured email vanished.");
+      changes.push({
+        entityKind: "capturedEmail",
+        entityId: updated.id,
+        changeKind: "upsert",
+        teamIds: combinedTeamIds,
+        versionDocId: updated._id,
+        payload: await encodeCapturedEmail(ctx, updated),
+      });
+    }
+    for (const milestone of sourceMilestones) {
+      await ctx.db.patch(milestone._id, { cloudProjectId: target.id, updatedAt: now });
+      const updated = await ctx.db.get(milestone._id);
+      if (updated === null) throw backendError("entity-not-found", "A milestone vanished.");
+      if (updated.deletedAt === null) {
+        changes.push({
+          entityKind: "issueMilestone",
+          entityId: updated.id,
+          changeKind: "upsert",
+          teamIds: combinedTeamIds,
+          versionDocId: updated._id,
+          payload: encodeIssueMilestone(actor.company, updated),
+        });
+      }
+    }
+    for (const issue of sourceIssues) {
+      await ctx.db.patch(issue._id, { projectId: target.id, updatedAt: now });
+      const updated = await ctx.db.get(issue._id);
+      if (updated === null) throw backendError("entity-not-found", "An issue vanished.");
+      if (updated.deletedAt === null) {
+        changes.push({
+          entityKind: "issue",
+          entityId: updated.id,
+          changeKind: "upsert",
+          teamIds: updated.teamIds,
+          versionDocId: updated._id,
+          payload: encodeIssue(actor.company, updated),
+        });
+      }
+    }
+
+    // A widened target scope has new readers. Replay its existing project-owned rows so those
+    // readers receive a complete snapshot rather than only the records moved from the source.
+    for (const thread of targetThreads) {
+      changes.push({
+        entityKind: "agentThread",
+        entityId: thread.id,
+        changeKind: "upsert",
+        teamIds: combinedTeamIds,
+        versionDocId: thread._id,
+        payload: await encodeAgentThread(ctx, thread),
+      });
+    }
+    for (const email of targetEmails) {
+      changes.push({
+        entityKind: "capturedEmail",
+        entityId: email.id,
+        changeKind: "upsert",
+        teamIds: combinedTeamIds,
+        versionDocId: email._id,
+        payload: await encodeCapturedEmail(ctx, email),
+      });
+    }
+    for (const milestone of targetMilestones) {
+      if (milestone.deletedAt !== null) continue;
+      changes.push({
+        entityKind: "issueMilestone",
+        entityId: milestone.id,
+        changeKind: "upsert",
+        teamIds: combinedTeamIds,
+        versionDocId: milestone._id,
+        payload: encodeIssueMilestone(actor.company, milestone),
+      });
+    }
+
+    for (const command of sourceCommands) {
+      const wasClaimed = command.state === "claimed";
+      await ctx.db.patch(command._id, {
+        cloudProjectId: target._id,
+        ...(wasClaimed
+          ? {
+              state: "pending" as const,
+              bindingId: null,
+              claimedByEnvironmentId: null,
+              claimGeneration: command.claimGeneration + 1,
+              claimExpiresAt: null,
+            }
+          : {}),
+        updatedAt: now,
+      });
+      const updated = await ctx.db.get(command._id);
+      if (updated === null) throw backendError("entity-not-found", "A command vanished.");
+      changes.push({
+        entityKind: "environmentCommand",
+        entityId: updated.id,
+        changeKind: "upsert",
+        versionDocId: updated._id,
+        payload: await encodeEnvironmentCommand(ctx, updated),
+      });
+    }
+    for (const job of sourceAutomationJobs) {
+      await ctx.db.patch(job._id, { cloudProjectId: target._id, updatedAt: now });
+    }
+    for (const intent of sourceSlackIntents) {
+      await ctx.db.patch(intent._id, { cloudProjectId: target._id, updatedAt: now });
+    }
+    for (const { watch, direct, trigger, rules } of affectedSlackWatches) {
+      await ctx.db.patch(watch._id, {
+        ...(direct ? { cloudProjectId: target._id } : {}),
+        ...(trigger === watch.trigger ? {} : { trigger }),
+        ...(rules === watch.rules ? {} : { rules }),
+        revision: watch.revision + 1,
+        updatedAt: now,
+      });
+    }
+    const preferredBindingId =
+      target.preferredBindingId ??
+      (source.preferredBindingId !== null &&
+      updatedBindings.some((binding) => binding.id === source.preferredBindingId)
+        ? source.preferredBindingId
+        : (updatedBindings.find((binding) => binding.status === "active")?.id ?? null));
+    await ctx.db.patch(target._id, {
+      teamIds: combinedTeamIds,
+      preferredBindingId,
+      repositoryIdentity: authoritativeRepositoryIdentity,
+      repositoryIdentityAuthority: "merge",
+      updatedAt: now,
+    });
+    const updatedTarget = await ctx.db.get(target._id);
+    if (updatedTarget === null)
+      throw backendError("entity-not-found", "The target project vanished.");
+    changes.push({
+      entityKind: "cloudProject",
+      entityId: updatedTarget.id,
+      changeKind: "upsert",
+      teamIds: combinedTeamIds,
+      versionDocId: updatedTarget._id,
+      payload: encodeCloudProject(updatedTarget),
+    });
+
+    await ctx.db.patch(source._id, { preferredBindingId: null, deletedAt: now, updatedAt: now });
+    changes.push({
+      entityKind: "cloudProject",
+      entityId: source.id,
+      changeKind: "tombstone",
+      teamIds: source.teamIds,
+      versionDocId: source._id,
+      payload: null,
+    });
+
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes,
+    });
+    await ctx.scheduler.runAfter(0, internal.cloudProjects.retargetMergedProjectIssueViews, {
+      companyId: actor.company._id,
+      sourceProjectId: source.id,
+      targetProjectId: target.id,
+      cursor: null,
+    });
+    return {
+      movedBindings: sourceBindings.filter((binding) => binding.status !== "revoked").length,
+      movedThreads: sourceThreads.length,
+      movedIssues: sourceIssues.filter((issue) => issue.deletedAt === null).length,
+    };
   },
 });
 

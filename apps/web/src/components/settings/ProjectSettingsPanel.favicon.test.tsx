@@ -322,6 +322,7 @@ describe("Project settings favicon selection", () => {
     );
     expect(nameInput).not.toBeNull();
 
+    (nameInput?.props.onChange as (() => void) | undefined)?.();
     (nameInput?.props.onBlur as ((event: unknown) => void) | undefined)?.({
       currentTarget: { value: "pathway" },
     });

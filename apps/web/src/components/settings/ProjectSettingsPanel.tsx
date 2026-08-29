@@ -32,6 +32,7 @@ import {
   ChevronDownIcon,
   CopyIcon,
   EllipsisIcon,
+  GitMergeIcon,
   MonitorIcon,
   PencilIcon,
   PlusIcon,
@@ -85,6 +86,7 @@ import { ProjectFavicon } from "../ProjectFavicon";
 import { AddProjectConnectionDialog } from "../projects/AddProjectConnectionDialog";
 import { AttachProjectDirectoryDialog } from "../projects/AttachProjectDirectoryDialog";
 import { MoveProjectWizard } from "../projects/MoveProjectWizard";
+import { MergeProjectDialog } from "../projects/MergeProjectDialog";
 import { PendingProjectSetup } from "../projects/PendingProjectSetup";
 import {
   clearWorkspaceProjectRemovalPending,
@@ -98,7 +100,12 @@ import {
 } from "../projects/projectConnectionMetadata";
 import { useProjectGroups } from "../projects/useProjectGroups";
 import { useWorkspaceProjects } from "../projects/useWorkspaceProjects";
-import type { WorkspaceProject } from "../projects/workspaceProjects.logic";
+import {
+  buildCompanyProjectMergeCandidates,
+  workspaceProjectCloudIdForCompany,
+  workspaceProjectMergeTarget,
+  type WorkspaceProject,
+} from "../projects/workspaceProjects.logic";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
   editorRequestForScript,
@@ -145,6 +152,8 @@ export const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, st
   repository_path: "Group by repository path",
   separate: "Keep separate",
 };
+
+const EMPTY_WORKSPACE_PROJECTS: ReadonlyArray<WorkspaceProject> = [];
 
 function memberKey(member: { environmentId: string; id: string }): string {
   return `${member.environmentId}:${member.id}`;
@@ -221,8 +230,10 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
       companyContext={{
         companyId: companySettings.companyId,
         replica: companySettings.replica,
+        registryReplicas: companySettings.registryReplicas,
         environmentControl,
       }}
+      workspaceProjects={workspaceProjects}
     />
   );
 }
@@ -230,6 +241,7 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
 interface ProjectCompanyContext {
   readonly companyId: CompanySettings["companyId"];
   readonly replica: CompanySettings["replica"];
+  readonly registryReplicas?: CompanySettings["registryReplicas"];
   readonly environmentControl: EnvironmentControlClient | null;
 }
 
@@ -387,10 +399,12 @@ export function ProjectDetail({
   group,
   workspaceProject = null,
   companyContext = null,
+  workspaceProjects = EMPTY_WORKSPACE_PROJECTS,
 }: {
   group: SidebarProjectSnapshot;
   workspaceProject?: WorkspaceProject | null;
   companyContext?: ProjectCompanyContext | null;
+  workspaceProjects?: ReadonlyArray<WorkspaceProject>;
 }) {
   const navigate = useNavigate();
   const settings = usePrimarySettings();
@@ -432,10 +446,48 @@ export function ProjectDetail({
   const owningCompany =
     workspaceProject === null
       ? null
-      : (companies.find((company) => workspaceProject.companyIds.includes(String(company.id))) ??
+      : (companies.find(
+          (company) =>
+            company.id === companyContext?.companyId &&
+            workspaceProject.companyIds.includes(String(company.id)),
+        ) ??
+        companies.find((company) => workspaceProject.companyIds.includes(String(company.id))) ??
         null);
+  const mergeTarget =
+    workspaceProject === null
+      ? null
+      : workspaceProjectMergeTarget(workspaceProject, companyContext?.companyId ?? null);
+  const mergeCompanyId = mergeTarget?.companyId as CompanyId | undefined;
+  const mergeTargetCloudProjectId = mergeTarget?.cloudProjectId ?? null;
+  const mergeProject = useMemo(
+    () =>
+      workspaceProject === null || mergeTargetCloudProjectId === null
+        ? null
+        : { ...workspaceProject, cloudProjectId: mergeTargetCloudProjectId },
+    [mergeTargetCloudProjectId, workspaceProject],
+  );
   const [moveDestination, setMoveDestination] = useState<CompanyId | null>(null);
   const [moveWizardOpen, setMoveWizardOpen] = useState(false);
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const mergeCandidates = useMemo(() => {
+    if (mergeProject === null || mergeCompanyId === undefined) return [];
+    const replica =
+      companyContext?.registryReplicas?.get(mergeCompanyId) ??
+      (companyContext?.companyId === mergeCompanyId ? companyContext.replica : null);
+    if (replica !== null) {
+      return buildCompanyProjectMergeCandidates({
+        companyId: mergeCompanyId,
+        targetCloudProjectId: mergeProject.cloudProjectId,
+        entities: replica.view.values(),
+      });
+    }
+    return workspaceProjects.flatMap((candidate) => {
+      const cloudProjectId = workspaceProjectCloudIdForCompany(candidate, mergeCompanyId);
+      return cloudProjectId === null || cloudProjectId === mergeProject.cloudProjectId
+        ? []
+        : [{ ...candidate, cloudProjectId }];
+    });
+  }, [companyContext?.registryReplicas, mergeCompanyId, mergeProject, workspaceProjects]);
   const connectionCatalog = useMemo(
     () => buildProjectConnectionCatalog(companyContext?.replica?.view.values() ?? []),
     [companyContext?.replica],
@@ -1255,7 +1307,40 @@ export function ProjectDetail({
                 </Select>
               }
             />
+            <SettingsRow
+              title="Merge duplicate"
+              description="Combine another project with this one and choose the Git repository all connections should use."
+              control={
+                <Button
+                  variant="outline"
+                  disabled={
+                    mergeCandidates.length === 0 ||
+                    mergeProject === null ||
+                    mergeCompanyId === undefined ||
+                    companyContext?.environmentControl == null
+                  }
+                  onClick={() => setMergeDialogOpen(true)}
+                >
+                  <GitMergeIcon />
+                  Merge project
+                </Button>
+              }
+            />
           </SettingsSection>
+        ) : null}
+
+        {mergeProject !== null &&
+        mergeCompanyId !== undefined &&
+        companyContext?.environmentControl != null ? (
+          <MergeProjectDialog
+            open={mergeDialogOpen}
+            onOpenChange={setMergeDialogOpen}
+            project={mergeProject}
+            candidates={mergeCandidates}
+            companyId={mergeCompanyId}
+            environmentControl={companyContext.environmentControl}
+            onMerged={() => void navigate({ to: "/settings/projects", replace: true })}
+          />
         ) : null}
 
         <SettingsSection

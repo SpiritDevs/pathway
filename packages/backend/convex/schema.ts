@@ -459,6 +459,10 @@ export default defineSchema({
     teamIds: v.array(domainId),
     defaultWorkflowOwner: v.union(workflowOwner, v.null()),
     preferredBindingId: v.union(domainId, v.null()),
+    /** User-selected repository identity shared by every checkout after a merge. */
+    repositoryIdentity: v.optional(v.union(repositoryIdentityArg, v.null())),
+    /** Only an explicit merge choice is allowed to rewrite connected Git remotes. */
+    repositoryIdentityAuthority: v.optional(v.literal("merge")),
     archivedAt: v.union(v.number(), v.null()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -611,6 +615,8 @@ export default defineSchema({
   })
     .index("by_company", ["companyId"])
     .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_project", ["companyId", "cloudProjectId"])
+    .index("by_company_project_and_state", ["companyId", "cloudProjectId", "state"])
     .index("by_target_and_state", ["targetEnvironmentId", "state"])
     .index("by_company_and_state", ["companyId", "state"])
     .index("by_state_and_expiry", ["state", "expiresAt"]),
@@ -753,6 +759,7 @@ export default defineSchema({
   })
     .index("by_company", ["companyId"])
     .index("by_company_and_issue", ["companyId", "issueId"])
+    .index("by_company_and_project", ["companyId", "cloudProjectId"])
     .index("by_integration", ["integrationId"]),
 
   /** A lease row is stable; generation increases whenever ownership is acquired or fenced. */
@@ -929,6 +936,7 @@ export default defineSchema({
   })
     .index("by_company", ["companyId"])
     .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_project", ["companyId", "cloudProjectId"])
     .index("by_company_and_state", ["companyId", "state"])
     .index("by_target_and_state", ["targetEnvironmentId", "state"])
     .index("by_company_and_issue", ["companyId", "issueId"])
