@@ -32,6 +32,7 @@ import { v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
   makeEnvironmentThreadState,
+  THREAD_DELETED_REPROBE_INTERVAL,
   THREAD_NOT_FOUND_MAX_ATTEMPTS,
   ThreadSnapshotLoader,
   type EnvironmentThreadState,
@@ -135,22 +136,21 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(
     Option.some(PREPARED),
   );
+  const httpNotFound = yield* Ref.make(options?.httpNotFound === true);
+  const httpSnapshot = yield* Ref.make(
+    options?.httpSnapshot ?? Option.none<OrchestrationV2ThreadDetailSnapshot>(),
+  );
   const snapshotLoader = ThreadSnapshotLoader.of({
     load: (_prepared, threadId) =>
       Ref.update(loaderCalls, (count) => count + 1).pipe(
-        Effect.as(
-          options?.httpNotFound === true
+        Effect.andThen(
+          Effect.all({ notFound: Ref.get(httpNotFound), snapshot: Ref.get(httpSnapshot) }),
+        ),
+        Effect.map(({ notFound, snapshot }) =>
+          notFound
             ? ({ _tag: "NotFound" } as const)
-            : threadId === THREAD_ID &&
-                Option.isSome(
-                  options?.httpSnapshot ?? Option.none<OrchestrationV2ThreadDetailSnapshot>(),
-                )
-              ? ({
-                  _tag: "Snapshot",
-                  snapshot: Option.getOrThrow(
-                    options?.httpSnapshot ?? Option.none<OrchestrationV2ThreadDetailSnapshot>(),
-                  ),
-                } as const)
+            : threadId === THREAD_ID && Option.isSome(snapshot)
+              ? ({ _tag: "Snapshot", snapshot: snapshot.value } as const)
               : ({ _tag: "Unavailable" } as const),
         ),
       ),
@@ -219,6 +219,8 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     savedThreads,
     removedThreads,
     wakeups,
+    httpNotFound,
+    httpSnapshot,
     clearSession: SubscriptionRef.set(supervisorSession, Option.none()),
     replaceSession: SubscriptionRef.set(
       supervisorSession,
@@ -409,6 +411,50 @@ describe("EnvironmentThreads", () => {
       expect(yield* Ref.get(harness.loaderCalls)).toBe(2);
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(THREAD_NOT_FOUND_MAX_ATTEMPTS);
       expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
+    }),
+  );
+
+  it.effect("recovers a wrongly-deleted thread once the owning server materializes it", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ httpNotFound: true });
+
+      expect(yield* Queue.take(harness.subscriptionStarts)).toBe(1);
+      for (let attempt = 2; attempt <= THREAD_NOT_FOUND_MAX_ATTEMPTS; attempt += 1) {
+        yield* harness.clearSession;
+        yield* Effect.yieldNow;
+        yield* harness.replaceSession;
+        expect(yield* Queue.take(harness.subscriptionStarts)).toBe(attempt);
+      }
+      yield* harness.clearSession;
+      yield* Effect.yieldNow;
+      yield* harness.replaceSession;
+      yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+
+      // A cloud shell kept referencing the thread; the owning server finally
+      // commits it. The next slow probe must resurrect the state instead of
+      // leaving it deleted for the rest of the session.
+      yield* Ref.set(harness.httpNotFound, false);
+      yield* Ref.set(
+        harness.httpSnapshot,
+        Option.some({
+          snapshotSequence: 1,
+          projection: {
+            ...BASE_PROJECTION,
+            thread: { ...BASE_PROJECTION.thread, title: "Materialized thread" },
+          },
+        }),
+      );
+      yield* TestClock.adjust(THREAD_DELETED_REPROBE_INTERVAL);
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+
+      expect(Option.getOrThrow(state.data).thread.title).toBe("Materialized thread");
+      // The socket subscription resumes from the recovered snapshot.
+      expect(yield* Queue.take(harness.subscriptionStarts)).toBe(THREAD_NOT_FOUND_MAX_ATTEMPTS + 1);
+      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(1);
     }),
   );
 
