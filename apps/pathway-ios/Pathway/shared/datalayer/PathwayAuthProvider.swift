@@ -1,6 +1,15 @@
 import ClerkKit
-@preconcurrency import ConvexMobile
 import Foundation
+
+@MainActor
+protocol PathwayAuthenticating: AnyObject {
+    var hasActiveSession: Bool { get }
+    var onSessionChanged: ((Bool) -> Void)? { get set }
+
+    func startHostedSignIn() async throws
+    func signOut() async throws
+    func token(template: String?) async throws -> String
+}
 
 enum PathwayAuthError: LocalizedError {
     case clerkNotReady
@@ -19,106 +28,57 @@ enum PathwayAuthError: LocalizedError {
     }
 }
 
-/// Bridges Pathway's Clerk session into Convex.
-/// Clerk owns credential collection, MFA, OAuth, recovery, and persisted sessions.
+/// Owns Clerk's hosted authentication and exposes a platform-neutral session boundary.
+/// Backend clients can consume Clerk tokens without making the app shell depend on their SDK.
 @MainActor
-final class PathwayAuthProvider: AuthProvider {
-    private let jwtTemplate: String
-    private var onIDToken: (@Sendable (String?) -> Void)?
-    private var refreshTask: Task<Void, Never>?
+final class PathwayAuthProvider: PathwayAuthenticating {
+    var onSessionChanged: ((Bool) -> Void)?
 
-    var onSessionEnded: (@MainActor () -> Void)?
+    private var sessionObservationTask: Task<Void, Never>?
 
-    init(jwtTemplate: String = AppConfiguration.convexJWTTemplate) {
-        self.jwtTemplate = jwtTemplate
+    var hasActiveSession: Bool {
+        Clerk.shared.session?.status == .active
+    }
+
+    init() {
+        sessionObservationTask = Task { @MainActor [weak self] in
+            for await _ in Clerk.shared.auth.events {
+                guard let self, !Task.isCancelled else { return }
+                onSessionChanged?(hasActiveSession)
+            }
+        }
+    }
+
+    deinit {
+        sessionObservationTask?.cancel()
     }
 
     func startHostedSignIn() async throws {
         guard Clerk.shared.isLoaded else {
             throw PathwayAuthError.clerkNotReady
         }
+
         try await Clerk.shared.auth.startHostedAuth()
-    }
 
-    func login(
-        onIdToken: @Sendable @escaping (String?) -> Void
-    ) async throws -> PathwayAuthSession {
-        try await makeSession(onIdToken: onIdToken)
-    }
-
-    func loginFromCache(
-        onIdToken: @Sendable @escaping (String?) -> Void
-    ) async throws -> PathwayAuthSession {
-        try await makeSession(onIdToken: onIdToken)
-    }
-
-    func logout() async throws {
-        refreshTask?.cancel()
-        refreshTask = nil
-
-        do {
-            try await Clerk.shared.auth.signOut()
-        } catch {
-            startRefreshListener()
-            throw error
+        guard hasActiveSession else {
+            throw PathwayAuthError.missingSession
         }
-
-        onIDToken?(nil)
-        onIDToken = nil
     }
 
-    nonisolated func extractIdToken(from authResult: PathwayAuthSession) -> String {
-        authResult.idToken
+    func signOut() async throws {
+        try await Clerk.shared.auth.signOut()
     }
 
-    private func makeSession(
-        onIdToken: @Sendable @escaping (String?) -> Void
-    ) async throws -> PathwayAuthSession {
-        onIDToken = onIdToken
-        let token = try await fetchToken()
-        onIdToken(token)
-        startRefreshListener()
-        return PathwayAuthSession(idToken: token)
-    }
-
-    private func fetchToken() async throws -> String {
+    func token(template: String?) async throws -> String {
         guard Clerk.shared.isLoaded else {
             throw PathwayAuthError.clerkNotReady
         }
         guard let session = Clerk.shared.session, session.status == .active else {
             throw PathwayAuthError.missingSession
         }
-        guard let token = try await session.getToken(.init(template: jwtTemplate)) else {
+        guard let token = try await session.getToken(.init(template: template)) else {
             throw PathwayAuthError.tokenUnavailable
         }
         return token
-    }
-
-    private func startRefreshListener() {
-        refreshTask?.cancel()
-        refreshTask = Task { @MainActor [weak self] in
-            for await _ in Clerk.shared.auth.events {
-                guard let self else { return }
-                guard !Task.isCancelled else { return }
-                guard let session = Clerk.shared.session, session.status == .active else {
-                    endSession()
-                    return
-                }
-                guard let token = try? await session.getToken(.init(template: jwtTemplate)) else {
-                    guard !Task.isCancelled else { return }
-                    endSession()
-                    return
-                }
-                guard !Task.isCancelled else { return }
-                onIDToken?(token)
-            }
-        }
-    }
-
-    private func endSession() {
-        refreshTask = nil
-        onIDToken?(nil)
-        onIDToken = nil
-        onSessionEnded?()
     }
 }

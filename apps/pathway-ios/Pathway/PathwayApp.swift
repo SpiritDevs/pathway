@@ -38,20 +38,69 @@ struct PathwayApp: App {
         )
     }
 
+    @SceneBuilder
     var body: some Scene {
-        WindowGroup {
-            if let appModel {
-                InitView()
-                    .environment(Clerk.shared)
-                    .environment(appModel)
-                    .onOpenURL { url in
-                        Task {
-                            try? await Clerk.shared.handle(url)
-                        }
-                    }
-            } else {
-                MissingConfigurationView(keys: missingConfigurationKeys)
+        #if os(visionOS)
+            WindowGroup {
+                mainContent
             }
+            .defaultSize(width: 1180, height: 820)
+            .windowResizability(.contentMinSize)
+
+            WindowGroup("Pathway Agent", id: PathwayWindow.agentOrchestrator.rawValue) {
+                configuredContent {
+                    AgentOrchestratorView()
+                        .frame(minWidth: 560, minHeight: 620)
+                }
+            }
+            .defaultSize(width: 720, height: 780)
+            .windowResizability(.contentMinSize)
+
+            WindowGroup("Pathway Settings", id: PathwayWindow.settings.rawValue) {
+                configuredContent {
+                    NavigationStack {
+                        PathwaySettingsView()
+                    }
+                    .frame(minWidth: 420, minHeight: 480)
+                }
+            }
+            .defaultSize(width: 520, height: 600)
+            .windowResizability(.contentMinSize)
+        #else
+            WindowGroup {
+                mainContent
+            }
+        #endif
+    }
+
+    @ViewBuilder
+    private var mainContent: some View {
+        if let appModel {
+            InitView()
+                .environment(Clerk.shared)
+                .environment(appModel)
+                .onOpenURL(perform: handleOpenURL)
+        } else {
+            MissingConfigurationView(keys: missingConfigurationKeys)
+        }
+    }
+
+    @ViewBuilder
+    private func configuredContent(
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        if let appModel {
+            content()
+                .environment(Clerk.shared)
+                .environment(appModel)
+        } else {
+            MissingConfigurationView(keys: missingConfigurationKeys)
+        }
+    }
+
+    private func handleOpenURL(_ url: URL) {
+        Task {
+            try? await Clerk.shared.handle(url)
         }
     }
 }
@@ -61,9 +110,12 @@ private struct MissingConfigurationView: View {
 
     var body: some View {
         ContentUnavailableView {
-            Label("Pathway iOS needs configuration", systemImage: "wrench.and.screwdriver")
+            Label("Pathway needs configuration", systemImage: "wrench.and.screwdriver")
         } description: {
-            Text("Run `node scripts/configure-pathway-ios.ts` after setting the Pathway public identifiers in the repository-root .env file. Missing: \(keys.joined(separator: ", ")).")
+            Text(
+                "Run `node scripts/configure-pathway-ios.ts` after setting the Pathway public identifiers in the repository-root .env file. Missing: \(keys.joined(separator: ", "))."
+            )
         }
+        .frame(minWidth: 320, minHeight: 320)
     }
 }

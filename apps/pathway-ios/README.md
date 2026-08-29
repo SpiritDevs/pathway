@@ -1,7 +1,9 @@
 # Pathway iOS
 
-Pathway's native SwiftUI app lives in this directory. The Xcode project, targets, source symbols,
-bundle identifiers, user-facing branding, and assets all use native Pathway identities.
+Pathway's native SwiftUI app lives in this directory. One target owns the shared product screens
+and adapts its shell for compact iPhone windows, regular-width iPad windows, and native visionOS
+windows. The Xcode project, source symbols, bundle identifiers, user-facing branding, and assets
+all use native Pathway identities.
 
 ## Requirements
 
@@ -32,8 +34,9 @@ an unrelated or stale deployment.
 
 The app uses Clerk's official native Swift SDK. Hosted authentication follows the sign-in methods,
 verification rules, MFA, and recovery flows configured for the existing Pathway Clerk instance.
-The resulting Clerk session requests the existing `convex` JWT template and supplies that token to
-`ConvexClientWithAuth`. Clerk persists and refreshes the session.
+Clerk persists and refreshes the session. The app shell intentionally depends only on this
+platform-neutral authentication boundary. Backend features should consume Clerk tokens through a
+cross-platform client or adapter rather than importing a platform-limited SDK into shared views.
 
 The production target uses:
 
@@ -47,9 +50,14 @@ Apple App ID prefix before hosted authentication can complete on a signed build.
 
 ## Current product boundary
 
-The SwiftUI foundation now contains only Pathway-native placeholders for Agents, Issues, Threads,
-Environments, and Settings. Copied product-domain screens and backend contracts are intentionally
-excluded.
+The SwiftUI foundation now contains only Pathway-native placeholders for Dashboard, Issues, Agent
+Threads, Email, Source Control, Calendar, Projects, Contacts, Time Tracker, and Settings. Copied
+product-domain screens and backend contracts are intentionally excluded.
+
+The compact shell uses the floating navigation bar on iPhone and narrow iPad windows. Regular iPad
+windows use a system `NavigationSplitView`, including automatic collapse in narrow multitasking
+layouts. visionOS uses that shared sidebar/detail model in a native resizable window and opens the
+agent orchestrator and Settings as independent windows.
 
 The detached chat button in the main bar presents the native Agent Orchestrator sheet. The
 placeholder includes chat history and close controls, prompt suggestions, mentions, attachments,
@@ -67,4 +75,18 @@ xcodebuild \
   -scheme Pathway \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   build
+
+xcodebuild \
+  -project Pathway.xcodeproj \
+  -scheme Pathway \
+  -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M5)' \
+  build
+
+xcodebuild \
+  -project Pathway.xcodeproj \
+  -scheme Pathway \
+  -destination 'platform=visionOS Simulator,name=Apple Vision Pro' \
+  build
 ```
+
+Run all three builds whenever shared navigation, authentication, assets, or app wiring changes.
