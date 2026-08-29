@@ -83,7 +83,12 @@ export const reconcileAuthoritativeEnvironmentRepositories = Effect.fn(
       settled.push(intentKey);
       continue;
     }
-    const remoteName = repository.repositoryIdentity.locator.remoteName;
+    // Apply the URL to this checkout's actual primary remote. The resolver prefers upstream over
+    // origin, so copying the selected checkout's remote name could leave another checkout still
+    // identifying itself through an untouched upstream.
+    const remoteName =
+      project.repositoryIdentity?.locator.remoteName ??
+      repository.repositoryIdentity.locator.remoteName;
     const remotes = yield* input.processRunner
       .run({ command: "git", args: ["-C", project.workspaceRoot, "remote"] })
       .pipe(Effect.option);

@@ -17,11 +17,14 @@ import {
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import type { WorkspaceProject } from "./workspaceProjects.logic";
 
-function repositoryChoices(
+export function mergeProjectRepositoryChoices(
   projects: ReadonlyArray<WorkspaceProject>,
 ): ReadonlyArray<RepositoryIdentity> {
   const choices = new Map<string, RepositoryIdentity>();
   for (const project of projects) {
+    if (project.repositoryIdentity !== undefined) {
+      choices.set(project.repositoryIdentity.canonicalKey, project.repositoryIdentity);
+    }
     for (const member of project.group?.memberProjects ?? []) {
       const identity = member.repositoryIdentity;
       if (identity !== undefined && identity !== null) choices.set(identity.canonicalKey, identity);
@@ -50,7 +53,7 @@ export function MergeProjectDialog({
   const [sourceId, setSourceId] = useState<string | null>(null);
   const source = candidates.find((candidate) => candidate.cloudProjectId === sourceId) ?? null;
   const repositories = useMemo(
-    () => repositoryChoices(source === null ? [project] : [project, source]),
+    () => mergeProjectRepositoryChoices(source === null ? [project] : [project, source]),
     [project, source],
   );
   const [repositoryKey, setRepositoryKey] = useState<string | null>(null);

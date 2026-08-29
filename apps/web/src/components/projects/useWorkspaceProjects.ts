@@ -16,6 +16,7 @@ function useMergedWorkspaceProjects(groups: ReturnType<typeof useProjectGroups>)
           companyIds: option.companyIds.map(String),
           projectIds: option.projectIds.map(String),
           isCompanyProject: option.isCompanyProject,
+          repositoryIdentity: option.companyProject?.repositoryIdentity ?? null,
         })),
       }),
     [groups, options],

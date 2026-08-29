@@ -10,6 +10,7 @@
  * @module components/projects/workspaceProjects.logic
  */
 import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
+import type { RepositoryIdentity } from "@spiritdevs/contracts";
 
 /** The subset of `IssueProjectOption` this merge needs, so the module stays testable in isolation. */
 export interface WorkspaceProjectCandidate {
@@ -18,6 +19,7 @@ export interface WorkspaceProjectCandidate {
   readonly companyIds: ReadonlyArray<string>;
   readonly projectIds: ReadonlyArray<string>;
   readonly isCompanyProject: boolean;
+  readonly repositoryIdentity?: RepositoryIdentity | null;
 }
 
 export interface WorkspaceProject {
@@ -32,6 +34,8 @@ export interface WorkspaceProject {
   readonly checkoutCount: number;
   /** The company-owned id, when this project has been registered. */
   readonly cloudProjectId: string | null;
+  /** Cloud-level identity remains available when every checkout is offline. */
+  readonly repositoryIdentity?: RepositoryIdentity;
 }
 
 export type WorkspaceThreadStartAvailability = "unavailable" | "needs-checkout" | "available";
@@ -86,6 +90,12 @@ export function buildWorkspaceProjects(input: {
       group?.projectKey ??
       (candidate.isCompanyProject ? cloudProjectKey(candidate.id) : String(candidate.id));
     const existing = byKey.get(projectKey);
+    const repositoryIdentity =
+      candidate.repositoryIdentity ??
+      existing?.repositoryIdentity ??
+      group?.memberProjects.find((member) => member.repositoryIdentity != null)
+        ?.repositoryIdentity ??
+      null;
     // The same project id can arrive once per owning company. Keep one row and union the owners,
     // so a shared project is listed once rather than once per company.
     byKey.set(projectKey, {
@@ -97,6 +107,7 @@ export function buildWorkspaceProjects(input: {
       cloudProjectId: candidate.isCompanyProject
         ? candidate.id
         : (existing?.cloudProjectId ?? null),
+      ...(repositoryIdentity === null ? {} : { repositoryIdentity }),
     });
   }
 
@@ -104,6 +115,9 @@ export function buildWorkspaceProjects(input: {
   // the mistake that emptied the issue Project picker.
   for (const group of input.groups) {
     if (claimedGroupKeys.has(group.projectKey) || byKey.has(group.projectKey)) continue;
+    const repositoryIdentity = group.memberProjects.find(
+      (member) => member.repositoryIdentity != null,
+    )?.repositoryIdentity;
     byKey.set(group.projectKey, {
       projectKey: group.projectKey,
       displayName: group.displayName,
@@ -111,6 +125,7 @@ export function buildWorkspaceProjects(input: {
       group,
       checkoutCount: group.groupedProjectCount,
       cloudProjectId: null,
+      ...(repositoryIdentity == null ? {} : { repositoryIdentity }),
     });
   }
 

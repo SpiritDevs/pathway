@@ -183,12 +183,12 @@ describe("cloud project repository reconciliation", () => {
     ]);
   });
 
-  it.effect("updates the selected Git remote for an online checkout", () =>
+  it.effect("updates the checkout's actual primary Git remote", () =>
     Effect.gen(function* () {
       const projectId = ProjectId.make("project");
       const run = vi.fn((input: ProcessRunner.ProcessRunInput) =>
         Effect.succeed({
-          stdout: input.args.at(-1) === "remote" ? "origin\n" : "",
+          stdout: input.args.at(-1) === "remote" ? "origin\nupstream\n" : "",
           stderr: "",
           code: 0,
           timedOut: false,
@@ -205,7 +205,14 @@ describe("cloud project repository reconciliation", () => {
               id: projectId,
               title: "Pathway",
               workspaceRoot: "/work/pathway",
-              repositoryIdentity: null,
+              repositoryIdentity: {
+                canonicalKey: "github.com/another/pathway",
+                locator: {
+                  source: "git-remote",
+                  remoteName: "upstream",
+                  remoteUrl: "https://github.com/another/pathway.git",
+                },
+              },
               faviconPath: null,
               defaultModelSelection: null,
               scripts: [],
@@ -238,7 +245,7 @@ describe("cloud project repository reconciliation", () => {
           "/work/pathway",
           "remote",
           "set-url",
-          "origin",
+          "upstream",
           "https://github.com/SpiritDevs/pathway.git",
         ],
       ]);

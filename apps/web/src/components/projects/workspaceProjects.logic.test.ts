@@ -42,6 +42,14 @@ function candidate(overrides: Partial<WorkspaceProjectCandidate>): WorkspaceProj
 
 describe("workspace project list", () => {
   it("keeps a company project that no machine has a checkout of", () => {
+    const repositoryIdentity = {
+      canonicalKey: "github.com/spiritdevs/pathway",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "https://github.com/SpiritDevs/pathway.git",
+      },
+    };
     const projects = buildWorkspaceProjects({
       groups: [],
       candidates: [
@@ -51,6 +59,7 @@ describe("workspace project list", () => {
           companyIds: ["company-acme"],
           projectIds: ["cloud-planned"],
           isCompanyProject: true,
+          repositoryIdentity,
         }),
       ],
     });
@@ -62,6 +71,7 @@ describe("workspace project list", () => {
         group: null,
         checkoutCount: 0,
         cloudProjectId: "cloud-planned",
+        repositoryIdentity,
       },
     ]);
   });

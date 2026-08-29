@@ -32,6 +32,52 @@ function trimmed(value: string, label: string): string {
   return result;
 }
 
+/** Keeps a merge comfortably below Convex's single-transaction read/write limits. */
+const PROJECT_MERGE_MAX_AFFECTED_ROWS = 300;
+const PROJECT_MERGE_MAX_COMPANY_SCAN_ROWS = 2_000;
+
+type StoredRepositoryIdentity = NonNullable<Doc<"environmentBindings">["repositoryIdentity"]>;
+
+function sameRepositoryIdentity(
+  left: StoredRepositoryIdentity,
+  right: StoredRepositoryIdentity,
+): boolean {
+  return (
+    left.canonicalKey === right.canonicalKey &&
+    left.locator.source === right.locator.source &&
+    left.locator.remoteName === right.locator.remoteName &&
+    left.locator.remoteUrl === right.locator.remoteUrl
+  );
+}
+
+/** Empty is company-wide, so it absorbs every narrower team scope. */
+function mergedProjectTeamIds(
+  sourceTeamIds: ReadonlyArray<string>,
+  targetTeamIds: ReadonlyArray<string>,
+): string[] {
+  return sourceTeamIds.length === 0 || targetTeamIds.length === 0
+    ? []
+    : [...new Set([...targetTeamIds, ...sourceTeamIds])];
+}
+
+function projectTeamScopeWidened(
+  previousTeamIds: ReadonlyArray<string>,
+  nextTeamIds: ReadonlyArray<string>,
+): boolean {
+  if (previousTeamIds.length === 0) return false;
+  if (nextTeamIds.length === 0) return true;
+  const previous = new Set(previousTeamIds);
+  return nextTeamIds.some((teamId) => !previous.has(teamId));
+}
+
+function assertBoundedProjectMergeRows(label: string, count: number, maximum: number): void {
+  if (count <= maximum) return;
+  throw backendError(
+    "invalid-arguments",
+    `This merge affects too many ${label} for one safe transaction. Reduce the project data or contact support.`,
+  );
+}
+
 interface ProjectIssueData {
   readonly issues: ReadonlyArray<Doc<"issues">>;
   readonly todos: ReadonlyArray<Doc<"issueTodos">>;
@@ -836,12 +882,20 @@ export const mergeCompanyProjects = mutation({
     requireRecordPermission(actor, "projects.manage", source.teamIds);
     requireRecordPermission(actor, "projects.manage", target.teamIds);
 
+    const combinedTeamIds = mergedProjectTeamIds(source.teamIds, target.teamIds);
+    const replayTargetScope = projectTeamScopeWidened(target.teamIds, combinedTeamIds);
+    const projectRowLimit = PROJECT_MERGE_MAX_AFFECTED_ROWS + 1;
+    const companyScanLimit = PROJECT_MERGE_MAX_COMPANY_SCAN_ROWS + 1;
+
     const [
       sourceBindings,
       targetBindings,
       sourceThreads,
+      targetThreads,
       sourceMilestones,
+      targetMilestones,
       sourceEmails,
+      targetEmails,
       commands,
       sourceIssues,
       automationJobs,
@@ -853,54 +907,100 @@ export const mergeCompanyProjects = mutation({
         .withIndex("by_company_and_project", (q) =>
           q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
         )
-        .collect(),
+        .take(projectRowLimit),
       ctx.db
         .query("environmentBindings")
         .withIndex("by_company_and_project", (q) =>
           q.eq("companyId", actor.company._id).eq("cloudProjectId", target._id),
         )
-        .collect(),
+        .take(projectRowLimit),
       ctx.db
         .query("agentThreads")
         .withIndex("by_company_and_project", (q) =>
           q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
         )
-        .collect(),
+        .take(projectRowLimit),
+      replayTargetScope
+        ? ctx.db
+            .query("agentThreads")
+            .withIndex("by_company_and_project", (q) =>
+              q.eq("companyId", actor.company._id).eq("cloudProjectId", target._id),
+            )
+            .take(projectRowLimit)
+        : Promise.resolve([]),
       ctx.db
         .query("issueMilestones")
         .withIndex("by_company_and_project", (q) =>
           q.eq("companyId", actor.company._id).eq("cloudProjectId", source.id),
         )
-        .collect(),
+        .take(projectRowLimit),
+      replayTargetScope
+        ? ctx.db
+            .query("issueMilestones")
+            .withIndex("by_company_and_project", (q) =>
+              q.eq("companyId", actor.company._id).eq("cloudProjectId", target.id),
+            )
+            .take(projectRowLimit)
+        : Promise.resolve([]),
       ctx.db
         .query("capturedEmails")
         .withIndex("by_company_and_project", (q) =>
           q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
         )
-        .collect(),
+        .take(projectRowLimit),
+      replayTargetScope
+        ? ctx.db
+            .query("capturedEmails")
+            .withIndex("by_company_and_project", (q) =>
+              q.eq("companyId", actor.company._id).eq("cloudProjectId", target._id),
+            )
+            .take(projectRowLimit)
+        : Promise.resolve([]),
       ctx.db
         .query("environmentCommands")
         .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-        .collect(),
+        .take(companyScanLimit),
       ctx.db
         .query("issues")
         .withIndex("by_company_and_project", (q) =>
           q.eq("companyId", actor.company._id).eq("projectId", source.id),
         )
-        .collect(),
+        .take(projectRowLimit),
       ctx.db
         .query("issueAutomationJobs")
         .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-        .collect(),
+        .take(companyScanLimit),
       ctx.db
         .query("slackChannelWatches")
         .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-        .collect(),
+        .take(companyScanLimit),
       ctx.db
         .query("slackIssueAutomationIntents")
         .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-        .collect(),
+        .take(companyScanLimit),
     ]);
+
+    for (const [label, rows] of [
+      ["source bindings", sourceBindings],
+      ["target bindings", targetBindings],
+      ["source threads", sourceThreads],
+      ["target threads", targetThreads],
+      ["source milestones", sourceMilestones],
+      ["target milestones", targetMilestones],
+      ["source captured emails", sourceEmails],
+      ["target captured emails", targetEmails],
+      ["source issues", sourceIssues],
+    ] as const) {
+      assertBoundedProjectMergeRows(label, rows.length, PROJECT_MERGE_MAX_AFFECTED_ROWS);
+    }
+    for (const [label, rows] of [
+      ["environment commands", commands],
+      ["automation jobs", automationJobs],
+      ["Slack watches", slackWatches],
+      ["Slack automation intents", slackIntents],
+    ] as const) {
+      assertBoundedProjectMergeRows(label, rows.length, PROJECT_MERGE_MAX_COMPANY_SCAN_ROWS);
+    }
 
     const targetConnectionKeys = new Set(
       targetBindings
@@ -918,15 +1018,16 @@ export const mergeCompanyProjects = mutation({
         "The projects already contain the same environment connection.",
       );
     }
-    const selectableRepositoryKeys = new Set(
-      [
-        source.repositoryIdentity?.canonicalKey,
-        target.repositoryIdentity?.canonicalKey,
-        ...sourceBindings.map((binding) => binding.repositoryIdentity?.canonicalKey),
-        ...targetBindings.map((binding) => binding.repositoryIdentity?.canonicalKey),
-      ].filter((key): key is string => key !== undefined),
+    const storedRepositoryIdentities = [
+      source.repositoryIdentity,
+      target.repositoryIdentity,
+      ...sourceBindings.map((binding) => binding.repositoryIdentity),
+      ...targetBindings.map((binding) => binding.repositoryIdentity),
+    ].filter((identity): identity is StoredRepositoryIdentity => identity != null);
+    const selectedRepositoryIdentity = storedRepositoryIdentities.find((identity) =>
+      sameRepositoryIdentity(identity, args.repositoryIdentity),
     );
-    if (!selectableRepositoryKeys.has(args.repositoryIdentity.canonicalKey)) {
+    if (selectedRepositoryIdentity === undefined) {
       throw backendError(
         "invalid-arguments",
         "Choose a Git repository already detected on one of these projects.",
@@ -934,7 +1035,38 @@ export const mergeCompanyProjects = mutation({
     }
 
     const { rootPath: _selectedRootPath, ...authoritativeRepositoryIdentity } =
-      args.repositoryIdentity;
+      selectedRepositoryIdentity;
+    const sourceCommands = commands.filter((row) => row.cloudProjectId === source._id);
+    const sourceAutomationJobs = automationJobs.filter((row) => row.cloudProjectId === source._id);
+    const sourceSlackIntents = slackIntents.filter((row) => row.cloudProjectId === source._id);
+    const affectedSlackWatches = slackWatches.flatMap((watch) => {
+      const direct = watch.cloudProjectId === source._id;
+      const trigger = replaceProjectReactionRoutes(watch.trigger, source.id, target.id);
+      const rules = replaceProjectRoutingRules(watch.rules, source.id, target.id);
+      return direct || trigger !== watch.trigger || rules !== watch.rules
+        ? [{ watch, direct, trigger, rules }]
+        : [];
+    });
+    const affectedRowCount =
+      [...targetBindings, ...sourceBindings].filter((binding) => binding.status !== "revoked")
+        .length +
+      sourceThreads.length +
+      targetThreads.length +
+      sourceMilestones.length +
+      targetMilestones.length +
+      sourceEmails.length +
+      targetEmails.length +
+      sourceIssues.length +
+      sourceCommands.length +
+      sourceAutomationJobs.length +
+      sourceSlackIntents.length +
+      affectedSlackWatches.length +
+      2;
+    assertBoundedProjectMergeRows(
+      "project records",
+      affectedRowCount,
+      PROJECT_MERGE_MAX_AFFECTED_ROWS,
+    );
     const now = Date.now();
     const changes: CompanyChange[] = [];
     const updatedBindings: Doc<"environmentBindings">[] = [];
@@ -969,7 +1101,7 @@ export const mergeCompanyProjects = mutation({
         entityKind: "agentThread",
         entityId: updated.id,
         changeKind: "upsert",
-        teamIds: [...new Set([...source.teamIds, ...target.teamIds])],
+        teamIds: combinedTeamIds,
         versionDocId: updated._id,
         payload: await encodeAgentThread(ctx, updated),
       });
@@ -982,7 +1114,7 @@ export const mergeCompanyProjects = mutation({
         entityKind: "capturedEmail",
         entityId: updated.id,
         changeKind: "upsert",
-        teamIds: [...new Set([...source.teamIds, ...target.teamIds])],
+        teamIds: combinedTeamIds,
         versionDocId: updated._id,
         payload: await encodeCapturedEmail(ctx, updated),
       });
@@ -996,7 +1128,7 @@ export const mergeCompanyProjects = mutation({
           entityKind: "issueMilestone",
           entityId: updated.id,
           changeKind: "upsert",
-          teamIds: [...new Set([...source.teamIds, ...target.teamIds])],
+          teamIds: combinedTeamIds,
           versionDocId: updated._id,
           payload: encodeIssueMilestone(actor.company, updated),
         });
@@ -1018,7 +1150,41 @@ export const mergeCompanyProjects = mutation({
       }
     }
 
-    for (const command of commands.filter((row) => row.cloudProjectId === source._id)) {
+    // A widened target scope has new readers. Replay its existing project-owned rows so those
+    // readers receive a complete snapshot rather than only the records moved from the source.
+    for (const thread of targetThreads) {
+      changes.push({
+        entityKind: "agentThread",
+        entityId: thread.id,
+        changeKind: "upsert",
+        teamIds: combinedTeamIds,
+        versionDocId: thread._id,
+        payload: await encodeAgentThread(ctx, thread),
+      });
+    }
+    for (const email of targetEmails) {
+      changes.push({
+        entityKind: "capturedEmail",
+        entityId: email.id,
+        changeKind: "upsert",
+        teamIds: combinedTeamIds,
+        versionDocId: email._id,
+        payload: await encodeCapturedEmail(ctx, email),
+      });
+    }
+    for (const milestone of targetMilestones) {
+      if (milestone.deletedAt !== null) continue;
+      changes.push({
+        entityKind: "issueMilestone",
+        entityId: milestone.id,
+        changeKind: "upsert",
+        teamIds: combinedTeamIds,
+        versionDocId: milestone._id,
+        payload: encodeIssueMilestone(actor.company, milestone),
+      });
+    }
+
+    for (const command of sourceCommands) {
       await ctx.db.patch(command._id, { cloudProjectId: target._id, updatedAt: now });
       const updated = await ctx.db.get(command._id);
       if (updated === null) throw backendError("entity-not-found", "A command vanished.");
@@ -1030,17 +1196,13 @@ export const mergeCompanyProjects = mutation({
         payload: await encodeEnvironmentCommand(ctx, updated),
       });
     }
-    for (const job of automationJobs.filter((row) => row.cloudProjectId === source._id)) {
+    for (const job of sourceAutomationJobs) {
       await ctx.db.patch(job._id, { cloudProjectId: target._id, updatedAt: now });
     }
-    for (const intent of slackIntents.filter((row) => row.cloudProjectId === source._id)) {
+    for (const intent of sourceSlackIntents) {
       await ctx.db.patch(intent._id, { cloudProjectId: target._id, updatedAt: now });
     }
-    for (const watch of slackWatches) {
-      const direct = watch.cloudProjectId === source._id;
-      const trigger = replaceProjectReactionRoutes(watch.trigger, source.id, target.id);
-      const rules = replaceProjectRoutingRules(watch.rules, source.id, target.id);
-      if (!direct && trigger === watch.trigger && rules === watch.rules) continue;
+    for (const { watch, direct, trigger, rules } of affectedSlackWatches) {
       await ctx.db.patch(watch._id, {
         ...(direct ? { cloudProjectId: target._id } : {}),
         ...(trigger === watch.trigger ? {} : { trigger }),
@@ -1050,7 +1212,6 @@ export const mergeCompanyProjects = mutation({
       });
     }
 
-    const combinedTeamIds = [...new Set([...target.teamIds, ...source.teamIds])];
     const preferredBindingId =
       target.preferredBindingId ??
       (source.preferredBindingId !== null &&
