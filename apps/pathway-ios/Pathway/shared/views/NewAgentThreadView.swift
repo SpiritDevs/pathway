@@ -27,7 +27,7 @@ struct NewAgentThreadView: View {
                         model: model,
                         selectedBindingID: $selectedBindingID,
                         chooseProject: { selectedProjectID = nil },
-                        didLaunch: close
+                        didLaunch: didLaunch
                     )
                 } else {
                     PathwayNewThreadProjectPicker(
@@ -126,6 +126,17 @@ struct NewAgentThreadView: View {
         dismiss()
     }
 
+    private func didLaunch(threadID: String) {
+        if let option = bindingOptions.first(where: { $0.id == selectedBindingID }) {
+            appModel.pendingThreadRoute = PathwayPendingThreadRoute(
+                companyId: option.binding.companyId,
+                environmentId: option.binding.binding.environmentId,
+                threadId: threadID
+            )
+        }
+        dismiss()
+    }
+
     private func unavailable(title: String, message: String) -> some View {
         ContentUnavailableView {
             Label(title, systemImage: "network.slash")
@@ -144,7 +155,7 @@ private struct NewAgentThreadComposer: View {
     let model: PathwayAgentThreadCreationModel?
     @Binding var selectedBindingID: String
     let chooseProject: () -> Void
-    let didLaunch: () -> Void
+    let didLaunch: (String) -> Void
 
     @FocusState private var promptFocused: Bool
     @State private var showsSettings = false
@@ -374,8 +385,8 @@ private struct NewAgentThreadComposer: View {
     private func launch(_ model: PathwayAgentThreadCreationModel) {
         promptFocused = false
         Task {
-            if await model.launch() != nil {
-                didLaunch()
+            if let threadID = await model.launch() {
+                didLaunch(threadID)
             }
         }
     }

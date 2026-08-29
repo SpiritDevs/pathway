@@ -14,6 +14,7 @@ enum MainTabSheet: String, Identifiable {
 
 struct MainTabView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(PathwayAppModel.self) private var appModel
     @State private var selectedDestination: AppDestination? = .dashboard
     @State private var presentedSheet: MainTabSheet?
 
@@ -73,6 +74,10 @@ struct MainTabView: View {
                     PathwaySettingsView()
                 }
             }
+        }
+        .onChange(of: appModel.pendingThreadRoute) { _, route in
+            guard route != nil else { return }
+            selectedDestination = .agentThreads
         }
     }
 }
@@ -407,15 +412,18 @@ struct PathwaySettingsView: View {
 #if os(visionOS)
     #Preview("Spatial app shell") {
         MainTabView()
+            .environment(PathwayAppModel())
     }
 #else
     #Preview("Compact app shell", traits: .fixedLayout(width: 430, height: 932)) {
         MainTabView()
+            .environment(PathwayAppModel())
     }
 
     #Preview("Regular app shell", traits: .fixedLayout(width: 1180, height: 820)) {
         MainTabView()
             .environment(\.horizontalSizeClass, .regular)
+            .environment(PathwayAppModel())
     }
 #endif
 

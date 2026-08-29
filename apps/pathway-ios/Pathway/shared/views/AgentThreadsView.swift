@@ -12,6 +12,7 @@ struct AgentThreadsView: View {
     @State private var isSnoozedExpanded = false
     @State private var isSettledExpanded = false
     @State private var settledVisibleCount = 10
+    @State private var routedThreadID: String?
 
     var body: some View {
         Group {
@@ -36,6 +37,19 @@ struct AgentThreadsView: View {
         .task(id: lifecycleRefreshKey) {
             guard let connect = appModel.connect else { return }
             await appModel.cloud.refreshLifecycleMetadata(using: connect)
+        }
+        .navigationDestination(item: $routedThreadID) { threadID in
+            if let thread = appModel.cloud.threads.first(where: { $0.id == threadID }) {
+                AgentThreadDetailRoute(thread: thread)
+            } else {
+                ContentUnavailableView(
+                    "Thread unavailable",
+                    systemImage: "bubble.left.and.bubble.right"
+                )
+            }
+        }
+        .task(id: appModel.pendingThreadRoute) {
+            await openPendingThread()
         }
         .accessibilityIdentifier("agent-threads-list")
     }
@@ -135,6 +149,26 @@ struct AgentThreadsView: View {
         appModel.cloud.threads.map { thread in
             "\(thread.id):\(thread.shell.updatedAt):\(thread.shell.branch ?? "")"
         }.joined(separator: "|")
+    }
+
+    private func openPendingThread() async {
+        guard appModel.pendingThreadRoute != nil else { return }
+        // The launched thread arrives through cloud sync moments after the composer
+        // dismisses, so wait for it briefly instead of dropping the navigation.
+        for _ in 0 ..< 40 {
+            guard !Task.isCancelled, let route = appModel.pendingThreadRoute else { return }
+            if let thread = appModel.cloud.threads.first(where: {
+                $0.companyId == route.companyId
+                    && $0.environmentId == route.environmentId
+                    && $0.threadId == route.threadId
+            }) {
+                appModel.pendingThreadRoute = nil
+                routedThreadID = thread.id
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        appModel.pendingThreadRoute = nil
     }
 
     private func threadLink(_ thread: PathwayAgentThread) -> some View {

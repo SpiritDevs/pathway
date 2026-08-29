@@ -8,11 +8,20 @@ enum AppAuthenticationState: Equatable {
     case signedIn
 }
 
+/// A thread the user just launched from the composer. The shell watches this to switch
+/// to Agent Threads and open the thread once it arrives through cloud sync.
+struct PathwayPendingThreadRoute: Equatable, Sendable {
+    let companyId: String
+    let environmentId: String
+    let threadId: String
+}
+
 @MainActor
 @Observable
 final class PathwayAppModel {
     private(set) var authenticationState: AppAuthenticationState = .restoring
     private(set) var authenticationErrorMessage: String?
+    var pendingThreadRoute: PathwayPendingThreadRoute?
     let cloud: PathwayCloudModel
     let connect: PathwayConnectClient?
 
