@@ -1,5 +1,40 @@
 import { focusOrderKeyBetween, sortFocuses } from "@spiritdevs/client-runtime/state/focuses";
-import type { Focus, FocusAssignment, FocusId } from "@spiritdevs/contracts/focus";
+import {
+  FocusProjectKey,
+  type Focus,
+  type FocusAssignment,
+  type FocusId,
+} from "@spiritdevs/contracts/focus";
+
+export interface FocusProjectOption {
+  readonly id: string;
+  readonly projectKeys: ReadonlyArray<FocusProjectKey>;
+  readonly name: string;
+}
+
+export function buildFocusProjectOptions(
+  groups: ReadonlyArray<{
+    readonly projectKey: string;
+    readonly displayName: string;
+    readonly memberProjectRefs: ReadonlyArray<{
+      readonly environmentId: string;
+      readonly projectId: string;
+    }>;
+  }>,
+): ReadonlyArray<FocusProjectOption> {
+  return groups
+    .flatMap((group): FocusProjectOption[] => {
+      const projectKeys = group.memberProjectRefs.map((projectRef) =>
+        FocusProjectKey.make(`${projectRef.environmentId}:${projectRef.projectId}`),
+      );
+      return projectKeys.length === 0
+        ? []
+        : [{ id: group.projectKey, projectKeys, name: group.displayName }];
+    })
+    .toSorted(
+      (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
+    );
+}
 
 export type ProjectFocusSelection = FocusId | "mixed" | "none";
 

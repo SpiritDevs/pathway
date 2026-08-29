@@ -15,12 +15,9 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { FOCUS_ICON_OPTIONS, FocusIcon } from "./FocusIcon";
+import { projectFocusSelection, type FocusProjectOption } from "./FocusStrip.logic";
 
-export interface FocusProjectOption {
-  readonly projectKey: FocusProjectKey;
-  readonly name: string;
-  readonly environmentLabel: string | null;
-}
+export type { FocusProjectOption } from "./FocusStrip.logic";
 
 export const FOCUS_ACCENT_COLORS = [
   "#3b82f6",
@@ -72,11 +69,13 @@ export function FocusEditor(props: {
     [props.assignments],
   );
 
-  const toggleProject = (projectKey: FocusProjectKey, checked: boolean) => {
+  const toggleProject = (projectKeys: ReadonlyArray<FocusProjectKey>, checked: boolean) => {
     setSelectedProjectKeys((current) => {
       const next = new Set(current);
-      if (checked) next.add(projectKey);
-      else next.delete(projectKey);
+      for (const projectKey of projectKeys) {
+        if (checked) next.add(projectKey);
+        else next.delete(projectKey);
+      }
       return next;
     });
   };
@@ -237,39 +236,55 @@ export function FocusEditor(props: {
             </p>
           ) : (
             props.projects.map((project) => {
-              const assignedFocusId = assignmentByProject.get(project.projectKey);
-              const assignedFocus = assignedFocusId ? focusById.get(assignedFocusId) : undefined;
-              const moving =
-                selectedProjectKeys.has(project.projectKey) &&
-                assignedFocus !== undefined &&
-                assignedFocus.id !== focus?.id;
+              const selectedCount = project.projectKeys.filter((projectKey) =>
+                selectedProjectKeys.has(projectKey),
+              ).length;
+              const checked = selectedCount === project.projectKeys.length;
+              const indeterminate = selectedCount > 0 && !checked;
+              const assignment = projectFocusSelection(project.projectKeys, props.assignments);
+              const movingFromFocusIds = new Set(
+                project.projectKeys.flatMap((projectKey) => {
+                  if (!selectedProjectKeys.has(projectKey)) return [];
+                  const assignedFocusId = assignmentByProject.get(projectKey);
+                  return assignedFocusId !== undefined && assignedFocusId !== focus?.id
+                    ? [assignedFocusId]
+                    : [];
+                }),
+              );
+              const movingFromFocuses = [...movingFromFocusIds]
+                .map((focusId) => focusById.get(focusId))
+                .filter((assignedFocus): assignedFocus is Focus => assignedFocus !== undefined);
+              const assignmentLabel =
+                assignment === "none"
+                  ? "No Focus"
+                  : assignment === "mixed"
+                    ? "Mixed Focuses"
+                    : (focusById.get(assignment)?.name ?? "No Focus");
+              const statusLabel =
+                movingFromFocuses.length === 1
+                  ? `Moving from ${movingFromFocuses[0]!.name}`
+                  : movingFromFocuses.length > 1
+                    ? "Moving from multiple Focuses"
+                    : assignmentLabel;
               return (
                 <label
-                  key={project.projectKey}
+                  key={project.id}
                   className="flex cursor-pointer items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent/70"
                 >
                   <Checkbox
                     className="mt-0.5"
-                    checked={selectedProjectKeys.has(project.projectKey)}
+                    checked={checked}
+                    indeterminate={indeterminate}
                     disabled={saving}
                     onCheckedChange={(checked) =>
-                      toggleProject(project.projectKey, checked === true)
+                      toggleProject(project.projectKeys, checked === true)
                     }
                   />
                   <span className="min-w-0 flex-1">
                     <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-foreground">
                       <span className="truncate">{project.name}</span>
-                      {project.environmentLabel ? (
-                        <span className="truncate text-[10px] font-normal text-muted-foreground/70">
-                          {project.environmentLabel}
-                        </span>
-                      ) : null}
                     </span>
-                    <span className="block text-[10px] text-muted-foreground">
-                      {moving
-                        ? `Moving from ${assignedFocus.name}`
-                        : (assignedFocus?.name ?? "No Focus")}
-                    </span>
+                    <span className="block text-[10px] text-muted-foreground">{statusLabel}</span>
                   </span>
                 </label>
               );

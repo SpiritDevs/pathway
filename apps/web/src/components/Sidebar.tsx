@@ -228,9 +228,10 @@ import {
   focusUnreadCountAtom,
   visibleFocusProjectKeysAtom,
 } from "../cloud/focusReadModel";
-import { FocusProjectKey, type FocusNotification } from "@spiritdevs/contracts/focus";
+import type { FocusNotification } from "@spiritdevs/contracts/focus";
 import { FocusStrip } from "./focus/FocusStrip";
 import { FocusQuickAssignItems } from "./focus/FocusQuickAssign";
+import { buildFocusProjectOptions } from "./focus/FocusStrip.logic";
 import { FocusIcon } from "./focus/FocusIcon";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
@@ -2141,23 +2142,8 @@ export default function Sidebar() {
     [projectGroups],
   );
   const focusEditorProjects = useMemo(
-    () =>
-      projects
-        .map((project) => {
-          const projectKey = FocusProjectKey.make(`${project.environmentId}:${project.id}`);
-          return {
-            projectKey,
-            name: projectDisplayNameByKey.get(String(projectKey)) ?? project.title,
-            environmentLabel: environmentLabelById.get(project.environmentId) ?? null,
-          };
-        })
-        .toSorted(
-          (left, right) =>
-            left.name.localeCompare(right.name) ||
-            left.environmentLabel?.localeCompare(right.environmentLabel ?? "") ||
-            left.projectKey.localeCompare(right.projectKey),
-        ),
-    [environmentLabelById, projectDisplayNameByKey, projects],
+    () => buildFocusProjectOptions(projectGroups),
+    [projectGroups],
   );
 
   // now is quantized to the minute so effectiveSettled memoization doesn't

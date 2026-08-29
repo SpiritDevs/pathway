@@ -11,7 +11,8 @@ project and thread available in the current company scope. You cannot edit, reor
 
 Select **Create Focus** at the right end of the Focus Strip, then choose a name, icon, color, and
 projects. Right-click a Focus in the strip to edit it. Drag Focuses in the strip to change their
-order.
+order. Connections grouped as one project in the project dropdown also appear as one project here.
+Assigning that row applies the Focus to every connection in the group.
 
 A project can belong to one Focus at a time. Selecting a project that already belongs to another
 Focus shows **Moving from _Focus name_** and moves the project when you save. You can also assign a
