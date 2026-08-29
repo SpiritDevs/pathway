@@ -1,0 +1,3 @@
+# Native iOS keeps Agent Thread source control thread-scoped
+
+The native iOS Agent Thread view supports the source-control behavior required to complete work in that thread: current branch and worktree state, changed files and full diffs, checkpoints and revert, safe branch switching, commit, push, pull or rebase recovery, and pull-request creation with progress and actionable failures. Pushes, checkpoint reverts, destructive branch changes, and pull-request creation require explicit confirmation. Broader repository browsing and management belongs to the separate Source Control surface; Agent Threads always scopes actions to the project, worktree, and changes owned by the active thread.

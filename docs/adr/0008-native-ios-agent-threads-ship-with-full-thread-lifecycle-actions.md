@@ -1,0 +1,3 @@
+# Native iOS Agent Threads ship with full thread lifecycle actions
+
+The first native iOS Agent Threads list is an operational client rather than a read-only index: it supports search and creation, pinning and pinned ordering, snooze and unsnooze, settle and reopen, archive and restore, and confirmed deletion. Each row represents streaming, waiting for approval or user input, completed, failed, offline, and stale-cache states without inventing mobile-only lifecycle semantics. Company, environment, project, provider, and status provenance is retained from the start so richer list filters can be added later without changing stored identity or commands.

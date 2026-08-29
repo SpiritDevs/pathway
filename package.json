@@ -15,6 +15,7 @@
     "start:mock-update-server": "node scripts/mock-update-server.ts",
     "icons:export": "node scripts/export-brand-icons.ts",
     "icons:check": "node scripts/export-brand-icons.ts --check",
+    "ios:configure": "node scripts/configure-pathway-ios.ts",
     "build": "vp run --filter './apps/*' --filter './packages/*' --filter './oxlint-plugin-pathway' --filter './scripts' build",
     "build:desktop": "vp run --filter @spiritdevs/desktop --filter @spiritdevs/pathway build",
     "build:resource-monitor": "cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml",
