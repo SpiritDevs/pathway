@@ -8,6 +8,7 @@ import {
   type RepositoryIdentity,
 } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 
 import type { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -112,6 +113,36 @@ export const reconcileAuthoritativeEnvironmentRepositories = Effect.fn(
     if (result._tag === "Some" && result.value.code === 0) settled.push(intentKey);
   }
   return settled;
+});
+
+/** Retries unsettled Git writes without waiting for unrelated cloud state to change. */
+export const reconcileAuthoritativeEnvironmentRepositoriesWithRetry = Effect.fn(
+  "cloud.project_reconciler.repository_retry",
+)(function* (input: {
+  readonly repositories: ReadonlyArray<AuthoritativeEnvironmentRepository>;
+  readonly projects: ProjectService.ProjectService["Service"];
+  readonly processRunner: ProcessRunner.ProcessRunner["Service"];
+  readonly attempts?: number;
+  readonly retryDelay?: Duration.Input;
+}) {
+  const attempts = Math.max(1, input.attempts ?? 5);
+  let pending = [...input.repositories];
+  const settled = new Set<string>();
+  for (let attempt = 0; attempt < attempts && pending.length > 0; attempt += 1) {
+    const reconciled = yield* reconcileAuthoritativeEnvironmentRepositories({
+      repositories: pending,
+      projects: input.projects,
+      processRunner: input.processRunner,
+    });
+    for (const intentKey of reconciled) settled.add(intentKey);
+    pending = pending.filter(
+      (repository) => !settled.has(authoritativeEnvironmentRepositoryIntentKey(repository)),
+    );
+    if (pending.length > 0 && attempt + 1 < attempts) {
+      yield* Effect.sleep(input.retryDelay ?? Duration.seconds(1));
+    }
+  }
+  return [...settled];
 });
 
 export const revokedEnvironmentProjectIntentKey = (binding: RevokedEnvironmentProject): string =>

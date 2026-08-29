@@ -98,7 +98,7 @@ import { makeSyncSqliteExecutor } from "./syncSqliteExecutor.ts";
 import {
   authoritativeEnvironmentRepositories,
   authoritativeEnvironmentRepositoryIntentKey,
-  reconcileAuthoritativeEnvironmentRepositories,
+  reconcileAuthoritativeEnvironmentRepositoriesWithRetry,
   reconcileRevokedEnvironmentProjects,
   revokedEnvironmentProjectIntentKey,
   revokedEnvironmentProjects,
@@ -732,11 +732,12 @@ const runCloudSyncCompany = Effect.fn("cloud.sync_daemon.run_company")(function*
                   !settledRepositories.has(authoritativeEnvironmentRepositoryIntentKey(repository)),
               );
               if (pendingRepositories.length === 0) return;
-              const reconciledRepositories = yield* reconcileAuthoritativeEnvironmentRepositories({
-                repositories: pendingRepositories,
-                projects: projects.value,
-                processRunner: processRunner.value,
-              });
+              const reconciledRepositories =
+                yield* reconcileAuthoritativeEnvironmentRepositoriesWithRetry({
+                  repositories: pendingRepositories,
+                  projects: projects.value,
+                  processRunner: processRunner.value,
+                });
               if (reconciledRepositories.length > 0) {
                 yield* Ref.update(
                   reconciledProjectRepositories,

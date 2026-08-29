@@ -20,6 +20,7 @@ export interface WorkspaceProjectCandidate {
   readonly projectIds: ReadonlyArray<string>;
   readonly isCompanyProject: boolean;
   readonly repositoryIdentity?: RepositoryIdentity | null;
+  readonly repositoryIdentities?: ReadonlyArray<RepositoryIdentity>;
 }
 
 export interface WorkspaceProject {
@@ -36,6 +37,8 @@ export interface WorkspaceProject {
   readonly cloudProjectId: string | null;
   /** Cloud-level identity remains available when every checkout is offline. */
   readonly repositoryIdentity?: RepositoryIdentity;
+  /** Binding-derived choices stay current even when their environments disconnect. */
+  readonly repositoryIdentities?: ReadonlyArray<RepositoryIdentity>;
 }
 
 export type WorkspaceThreadStartAvailability = "unavailable" | "needs-checkout" | "available";
@@ -96,6 +99,14 @@ export function buildWorkspaceProjects(input: {
       group?.memberProjects.find((member) => member.repositoryIdentity != null)
         ?.repositoryIdentity ??
       null;
+    const repositoryIdentities = [
+      ...(existing?.repositoryIdentities ?? []),
+      ...(candidate.repositoryIdentities ?? []),
+    ].filter(
+      (identity, index, identities) =>
+        identities.findIndex((candidate) => candidate.canonicalKey === identity.canonicalKey) ===
+        index,
+    );
     // The same project id can arrive once per owning company. Keep one row and union the owners,
     // so a shared project is listed once rather than once per company.
     byKey.set(projectKey, {
@@ -108,6 +119,7 @@ export function buildWorkspaceProjects(input: {
         ? candidate.id
         : (existing?.cloudProjectId ?? null),
       ...(repositoryIdentity === null ? {} : { repositoryIdentity }),
+      ...(repositoryIdentities.length === 0 ? {} : { repositoryIdentities }),
     });
   }
 
@@ -118,6 +130,14 @@ export function buildWorkspaceProjects(input: {
     const repositoryIdentity = group.memberProjects.find(
       (member) => member.repositoryIdentity != null,
     )?.repositoryIdentity;
+    const repositoryIdentities = group.memberProjects
+      .map((member) => member.repositoryIdentity)
+      .filter((identity): identity is RepositoryIdentity => identity != null)
+      .filter(
+        (identity, index, identities) =>
+          identities.findIndex((candidate) => candidate.canonicalKey === identity.canonicalKey) ===
+          index,
+      );
     byKey.set(group.projectKey, {
       projectKey: group.projectKey,
       displayName: group.displayName,
@@ -126,6 +146,7 @@ export function buildWorkspaceProjects(input: {
       checkoutCount: group.groupedProjectCount,
       cloudProjectId: null,
       ...(repositoryIdentity == null ? {} : { repositoryIdentity }),
+      ...(repositoryIdentities.length === 0 ? {} : { repositoryIdentities }),
     });
   }
 

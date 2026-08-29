@@ -422,7 +422,48 @@ describe("company project merge", () => {
         updatedAt: NOW,
         version: 0,
       });
-      return { projectId, bindingId, threadId };
+      const issueViewId = await ctx.db.insert("issueViews", {
+        id: "0198c0de-aaaa-7aaa-8aaa-000000000008",
+        companyId: ids.companyId,
+        ownerMembershipId: ids.membershipId,
+        visibility: "company",
+        teamIds: [],
+        name: "Duplicate project work",
+        config: {
+          tab: "active",
+          projectIds: [PENDING_PROJECT_ID, PROJECT_ID],
+          grouping: "status",
+          sortMode: "manual",
+          viewMode: "list",
+        },
+        position: 0,
+        createdAt: NOW,
+        updatedAt: NOW,
+        deletedAt: null,
+        version: 0,
+      });
+      const commandId = await ctx.db.insert("environmentCommands", {
+        id: "0198c0de-aaaa-7aaa-8aaa-000000000009",
+        companyId: ids.companyId,
+        targetEnvironmentId: "environment-laptop",
+        cloudProjectId: projectId,
+        bindingId: "0198c0de-aaaa-7aaa-8aaa-000000000007",
+        kind: "startThread",
+        args: { projectId: "local-pathway-laptop" },
+        issuedByMembershipId: ids.membershipId,
+        onBehalfOfActor: { kind: "member", membershipId: MEMBERSHIP_ID },
+        state: "claimed",
+        claimedByEnvironmentId: "environment-laptop",
+        claimGeneration: 2,
+        claimExpiresAt: NOW + 60_000,
+        expiresAt: NOW + 120_000,
+        result: null,
+        error: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+        version: 0,
+      });
+      return { projectId, bindingId, threadId, issueViewId, commandId };
     });
     const repositoryIdentity = {
       canonicalKey: "github.com/spiritdevs/pathway",
@@ -447,6 +488,8 @@ describe("company project merge", () => {
       source: await ctx.db.get(duplicate.projectId),
       binding: await ctx.db.get(duplicate.bindingId),
       thread: await ctx.db.get(duplicate.threadId),
+      issueView: await ctx.db.get(duplicate.issueViewId),
+      command: await ctx.db.get(duplicate.commandId),
       changes: await ctx.db.query("syncChanges").collect(),
     }));
     expect(result).toEqual({ movedBindings: 1, movedThreads: 1, movedIssues: 0 });
@@ -466,6 +509,15 @@ describe("company project merge", () => {
       },
     });
     expect(state.thread?.cloudProjectId).toBe(ids.projectId);
+    expect(state.issueView?.config).toMatchObject({ projectIds: [PROJECT_ID] });
+    expect(state.command).toMatchObject({
+      cloudProjectId: ids.projectId,
+      bindingId: null,
+      state: "pending",
+      claimedByEnvironmentId: null,
+      claimGeneration: 3,
+      claimExpiresAt: null,
+    });
     expect(state.changes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -473,6 +525,10 @@ describe("company project merge", () => {
           entityId: `${ENVIRONMENT_ID}:thread-1`,
         }),
         expect.objectContaining({ entityKind: "issueMilestone", entityId: MILESTONE_ID }),
+        expect.objectContaining({
+          entityKind: "issueView",
+          entityId: "0198c0de-aaaa-7aaa-8aaa-000000000008",
+        }),
       ]),
     );
   });

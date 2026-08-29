@@ -23,7 +23,7 @@ import {
   requirePermission,
   requireRecordPermission,
 } from "./lib/identity.ts";
-import { encodeIssue, encodeIssueMilestone } from "./lib/issueApply.ts";
+import { encodeIssue, encodeIssueMilestone, encodeIssueView } from "./lib/issueApply.ts";
 import { domainIdArg, repositoryIdentityArg } from "./lib/validators.ts";
 
 function trimmed(value: string, label: string): string {
@@ -262,6 +262,21 @@ function replaceProjectRoutingRules(rules: unknown, fromProjectId: string, toPro
     return { ...ruleValue, cloudProjectId: toProjectId };
   });
   return changed ? updated : rules;
+}
+
+function replaceIssueViewProjectIds(config: unknown, fromProjectId: string, toProjectId: string) {
+  const value = record(config);
+  if (value === null || !Array.isArray(value["projectIds"])) return config;
+  const projectIds = value["projectIds"];
+  if (!projectIds.includes(fromProjectId)) return config;
+  return {
+    ...value,
+    projectIds: [
+      ...new Set(
+        projectIds.map((projectId) => (projectId === fromProjectId ? toProjectId : projectId)),
+      ),
+    ],
+  };
 }
 
 function hasSlackRoutes(configurationVersion: 2 | undefined, trigger: unknown, rules: unknown) {
@@ -901,6 +916,7 @@ export const mergeCompanyProjects = mutation({
       automationJobs,
       slackWatches,
       slackIntents,
+      issueViews,
     ] = await Promise.all([
       ctx.db
         .query("environmentBindings")
@@ -978,6 +994,10 @@ export const mergeCompanyProjects = mutation({
         .query("slackIssueAutomationIntents")
         .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
         .take(companyScanLimit),
+      ctx.db
+        .query("issueViews")
+        .withIndex("by_company_and_visibility", (q) => q.eq("companyId", actor.company._id))
+        .take(companyScanLimit),
     ]);
 
     for (const [label, rows] of [
@@ -998,6 +1018,7 @@ export const mergeCompanyProjects = mutation({
       ["automation jobs", automationJobs],
       ["Slack watches", slackWatches],
       ["Slack automation intents", slackIntents],
+      ["saved issue views", issueViews],
     ] as const) {
       assertBoundedProjectMergeRows(label, rows.length, PROJECT_MERGE_MAX_COMPANY_SCAN_ROWS);
     }
@@ -1047,6 +1068,11 @@ export const mergeCompanyProjects = mutation({
         ? [{ watch, direct, trigger, rules }]
         : [];
     });
+    const affectedIssueViews = issueViews.flatMap((view) => {
+      if (view.deletedAt !== null) return [];
+      const config = replaceIssueViewProjectIds(view.config, source.id, target.id);
+      return config === view.config ? [] : [{ view, config }];
+    });
     const affectedRowCount =
       [...targetBindings, ...sourceBindings].filter((binding) => binding.status !== "revoked")
         .length +
@@ -1061,6 +1087,7 @@ export const mergeCompanyProjects = mutation({
       sourceAutomationJobs.length +
       sourceSlackIntents.length +
       affectedSlackWatches.length +
+      affectedIssueViews.length +
       2;
     assertBoundedProjectMergeRows(
       "project records",
@@ -1185,7 +1212,20 @@ export const mergeCompanyProjects = mutation({
     }
 
     for (const command of sourceCommands) {
-      await ctx.db.patch(command._id, { cloudProjectId: target._id, updatedAt: now });
+      const wasClaimed = command.state === "claimed";
+      await ctx.db.patch(command._id, {
+        cloudProjectId: target._id,
+        ...(wasClaimed
+          ? {
+              state: "pending" as const,
+              bindingId: null,
+              claimedByEnvironmentId: null,
+              claimGeneration: command.claimGeneration + 1,
+              claimExpiresAt: null,
+            }
+          : {}),
+        updatedAt: now,
+      });
       const updated = await ctx.db.get(command._id);
       if (updated === null) throw backendError("entity-not-found", "A command vanished.");
       changes.push({
@@ -1209,6 +1249,19 @@ export const mergeCompanyProjects = mutation({
         ...(rules === watch.rules ? {} : { rules }),
         revision: watch.revision + 1,
         updatedAt: now,
+      });
+    }
+    for (const { view, config } of affectedIssueViews) {
+      await ctx.db.patch(view._id, { config, updatedAt: now });
+      const updated = await ctx.db.get(view._id);
+      if (updated === null) throw backendError("entity-not-found", "A saved issue view vanished.");
+      changes.push({
+        entityKind: "issueView",
+        entityId: updated.id,
+        changeKind: "upsert",
+        teamIds: updated.visibility === "teams" ? updated.teamIds : [],
+        versionDocId: updated._id,
+        payload: await encodeIssueView(ctx, actor.company, updated),
       });
     }
 

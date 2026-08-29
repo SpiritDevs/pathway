@@ -50,6 +50,14 @@ describe("workspace project list", () => {
         remoteUrl: "https://github.com/SpiritDevs/pathway.git",
       },
     };
+    const bindingRepositoryIdentity = {
+      canonicalKey: "github.com/spiritdevs/pathway-next",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "https://github.com/SpiritDevs/pathway-next.git",
+      },
+    };
     const projects = buildWorkspaceProjects({
       groups: [],
       candidates: [
@@ -60,6 +68,7 @@ describe("workspace project list", () => {
           projectIds: ["cloud-planned"],
           isCompanyProject: true,
           repositoryIdentity,
+          repositoryIdentities: [bindingRepositoryIdentity],
         }),
       ],
     });
@@ -72,6 +81,7 @@ describe("workspace project list", () => {
         checkoutCount: 0,
         cloudProjectId: "cloud-planned",
         repositoryIdentity,
+        repositoryIdentities: [bindingRepositoryIdentity],
       },
     ]);
   });

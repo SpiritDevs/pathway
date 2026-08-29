@@ -22,7 +22,13 @@ export function mergeProjectRepositoryChoices(
 ): ReadonlyArray<RepositoryIdentity> {
   const choices = new Map<string, RepositoryIdentity>();
   for (const project of projects) {
-    if (project.repositoryIdentity !== undefined) {
+    for (const identity of project.repositoryIdentities ?? []) {
+      choices.set(identity.canonicalKey, identity);
+    }
+    if (
+      project.repositoryIdentity !== undefined &&
+      !choices.has(project.repositoryIdentity.canonicalKey)
+    ) {
       choices.set(project.repositoryIdentity.canonicalKey, project.repositoryIdentity);
     }
     for (const member of project.group?.memberProjects ?? []) {

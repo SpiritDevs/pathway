@@ -3,6 +3,7 @@ import { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { CloudProjectId, EnvironmentBindingId } from "@spiritdevs/contracts/cloudProject";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { describe, expect, it, vi } from "@effect/vitest";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 
 import type { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
@@ -11,6 +12,7 @@ import type * as ProcessRunner from "../processRunner.ts";
 import {
   authoritativeEnvironmentRepositories,
   reconcileAuthoritativeEnvironmentRepositories,
+  reconcileAuthoritativeEnvironmentRepositoriesWithRetry,
   reconcileRevokedEnvironmentProjects,
   revokedEnvironmentProjects,
 } from "./cloudProjectReconciler.ts";
@@ -249,6 +251,64 @@ describe("cloud project repository reconciliation", () => {
           "https://github.com/SpiritDevs/pathway.git",
         ],
       ]);
+      expect(reconciled).toEqual(["binding:github.com/spiritdevs/pathway:8"]);
+    }),
+  );
+
+  it.effect("retries an unsettled Git remote without another cloud state change", () =>
+    Effect.gen(function* () {
+      const projectId = ProjectId.make("project");
+      let setUrlAttempts = 0;
+      const run = vi.fn((input: ProcessRunner.ProcessRunInput) => {
+        const settingUrl = input.args.includes("set-url");
+        if (settingUrl) setUrlAttempts += 1;
+        return Effect.succeed({
+          stdout: input.args.at(-1) === "remote" ? "origin\n" : "",
+          stderr: "",
+          code: settingUrl && setUrlAttempts === 1 ? 1 : 0,
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdoutInvalidUtf8: false,
+          stderrInvalidUtf8: false,
+        });
+      });
+      const projects = {
+        snapshot: Effect.succeed({
+          projects: [
+            {
+              id: projectId,
+              title: "Pathway",
+              workspaceRoot: "/work/pathway",
+              repositoryIdentity: null,
+              faviconPath: null,
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: "2026-08-20T00:00:00.000Z",
+              updatedAt: "2026-08-20T00:00:00.000Z",
+              deletedAt: null,
+            },
+          ],
+          updatedAt: "2026-08-20T00:00:00.000Z",
+        }),
+      } as unknown as ProjectService.ProjectService["Service"];
+
+      const reconciled = yield* reconcileAuthoritativeEnvironmentRepositoriesWithRetry({
+        repositories: [
+          {
+            bindingId: "binding",
+            localProjectId: projectId,
+            repositoryIdentity: identity,
+            updatedAt: 8,
+          },
+        ],
+        projects,
+        processRunner: { run } as unknown as ProcessRunner.ProcessRunner["Service"],
+        attempts: 2,
+        retryDelay: Duration.zero,
+      });
+
+      expect(setUrlAttempts).toBe(2);
       expect(reconciled).toEqual(["binding:github.com/spiritdevs/pathway:8"]);
     }),
   );
