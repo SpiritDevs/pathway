@@ -91,17 +91,13 @@ function FocusTabVisual(props: {
   return (
     <span
       data-focus-magnify
-      className="relative flex size-4 origin-center items-center justify-center transform-gpu transition-transform duration-150 ease-out [transform:scale(var(--focus-scale,0.68))] motion-reduce:transform-none motion-reduce:transition-none"
-      style={{ color: props.accentColor }}
+      className={cn(
+        "relative flex size-4 origin-center items-center justify-center transform-gpu transition-transform duration-150 ease-out [transform:scale(var(--focus-scale,0.68))] motion-reduce:transform-none motion-reduce:transition-none",
+        !props.active && "text-sidebar-muted-foreground/70",
+      )}
+      style={{ color: props.active ? props.accentColor : undefined }}
     >
       {props.children}
-      {props.active ? (
-        <span
-          aria-hidden
-          className="absolute -bottom-1 size-1 rounded-full bg-current"
-          style={{ color: props.accentColor }}
-        />
-      ) : null}
     </span>
   );
 }
@@ -129,8 +125,7 @@ const SortableFocusTab = memo(function SortableFocusTab(props: {
         props.onEdit();
       }}
       className={cn(
-        "flex h-7 w-6 shrink-0 cursor-pointer touch-none items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-        props.active && "bg-sidebar-row-active",
+        "flex h-7 w-6 shrink-0 cursor-pointer touch-none items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
         isDragging && "z-10 opacity-80",
       )}
       style={{ transform: CSS.Transform.toString(transform), transition }}
@@ -274,9 +269,8 @@ export function FocusStrip(props: {
             title="All"
             onClick={() => props.onActiveFocusChange(ALL_FOCUS_ID)}
             className={cn(
-              "flex h-7 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
-              props.activeFocusId === ALL_FOCUS_ID &&
-                "bg-sidebar-row-active text-sidebar-foreground",
+              "flex h-7 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+              props.activeFocusId === ALL_FOCUS_ID && "text-sidebar-foreground",
             )}
           >
             <FocusTabVisual active={props.activeFocusId === ALL_FOCUS_ID}>

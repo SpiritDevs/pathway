@@ -1,9 +1,12 @@
 import type { ScopedProjectRef } from "@spiritdevs/contracts";
 import { scopedProjectKey } from "@spiritdevs/client-runtime/environment";
+import { ALL_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { FolderPlusIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 
 import { openCommandPalette } from "~/commandPaletteBus";
+import { activeFocusIdAtom, focusAssignmentsAtom, focusListAtom } from "~/cloud/focusReadModel";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useClientSettings } from "~/hooks/useSettings";
 import { selectProjectGroupingSettings } from "~/logicalProject";
@@ -11,9 +14,12 @@ import { buildSidebarProjectSnapshots } from "~/sidebarProjectGrouping";
 import { useProjects, useThreadShells } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { useWorkspaceProjectPicker } from "../projects/useWorkspaceProjectPicker";
+import { FocusIcon } from "../focus/FocusIcon";
 import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
 import {
   Menu,
+  MenuGroup,
+  MenuGroupLabel,
   MenuItem,
   MenuPopup,
   MenuRadioGroup,
@@ -21,6 +27,7 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "../ui/menu";
+import { groupProjectPickerEntriesByFocus } from "./DraftHeroHeadline.logic";
 
 interface DraftHeroHeadlineProps {
   readonly activeProjectRef: ScopedProjectRef | null;
@@ -38,6 +45,9 @@ export function DraftHeroHeadline({
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const projectSortOrder = useClientSettings((settings) => settings.sidebarProjectSortOrder);
   const handleNewThread = useNewThreadHandler();
+  const focuses = useAtomValue(focusListAtom);
+  const focusAssignments = useAtomValue(focusAssignmentsAtom);
+  const setActiveFocusId = useAtomSet(activeFocusIdAtom);
   const openAddProject = useCallback(() => openCommandPalette({ open: "add-project" }), []);
 
   const environmentLabelById = useMemo(
@@ -77,6 +87,25 @@ export function DraftHeroHeadline({
     () => new Map(projectPickerEntries.map((entry) => [entry.projectKey, entry] as const)),
     [projectPickerEntries],
   );
+  const projectPickerGroups = useMemo(
+    () =>
+      groupProjectPickerEntriesByFocus({
+        entries: projectPickerEntries,
+        focuses,
+        assignments: focusAssignments,
+      }),
+    [focusAssignments, focuses, projectPickerEntries],
+  );
+  const focusIdByProjectKey = useMemo(
+    () =>
+      new Map(
+        projectPickerGroups.flatMap((group) =>
+          group.entries.map((entry) => [entry.projectKey, group.focusId] as const),
+        ),
+      ),
+    [projectPickerGroups],
+  );
+  const showProjectGroups = projectPickerGroups.some((group) => group.focus !== null);
   const activeProjectGroup =
     activeProjectRef === null
       ? null
@@ -91,6 +120,27 @@ export function DraftHeroHeadline({
   const canChooseProject = projectPickerEntries.length > 0;
   const shouldShowProjectMenu = canChooseProject;
 
+  const selectProject = (value: unknown) => {
+    const entry = projectEntryByKey.get(value as string);
+    if (!entry || value === activeProjectKey) return;
+    void (async () => {
+      // A project with no checkout gets one made on the way through, so picking it starts
+      // a thread rather than dead-ending on a directory it does not have yet.
+      const projectRef = await resolveProjectRef(entry);
+      if (projectRef === null) return;
+      setActiveFocusId(focusIdByProjectKey.get(entry.projectKey) ?? ALL_FOCUS_ID);
+      await handleNewThread(projectRef, { replace: true });
+    })();
+  };
+
+  const projectItem = (entry: (typeof projectPickerEntries)[number]) => (
+    <MenuRadioItem key={entry.projectKey} value={entry.projectKey} closeOnClick>
+      <span className="block min-w-0 truncate" title={entry.displayName}>
+        {entry.displayName}
+      </span>
+    </MenuRadioItem>
+  );
+
   const projectSelector = shouldShowProjectMenu ? (
     <Menu>
       <MenuTrigger
@@ -101,32 +151,29 @@ export function DraftHeroHeadline({
         {activeProjectDisplayName ?? "Choose a project"}
       </MenuTrigger>
       <MenuPopup align="center" className="max-h-80 min-w-40! w-max max-w-64 overflow-y-auto">
-        <MenuRadioGroup
-          value={activeProjectKey}
-          onValueChange={(value) => {
-            const entry = projectEntryByKey.get(value as string);
-            if (!entry || value === activeProjectKey) {
-              return;
-            }
-            void (async () => {
-              // A project with no checkout gets one made on the way through, so picking it starts
-              // a thread rather than dead-ending on a directory it does not have yet.
-              const projectRef = await resolveProjectRef(entry);
-              if (projectRef === null) return;
-              await handleNewThread(projectRef, { replace: true });
-            })();
-          }}
-        >
-          {projectPickerEntries.map((entry) => {
-            return (
-              <MenuRadioItem key={entry.projectKey} value={entry.projectKey} closeOnClick>
-                <span className="block min-w-0 truncate" title={entry.displayName}>
-                  {entry.displayName}
-                </span>
-              </MenuRadioItem>
-            );
-          })}
-        </MenuRadioGroup>
+        {showProjectGroups ? (
+          projectPickerGroups.map((group) => (
+            <MenuGroup key={group.focusId}>
+              <MenuGroupLabel className="flex items-center gap-1.5">
+                {group.focus === null ? null : (
+                  <FocusIcon
+                    iconName={group.focus.iconName}
+                    color={group.focus.accentColor}
+                    className="size-3 shrink-0"
+                  />
+                )}
+                {group.focus?.name ?? "Other projects"}
+              </MenuGroupLabel>
+              <MenuRadioGroup value={activeProjectKey} onValueChange={selectProject}>
+                {group.entries.map(projectItem)}
+              </MenuRadioGroup>
+            </MenuGroup>
+          ))
+        ) : (
+          <MenuRadioGroup value={activeProjectKey} onValueChange={selectProject}>
+            {projectPickerEntries.map(projectItem)}
+          </MenuRadioGroup>
+        )}
         <MenuSeparator />
         <MenuItem onClick={openAddProject}>
           <FolderPlusIcon />

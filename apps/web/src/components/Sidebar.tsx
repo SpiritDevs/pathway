@@ -231,7 +231,7 @@ import {
 import type { FocusNotification } from "@spiritdevs/contracts/focus";
 import { FocusStrip } from "./focus/FocusStrip";
 import { FocusQuickAssignItems } from "./focus/FocusQuickAssign";
-import { buildFocusProjectOptions } from "./focus/FocusStrip.logic";
+import { buildFocusProjectOptions, projectFocusSelection } from "./focus/FocusStrip.logic";
 import { FocusIcon } from "./focus/FocusIcon";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
@@ -2072,6 +2072,10 @@ export default function Sidebar() {
   const singleWorkspaceProject =
     focusScopedWorkspaceProjects.length === 1 ? (focusScopedWorkspaceProjects[0] ?? null) : null;
   const singleProjectGroup = singleWorkspaceProject?.group ?? null;
+  const focusById = useMemo(
+    () => new Map(focuses.map((focus) => [focus.id, focus] as const)),
+    [focuses],
+  );
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   // Threads on non-primary environments (T3 Connect, hosted) resolve their
   // provider entry from their own environment's config: default instance ids
@@ -3863,52 +3867,24 @@ export default function Sidebar() {
             {workspaceProjects.length > 0 ? (
               <div className="flex items-center gap-1">
                 {singleProjectGroup ? (
-                  <>
-                    <SidebarMenuButton
-                      aria-label={`Project settings for ${singleProjectGroup.displayName}`}
-                      className="min-w-0 flex-1 ps-[calc(var(--sidebar-row-content-inset)-1px)] focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                      onClick={(event) => {
-                        void handleProjectSettings(event, singleProjectGroup);
-                      }}
-                    >
-                      <ProjectFavicon
-                        environmentId={singleProjectGroup.environmentId}
-                        cwd={singleProjectGroup.workspaceRoot}
-                        faviconPath={singleProjectGroup.faviconPath}
-                        className="size-4 shrink-0"
-                      />
-                      <span className="min-w-0 flex-1 truncate">
-                        {singleProjectGroup.displayName}
-                      </span>
-                      <SettingsIcon className="-mr-px size-4 shrink-0" />
-                    </SidebarMenuButton>
-                    <Menu>
-                      <MenuTrigger
-                        render={
-                          <SidebarMenuButton
-                            size="icon"
-                            type="button"
-                            aria-label={`Assign ${singleProjectGroup.displayName} to a Focus`}
-                            className="shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                          />
-                        }
-                      >
-                        <CircleDotIcon />
-                      </MenuTrigger>
-                      <MenuPopup align="end" className="min-w-44">
-                        <FocusQuickAssignItems
-                          projectKeys={
-                            singleWorkspaceProject?.group?.memberProjectRefs.map(
-                              (projectRef) => `${projectRef.environmentId}:${projectRef.projectId}`,
-                            ) ?? []
-                          }
-                          focuses={focuses}
-                          assignments={focusAssignments}
-                          mutations={focusMutations}
-                        />
-                      </MenuPopup>
-                    </Menu>
-                  </>
+                  <SidebarMenuButton
+                    aria-label={`Project settings for ${singleProjectGroup.displayName}`}
+                    className="min-w-0 flex-1 ps-[calc(var(--sidebar-row-content-inset)-1px)] focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                    onClick={(event) => {
+                      void handleProjectSettings(event, singleProjectGroup);
+                    }}
+                  >
+                    <ProjectFavicon
+                      environmentId={singleProjectGroup.environmentId}
+                      cwd={singleProjectGroup.workspaceRoot}
+                      faviconPath={singleProjectGroup.faviconPath}
+                      className="size-4 shrink-0"
+                    />
+                    <span className="min-w-0 flex-1 truncate">
+                      {singleProjectGroup.displayName}
+                    </span>
+                    <SettingsIcon className="-mr-px size-4 shrink-0" />
+                  </SidebarMenuButton>
                 ) : (
                   <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
                     <MenuTrigger
@@ -3952,6 +3928,18 @@ export default function Sidebar() {
                         {focusScopedWorkspaceProjects.map((workspaceProject) => {
                           const scopeKey = workspaceProject.projectKey;
                           const project = workspaceProject.group;
+                          const projectKeys =
+                            project?.memberProjectRefs.map(
+                              (projectRef) => `${projectRef.environmentId}:${projectRef.projectId}`,
+                            ) ?? [];
+                          const focusSelection = projectFocusSelection(
+                            projectKeys,
+                            focusAssignments,
+                          );
+                          const projectFocus =
+                            focusSelection === "none" || focusSelection === "mixed"
+                              ? null
+                              : (focusById.get(focusSelection) ?? null);
                           return (
                             <MenuRadioItem
                               key={scopeKey}
@@ -3975,19 +3963,30 @@ export default function Sidebar() {
                               {project === null ? null : (
                                 <MenuSub>
                                   <MenuSubTrigger
-                                    aria-label={`Assign ${workspaceProject.displayName} to a Focus`}
-                                    className="ml-auto min-h-6 shrink-0 gap-1 px-1.5 py-0 text-[10px] text-muted-foreground"
+                                    hideChevron
+                                    aria-label={`Change Focus for ${workspaceProject.displayName}${projectFocus === null ? "" : `, currently ${projectFocus.name}`}`}
+                                    title={
+                                      projectFocus === null
+                                        ? "Change Focus"
+                                        : `Change Focus, currently ${projectFocus.name}`
+                                    }
+                                    className="ml-auto flex size-6 min-h-6 shrink-0 items-center justify-center gap-0 p-0 text-muted-foreground"
                                     onPointerDown={(event) => event.stopPropagation()}
                                     onClick={(event) => event.stopPropagation()}
                                   >
-                                    Focus
+                                    {projectFocus === null ? (
+                                      <CircleDotIcon className="size-3.5 text-muted-foreground/50" />
+                                    ) : (
+                                      <FocusIcon
+                                        iconName={projectFocus.iconName}
+                                        color={projectFocus.accentColor}
+                                        className="size-3.5"
+                                      />
+                                    )}
                                   </MenuSubTrigger>
                                   <MenuSubPopup className="min-w-44">
                                     <FocusQuickAssignItems
-                                      projectKeys={project.memberProjectRefs.map(
-                                        (projectRef) =>
-                                          `${projectRef.environmentId}:${projectRef.projectId}`,
-                                      )}
+                                      projectKeys={projectKeys}
                                       focuses={focuses}
                                       assignments={focusAssignments}
                                       mutations={focusMutations}

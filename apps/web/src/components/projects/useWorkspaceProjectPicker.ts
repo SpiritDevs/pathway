@@ -16,7 +16,7 @@
 import type { ScopedProjectRef } from "@spiritdevs/contracts";
 import { useCallback, useMemo } from "react";
 
-import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
+import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import {
   buildSidebarProjectPickerEntries,
   type SidebarProjectGroupMember,
@@ -28,6 +28,8 @@ import type { WorkspaceProject } from "./workspaceProjects.logic";
 
 export interface WorkspaceProjectPickerEntry {
   readonly projectKey: string;
+  /** Every checkout key represented by this logical project. */
+  readonly projectKeys: ReadonlyArray<string>;
   readonly displayName: string;
   /** The checkout this entry runs in, or null when one has to be created on selection. */
   readonly targetProject: SidebarProjectGroupMember | null;
@@ -52,6 +54,7 @@ export function useWorkspaceProjectPicker(input: {
     }).map(
       (entry): WorkspaceProjectPickerEntry => ({
         projectKey: entry.group.projectKey,
+        projectKeys: entry.group.memberProjectRefs.map(scopedProjectKey),
         displayName: entry.group.displayName,
         targetProject: entry.targetProject,
         isPreferred: entry.isPreferred,
@@ -65,6 +68,7 @@ export function useWorkspaceProjectPicker(input: {
       .map(
         (project): WorkspaceProjectPickerEntry => ({
           projectKey: project.projectKey,
+          projectKeys: [],
           displayName: project.displayName,
           targetProject: null,
           isPreferred: false,

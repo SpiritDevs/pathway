@@ -219,10 +219,12 @@ function MenuSub(props: MenuPrimitive.SubmenuRoot.Props) {
 function MenuSubTrigger({
   className,
   inset,
+  hideChevron = false,
   children,
   ...props
 }: MenuPrimitive.SubmenuTrigger.Props & {
   inset?: boolean;
+  hideChevron?: boolean;
 }) {
   return (
     <MenuPrimitive.SubmenuTrigger
@@ -235,7 +237,7 @@ function MenuSubTrigger({
       {...props}
     >
       {children}
-      <ChevronRightIcon className="-me-0.5 ms-auto opacity-80" />
+      {hideChevron ? null : <ChevronRightIcon className="-me-0.5 ms-auto opacity-80" />}
     </MenuPrimitive.SubmenuTrigger>
   );
 }
