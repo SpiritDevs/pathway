@@ -55,7 +55,7 @@ struct PathwayApp: App {
 
             WindowGroup("Pathway Agent", id: PathwayWindow.agentOrchestrator.rawValue) {
                 configuredContent {
-                    NewAgentThreadView()
+                    AgentOrchestratorView()
                         .frame(minWidth: 560, minHeight: 620)
                 }
             }

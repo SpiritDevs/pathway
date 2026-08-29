@@ -2,9 +2,9 @@ import SwiftUI
 
 struct NewAgentThreadView: View {
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.dismissWindow) private var dismissWindow
     @Environment(PathwayAppModel.self) private var appModel
 
+    @State private var selectedProjectID: String?
     @State private var selectedBindingID = ""
     @State private var model: PathwayAgentThreadCreationModel?
 
@@ -16,34 +16,32 @@ struct NewAgentThreadView: View {
                         title: "Pathway Connect unavailable",
                         message: "This build is missing its Pathway Connect configuration."
                     )
-                } else if bindingOptions.isEmpty {
+                } else if projectOptions.isEmpty {
                     unavailable(
                         title: "No connected projects",
                         message: "A project must be available in a Pathway Connect environment before you can start a thread."
                     )
-                } else if let model {
-                    NewAgentThreadForm(
+                } else if let selectedProject {
+                    NewAgentThreadComposer(
+                        project: selectedProject,
                         model: model,
-                        bindingOptions: bindingOptions,
                         selectedBindingID: $selectedBindingID,
+                        chooseProject: { selectedProjectID = nil },
                         didLaunch: close
                     )
                 } else {
-                    ProgressView("Connecting to the environment…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    PathwayNewThreadProjectPicker(
+                        projects: projectOptions,
+                        select: selectProject
+                    )
                 }
             }
-            .navigationTitle("New Agent Thread")
+            .navigationTitle(selectedProjectID == nil ? "Choose Project" : "New Agent Thread")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: close)
                 }
-            }
-        }
-        .task {
-            if selectedBindingID.isEmpty {
-                selectedBindingID = bindingOptions.first?.id ?? ""
             }
         }
         .task(id: selectedBindingID) {
@@ -69,11 +67,40 @@ struct NewAgentThreadView: View {
             return PathwayNewThreadBindingOption(
                 binding: binding,
                 environment: environment,
+                projectID: project.project.id,
                 projectName: project.project.name,
                 companyName: appModel.cloud.companyName(for: binding.companyId) ?? "Pathway"
             )
         }.sorted {
             $0.label.localizedStandardCompare($1.label) == .orderedAscending
+        }
+    }
+
+    private var projectOptions: [PathwayNewThreadProjectOption] {
+        let groups = Dictionary(grouping: bindingOptions) { option in
+            "\(option.binding.companyId):\(option.projectID)"
+        }
+        return groups.compactMap { id, bindings in
+            guard let first = bindings.first else { return nil }
+            return PathwayNewThreadProjectOption(
+                id: id,
+                name: first.projectName,
+                companyName: first.companyName,
+                bindings: bindings
+            )
+        }.sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    private var selectedProject: PathwayNewThreadProjectOption? {
+        projectOptions.first { $0.id == selectedProjectID }
+    }
+
+    private func selectProject(_ project: PathwayNewThreadProjectOption) {
+        selectedProjectID = project.id
+        if !project.bindings.contains(where: { $0.id == selectedBindingID }) {
+            selectedBindingID = project.bindings.first?.id ?? ""
         }
     }
 
@@ -96,11 +123,7 @@ struct NewAgentThreadView: View {
     }
 
     private func close() {
-        #if os(visionOS)
-            dismissWindow(id: PathwayWindow.agentOrchestrator.rawValue)
-        #else
-            dismiss()
-        #endif
+        dismiss()
     }
 
     private func unavailable(title: String, message: String) -> some View {
@@ -116,184 +139,243 @@ struct NewAgentThreadView: View {
     }
 }
 
-@MainActor
-private struct PathwayNewThreadDraft {
-    let prompt: String
-    let runtimeMode: String
-    let interactionMode: String
-    let workspaceMode: String
-    let baseReference: String
-    let branch: String
-    let startFromOrigin: Bool
-
-    init(model: PathwayAgentThreadCreationModel) {
-        prompt = model.prompt
-        runtimeMode = model.runtimeMode
-        interactionMode = model.interactionMode
-        workspaceMode = model.workspaceMode
-        baseReference = model.baseReference
-        branch = model.branch
-        startFromOrigin = model.startFromOrigin
-    }
-
-    func apply(to model: PathwayAgentThreadCreationModel) {
-        model.prompt = prompt
-        model.runtimeMode = runtimeMode
-        model.interactionMode = interactionMode
-        model.workspaceMode = workspaceMode
-        model.baseReference = baseReference
-        model.branch = branch
-        model.startFromOrigin = startFromOrigin
-    }
-}
-
-private struct PathwayNewThreadBindingOption: Identifiable {
-    let binding: PathwayCompanyEnvironmentBinding
-    let environment: PathwayCompanyEnvironment
-    let projectName: String
-    let companyName: String
-
-    var id: String { binding.id }
-    var label: String { "\(projectName) · \(environment.environment.label)" }
-}
-
-private struct NewAgentThreadForm: View {
-    @Bindable var model: PathwayAgentThreadCreationModel
-    let bindingOptions: [PathwayNewThreadBindingOption]
+private struct NewAgentThreadComposer: View {
+    let project: PathwayNewThreadProjectOption
+    let model: PathwayAgentThreadCreationModel?
     @Binding var selectedBindingID: String
+    let chooseProject: () -> Void
     let didLaunch: () -> Void
 
+    @FocusState private var promptFocused: Bool
+    @State private var showsSettings = false
+
     var body: some View {
-        Form {
-            Section("Where") {
-                Picker("Project and environment", selection: $selectedBindingID) {
-                    ForEach(bindingOptions) { option in
-                        Text("\(option.label) — \(option.companyName)")
-                            .tag(option.id)
+        ZStack {
+            Color.clear
+
+            VStack(spacing: 12) {
+                Spacer(minLength: 54)
+
+                Text("What should we build")
+                    .font(.largeTitle.weight(.regular))
+
+                Button(action: chooseProject) {
+                    HStack(spacing: 5) {
+                        Text("in \(project.name)?")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.bold))
                     }
+                    .font(.largeTitle.weight(.regular))
+                    .foregroundStyle(.primary)
                 }
-            }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Choose project")
+                .accessibilityValue(project.name)
 
-            Section("What should the agent do?") {
-                TextField("Describe the work", text: $model.prompt, axis: .vertical)
-                    .lineLimit(4 ... 12)
-            }
+                environmentPicker
 
-            Section("Agent") {
-                switch model.connectionState {
-                case .connecting:
-                    HStack {
+                Spacer(minLength: 0)
+            }
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 24)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 4) {
+                if let model {
+                    workspaceSummary(model)
+                    composer(model)
+                } else {
+                    HStack(spacing: 10) {
                         ProgressView()
-                        Text("Loading agents and models…")
+                        Text("Connecting to \(selectedBinding?.label ?? "environment")…")
                     }
-                case let .failed(message):
-                    Label(message, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                default:
-                    EmptyView()
-                }
-
-                Picker("Provider", selection: $model.selectedProviderID) {
-                    ForEach(model.providers) { provider in
-                        Text(provider.name).tag(provider.id)
-                    }
-                }
-
-                Picker("Model", selection: $model.selectedModelID) {
-                    ForEach(model.selectedProvider?.models ?? []) { availableModel in
-                        Text(availableModel.name).tag(availableModel.id)
-                    }
-                }
-
-                ForEach(model.selectedModel?.optionDescriptors ?? []) { descriptor in
-                    optionControl(descriptor)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 110)
                 }
             }
-
-            Section("How it should work") {
-                Picker("Access", selection: $model.runtimeMode) {
-                    Text("Ask before changes").tag("approval-required")
-                    Text("Accept file edits").tag("auto-accept-edits")
-                    Text("Automatic").tag("auto")
-                    Text("Full access").tag("full-access")
-                }
-
-                if model.selectedProvider?.showsInteractionMode == true {
-                    Picker("Mode", selection: $model.interactionMode) {
-                        Text("Work").tag("default")
-                        Text("Plan").tag("plan")
-                    }
-                }
-
-                Picker("Workspace", selection: $model.workspaceMode) {
-                    Text("Current project").tag("local")
-                    Text("New worktree").tag("worktree")
-                }
-
-                if model.workspaceMode == "worktree" {
-                    TextField("Base branch or ref", text: $model.baseReference)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("New branch (optional)", text: $model.branch)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    Toggle("Start from origin", isOn: $model.startFromOrigin)
-                }
-            }
-
-            if let errorMessage = model.errorMessage {
-                Section {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                }
-            }
-
-            Section {
-                Button {
-                    Task {
-                        if await model.launch() != nil {
-                            didLaunch()
-                        }
-                    }
-                } label: {
-                    HStack {
-                        Spacer()
-                        if model.isLaunching {
-                            ProgressView()
-                        } else {
-                            Label("Start Agent Thread", systemImage: "arrow.up.circle.fill")
-                        }
-                        Spacer()
-                    }
-                }
-                .disabled(!model.canLaunch)
-            } footer: {
-                Text("The thread runs on the selected environment through Pathway Connect.")
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
+            .background(.background)
+        }
+        .sheet(isPresented: $showsSettings) {
+            if let model {
+                NewAgentThreadSettings(model: model)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
             }
         }
     }
 
-    @ViewBuilder
-    private func optionControl(_ descriptor: PathwayProviderOptionDescriptor) -> some View {
-        if descriptor.type == "boolean" {
-            Toggle(
-                descriptor.label,
-                isOn: Binding(
-                    get: { model.optionValues[descriptor.id]?.boolValue ?? false },
-                    set: { model.setOption(descriptor, value: .bool($0)) }
-                )
-            )
-        } else {
-            Picker(
-                descriptor.label,
-                selection: Binding(
-                    get: { model.optionValues[descriptor.id]?.stringValue ?? "" },
-                    set: { model.setOption(descriptor, value: .string($0)) }
-                )
-            ) {
-                ForEach(descriptor.choices) { choice in
-                    Text(choice.label).tag(choice.id)
+    private var selectedBinding: PathwayNewThreadBindingOption? {
+        project.bindings.first { $0.id == selectedBindingID }
+    }
+
+    private var environmentPicker: some View {
+        Menu {
+            ForEach(project.bindings) { binding in
+                Button {
+                    selectedBindingID = binding.id
+                } label: {
+                    if binding.id == selectedBindingID {
+                        Label(binding.label, systemImage: "checkmark")
+                    } else {
+                        Text(binding.label)
+                    }
                 }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "desktopcomputer")
+                Text(selectedBinding?.label ?? "Choose environment")
+                    .lineLimit(1)
+                if project.bindings.count > 1 {
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.bold))
+                }
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .disabled(project.bindings.count < 2)
+        .accessibilityLabel("Environment")
+        .accessibilityValue(selectedBinding?.label ?? "Not selected")
+    }
+
+    private func workspaceSummary(_ model: PathwayAgentThreadCreationModel) -> some View {
+        HStack(spacing: 14) {
+            Button {
+                model.workspaceMode = model.workspaceMode == "local" ? "worktree" : "local"
+            } label: {
+                Label(
+                    model.workspaceMode == "worktree" ? "New worktree" : "Current checkout",
+                    systemImage: model.workspaceMode == "worktree"
+                        ? "arrow.triangle.branch"
+                        : "folder"
+                )
+            }
+            .accessibilityHint("Changes the workspace used for the new thread")
+
+            if model.workspaceMode == "worktree" {
+                Button {
+                    showsSettings = true
+                } label: {
+                    Label(model.baseReference, systemImage: "arrow.triangle.branch")
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .buttonStyle(.plain)
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .frame(minHeight: 40)
+        .padding(.horizontal, 8)
+    }
+
+    private func composer(_ model: PathwayAgentThreadCreationModel) -> some View {
+        @Bindable var model = model
+        return VStack(spacing: 12) {
+            TextField("Ask anything…", text: $model.prompt, axis: .vertical)
+                .lineLimit(3 ... 8)
+                .focused($promptFocused)
+                .textFieldStyle(.plain)
+
+            HStack(spacing: 10) {
+                Button("Thread settings", systemImage: "slider.horizontal.3") {
+                    showsSettings = true
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+
+                modelPicker(model)
+
+                Spacer(minLength: 0)
+
+                Button {
+                    launch(model)
+                } label: {
+                    if model.isLaunching {
+                        ProgressView()
+                            .frame(width: 20, height: 20)
+                    } else {
+                        Image(systemName: "arrow.up")
+                            .font(.headline)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.circle)
+                .disabled(!model.canLaunch)
+                .accessibilityLabel("Start agent thread")
+            }
+
+            if let statusMessage = statusMessage(model) {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(model.errorMessage == nil ? Color.secondary : Color.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(16)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 28))
+    }
+
+    private func modelPicker(_ model: PathwayAgentThreadCreationModel) -> some View {
+        Menu {
+            ForEach(model.providers) { provider in
+                Section(provider.name) {
+                    ForEach(provider.models) { availableModel in
+                        Button {
+                            model.selectedProviderID = provider.id
+                            model.selectedModelID = availableModel.id
+                        } label: {
+                            let isSelected = provider.id == model.selectedProviderID
+                                && availableModel.id == model.selectedModelID
+                            if isSelected {
+                                Label(availableModel.name, systemImage: "checkmark")
+                            } else {
+                                Text(availableModel.name)
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                Text(model.selectedModel?.name ?? "Choose model")
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
+            }
+            .font(.subheadline.weight(.medium))
+            .foregroundStyle(.primary)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .disabled(model.providers.isEmpty || model.isLaunching)
+        .accessibilityLabel("Model")
+        .accessibilityValue(model.selectedModel?.name ?? "Not selected")
+    }
+
+    private func statusMessage(_ model: PathwayAgentThreadCreationModel) -> String? {
+        if let error = model.errorMessage { return error }
+        switch model.connectionState {
+        case .connecting: return "Loading agents and models…"
+        case let .failed(message): return message
+        default: return nil
+        }
+    }
+
+    private func launch(_ model: PathwayAgentThreadCreationModel) {
+        promptFocused = false
+        Task {
+            if await model.launch() != nil {
+                didLaunch()
             }
         }
     }

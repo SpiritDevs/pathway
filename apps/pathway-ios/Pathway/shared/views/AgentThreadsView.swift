@@ -6,27 +6,22 @@ import SwiftUI
 
 struct AgentThreadsView: View {
     @Environment(PathwayAppModel.self) private var appModel
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     let newThreadAction: () -> Void
 
-    @State private var searchText = ""
+    @State private var isSnoozedExpanded = false
+    @State private var isSettledExpanded = false
+    @State private var settledVisibleCount = 10
 
     var body: some View {
         Group {
-            if filteredThreads.isEmpty {
+            if lifecycleThreadCount == 0 {
                 emptyState
             } else {
-                List(filteredThreads) { thread in
-                    NavigationLink {
-                        AgentThreadDetailRoute(thread: thread)
-                    } label: {
-                        AgentThreadRow(thread: thread)
-                    }
-                }
-                .listStyle(.plain)
+                threadList
             }
         }
         .navigationTitle("Agent Threads")
-        .searchable(text: $searchText, prompt: "Search threads")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("New thread", systemImage: "square.and.pencil", action: newThreadAction)
@@ -34,29 +29,132 @@ struct AgentThreadsView: View {
         }
         .refreshable {
             await appModel.cloud.retry()
+            if let connect = appModel.connect {
+                await appModel.cloud.refreshLifecycleMetadata(using: connect)
+            }
+        }
+        .task(id: lifecycleRefreshKey) {
+            guard let connect = appModel.connect else { return }
+            await appModel.cloud.refreshLifecycleMetadata(using: connect)
         }
         .accessibilityIdentifier("agent-threads-list")
     }
 
-    private var filteredThreads: [PathwayAgentThread] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return appModel.cloud.threads }
-        return appModel.cloud.threads.filter { thread in
-            let metadata = [
-                thread.shell.title,
-                appModel.cloud.companyName(for: thread.companyId),
-                appModel.cloud.environmentLabel(
-                    companyId: thread.companyId,
-                    environmentId: thread.environmentId
-                ),
-                appModel.cloud.projectName(
-                    companyId: thread.companyId,
-                    projectId: thread.cloudProjectId
-                ),
-                thread.shell.modelSelection.model
-            ].compactMap(\.self).joined(separator: " ")
-            return metadata.localizedCaseInsensitiveContains(query)
+    @ViewBuilder
+    private var threadList: some View {
+        List {
+            ForEach(appModel.cloud.activeThreads) { thread in
+                threadLink(thread)
+            }
+
+            if !appModel.cloud.snoozedThreads.isEmpty {
+                Section {
+                    if isSnoozedExpanded {
+                        ForEach(appModel.cloud.snoozedThreads) { thread in
+                            compactThreadLink(thread, icon: "clock")
+                        }
+                    }
+                } header: {
+                    ThreadLifecycleShelfHeader(
+                        title: "Snoozed",
+                        count: appModel.cloud.snoozedThreads.count,
+                        isExpanded: isSnoozedExpanded,
+                        tint: .blue
+                    ) {
+                        isSnoozedExpanded.toggle()
+                    }
+                }
+            }
+
+            if !appModel.cloud.settledThreads.isEmpty {
+                Section {
+                    if isSettledExpanded {
+                        ForEach(visibleSettledThreads) { thread in
+                            compactThreadLink(thread, icon: "folder.fill")
+                        }
+
+                        if hiddenSettledCount > 0 {
+                            Button {
+                                settledVisibleCount += 25
+                            } label: {
+                                Label(
+                                    "Show \(min(hiddenSettledCount, 25)) more",
+                                    systemImage: "plus"
+                                )
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("settled-threads-show-more")
+                        }
+                    }
+                } header: {
+                    ThreadLifecycleShelfHeader(
+                        title: "Settled",
+                        count: appModel.cloud.settledThreads.count,
+                        isExpanded: isSettledExpanded,
+                        tint: .secondary
+                    ) {
+                        isSettledExpanded.toggle()
+                    }
+                }
+            }
         }
+        .listStyle(.plain)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if usesCompactShell {
+                Color.clear
+                    .frame(height: CompactAppShellMetrics.scrollContentClearance)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    private var usesCompactShell: Bool {
+        #if os(visionOS)
+            false
+        #else
+            horizontalSizeClass != .regular
+        #endif
+    }
+
+    private var lifecycleThreadCount: Int {
+        appModel.cloud.activeThreads.count
+            + appModel.cloud.snoozedThreads.count
+            + appModel.cloud.settledThreads.count
+    }
+
+    private var visibleSettledThreads: [PathwayAgentThread] {
+        Array(appModel.cloud.settledThreads.prefix(settledVisibleCount))
+    }
+
+    private var hiddenSettledCount: Int {
+        max(0, appModel.cloud.settledThreads.count - visibleSettledThreads.count)
+    }
+
+    private var lifecycleRefreshKey: String {
+        appModel.cloud.threads.map { thread in
+            "\(thread.id):\(thread.shell.updatedAt):\(thread.shell.branch ?? "")"
+        }.joined(separator: "|")
+    }
+
+    private func threadLink(_ thread: PathwayAgentThread) -> some View {
+        NavigationLink {
+            AgentThreadDetailRoute(thread: thread)
+        } label: {
+            AgentThreadRow(thread: thread)
+        }
+    }
+
+    private func compactThreadLink(
+        _ thread: PathwayAgentThread,
+        icon: String
+    ) -> some View {
+        NavigationLink {
+            AgentThreadDetailRoute(thread: thread)
+        } label: {
+            CompactAgentThreadRow(thread: thread, icon: icon)
+        }
+        .listRowSeparator(.hidden)
     }
 
     @ViewBuilder
@@ -79,17 +177,67 @@ struct AgentThreadsView: View {
             ContentUnavailableView {
                 Label("No Agent Threads", systemImage: "bubble.left.and.bubble.right")
             } description: {
-                Text(
-                    searchText.isEmpty
-                        ? "Start a thread in one of your Pathway environments."
-                        : "No threads match your search."
-                )
+                Text("Start a thread in one of your Pathway environments.")
             } actions: {
-                if searchText.isEmpty {
-                    Button("New thread", action: newThreadAction)
-                }
+                Button("New thread", action: newThreadAction)
             }
         }
+    }
+}
+
+private struct ThreadLifecycleShelfHeader: View {
+    let title: String
+    let count: Int
+    let isExpanded: Bool
+    let tint: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Text(isExpanded ? title : "\(title) (\(count))")
+                    .font(.caption.weight(.medium))
+
+                Rectangle()
+                    .frame(height: 1)
+                    .opacity(0.25)
+
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(.degrees(isExpanded ? 180 : 0))
+            }
+            .foregroundStyle(tint)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .textCase(nil)
+        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+    }
+}
+
+private struct CompactAgentThreadRow: View {
+    let thread: PathwayAgentThread
+    let icon: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: icon)
+                .font(.caption)
+                .frame(width: 16)
+
+            Text(thread.shell.title)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Text(thread.lifecycleSortDate, format: .relative(presentation: .named))
+                .font(.caption)
+                .lineLimit(1)
+        }
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -209,8 +357,12 @@ private struct AgentThreadDetailRoute: View {
 }
 
 private struct AgentThreadConversationView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.compactThreadChrome) private var compactThreadChrome
     let thread: PathwayAgentThread
     @State private var model: PathwayAgentThreadModel
+    @State private var isComposerExpanded = false
+    @FocusState private var isComposerFocused: Bool
 
     init(
         thread: PathwayAgentThread,
@@ -244,6 +396,14 @@ private struct AgentThreadConversationView: View {
                 .padding(.vertical, 12)
             }
             .defaultScrollAnchor(.bottom)
+            .simultaneousGesture(
+                TapGesture().onEnded { collapseInteractiveChrome() }
+            )
+            .onScrollPhaseChange { _, phase in
+                if phase == .interacting {
+                    collapseInteractiveChrome()
+                }
+            }
             .onChange(of: model.items.last?.id) { _, identifier in
                 guard let identifier else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -252,12 +412,26 @@ private struct AgentThreadConversationView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            AgentThreadComposer(model: model)
+            AgentThreadComposer(
+                model: model,
+                isExpanded: $isComposerExpanded,
+                isFocused: $isComposerFocused,
+                modelName: thread.shell.modelSelection.model,
+                usesCompactPresentation: compactThreadChrome != nil,
+                isNavigationExpanded: compactThreadChrome?.isNavigationExpanded == true
+            )
         }
         .navigationTitle(thread.shell.title)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            compactThreadChrome?.enterThreadDetail()
+        }
+        .onChange(of: isComposerExpanded, initial: true) { _, isExpanded in
+            compactThreadChrome?.setComposerExpanded(isExpanded)
+        }
         .task { model.start() }
         .onDisappear {
+            compactThreadChrome?.leaveThreadDetail()
             Task { await model.stop() }
         }
         .accessibilityIdentifier("agent-thread-conversation")
@@ -284,6 +458,19 @@ private struct AgentThreadConversationView: View {
         default:
             EmptyView()
         }
+    }
+
+    private func collapseInteractiveChrome() {
+        guard isComposerExpanded || compactThreadChrome?.isNavigationExpanded == true else {
+            return
+        }
+        withAnimation(
+            reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation
+        ) {
+            isComposerExpanded = false
+            compactThreadChrome?.collapseNavigation()
+        }
+        isComposerFocused = false
     }
 }
 
@@ -495,44 +682,5 @@ private struct UserInputCard: View {
         }
         .padding(14)
         .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
-    }
-}
-
-private struct AgentThreadComposer: View {
-    @Bindable var model: PathwayAgentThreadModel
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            TextField("Message the agent", text: $model.draft, axis: .vertical)
-                .lineLimit(1 ... 7)
-                .textFieldStyle(.plain)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 18))
-                .submitLabel(.send)
-                .onSubmit {
-                    Task { await model.send() }
-                }
-
-            Button {
-                Task { await model.send() }
-            } label: {
-                if model.isSending {
-                    ProgressView()
-                        .frame(width: 34, height: 34)
-                } else {
-                    Image(systemName: "arrow.up")
-                        .font(.body.weight(.bold))
-                        .frame(width: 34, height: 34)
-                }
-            }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.circle)
-            .disabled(model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityLabel("Send message")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.bar)
     }
 }

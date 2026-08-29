@@ -1,6 +1,9 @@
 import Foundation
 @testable import Pathway
 import Testing
+#if !os(visionOS)
+    import ConvexMobile
+#endif
 
 struct PathwayTests {
     @Test func appShellUsesCompactLayoutForNarrowIOSWindows() {
@@ -171,6 +174,153 @@ struct PathwayTests {
 
         #expect(normalized.absoluteString == "https://relay.example/v1/connect")
     }
+
+    // swiftlint:disable:next function_body_length
+    @Test func agentThreadLifecycleMatchesTheDesktopInbox() throws {
+        let now = try #require(
+            try? Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+                .parse("2026-08-29T02:30:00.000Z")
+        )
+
+        #expect(makeAgentThread().lifecycleSection(at: now) == .active)
+        #expect(
+            makeAgentThread(snoozedUntil: "2026-08-29T03:30:00.000Z")
+                .lifecycleSection(at: now) == .snoozed
+        )
+        #expect(
+            makeAgentThread(snoozedUntil: "2026-08-29T01:30:00.000Z")
+                .lifecycleSection(at: now) == .active
+        )
+        #expect(
+            makeAgentThread(settledOverride: "settled", settledAt: "2026-08-29T02:00:00.000Z")
+                .lifecycleSection(at: now) == .settled
+        )
+        #expect(
+            makeAgentThread(latestRunCompletedAt: "2026-08-25T02:30:00.000Z")
+                .lifecycleSection(at: now) == .settled
+        )
+        #expect(
+            makeAgentThread(
+                latestRunCompletedAt: "2026-08-25T02:30:00.000Z",
+                pinnedAt: "2026-08-25T03:00:00.000Z"
+            ).lifecycleSection(at: now) == .active
+        )
+        #expect(
+            makeAgentThread(
+                latestRunCompletedAt: "2026-08-25T02:30:00.000Z",
+                settledOverride: "active"
+            ).lifecycleSection(at: now) == .active
+        )
+        #expect(
+            makeAgentThread()
+                .lifecycleSection(at: now, changeRequestState: .merged) == .settled
+        )
+        #expect(
+            makeAgentThread(latestRunCompletedAt: "2026-08-25T02:30:00.000Z")
+                .lifecycleSection(at: now, changeRequestState: .open) == .active
+        )
+        #expect(
+            makeAgentThread(
+                settledOverride: "settled",
+                settledAt: "2026-08-29T02:00:00.000Z",
+                pendingRequestKind: "approval"
+            ).lifecycleSection(at: now) == .active
+        )
+        #expect(
+            makeAgentThread(archivedAt: "2026-08-29T02:00:00.000Z")
+                .lifecycleSection(at: now) == .hidden
+        )
+        for relationship in ["subagent", "fork"] {
+            #expect(
+                makeAgentThread(relationshipToParent: relationship)
+                    .lifecycleSection(at: now) == .hidden
+            )
+        }
+    }
+
+    #if !os(visionOS)
+        @Test func convexSyncArgumentsUseFloat64Numbers() {
+            let bootstrap = PathwayConvexArguments.bootstrap(
+                companyID: "company-1",
+                cursor: nil
+            )
+            let changes = PathwayConvexArguments.changes(companyID: "company-1", cursor: 42)
+
+            #expect(bootstrap["pageSize"] as? Double == 100.0)
+            #expect(changes["cursor"] as? Double == 42.0)
+            #expect(changes["limit"] as? Double == 100.0)
+        }
+    #endif
+}
+
+// swiftlint:disable:next function_body_length
+private func makeAgentThread(
+    latestRunCompletedAt: String? = "2026-08-29T02:00:00.000Z",
+    archivedAt: String? = nil,
+    settledOverride: String? = nil,
+    settledAt: String? = nil,
+    snoozedUntil: String? = nil,
+    pinnedAt: String? = nil,
+    pendingRequestKind: String? = nil,
+    relationshipToParent: String? = nil
+) -> PathwayAgentThread {
+    PathwayAgentThread(
+        companyId: "company-1",
+        environmentId: "environment-1",
+        cloudProjectId: "cloud-project-1",
+        shell: PathwayAgentThreadShell(
+            id: "thread-1",
+            projectId: "project-1",
+            title: "Thread",
+            providerInstanceId: "codex-work",
+            modelSelection: PathwayModelSelection(
+                instanceId: "codex-work",
+                model: "gpt-5.6-sol",
+                options: nil
+            ),
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            lineage: PathwayThreadLineage(
+                rootThreadId: "thread-1",
+                parentThreadId: relationshipToParent == nil ? nil : "parent-1",
+                relationshipToParent: relationshipToParent
+            ),
+            locations: ["agents"],
+            branch: nil,
+            worktreePath: nil,
+            latestRunRequestedAt: latestRunCompletedAt,
+            latestRunStartedAt: latestRunCompletedAt,
+            latestRunCompletedAt: latestRunCompletedAt,
+            activeRunId: nil,
+            activityRunStatus: nil,
+            status: "idle",
+            lastError: nil,
+            pendingRuntimeRequest: pendingRequestKind.map {
+                PathwayRuntimeRequestSummary(
+                    id: "request-1",
+                    kind: $0,
+                    createdAt: "2026-08-29T02:15:00.000Z"
+                )
+            },
+            latestVisibleMessage: nil,
+            latestUserMessageAt: latestRunCompletedAt,
+            hasActionableProposedPlan: false,
+            itemCount: 1,
+            visibleItemCount: 1,
+            createdAt: "2026-08-29T00:00:00.000Z",
+            updatedAt: "2026-08-29T02:00:00.000Z",
+            archivedAt: archivedAt,
+            settledOverride: settledOverride,
+            settledAt: settledAt,
+            snoozedUntil: snoozedUntil,
+            snoozedAt: snoozedUntil == nil ? nil : "2026-08-29T02:15:00.000Z",
+            pinnedAt: pinnedAt,
+            pinOrderKey: nil,
+            lastVisitedAt: nil,
+            deletedAt: nil
+        ),
+        cloudUpdatedAt: 0
+    )
 }
 
 @MainActor

@@ -7,6 +7,24 @@
         let idToken: String
     }
 
+    enum PathwayConvexArguments {
+        static func bootstrap(companyID: String, cursor: String?) -> [String: ConvexEncodable?] {
+            [
+                "companyId": companyID,
+                "cursor": cursor,
+                "pageSize": 100.0
+            ]
+        }
+
+        static func changes(companyID: String, cursor: Int) -> [String: ConvexEncodable?] {
+            [
+                "companyId": companyID,
+                "cursor": Double(cursor),
+                "limit": 100.0
+            ]
+        }
+    }
+
     @MainActor
     private final class PathwayConvexAuthProvider: AuthProvider {
         private let credentials: any PathwayAuthenticating
@@ -87,11 +105,7 @@
         ) async throws -> PathwaySyncBootstrapPage {
             try await query(
                 "sync:bootstrap",
-                with: [
-                    "companyId": companyId,
-                    "cursor": cursor,
-                    "pageSize": 100
-                ]
+                with: PathwayConvexArguments.bootstrap(companyID: companyId, cursor: cursor)
             )
         }
 
@@ -109,11 +123,7 @@
         ) async throws -> PathwaySyncChangesPage {
             try await query(
                 "sync:listChanges",
-                with: [
-                    "companyId": companyId,
-                    "cursor": cursor,
-                    "limit": 100
-                ]
+                with: PathwayConvexArguments.changes(companyID: companyId, cursor: cursor)
             )
         }
 

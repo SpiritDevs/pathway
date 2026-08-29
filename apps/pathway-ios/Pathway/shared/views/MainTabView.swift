@@ -6,6 +6,7 @@ import SwiftUI
 
 enum MainTabSheet: String, Identifiable {
     case agentOrchestrator
+    case newAgentThread
     case settings
 
     var id: Self { self }
@@ -58,6 +59,11 @@ struct MainTabView: View {
         .sheet(item: $presentedSheet) { sheet in
             switch sheet {
             case .agentOrchestrator:
+                AgentOrchestratorView()
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.hidden)
+                    .presentationCornerRadius(36)
+            case .newAgentThread:
                 NewAgentThreadView()
                     .presentationDetents([.large])
                     .presentationDragIndicator(.hidden)
@@ -85,7 +91,7 @@ private struct FloatingAppShell: View {
         HStack(spacing: 12) {
             PathwayNavigationRail(
                 selectedDestination: $selectedDestination,
-                newThreadAction: presentAgentOrchestrator,
+                agentOrchestratorAction: presentAgentOrchestrator,
                 settingsAction: presentSettings
             )
 
@@ -100,14 +106,14 @@ private struct FloatingAppShell: View {
                     PathwayContextDestinationView(
                         destination: activeDestination,
                         contextDestination: activeContextDestination,
-                        newThreadAction: presentAgentOrchestrator
+                        newThreadAction: presentNewAgentThread
                     )
                     .toolbar {
                         ToolbarItemGroup(placement: .primaryAction) {
                             Button(
                                 "New agent thread",
                                 systemImage: "bubble.left.and.bubble.right",
-                                action: presentAgentOrchestrator
+                                action: presentNewAgentThread
                             )
                             Button("Settings", systemImage: "gearshape", action: presentSettings)
                         }
@@ -143,6 +149,10 @@ private struct FloatingAppShell: View {
         }
     }
 
+    private func presentNewAgentThread() {
+        presentedSheet = .newAgentThread
+    }
+
     private func presentSettings() {
         if layout == .spatial {
             openWindow(id: PathwayWindow.settings.rawValue)
@@ -154,7 +164,7 @@ private struct FloatingAppShell: View {
 
 private struct PathwayNavigationRail: View {
     @Binding var selectedDestination: AppDestination?
-    let newThreadAction: () -> Void
+    let agentOrchestratorAction: () -> Void
     let settingsAction: () -> Void
 
     var body: some View {
@@ -201,9 +211,9 @@ private struct PathwayNavigationRail: View {
                 .padding(.horizontal, 12)
 
             railActionButton(
-                title: "New agent thread",
+                title: "Open agent orchestrator",
                 systemImage: "bubble.left.and.bubble.right",
-                action: newThreadAction
+                action: agentOrchestratorAction
             )
             railActionButton(title: "Settings", systemImage: "gearshape", action: settingsAction)
         }

@@ -2,6 +2,15 @@
     import Combine
     import Foundation
     import Observation
+    import OSLog
+
+    // Convex discovery owns one coordinated subscription state machine.
+    // swiftlint:disable file_length
+
+    private let pathwayCloudLogger = Logger(
+        subsystem: "com.spiritdevs.pathway",
+        category: "PathwayCloud"
+    )
 
     @MainActor
     @Observable
@@ -12,6 +21,9 @@
         private(set) var projects: [PathwayCompanyProject] = []
         private(set) var environmentBindings: [PathwayCompanyEnvironmentBinding] = []
         private(set) var threads: [PathwayAgentThread] = []
+        private(set) var activeThreads: [PathwayAgentThread] = []
+        private(set) var snoozedThreads: [PathwayAgentThread] = []
+        private(set) var settledThreads: [PathwayAgentThread] = []
 
         @ObservationIgnored private let client: PathwayConvexClient?
         @ObservationIgnored private var companiesSubscription: AnyCancellable?
@@ -21,6 +33,8 @@
         @ObservationIgnored private var entitiesByCompany: [String: [PathwaySyncEntityKey: PathwaySyncChange]] = [:]
         @ObservationIgnored private var cursorByCompany: [String: Int] = [:]
         @ObservationIgnored private var latestVersionByCompany: [String: Int] = [:]
+        @ObservationIgnored private var changeRequestStates: [String: PathwayChangeRequestState] = [:]
+        @ObservationIgnored private var isRefreshingLifecycleMetadata = false
         @ObservationIgnored private var isProvisioning = false
 
         init(client: PathwayConvexClient? = nil) {
@@ -68,9 +82,13 @@
                 projects = []
                 environmentBindings = []
                 threads = []
+                activeThreads = []
+                snoozedThreads = []
+                settledThreads = []
                 entitiesByCompany = [:]
                 cursorByCompany = [:]
                 latestVersionByCompany = [:]
+                changeRequestStates = [:]
             }
         }
 
@@ -86,6 +104,26 @@
 
         func projectName(companyId: String, projectId: String) -> String? {
             projects.first { $0.companyId == companyId && $0.project.id == projectId }?.project.name
+        }
+
+        func refreshLifecycleMetadata(using connect: PathwayConnectClient) async {
+            guard !isRefreshingLifecycleMetadata, !activeThreads.isEmpty else { return }
+            isRefreshingLifecycleMetadata = true
+            defer { isRefreshingLifecycleMetadata = false }
+
+            let resolutions = await PathwayThreadChangeRequestResolver.resolve(
+                threads: activeThreads,
+                environments: environments,
+                bindings: environmentBindings,
+                connect: connect
+            )
+            guard !Task.isCancelled else { return }
+            for resolution in resolutions {
+                changeRequestStates[resolution.threadID] = resolution.state
+            }
+            let currentThreadIDs = Set(threads.map(\.id))
+            changeRequestStates = changeRequestStates.filter { currentThreadIDs.contains($0.key) }
+            rebuildThreadPartition()
         }
     }
 
@@ -264,8 +302,19 @@
             }
             environmentBindings = snapshot.bindings
             threads = snapshot.threads
-                .filter { $0.shell.deletedAt == nil }
-                .sorted(by: PathwayAgentThread.isOrderedBefore)
+            rebuildThreadPartition()
+        }
+
+        private func rebuildThreadPartition() {
+            let partition = PathwayThreadLifecyclePartition(
+                threads: threads,
+                now: Date(),
+                changeRequestStates: changeRequestStates
+            )
+            threads = partition.all
+            activeThreads = partition.active
+            snoozedThreads = partition.snoozed
+            settledThreads = partition.settled
         }
 
         private func updateConnectionStateIfReady() {
@@ -290,7 +339,10 @@
         }
 
         private func fail(_ error: any Error) {
-            connectionState = .failed(error.localizedDescription)
+            pathwayCloudLogger.error("Convex sync failed: \(error.localizedDescription, privacy: .public)")
+            connectionState = .failed(
+                "Pathway couldn’t sync Agent Threads. Check your connection and try again."
+            )
         }
 
         private func cancelWork() {
@@ -371,16 +423,4 @@
         }
     }
 
-    private extension PathwayAgentThread {
-        static func isOrderedBefore(_ left: Self, _ right: Self) -> Bool {
-            switch (left.shell.pinnedAt, right.shell.pinnedAt) {
-            case (.some, .none):
-                true
-            case (.none, .some):
-                false
-            default:
-                left.sortDate > right.sortDate
-            }
-        }
-    }
 #endif

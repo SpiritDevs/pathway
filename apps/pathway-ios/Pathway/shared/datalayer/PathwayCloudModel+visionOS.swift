@@ -11,6 +11,9 @@
         private(set) var projects: [PathwayCompanyProject] = []
         private(set) var environmentBindings: [PathwayCompanyEnvironmentBinding] = []
         private(set) var threads: [PathwayAgentThread] = []
+        private(set) var activeThreads: [PathwayAgentThread] = []
+        private(set) var snoozedThreads: [PathwayAgentThread] = []
+        private(set) var settledThreads: [PathwayAgentThread] = []
 
         init() {}
 
@@ -20,6 +23,7 @@
         func start() async {}
         func retry() async {}
         func stop(clearContent _: Bool = true) async {}
+        func refreshLifecycleMetadata(using _: PathwayConnectClient) async {}
 
         func companyName(for companyId: String) -> String? {
             companies.first { $0.id == companyId }?.name

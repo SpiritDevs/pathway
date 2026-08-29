@@ -1,21 +1,34 @@
+import SwiftUI
+
+enum CompactAppShellMetrics {
+    static let tabBarHeight: CGFloat = 58
+    static let tabBarBottomPadding: CGFloat = 8
+    static let scrollContentClearance: CGFloat = tabBarHeight + tabBarBottomPadding + 12
+    /// Shared by the tab bar surface and the thread composer so both halves of the
+    /// bottom chrome interpolate on exactly the same curve. The composer's pill-to-card
+    /// morph uses it too: the card grows as the tab bar leaves, and a second curve would
+    /// leave the collapsed row visible underneath for part of the transition.
+    static let navigationChromeAnimation = Animation.smooth(duration: 0.28)
+}
+
 #if !os(visionOS)
-    import SwiftUI
 
     private let tabBarSpring = Animation.spring(duration: 0.48, bounce: 0.22)
     private let tabSelectionSpring = Animation.spring(duration: 0.36, bounce: 0.14)
-    private let compactTabBarHeight: CGFloat = 58
 
     struct CompactAppShell: View {
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Binding var selectedDestination: AppDestination?
         @Binding var presentedSheet: MainTabSheet?
         @State private var isMoreMenuPresented = false
+        @State private var threadChrome = CompactThreadChromeState()
 
         var body: some View {
             ZStack(alignment: .bottom) {
                 NavigationStack {
                     PathwayFeatureDestinationView(
                         destination: activeDestination,
-                        newThreadAction: presentAgentOrchestrator
+                        newThreadAction: presentNewAgentThread
                     )
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
@@ -23,8 +36,8 @@
                         }
                     }
                 }
-
-                if isMoreMenuPresented {
+                .environment(\.compactThreadChrome, threadChrome)
+                if isNavigationBackdropPresented {
                     Button(action: dismissMoreMenu) {
                         Color.clear
                             .contentShape(Rectangle())
@@ -34,24 +47,46 @@
                     .accessibilityLabel("Dismiss navigation menu")
                 }
 
-                PathwayTabBar(
-                    selectedDestination: $selectedDestination,
-                    isMoreMenuPresented: $isMoreMenuPresented,
-                    showAgentOrchestrator: presentAgentOrchestrator
-                )
-                .frame(maxWidth: 520)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 8)
+                if !threadChrome.isComposerExpanded {
+                    PathwayTabBar(
+                        selectedDestination: $selectedDestination,
+                        isMoreMenuPresented: $isMoreMenuPresented,
+                        threadChrome: threadChrome,
+                        showAgentOrchestrator: presentAgentOrchestrator
+                    )
+                    .frame(maxWidth: 520)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, CompactAppShellMetrics.tabBarBottomPadding)
+                    .transition(
+                        reduceMotion
+                            ? .opacity
+                            : .scale(scale: 0.94, anchor: .bottomTrailing).combined(with: .opacity)
+                    )
+                }
             }
+            .animation(
+                reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation,
+                value: threadChrome.isComposerExpanded
+            )
         }
 
         private var activeDestination: AppDestination {
             selectedDestination ?? .dashboard
         }
 
+        private var isNavigationBackdropPresented: Bool {
+            isMoreMenuPresented
+                || (threadChrome.isThreadDetailActive && threadChrome.isNavigationExpanded)
+        }
+
         private func presentAgentOrchestrator() {
             dismissMoreMenu()
             presentedSheet = .agentOrchestrator
+        }
+
+        private func presentNewAgentThread() {
+            dismissMoreMenu()
+            presentedSheet = .newAgentThread
         }
 
         private func presentSettings() {
@@ -60,39 +95,54 @@
         }
 
         private func dismissMoreMenu() {
-            withAnimation(tabBarSpring) {
+            let animation: Animation? = if reduceMotion {
+                nil
+            } else if threadChrome.isThreadDetailActive, threadChrome.isNavigationExpanded {
+                CompactAppShellMetrics.navigationChromeAnimation
+            } else {
+                tabBarSpring
+            }
+
+            withAnimation(animation) {
                 isMoreMenuPresented = false
+                threadChrome.collapseNavigation()
             }
         }
     }
 
     private struct PathwayTabBar: View {
+        @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Binding var selectedDestination: AppDestination?
         @Binding var isMoreMenuPresented: Bool
+        let threadChrome: CompactThreadChromeState
         let showAgentOrchestrator: () -> Void
 
         @Namespace private var glassNamespace
         @Namespace private var selectionNamespace
+        /// Width of the leading slot once laid out, so the collapsed circle has a concrete
+        /// target to interpolate towards. `nil` until the first layout pass, which keeps the
+        /// slot free-sizing exactly as it did before measurement lands.
+        @State private var expandedSurfaceWidth: CGFloat?
 
         var body: some View {
             GlassEffectContainer(spacing: 12) {
                 HStack(alignment: .bottom, spacing: 12) {
                     mainSurface
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .onGeometryChange(for: CGFloat.self) { proxy in
+                            proxy.size.width
+                        } action: { width in
+                            expandedSurfaceWidth = width
+                        }
 
-                    Button(action: showAgentOrchestrator) {
-                        Image(systemName: "bubble.left.and.bubble.right")
-                            .font(.system(size: 23, weight: .medium))
-                            .frame(width: compactTabBarHeight, height: compactTabBarHeight)
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.primary)
-                    .glassEffect(.regular.interactive(), in: .circle)
-                    .glassEffectID("agent-orchestrator", in: glassNamespace)
-                    .accessibilityLabel("Open agent orchestrator")
-                    .accessibilityIdentifier("agent-orchestrator-button")
+                    agentOrchestratorButton
                 }
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
+            .animation(
+                reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation,
+                value: isThreadNavigationCollapsed
+            )
         }
 
         @ViewBuilder
@@ -105,16 +155,92 @@
                     .glassEffectTransition(.matchedGeometry)
                     .transition(.blurReplace)
             } else {
-                tabButtons
-                    .frame(maxWidth: .infinity)
-                    .glassEffect(
-                        .regular.interactive(),
-                        in: .rect(cornerRadius: compactTabBarHeight / 2)
-                    )
-                    .glassEffectID("compact-tab-bar", in: glassNamespace)
-                    .glassEffectTransition(.matchedGeometry)
-                    .transition(.blurReplace)
+                navigationSurface
             }
+        }
+
+        /// One glass element that resizes, rather than two views swapped behind a shared
+        /// `glassEffectID`. The conditional replacement gave the collapsed circle and the tab
+        /// bar different structural identities, so SwiftUI inserted/removed them instead of
+        /// interpolating a frame and the chrome popped. Keeping a single view means the width
+        /// is an animatable `CGFloat` and the glass shape follows it continuously.
+        private var navigationSurface: some View {
+            ZStack(alignment: .leading) {
+                tabButtons
+                    .frame(width: expandedSurfaceWidth, alignment: .leading)
+                    .opacity(isThreadNavigationCollapsed ? 0 : 1)
+                    .allowsHitTesting(!isThreadNavigationCollapsed)
+                    .accessibilityHidden(isThreadNavigationCollapsed)
+
+                expandNavigationButton
+                    .opacity(isThreadNavigationCollapsed ? 1 : 0)
+                    .allowsHitTesting(isThreadNavigationCollapsed)
+                    .accessibilityHidden(!isThreadNavigationCollapsed)
+            }
+            .frame(
+                width: navigationSurfaceWidth,
+                height: CompactAppShellMetrics.tabBarHeight,
+                alignment: .leading
+            )
+            .clipShape(.rect(cornerRadius: CompactAppShellMetrics.tabBarHeight / 2))
+            .glassEffect(
+                .regular.interactive(),
+                in: .rect(cornerRadius: CompactAppShellMetrics.tabBarHeight / 2)
+            )
+            .glassEffectID("compact-tab-bar", in: glassNamespace)
+            .glassEffectTransition(.matchedGeometry)
+        }
+
+        /// A `tabBarHeight` square with a `tabBarHeight / 2` corner radius is the collapsed
+        /// circle, so the same rounded rectangle describes both ends of the animation.
+        private var navigationSurfaceWidth: CGFloat? {
+            isThreadNavigationCollapsed
+                ? CompactAppShellMetrics.tabBarHeight
+                : expandedSurfaceWidth
+        }
+
+        private var isThreadNavigationCollapsed: Bool {
+            threadChrome.isThreadDetailActive && !threadChrome.isNavigationExpanded
+        }
+
+        private var expandNavigationButton: some View {
+            Button {
+                withAnimation(
+                    reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation
+                ) {
+                    threadChrome.expandNavigation()
+                }
+            } label: {
+                Image(systemName: AppDestination.agentThreads.systemImage)
+                    .font(.system(size: 23, weight: .semibold))
+                    .frame(
+                        width: CompactAppShellMetrics.tabBarHeight,
+                        height: CompactAppShellMetrics.tabBarHeight
+                    )
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+            .accessibilityLabel("Show main navigation")
+            .accessibilityHint("Expands the tab bar")
+        }
+
+        private var agentOrchestratorButton: some View {
+            Button(action: showAgentOrchestrator) {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .font(.system(size: 23, weight: .medium))
+                    .frame(
+                        width: CompactAppShellMetrics.tabBarHeight,
+                        height: CompactAppShellMetrics.tabBarHeight
+                    )
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.primary)
+            .glassEffect(.regular.interactive(), in: .circle)
+            .glassEffectID("agent-orchestrator", in: glassNamespace)
+            .accessibilityLabel("Open agent orchestrator")
+            .accessibilityIdentifier("agent-orchestrator-button")
         }
 
         private var destinationList: some View {
@@ -182,7 +308,7 @@
                 .accessibilityLabel(moreAccessibilityLabel)
                 .accessibilityValue(isMoreMenuPresented ? "Expanded" : "Collapsed")
             }
-            .frame(height: compactTabBarHeight)
+            .frame(height: CompactAppShellMetrics.tabBarHeight)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Main navigation")
         }
@@ -209,6 +335,7 @@
             withAnimation(animation) {
                 selectedDestination = destination
                 isMoreMenuPresented = false
+                threadChrome.collapseNavigation()
             }
         }
 
@@ -220,63 +347,6 @@
             withAnimation(tabBarSpring) {
                 isMoreMenuPresented.toggle()
             }
-        }
-    }
-
-    private struct DestinationMenuButton: View {
-        let destination: AppDestination
-        let isSelected: Bool
-        let action: () -> Void
-
-        var body: some View {
-            Button(action: action) {
-                Label(destination.title, systemImage: destination.systemImage)
-                    .font(.body.weight(.medium))
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .padding(.horizontal, 12)
-                    .background {
-                        if isSelected {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.primary.opacity(0.07))
-                        }
-                    }
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 6)
-            .accessibilityAddTraits(isSelected ? .isSelected : [])
-        }
-    }
-
-    private struct TabBarIconButton: View {
-        let systemImage: String
-        let accessibilityLabel: String
-        let isSelected: Bool
-        let selectionNamespace: Namespace.ID
-        let action: () -> Void
-
-        var body: some View {
-            Button(action: action) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 22, weight: .semibold))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-                    .background {
-                        if isSelected {
-                            Capsule()
-                                .fill(Color.primary.opacity(0.08))
-                                .padding(5)
-                                .matchedGeometryEffect(
-                                    id: "selected-tab-background",
-                                    in: selectionNamespace
-                                )
-                        }
-                    }
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
-            .accessibilityLabel(accessibilityLabel)
-            .accessibilityAddTraits(isSelected ? .isSelected : [])
         }
     }
 #endif

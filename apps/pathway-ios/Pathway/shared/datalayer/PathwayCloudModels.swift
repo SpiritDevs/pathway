@@ -98,6 +98,12 @@ struct PathwayRuntimeRequestSummary: Codable, Equatable, Sendable {
     let createdAt: String
 }
 
+struct PathwayThreadLineage: Codable, Equatable, Sendable {
+    let rootThreadId: String
+    let parentThreadId: String?
+    let relationshipToParent: String?
+}
+
 struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let id: String
     let projectId: String
@@ -106,6 +112,8 @@ struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let modelSelection: PathwayModelSelection
     let runtimeMode: String
     let interactionMode: String
+    let lineage: PathwayThreadLineage?
+    let locations: [String]?
     let branch: String?
     let worktreePath: String?
     let latestRunRequestedAt: String?
@@ -124,6 +132,7 @@ struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let createdAt: String
     let updatedAt: String
     let archivedAt: String?
+    let settledOverride: String?
     let settledAt: String?
     let snoozedUntil: String?
     let snoozedAt: String?
@@ -247,7 +256,7 @@ func decodePathwayPayload<Value: Decodable>(
     return try JSONDecoder().decode(type, from: data)
 }
 
-private func pathwayDate(from value: String) -> Date? {
+func pathwayDate(from value: String) -> Date? {
     if let date = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value) {
         return date
     }
