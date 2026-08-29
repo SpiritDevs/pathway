@@ -24,16 +24,45 @@ const REPO_ROOT = NodePath.dirname(
 
 export function loadRepoEnv({
   baseEnv = process.env,
+  fallbackRepoRoot,
+  includeProductionEnv = false,
   repoRoot = REPO_ROOT,
 }: {
   readonly baseEnv?: Environment;
+  readonly fallbackRepoRoot?: string;
+  readonly includeProductionEnv?: boolean;
   readonly repoRoot?: string;
 } = {}): Record<string, string | undefined> {
+  const fallbackRootEnv = fallbackRepoRoot
+    ? readEnvFile(NodePath.join(fallbackRepoRoot, ".env"))
+    : {};
+  const fallbackProductionEnv =
+    fallbackRepoRoot && includeProductionEnv
+      ? readEnvFile(NodePath.join(fallbackRepoRoot, ".env.prod"))
+      : {};
+  const fallbackLocalEnv = fallbackRepoRoot
+    ? readEnvFile(NodePath.join(fallbackRepoRoot, ".env.local"))
+    : {};
   const rootEnv = readEnvFile(NodePath.join(repoRoot, ".env"));
+  const productionEnv = includeProductionEnv
+    ? readEnvFile(NodePath.join(repoRoot, ".env.prod"))
+    : {};
   const localEnv = readEnvFile(NodePath.join(repoRoot, ".env.local"));
-  const config = resolvePublicConfig(baseEnv, localEnv, rootEnv);
+  const config = resolvePublicConfig(
+    baseEnv,
+    localEnv,
+    productionEnv,
+    rootEnv,
+    fallbackLocalEnv,
+    fallbackProductionEnv,
+    fallbackRootEnv,
+  );
   return {
+    ...fallbackRootEnv,
+    ...fallbackProductionEnv,
+    ...fallbackLocalEnv,
     ...rootEnv,
+    ...productionEnv,
     ...localEnv,
     ...baseEnv,
     ...(config.clerkPublishableKey

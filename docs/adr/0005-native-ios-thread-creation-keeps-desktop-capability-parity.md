@@ -1,0 +1,3 @@
+# Native iOS thread creation keeps desktop capability parity
+
+Creating an Agent Thread in the native iOS client exposes the same environment-backed choices as the desktop client: environment, project, provider instance, model, provider-defined options such as reasoning effort, runtime mode, interaction mode, and supported branch or worktree behavior. The phone presentation uses progressive disclosure rather than removing capability: the composer shows compact environment/project and model/trait controls, while a configuration sheet exposes every advanced option before the first message. Project defaults and the user's last compatible selections reduce repeated configuration, but no hidden mobile-only preset changes the command sent to the owning Pathway environment.

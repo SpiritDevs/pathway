@@ -1,83 +1,60 @@
 import SwiftUI
 
-private let tabBarSpring = Animation.spring(duration: 0.48, bounce: 0.22)
-private let tabSelectionSpring = Animation.spring(duration: 0.36, bounce: 0.14)
-private let compactTabBarHeight: CGFloat = 58
+// The adaptive shell keeps its rail, context sidebar, destination routing, and settings
+// together because they share navigation state across iPadOS and visionOS.
+// swiftlint:disable file_length
 
-private enum AppDestination: String, CaseIterable, Identifiable, Hashable {
-    case agents
-    case issues
-    case threads
-    case environments
-    case settings
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .agents: "Agents"
-        case .issues: "Issues"
-        case .threads: "Threads"
-        case .environments: "Environments"
-        case .settings: "Settings"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .agents: "cpu"
-        case .issues: "checklist"
-        case .threads: "bubble.left.and.bubble.right"
-        case .environments: "server.rack"
-        case .settings: "gearshape"
-        }
-    }
-
-    var description: String {
-        switch self {
-        case .agents: "Your active agents and delegated work will appear here."
-        case .issues: "Track work that needs attention across your environments."
-        case .threads: "Continue conversations with your Pathway agents."
-        case .environments: "Connect to the machines and workspaces running Pathway."
-        case .settings: "Manage your Pathway account and native app preferences."
-        }
-    }
-
-    var isCompactDestination: Bool {
-        self == .agents || self == .issues || self == .threads
-    }
-}
-
-private enum MainTabSheet: String, Identifiable {
+enum MainTabSheet: String, Identifiable {
     case agentOrchestrator
+    case newAgentThread
+    case settings
 
     var id: Self { self }
 }
 
 struct MainTabView: View {
-    @State private var selectedDestination: AppDestination = .agents
-    @State private var isMoreMenuPresented = false
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var selectedDestination: AppDestination? = .dashboard
     @State private var presentedSheet: MainTabSheet?
 
+    private var layout: AppShellLayout {
+        AppShellLayout.resolve(
+            usesRegularWidth: horizontalSizeClass == .regular,
+            isVisionOS: isVisionOS
+        )
+    }
+
+    private var isVisionOS: Bool {
+        #if os(visionOS)
+            true
+        #else
+            false
+        #endif
+    }
+
     var body: some View {
-        ZStack(alignment: .bottom) {
-            selectedContent
-
-            if isMoreMenuPresented {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .ignoresSafeArea()
-                    .onTapGesture(perform: dismissMoreMenu)
+        Group {
+            switch layout {
+            case .compact:
+                #if os(visionOS)
+                    FloatingAppShell(
+                        selectedDestination: $selectedDestination,
+                        presentedSheet: $presentedSheet,
+                        layout: .spatial
+                    )
+                #else
+                    CompactAppShell(
+                        selectedDestination: $selectedDestination,
+                        presentedSheet: $presentedSheet
+                    )
+                #endif
+            case .sidebar, .spatial:
+                FloatingAppShell(
+                    selectedDestination: $selectedDestination,
+                    presentedSheet: $presentedSheet,
+                    layout: layout
+                )
             }
-
-            PathwayTabBar(
-                selectedDestination: $selectedDestination,
-                isMoreMenuPresented: $isMoreMenuPresented,
-                showAgentOrchestrator: presentAgentOrchestrator
-            )
-            .frame(maxWidth: 520)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
         }
         .sheet(item: $presentedSheet) { sheet in
             switch sheet {
@@ -86,257 +63,306 @@ struct MainTabView: View {
                     .presentationDetents([.large])
                     .presentationDragIndicator(.hidden)
                     .presentationCornerRadius(36)
+            case .newAgentThread:
+                NewAgentThreadView()
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.hidden)
+                    .presentationCornerRadius(36)
+            case .settings:
+                NavigationStack {
+                    PathwaySettingsView()
+                }
             }
         }
     }
+}
 
-    @ViewBuilder
-    private var selectedContent: some View {
-        NavigationStack {
-            if selectedDestination == .settings {
-                PathwaySettingsView()
-            } else {
-                PathwayFeaturePlaceholder(destination: selectedDestination)
+private struct FloatingAppShell: View {
+    @Environment(\.openWindow) private var openWindow
+    @Binding var selectedDestination: AppDestination?
+    @Binding var presentedSheet: MainTabSheet?
+    let layout: AppShellLayout
+
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var selectedContextDestination: AppContextDestination? =
+        AppDestination.dashboard.defaultContextDestination
+
+    var body: some View {
+        HStack(spacing: 12) {
+            PathwayNavigationRail(
+                selectedDestination: $selectedDestination,
+                agentOrchestratorAction: presentAgentOrchestrator,
+                settingsAction: presentSettings
+            )
+
+            NavigationSplitView(columnVisibility: $columnVisibility) {
+                PathwayContextSidebar(
+                    destination: activeDestination,
+                    selectedContextDestination: $selectedContextDestination
+                )
+                .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 310)
+            } detail: {
+                NavigationStack {
+                    PathwayContextDestinationView(
+                        destination: activeDestination,
+                        contextDestination: activeContextDestination,
+                        newThreadAction: presentNewAgentThread
+                    )
+                    .toolbar {
+                        ToolbarItemGroup(placement: .primaryAction) {
+                            Button(
+                                "New agent thread",
+                                systemImage: "bubble.left.and.bubble.right",
+                                action: presentNewAgentThread
+                            )
+                            Button("Settings", systemImage: "gearshape", action: presentSettings)
+                        }
+                    }
+                }
             }
+            .navigationSplitViewStyle(.balanced)
         }
+        .padding(12)
+        .onChange(of: activeDestination) { _, destination in
+            selectedContextDestination = destination.defaultContextDestination
+        }
+    }
+
+    private var activeDestination: AppDestination {
+        selectedDestination ?? .dashboard
+    }
+
+    private var activeContextDestination: AppContextDestination {
+        guard let selectedContextDestination,
+              activeDestination.contextDestinations.contains(selectedContextDestination)
+        else {
+            return activeDestination.defaultContextDestination
+        }
+        return selectedContextDestination
     }
 
     private func presentAgentOrchestrator() {
-        dismissMoreMenu()
-        presentedSheet = .agentOrchestrator
+        if layout == .spatial {
+            openWindow(id: PathwayWindow.agentOrchestrator.rawValue)
+        } else {
+            presentedSheet = .agentOrchestrator
+        }
     }
 
-    private func dismissMoreMenu() {
-        withAnimation(tabBarSpring) {
-            isMoreMenuPresented = false
+    private func presentNewAgentThread() {
+        presentedSheet = .newAgentThread
+    }
+
+    private func presentSettings() {
+        if layout == .spatial {
+            openWindow(id: PathwayWindow.settings.rawValue)
+        } else {
+            presentedSheet = .settings
         }
     }
 }
 
-private struct PathwayTabBar: View {
-    @Binding var selectedDestination: AppDestination
-    @Binding var isMoreMenuPresented: Bool
-    let showAgentOrchestrator: () -> Void
-
-    @Namespace private var glassNamespace
-    @Namespace private var selectionNamespace
+private struct PathwayNavigationRail: View {
+    @Binding var selectedDestination: AppDestination?
+    let agentOrchestratorAction: () -> Void
+    let settingsAction: () -> Void
 
     var body: some View {
-        GlassEffectContainer(spacing: 8) {
-            HStack(alignment: .bottom, spacing: 12) {
-                mainSurface
-
-                Button(action: showAgentOrchestrator) {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                        .font(.system(size: 23, weight: .medium))
-                        .frame(width: compactTabBarHeight, height: compactTabBarHeight)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.primary)
-                .glassEffect(.regular.interactive(), in: .circle)
-                .glassEffectID("agent-orchestrator", in: glassNamespace)
-                .accessibilityLabel("Open agent orchestrator")
-                .accessibilityIdentifier("agent-orchestrator-button")
+        #if os(visionOS)
+            railContent
+                .background(.regularMaterial, in: Capsule())
+        #else
+            GlassEffectContainer {
+                railContent
+                    .glassEffect(.regular, in: .capsule)
             }
-        }
+        #endif
     }
 
-    @ViewBuilder
-    private var mainSurface: some View {
-        if isMoreMenuPresented {
-            destinationList
-                .frame(maxWidth: .infinity)
-                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 32))
-                .glassEffectID("expanded-view-menu", in: glassNamespace)
-                .glassEffectTransition(.matchedGeometry)
-                .transition(.blurReplace)
-        } else {
-            tabButtons
-                .frame(maxWidth: .infinity)
-                .glassEffect(
-                    .regular.interactive(),
-                    in: .rect(cornerRadius: compactTabBarHeight / 2)
-                )
-                .glassEffectID("compact-tab-bar", in: glassNamespace)
-                .glassEffectTransition(.matchedGeometry)
-                .transition(.blurReplace)
-        }
-    }
-
-    private var destinationList: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Pathway")
-                .font(.headline)
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 8)
+    private var railContent: some View {
+        VStack(spacing: 8) {
+            Text("P")
+                .font(.title2.weight(.bold))
+                .frame(width: 48, height: 48)
+                .accessibilityLabel("Pathway")
 
             Divider()
-                .padding(.horizontal, 14)
+                .padding(.horizontal, 12)
 
-            ForEach(AppDestination.allCases) { destination in
-                destinationButton(destination)
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(Array(AppDestination.sidebarSections.enumerated()), id: \.element.id) { entry in
+                        let (index, section) = entry
+                        if index > 0 {
+                            Divider()
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 2)
+                        }
+
+                        ForEach(section.destinations) { destination in
+                            destinationButton(destination)
+                        }
+                    }
+                }
             }
+            .scrollIndicators(.hidden)
+
+            Divider()
+                .padding(.horizontal, 12)
+
+            railActionButton(
+                title: "Open agent orchestrator",
+                systemImage: "bubble.left.and.bubble.right",
+                action: agentOrchestratorAction
+            )
+            railActionButton(title: "Settings", systemImage: "gearshape", action: settingsAction)
         }
-        .padding(.bottom, 10)
+        .padding(.vertical, 8)
+        .frame(width: 64)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Main navigation")
     }
 
     private func destinationButton(_ destination: AppDestination) -> some View {
-        Button {
-            select(destination)
+        let isSelected = activeDestination == destination
+
+        return Button {
+            withAnimation(.snappy(duration: 0.24)) {
+                selectedDestination = destination
+            }
         } label: {
-            HStack(spacing: 12) {
-                Image(systemName: destination.systemImage)
-                    .font(.body.weight(.semibold))
-                    .frame(width: 24)
-
-                Text(destination.title)
-                    .font(.body.weight(.medium))
-
-                Spacer()
-            }
-            .contentShape(Rectangle())
-            .padding(.horizontal, 12)
-            .frame(height: 44)
-            .background {
-                if selectedDestination == destination {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.primary.opacity(0.07))
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 6)
-        .accessibilityAddTraits(selectedDestination == destination ? .isSelected : [])
-    }
-
-    private var tabButtons: some View {
-        HStack(spacing: 0) {
-            compactButton(.agents)
-            compactButton(.issues)
-            compactButton(.threads)
-
-            Button(action: toggleMoreMenu) {
-                ZStack {
-                    if !selectedDestination.isCompactDestination {
-                        HStack(spacing: 4) {
-                            Image(systemName: selectedDestination.systemImage)
-
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 10, weight: .semibold))
-                                .opacity(0.45)
-                        }
-                        .font(.system(size: 22, weight: .semibold))
-                    } else {
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.system(size: 18, weight: .semibold))
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .background {
-                    if !selectedDestination.isCompactDestination {
-                        Capsule()
-                            .fill(Color.primary.opacity(0.08))
-                            .padding(5)
-                            .matchedGeometryEffect(
-                                id: "selected-tab-background",
-                                in: selectionNamespace
-                            )
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(
-                selectedDestination.isCompactDestination ? Color.primary : Color.accentColor
-            )
-            .accessibilityLabel(moreAccessibilityLabel)
-            .accessibilityValue(isMoreMenuPresented ? "Expanded" : "Collapsed")
-        }
-        .frame(height: compactTabBarHeight)
-    }
-
-    private func compactButton(_ destination: AppDestination) -> some View {
-        TabBarIconButton(
-            systemImage: destination.systemImage,
-            accessibilityLabel: destination.title,
-            isSelected: selectedDestination == destination,
-            selectionNamespace: selectionNamespace
-        ) {
-            select(destination)
-        }
-    }
-
-    private var moreAccessibilityLabel: String {
-        if !selectedDestination.isCompactDestination {
-            return "\(selectedDestination.title), choose another view"
-        }
-        return "Choose another view"
-    }
-
-    private func select(_ destination: AppDestination) {
-        let animation = destination.isCompactDestination ? tabSelectionSpring : tabBarSpring
-        withAnimation(animation) {
-            selectedDestination = destination
-            isMoreMenuPresented = false
-        }
-    }
-
-    private func toggleMoreMenu() {
-        withAnimation(tabBarSpring) {
-            isMoreMenuPresented.toggle()
-        }
-    }
-}
-
-private struct TabBarIconButton: View {
-    let systemImage: String
-    let accessibilityLabel: String
-    let isSelected: Bool
-    let selectionNamespace: Namespace.ID
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 22, weight: .semibold))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
+            Image(systemName: destination.systemImage)
+                .font(.system(size: 20, weight: .semibold))
+                .frame(width: 48, height: 48)
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .background {
                     if isSelected {
-                        Capsule()
-                            .fill(Color.primary.opacity(0.08))
-                            .padding(5)
-                            .matchedGeometryEffect(
-                                id: "selected-tab-background",
-                                in: selectionNamespace
-                            )
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.18))
                     }
                 }
         }
         .buttonStyle(.plain)
         .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
-        .accessibilityLabel(accessibilityLabel)
+        .hoverEffect()
+        .help(destination.title)
+        .accessibilityLabel(destination.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("rail-destination-\(destination.rawValue)")
+    }
+
+    private func railActionButton(
+        title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 19, weight: .semibold))
+                .frame(width: 48, height: 48)
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .hoverEffect()
+        .help(title)
+        .accessibilityLabel(title)
+    }
+
+    private var activeDestination: AppDestination {
+        selectedDestination ?? .dashboard
     }
 }
 
-private struct PathwayFeaturePlaceholder: View {
+private struct PathwayContextSidebar: View {
+    let destination: AppDestination
+    @Binding var selectedContextDestination: AppContextDestination?
+
+    var body: some View {
+        List(selection: $selectedContextDestination) {
+            Section {
+                ForEach(destination.contextDestinations) { contextDestination in
+                    Label(contextDestination.title, systemImage: contextDestination.systemImage)
+                        .tag(contextDestination)
+                }
+            } footer: {
+                Text(destination.description)
+            }
+        }
+        .navigationTitle(destination.title)
+        .id(destination)
+        .accessibilityIdentifier("context-sidebar-\(destination.rawValue)")
+    }
+}
+
+private struct PathwayContextDestinationView: View {
+    let destination: AppDestination
+    let contextDestination: AppContextDestination
+    let newThreadAction: () -> Void
+
+    @ViewBuilder
+    var body: some View {
+        if contextDestination == destination.defaultContextDestination {
+            PathwayFeatureDestinationView(
+                destination: destination,
+                newThreadAction: newThreadAction
+            )
+        } else {
+            ScrollView {
+                ContentUnavailableView {
+                    Label(contextDestination.title, systemImage: contextDestination.systemImage)
+                } description: {
+                    Text("This \(destination.title.lowercased()) view is ready for its content.")
+                }
+                .frame(maxWidth: 720, minHeight: 420)
+                .frame(maxWidth: .infinity)
+                .padding(24)
+            }
+            .navigationTitle(contextDestination.title)
+            .navigationBarTitleDisplayMode(.large)
+            .accessibilityIdentifier(
+                "context-destination-\(destination.rawValue)-\(contextDestination.id)"
+            )
+        }
+    }
+}
+
+struct PathwayFeaturePlaceholder: View {
     let destination: AppDestination
 
     var body: some View {
-        ContentUnavailableView {
-            Label(destination.title, systemImage: destination.systemImage)
-        } description: {
-            Text(destination.description)
+        ScrollView {
+            ContentUnavailableView {
+                Label(destination.title, systemImage: destination.systemImage)
+            } description: {
+                Text(destination.description)
+            }
+            .frame(maxWidth: 720, minHeight: 420)
+            .frame(maxWidth: .infinity)
+            .padding(24)
         }
         .navigationTitle(destination.title)
         .navigationBarTitleDisplayMode(.large)
+        .accessibilityIdentifier("destination-\(destination.rawValue)")
     }
 }
 
-private struct PathwaySettingsView: View {
+struct PathwayFeatureDestinationView: View {
+    let destination: AppDestination
+    let newThreadAction: () -> Void
+
+    @ViewBuilder
+    var body: some View {
+        if destination == .agentThreads {
+            AgentThreadsView(newThreadAction: newThreadAction)
+        } else {
+            PathwayFeaturePlaceholder(destination: destination)
+        }
+    }
+}
+
+struct PathwaySettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismissWindow) private var dismissWindow
     @Environment(PathwayAppModel.self) private var appModel
 
     var body: some View {
@@ -356,10 +382,41 @@ private struct PathwaySettingsView: View {
             }
 
             Section {
-                Text(AppDestination.settings.description)
+                Text("Manage your Pathway account and native app preferences.")
                     .foregroundStyle(.secondary)
             }
         }
         .navigationTitle("Settings")
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done", action: close)
+            }
+        }
+        .frame(minWidth: 320, minHeight: 360)
+    }
+
+    private func close() {
+        #if os(visionOS)
+            dismissWindow(id: PathwayWindow.settings.rawValue)
+        #else
+            dismiss()
+        #endif
     }
 }
+
+#if os(visionOS)
+    #Preview("Spatial app shell") {
+        MainTabView()
+    }
+#else
+    #Preview("Compact app shell", traits: .fixedLayout(width: 430, height: 932)) {
+        MainTabView()
+    }
+
+    #Preview("Regular app shell", traits: .fixedLayout(width: 1180, height: 820)) {
+        MainTabView()
+            .environment(\.horizontalSizeClass, .regular)
+    }
+#endif
+
+// swiftlint:enable file_length

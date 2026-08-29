@@ -1,6 +1,7 @@
 // Public runtime identifiers. Local.xcconfig is generated from the repository-root
 // .env/.env.local files by `node scripts/configure-pathway-ios.ts`.
 PATHWAY_CLERK_PUBLISHABLE_KEY =
+PATHWAY_CLERK_JWT_TEMPLATE =
 PATHWAY_CONVEX_URL =
 PATHWAY_RELAY_URL = https:/$()/relay.spiritdevs.com
 PATHWAY_SITE_URL = https:/$()/app.spiritdevs.com

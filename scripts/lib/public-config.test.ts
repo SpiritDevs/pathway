@@ -33,11 +33,15 @@ describe("loadRepoEnv", () => {
     expect(env.VITE_RELAY_OTLP_TRACES_TOKEN).toBeUndefined();
   });
 
-  it("applies process, root local, and root precedence in that order", () => {
+  it("applies process, local, and base precedence in that order", () => {
     const repoRoot = makeTemporaryDirectory();
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env"),
       "PATHWAY_CLERK_PUBLISHABLE_KEY=pk_root\nPATHWAY_CLERK_JWT_TEMPLATE=template_root\nPATHWAY_CLERK_CLI_OAUTH_CLIENT_ID=oauth_root\nPATHWAY_RELAY_URL=https://root.example.test\n",
+    );
+    NodeFS.writeFileSync(
+      NodePath.join(repoRoot, ".env.prod"),
+      "PATHWAY_CLERK_PUBLISHABLE_KEY=pk_prod\nPATHWAY_CLERK_JWT_TEMPLATE=template_prod\nPATHWAY_CLERK_CLI_OAUTH_CLIENT_ID=oauth_prod\nPATHWAY_RELAY_URL=https://prod.example.test\nPATHWAY_CONVEX_URL=https://prod.convex.test\n",
     );
     NodeFS.writeFileSync(
       NodePath.join(repoRoot, ".env.local"),
@@ -47,6 +51,10 @@ describe("loadRepoEnv", () => {
     expect(loadRepoEnv({ baseEnv: {}, repoRoot }).PATHWAY_RELAY_URL).toBe(
       "https://local.example.test",
     );
+    expect(loadRepoEnv({ baseEnv: {}, repoRoot }).PATHWAY_CONVEX_URL).toBeUndefined();
+    expect(
+      loadRepoEnv({ baseEnv: {}, includeProductionEnv: true, repoRoot }).PATHWAY_CONVEX_URL,
+    ).toBe("https://prod.convex.test");
     expect(
       loadRepoEnv({
         baseEnv: {
@@ -65,6 +73,33 @@ describe("loadRepoEnv", () => {
       VITE_CLERK_JWT_TEMPLATE: "template_ci",
       PATHWAY_RELAY_URL: "https://ci.example.test",
       VITE_PATHWAY_RELAY_URL: "https://ci.example.test",
+    });
+  });
+
+  it("uses a primary checkout as fallback for worktree production credentials", () => {
+    const primaryRepoRoot = makeTemporaryDirectory();
+    const worktreeRoot = makeTemporaryDirectory();
+    NodeFS.writeFileSync(
+      NodePath.join(primaryRepoRoot, ".env.prod"),
+      "PATHWAY_CLERK_PUBLISHABLE_KEY=pk_primary\nPATHWAY_CLERK_JWT_TEMPLATE=template_primary\nPATHWAY_CONVEX_URL=https://primary.convex.test\nPATHWAY_RELAY_URL=https://primary.example.test\n",
+    );
+    NodeFS.writeFileSync(
+      NodePath.join(worktreeRoot, ".env.prod"),
+      "PATHWAY_RELAY_URL=https://worktree.example.test\n",
+    );
+
+    expect(
+      loadRepoEnv({
+        baseEnv: {},
+        fallbackRepoRoot: primaryRepoRoot,
+        includeProductionEnv: true,
+        repoRoot: worktreeRoot,
+      }),
+    ).toMatchObject({
+      PATHWAY_CLERK_PUBLISHABLE_KEY: "pk_primary",
+      PATHWAY_CLERK_JWT_TEMPLATE: "template_primary",
+      PATHWAY_CONVEX_URL: "https://primary.convex.test",
+      PATHWAY_RELAY_URL: "https://worktree.example.test",
     });
   });
 

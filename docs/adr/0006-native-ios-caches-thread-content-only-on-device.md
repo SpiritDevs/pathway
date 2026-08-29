@@ -1,0 +1,3 @@
+# Native iOS caches thread content only on device
+
+The native iOS client keeps previously loaded Agent Thread projections in a bounded on-device cache so conversations remain readable during a Pathway Connect outage, and it persists unsent composer drafts across connection and app lifecycle changes. Cached content is explicitly stale and read-only while its owning environment is unavailable: messages, approvals, user-input responses, source-control actions, and commands cannot be submitted, and drafts never send automatically after reconnection. Convex continues to carry only cloud-safe list metadata and never receives message or attachment content; after Pathway Connect reconnects, the environment's authoritative projection replaces the cached copy.

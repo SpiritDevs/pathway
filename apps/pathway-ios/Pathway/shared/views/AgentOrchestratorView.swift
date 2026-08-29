@@ -1,34 +1,35 @@
 import SwiftUI
 
-struct AgentOrchestratorView: View {
-    private enum PlaceholderNotice: String, Identifiable {
-        case attachments
-        case history
+private enum AgentPlaceholderNotice: String, Identifiable {
+    case attachments
+    case history
 
-        var id: Self { self }
+    var id: Self { self }
 
-        var title: String {
-            switch self {
-            case .attachments: "Attachments"
-            case .history: "Chat history"
-            }
-        }
-
-        var message: String {
-            switch self {
-            case .attachments:
-                "Attachments will be available when the native orchestrator is connected."
-            case .history:
-                "Your previous agent conversations will appear here."
-            }
+    var title: String {
+        switch self {
+        case .attachments: "Attachments"
+        case .history: "Chat history"
         }
     }
 
+    var message: String {
+        switch self {
+        case .attachments:
+            "Attachments will be available when the native orchestrator is connected."
+        case .history:
+            "Your previous agent conversations will appear here."
+        }
+    }
+}
+
+struct AgentOrchestratorView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismissWindow) private var dismissWindow
     @FocusState private var isComposerFocused: Bool
     @State private var draft = ""
     @State private var submittedPrompt: String?
-    @State private var presentedNotice: PlaceholderNotice?
+    @State private var presentedNotice: AgentPlaceholderNotice?
 
     private var trimmedDraft: String {
         draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -51,10 +52,7 @@ struct AgentOrchestratorView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             composer
         }
-        .task {
-            await Task.yield()
-            isComposerFocused = true
-        }
+        .task(focusComposerIfAppropriate)
         .alert(item: $presentedNotice) { notice in
             Alert(
                 title: Text(notice.title),
@@ -74,7 +72,7 @@ struct AgentOrchestratorView: View {
                 headerButton(
                     systemImage: "xmark",
                     accessibilityLabel: "Close agent orchestrator",
-                    action: { dismiss() }
+                    action: close
                 )
 
                 Spacer()
@@ -108,52 +106,61 @@ struct AgentOrchestratorView: View {
     }
 
     private var welcomeContent: some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 36)
+        ScrollView {
+            VStack(spacing: 0) {
+                Spacer(minLength: 36)
 
-            Image(systemName: "cursorarrow")
-                .font(.system(size: 27, weight: .medium))
-                .symbolRenderingMode(.hierarchical)
-                .padding(.bottom, 22)
+                Image(systemName: "cursorarrow")
+                    .font(.system(size: 27, weight: .medium))
+                    .symbolRenderingMode(.hierarchical)
+                    .padding(.bottom, 22)
 
-            Text("Welcome to Pathway Agent")
-                .font(.title2.weight(.semibold))
-                .multilineTextAlignment(.center)
+                Text("Welcome to Pathway Agent")
+                    .font(.title2.weight(.semibold))
+                    .multilineTextAlignment(.center)
 
-            Text("Ask anything or tell Pathway what you need")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.top, 8)
-
-            suggestionChips
-                .padding(.top, 22)
-
-            HStack(spacing: 8) {
-                Text("@")
-                    .font(.body.weight(.semibold))
-                    .frame(width: 28, height: 28)
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
-
-                Text("to mention any issue, project, or thread")
+                Text("Ask anything or tell Pathway what you need")
+                    .font(.title3)
                     .foregroundStyle(.secondary)
-            }
-            .font(.body)
-            .padding(.top, 24)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 8)
 
-            Spacer(minLength: 44)
+                suggestionChips
+                    .padding(.top, 22)
+
+                HStack(spacing: 8) {
+                    Text("@")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 28, height: 28)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 7))
+
+                    Text("to mention any issue, project, or thread")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.body)
+                .padding(.top, 24)
+
+                Spacer(minLength: 44)
+            }
+            .frame(maxWidth: 720)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20)
         }
-        .padding(.horizontal, 20)
     }
 
     private var suggestionChips: some View {
-        VStack(spacing: 10) {
+        ViewThatFits(in: .horizontal) {
             HStack(spacing: 10) {
                 suggestionChip(title: "Agent setup", systemImage: "gearshape.fill")
                 suggestionChip(title: "Issue research", systemImage: "magnifyingglass")
+                suggestionChip(title: "Situation report", systemImage: "bolt.fill")
             }
 
-            suggestionChip(title: "Situation report", systemImage: "bolt.fill")
+            VStack(spacing: 10) {
+                suggestionChip(title: "Agent setup", systemImage: "gearshape.fill")
+                suggestionChip(title: "Issue research", systemImage: "magnifyingglass")
+                suggestionChip(title: "Situation report", systemImage: "bolt.fill")
+            }
         }
     }
 
@@ -177,6 +184,15 @@ struct AgentOrchestratorView: View {
     }
 
     private func placeholderConversation(prompt: String) -> some View {
+        #if os(visionOS)
+            conversationContent(prompt: prompt)
+        #else
+            conversationContent(prompt: prompt)
+                .scrollDismissesKeyboard(.interactively)
+        #endif
+    }
+
+    private func conversationContent(prompt: String) -> some View {
         ScrollView {
             VStack(alignment: .trailing, spacing: 18) {
                 Text(prompt)
@@ -195,8 +211,9 @@ struct AgentOrchestratorView: View {
                 .padding(.top, 80)
             }
             .padding(20)
+            .frame(maxWidth: 820)
+            .frame(maxWidth: .infinity)
         }
-        .scrollDismissesKeyboard(.interactively)
     }
 
     private var composer: some View {
@@ -247,6 +264,23 @@ struct AgentOrchestratorView: View {
         .shadow(color: .black.opacity(0.06), radius: 22, y: 8)
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
+        .frame(maxWidth: 820)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func focusComposerIfAppropriate() async {
+        #if !os(visionOS)
+            await Task.yield()
+            isComposerFocused = true
+        #endif
+    }
+
+    private func close() {
+        #if os(visionOS)
+            dismissWindow(id: PathwayWindow.agentOrchestrator.rawValue)
+        #else
+            dismiss()
+        #endif
     }
 
     private func insertMention() {
