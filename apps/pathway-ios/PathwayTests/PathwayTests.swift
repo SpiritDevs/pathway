@@ -115,6 +115,23 @@ struct PathwayTests {
         #expect(item?.text == "Run the release command?")
     }
 
+    @Test func timelineUsesTextFallbacksInPriorityOrder() {
+        let preferred = PathwayTimelineItem(json: .object([
+            "id": .string("message-1"),
+            "type": .string("assistant_message"),
+            "text": .string("Primary text"),
+            "markdown": .string("Fallback markdown")
+        ]))
+        let failure = PathwayTimelineItem(json: .object([
+            "id": .string("failure-1"),
+            "type": .string("error"),
+            "failure": .object(["message": .string("Provider failed")])
+        ]))
+
+        #expect(preferred?.text == "Primary text")
+        #expect(failure?.text == "Provider failed")
+    }
+
     @Test func messageDispatchUsesMobileContractAndQueuesActiveThreads() {
         let command = PathwayAgentThreadCommands.dispatchMessage(
             threadID: "thread-1",

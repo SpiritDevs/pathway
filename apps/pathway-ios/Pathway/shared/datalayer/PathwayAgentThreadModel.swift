@@ -79,16 +79,15 @@ struct PathwayTimelineItem: Codable, Equatable, Identifiable, Sendable {
     }
 
     private static func text(from object: [String: JSONValue]) -> String? {
-        object["text"]?.stringValue
-            ?? object["markdown"]?.stringValue
-            ?? object["prompt"]?.stringValue
-            ?? object["input"]?.stringValue
-            ?? object["output"]?.stringValue
-            ?? object["message"]?.stringValue
-            ?? object["summary"]?.stringValue
-            ?? object["progress"]?.stringValue
-            ?? object["result"]?.stringValue
-            ?? object["failure"]?.objectValue?["message"]?.stringValue
+        for key in [
+            "text", "markdown", "prompt", "input", "output",
+            "message", "summary", "progress", "result"
+        ] {
+            if let text = object[key]?.stringValue {
+                return text
+            }
+        }
+        return object["failure"]?.objectValue?["message"]?.stringValue
     }
 
     private static func attachment(_ value: JSONValue) -> PathwayMessageAttachment? {
