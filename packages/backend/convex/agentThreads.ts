@@ -142,14 +142,6 @@ export const upsert = mutation({
       }
     }
 
-    const binding = await activeBinding(ctx, actor.company._id, environmentId, localProjectId);
-    if (binding === undefined) {
-      throw backendError(
-        "entity-not-found",
-        "The Agent Thread project has no active binding on this environment.",
-      );
-    }
-
     const id = agentThreadId(environmentId, threadId);
     const existing = await ctx.db
       .query("agentThreads")
@@ -157,9 +149,28 @@ export const upsert = mutation({
         q.eq("companyId", actor.company._id).eq("id", id),
       )
       .unique();
+    const binding = await activeBinding(ctx, actor.company._id, environmentId, localProjectId);
+    // Discovery of a NEW thread still requires an active binding. A thread
+    // already in the index was published while its binding was active; its
+    // shell must stay updatable after the binding is revoked (e.g. duplicate
+    // project identities merged away), or one such thread wedges the
+    // environment's reconcile loop forever.
+    if (binding === undefined && existing === null) {
+      throw backendError(
+        "entity-not-found",
+        "The Agent Thread project has no active binding on this environment.",
+      );
+    }
+    const cloudProjectId = binding?.cloudProjectId ?? existing?.cloudProjectId;
+    if (cloudProjectId === undefined) {
+      throw backendError(
+        "entity-not-found",
+        "The Agent Thread project has no active binding on this environment.",
+      );
+    }
     if (
       existing !== null &&
-      existing.cloudProjectId === binding.cloudProjectId &&
+      existing.cloudProjectId === cloudProjectId &&
       existing.localProjectId === localProjectId &&
       JSON.stringify(existing.shell) === JSON.stringify(args.shell)
     ) {
@@ -172,7 +183,7 @@ export const upsert = mutation({
         id,
         companyId: actor.company._id,
         environmentId,
-        cloudProjectId: binding.cloudProjectId,
+        cloudProjectId,
         localProjectId,
         threadId,
         shell: args.shell,
@@ -183,7 +194,7 @@ export const upsert = mutation({
       row = inserted;
     } else {
       await ctx.db.patch(existing._id, {
-        cloudProjectId: binding.cloudProjectId,
+        cloudProjectId,
         localProjectId,
         shell: args.shell,
         updatedAt: now,
@@ -193,7 +204,7 @@ export const upsert = mutation({
       row = updated;
     }
 
-    const project = await ctx.db.get(binding.cloudProjectId);
+    const project = await ctx.db.get(cloudProjectId);
     if (project === null) throw backendError("entity-not-found", "The cloud project is missing.");
     await appendCompanyChanges(ctx, {
       companyId: actor.company._id,

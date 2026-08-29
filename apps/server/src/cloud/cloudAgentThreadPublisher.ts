@@ -189,10 +189,17 @@ export const runCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publis
     const reconcile = Effect.gen(function* () {
       const snapshot = yield* threads.getShellSnapshot();
       const shells = [...snapshot.threads, ...snapshot.archivedThreads];
-      yield* Effect.forEach(shells, (shell) => publisher.publish(shell), {
-        concurrency: 4,
-        discard: true,
-      });
+      // One unpublishable shell (a thread whose project binding was revoked,
+      // a shell the deployed validator rejects) must not abort the cycle:
+      // every other shell still publishes and stale removals below still run.
+      yield* Effect.forEach(
+        shells,
+        (shell) => publisher.publish(shell).pipe(reportFailure("publish", shell.id)),
+        {
+          concurrency: 4,
+          discard: true,
+        },
+      );
       yield* publisher.reconcileIds(shells.map((shell) => shell.id));
     }).pipe(reportFailure("reconcile"));
 
