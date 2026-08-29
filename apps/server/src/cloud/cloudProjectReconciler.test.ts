@@ -172,6 +172,7 @@ describe("cloud project repository reconciliation", () => {
       defaultWorkflowOwner: null,
       preferredBindingId: null,
       repositoryIdentity: identity,
+      repositoryIdentityAuthority: "merge",
       archivedAt: null,
       createdAt: 1,
       updatedAt: 8,
@@ -192,6 +193,32 @@ describe("cloud project repository reconciliation", () => {
         updatedAt: 8,
       },
     ]);
+  });
+
+  it("does not treat an ordinarily published repository as a Git rewrite intent", () => {
+    const project: CloudSyncEntity = {
+      entityKind: "cloudProject",
+      id: CloudProjectId.make("cloud-project"),
+      name: "Pathway",
+      description: "",
+      teamIds: [],
+      defaultWorkflowOwner: null,
+      preferredBindingId: null,
+      repositoryIdentity: identity,
+      archivedAt: null,
+      createdAt: 1,
+      updatedAt: 8,
+    };
+
+    expect(
+      authoritativeEnvironmentRepositories(
+        [
+          project,
+          binding({ id: "binding", localProjectId: "project", status: "active", updatedAt: 5 }),
+        ],
+        CURRENT,
+      ),
+    ).toEqual([]);
   });
 
   it.effect("updates the checkout's actual primary Git remote", () =>

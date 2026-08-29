@@ -75,7 +75,9 @@ export function authoritativeEnvironmentRepositories(
   }
   return bindings.flatMap((binding) => {
     const project = projects.get(String(binding.cloudProjectId));
-    if (project?.repositoryIdentity == null) return [];
+    if (project?.repositoryIdentity == null || project.repositoryIdentityAuthority !== "merge") {
+      return [];
+    }
     return [
       {
         bindingId: String(binding.id),

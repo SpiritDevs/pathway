@@ -79,6 +79,8 @@ export const CloudProject = Schema.Struct({
   preferredBindingId: Schema.NullOr(EnvironmentBindingId),
   /** Repository chosen by the user when several checkouts disagree. */
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  /** Present only when a merge explicitly made the repository authoritative for every checkout. */
+  repositoryIdentityAuthority: Schema.optional(Schema.Literal("merge")),
   archivedAt: Schema.NullOr(CloudTimestamp),
   createdAt: CloudTimestamp,
   updatedAt: CloudTimestamp,

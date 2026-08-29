@@ -41,6 +41,7 @@ const PROJECT_MERGE_MAX_SERIALIZED_BYTES = 4 * 1_024 * 1_024;
 // before the byte-aware aggregate check below can inspect the returned documents.
 const PROJECT_MERGE_MAX_COMMAND_ROWS = 8;
 const PROJECT_MERGE_MAX_CAPTURED_EMAIL_ROWS = 5;
+const PROJECT_MERGE_ISSUE_VIEW_PAGE_SIZE = 50;
 
 type StoredRepositoryIdentity = NonNullable<Doc<"environmentBindings">["repositoryIdentity"]>;
 
@@ -319,6 +320,60 @@ function replaceIssueViewProjectIds(config: unknown, fromProjectId: string, toPr
     ],
   };
 }
+
+/** Retargets saved views outside the merge transaction, one bounded company page at a time. */
+export const retargetMergedProjectIssueViews = internalMutation({
+  args: {
+    companyId: v.id("companies"),
+    sourceProjectId: domainIdArg,
+    targetProjectId: domainIdArg,
+    cursor: v.union(v.string(), v.null()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const company = await ctx.db.get(args.companyId);
+    if (company === null) return null;
+    const page = await ctx.db
+      .query("issueViews")
+      .withIndex("by_company_and_visibility", (q) => q.eq("companyId", args.companyId))
+      .paginate({ cursor: args.cursor, numItems: PROJECT_MERGE_ISSUE_VIEW_PAGE_SIZE });
+    const changes: CompanyChange[] = [];
+    for (const view of page.page) {
+      if (view.deletedAt !== null) continue;
+      const config = replaceIssueViewProjectIds(
+        view.config,
+        args.sourceProjectId,
+        args.targetProjectId,
+      );
+      if (config === view.config) continue;
+      await ctx.db.patch(view._id, { config, updatedAt: Date.now() });
+      const updated = await ctx.db.get(view._id);
+      if (updated === null) continue;
+      changes.push({
+        entityKind: "issueView",
+        entityId: updated.id,
+        changeKind: "upsert",
+        teamIds: updated.visibility === "teams" ? updated.teamIds : [],
+        versionDocId: updated._id,
+        payload: await encodeIssueView(ctx, company, updated),
+      });
+    }
+    if (changes.length > 0) {
+      await appendCompanyChanges(ctx, {
+        companyId: args.companyId,
+        actor: { kind: "system", source: "automation" },
+        changes,
+      });
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.cloudProjects.retargetMergedProjectIssueViews, {
+        ...args,
+        cursor: page.continueCursor,
+      });
+    }
+    return null;
+  },
+});
 
 function hasSlackRoutes(configurationVersion: 2 | undefined, trigger: unknown, rules: unknown) {
   if (configurationVersion === 2) return Array.isArray(rules) && rules.length > 0;
@@ -957,7 +1012,6 @@ export const mergeCompanyProjects = mutation({
       automationJobs,
       slackWatches,
       slackIntents,
-      issueViews,
     ] = await Promise.all([
       ctx.db
         .query("environmentBindings")
@@ -1036,10 +1090,6 @@ export const mergeCompanyProjects = mutation({
           q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
         )
         .take(projectRowLimit),
-      ctx.db
-        .query("issueViews")
-        .withIndex("by_company_and_visibility", (q) => q.eq("companyId", actor.company._id))
-        .take(companyScanLimit),
     ]);
 
     for (const [label, rows] of [
@@ -1070,12 +1120,11 @@ export const mergeCompanyProjects = mutation({
       commands.length,
       PROJECT_MERGE_MAX_COMMAND_ROWS,
     );
-    for (const [label, rows] of [
-      ["Slack watches", slackWatches],
-      ["saved issue views", issueViews],
-    ] as const) {
-      assertBoundedProjectMergeRows(label, rows.length, PROJECT_MERGE_MAX_COMPANY_SCAN_ROWS);
-    }
+    assertBoundedProjectMergeRows(
+      "Slack watches",
+      slackWatches.length,
+      PROJECT_MERGE_MAX_COMPANY_SCAN_ROWS,
+    );
 
     const targetEnvironmentIds = new Set(
       targetBindings
@@ -1120,11 +1169,6 @@ export const mergeCompanyProjects = mutation({
         ? [{ watch, direct, trigger, rules }]
         : [];
     });
-    const affectedIssueViews = issueViews.flatMap((view) => {
-      if (view.deletedAt !== null) return [];
-      const config = replaceIssueViewProjectIds(view.config, source.id, target.id);
-      return config === view.config ? [] : [{ view, config }];
-    });
     const affectedRowCount =
       [...targetBindings, ...sourceBindings].filter((binding) => binding.status !== "revoked")
         .length +
@@ -1139,7 +1183,6 @@ export const mergeCompanyProjects = mutation({
       sourceAutomationJobs.length +
       sourceSlackIntents.length +
       affectedSlackWatches.length +
-      affectedIssueViews.length +
       2;
     assertBoundedProjectMergeRows(
       "project records",
@@ -1162,7 +1205,6 @@ export const mergeCompanyProjects = mutation({
       ...sourceAutomationJobs,
       ...sourceSlackIntents,
       ...affectedSlackWatches,
-      ...affectedIssueViews,
     ]);
     const now = Date.now();
     const changes: CompanyChange[] = [];
@@ -1321,20 +1363,6 @@ export const mergeCompanyProjects = mutation({
         updatedAt: now,
       });
     }
-    for (const { view, config } of affectedIssueViews) {
-      await ctx.db.patch(view._id, { config, updatedAt: now });
-      const updated = await ctx.db.get(view._id);
-      if (updated === null) throw backendError("entity-not-found", "A saved issue view vanished.");
-      changes.push({
-        entityKind: "issueView",
-        entityId: updated.id,
-        changeKind: "upsert",
-        teamIds: updated.visibility === "teams" ? updated.teamIds : [],
-        versionDocId: updated._id,
-        payload: await encodeIssueView(ctx, actor.company, updated),
-      });
-    }
-
     const preferredBindingId =
       target.preferredBindingId ??
       (source.preferredBindingId !== null &&
@@ -1345,6 +1373,7 @@ export const mergeCompanyProjects = mutation({
       teamIds: combinedTeamIds,
       preferredBindingId,
       repositoryIdentity: authoritativeRepositoryIdentity,
+      repositoryIdentityAuthority: "merge",
       updatedAt: now,
     });
     const updatedTarget = await ctx.db.get(target._id);
@@ -1373,6 +1402,12 @@ export const mergeCompanyProjects = mutation({
       companyId: actor.company._id,
       actor: actorRecord(actor),
       changes,
+    });
+    await ctx.scheduler.runAfter(0, internal.cloudProjects.retargetMergedProjectIssueViews, {
+      companyId: actor.company._id,
+      sourceProjectId: source.id,
+      targetProjectId: target.id,
+      cursor: null,
     });
     return {
       movedBindings: sourceBindings.filter((binding) => binding.status !== "revoked").length,

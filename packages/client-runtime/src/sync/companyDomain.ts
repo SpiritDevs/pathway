@@ -192,6 +192,7 @@ const cloudProjectSyncEntityFields = {
   defaultWorkflowOwner: Schema.NullOr(WorkflowOwner),
   preferredBindingId: Schema.NullOr(EnvironmentBindingId),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
+  repositoryIdentityAuthority: Schema.optional(Schema.Literal("merge")),
   archivedAt: Schema.NullOr(CloudTimestamp),
   createdAt: CloudTimestamp,
   updatedAt: CloudTimestamp,

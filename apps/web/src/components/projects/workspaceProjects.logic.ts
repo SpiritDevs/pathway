@@ -10,7 +10,12 @@
  * @module components/projects/workspaceProjects.logic
  */
 import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
+import { CloudProjectSyncEntity, EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
 import type { RepositoryIdentity } from "@spiritdevs/contracts";
+import * as Schema from "effect/Schema";
+
+const isCloudProject = Schema.is(CloudProjectSyncEntity);
+const isEnvironmentBinding = Schema.is(EnvironmentBindingEntity);
 
 /** The subset of `IssueProjectOption` this merge needs, so the module stays testable in isolation. */
 export interface WorkspaceProjectCandidate {
@@ -96,6 +101,62 @@ export function workspaceProjectMergeTarget(
   if (companyId === null) return null;
   const cloudProjectId = workspaceProjectCloudIdForCompany(project, companyId);
   return cloudProjectId === null ? null : { companyId, cloudProjectId };
+}
+
+/**
+ * Merge choices are physical company records, not logical workspace groups. Two cloud projects can
+ * already share one repository identity — that is often exactly why the user needs to merge them.
+ */
+export function buildCompanyProjectMergeCandidates(input: {
+  readonly companyId: string;
+  readonly targetCloudProjectId: string;
+  readonly entities: Iterable<unknown>;
+}): ReadonlyArray<WorkspaceProject> {
+  const projects: CloudProjectSyncEntity[] = [];
+  const bindingsByProject = new Map<string, EnvironmentBindingEntity[]>();
+  for (const entity of input.entities) {
+    if (isCloudProject(entity)) {
+      if (entity.archivedAt === null && String(entity.id) !== input.targetCloudProjectId) {
+        projects.push(entity);
+      }
+      continue;
+    }
+    if (!isEnvironmentBinding(entity) || entity.status === "revoked") continue;
+    const projectId = String(entity.cloudProjectId);
+    const bindings = bindingsByProject.get(projectId) ?? [];
+    bindings.push(entity);
+    bindingsByProject.set(projectId, bindings);
+  }
+
+  return projects
+    .map((project): WorkspaceProject => {
+      const cloudProjectId = String(project.id);
+      const bindings = bindingsByProject.get(cloudProjectId) ?? [];
+      const repositoryIdentities = bindings
+        .flatMap((binding) =>
+          binding.repositoryIdentity == null ? [] : [binding.repositoryIdentity],
+        )
+        .filter(
+          (identity, index, identities) =>
+            identities.findIndex(
+              (candidate) => candidate.canonicalKey === identity.canonicalKey,
+            ) === index,
+        );
+      return {
+        projectKey: cloudProjectKey(cloudProjectId),
+        displayName: project.name,
+        companyIds: [input.companyId],
+        group: null,
+        checkoutCount: bindings.length,
+        cloudProjectId,
+        companyProjectIds: [{ companyId: input.companyId, cloudProjectId }],
+        ...(project.repositoryIdentity == null
+          ? {}
+          : { repositoryIdentity: project.repositoryIdentity }),
+        ...(repositoryIdentities.length === 0 ? {} : { repositoryIdentities }),
+      };
+    })
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
 }
 
 /**

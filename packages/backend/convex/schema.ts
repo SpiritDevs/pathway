@@ -461,6 +461,8 @@ export default defineSchema({
     preferredBindingId: v.union(domainId, v.null()),
     /** User-selected repository identity shared by every checkout after a merge. */
     repositoryIdentity: v.optional(v.union(repositoryIdentityArg, v.null())),
+    /** Only an explicit merge choice is allowed to rewrite connected Git remotes. */
+    repositoryIdentityAuthority: v.optional(v.literal("merge")),
     archivedAt: v.union(v.number(), v.null()),
     createdAt: v.number(),
     updatedAt: v.number(),

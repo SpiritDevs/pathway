@@ -101,6 +101,7 @@ import {
 import { useProjectGroups } from "../projects/useProjectGroups";
 import { useWorkspaceProjects } from "../projects/useWorkspaceProjects";
 import {
+  buildCompanyProjectMergeCandidates,
   workspaceProjectCloudIdForCompany,
   workspaceProjectMergeTarget,
   type WorkspaceProject,
@@ -229,6 +230,7 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
       companyContext={{
         companyId: companySettings.companyId,
         replica: companySettings.replica,
+        registryReplicas: companySettings.registryReplicas,
         environmentControl,
       }}
       workspaceProjects={workspaceProjects}
@@ -239,6 +241,7 @@ export function ProjectSettingsPanel({ projectKey }: { projectKey: string }) {
 interface ProjectCompanyContext {
   readonly companyId: CompanySettings["companyId"];
   readonly replica: CompanySettings["replica"];
+  readonly registryReplicas?: CompanySettings["registryReplicas"];
   readonly environmentControl: EnvironmentControlClient | null;
 }
 
@@ -468,13 +471,23 @@ export function ProjectDetail({
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const mergeCandidates = useMemo(() => {
     if (mergeProject === null || mergeCompanyId === undefined) return [];
+    const replica =
+      companyContext?.registryReplicas?.get(mergeCompanyId) ??
+      (companyContext?.companyId === mergeCompanyId ? companyContext.replica : null);
+    if (replica !== null) {
+      return buildCompanyProjectMergeCandidates({
+        companyId: mergeCompanyId,
+        targetCloudProjectId: mergeProject.cloudProjectId,
+        entities: replica.view.values(),
+      });
+    }
     return workspaceProjects.flatMap((candidate) => {
       const cloudProjectId = workspaceProjectCloudIdForCompany(candidate, mergeCompanyId);
       return cloudProjectId === null || cloudProjectId === mergeProject.cloudProjectId
         ? []
         : [{ ...candidate, cloudProjectId }];
     });
-  }, [mergeCompanyId, mergeProject, workspaceProjects]);
+  }, [companyContext?.registryReplicas, mergeCompanyId, mergeProject, workspaceProjects]);
   const connectionCatalog = useMemo(
     () => buildProjectConnectionCatalog(companyContext?.replica?.view.values() ?? []),
     [companyContext?.replica],

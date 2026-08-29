@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
 import {
   buildWorkspaceProjects,
+  buildCompanyProjectMergeCandidates,
   cloudProjectKey,
   unassignedWorkspaceProjects,
   workspaceProjectAssignmentKey,
@@ -43,6 +44,74 @@ function candidate(overrides: Partial<WorkspaceProjectCandidate>): WorkspaceProj
 }
 
 describe("workspace project list", () => {
+  it("keeps same-repository cloud rows distinct as merge candidates", () => {
+    const repositoryIdentity = {
+      canonicalKey: "github.com/spiritdevs/pathway",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "https://github.com/SpiritDevs/pathway.git",
+      },
+    };
+    const entities = [
+      {
+        entityKind: "cloudProject" as const,
+        id: "cloud-target",
+        name: "Pathway target",
+        description: "",
+        teamIds: [],
+        defaultWorkflowOwner: null,
+        preferredBindingId: null,
+        repositoryIdentity,
+        archivedAt: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        entityKind: "cloudProject" as const,
+        id: "cloud-duplicate",
+        name: "Pathway duplicate",
+        description: "",
+        teamIds: [],
+        defaultWorkflowOwner: null,
+        preferredBindingId: null,
+        repositoryIdentity,
+        archivedAt: null,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        entityKind: "environmentBinding" as const,
+        id: "binding-duplicate",
+        cloudProjectId: "cloud-duplicate",
+        environmentId: "environment-laptop",
+        localProjectId: "local-pathway",
+        localWorkspaceRoot: "/work/pathway",
+        repositoryIdentity,
+        status: "active" as const,
+        lastSeenAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+
+    expect(
+      buildCompanyProjectMergeCandidates({
+        companyId: "company-acme",
+        targetCloudProjectId: "cloud-target",
+        entities,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        displayName: "Pathway duplicate",
+        cloudProjectId: "cloud-duplicate",
+        checkoutCount: 1,
+        repositoryIdentity,
+        repositoryIdentities: [repositoryIdentity],
+      }),
+    ]);
+  });
+
   it("keeps a company project that no machine has a checkout of", () => {
     const repositoryIdentity = {
       canonicalKey: "github.com/spiritdevs/pathway",

@@ -482,6 +482,12 @@ describe("company project merge", () => {
       targetCloudProjectId: PROJECT_ID,
       repositoryIdentity,
     });
+    await t.mutation(internal.cloudProjects.retargetMergedProjectIssueViews, {
+      companyId: ids.companyId,
+      sourceProjectId: PENDING_PROJECT_ID,
+      targetProjectId: PROJECT_ID,
+      cursor: null,
+    });
 
     const state = await t.run(async (ctx) => ({
       target: await ctx.db.get(ids.projectId),
@@ -498,6 +504,7 @@ describe("company project merge", () => {
       locator: repositoryIdentity.locator,
       displayName: repositoryIdentity.displayName,
     });
+    expect(state.target?.repositoryIdentityAuthority).toBe("merge");
     expect(state.target?.teamIds).toEqual([]);
     expect(state.source?.deletedAt).toEqual(expect.any(Number));
     expect(state.binding).toMatchObject({
@@ -629,6 +636,39 @@ describe("company project merge", () => {
           error: null,
           createdAt: NOW,
           updatedAt: NOW,
+          version: 0,
+        });
+      }
+    });
+
+    await expect(
+      asOwner(t).mutation(api.cloudProjects.mergeCompanyProjects, {
+        companyId: COMPANY_ID,
+        sourceCloudProjectId: PENDING_PROJECT_ID,
+        targetCloudProjectId: PROJECT_ID,
+        repositoryIdentity: duplicate.repositoryIdentity,
+      }),
+    ).resolves.toMatchObject({ movedBindings: 1, movedThreads: 1 });
+  });
+
+  it("does not reject a merge because the company has extensive saved-view history", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const duplicate = await seedMergeDuplicate(t, ids);
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 2_001; index += 1) {
+        await ctx.db.insert("issueViews", {
+          id: `0198c0de-dddd-7ddd-8ddd-${String(index).padStart(12, "0")}`,
+          companyId: ids.companyId,
+          ownerMembershipId: ids.membershipId,
+          visibility: "private",
+          teamIds: [],
+          name: `Deleted view ${index}`,
+          config: { tab: "active", projectIds: [] },
+          position: index,
+          createdAt: NOW,
+          updatedAt: NOW,
+          deletedAt: NOW,
           version: 0,
         });
       }
