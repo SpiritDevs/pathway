@@ -100,7 +100,11 @@ import {
 } from "../projects/projectConnectionMetadata";
 import { useProjectGroups } from "../projects/useProjectGroups";
 import { useWorkspaceProjects } from "../projects/useWorkspaceProjects";
-import type { WorkspaceProject } from "../projects/workspaceProjects.logic";
+import {
+  workspaceProjectCloudIdForCompany,
+  workspaceProjectMergeTarget,
+  type WorkspaceProject,
+} from "../projects/workspaceProjects.logic";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
   editorRequestForScript,
@@ -439,20 +443,38 @@ export function ProjectDetail({
   const owningCompany =
     workspaceProject === null
       ? null
-      : (companies.find((company) => workspaceProject.companyIds.includes(String(company.id))) ??
+      : (companies.find(
+          (company) =>
+            company.id === companyContext?.companyId &&
+            workspaceProject.companyIds.includes(String(company.id)),
+        ) ??
+        companies.find((company) => workspaceProject.companyIds.includes(String(company.id))) ??
         null);
+  const mergeTarget =
+    workspaceProject === null
+      ? null
+      : workspaceProjectMergeTarget(workspaceProject, companyContext?.companyId ?? null);
+  const mergeCompanyId = mergeTarget?.companyId as CompanyId | undefined;
+  const mergeTargetCloudProjectId = mergeTarget?.cloudProjectId ?? null;
+  const mergeProject = useMemo(
+    () =>
+      workspaceProject === null || mergeTargetCloudProjectId === null
+        ? null
+        : { ...workspaceProject, cloudProjectId: mergeTargetCloudProjectId },
+    [mergeTargetCloudProjectId, workspaceProject],
+  );
   const [moveDestination, setMoveDestination] = useState<CompanyId | null>(null);
   const [moveWizardOpen, setMoveWizardOpen] = useState(false);
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
   const mergeCandidates = useMemo(() => {
-    if (workspaceProject === null || owningCompany === null) return [];
-    return workspaceProjects.filter(
-      (candidate) =>
-        candidate.cloudProjectId !== null &&
-        candidate.cloudProjectId !== workspaceProject.cloudProjectId &&
-        candidate.companyIds.includes(String(owningCompany.id)),
-    );
-  }, [owningCompany, workspaceProject, workspaceProjects]);
+    if (mergeProject === null || mergeCompanyId === undefined) return [];
+    return workspaceProjects.flatMap((candidate) => {
+      const cloudProjectId = workspaceProjectCloudIdForCompany(candidate, mergeCompanyId);
+      return cloudProjectId === null || cloudProjectId === mergeProject.cloudProjectId
+        ? []
+        : [{ ...candidate, cloudProjectId }];
+    });
+  }, [mergeCompanyId, mergeProject, workspaceProjects]);
   const connectionCatalog = useMemo(
     () => buildProjectConnectionCatalog(companyContext?.replica?.view.values() ?? []),
     [companyContext?.replica],
@@ -1280,7 +1302,8 @@ export function ProjectDetail({
                   variant="outline"
                   disabled={
                     mergeCandidates.length === 0 ||
-                    owningCompany === null ||
+                    mergeProject === null ||
+                    mergeCompanyId === undefined ||
                     companyContext?.environmentControl == null
                   }
                   onClick={() => setMergeDialogOpen(true)}
@@ -1293,15 +1316,15 @@ export function ProjectDetail({
           </SettingsSection>
         ) : null}
 
-        {workspaceProject !== null &&
-        owningCompany !== null &&
+        {mergeProject !== null &&
+        mergeCompanyId !== undefined &&
         companyContext?.environmentControl != null ? (
           <MergeProjectDialog
             open={mergeDialogOpen}
             onOpenChange={setMergeDialogOpen}
-            project={workspaceProject}
+            project={mergeProject}
             candidates={mergeCandidates}
-            companyId={owningCompany.id as CompanyId}
+            companyId={mergeCompanyId}
             environmentControl={companyContext.environmentControl}
             onMerged={() => void navigate({ to: "/settings/projects", replace: true })}
           />

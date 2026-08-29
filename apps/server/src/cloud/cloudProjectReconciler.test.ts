@@ -11,6 +11,7 @@ import type * as ProjectService from "../project/ProjectService.ts";
 import type * as ProcessRunner from "../processRunner.ts";
 import {
   authoritativeEnvironmentRepositories,
+  primaryGitRemoteName,
   reconcileAuthoritativeEnvironmentRepositories,
   reconcileAuthoritativeEnvironmentRepositoriesWithRetry,
   reconcileRevokedEnvironmentProjects,
@@ -153,6 +154,14 @@ describe("cloud project repository reconciliation", () => {
     displayName: "spiritdevs/pathway",
   };
 
+  it("selects the resolver-preferred fetch remote from a live Git listing", () => {
+    expect(
+      primaryGitRemoteName(
+        "origin https://github.com/old/pathway.git (fetch)\nupstream https://github.com/other/pathway.git (fetch)\n",
+      ),
+    ).toEqual({ name: "upstream", exists: true });
+  });
+
   it("joins an active binding to its project's authoritative repository", () => {
     const project: CloudSyncEntity = {
       entityKind: "cloudProject",
@@ -190,7 +199,9 @@ describe("cloud project repository reconciliation", () => {
       const projectId = ProjectId.make("project");
       const run = vi.fn((input: ProcessRunner.ProcessRunInput) =>
         Effect.succeed({
-          stdout: input.args.at(-1) === "remote" ? "origin\nupstream\n" : "",
+          stdout: input.args.includes("-v")
+            ? "origin https://github.com/old/pathway.git (fetch)\nupstream https://github.com/another/pathway.git (fetch)\n"
+            : "",
           stderr: "",
           code: 0,
           timedOut: false,
@@ -207,14 +218,7 @@ describe("cloud project repository reconciliation", () => {
               id: projectId,
               title: "Pathway",
               workspaceRoot: "/work/pathway",
-              repositoryIdentity: {
-                canonicalKey: "github.com/another/pathway",
-                locator: {
-                  source: "git-remote",
-                  remoteName: "upstream",
-                  remoteUrl: "https://github.com/another/pathway.git",
-                },
-              },
+              repositoryIdentity: null,
               faviconPath: null,
               defaultModelSelection: null,
               scripts: [],
@@ -241,7 +245,7 @@ describe("cloud project repository reconciliation", () => {
       });
 
       expect(run.mock.calls.map(([input]) => input.args)).toEqual([
-        ["-C", "/work/pathway", "remote"],
+        ["-C", "/work/pathway", "remote", "-v"],
         [
           "-C",
           "/work/pathway",
@@ -263,7 +267,9 @@ describe("cloud project repository reconciliation", () => {
         const settingUrl = input.args.includes("set-url");
         if (settingUrl) setUrlAttempts += 1;
         return Effect.succeed({
-          stdout: input.args.at(-1) === "remote" ? "origin\n" : "",
+          stdout: input.args.includes("-v")
+            ? "origin https://github.com/old/pathway.git (fetch)\n"
+            : "",
           stderr: "",
           code: settingUrl && setUrlAttempts === 1 ? 1 : 0,
           timedOut: false,

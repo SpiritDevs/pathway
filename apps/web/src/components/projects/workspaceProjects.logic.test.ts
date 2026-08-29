@@ -6,6 +6,8 @@ import {
   cloudProjectKey,
   unassignedWorkspaceProjects,
   workspaceProjectAssignmentKey,
+  workspaceProjectCloudIdForCompany,
+  workspaceProjectMergeTarget,
   workspaceThreadStartAvailability,
   type WorkspaceProjectCandidate,
 } from "./workspaceProjects.logic";
@@ -80,6 +82,7 @@ describe("workspace project list", () => {
         group: null,
         checkoutCount: 0,
         cloudProjectId: "cloud-planned",
+        companyProjectIds: [{ companyId: "company-acme", cloudProjectId: "cloud-planned" }],
         repositoryIdentity,
         repositoryIdentities: [bindingRepositoryIdentity],
       },
@@ -113,6 +116,7 @@ describe("workspace project list", () => {
         group: pathway,
         checkoutCount: 2,
         cloudProjectId: "cloud-pathway",
+        companyProjectIds: [{ companyId: "company-acme", cloudProjectId: "cloud-pathway" }],
       },
     ]);
   });
@@ -157,6 +161,39 @@ describe("workspace project list", () => {
     });
     expect(projects).toHaveLength(1);
     expect(projects[0]?.companyIds).toEqual(["company-acme", "company-bolt"]);
+    expect(projects[0]?.companyProjectIds).toEqual([
+      { companyId: "company-acme", cloudProjectId: "cloud-shared" },
+      { companyId: "company-bolt", cloudProjectId: "cloud-shared" },
+    ]);
+  });
+
+  it("keeps each company paired with its own project id in a folded checkout group", () => {
+    const shared = group({ id: "local-shared", projectKey: "repo:shared", displayName: "Shared" });
+    const projects = buildWorkspaceProjects({
+      groups: [shared],
+      candidates: [
+        candidate({
+          id: "cloud-acme",
+          companyIds: ["company-acme"],
+          projectIds: ["local-shared"],
+          isCompanyProject: true,
+        }),
+        candidate({
+          id: "cloud-bolt",
+          companyIds: ["company-bolt"],
+          projectIds: ["local-shared"],
+          isCompanyProject: true,
+        }),
+      ],
+    });
+
+    expect(workspaceProjectCloudIdForCompany(projects[0]!, "company-acme")).toBe("cloud-acme");
+    expect(workspaceProjectCloudIdForCompany(projects[0]!, "company-bolt")).toBe("cloud-bolt");
+    expect(workspaceProjectMergeTarget(projects[0]!, null)).toBeNull();
+    expect(workspaceProjectMergeTarget(projects[0]!, "company-acme")).toEqual({
+      companyId: "company-acme",
+      cloudProjectId: "cloud-acme",
+    });
   });
 
   it("sorts by display name so the sidebar order does not depend on where a project came from", () => {

@@ -554,6 +554,96 @@ describe("company project merge", () => {
     ).rejects.toThrow("already detected");
   });
 
+  it("rejects two active project bindings in the same environment", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const duplicate = await seedMergeDuplicate(t, ids);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ids.bindingId, { environmentId: "environment-laptop" });
+    });
+
+    await expect(
+      asOwner(t).mutation(api.cloudProjects.mergeCompanyProjects, {
+        companyId: COMPANY_ID,
+        sourceCloudProjectId: PENDING_PROJECT_ID,
+        targetCloudProjectId: PROJECT_ID,
+        repositoryIdentity: duplicate.repositoryIdentity,
+      }),
+    ).rejects.toThrow("both have active connections in one environment");
+  });
+
+  it("rejects oversized serialized payloads before moving project records", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const duplicate = await seedMergeDuplicate(t, ids);
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 4; index += 1) {
+        await ctx.db.insert("capturedEmails", {
+          id: `environment-laptop:large-message-${index}`,
+          companyId: ids.companyId,
+          environmentId: "environment-laptop",
+          cloudProjectId: duplicate.projectId,
+          localProjectId: "local-pathway-laptop",
+          messageId: `large-message-${index}`,
+          message: { subject: "x".repeat(600_000) },
+          updatedAt: NOW,
+          version: 0,
+        });
+      }
+    });
+
+    await expect(
+      asOwner(t).mutation(api.cloudProjects.mergeCompanyProjects, {
+        companyId: COMPANY_ID,
+        sourceCloudProjectId: PENDING_PROJECT_ID,
+        targetCloudProjectId: PROJECT_ID,
+        repositoryIdentity: duplicate.repositoryIdentity,
+      }),
+    ).rejects.toThrow("too much serialized project data");
+    const source = await t.run(async (ctx) => ctx.db.get(duplicate.projectId));
+    expect(source?.deletedAt).toBeNull();
+  });
+
+  it("ignores terminal command history when bounding merge work", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    const duplicate = await seedMergeDuplicate(t, ids);
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 2_001; index += 1) {
+        await ctx.db.insert("environmentCommands", {
+          id: `0198c0de-eeee-7eee-8eee-${String(index).padStart(12, "0")}`,
+          companyId: ids.companyId,
+          targetEnvironmentId: ENVIRONMENT_ID,
+          cloudProjectId: duplicate.projectId,
+          bindingId: null,
+          kind: "statusQuery",
+          args: {},
+          issuedByMembershipId: ids.membershipId,
+          onBehalfOfActor: { kind: "member", membershipId: MEMBERSHIP_ID },
+          state: "succeeded",
+          claimedByEnvironmentId: null,
+          claimGeneration: 0,
+          claimExpiresAt: null,
+          expiresAt: NOW + 120_000,
+          result: null,
+          error: null,
+          createdAt: NOW,
+          updatedAt: NOW,
+          version: 0,
+        });
+      }
+    });
+
+    await expect(
+      asOwner(t).mutation(api.cloudProjects.mergeCompanyProjects, {
+        companyId: COMPANY_ID,
+        sourceCloudProjectId: PENDING_PROJECT_ID,
+        targetCloudProjectId: PROJECT_ID,
+        repositoryIdentity: duplicate.repositoryIdentity,
+      }),
+    ).resolves.toMatchObject({ movedBindings: 1, movedThreads: 1 });
+  });
+
   it("rejects an oversized merge before moving any records", async () => {
     const t = harness();
     const ids = await seed(t);

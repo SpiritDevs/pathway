@@ -157,6 +157,7 @@ export const DEFAULT_SYNC_DAEMON_UNAUTHORIZED_RESTARTS = 3;
 
 /** How often the server asks Convex for registration additions and revocations. */
 export const DEFAULT_SYNC_DAEMON_COMPANY_RECONCILE_INTERVAL = Duration.seconds(15);
+export const DEFAULT_CLOUD_PROJECT_RECONCILE_INTERVAL = Duration.minutes(1);
 /** Bounded recovery attempts after a per-company worker returns or fails unexpectedly. */
 export const DEFAULT_CLOUD_COMPANY_WORKER_RESTARTS = 3;
 
@@ -653,6 +654,15 @@ export function superviseCloudSyncCompanies<DiscoveryError, WorkerError, R>(
   );
 }
 
+/** State changes reconcile immediately; the periodic snapshot retries intents after a quiet failure. */
+export function cloudProjectReconciliationStates<A>(
+  state: SubscriptionRef.SubscriptionRef<A>,
+  interval: Duration.Input = DEFAULT_CLOUD_PROJECT_RECONCILE_INTERVAL,
+): Stream.Stream<A> {
+  const periodic = Stream.tick(interval).pipe(Stream.mapEffect(() => SubscriptionRef.get(state)));
+  return Stream.merge(SubscriptionRef.changes(state), periodic);
+}
+
 /**
  * Builds the engine and parks it at the activation boundary, or logs why it did not.
  *
@@ -699,7 +709,7 @@ const runCloudSyncCompany = Effect.fn("cloud.sync_daemon.run_company")(function*
   const reconciledProjectRepositories = yield* Ref.make<ReadonlySet<string>>(new Set());
   const reconcileCloudProjects =
     Option.isSome(projects) && Option.isSome(orchestration)
-      ? SubscriptionRef.changes(engine.state).pipe(
+      ? cloudProjectReconciliationStates(engine.state).pipe(
           Stream.runForEach((state) =>
             Effect.gen(function* () {
               const settled = yield* Ref.get(reconciledProjectDeletions);

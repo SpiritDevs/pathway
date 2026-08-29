@@ -28,6 +28,29 @@ export interface AuthoritativeEnvironmentRepository {
   readonly updatedAt: number;
 }
 
+/** Matches the repository resolver's remote preference even before project enrichment completes. */
+export function primaryGitRemoteName(
+  remoteListing: string,
+  enrichedRemoteName?: string,
+): { readonly name: string; readonly exists: boolean } | null {
+  const all = new Set<string>();
+  const fetch = new Set<string>();
+  for (const line of remoteListing.split("\n")) {
+    const match = /^\s*(\S+)\s+\S+\s+\((fetch|push)\)\s*$/.exec(line);
+    if (match === null) continue;
+    all.add(match[1]!);
+    if (match[2] === "fetch") fetch.add(match[1]!);
+  }
+  const candidates = fetch.size > 0 ? fetch : all;
+  const name =
+    (enrichedRemoteName !== undefined && candidates.has(enrichedRemoteName)
+      ? enrichedRemoteName
+      : undefined) ??
+    (["upstream", "origin"].find((candidate) => candidates.has(candidate)) ||
+      [...candidates].sort()[0]);
+  return name === undefined ? null : { name, exists: all.has(name) };
+}
+
 export const authoritativeEnvironmentRepositoryIntentKey = (
   repository: AuthoritativeEnvironmentRepository,
 ): string =>
@@ -84,19 +107,18 @@ export const reconcileAuthoritativeEnvironmentRepositories = Effect.fn(
       settled.push(intentKey);
       continue;
     }
-    // Apply the URL to this checkout's actual primary remote. The resolver prefers upstream over
-    // origin, so copying the selected checkout's remote name could leave another checkout still
-    // identifying itself through an untouched upstream.
-    const remoteName =
-      project.repositoryIdentity?.locator.remoteName ??
-      repository.repositoryIdentity.locator.remoteName;
     const remotes = yield* input.processRunner
-      .run({ command: "git", args: ["-C", project.workspaceRoot, "remote"] })
+      .run({ command: "git", args: ["-C", project.workspaceRoot, "remote", "-v"] })
       .pipe(Effect.option);
     if (remotes._tag === "None" || remotes.value.code !== 0) continue;
-    const hasRemote = remotes.value.stdout
-      .split("\n")
-      .some((candidate) => candidate.trim() === remoteName);
+    // Apply the URL to this checkout's actual primary fetch remote. The enrichment snapshot can be
+    // null just after reconnect, so the live listing is the authority and uses the same preference
+    // as RepositoryIdentityResolver: upstream, origin, then alphabetically first.
+    const primary = primaryGitRemoteName(
+      remotes.value.stdout,
+      project.repositoryIdentity?.locator.remoteName,
+    );
+    const remoteName = primary?.name ?? repository.repositoryIdentity.locator.remoteName;
     const result = yield* input.processRunner
       .run({
         command: "git",
@@ -104,7 +126,7 @@ export const reconcileAuthoritativeEnvironmentRepositories = Effect.fn(
           "-C",
           project.workspaceRoot,
           "remote",
-          hasRemote ? "set-url" : "add",
+          primary?.exists === true ? "set-url" : "add",
           remoteName,
           repository.repositoryIdentity.locator.remoteUrl,
         ],

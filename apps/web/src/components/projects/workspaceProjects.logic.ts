@@ -35,6 +35,11 @@ export interface WorkspaceProject {
   readonly checkoutCount: number;
   /** The company-owned id, when this project has been registered. */
   readonly cloudProjectId: string | null;
+  /** Preserves which company owns which id when All Companies folds checkouts into one row. */
+  readonly companyProjectIds?: ReadonlyArray<{
+    readonly companyId: string;
+    readonly cloudProjectId: string;
+  }>;
   /** Cloud-level identity remains available when every checkout is offline. */
   readonly repositoryIdentity?: RepositoryIdentity;
   /** Binding-derived choices stay current even when their environments disconnect. */
@@ -60,6 +65,37 @@ export function workspaceThreadStartAvailability(
 /** Company projects with no checkout need a route key that cannot collide with a grouping key. */
 export function cloudProjectKey(cloudProjectId: string): string {
   return `cloud:${cloudProjectId}`;
+}
+
+/** The unambiguous cloud-project id owned by one company within a folded workspace row. */
+export function workspaceProjectCloudIdForCompany(
+  project: WorkspaceProject,
+  companyId: string,
+): string | null {
+  const matches = (project.companyProjectIds ?? []).filter(
+    (candidate) => candidate.companyId === companyId,
+  );
+  if (matches.length === 1) return matches[0]!.cloudProjectId;
+  if (
+    matches.length === 0 &&
+    project.companyIds.length === 1 &&
+    project.companyIds[0] === companyId
+  ) {
+    return project.cloudProjectId;
+  }
+  return null;
+}
+
+/** A merge needs one company and that company's matching project id; All Companies can be ambiguous. */
+export function workspaceProjectMergeTarget(
+  project: WorkspaceProject,
+  scopedCompanyId: string | null,
+): { readonly companyId: string; readonly cloudProjectId: string } | null {
+  const companyId =
+    scopedCompanyId ?? (project.companyIds.length === 1 ? project.companyIds[0]! : null);
+  if (companyId === null) return null;
+  const cloudProjectId = workspaceProjectCloudIdForCompany(project, companyId);
+  return cloudProjectId === null ? null : { companyId, cloudProjectId };
 }
 
 /**
@@ -107,6 +143,19 @@ export function buildWorkspaceProjects(input: {
         identities.findIndex((candidate) => candidate.canonicalKey === identity.canonicalKey) ===
         index,
     );
+    const companyProjectIds = [
+      ...(existing?.companyProjectIds ?? []),
+      ...(candidate.isCompanyProject
+        ? candidate.companyIds.map((companyId) => ({ companyId, cloudProjectId: candidate.id }))
+        : []),
+    ].filter(
+      (mapping, index, mappings) =>
+        mappings.findIndex(
+          (candidate) =>
+            candidate.companyId === mapping.companyId &&
+            candidate.cloudProjectId === mapping.cloudProjectId,
+        ) === index,
+    );
     // The same project id can arrive once per owning company. Keep one row and union the owners,
     // so a shared project is listed once rather than once per company.
     byKey.set(projectKey, {
@@ -118,6 +167,7 @@ export function buildWorkspaceProjects(input: {
       cloudProjectId: candidate.isCompanyProject
         ? candidate.id
         : (existing?.cloudProjectId ?? null),
+      ...(companyProjectIds.length === 0 ? {} : { companyProjectIds }),
       ...(repositoryIdentity === null ? {} : { repositoryIdentity }),
       ...(repositoryIdentities.length === 0 ? {} : { repositoryIdentities }),
     });

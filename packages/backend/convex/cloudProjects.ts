@@ -25,6 +25,7 @@ import {
 } from "./lib/identity.ts";
 import { encodeIssue, encodeIssueMilestone, encodeIssueView } from "./lib/issueApply.ts";
 import { domainIdArg, repositoryIdentityArg } from "./lib/validators.ts";
+import { measureSerializedBytes } from "../src/sync/changeFeed.ts";
 
 function trimmed(value: string, label: string): string {
   const result = value.trim();
@@ -35,6 +36,11 @@ function trimmed(value: string, label: string): string {
 /** Keeps a merge comfortably below Convex's single-transaction read/write limits. */
 const PROJECT_MERGE_MAX_AFFECTED_ROWS = 300;
 const PROJECT_MERGE_MAX_COMPANY_SCAN_ROWS = 2_000;
+const PROJECT_MERGE_MAX_SERIALIZED_BYTES = 4 * 1_024 * 1_024;
+// These records can each approach half a megabyte. Their query caps keep the read itself bounded
+// before the byte-aware aggregate check below can inspect the returned documents.
+const PROJECT_MERGE_MAX_COMMAND_ROWS = 8;
+const PROJECT_MERGE_MAX_CAPTURED_EMAIL_ROWS = 5;
 
 type StoredRepositoryIdentity = NonNullable<Doc<"environmentBindings">["repositoryIdentity"]>;
 
@@ -76,6 +82,41 @@ function assertBoundedProjectMergeRows(label: string, count: number, maximum: nu
     "invalid-arguments",
     `This merge affects too many ${label} for one safe transaction. Reduce the project data or contact support.`,
   );
+}
+
+function assertBoundedProjectMergeBytes(rows: Iterable<unknown>): void {
+  let bytes = 0;
+  for (const row of rows) {
+    // Each affected document is both patched and represented in the change feed. Counting it twice
+    // is intentionally conservative and keeps one large payload from exhausting the transaction.
+    bytes += measureSerializedBytes(row) * 2;
+    if (bytes <= PROJECT_MERGE_MAX_SERIALIZED_BYTES) continue;
+    throw backendError(
+      "invalid-arguments",
+      "This merge contains too much serialized project data for one safe transaction. Reduce the project data or contact support.",
+    );
+  }
+}
+
+async function collectActiveProjectCommands(
+  ctx: MutationCtx,
+  companyId: Id<"companies">,
+  cloudProjectId: Id<"cloudProjects">,
+): Promise<ReadonlyArray<Doc<"environmentCommands">>> {
+  const pending = await ctx.db
+    .query("environmentCommands")
+    .withIndex("by_company_project_and_state", (q) =>
+      q.eq("companyId", companyId).eq("cloudProjectId", cloudProjectId).eq("state", "pending"),
+    )
+    .take(PROJECT_MERGE_MAX_COMMAND_ROWS + 1);
+  if (pending.length > PROJECT_MERGE_MAX_COMMAND_ROWS) return pending;
+  const claimed = await ctx.db
+    .query("environmentCommands")
+    .withIndex("by_company_project_and_state", (q) =>
+      q.eq("companyId", companyId).eq("cloudProjectId", cloudProjectId).eq("state", "claimed"),
+    )
+    .take(PROJECT_MERGE_MAX_COMMAND_ROWS - pending.length + 1);
+  return [...pending, ...claimed];
 }
 
 interface ProjectIssueData {
@@ -963,19 +1004,16 @@ export const mergeCompanyProjects = mutation({
         .withIndex("by_company_and_project", (q) =>
           q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
         )
-        .take(projectRowLimit),
+        .take(PROJECT_MERGE_MAX_CAPTURED_EMAIL_ROWS + 1),
       replayTargetScope
         ? ctx.db
             .query("capturedEmails")
             .withIndex("by_company_and_project", (q) =>
               q.eq("companyId", actor.company._id).eq("cloudProjectId", target._id),
             )
-            .take(projectRowLimit)
+            .take(PROJECT_MERGE_MAX_CAPTURED_EMAIL_ROWS + 1)
         : Promise.resolve([]),
-      ctx.db
-        .query("environmentCommands")
-        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-        .take(companyScanLimit),
+      collectActiveProjectCommands(ctx, actor.company._id, source._id),
       ctx.db
         .query("issues")
         .withIndex("by_company_and_project", (q) =>
@@ -984,16 +1022,20 @@ export const mergeCompanyProjects = mutation({
         .take(projectRowLimit),
       ctx.db
         .query("issueAutomationJobs")
-        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-        .take(companyScanLimit),
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
+        )
+        .take(projectRowLimit),
       ctx.db
         .query("slackChannelWatches")
         .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
         .take(companyScanLimit),
       ctx.db
         .query("slackIssueAutomationIntents")
-        .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-        .take(companyScanLimit),
+        .withIndex("by_company_and_project", (q) =>
+          q.eq("companyId", actor.company._id).eq("cloudProjectId", source._id),
+        )
+        .take(projectRowLimit),
       ctx.db
         .query("issueViews")
         .withIndex("by_company_and_visibility", (q) => q.eq("companyId", actor.company._id))
@@ -1007,36 +1049,46 @@ export const mergeCompanyProjects = mutation({
       ["target threads", targetThreads],
       ["source milestones", sourceMilestones],
       ["target milestones", targetMilestones],
-      ["source captured emails", sourceEmails],
-      ["target captured emails", targetEmails],
       ["source issues", sourceIssues],
+      ["automation jobs", automationJobs],
+      ["Slack automation intents", slackIntents],
     ] as const) {
       assertBoundedProjectMergeRows(label, rows.length, PROJECT_MERGE_MAX_AFFECTED_ROWS);
     }
+    assertBoundedProjectMergeRows(
+      "source captured emails",
+      sourceEmails.length,
+      PROJECT_MERGE_MAX_CAPTURED_EMAIL_ROWS,
+    );
+    assertBoundedProjectMergeRows(
+      "target captured emails",
+      targetEmails.length,
+      PROJECT_MERGE_MAX_CAPTURED_EMAIL_ROWS,
+    );
+    assertBoundedProjectMergeRows(
+      "environment commands",
+      commands.length,
+      PROJECT_MERGE_MAX_COMMAND_ROWS,
+    );
     for (const [label, rows] of [
-      ["environment commands", commands],
-      ["automation jobs", automationJobs],
       ["Slack watches", slackWatches],
-      ["Slack automation intents", slackIntents],
       ["saved issue views", issueViews],
     ] as const) {
       assertBoundedProjectMergeRows(label, rows.length, PROJECT_MERGE_MAX_COMPANY_SCAN_ROWS);
     }
 
-    const targetConnectionKeys = new Set(
+    const targetEnvironmentIds = new Set(
       targetBindings
         .filter((binding) => binding.status !== "revoked")
-        .map((binding) => `${binding.environmentId}:${binding.localProjectId}`),
+        .map((binding) => binding.environmentId),
     );
     const duplicateConnection = sourceBindings.find(
-      (binding) =>
-        binding.status !== "revoked" &&
-        targetConnectionKeys.has(`${binding.environmentId}:${binding.localProjectId}`),
+      (binding) => binding.status !== "revoked" && targetEnvironmentIds.has(binding.environmentId),
     );
     if (duplicateConnection !== undefined) {
       throw backendError(
         "foreign-id-conflict",
-        "The projects already contain the same environment connection.",
+        "The projects both have active connections in one environment. Remove one connection before merging.",
       );
     }
     const storedRepositoryIdentities = [
@@ -1057,9 +1109,9 @@ export const mergeCompanyProjects = mutation({
 
     const { rootPath: _selectedRootPath, ...authoritativeRepositoryIdentity } =
       selectedRepositoryIdentity;
-    const sourceCommands = commands.filter((row) => row.cloudProjectId === source._id);
-    const sourceAutomationJobs = automationJobs.filter((row) => row.cloudProjectId === source._id);
-    const sourceSlackIntents = slackIntents.filter((row) => row.cloudProjectId === source._id);
+    const sourceCommands = commands;
+    const sourceAutomationJobs = automationJobs;
+    const sourceSlackIntents = slackIntents;
     const affectedSlackWatches = slackWatches.flatMap((watch) => {
       const direct = watch.cloudProjectId === source._id;
       const trigger = replaceProjectReactionRoutes(watch.trigger, source.id, target.id);
@@ -1094,6 +1146,24 @@ export const mergeCompanyProjects = mutation({
       affectedRowCount,
       PROJECT_MERGE_MAX_AFFECTED_ROWS,
     );
+    assertBoundedProjectMergeBytes([
+      source,
+      target,
+      ...sourceBindings,
+      ...targetBindings,
+      ...sourceThreads,
+      ...targetThreads,
+      ...sourceMilestones,
+      ...targetMilestones,
+      ...sourceEmails,
+      ...targetEmails,
+      ...sourceIssues,
+      ...sourceCommands,
+      ...sourceAutomationJobs,
+      ...sourceSlackIntents,
+      ...affectedSlackWatches,
+      ...affectedIssueViews,
+    ]);
     const now = Date.now();
     const changes: CompanyChange[] = [];
     const updatedBindings: Doc<"environmentBindings">[] = [];
