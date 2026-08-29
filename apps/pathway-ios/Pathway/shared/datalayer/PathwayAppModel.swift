@@ -14,16 +14,29 @@ final class PathwayAppModel {
     private(set) var authenticationState: AppAuthenticationState = .restoring
     private(set) var authenticationErrorMessage: String?
     let cloud: PathwayCloudModel
+    let connect: PathwayConnectClient?
 
     @ObservationIgnored private let authProvider: any PathwayAuthenticating
     @ObservationIgnored private var hasRestoredSession = false
 
     init(
         authProvider: (any PathwayAuthenticating)? = nil,
-        convexDeploymentURL: URL? = nil
+        convexDeploymentURL: URL? = nil,
+        relayURL: URL? = nil,
+        relayJWTTemplate: String? = nil
     ) {
         let provider = authProvider ?? PathwayAuthProvider()
         self.authProvider = provider
+        if let relayURL, let relayJWTTemplate {
+            connect = PathwayConnectClient(
+                relayURL: relayURL,
+                clerkTokenProvider: {
+                    try await provider.token(template: relayJWTTemplate)
+                }
+            )
+        } else {
+            connect = nil
+        }
         #if os(visionOS)
             cloud = PathwayCloudModel()
         #else

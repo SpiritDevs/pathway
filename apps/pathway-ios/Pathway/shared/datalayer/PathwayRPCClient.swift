@@ -1,5 +1,9 @@
 import Foundation
 
+// Effect RPC framing, reconnect ownership, stream backpressure, and keepalive state form one
+// transport state machine and must evolve together.
+// swiftlint:disable file_length
+
 enum PathwayRPCError: LocalizedError, Sendable {
     case disconnected
     case protocolViolation(String)
@@ -15,55 +19,86 @@ enum PathwayRPCError: LocalizedError, Sendable {
 }
 
 private struct PathwayRPCRequest: Encodable, Sendable {
-    let _tag = "Request"
+    let envelopeTag = "Request"
     let id: Int
     let tag: String
     let payload: JSONValue
     let headers: [[String]] = []
+
+    enum CodingKeys: String, CodingKey {
+        case envelopeTag = "_tag"
+        case id
+        case tag
+        case payload
+        case headers
+    }
 }
 
 private struct PathwayRPCControl: Encodable, Sendable {
-    let _tag: String
+    let envelopeTag: String
     let requestId: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case envelopeTag = "_tag"
+        case requestId
+    }
 }
 
-private struct PathwayRPCResponse: Decodable, Sendable {
-    struct Exit: Decodable, Sendable {
-        struct Cause: Decodable, Sendable {
-            let error: JSONValue?
-            let defect: JSONValue?
-        }
-
-        let _tag: String
-        let value: JSONValue?
-        let cause: [Cause]?
-    }
-
-    let _tag: String
-    let requestId: Int?
-    let values: [JSONValue]?
-    let exit: Exit?
+private struct PathwayRPCCause: Decodable, Sendable {
+    let error: JSONValue?
     let defect: JSONValue?
 }
 
+private struct PathwayRPCPendingRequest {
+    let envelope: PathwayRPCRequest
+    var sent = false
+    let resume: @Sendable (Result<JSONValue, Error>) -> Void
+}
+
+private struct PathwayRPCExit: Decodable, Sendable {
+    let envelopeTag: String
+    let value: JSONValue?
+    let cause: [PathwayRPCCause]?
+
+    enum CodingKeys: String, CodingKey {
+        case envelopeTag = "_tag"
+        case value
+        case cause
+    }
+}
+
+private struct PathwayRPCResponse: Decodable, Sendable {
+    let envelopeTag: String
+    let requestId: Int?
+    let values: [JSONValue]?
+    let exit: PathwayRPCExit?
+    let defect: JSONValue?
+
+    enum CodingKeys: String, CodingKey {
+        case envelopeTag = "_tag"
+        case requestId
+        case values
+        case exit
+        case defect
+    }
+}
+
+// swiftlint:disable type_body_length
 actor PathwayRPCClient {
     typealias EndpointProvider = @Sendable () async throws -> URL
-
-    private struct PendingRequest {
-        let envelope: PathwayRPCRequest
-        var sent = false
-        let resume: @Sendable (Result<JSONValue, Error>) -> Void
-    }
 
     private let endpointProvider: EndpointProvider
     private let session: URLSession
     private var socket: URLSessionWebSocketTask?
     private var connectionID: UUID?
     private var loopTask: Task<Void, Never>?
+    private var keepaliveTask: Task<Void, Never>?
+    private var awaitingKeepaliveResponse = false
     private var desired = false
     private var nextRequestID = 1
-    private var pending: [Int: PendingRequest] = [:]
-    private var threadID: String?
+    private var pending: [Int: PathwayRPCPendingRequest] = [:]
+    private var subscriptionTag: String?
+    private var subscriptionPayload: JSONValue?
     private var subscriptionRequestID: Int?
     private var subscriptionContinuation: AsyncThrowingStream<JSONValue, Error>.Continuation?
 
@@ -77,14 +112,28 @@ actor PathwayRPCClient {
 
     deinit {
         loopTask?.cancel()
+        keepaliveTask?.cancel()
         socket?.cancel(with: .goingAway, reason: nil)
     }
 
     func subscribeToThread(_ threadID: String) -> AsyncThrowingStream<JSONValue, Error> {
+        subscribe(
+            "orchestration.subscribeThread",
+            payload: .object([
+                "threadId": .string(threadID),
+                "requestCompletionMarker": .bool(true)
+            ])
+        )
+    }
+
+    func subscribe(
+        _ tag: String,
+        payload: JSONValue
+    ) -> AsyncThrowingStream<JSONValue, Error> {
         subscriptionContinuation?.finish()
-        self.threadID = threadID
-        let stream = AsyncThrowingStream<JSONValue, Error>(bufferingPolicy: .bufferingOldest(256)) {
-            continuation in
+        subscriptionTag = tag
+        subscriptionPayload = payload
+        let stream = AsyncThrowingStream<JSONValue, Error>(bufferingPolicy: .bufferingOldest(256)) { continuation in
             subscriptionContinuation = continuation
             continuation.onTermination = { @Sendable _ in
                 Task { await self.removeSubscription() }
@@ -107,7 +156,7 @@ actor PathwayRPCClient {
                     continuation.resume(throwing: CancellationError())
                     return
                 }
-                pending[id] = PendingRequest(
+                pending[id] = PathwayRPCPendingRequest(
                     envelope: envelope,
                     resume: { continuation.resume(with: $0) }
                 )
@@ -124,6 +173,9 @@ actor PathwayRPCClient {
         desired = false
         loopTask?.cancel()
         loopTask = nil
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
+        awaitingKeepaliveResponse = false
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         connectionID = nil
@@ -173,6 +225,11 @@ actor PathwayRPCClient {
         socket?.cancel(with: .goingAway, reason: nil)
         socket = task
         connectionID = id
+        awaitingKeepaliveResponse = false
+        keepaliveTask?.cancel()
+        keepaliveTask = Task { [weak self] in
+            await self?.keepaliveLoop(connectionID: id)
+        }
         subscriptionRequestID = nil
         for pendingID in pending.keys {
             pending[pendingID]?.sent = false
@@ -199,10 +256,12 @@ actor PathwayRPCClient {
         }
     }
 
+    // swiftlint:disable:next cyclomatic_complexity
     private func handle(_ data: Data, connectionID: UUID) async throws {
         guard self.connectionID == connectionID else { return }
         let response = try JSONDecoder().decode(PathwayRPCResponse.self, from: data)
-        switch response._tag {
+        awaitingKeepaliveResponse = false
+        switch response.envelopeTag {
         case "Pong":
             return
         case "Chunk":
@@ -220,13 +279,13 @@ actor PathwayRPCClient {
             if pending[requestID] != nil {
                 complete(
                     requestID,
-                    result: exit._tag == "Success"
+                    result: exit.envelopeTag == "Success"
                         ? .success(exit.value ?? .null)
                         : .failure(PathwayRPCError.remote(Self.remoteMessage(exit)))
                 )
             } else if requestID == subscriptionRequestID {
                 subscriptionRequestID = nil
-                if exit._tag != "Success" {
+                if exit.envelopeTag != "Success" {
                     throw PathwayRPCError.remote(Self.remoteMessage(exit))
                 }
             }
@@ -242,6 +301,9 @@ actor PathwayRPCClient {
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         connectionID = nil
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
+        awaitingKeepaliveResponse = false
         subscriptionRequestID = nil
         let sentIDs = pending.compactMap { $0.value.sent ? $0.key : nil }
         for id in sentIDs {
@@ -259,7 +321,7 @@ actor PathwayRPCClient {
         request.sent = true
         pending[id] = request
         do {
-            try await socket.send(.data(try JSONEncoder.pathwayRPC.encode(request.envelope)))
+            try await socket.send(.data(JSONEncoder.pathwayRPC.encode(request.envelope)))
         } catch {
             complete(id, result: .failure(PathwayRPCError.disconnected))
             disconnect(id: connectionID)
@@ -268,7 +330,8 @@ actor PathwayRPCClient {
 
     private func sendSubscription() async {
         guard
-            let threadID,
+            let subscriptionTag,
+            let subscriptionPayload,
             let socket,
             let connectionID,
             subscriptionRequestID == nil
@@ -277,14 +340,11 @@ actor PathwayRPCClient {
         subscriptionRequestID = requestID
         let request = PathwayRPCRequest(
             id: requestID,
-            tag: "orchestration.subscribeThread",
-            payload: .object([
-                "threadId": .string(threadID),
-                "requestCompletionMarker": .bool(true)
-            ])
+            tag: subscriptionTag,
+            payload: subscriptionPayload
         )
         do {
-            try await socket.send(.data(try JSONEncoder.pathwayRPC.encode(request)))
+            try await socket.send(.data(JSONEncoder.pathwayRPC.encode(request)))
         } catch {
             subscriptionRequestID = nil
             disconnect(id: connectionID)
@@ -295,13 +355,34 @@ actor PathwayRPCClient {
         guard let socket, let connectionID else { throw PathwayRPCError.disconnected }
         do {
             try await socket.send(
-                .data(try JSONEncoder.pathwayRPC.encode(
-                    PathwayRPCControl(_tag: tag, requestId: requestID)
+                .data(JSONEncoder.pathwayRPC.encode(
+                    PathwayRPCControl(envelopeTag: tag, requestId: requestID)
                 ))
             )
         } catch {
             disconnect(id: connectionID)
             throw PathwayRPCError.disconnected
+        }
+    }
+
+    private func keepaliveLoop(connectionID: UUID) async {
+        while desired, self.connectionID == connectionID, !Task.isCancelled {
+            do {
+                try await Task.sleep(for: .seconds(5))
+            } catch {
+                return
+            }
+            guard desired, self.connectionID == connectionID else { return }
+            if awaitingKeepaliveResponse {
+                disconnect(id: connectionID)
+                return
+            }
+            awaitingKeepaliveResponse = true
+            do {
+                try await sendControl("Ping", requestID: nil)
+            } catch {
+                return
+            }
         }
     }
 
@@ -311,7 +392,8 @@ actor PathwayRPCClient {
         }
         subscriptionRequestID = nil
         subscriptionContinuation = nil
-        threadID = nil
+        subscriptionTag = nil
+        subscriptionPayload = nil
     }
 
     private func cancelPending(_ id: Int) {
@@ -331,54 +413,20 @@ actor PathwayRPCClient {
         return nextRequestID
     }
 
-    private static func remoteMessage(_ exit: PathwayRPCResponse.Exit) -> String {
+    private static func remoteMessage(_ exit: PathwayRPCExit) -> String {
         exit.cause?.compactMap { $0.error?.displayString ?? $0.defect?.displayString }.first
             ?? "The Pathway environment rejected the request."
     }
 }
 
-extension JSONValue {
-    var objectValue: [String: JSONValue]? {
-        guard case let .object(value) = self else { return nil }
-        return value
-    }
+// swiftlint:enable type_body_length
 
-    var arrayValue: [JSONValue]? {
-        guard case let .array(value) = self else { return nil }
-        return value
-    }
-
-    var stringValue: String? {
-        guard case let .string(value) = self else { return nil }
-        return value
-    }
-
-    var boolValue: Bool? {
-        guard case let .bool(value) = self else { return nil }
-        return value
-    }
-
-    var intValue: Int? {
-        guard case let .number(value) = self else { return nil }
-        return Int(exactly: value)
-    }
-
-    var displayString: String? {
-        switch self {
-        case let .string(value): value
-        case let .object(value):
-            value["message"]?.stringValue
-                ?? value["detail"]?.stringValue
-                ?? value["reason"]?.stringValue
-        default: nil
-        }
-    }
-}
-
-extension JSONEncoder {
-    fileprivate static let pathwayRPC: JSONEncoder = {
+private extension JSONEncoder {
+    static let pathwayRPC: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return encoder
     }()
 }
+
+// swiftlint:enable file_length

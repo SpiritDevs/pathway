@@ -18,7 +18,9 @@ struct PathwayApp: App {
         guard
             missingConfigurationKeys.isEmpty,
             let publishableKey = AppConfiguration.clerkPublishableKey,
-            let convexDeploymentURL = AppConfiguration.convexDeploymentURL
+            let convexDeploymentURL = AppConfiguration.convexDeploymentURL,
+            let relayURL = AppConfiguration.relayURL,
+            let relayJWTTemplate = AppConfiguration.clerkJWTTemplate
         else {
             _appModel = State(initialValue: nil)
             return
@@ -34,7 +36,11 @@ struct PathwayApp: App {
             )
         )
         _appModel = State(
-            initialValue: PathwayAppModel(convexDeploymentURL: convexDeploymentURL)
+            initialValue: PathwayAppModel(
+                convexDeploymentURL: convexDeploymentURL,
+                relayURL: relayURL,
+                relayJWTTemplate: relayJWTTemplate
+            )
         )
     }
 
@@ -49,7 +55,7 @@ struct PathwayApp: App {
 
             WindowGroup("Pathway Agent", id: PathwayWindow.agentOrchestrator.rawValue) {
                 configuredContent {
-                    AgentOrchestratorView()
+                    NewAgentThreadView()
                         .frame(minWidth: 560, minHeight: 620)
                 }
             }

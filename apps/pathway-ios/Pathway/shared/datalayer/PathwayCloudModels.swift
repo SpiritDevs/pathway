@@ -58,6 +58,23 @@ struct PathwayCompanyProject: Equatable, Identifiable, Sendable {
     var id: String { "\(companyId):\(project.id)" }
 }
 
+struct PathwayEnvironmentBinding: Decodable, Equatable, Identifiable, Sendable {
+    let id: String
+    let cloudProjectId: String
+    let environmentId: String
+    let localProjectId: String
+    let localWorkspaceRoot: String
+    let status: String
+    let lastSeenAt: Double?
+}
+
+struct PathwayCompanyEnvironmentBinding: Equatable, Identifiable, Sendable {
+    let companyId: String
+    let binding: PathwayEnvironmentBinding
+
+    var id: String { "\(companyId):\(binding.id)" }
+}
+
 struct PathwayModelOption: Codable, Equatable, Sendable {
     let id: String
     let value: JSONValue

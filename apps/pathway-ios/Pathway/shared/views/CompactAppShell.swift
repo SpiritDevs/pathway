@@ -13,12 +13,15 @@
         var body: some View {
             ZStack(alignment: .bottom) {
                 NavigationStack {
-                    PathwayFeaturePlaceholder(destination: activeDestination)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button("Settings", systemImage: "gearshape", action: presentSettings)
-                            }
+                    PathwayFeatureDestinationView(
+                        destination: activeDestination,
+                        newThreadAction: presentAgentOrchestrator
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Settings", systemImage: "gearshape", action: presentSettings)
                         }
+                    }
                 }
 
                 if isMoreMenuPresented {

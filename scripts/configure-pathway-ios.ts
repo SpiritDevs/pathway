@@ -7,7 +7,40 @@ import { loadRepoEnv } from "./lib/public-config.ts";
 const scriptDirectory = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const repoRoot = NodePath.dirname(scriptDirectory);
 const outputPath = NodePath.join(repoRoot, "apps/pathway-ios/Config/Local.xcconfig");
-const env = loadRepoEnv({ repoRoot });
+const primaryRepoRoot = findPrimaryRepoRoot(repoRoot);
+const env = loadRepoEnv({
+  includeProductionEnv: true,
+  repoRoot,
+  ...(primaryRepoRoot === repoRoot ? {} : { fallbackRepoRoot: primaryRepoRoot }),
+});
+
+function findPrimaryRepoRoot(root: string): string {
+  const dotGitPath = NodePath.join(root, ".git");
+  if (!NodeFS.existsSync(dotGitPath) || NodeFS.statSync(dotGitPath).isDirectory()) {
+    return root;
+  }
+
+  const gitDirectoryLine = NodeFS.readFileSync(dotGitPath, "utf8").trim();
+  const gitDirectoryPrefix = "gitdir:";
+  if (!gitDirectoryLine.startsWith(gitDirectoryPrefix)) {
+    return root;
+  }
+
+  const worktreeGitDirectory = NodePath.resolve(
+    root,
+    gitDirectoryLine.slice(gitDirectoryPrefix.length).trim(),
+  );
+  const commonDirectoryPath = NodePath.join(worktreeGitDirectory, "commondir");
+  if (!NodeFS.existsSync(commonDirectoryPath)) {
+    return root;
+  }
+
+  const commonGitDirectory = NodePath.resolve(
+    worktreeGitDirectory,
+    NodeFS.readFileSync(commonDirectoryPath, "utf8").trim(),
+  );
+  return NodePath.dirname(commonGitDirectory);
+}
 
 function xcconfigValue(value: string | undefined): string {
   return (value?.trim() ?? "").replaceAll("//", "/$()/");

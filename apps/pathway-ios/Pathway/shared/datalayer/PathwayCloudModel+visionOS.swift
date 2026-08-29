@@ -9,6 +9,7 @@
         private(set) var companies: [PathwayCompany] = []
         private(set) var environments: [PathwayCompanyEnvironment] = []
         private(set) var projects: [PathwayCompanyProject] = []
+        private(set) var environmentBindings: [PathwayCompanyEnvironmentBinding] = []
         private(set) var threads: [PathwayAgentThread] = []
 
         init() {}

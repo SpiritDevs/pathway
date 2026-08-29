@@ -10,6 +10,7 @@
         private(set) var companies: [PathwayCompany] = []
         private(set) var environments: [PathwayCompanyEnvironment] = []
         private(set) var projects: [PathwayCompanyProject] = []
+        private(set) var environmentBindings: [PathwayCompanyEnvironmentBinding] = []
         private(set) var threads: [PathwayAgentThread] = []
 
         @ObservationIgnored private let client: PathwayConvexClient?
@@ -65,6 +66,7 @@
                 companies = []
                 environments = []
                 projects = []
+                environmentBindings = []
                 threads = []
                 entitiesByCompany = [:]
                 cursorByCompany = [:]
@@ -247,56 +249,21 @@
         }
 
         private func rebuildDiscoveryModels() {
-            var nextEnvironments: [PathwayCompanyEnvironment] = []
-            var nextProjects: [PathwayCompanyProject] = []
-            var nextThreads: [PathwayAgentThread] = []
-
+            var snapshot = PathwayDiscoverySnapshot()
             for (companyId, entities) in entitiesByCompany {
                 for change in entities.values {
-                    guard let payload = change.payload else { continue }
-                    do {
-                        switch change.entityKind {
-                        case "environmentRegistration":
-                            let environment = try decodePathwayPayload(
-                                PathwayEnvironment.self,
-                                from: payload
-                            )
-                            nextEnvironments.append(
-                                PathwayCompanyEnvironment(
-                                    companyId: companyId,
-                                    environment: environment
-                                )
-                            )
-                        case "cloudProject":
-                            let project = try decodePathwayPayload(
-                                PathwayCloudProject.self,
-                                from: payload
-                            )
-                            nextProjects.append(
-                                PathwayCompanyProject(companyId: companyId, project: project)
-                            )
-                        case "agentThread":
-                            let thread = try decodePathwayPayload(
-                                PathwayAgentThreadPayload.self,
-                                from: payload
-                            )
-                            nextThreads.append(thread.thread(companyId: companyId))
-                        default:
-                            continue
-                        }
-                    } catch {
-                        continue
-                    }
+                    snapshot.apply(change, companyId: companyId)
                 }
             }
 
-            environments = nextEnvironments.sorted {
+            environments = snapshot.environments.sorted {
                 $0.environment.label.localizedStandardCompare($1.environment.label) == .orderedAscending
             }
-            projects = nextProjects.sorted {
+            projects = snapshot.projects.sorted {
                 $0.project.name.localizedStandardCompare($1.project.name) == .orderedAscending
             }
-            threads = nextThreads
+            environmentBindings = snapshot.bindings
+            threads = snapshot.threads
                 .filter { $0.shell.deletedAt == nil }
                 .sorted(by: PathwayAgentThread.isOrderedBefore)
         }
@@ -358,6 +325,49 @@
                 shell: shell,
                 cloudUpdatedAt: updatedAt
             )
+        }
+    }
+
+    private struct PathwayDiscoverySnapshot {
+        var environments: [PathwayCompanyEnvironment] = []
+        var projects: [PathwayCompanyProject] = []
+        var bindings: [PathwayCompanyEnvironmentBinding] = []
+        var threads: [PathwayAgentThread] = []
+
+        mutating func apply(_ change: PathwaySyncChange, companyId: String) {
+            guard let payload = change.payload else { return }
+            do {
+                switch change.entityKind {
+                case "environmentRegistration":
+                    let value = try decodePathwayPayload(PathwayEnvironment.self, from: payload)
+                    environments.append(
+                        PathwayCompanyEnvironment(companyId: companyId, environment: value)
+                    )
+                case "cloudProject":
+                    let value = try decodePathwayPayload(PathwayCloudProject.self, from: payload)
+                    projects.append(PathwayCompanyProject(companyId: companyId, project: value))
+                case "environmentBinding":
+                    let value = try decodePathwayPayload(
+                        PathwayEnvironmentBinding.self,
+                        from: payload
+                    )
+                    if value.status == "active" {
+                        bindings.append(
+                            PathwayCompanyEnvironmentBinding(companyId: companyId, binding: value)
+                        )
+                    }
+                case "agentThread":
+                    let value = try decodePathwayPayload(
+                        PathwayAgentThreadPayload.self,
+                        from: payload
+                    )
+                    threads.append(value.thread(companyId: companyId))
+                default:
+                    return
+                }
+            } catch {
+                return
+            }
         }
     }
 

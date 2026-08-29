@@ -1,5 +1,9 @@
 import SwiftUI
 
+// The adaptive shell keeps its rail, context sidebar, destination routing, and settings
+// together because they share navigation state across iPadOS and visionOS.
+// swiftlint:disable file_length
+
 enum MainTabSheet: String, Identifiable {
     case agentOrchestrator
     case settings
@@ -32,7 +36,7 @@ struct MainTabView: View {
             switch layout {
             case .compact:
                 #if os(visionOS)
-                    SidebarAppShell(
+                    FloatingAppShell(
                         selectedDestination: $selectedDestination,
                         presentedSheet: $presentedSheet,
                         layout: .spatial
@@ -44,7 +48,7 @@ struct MainTabView: View {
                     )
                 #endif
             case .sidebar, .spatial:
-                SidebarAppShell(
+                FloatingAppShell(
                     selectedDestination: $selectedDestination,
                     presentedSheet: $presentedSheet,
                     layout: layout
@@ -54,7 +58,7 @@ struct MainTabView: View {
         .sheet(item: $presentedSheet) { sheet in
             switch sheet {
             case .agentOrchestrator:
-                AgentOrchestratorView()
+                NewAgentThreadView()
                     .presentationDetents([.large])
                     .presentationDragIndicator(.hidden)
                     .presentationCornerRadius(36)
@@ -67,40 +71,37 @@ struct MainTabView: View {
     }
 }
 
-private struct SidebarAppShell: View {
+private struct FloatingAppShell: View {
     @Environment(\.openWindow) private var openWindow
     @Binding var selectedDestination: AppDestination?
     @Binding var presentedSheet: MainTabSheet?
     let layout: AppShellLayout
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var selectedContextDestination: AppContextDestination? =
+        AppDestination.dashboard.defaultContextDestination
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            List(selection: $selectedDestination) {
-                ForEach(AppDestination.sidebarSections) { section in
-                    Section(section.title) {
-                        ForEach(section.destinations) { destination in
-                            Label(destination.title, systemImage: destination.systemImage)
-                                .tag(destination)
-                        }
-                    }
-                }
+        HStack(spacing: 12) {
+            PathwayNavigationRail(
+                selectedDestination: $selectedDestination,
+                newThreadAction: presentAgentOrchestrator,
+                settingsAction: presentSettings
+            )
 
-                Section("Actions") {
-                    Button(
-                        "New agent thread",
-                        systemImage: "bubble.left.and.bubble.right",
-                        action: presentAgentOrchestrator
+            NavigationSplitView(columnVisibility: $columnVisibility) {
+                PathwayContextSidebar(
+                    destination: activeDestination,
+                    selectedContextDestination: $selectedContextDestination
+                )
+                .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 310)
+            } detail: {
+                NavigationStack {
+                    PathwayContextDestinationView(
+                        destination: activeDestination,
+                        contextDestination: activeContextDestination,
+                        newThreadAction: presentAgentOrchestrator
                     )
-                    Button("Settings", systemImage: "gearshape", action: presentSettings)
-                }
-            }
-            .navigationTitle("Pathway")
-            .navigationSplitViewColumnWidth(min: 220, ideal: 270, max: 340)
-        } detail: {
-            NavigationStack {
-                PathwayFeaturePlaceholder(destination: activeDestination)
                     .toolbar {
                         ToolbarItemGroup(placement: .primaryAction) {
                             Button(
@@ -111,13 +112,27 @@ private struct SidebarAppShell: View {
                             Button("Settings", systemImage: "gearshape", action: presentSettings)
                         }
                     }
+                }
             }
+            .navigationSplitViewStyle(.balanced)
         }
-        .navigationSplitViewStyle(.balanced)
+        .padding(12)
+        .onChange(of: activeDestination) { _, destination in
+            selectedContextDestination = destination.defaultContextDestination
+        }
     }
 
     private var activeDestination: AppDestination {
         selectedDestination ?? .dashboard
+    }
+
+    private var activeContextDestination: AppContextDestination {
+        guard let selectedContextDestination,
+              activeDestination.contextDestinations.contains(selectedContextDestination)
+        else {
+            return activeDestination.defaultContextDestination
+        }
+        return selectedContextDestination
     }
 
     private func presentAgentOrchestrator() {
@@ -133,6 +148,170 @@ private struct SidebarAppShell: View {
             openWindow(id: PathwayWindow.settings.rawValue)
         } else {
             presentedSheet = .settings
+        }
+    }
+}
+
+private struct PathwayNavigationRail: View {
+    @Binding var selectedDestination: AppDestination?
+    let newThreadAction: () -> Void
+    let settingsAction: () -> Void
+
+    var body: some View {
+        #if os(visionOS)
+            railContent
+                .background(.regularMaterial, in: Capsule())
+        #else
+            GlassEffectContainer {
+                railContent
+                    .glassEffect(.regular, in: .capsule)
+            }
+        #endif
+    }
+
+    private var railContent: some View {
+        VStack(spacing: 8) {
+            Text("P")
+                .font(.title2.weight(.bold))
+                .frame(width: 48, height: 48)
+                .accessibilityLabel("Pathway")
+
+            Divider()
+                .padding(.horizontal, 12)
+
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(Array(AppDestination.sidebarSections.enumerated()), id: \.element.id) { entry in
+                        let (index, section) = entry
+                        if index > 0 {
+                            Divider()
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 2)
+                        }
+
+                        ForEach(section.destinations) { destination in
+                            destinationButton(destination)
+                        }
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+
+            Divider()
+                .padding(.horizontal, 12)
+
+            railActionButton(
+                title: "New agent thread",
+                systemImage: "bubble.left.and.bubble.right",
+                action: newThreadAction
+            )
+            railActionButton(title: "Settings", systemImage: "gearshape", action: settingsAction)
+        }
+        .padding(.vertical, 8)
+        .frame(width: 64)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Main navigation")
+    }
+
+    private func destinationButton(_ destination: AppDestination) -> some View {
+        let isSelected = activeDestination == destination
+
+        return Button {
+            withAnimation(.snappy(duration: 0.24)) {
+                selectedDestination = destination
+            }
+        } label: {
+            Image(systemName: destination.systemImage)
+                .font(.system(size: 20, weight: .semibold))
+                .frame(width: 48, height: 48)
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .background {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.18))
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+        .hoverEffect()
+        .help(destination.title)
+        .accessibilityLabel(destination.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("rail-destination-\(destination.rawValue)")
+    }
+
+    private func railActionButton(
+        title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 19, weight: .semibold))
+                .frame(width: 48, height: 48)
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .hoverEffect()
+        .help(title)
+        .accessibilityLabel(title)
+    }
+
+    private var activeDestination: AppDestination {
+        selectedDestination ?? .dashboard
+    }
+}
+
+private struct PathwayContextSidebar: View {
+    let destination: AppDestination
+    @Binding var selectedContextDestination: AppContextDestination?
+
+    var body: some View {
+        List(selection: $selectedContextDestination) {
+            Section {
+                ForEach(destination.contextDestinations) { contextDestination in
+                    Label(contextDestination.title, systemImage: contextDestination.systemImage)
+                        .tag(contextDestination)
+                }
+            } footer: {
+                Text(destination.description)
+            }
+        }
+        .navigationTitle(destination.title)
+        .id(destination)
+        .accessibilityIdentifier("context-sidebar-\(destination.rawValue)")
+    }
+}
+
+private struct PathwayContextDestinationView: View {
+    let destination: AppDestination
+    let contextDestination: AppContextDestination
+    let newThreadAction: () -> Void
+
+    @ViewBuilder
+    var body: some View {
+        if contextDestination == destination.defaultContextDestination {
+            PathwayFeatureDestinationView(
+                destination: destination,
+                newThreadAction: newThreadAction
+            )
+        } else {
+            ScrollView {
+                ContentUnavailableView {
+                    Label(contextDestination.title, systemImage: contextDestination.systemImage)
+                } description: {
+                    Text("This \(destination.title.lowercased()) view is ready for its content.")
+                }
+                .frame(maxWidth: 720, minHeight: 420)
+                .frame(maxWidth: .infinity)
+                .padding(24)
+            }
+            .navigationTitle(contextDestination.title)
+            .navigationBarTitleDisplayMode(.large)
+            .accessibilityIdentifier(
+                "context-destination-\(destination.rawValue)-\(contextDestination.id)"
+            )
         }
     }
 }
@@ -154,6 +333,20 @@ struct PathwayFeaturePlaceholder: View {
         .navigationTitle(destination.title)
         .navigationBarTitleDisplayMode(.large)
         .accessibilityIdentifier("destination-\(destination.rawValue)")
+    }
+}
+
+struct PathwayFeatureDestinationView: View {
+    let destination: AppDestination
+    let newThreadAction: () -> Void
+
+    @ViewBuilder
+    var body: some View {
+        if destination == .agentThreads {
+            AgentThreadsView(newThreadAction: newThreadAction)
+        } else {
+            PathwayFeaturePlaceholder(destination: destination)
+        }
     }
 }
 
@@ -215,3 +408,5 @@ struct PathwaySettingsView: View {
             .environment(\.horizontalSizeClass, .regular)
     }
 #endif
+
+// swiftlint:enable file_length

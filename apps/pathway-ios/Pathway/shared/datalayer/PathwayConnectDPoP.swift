@@ -5,8 +5,15 @@ import Security
 struct PathwayDPoPPublicJWK: Codable, Equatable, Sendable {
     let kty: String
     let crv: String
-    let x: String
-    let y: String
+    let xCoordinate: String
+    let yCoordinate: String
+
+    enum CodingKeys: String, CodingKey {
+        case kty
+        case crv
+        case xCoordinate = "x"
+        case yCoordinate = "y"
+    }
 
     init(publicKey: P256.Signing.PublicKey) throws {
         let bytes = publicKey.x963Representation
@@ -15,12 +22,12 @@ struct PathwayDPoPPublicJWK: Codable, Equatable, Sendable {
         }
         kty = "EC"
         crv = "P-256"
-        x = Data(bytes[1 ..< 33]).base64URLEncodedString()
-        y = Data(bytes[33 ..< 65]).base64URLEncodedString()
+        xCoordinate = Data(bytes[1 ..< 33]).base64URLEncodedString()
+        yCoordinate = Data(bytes[33 ..< 65]).base64URLEncodedString()
     }
 
     var thumbprint: String {
-        let canonical = "{\"crv\":\"\(crv)\",\"kty\":\"\(kty)\",\"x\":\"\(x)\",\"y\":\"\(y)\"}"
+        let canonical = "{\"crv\":\"\(crv)\",\"kty\":\"\(kty)\",\"x\":\"\(xCoordinate)\",\"y\":\"\(yCoordinate)\"}"
         return Data(SHA256.hash(data: Data(canonical.utf8))).base64URLEncodedString()
     }
 }
@@ -171,8 +178,8 @@ actor PathwayDPoPSigner {
     }
 }
 
-extension Data {
-    fileprivate func base64URLEncodedString() -> String {
+private extension Data {
+    func base64URLEncodedString() -> String {
         base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")

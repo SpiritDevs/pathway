@@ -79,6 +79,73 @@ enum AppDestination: String, CaseIterable, Identifiable, Hashable, Sendable {
         }
     }
 
+    var contextDestinations: [AppContextDestination] {
+        switch self {
+        case .dashboard:
+            [
+                .init(id: "overview", title: "Overview", systemImage: "square.grid.2x2"),
+                .init(id: "activity", title: "Activity", systemImage: "waveform.path.ecg")
+            ]
+        case .issues:
+            [
+                .init(id: "all", title: "All issues", systemImage: "checklist"),
+                .init(id: "assigned", title: "Assigned to me", systemImage: "person.crop.circle")
+            ]
+        case .agentThreads:
+            [
+                .init(
+                    id: "all",
+                    title: "All threads",
+                    systemImage: "bubble.left.and.bubble.right"
+                ),
+                .init(id: "running", title: "Running", systemImage: "bolt"),
+                .init(
+                    id: "needs-attention",
+                    title: "Needs attention",
+                    systemImage: "exclamationmark.circle"
+                )
+            ]
+        case .email:
+            [
+                .init(id: "inbox", title: "Inbox", systemImage: "tray"),
+                .init(id: "starred", title: "Starred", systemImage: "star"),
+                .init(id: "sent", title: "Sent", systemImage: "paperplane")
+            ]
+        case .sourceControl:
+            [
+                .init(id: "repositories", title: "Repositories", systemImage: "shippingbox"),
+                .init(id: "changes", title: "Changes", systemImage: "arrow.triangle.branch"),
+                .init(id: "pull-requests", title: "Pull requests", systemImage: "arrow.triangle.pull")
+            ]
+        case .calendar:
+            [
+                .init(id: "schedule", title: "Schedule", systemImage: "calendar"),
+                .init(id: "upcoming", title: "Upcoming", systemImage: "calendar.badge.clock")
+            ]
+        case .projects:
+            [
+                .init(id: "all", title: "All projects", systemImage: "folder"),
+                .init(id: "recent", title: "Recent", systemImage: "clock.arrow.circlepath"),
+                .init(id: "archived", title: "Archived", systemImage: "archivebox")
+            ]
+        case .contacts:
+            [
+                .init(id: "people", title: "People", systemImage: "person.2"),
+                .init(id: "teams", title: "Teams", systemImage: "person.3")
+            ]
+        case .timeTracker:
+            [
+                .init(id: "today", title: "Today", systemImage: "clock"),
+                .init(id: "this-week", title: "This week", systemImage: "calendar.day.timeline.left"),
+                .init(id: "reports", title: "Reports", systemImage: "chart.bar")
+            ]
+        }
+    }
+
+    var defaultContextDestination: AppContextDestination {
+        contextDestinations[0]
+    }
+
     var isCompactDestination: Bool {
         Self.compactDestinations.contains(self)
     }
@@ -88,6 +155,12 @@ struct AppDestinationSection: Identifiable, Hashable, Sendable {
     let id: String
     let title: String
     let destinations: [AppDestination]
+}
+
+struct AppContextDestination: Identifiable, Hashable, Sendable {
+    let id: String
+    let title: String
+    let systemImage: String
 }
 
 enum AppShellLayout: Equatable, Sendable {
