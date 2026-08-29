@@ -681,13 +681,17 @@ export const ensureEnvironmentProject = mutation({
       binding !== null &&
       (binding.localWorkspaceRoot !== localWorkspaceRoot ||
         binding.status !== (localWorkspaceRoot === null ? "missing" : "active") ||
-        (repositoryIdentity !== undefined &&
+        // A null identity means the environment's enrichment has not resolved (yet), not that the
+        // checkout lost its repository: the publisher re-reports every project each minute, and
+        // treating null as authoritative made each expired enrichment cache clear the stored
+        // identity, then restore it a minute later — a permanent write/feed ping-pong.
+        (repositoryIdentity != null &&
           JSON.stringify(binding.repositoryIdentity ?? null) !==
             JSON.stringify(repositoryIdentity)))
     ) {
       await ctx.db.patch(binding._id, {
         ...(localWorkspaceRoot === null ? {} : { localWorkspaceRoot }),
-        ...(repositoryIdentity === undefined ? {} : { repositoryIdentity, repositoryKey }),
+        ...(repositoryIdentity == null ? {} : { repositoryIdentity, repositoryKey }),
         status: localWorkspaceRoot === null ? "missing" : "active",
         lastSeenAt: now,
         updatedAt: now,

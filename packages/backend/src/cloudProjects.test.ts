@@ -265,6 +265,49 @@ describe("checkoutless project setup", () => {
     expect(state.duplicate).toBeUndefined();
   });
 
+  it("keeps the stored repository identity when a republish has not resolved one yet", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    await registerEnvironment(t, ids.companyId);
+    const repositoryIdentity = {
+      canonicalKey: "github.com/spiritdevs/pathway",
+      locator: {
+        source: "git-remote" as const,
+        remoteName: "origin",
+        remoteUrl: "git@github.com:spiritdevs/pathway.git",
+      },
+      rootPath: "/work/pathway",
+    };
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ids.bindingId, {
+        repositoryIdentity,
+        repositoryKey: repositoryIdentity.canonicalKey,
+      });
+    });
+
+    // The publisher re-reports each project every minute, and its enrichment cache expires on the
+    // same cadence — a null identity here means "not resolved yet" and must not clear or republish.
+    const result = await asOwner(t).mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: LOCAL_PROJECT_ID,
+      localWorkspaceRoot: "/work/pathway",
+      repositoryIdentity: null,
+      name: "Pathway",
+    });
+
+    expect(result).toBe(PROJECT_ID);
+    const state = await t.run(async (ctx) => ({
+      binding: await ctx.db.get(ids.bindingId),
+      bindingChanges: (await ctx.db.query("syncChanges").collect()).filter(
+        (change) => change.entityKind === "environmentBinding",
+      ),
+    }));
+    expect(state.binding?.repositoryIdentity).toEqual(repositoryIdentity);
+    expect(state.binding?.repositoryKey).toBe(repositoryIdentity.canonicalKey);
+    expect(state.bindingChanges).toHaveLength(0);
+  });
+
   it("creates a distinct company project when repository matching is disabled", async () => {
     const t = harness();
     const ids = await seed(t);

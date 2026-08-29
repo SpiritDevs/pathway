@@ -163,8 +163,15 @@
 
             let activeCompanyIds = Set(newCompanies.map(\.id))
             removeCompanies(notIn: activeCompanyIds)
-            for company in newCompanies where cursorByCompany[company.id] == nil {
-                startBootstrap(companyId: company.id)
+            for company in newCompanies {
+                if cursorByCompany[company.id] == nil {
+                    startBootstrap(companyId: company.id)
+                } else {
+                    // A restart (session refresh, retry) cancels head subscriptions but keeps the
+                    // replica and its cursor. Resubscribing emits the current head immediately, so
+                    // the drain catches up on anything missed while unsubscribed.
+                    subscribeToHead(companyId: company.id)
+                }
             }
             updateConnectionStateIfReady()
         }
