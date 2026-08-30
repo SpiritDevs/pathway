@@ -10,6 +10,21 @@ import { useEnvironmentQuery } from "../state/query";
 import { serverEnvironment } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
 
+/**
+ * Loading state for a subscription-backed view.
+ *
+ * A subscription stream never completes, so its atom reports `waiting` for the
+ * stream's whole life. Only the wait for the first emission is a load; after
+ * that, treating `waiting` as pending pins refresh controls into a spinning,
+ * disabled state forever.
+ */
+export function isAwaitingFirstEmission(input: {
+  readonly isPending: boolean;
+  readonly data: unknown;
+}): boolean {
+  return input.isPending && input.data === null;
+}
+
 export interface ResourceTelemetryState {
   readonly data: ResourceTelemetrySnapshot | null;
   readonly error: string | null;
@@ -40,7 +55,11 @@ export function useResourceTelemetry(): ResourceTelemetryState {
     return result.value.snapshot;
   }, [environmentId, retryCommand]);
 
-  return { ...query, retry };
+  return {
+    ...query,
+    isPending: isAwaitingFirstEmission(query),
+    retry,
+  };
 }
 
 export function useResourceTelemetryHistory(input: ResourceTelemetryHistoryInput) {
