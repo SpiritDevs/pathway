@@ -23,7 +23,11 @@ import type {
   ServerProviderUsageLine,
   ServerProviderUsageSnapshot,
 } from "@spiritdevs/contracts";
-import { ProviderInstanceId } from "@spiritdevs/contracts";
+import {
+  defaultInstanceIdForDriver,
+  ProviderDriverKind,
+  ProviderInstanceId,
+} from "@spiritdevs/contracts";
 import { HostProcessEnvironment, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -79,7 +83,14 @@ interface InFlightFetch {
 const snapshotCache = new Map<string, CachedSnapshot>();
 const inFlightFetches = new Map<string, InFlightFetch>();
 const retryAfterGates = new Map<string, number>();
-const claudeVersionCache = new Map<string, Promise<string>>();
+// Cursor's credit-balance endpoint throttles independently of the main quota
+// endpoint; gate it separately so a credits 429 never blocks quota refreshes.
+const cursorCreditsGates = new Map<string, number>();
+const claudeVersionCache = new Map<
+  string,
+  { readonly version: Promise<string>; readonly cachedAtMs: number }
+>();
+const CLAUDE_VERSION_TTL_MS = 60 * 60 * 1000;
 // This cache is process-local already, so its dirty-signal shares that
 // lifetime. Sliding(1) mirrors ScheduledTaskService: subscribers always
 // re-read the full list and never need a backlog of intermediate signals.
@@ -947,9 +958,11 @@ async function detectClaudeVersion(ctx: ProviderContext): Promise<string> {
   const commands = Array.from(
     new Set(ctx.providerBinaryPath ? [ctx.providerBinaryPath, "claude"] : ["claude"]),
   );
-  const cacheKey = commands.join("\u0000");
+  // PATH participates in the key: instances with different environments can
+  // resolve different binaries. The TTL keeps in-place CLI upgrades visible.
+  const cacheKey = [...commands, ctx.env.PATH ?? ""].join("\u0000");
   const cached = claudeVersionCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached && ctx.nowMs - cached.cachedAtMs < CLAUDE_VERSION_TTL_MS) return cached.version;
   const pending = (async () => {
     for (const command of commands) {
       try {
@@ -961,7 +974,7 @@ async function detectClaudeVersion(ctx: ProviderContext): Promise<string> {
     }
     return FALLBACK_CLAUDE_VERSION;
   })();
-  setBounded(claudeVersionCache, cacheKey, pending);
+  setBounded(claudeVersionCache, cacheKey, { version: pending, cachedAtMs: ctx.nowMs });
   return pending;
 }
 
@@ -1173,21 +1186,33 @@ async function fetchCursorUsage(ctx: ProviderContext): Promise<ProviderFetchResu
       return failedFetchResult(ctx, "cursor-dashboard", "Cursor", usage);
     }
     let credits: unknown;
-    let creditsRetryAfterUntilMs: number | undefined;
-    try {
-      const result = await fetchJson({
-        url: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCreditGrantsBalance",
-        method: "POST",
-        headers,
-        body: {},
-      });
-      if (result.ok) {
-        credits = result.json;
-      } else if (result.status === 429) {
-        creditsRetryAfterUntilMs = retryAfterUntilMs(result.headers.get("retry-after"), ctx.nowMs);
+    // The credits endpoint throttles independently; gate only it, so a
+    // credits 429 never blocks refreshes of the main quota endpoint.
+    const creditsGateKey = cacheKeyFor(ctx);
+    let creditsBlockedUntilMs = getLru(cursorCreditsGates, creditsGateKey);
+    if (creditsBlockedUntilMs !== undefined && creditsBlockedUntilMs <= ctx.nowMs) {
+      cursorCreditsGates.delete(creditsGateKey);
+      creditsBlockedUntilMs = undefined;
+    }
+    if (creditsBlockedUntilMs === undefined) {
+      try {
+        const result = await fetchJson({
+          url: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCreditGrantsBalance",
+          method: "POST",
+          headers,
+          body: {},
+        });
+        if (result.ok) {
+          credits = result.json;
+        } else if (result.status === 429) {
+          creditsBlockedUntilMs = retryAfterUntilMs(result.headers.get("retry-after"), ctx.nowMs);
+          if (creditsBlockedUntilMs !== undefined) {
+            setBounded(cursorCreditsGates, creditsGateKey, creditsBlockedUntilMs);
+          }
+        }
+      } catch {
+        credits = undefined;
       }
-    } catch {
-      credits = undefined;
     }
     const snapshotValue = parseCursorUsage({
       instanceId: ctx.instanceId,
@@ -1198,15 +1223,12 @@ async function fetchCursorUsage(ctx: ProviderContext): Promise<ProviderFetchResu
     });
     return {
       snapshot:
-        creditsRetryAfterUntilMs === undefined
+        creditsBlockedUntilMs === undefined
           ? snapshotValue
           : {
               ...snapshotValue,
-              detail: `Cursor credit refresh is rate limited until ${new Date(creditsRetryAfterUntilMs).toISOString()}.`,
+              detail: `Cursor credit refresh is rate limited until ${new Date(creditsBlockedUntilMs).toISOString()}.`,
             },
-      ...(creditsRetryAfterUntilMs === undefined
-        ? {}
-        : { retryAfterUntilMs: creditsRetryAfterUntilMs }),
     };
   } catch {
     return fetched(errorSnapshot(ctx, "cursor-dashboard", "Could not reach the Cursor dashboard."));
@@ -1391,16 +1413,25 @@ function isProviderUsageDriver(driver: string): driver is ProviderUsageDriver {
 const configuredProviderUsageInputs = Effect.fn("ProviderUsage.configuredInputs")(function* () {
   const serverSettings = yield* ServerSettingsService;
   const settings = yield* serverSettings.getSettings;
-  return Object.entries(settings.providerInstances).flatMap(([instanceId, instance]) =>
-    instance.enabled !== false && isProviderUsageDriver(instance.driver)
-      ? [
-          {
-            instanceId: ProviderInstanceId.make(instanceId),
-            provider: instance.driver,
-          } satisfies ServerGetProviderUsageInput,
-        ]
-      : [],
-  );
+  const inputs = new Map<string, ServerGetProviderUsageInput>();
+  for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
+    if (instance.enabled !== false && isProviderUsageDriver(instance.driver)) {
+      inputs.set(instanceId, {
+        instanceId: ProviderInstanceId.make(instanceId),
+        provider: instance.driver,
+      });
+    }
+  }
+  // Unmigrated installations keep built-in providers under settings.providers;
+  // mirror ProviderInstanceRegistryHydration's synthesis (explicit entries win)
+  // so their usage still appears in the subscription list.
+  for (const driver of ["codex", "claudeAgent", "cursor"] as const) {
+    const instanceId = defaultInstanceIdForDriver(ProviderDriverKind.make(driver));
+    if (instanceId in settings.providerInstances) continue;
+    if (settings.providers[driver] === undefined) continue;
+    inputs.set(instanceId, { instanceId: ProviderInstanceId.make(instanceId), provider: driver });
+  }
+  return [...inputs.values()];
 });
 
 const readCachedProviderUsageList = Effect.fn("ProviderUsage.readCachedList")(function* () {
@@ -1423,16 +1454,21 @@ const loadProviderUsageList = Effect.fn("ProviderUsage.loadList")(function* () {
 export const subscribeProviderUsage = () =>
   Stream.unwrap(
     Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsService;
       // Match ScheduledTaskService: register first so a write during bootstrap
       // is buffered, then emit the complete current list before live updates.
       const subscription = yield* PubSub.subscribe(snapshotChanges);
       const current = yield* loadProviderUsageList();
-      return Stream.concat(
-        Stream.make(current),
-        Stream.fromSubscription(subscription).pipe(
-          Stream.mapEffect(() => readCachedProviderUsageList()),
-        ),
+      // Settings changes alter membership (instances added, enabled, removed)
+      // without touching the snapshot cache; reload so new instances fetch and
+      // dropped ones disappear.
+      const membershipUpdates = serverSettings.streamChanges.pipe(
+        Stream.mapEffect(() => loadProviderUsageList()),
       );
+      const cacheUpdates = Stream.fromSubscription(subscription).pipe(
+        Stream.mapEffect(() => readCachedProviderUsageList()),
+      );
+      return Stream.concat(Stream.make(current), Stream.merge(cacheUpdates, membershipUpdates));
     }),
   );
 
@@ -1495,6 +1531,7 @@ export function resetProviderUsageCache(): void {
   snapshotCache.clear();
   inFlightFetches.clear();
   retryAfterGates.clear();
+  cursorCreditsGates.clear();
   claudeVersionCache.clear();
   claudeVersionRunner = defaultClaudeVersionRunner;
 }

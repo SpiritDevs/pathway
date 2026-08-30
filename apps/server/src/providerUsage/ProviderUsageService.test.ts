@@ -24,6 +24,14 @@ import {
 
 const instanceId = ProviderInstanceId.make("usage_test");
 const nowMs = Date.parse("2026-08-12T00:00:00.000Z");
+// Default settings carry legacy providers.<kind> blobs for every built-in
+// driver, which the subscription list synthesizes into instances; disable
+// those slots so tests control membership explicitly.
+const disabledLegacySlots = {
+  [ProviderInstanceId.make("codex")]: { driver: "codex", enabled: false },
+  [ProviderInstanceId.make("claudeAgent")]: { driver: "claudeAgent", enabled: false },
+  [ProviderInstanceId.make("cursor")]: { driver: "cursor", enabled: false },
+} as const;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -518,6 +526,7 @@ describe("provider usage snapshots", () => {
           Effect.provide(
             ServerSettingsService.layerTest({
               providerInstances: {
+                ...disabledLegacySlots,
                 [ProviderInstanceId.make("usage_test")]: {
                   driver: "claudeAgent",
                   config: { homePath: providerHomePath },
@@ -631,8 +640,51 @@ describe("provider usage snapshots", () => {
         Effect.provide(
           ServerSettingsService.layerTest({
             providerInstances: {
+              ...disabledLegacySlots,
               [ProviderInstanceId.make("usage_test")]: { driver: "codex" },
             },
+          }),
+        ),
+      ),
+    );
+  });
+
+  it.effect("lists legacy settings.providers instances in the subscription bootstrap", () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("network disabled in test"));
+    return Effect.scoped(
+      Effect.gen(function* () {
+        resetProviderUsageCache();
+        const providerHomePath = yield* Effect.promise(() =>
+          NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "pathway-provider-usage-")),
+        );
+        yield* Effect.gen(function* () {
+          const current = yield* subscribeProviderUsage().pipe(Stream.take(1), Stream.runCollect);
+          expect(current[0]).toMatchObject([{ provider: "codex", status: "needs-auth" }]);
+          expect(fetchMock).not.toHaveBeenCalled();
+        }).pipe(
+          Effect.provide(
+            ServerSettingsService.layerTest({
+              providers: { codex: { homePath: providerHomePath } },
+              providerInstances: {
+                [ProviderInstanceId.make("claudeAgent")]: {
+                  driver: "claudeAgent",
+                  enabled: false,
+                },
+                [ProviderInstanceId.make("cursor")]: { driver: "cursor", enabled: false },
+              },
+            }),
+          ),
+          Effect.ensuring(
+            Effect.promise(() => NodeFSP.rm(providerHomePath, { recursive: true, force: true })),
+          ),
+        );
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            fetchMock.mockRestore();
+            resetProviderUsageCache();
           }),
         ),
       ),
