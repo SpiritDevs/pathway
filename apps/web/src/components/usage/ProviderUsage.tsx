@@ -45,10 +45,6 @@ import {
 } from "./providerUsageAccounts";
 
 const SLOW_REFRESH_SPIN_CLASS = "animate-spin [animation-duration:2s] motion-reduce:animate-none";
-const AUTOMATIC_REFRESH_BUTTON_CLASS =
-  "group-has-[[data-provider-usage-pending]]/usage:pointer-events-auto group-has-[[data-provider-usage-pending]]/usage:opacity-100";
-const AUTOMATIC_REFRESH_SPIN_CLASS =
-  "group-has-[[data-provider-usage-pending]]/usage:animate-spin group-has-[[data-provider-usage-pending]]/usage:[animation-duration:2s] motion-reduce:group-has-[[data-provider-usage-pending]]/usage:animate-none";
 
 function providerName(provider: ProviderUsageDriver): string {
   return PROVIDER_DISPLAY_NAMES[ProviderDriverKind.make(provider)] ?? provider;
@@ -154,14 +150,12 @@ function usageSectionHeading({
               onClick={handleRefreshClick}
               className={cn(
                 "pointer-events-none -my-1 -mr-1 size-6 opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/usage:pointer-events-auto group-hover/usage:opacity-100 group-focus-within/usage:pointer-events-auto group-focus-within/usage:opacity-100 pointer-coarse:pointer-events-auto pointer-coarse:opacity-100 motion-reduce:transition-none",
-                AUTOMATIC_REFRESH_BUTTON_CLASS,
                 refreshing && "pointer-events-auto opacity-100",
               )}
             >
               <RefreshCwIcon
                 className={cn(
                   "size-3.5",
-                  AUTOMATIC_REFRESH_SPIN_CLASS,
                   refreshing && "text-foreground",
                   refreshing && SLOW_REFRESH_SPIN_CLASS,
                 )}

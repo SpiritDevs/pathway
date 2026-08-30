@@ -230,7 +230,7 @@ describe("provider usage panel refresh", () => {
     expect(tooltip).not.toBeNull();
   });
 
-  it("reveals and spins the refresh action while usage refreshes automatically", () => {
+  it("keeps the refresh action calm while usage loads in the background", () => {
     testState.pendingQueries.add(String(codexId));
 
     const panel = renderSingle();
@@ -239,23 +239,12 @@ describe("provider usage panel refresh", () => {
       panel,
       (element) => element.props["data-provider-usage-pending"] === true,
     );
-    const icon = visitElements(
-      panel,
-      (element) =>
-        typeof element.props.className === "string" &&
-        element.props.className.includes(
-          "group-has-[[data-provider-usage-pending]]/usage:animate-spin",
-        ),
-    );
 
     expect(pendingContent).not.toBeNull();
     expect(pendingContent?.props["aria-busy"]).toBe(true);
-    expect(button?.props.className).toContain(
-      "group-has-[[data-provider-usage-pending]]/usage:opacity-100",
-    );
-    expect(icon?.props.className).toContain(
-      "motion-reduce:group-has-[[data-provider-usage-pending]]/usage:animate-none",
-    );
+    expect(button?.props.className).toContain("opacity-0");
+    expect(button?.props["aria-busy"]).toBe(false);
+    expect(findSpinningRefreshIcon(panel)).toBeNull();
   });
 
   it("forces one refresh, stays busy, preserves disclosure state, and reads the broadcast", async () => {
