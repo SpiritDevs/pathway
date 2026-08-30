@@ -33,6 +33,7 @@ import {
 import { THREAD_DETAILS_PANEL_DISCLOSURE_ROW_CLASS } from "../chat/threadDetailsPanelStyles";
 import {
   deriveProviderUsageLimits,
+  formatProviderUsageCaptureAge,
   selectPrimaryProviderUsageLimit,
   shouldCollapseProviderUsage,
   type ProviderUsageDisplayLimit,
@@ -60,13 +61,6 @@ interface ProviderUsageRefreshTarget {
   readonly label: string;
 }
 
-function providerUsageSnapshotKey(
-  environmentId: EnvironmentId,
-  instanceId: ProviderInstanceId,
-): string {
-  return `${environmentId}:${instanceId}`;
-}
-
 function refreshFailureMessage(error: unknown): string {
   return error instanceof Error ? error.message : "The provider did not return updated usage.";
 }
@@ -75,9 +69,6 @@ function useForcedProviderUsageRefresh(targets: ReadonlyArray<ProviderUsageRefre
   const refreshUsage = useAtomCommand(serverEnvironment.refreshProviderUsage, {
     reportFailure: false,
   });
-  const [refreshedSnapshots, setRefreshedSnapshots] = useState<
-    ReadonlyMap<string, ServerProviderUsageSnapshot>
-  >(() => new Map());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const inFlightRef = useRef(false);
 
@@ -98,16 +89,7 @@ function useForcedProviderUsageRefresh(targets: ReadonlyArray<ProviderUsageRefre
               forceRefresh: true,
             },
           });
-          if (result._tag === "Success") {
-            setRefreshedSnapshots((current) => {
-              const next = new Map(current);
-              next.set(
-                providerUsageSnapshotKey(target.environmentId, target.instanceId),
-                result.value,
-              );
-              return next;
-            });
-          } else if (!isAtomCommandInterrupted(result)) {
+          if (result._tag !== "Success" && !isAtomCommandInterrupted(result)) {
             failed.push({ target, error: squashAtomCommandFailure(result) });
           }
         }),
@@ -133,7 +115,7 @@ function useForcedProviderUsageRefresh(targets: ReadonlyArray<ProviderUsageRefre
     }
   }, [refreshUsage, targets]);
 
-  return { isRefreshing, refresh, refreshedSnapshots };
+  return { isRefreshing, refresh };
 }
 
 function usageSectionHeading({
@@ -199,26 +181,29 @@ function useProviderUsage(input: {
   instanceId: ProviderInstanceId;
   provider: ProviderUsageDriver;
   enabled: boolean;
-  forceRefresh?: boolean;
 }): EnvironmentQueryView<ServerProviderUsageSnapshot> {
   const target = useMemo(
     () =>
       input.enabled
-        ? serverEnvironment.providerUsage({
+        ? serverEnvironment.providerUsageLive({
             environmentId: input.environmentId,
-            input: {
-              instanceId: input.instanceId,
-              provider: input.provider,
-              ...(input.forceRefresh ? { forceRefresh: true } : {}),
-            },
+            input: {},
           })
         : null,
-    [input.enabled, input.environmentId, input.forceRefresh, input.instanceId, input.provider],
+    [input.enabled, input.environmentId],
   );
-  return useEnvironmentQuery(target);
+  const usage = useEnvironmentQuery(target);
+  return {
+    ...usage,
+    data:
+      usage.data?.find(
+        (snapshot) =>
+          snapshot.instanceId === input.instanceId && snapshot.provider === input.provider,
+      ) ?? null,
+  };
 }
 
-const TONE_CLASS_NAME: Record<ProviderUsageDisplayLimit["tone"], string> = {
+const TONE_CLASS_NAME: Record<Exclude<ProviderUsageDisplayLimit["tone"], null>, string> = {
   healthy: "bg-success",
   warning: "bg-warning",
   danger: "bg-destructive",
@@ -233,10 +218,11 @@ function UsageLimitRow({
   compact?: boolean;
   resetInline?: boolean;
 }) {
+  const label = limit.scope ? `${limit.window} · ${limit.scope}` : limit.window;
   return (
     <div className={cn("space-y-1.5", compact && "space-y-1")}>
       <div className="flex items-baseline justify-between gap-3 text-xs">
-        <span className="font-medium text-foreground">{limit.window}</span>
+        <span className="font-medium text-foreground">{label}</span>
         <span className="flex shrink-0 items-baseline gap-2 tabular-nums text-muted-foreground">
           <span>{limit.remainingLabel}</span>
           {resetInline && limit.resetLabel ? (
@@ -244,17 +230,19 @@ function UsageLimitRow({
           ) : null}
         </span>
       </div>
-      <div className={cn("h-1.5 overflow-hidden rounded-full bg-muted", compact && "h-1")}>
-        <div
-          role="progressbar"
-          aria-label={`${limit.window} quota remaining`}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={limit.remainingPercent}
-          className={cn("h-full rounded-full", TONE_CLASS_NAME[limit.tone])}
-          style={{ width: `${limit.remainingPercent}%` }}
-        />
-      </div>
+      {limit.remainingPercent === null || limit.tone === null ? null : (
+        <div className={cn("h-1.5 overflow-hidden rounded-full bg-muted", compact && "h-1")}>
+          <div
+            role="progressbar"
+            aria-label={`${label} quota remaining`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={limit.remainingPercent}
+            className={cn("h-full rounded-full", TONE_CLASS_NAME[limit.tone])}
+            style={{ width: `${limit.remainingPercent}%` }}
+          />
+        </div>
+      )}
       {!resetInline && limit.resetLabel ? (
         <p className="text-right text-[11px] tabular-nums text-muted-foreground">
           {limit.resetLabel}
@@ -288,16 +276,24 @@ function ProviderUsageDetails({
     return <p className="text-xs leading-relaxed text-muted-foreground">{snapshot.detail}</p>;
   }
   const limits = deriveProviderUsageLimits(snapshot.limits);
-  if (limits.length === 0 && snapshot.usageLines.length === 0) {
-    return <p className="text-xs text-muted-foreground">No quota data reported yet.</p>;
-  }
+  const captureAge = snapshot.fetchedAt ? formatProviderUsageCaptureAge(snapshot.fetchedAt) : null;
+  const hasUsage = limits.length > 0 || snapshot.usageLines.length > 0;
   return (
     <div className={cn("space-y-3", compact && "space-y-2.5")}>
-      {snapshot.stale && snapshot.detail ? (
-        <p className="text-xs leading-relaxed text-warning-foreground">{snapshot.detail}</p>
+      {snapshot.stale && (snapshot.detail || captureAge) ? (
+        <p className="text-xs leading-relaxed text-warning-foreground">
+          {[snapshot.detail, captureAge].filter(Boolean).join(" · ")}
+        </p>
       ) : null}
-      {limits.map((limit) => (
-        <UsageLimitRow key={limit.window} limit={limit} compact={compact} />
+      {!hasUsage ? (
+        <p className="text-xs text-muted-foreground">No quota data reported yet.</p>
+      ) : null}
+      {limits.map((limit, index) => (
+        <UsageLimitRow
+          key={`${limit.windowKey ?? "legacy"}:${limit.scope ?? "all"}:${index}`}
+          limit={limit}
+          compact={compact}
+        />
       ))}
       {snapshot.usageLines.length > 0 ? (
         <div className={cn("space-y-1 border-t border-border/70 pt-2.5", compact && "pt-2")}>
@@ -322,7 +318,6 @@ export function EnvironmentProviderUsage({
   enabled,
   displayMode = "card",
   grouped = false,
-  refreshedSnapshot,
   parentRefreshing = false,
   iconDisplayName,
   showIconBadge = false,
@@ -332,7 +327,6 @@ export function EnvironmentProviderUsage({
   enabled: boolean;
   displayMode?: "card" | "panel";
   grouped?: boolean;
-  refreshedSnapshot?: ServerProviderUsageSnapshot;
   parentRefreshing?: boolean;
   iconDisplayName?: string;
   showIconBadge?: boolean;
@@ -359,12 +353,7 @@ export function EnvironmentProviderUsage({
     [displayName, environmentId, provider.instanceId, usageProvider],
   );
   const singleRefresh = useForcedProviderUsageRefresh(refreshTargets);
-  const snapshot =
-    refreshedSnapshot ??
-    singleRefresh.refreshedSnapshots.get(
-      providerUsageSnapshotKey(environmentId, provider.instanceId),
-    ) ??
-    usage.data;
+  const snapshot = usage.data;
   const refreshing = grouped ? parentRefreshing : singleRefresh.isRefreshing;
   const primary = selectPrimaryProviderUsageLimit(snapshot);
   const limits = snapshot?.status === "ok" ? deriveProviderUsageLimits(snapshot.limits) : [];
@@ -574,38 +563,26 @@ export function EnvironmentProviderUsageList({
         <p className="px-4 pb-3 pt-1 text-xs text-muted-foreground">Loading provider accounts…</p>
       ) : (
         <div className="divide-y divide-border/70">
-          {supported.map((entry) => {
-            const refreshedSnapshot = usageRefresh.refreshedSnapshots.get(
-              providerUsageSnapshotKey(environmentId, entry.instanceId),
-            );
-            return (
-              <EnvironmentProviderUsage
-                key={entry.instanceId}
-                environmentId={environmentId}
-                provider={entry.snapshot}
-                enabled={enabled}
-                displayMode="panel"
-                grouped
-                iconDisplayName={entry.displayName}
-                showIconBadge={shouldShowProviderInstanceBadge(entry, supported)}
-                {...(refreshedSnapshot === undefined ? {} : { refreshedSnapshot })}
-                parentRefreshing={usageRefresh.isRefreshing}
-              />
-            );
-          })}
+          {supported.map((entry) => (
+            <EnvironmentProviderUsage
+              key={entry.instanceId}
+              environmentId={environmentId}
+              provider={entry.snapshot}
+              enabled={enabled}
+              displayMode="panel"
+              grouped
+              iconDisplayName={entry.displayName}
+              showIconBadge={shouldShowProviderInstanceBadge(entry, supported)}
+              parentRefreshing={usageRefresh.isRefreshing}
+            />
+          ))}
         </div>
       )}
     </section>
   );
 }
 
-function ProviderUsageCard({
-  account,
-  refreshedSnapshot,
-}: {
-  account: ConnectedProviderUsageAccount;
-  refreshedSnapshot?: ServerProviderUsageSnapshot;
-}) {
+function ProviderUsageCard({ account }: { account: ConnectedProviderUsageAccount }) {
   const { displayName, environmentId, provider } = account;
   const usageProvider = provider.driver as ProviderUsageDriver;
   const usage = useProviderUsage({
@@ -614,7 +591,7 @@ function ProviderUsageCard({
     provider: usageProvider,
     enabled: true,
   });
-  const snapshot = refreshedSnapshot ?? usage.data;
+  const snapshot = usage.data;
   const statusLabel = snapshot?.stale
     ? "Last known"
     : snapshot?.status === "needs-auth"
@@ -670,11 +647,9 @@ function ProviderUsageCard({
 function ConnectedProviderUsageCards({
   accounts,
   loading,
-  refreshedSnapshots,
 }: {
   accounts: ReadonlyArray<ConnectedProviderUsageAccount>;
   loading: boolean;
-  refreshedSnapshots: ReadonlyMap<string, ServerProviderUsageSnapshot>;
 }) {
   if (!loading && accounts.length === 0) return null;
 
@@ -686,18 +661,9 @@ function ConnectedProviderUsageCards({
         </div>
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {accounts.map((account) => {
-            const refreshedSnapshot = refreshedSnapshots.get(
-              providerUsageSnapshotKey(account.environmentId, account.provider.instanceId),
-            );
-            return (
-              <ProviderUsageCard
-                key={account.key}
-                account={account}
-                {...(refreshedSnapshot === undefined ? {} : { refreshedSnapshot })}
-              />
-            );
-          })}
+          {accounts.map((account) => (
+            <ProviderUsageCard key={account.key} account={account} />
+          ))}
         </div>
       )}
     </div>
@@ -834,11 +800,7 @@ export function ProviderUsageSettingsSection() {
           Live subscription quota from each connected provider account.
         </p>
         <div className="space-y-5">
-          <ConnectedProviderUsageCards
-            accounts={accounts}
-            loading={loading}
-            refreshedSnapshots={usageRefresh.refreshedSnapshots}
-          />
+          <ConnectedProviderUsageCards accounts={accounts} loading={loading} />
         </div>
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           Pathway reads each CLI&apos;s stored sign-in on its connected environment and sends only

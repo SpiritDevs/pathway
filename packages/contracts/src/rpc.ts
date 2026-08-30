@@ -435,6 +435,7 @@ export const WS_METHODS = {
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
   serverGetProviderUsage: "server.getProviderUsage",
+  serverSubscribeProviderUsage: "server.subscribeProviderUsage",
 
   // Scheduled tasks
   scheduledTasksList: "scheduledTasks.list",
@@ -607,6 +608,13 @@ export const WsServerGetProviderUsageRpc = Rpc.make(WS_METHODS.serverGetProvider
   payload: ServerGetProviderUsageInput,
   success: ServerProviderUsageSnapshot,
   error: Schema.Union([EnvironmentAuthorizationError, ServerSettingsError]),
+});
+
+export const WsServerSubscribeProviderUsageRpc = Rpc.make(WS_METHODS.serverSubscribeProviderUsage, {
+  payload: Schema.Struct({}),
+  success: Schema.Array(ServerProviderUsageSnapshot),
+  error: Schema.Union([EnvironmentAuthorizationError, ServerSettingsError]),
+  stream: true,
 });
 
 export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
@@ -1811,6 +1819,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRetryResourceTelemetryRpc,
   WsServerGetUsageSummaryRpc,
   WsServerGetProviderUsageRpc,
+  WsServerSubscribeProviderUsageRpc,
   WsServerSignalProcessRpc,
   WsScheduledTasksListRpc,
   WsScheduledTasksSubscribeRpc,

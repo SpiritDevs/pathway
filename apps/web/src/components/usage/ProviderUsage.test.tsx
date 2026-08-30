@@ -67,24 +67,16 @@ vi.mock("~/state/server", () => ({
   environmentServerConfigsAtom: atoms.serverConfigsAtom,
   serverEnvironment: {
     providersValueAtom: () => atoms.providersAtom,
-    providerUsage: (target: unknown) => target,
+    providerUsageLive: (target: unknown) => target,
     refreshProviderUsage: atoms.refreshProviderUsage,
   },
 }));
 
 vi.mock("~/state/query", () => ({
-  useEnvironmentQuery: (
-    target: {
-      readonly input?: { readonly instanceId?: ProviderInstanceId };
-    } | null,
-  ) => ({
-    data: target?.input?.instanceId
-      ? (testState.queries.get(String(target.input.instanceId)) ?? null)
-      : null,
+  useEnvironmentQuery: (target: unknown) => ({
+    data: target === null ? null : Array.from(testState.queries.values()),
     error: null,
-    isPending: target?.input?.instanceId
-      ? testState.pendingQueries.has(String(target.input.instanceId))
-      : false,
+    isPending: target !== null && testState.pendingQueries.size > 0,
     refresh: vi.fn(),
   }),
 }));
@@ -266,7 +258,7 @@ describe("provider usage panel refresh", () => {
     );
   });
 
-  it("forces one refresh, stays busy, preserves disclosure state, and applies the response", async () => {
+  it("forces one refresh, stays busy, preserves disclosure state, and reads the broadcast", async () => {
     const initial = snapshot(codexId, "codex", 20);
     const refreshed = snapshot(codexId, "codex", 70);
     testState.queries.set(String(codexId), initial);
@@ -274,7 +266,10 @@ describe("provider usage panel refresh", () => {
     testState.refresh.mockImplementation(
       () =>
         new Promise((resolve) => {
-          finishRefresh = () => resolve(AsyncResult.success(refreshed));
+          finishRefresh = () => {
+            testState.queries.set(String(codexId), refreshed);
+            resolve(AsyncResult.success(refreshed));
+          };
         }),
     );
 
@@ -342,7 +337,7 @@ describe("provider usage panel refresh", () => {
     });
   });
 
-  it("refreshes every displayed provider and applies partial success", async () => {
+  it("refreshes every displayed provider and reports partial failure", async () => {
     const codex = provider("codex", codexId);
     const claude = provider("claudeAgent", claudeId);
     atoms.providers = [codex, claude];
@@ -375,21 +370,6 @@ describe("provider usage panel refresh", () => {
       input: { instanceId: claudeId, provider: "claudeAgent", forceRefresh: true },
     });
 
-    const updatedList = renderList();
-    const codexRow = visitElements(
-      updatedList,
-      (element) =>
-        (element.props.provider as ServerProvider | undefined)?.instanceId === codexId &&
-        element.props.grouped === true,
-    );
-    const claudeRow = visitElements(
-      updatedList,
-      (element) =>
-        (element.props.provider as ServerProvider | undefined)?.instanceId === claudeId &&
-        element.props.grouped === true,
-    );
-    expect(codexRow?.props.refreshedSnapshot).toEqual(refreshedCodex);
-    expect(claudeRow?.props.refreshedSnapshot).toBeUndefined();
     expect(testState.toast).toHaveBeenCalledWith({
       type: "error",
       title: "Some usage couldn’t be refreshed",

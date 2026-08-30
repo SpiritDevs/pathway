@@ -2,6 +2,8 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   deriveProviderUsageLimits,
+  formatDuration,
+  formatProviderUsageCaptureAge,
   formatProviderUsageReset,
   shouldCollapseProviderUsage,
 } from "./providerUsageDisplay";
@@ -28,7 +30,48 @@ describe("provider usage display", () => {
     ).toBe("Resets in 45m");
     expect(
       formatProviderUsageReset("2026-08-14T12:00:00.000Z", Date.parse("2026-08-12T00:00:00Z")),
-    ).toBe("Resets in 3d");
+    ).toBe("Resets in 2d 12h");
+  });
+
+  it("keeps two tiers of duration precision", () => {
+    expect(formatDuration(61 * 60_000)).toBe("1h 1m");
+    expect(formatDuration(25 * 60 * 60_000)).toBe("1d 1h");
+  });
+
+  it("keeps reset-only limits visible without inventing a percentage", () => {
+    expect(
+      deriveProviderUsageLimits(
+        [
+          {
+            window: "Weekly",
+            windowKey: "weekly",
+            scope: "Sonnet",
+            resetsAt: "2026-08-12T01:00:00.000Z",
+          },
+        ],
+        Date.parse("2026-08-12T00:00:00.000Z"),
+      ),
+    ).toEqual([
+      {
+        window: "Weekly",
+        windowKey: "weekly",
+        scope: "Sonnet",
+        resetsAt: "2026-08-12T01:00:00.000Z",
+        remainingPercent: null,
+        remainingLabel: "No % reported",
+        resetLabel: "Resets in 1h",
+        tone: null,
+      },
+    ]);
+  });
+
+  it("formats stale snapshot capture age", () => {
+    expect(
+      formatProviderUsageCaptureAge(
+        "2026-08-12T00:00:00.000Z",
+        Date.parse("2026-08-12T00:12:00.000Z"),
+      ),
+    ).toBe("as of 12m ago");
   });
 
   it("only offers disclosure when there is more than one quota bar", () => {

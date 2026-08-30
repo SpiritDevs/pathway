@@ -144,7 +144,7 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
-import { getProviderUsage } from "./providerUsage/ProviderUsageService.ts";
+import { getProviderUsage, subscribeProviderUsage } from "./providerUsage/ProviderUsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
@@ -1572,6 +1572,10 @@ const makeWsRpcLayer = (
           }),
         [WS_METHODS.serverGetProviderUsage]: (input) =>
           observeRpcEffect(WS_METHODS.serverGetProviderUsage, getProviderUsage(input), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverSubscribeProviderUsage]: (_input) =>
+          observeRpcStream(WS_METHODS.serverSubscribeProviderUsage, subscribeProviderUsage(), {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) =>
