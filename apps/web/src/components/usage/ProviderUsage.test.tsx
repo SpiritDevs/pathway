@@ -25,6 +25,8 @@ const atoms = vi.hoisted(() => ({
 const testState = vi.hoisted(() => ({
   queries: new Map<string, ServerProviderUsageSnapshot>(),
   pendingQueries: new Set<string>(),
+  // The live subscription reports no data until its first emission arrives.
+  listLoaded: true,
   refresh: vi.fn(),
   toast: vi.fn(),
   environments: [] as ReadonlyArray<{
@@ -74,7 +76,7 @@ vi.mock("~/state/server", () => ({
 
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: (target: unknown) => ({
-    data: target === null ? null : Array.from(testState.queries.values()),
+    data: target === null || !testState.listLoaded ? null : Array.from(testState.queries.values()),
     error: null,
     isPending: target !== null && testState.pendingQueries.size > 0,
     refresh: vi.fn(),
@@ -205,6 +207,7 @@ describe("provider usage panel refresh", () => {
     testState.environments = [];
     testState.queries.clear();
     testState.pendingQueries.clear();
+    testState.listLoaded = true;
     testState.refresh.mockReset();
     testState.toast.mockReset();
   });
@@ -230,7 +233,8 @@ describe("provider usage panel refresh", () => {
     expect(tooltip).not.toBeNull();
   });
 
-  it("reveals and spins the refresh action while usage refreshes automatically", () => {
+  it("reveals and spins the refresh action while the first usage list loads", () => {
+    testState.listLoaded = false;
     testState.pendingQueries.add(String(codexId));
 
     const panel = renderSingle();
@@ -256,6 +260,21 @@ describe("provider usage panel refresh", () => {
     expect(icon?.props.className).toContain(
       "motion-reduce:group-has-[[data-provider-usage-pending]]/usage:animate-none",
     );
+  });
+
+  it("stops spinning once the live list arrives even though the stream stays open", () => {
+    // The subscription never completes, so its underlying `waiting` flag stays
+    // true forever; only the absence of data may present as loading.
+    testState.pendingQueries.add(String(codexId));
+    testState.queries.set(String(codexId), snapshot(codexId, "codex", 20));
+
+    const panel = renderSingle();
+    const pendingContent = visitElements(
+      panel,
+      (element) => element.props["data-provider-usage-pending"] === true,
+    );
+
+    expect(pendingContent).toBeNull();
   });
 
   it("forces one refresh, stays busy, preserves disclosure state, and reads the broadcast", async () => {

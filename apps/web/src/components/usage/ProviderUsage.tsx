@@ -195,6 +195,9 @@ function useProviderUsage(input: {
   const usage = useEnvironmentQuery(target);
   return {
     ...usage,
+    // The live subscription never completes, so its `waiting` flag stays true
+    // for the life of the stream. Only the first list arrival is loading.
+    isPending: usage.isPending && usage.data === null,
     data:
       usage.data?.find(
         (snapshot) =>
