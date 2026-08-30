@@ -12,10 +12,14 @@
  * gpt-5.6-luna at low effort, prompting a two-child fan-out (alpha, beta).
  * See codexMultiAgentWire.json.
  */
-import { assert, describe, it } from "vite-plus/test";
+import { assert, describe, it } from "@effect/vitest";
+import { ProviderInstanceId } from "@spiritdevs/contracts";
+import * as Effect from "effect/Effect";
 
 import fixture from "../testFixtures/codexMultiAgentWire.json" with { type: "json" };
 import { routeCodexChildNotification } from "./CodexSessionRuntime.ts";
+import { ingestCodexRateLimitsUpdated } from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import type { PushedProviderUsageSnapshot } from "../../providerUsage/ProviderUsageService.ts";
 
 interface WireNotification {
   readonly method: string;
@@ -177,4 +181,59 @@ describe("routeCodexChildNotification", () => {
     assert.equal(routeCodexChildNotification("thread/somethingBrandNew"), "parent");
     assert.equal(routeCodexChildNotification("account/rateLimits/updated"), "parent");
   });
+
+  it.effect("maps account rate-limit notifications into the provider usage ingest boundary", () =>
+    Effect.gen(function* () {
+      let received: PushedProviderUsageSnapshot | undefined;
+      yield* ingestCodexRateLimitsUpdated({
+        instanceId: ProviderInstanceId.make("codex_work"),
+        notification: {
+          rateLimits: {
+            limitId: "codex",
+            primary: {
+              usedPercent: 31,
+              windowDurationMins: 300,
+              resetsAt: 1_786_579_200,
+            },
+            secondary: {
+              usedPercent: 47,
+              windowDurationMins: 10_080,
+              resetsAt: 1_787_184_000,
+            },
+            planType: "pro",
+          },
+        },
+        ingest: (snapshot) =>
+          Effect.sync(() => {
+            received = snapshot;
+            return {
+              ...snapshot,
+              source: "test",
+              updatedAt: "2026-08-12T00:00:00.000Z",
+            };
+          }),
+      });
+
+      assert.deepInclude(received, {
+        instanceId: ProviderInstanceId.make("codex_work"),
+        provider: "codex",
+        limits: [
+          {
+            window: "5h",
+            windowKey: "session",
+            usedPercent: 31,
+            windowDurationMins: 300,
+            resetsAt: "2026-08-13T00:00:00.000Z",
+          },
+          {
+            window: "Weekly",
+            windowKey: "weekly",
+            usedPercent: 47,
+            windowDurationMins: 10_080,
+            resetsAt: "2026-08-20T00:00:00.000Z",
+          },
+        ],
+      });
+    }),
+  );
 });

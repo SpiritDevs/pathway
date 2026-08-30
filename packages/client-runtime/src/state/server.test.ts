@@ -41,6 +41,7 @@ import {
   serverUpdateStateForProgressEvent,
   serverUpdateStateForServerVersion,
   validateServerUpdateReadyEvent,
+  withProviderUsageLegacyFallback,
 } from "./server.ts";
 
 const CONFIG = {
@@ -123,6 +124,25 @@ describe("update restart reconnect nudges", () => {
 
       yield* Fiber.join(fiber);
     }).pipe(Effect.provide(TestClock.layer())),
+  );
+});
+
+describe("provider usage compatibility", () => {
+  it.effect("falls back only when an older server rejects the subscription RPC tag", () =>
+    Effect.gen(function* () {
+      const fallback = Stream.make("legacy snapshot");
+      const values = yield* withProviderUsageLegacyFallback(
+        Stream.die(`Unknown request tag: ${WS_METHODS.serverSubscribeProviderUsage}`),
+        fallback,
+      ).pipe(Stream.runCollect);
+      expect(values).toEqual(["legacy snapshot"]);
+
+      const unrelatedFailure = yield* withProviderUsageLegacyFallback(
+        Stream.die("provider usage decoder failed"),
+        fallback,
+      ).pipe(Stream.runCollect, Effect.exit);
+      expect(Exit.isFailure(unrelatedFailure)).toBe(true);
+    }),
   );
 });
 

@@ -27,6 +27,7 @@ import type {
   ProviderUserInputAnswers,
   ProviderApprovalDecision,
   ProviderRequestKind,
+  ServerProviderUsageSnapshot,
   ProviderTurnId,
   ProviderInstanceId,
   RuntimeMode,
@@ -67,6 +68,11 @@ import {
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
+import {
+  ingestPushedSnapshot,
+  mapCodexRateLimitsUpdated,
+  type PushedProviderUsageSnapshot,
+} from "../../providerUsage/ProviderUsageService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   ProviderAdapterDriverCreateError,
@@ -1470,6 +1476,9 @@ export interface CodexAdapterV2Options {
   readonly fileSystem: FileSystem.FileSystem;
   readonly idAllocator: IdAllocatorV2Shape;
   readonly serverConfig: ServerConfig["Service"];
+  readonly ingestProviderUsage?: (
+    snapshot: PushedProviderUsageSnapshot,
+  ) => Effect.Effect<ServerProviderUsageSnapshot>;
   /**
    * Sink for post-settle background command completions so the orchestrator
    * can start a continuation run. Optional: adapters that omit it keep
@@ -1479,6 +1488,23 @@ export interface CodexAdapterV2Options {
     readonly offer: (request: ProviderContinuationRequest) => Effect.Effect<void>;
   };
 }
+
+export const ingestCodexRateLimitsUpdated = Effect.fn("CodexAdapterV2.ingestRateLimitsUpdated")(
+  function* (input: {
+    readonly instanceId: ProviderInstanceId;
+    readonly notification: CodexSchema.V2AccountRateLimitsUpdatedNotification;
+    readonly ingest?: (
+      snapshot: PushedProviderUsageSnapshot,
+    ) => Effect.Effect<ServerProviderUsageSnapshot>;
+  }) {
+    return yield* (input.ingest ?? ingestPushedSnapshot)(
+      mapCodexRateLimitsUpdated({
+        instanceId: input.instanceId,
+        rateLimits: input.notification.rateLimits,
+      }),
+    );
+  },
+);
 
 export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): ProviderAdapterV2Shape {
   const { clientFactory, fileSystem, idAllocator, serverConfig } = adapterOptions;
@@ -3383,6 +3409,16 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               turnItem: artifacts.turnItem,
             });
           }).pipe(Effect.orDie),
+        );
+
+        yield* client.handleServerNotification("account/rateLimits/updated", (notification) =>
+          ingestCodexRateLimitsUpdated({
+            instanceId: adapterOptions.instanceId,
+            notification,
+            ...(adapterOptions.ingestProviderUsage === undefined
+              ? {}
+              : { ingest: adapterOptions.ingestProviderUsage }),
+          }).pipe(Effect.asVoid),
         );
 
         yield* client.handleServerNotification("turn/started", (payload) =>

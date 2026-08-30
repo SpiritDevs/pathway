@@ -19,4 +19,8 @@ describe("WebSocket RPC contracts", () => {
       ]),
     );
   });
+
+  it("exposes the provider usage subscription", () => {
+    expect([...WsRpcGroup.requests.keys()]).toContain(WS_METHODS.serverSubscribeProviderUsage);
+  });
 });

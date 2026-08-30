@@ -82,18 +82,21 @@ export function UsageLimitRecoveryActions(props: {
       : props.providerStatuses.find((entry) => entry.instanceId === run.providerInstanceId);
   const usageTarget = useMemo(() => {
     if (!provider || !USAGE_PROVIDERS.has(provider.driver)) return null;
-    return serverEnvironment.providerUsage({
+    return serverEnvironment.providerUsageLive({
       environmentId: props.environmentId,
-      input: {
-        instanceId: provider.instanceId,
-        provider: provider.driver as "codex" | "claudeAgent" | "cursor",
-      },
+      input: {},
     });
   }, [props.environmentId, provider]);
   const usage = useEnvironmentQuery(usageTarget);
+  const usageSnapshot = usage.data?.find(
+    (snapshot) =>
+      provider !== undefined &&
+      snapshot.instanceId === provider.instanceId &&
+      snapshot.provider === provider.driver,
+  );
   const resetAt = resolveUsageLimitResetAt({
     failureMessage: props.item.failure.message,
-    snapshot: usage.data,
+    snapshot: usageSnapshot ?? null,
     nowMs: Date.now(),
   });
 

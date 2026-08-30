@@ -4,6 +4,8 @@ import {
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
   type ServerLifecycleStreamReadyEvent,
+  type ProviderUsageDriver,
+  type ServerProviderUsageSnapshot,
   type ServerSelfUpdateProgressEvent,
   type ServerSelfUpdateResult,
   WS_METHODS,
@@ -16,6 +18,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -23,6 +26,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import {
   createAtomCommandScheduler,
+  createEnvironmentSubscriptionAtomFamily,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
@@ -219,6 +223,69 @@ function isRpcSocketError(error: unknown): boolean {
     default:
       return false;
   }
+}
+
+function asProviderUsageDriver(driver: string): ProviderUsageDriver | null {
+  if (driver === "codex" || driver === "claudeAgent" || driver === "cursor") return driver;
+  return null;
+}
+
+function defectMessage(defect: unknown): string | null {
+  if (typeof defect === "string") return defect;
+  return defect instanceof Error ? defect.message : null;
+}
+
+function isUnknownProviderUsageSubscription(cause: Cause.Cause<unknown>): boolean {
+  return cause.reasons.some(
+    (reason) =>
+      Cause.isDieReason(reason) &&
+      defectMessage(reason.defect) ===
+        `Unknown request tag: ${WS_METHODS.serverSubscribeProviderUsage}`,
+  );
+}
+
+export function withProviderUsageLegacyFallback<A, E, R, E2, R2>(
+  live: Stream.Stream<A, E, R>,
+  fallback: Stream.Stream<A, E2, R2>,
+): Stream.Stream<A, E | E2, R | R2> {
+  const widenedLive = live.pipe(Stream.mapError((error): E | E2 => error));
+  const widenedFallback = fallback.pipe(Stream.mapError((error): E | E2 => error));
+  return widenedLive.pipe(
+    Stream.catchCause(
+      (cause): Stream.Stream<A, E | E2, R2> =>
+        isUnknownProviderUsageSubscription(cause) ? widenedFallback : Stream.failCause(cause),
+    ),
+  );
+}
+
+const loadLegacyProviderUsageList = Effect.fn("ServerState.loadLegacyProviderUsageList")(
+  function* () {
+    const config = yield* request(WS_METHODS.serverGetConfig, {});
+    const snapshots = yield* Effect.forEach(
+      config.providers,
+      (provider) => {
+        const usageDriver = asProviderUsageDriver(provider.driver);
+        return provider.enabled && usageDriver !== null
+          ? request(WS_METHODS.serverGetProviderUsage, {
+              instanceId: provider.instanceId,
+              provider: usageDriver,
+            }).pipe(Effect.map((snapshot) => [snapshot]))
+          : Effect.succeed([]);
+      },
+      { concurrency: "unbounded" },
+    );
+    return snapshots.flat();
+  },
+);
+
+function providerUsageStream() {
+  const fallback = Stream.fromEffect(loadLegacyProviderUsageList()).pipe(
+    Stream.repeat(Schedule.spaced(Duration.minutes(1))),
+  );
+  return withProviderUsageLegacyFallback(
+    subscribe(WS_METHODS.serverSubscribeProviderUsage, {}),
+    fallback,
+  );
 }
 
 export function isLegacyUpdateHandoffLoss(cause: Cause.Cause<unknown>): boolean {
@@ -723,6 +790,16 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:provider-usage",
       tag: WS_METHODS.serverGetProviderUsage,
       staleTimeMs: 60_000,
+    }),
+    providerUsageLive: createEnvironmentSubscriptionAtomFamily<
+      R,
+      E,
+      Record<string, never>,
+      ReadonlyArray<ServerProviderUsageSnapshot>,
+      unknown
+    >(runtime, {
+      label: "environment-data:server:provider-usage:live",
+      subscribe: providerUsageStream,
     }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {

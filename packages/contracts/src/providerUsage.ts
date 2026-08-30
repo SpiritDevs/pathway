@@ -9,6 +9,8 @@ export type ProviderUsageDriver = typeof ProviderUsageDriver.Type;
 
 export const ServerProviderUsageLimit = Schema.Struct({
   window: TrimmedNonEmptyString,
+  windowKey: Schema.optional(Schema.Literals(["session", "weekly", "monthly", "custom"])),
+  scope: Schema.optional(TrimmedNonEmptyString),
   usedPercent: Schema.optional(Schema.Number),
   resetsAt: Schema.optional(IsoDateTime),
   windowDurationMins: Schema.optional(Schema.Number),
@@ -29,6 +31,7 @@ export const ServerProviderUsageSnapshot = Schema.Struct({
   instanceId: ProviderInstanceId,
   provider: ProviderUsageDriver,
   updatedAt: IsoDateTime,
+  fetchedAt: Schema.optional(IsoDateTime),
   limits: Schema.Array(ServerProviderUsageLimit),
   usageLines: Schema.Array(ServerProviderUsageLine),
   source: TrimmedNonEmptyString,
