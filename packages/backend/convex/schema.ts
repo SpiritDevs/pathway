@@ -457,6 +457,7 @@ export default defineSchema({
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_owner", ["companyId", "ownerMembershipId"])
     .index("by_company_and_account", ["companyId", "accountId"])
+    .index("by_company_account_and_deleted", ["companyId", "accountId", "deletedAt"])
     .index("by_company_and_google_calendar", ["companyId", "googleCalendarId"]),
 
   calendarEvent: defineTable({
@@ -478,6 +479,13 @@ export default defineSchema({
   })
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_calendar", ["companyId", "calendarId"])
+    .index("by_company_calendar_and_deleted", ["companyId", "calendarId", "deletedAt"])
+    .index("by_company_calendar_deleted_and_visibility", [
+      "companyId",
+      "calendarId",
+      "deletedAt",
+      "visibility",
+    ])
     .index("by_company_and_google_event", ["companyId", "googleEventId"]),
 
   /** Explicit read edge for one named calendar and one grantee membership. */
@@ -511,6 +519,7 @@ export default defineSchema({
   })
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_issue", ["companyId", "issueId"])
+    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
     .index("by_company_and_google_event", ["companyId", "googleEventId"]),
 
   companyInvitations: defineTable({

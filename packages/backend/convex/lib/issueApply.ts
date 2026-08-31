@@ -1410,12 +1410,12 @@ function tooManyDependents(issue: Doc<"issues">): DomainOutcome {
 /**
  * Everything hanging off an issue, republished under the union of the audiences its move spans.
  *
- * Comments, todos, attachments, relations, and thread links carry no team scope of their own: they
- * inherit the parent issue's, both in the feed and in `bootstrap`. So moving the parent alone moves
- * *nothing* for a replica that already holds them or is about to need them — the teams gaining the
- * issue never hear the children exist, and the teams losing it keep theirs forever. Re-emitting each
- * child as an upsert at the union audience is what makes the gaining replicas acquire them and lets
- * the losing ones drop them alongside the parent.
+ * Comments, todos, attachments, relations, thread links, and calendar-event links carry no team
+ * scope of their own: they inherit the parent issue's, both in the feed and in `bootstrap`. So moving
+ * the parent alone moves *nothing* for a replica that already holds them or is about to need them —
+ * the teams gaining the issue never hear the children exist, and the teams losing it keep theirs
+ * forever. Re-emitting each child as an upsert at the union audience is what makes the gaining
+ * replicas acquire them and lets the losing ones drop them alongside the parent.
  *
  * Audit history is deliberately not republished: it is append-only and unbounded, the one thing that
  * could not fit a bounded migration, and a replica that newly gains an issue seeds its history on
@@ -1490,6 +1490,25 @@ async function issueScopeMigrationChanges(
         audience,
         row._id,
         await encodeIssueThreadLink(ctx, company, row),
+      ),
+    );
+  }
+  if (room() <= 0) return { ok: false, outcome: tooManyDependents(issue) };
+
+  const calendarEventLinks = await ctx.db
+    .query("calendarEventLink")
+    .withIndex("by_company_issue_and_deleted", (q) =>
+      q.eq("companyId", company._id).eq("issueId", issue.id).eq("deletedAt", null),
+    )
+    .take(room());
+  for (const row of calendarEventLinks) {
+    changes.push(
+      upsert(
+        "calendarEventLink",
+        row.id,
+        audience,
+        row._id,
+        await encodeCalendarEventLink(ctx, row),
       ),
     );
   }

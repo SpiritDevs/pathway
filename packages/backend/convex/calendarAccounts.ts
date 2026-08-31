@@ -9,6 +9,10 @@ import { backendError, notImplemented } from "./lib/errors.ts";
 import { actorRecord, requireCompanyActor } from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
 
+/** Keeps account disconnect atomic and below Convex's single-transaction read/write limits. */
+const ACCOUNT_DISCONNECT_MAX_CALENDARS = 50;
+const ACCOUNT_DISCONNECT_MAX_DEPENDENT_ROWS = 500;
+
 /**
  * Pins the future mirror API boundary without pretending OAuth or polling exists. When implemented,
  * mirrored calendars created here must use `sharing: "private"` by default.
@@ -54,10 +58,47 @@ export const disconnect = mutation({
 
     const calendars = await ctx.db
       .query("calendar")
-      .withIndex("by_company_and_account", (q) =>
-        q.eq("companyId", actor.company._id).eq("accountId", account._id),
+      .withIndex("by_company_account_and_deleted", (q) =>
+        q.eq("companyId", actor.company._id).eq("accountId", account._id).eq("deletedAt", null),
       )
-      .collect();
+      .take(ACCOUNT_DISCONNECT_MAX_CALENDARS + 1);
+    if (calendars.length > ACCOUNT_DISCONNECT_MAX_CALENDARS) {
+      throw backendError(
+        "invalid-arguments",
+        `This account has more than ${ACCOUNT_DISCONNECT_MAX_CALENDARS} live calendars and cannot be disconnected in one transaction.`,
+      );
+    }
+    let dependentRoom = ACCOUNT_DISCONNECT_MAX_DEPENDENT_ROWS - calendars.length;
+    const cascades = [];
+    for (const calendar of calendars) {
+      const grants = await ctx.db
+        .query("calendarGrant")
+        .withIndex("by_company_and_calendar", (q) =>
+          q.eq("companyId", actor.company._id).eq("calendarId", calendar.id),
+        )
+        .take(dependentRoom + 1);
+      if (grants.length > dependentRoom) {
+        throw backendError(
+          "invalid-arguments",
+          `This account has more than ${ACCOUNT_DISCONNECT_MAX_DEPENDENT_ROWS} dependent records and cannot be disconnected in one transaction.`,
+        );
+      }
+      dependentRoom -= grants.length;
+      const events = await ctx.db
+        .query("calendarEvent")
+        .withIndex("by_company_calendar_and_deleted", (q) =>
+          q.eq("companyId", actor.company._id).eq("calendarId", calendar.id).eq("deletedAt", null),
+        )
+        .take(dependentRoom + 1);
+      if (events.length > dependentRoom) {
+        throw backendError(
+          "invalid-arguments",
+          `This account has more than ${ACCOUNT_DISCONNECT_MAX_DEPENDENT_ROWS} dependent records and cannot be disconnected in one transaction.`,
+        );
+      }
+      dependentRoom -= events.length;
+      cascades.push({ calendar, grants, events });
+    }
     const now = Date.now();
     const changes: CompanyChange[] = [
       {
@@ -70,23 +111,9 @@ export const disconnect = mutation({
       },
     ];
 
-    for (const calendar of calendars) {
-      if (calendar.deletedAt !== null) continue;
-      const grants = await ctx.db
-        .query("calendarGrant")
-        .withIndex("by_company_and_calendar", (q) =>
-          q.eq("companyId", actor.company._id).eq("calendarId", calendar.id),
-        )
-        .collect();
-      const events = await ctx.db
-        .query("calendarEvent")
-        .withIndex("by_company_and_calendar", (q) =>
-          q.eq("companyId", actor.company._id).eq("calendarId", calendar.id),
-        )
-        .collect();
+    for (const { calendar, grants, events } of cascades) {
       for (const event of events) {
-        if (event.deletedAt === null)
-          await ctx.db.patch(event._id, { deletedAt: now, updatedAt: now });
+        await ctx.db.patch(event._id, { deletedAt: now, updatedAt: now });
       }
       for (const grant of grants) await ctx.db.delete(grant._id);
       await ctx.db.patch(calendar._id, { deletedAt: now, updatedAt: now });

@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off -- Test rows mirror Convex documents.
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { api } from "../convex/_generated/api.js";
 import type { QueryCtx } from "../convex/_generated/server.js";
@@ -87,6 +87,7 @@ async function seed(t: Harness) {
     const carol = await member("carol");
     const dave = await member("dave");
     const blind = await member("blind");
+    const manager = await member("manager");
     await ctx.db.insert("companyOwners", {
       companyId,
       membershipId: alice,
@@ -117,6 +118,7 @@ async function seed(t: Harness) {
     const reader = await role("role-reader", ["calendar.read"]);
     const readerAll = await role("role-reader-all", ["calendar.read", "calendar.readAll"]);
     const noCalendar = await role("role-blind", []);
+    const companyManager = await role("role-company-manager", ["company.manage"]);
     const assignment = async (
       id: string,
       membershipId: typeof bob,
@@ -137,8 +139,9 @@ async function seed(t: Harness) {
     await assignment("assignment-carol", carol, readerAll, "company", null);
     await assignment("assignment-dave", dave, readerAll, "team", TEAM);
     await assignment("assignment-blind", blind, noCalendar, "company", null);
+    await assignment("assignment-manager", manager, companyManager, "company", null);
 
-    return { companyId, alice, bob, carol, dave, blind, teamId };
+    return { companyId, alice, bob, carol, dave, blind, manager, teamId };
   });
 }
 
@@ -200,6 +203,7 @@ async function buildCalendarFixture(t: Harness) {
     allDay: true,
     visibility: "private",
   });
+  await finishScheduled(t);
   return ids;
 }
 
@@ -211,6 +215,15 @@ async function visibleIds(t: Harness, subject: string) {
   });
   if (result._tag !== "Changes") throw new Error("Expected a live change page.");
   return new Set(result.changes.map((change) => change.entityId));
+}
+
+async function finishScheduled(t: Harness) {
+  vi.useFakeTimers();
+  try {
+    await t.finishAllScheduledFunctions(() => vi.runAllTimers());
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 describe("calendar change-feed visibility", () => {
@@ -314,6 +327,88 @@ describe("calendar revocation cascades", () => {
     }
   });
 
+  it("republishes non-private events when a revoked grant is restored", async () => {
+    const t = harness();
+    const ids = await buildCalendarFixture(t);
+    await t.run(async (ctx) => {
+      const now = 1_800_100_000_000;
+      for (let index = 0; index < 55; index += 1) {
+        await ctx.db.insert("calendarEvent", {
+          id: `event-restored-${index}`,
+          companyId: ids.companyId,
+          calendarId: PRIVATE_CALENDAR,
+          ownerMembershipId: ids.alice,
+          title: `Restored ${index}`,
+          startAt: now + index * 3_600_000,
+          endAt: now + (index + 1) * 3_600_000,
+          timeZone: "Australia/Sydney",
+          allDay: false,
+          visibility: "default",
+          googleEventId: null,
+          createdAt: now,
+          updatedAt: now,
+          deletedAt: null,
+        });
+      }
+    });
+    const alice = asUser(t, "alice");
+    await alice.mutation(api.calendars.revoke, {
+      companyId: COMPANY,
+      calendarId: PRIVATE_CALENDAR,
+      granteeMembershipId: "membership-bob",
+    });
+    const cursor = (await t.run(companyDoc))?.syncVersion ?? 0;
+
+    await alice.mutation(api.calendars.share, {
+      companyId: COMPANY,
+      id: "grant-bob-restored",
+      calendarId: PRIVATE_CALENDAR,
+      granteeMembershipId: "membership-bob",
+    });
+    await finishScheduled(t);
+
+    const page = await asUser(t, "bob").query(api.sync.listChanges, {
+      companyId: COMPANY,
+      cursor,
+      limit: 100,
+    });
+    expect(page._tag).toBe("Changes");
+    if (page._tag === "Changes") {
+      const rows = page.changes.map((change) => `${change.entityKind}:${change.entityId}`);
+      expect(rows).toContain(`calendar:${PRIVATE_CALENDAR}`);
+      expect(rows).toContain(`calendarEvent:${PUBLIC_EVENT}`);
+      expect(rows).toContain("calendarEvent:event-restored-54");
+      expect(rows).not.toContain(`calendarEvent:${PRIVATE_EVENT}`);
+    }
+  });
+
+  it("republishes non-private events when calendar scope changes", async () => {
+    const t = harness();
+    await buildCalendarFixture(t);
+    const cursor = (await t.run(companyDoc))?.syncVersion ?? 0;
+
+    await asUser(t, "alice").mutation(api.calendars.update, {
+      companyId: COMPANY,
+      calendarId: PRIVATE_CALENDAR,
+      sharing: "team",
+      teamId: TEAM,
+    });
+    await finishScheduled(t);
+
+    const page = await asUser(t, "dave").query(api.sync.listChanges, {
+      companyId: COMPANY,
+      cursor,
+      limit: 100,
+    });
+    expect(page._tag).toBe("Changes");
+    if (page._tag === "Changes") {
+      const rows = page.changes.map((change) => `${change.entityKind}:${change.entityId}`);
+      expect(rows).toContain(`calendar:${PRIVATE_CALENDAR}`);
+      expect(rows).toContain(`calendarEvent:${PUBLIC_EVENT}`);
+      expect(rows).not.toContain(`calendarEvent:${PRIVATE_EVENT}`);
+    }
+  });
+
   it("disconnects an account through calendars, events, and grants while preserving event links", async () => {
     const t = harness();
     const ids = await seed(t);
@@ -403,6 +498,240 @@ describe("calendar revocation cascades", () => {
       "calendarAccount",
       "calendar",
     ]);
+  });
+
+  it("refuses oversized account disconnect before writing any part of the cascade", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    await t.run(async (ctx) => {
+      const now = 1_700_000_000_000;
+      const accountId = await ctx.db.insert("calendarAccount", {
+        id: "account-google-large",
+        companyId: ids.companyId,
+        ownerMembershipId: ids.alice,
+        provider: "google",
+        providerAccountId: "google-user-large",
+        email: "alice@example.test",
+        credentialCiphertext: "encrypted:test-credential",
+        createdAt: now,
+        updatedAt: now,
+        disconnectedAt: null,
+      });
+      await ctx.db.insert("calendar", {
+        id: "calendar-google-large",
+        companyId: ids.companyId,
+        ownerMembershipId: ids.alice,
+        name: "Large Google calendar",
+        sharing: "private",
+        teamId: null,
+        kind: "google",
+        accountId,
+        googleCalendarId: "large",
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      });
+      for (let index = 0; index < 500; index += 1) {
+        await ctx.db.insert("calendarEvent", {
+          id: `event-google-large-${index}`,
+          companyId: ids.companyId,
+          calendarId: "calendar-google-large",
+          ownerMembershipId: ids.alice,
+          title: `Event ${index}`,
+          startAt: now + index * 3_600_000,
+          endAt: now + (index + 1) * 3_600_000,
+          timeZone: "Australia/Sydney",
+          allDay: false,
+          visibility: "default",
+          googleEventId: `google-large-${index}`,
+          createdAt: now,
+          updatedAt: now,
+          deletedAt: null,
+        });
+      }
+    });
+
+    await expect(
+      asUser(t, "alice").mutation(api.calendarAccounts.disconnect, {
+        companyId: COMPANY,
+        accountId: "account-google-large",
+      }),
+    ).rejects.toThrow("more than 500 dependent records");
+
+    const state = await t.run(async (ctx) => ({
+      account: await ctx.db
+        .query("calendarAccount")
+        .withIndex("by_company_and_domain_id", (q) =>
+          q.eq("companyId", ids.companyId).eq("id", "account-google-large"),
+        )
+        .unique(),
+      calendar: await ctx.db
+        .query("calendar")
+        .withIndex("by_company_and_domain_id", (q) =>
+          q.eq("companyId", ids.companyId).eq("id", "calendar-google-large"),
+        )
+        .unique(),
+      liveEvents: await ctx.db
+        .query("calendarEvent")
+        .withIndex("by_company_calendar_and_deleted", (q) =>
+          q
+            .eq("companyId", ids.companyId)
+            .eq("calendarId", "calendar-google-large")
+            .eq("deletedAt", null),
+        )
+        .collect(),
+      changes: await ctx.db.query("syncChanges").collect(),
+    }));
+    expect(state.account?.disconnectedAt).toBeNull();
+    expect(state.calendar?.deletedAt).toBeNull();
+    expect(state.liveEvents).toHaveLength(500);
+    expect(state.changes).toEqual([]);
+  });
+});
+
+describe("calendar administration", () => {
+  it("lets company managers enumerate calendars without widening event visibility", async () => {
+    const t = harness();
+    await buildCalendarFixture(t);
+
+    const groups = await asUser(t, "manager").query(api.calendars.listGroupedByOwner, {
+      companyId: COMPANY,
+    });
+    expect(
+      groups.flatMap((group) => group.calendars.map((calendar) => (calendar as { id: string }).id)),
+    ).toEqual(expect.arrayContaining([PRIVATE_CALENDAR, COMPANY_CALENDAR, TEAM_CALENDAR]));
+
+    const feed = await visibleIds(t, "manager");
+    expect(feed.has(PRIVATE_CALENDAR)).toBe(false);
+    expect(feed.has(PUBLIC_EVENT)).toBe(false);
+  });
+
+  it("requires calendar.read for every owner calendar and event write", async () => {
+    const t = harness();
+    await seed(t);
+    const bob = asUser(t, "bob");
+    await bob.mutation(api.calendars.create, {
+      companyId: COMPANY,
+      id: "calendar-bob",
+      name: "Bob calendar",
+      sharing: "private",
+      teamId: null,
+    });
+    await bob.mutation(api.calendars.createEvent, {
+      companyId: COMPANY,
+      id: "event-bob",
+      calendarId: "calendar-bob",
+      title: "Before revocation",
+      startAt: 1_800_000_000_000,
+      endAt: 1_800_003_600_000,
+      timeZone: "Australia/Sydney",
+      allDay: false,
+    });
+    await t.run(async (ctx) => {
+      const company = await companyDoc(ctx);
+      if (company === null) throw new Error("seed the company first");
+      const assignment = await ctx.db
+        .query("roleAssignments")
+        .withIndex("by_company_and_domain_id", (q) =>
+          q.eq("companyId", company._id).eq("id", "assignment-bob"),
+        )
+        .unique();
+      if (assignment === null) throw new Error("seed Bob's assignment first");
+      await ctx.db.delete(assignment._id);
+    });
+
+    await expect(
+      bob.mutation(api.calendars.update, {
+        companyId: COMPANY,
+        calendarId: "calendar-bob",
+        name: "Denied",
+      }),
+    ).rejects.toThrow("calendar.read");
+    await expect(
+      bob.mutation(api.calendars.remove, { companyId: COMPANY, calendarId: "calendar-bob" }),
+    ).rejects.toThrow("calendar.read");
+    await expect(
+      bob.mutation(api.calendars.createEvent, {
+        companyId: COMPANY,
+        id: "event-bob-denied",
+        calendarId: "calendar-bob",
+        title: "Denied",
+        startAt: 1_800_010_000_000,
+        endAt: 1_800_013_600_000,
+        timeZone: "Australia/Sydney",
+        allDay: false,
+      }),
+    ).rejects.toThrow("calendar.read");
+    await expect(
+      bob.mutation(api.calendars.updateEvent, {
+        companyId: COMPANY,
+        eventId: "event-bob",
+        title: "Denied",
+      }),
+    ).rejects.toThrow("calendar.read");
+    await expect(
+      bob.mutation(api.calendars.deleteEvent, { companyId: COMPANY, eventId: "event-bob" }),
+    ).rejects.toThrow("calendar.read");
+  });
+
+  it("refuses oversized calendar deletion before writing any part of the cascade", async () => {
+    const t = harness();
+    const ids = await seed(t);
+    await asUser(t, "alice").mutation(api.calendars.create, {
+      companyId: COMPANY,
+      id: "calendar-large",
+      name: "Large",
+      sharing: "private",
+      teamId: null,
+    });
+    await t.run(async (ctx) => {
+      const now = 1_700_000_000_000;
+      for (let index = 0; index <= 500; index += 1) {
+        await ctx.db.insert("calendarEvent", {
+          id: `event-large-${index}`,
+          companyId: ids.companyId,
+          calendarId: "calendar-large",
+          ownerMembershipId: ids.alice,
+          title: `Event ${index}`,
+          startAt: now + index * 3_600_000,
+          endAt: now + (index + 1) * 3_600_000,
+          timeZone: "Australia/Sydney",
+          allDay: false,
+          visibility: "default",
+          googleEventId: null,
+          createdAt: now,
+          updatedAt: now,
+          deletedAt: null,
+        });
+      }
+    });
+    const before = (await t.run(companyDoc))?.syncVersion;
+
+    await expect(
+      asUser(t, "alice").mutation(api.calendars.remove, {
+        companyId: COMPANY,
+        calendarId: "calendar-large",
+      }),
+    ).rejects.toThrow("more than 500 dependent records");
+
+    const state = await t.run(async (ctx) => ({
+      calendar: await ctx.db
+        .query("calendar")
+        .withIndex("by_company_and_domain_id", (q) =>
+          q.eq("companyId", ids.companyId).eq("id", "calendar-large"),
+        )
+        .unique(),
+      liveEvents: await ctx.db
+        .query("calendarEvent")
+        .withIndex("by_company_calendar_and_deleted", (q) =>
+          q.eq("companyId", ids.companyId).eq("calendarId", "calendar-large").eq("deletedAt", null),
+        )
+        .collect(),
+      company: await companyDoc(ctx),
+    }));
+    expect(state.calendar?.deletedAt).toBeNull();
+    expect(state.liveEvents).toHaveLength(501);
+    expect(state.company?.syncVersion).toBe(before);
   });
 });
 

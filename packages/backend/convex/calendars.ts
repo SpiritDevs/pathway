@@ -7,7 +7,8 @@ import {
   hasCompanyPermission,
   hasRecordPermission,
 } from "../src/permissions.ts";
-import { mutation, query } from "./_generated/server.js";
+import { internal } from "./_generated/api.js";
+import { internalMutation, mutation, query } from "./_generated/server.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 import type { QueryCtx } from "./_generated/server.js";
 import {
@@ -28,6 +29,8 @@ import { domainIdArg } from "./lib/validators.ts";
 
 const MAX_NAME_LENGTH = 200;
 const MAX_TITLE_LENGTH = 500;
+const CALENDAR_REMOVE_MAX_DEPENDENT_ROWS = 500;
+const CALENDAR_EVENT_RESEED_PAGE_SIZE = 50;
 const sharingArg = v.union(v.literal("private"), v.literal("team"), v.literal("company"));
 const visibilityArg = v.union(v.literal("default"), v.literal("private"));
 
@@ -100,6 +103,9 @@ function canManageCalendar(actor: CompanyActor, calendar: Doc<"calendar">): bool
 
 function requireOwnedPathwayCalendar(actor: CompanyActor, calendar: Doc<"calendar">): void {
   requireMember(actor);
+  if (!hasAnyScopePermission(actor.permissions, "calendar.read")) {
+    throw backendError("permission-denied", "Missing permission calendar.read.");
+  }
   if (calendar.deletedAt !== null) throw backendError("entity-not-found", "Calendar not found.");
   if (calendar.kind !== "pathway") {
     throw backendError("permission-denied", "Mirrored calendars are read-only.");
@@ -240,8 +246,13 @@ export const listGroupedByOwner = query({
       { ownerMembershipId: string; ownerName: string; calendars: unknown[] }
     >();
     for (const calendar of calendars) {
-      if (calendar.deletedAt !== null || !canReadCalendar(actor, calendar, grantedCalendarIds))
+      if (
+        calendar.deletedAt !== null ||
+        (!canManageCalendar(actor, calendar) &&
+          !canReadCalendar(actor, calendar, grantedCalendarIds))
+      ) {
         continue;
+      }
       const owner = await ctx.db.get(calendar.ownerMembershipId);
       if (owner === null) continue;
       let group = groups.get(owner._id);
@@ -385,6 +396,12 @@ export const update = mutation({
       actor: actorRecord(actor),
       changes,
     });
+    if (scopeChanged) {
+      await ctx.scheduler.runAfter(0, internal.calendars.republishSharedEvents, {
+        calendarDocId: updated._id,
+        cursor: null,
+      });
+    }
     return null;
   },
 });
@@ -397,17 +414,34 @@ export const remove = mutation({
     const calendar = await byCalendarId(ctx, actor.company._id, args.calendarId);
     if (calendar === null || calendar.deletedAt !== null) return null;
     requireOwnedPathwayCalendar(actor, calendar);
-    const grants = await grantsForCalendar(ctx, calendar);
+    const grants = await ctx.db
+      .query("calendarGrant")
+      .withIndex("by_company_and_calendar", (q) =>
+        q.eq("companyId", calendar.companyId).eq("calendarId", calendar.id),
+      )
+      .take(CALENDAR_REMOVE_MAX_DEPENDENT_ROWS + 1);
+    const eventRoom = CALENDAR_REMOVE_MAX_DEPENDENT_ROWS - grants.length;
+    if (eventRoom < 0) {
+      throw backendError(
+        "invalid-arguments",
+        `This calendar has more than ${CALENDAR_REMOVE_MAX_DEPENDENT_ROWS} dependent records; revoke grants or delete events before deleting it.`,
+      );
+    }
     const now = Date.now();
     const events = await ctx.db
       .query("calendarEvent")
-      .withIndex("by_company_and_calendar", (q) =>
-        q.eq("companyId", actor.company._id).eq("calendarId", calendar.id),
+      .withIndex("by_company_calendar_and_deleted", (q) =>
+        q.eq("companyId", actor.company._id).eq("calendarId", calendar.id).eq("deletedAt", null),
       )
-      .collect();
+      .take(eventRoom + 1);
+    if (events.length > eventRoom) {
+      throw backendError(
+        "invalid-arguments",
+        `This calendar has more than ${CALENDAR_REMOVE_MAX_DEPENDENT_ROWS} dependent records; revoke grants or delete events before deleting it.`,
+      );
+    }
     for (const event of events) {
-      if (event.deletedAt === null)
-        await ctx.db.patch(event._id, { deletedAt: now, updatedAt: now });
+      await ctx.db.patch(event._id, { deletedAt: now, updatedAt: now });
     }
     for (const grant of grants) await ctx.db.delete(grant._id);
     await ctx.db.patch(calendar._id, { deletedAt: now, updatedAt: now });
@@ -486,6 +520,52 @@ export const share = mutation({
       actor: actorRecord(actor),
       changes: [calendarUpsert(calendar, await encodeCalendar(ctx, calendar))],
     });
+    await ctx.scheduler.runAfter(0, internal.calendars.republishSharedEvents, {
+      calendarDocId: calendar._id,
+      cursor: null,
+    });
+    return null;
+  },
+});
+
+/** Republishes non-private events after a grant or scope change, one bounded feed page at a time. */
+export const republishSharedEvents = internalMutation({
+  args: {
+    calendarDocId: v.id("calendar"),
+    cursor: v.union(v.string(), v.null()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const calendar = await ctx.db.get(args.calendarDocId);
+    if (calendar === null || calendar.deletedAt !== null) return null;
+    const page = await ctx.db
+      .query("calendarEvent")
+      .withIndex("by_company_calendar_deleted_and_visibility", (q) =>
+        q
+          .eq("companyId", calendar.companyId)
+          .eq("calendarId", calendar.id)
+          .eq("deletedAt", null)
+          .eq("visibility", "default"),
+      )
+      .paginate({ cursor: args.cursor, numItems: CALENDAR_EVENT_RESEED_PAGE_SIZE });
+    if (page.page.length > 0) {
+      const changes = await Promise.all(
+        page.page.map(async (event) =>
+          eventChange(calendar, event, "upsert", await encodeCalendarEvent(ctx, event)),
+        ),
+      );
+      await appendCompanyChanges(ctx, {
+        companyId: calendar.companyId,
+        actor: { kind: "system", source: "automation" },
+        changes,
+      });
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.calendars.republishSharedEvents, {
+        ...args,
+        cursor: page.continueCursor,
+      });
+    }
     return null;
   },
 });
