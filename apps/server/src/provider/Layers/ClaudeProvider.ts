@@ -2,8 +2,10 @@ import {
   type ClaudeSettings,
   type ModelCapabilities,
   type ModelSelection,
+  type ServerProviderAuth,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
+  type ServerProviderState,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -32,7 +34,10 @@ import {
   buildBooleanOptionDescriptor,
   buildSelectOptionDescriptor,
   buildServerProvider,
+  AUTH_PROBE_TIMEOUT_MS,
+  type CommandResult,
   DEFAULT_TIMEOUT_MS,
+  extractAuthBoolean,
   isCommandMissingCause,
   parseGenericCliVersion,
   providerModelsFromSettings,
@@ -576,6 +581,78 @@ function apiProviderAuthMetadata(
   return apiProvider === "bedrock" ? { type: "bedrock", label: "Amazon Bedrock" } : undefined;
 }
 
+export function parseClaudeAuthStatusFromOutput(result: CommandResult): {
+  readonly status: Exclude<ServerProviderState, "disabled">;
+  readonly auth: Pick<ServerProviderAuth, "status">;
+  readonly message?: string;
+} {
+  const output = `${result.stdout}\n${result.stderr}`;
+  const normalizedOutput = output.toLowerCase();
+
+  if (
+    normalizedOutput.includes("unknown command") ||
+    normalizedOutput.includes("unrecognized command") ||
+    normalizedOutput.includes("unexpected argument")
+  ) {
+    return {
+      status: "warning",
+      auth: { status: "unknown" },
+      message:
+        "Claude authentication status is unavailable in this version of Claude Code. Upgrade Claude Code and try again.",
+    };
+  }
+
+  if (
+    normalizedOutput.includes("not logged in") ||
+    normalizedOutput.includes("login required") ||
+    normalizedOutput.includes("authentication required") ||
+    normalizedOutput.includes("oauth session expired") ||
+    normalizedOutput.includes("failed to authenticate") ||
+    normalizedOutput.includes("run `claude login`") ||
+    normalizedOutput.includes("run claude login")
+  ) {
+    return {
+      status: "error",
+      auth: { status: "unauthenticated" },
+      message: "Claude is not authenticated. Run `claude auth login` and try again.",
+    };
+  }
+
+  const trimmed = result.stdout.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      const authenticated = extractAuthBoolean(JSON.parse(trimmed));
+      if (authenticated === true) {
+        return { status: "ready", auth: { status: "authenticated" } };
+      }
+      if (authenticated === false) {
+        return {
+          status: "error",
+          auth: { status: "unauthenticated" },
+          message: "Claude is not authenticated. Run `claude auth login` and try again.",
+        };
+      }
+      return {
+        status: "warning",
+        auth: { status: "unknown" },
+        message: "Could not verify Claude authentication status from the Claude Code response.",
+      };
+    } catch {
+      // Older Claude Code versions may report a successful status as plain text.
+    }
+  }
+
+  if (result.code === 0) {
+    return { status: "ready", auth: { status: "authenticated" } };
+  }
+
+  return {
+    status: "warning",
+    auth: { status: "unknown" },
+    message: "Could not verify Claude authentication status.",
+  };
+}
+
 // ── SDK capability probe ────────────────────────────────────────────
 
 // Amazon Bedrock initializes far slower than first-party auth: the SDK boots the
@@ -936,29 +1013,36 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   ];
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);
 
-  if (!capabilities) {
-    return buildServerProvider({
-      presentation: CLAUDE_PRESENTATION,
-      enabled: claudeSettings.enabled,
-      checkedAt,
-      models,
-      slashCommands: dedupedSlashCommands,
-      skills,
-      probe: {
-        installed: true,
-        version: parsedVersion,
-        status: "warning",
-        auth: { status: "unknown" },
-        message: "Could not verify Claude authentication status from initialization result.",
-      },
-    });
-  }
+  const authProbe =
+    capabilities?.apiProvider === "bedrock"
+      ? ({ status: "ready", auth: { status: "authenticated" } } as const)
+      : yield* runClaudeCommand(claudeSettings, ["auth", "status"], resolvedEnvironment).pipe(
+          Effect.timeoutOption(AUTH_PROBE_TIMEOUT_MS),
+          Effect.result,
+          Effect.map((result) => {
+            if (Result.isFailure(result)) {
+              return {
+                status: "warning",
+                auth: { status: "unknown" },
+                message: "Could not verify Claude authentication status.",
+              } as const;
+            }
+            if (Option.isNone(result.success)) {
+              return {
+                status: "warning",
+                auth: { status: "unknown" },
+                message: "Could not verify Claude authentication status. The check timed out.",
+              } as const;
+            }
+            return parseClaudeAuthStatusFromOutput(result.success.value);
+          }),
+        );
 
   const authMetadata =
     claudeAuthMetadata({
-      subscriptionType: capabilities.subscriptionType,
-      authMethod: capabilities.tokenSource,
-    }) ?? apiProviderAuthMetadata(capabilities.apiProvider);
+      subscriptionType: capabilities?.subscriptionType,
+      authMethod: capabilities?.tokenSource,
+    }) ?? apiProviderAuthMetadata(capabilities?.apiProvider);
   return buildServerProvider({
     presentation: CLAUDE_PRESENTATION,
     enabled: claudeSettings.enabled,
@@ -969,13 +1053,19 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     probe: {
       installed: true,
       version: parsedVersion,
-      status: "ready",
+      status: authProbe.status,
       auth: {
-        status: "authenticated",
-        ...(capabilities.email ? { email: capabilities.email } : {}),
-        ...(authMetadata ? authMetadata : {}),
+        ...authProbe.auth,
+        ...(authProbe.auth.status === "authenticated" && capabilities?.email
+          ? { email: capabilities.email }
+          : {}),
+        ...(authProbe.auth.status === "authenticated" && authMetadata ? authMetadata : {}),
       },
-      ...(versionUpgradeMessage ? { message: versionUpgradeMessage } : {}),
+      ...(authProbe.message
+        ? { message: authProbe.message }
+        : versionUpgradeMessage
+          ? { message: versionUpgradeMessage }
+          : {}),
     },
   });
 });

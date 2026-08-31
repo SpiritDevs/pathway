@@ -13,6 +13,7 @@
  * @module provider/Drivers/ClaudeDriver
  */
 import { ClaudeSettings, ProviderDriverKind, type ServerProvider } from "@spiritdevs/contracts";
+import { query as claudeQuery, type Query as ClaudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Crypto from "effect/Crypto";
@@ -33,11 +34,17 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import {
+  buildClaudeCapabilitiesProbeQueryOptions,
   checkClaudeProviderStatus,
   makePendingClaudeProvider,
   probeClaudeCapabilities,
 } from "../Layers/ClaudeProvider.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import {
+  makeProviderAuthentication,
+  ProviderAuthenticationError,
+  type ProviderAuthenticationQuery,
+} from "../ProviderAuthentication.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -56,7 +63,12 @@ import {
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
-import { makeClaudeCapabilitiesCacheKey, makeClaudeContinuationGroupKey } from "./ClaudeHome.ts";
+import { resolveClaudeSdkExecutablePath } from "./ClaudeExecutable.ts";
+import {
+  makeClaudeCapabilitiesCacheKey,
+  makeClaudeContinuationGroupKey,
+  makeClaudeEnvironment,
+} from "./ClaudeHome.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
@@ -103,6 +115,7 @@ const withInstanceIdentity =
   }) =>
   (snapshot: ServerProviderDraft): ServerProvider => ({
     ...snapshot,
+    auth: { ...snapshot.auth, supportsLogin: true },
     instanceId: input.instanceId,
     driver: DRIVER_KIND,
     ...(input.displayName ? { displayName: input.displayName } : {}),
@@ -176,6 +189,96 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       });
       const capabilitiesCacheKey = yield* makeClaudeCapabilitiesCacheKey(effectiveConfig, cwd);
 
+      const authentication = yield* makeProviderAuthentication(
+        Effect.gen(function* () {
+          const abortController = new AbortController();
+          const claudeEnvironment = yield* makeClaudeEnvironment(effectiveConfig, processEnv);
+          const executablePath = yield* resolveClaudeSdkExecutablePath(
+            effectiveConfig.binaryPath,
+            claudeEnvironment,
+          );
+          const query = claudeQuery({
+            // oxlint-disable-next-line require-yield -- the stream stays open for control requests.
+            prompt: (async function* () {
+              await new Promise<void>((resolve) => {
+                abortController.signal.addEventListener("abort", () => resolve(), { once: true });
+              });
+            })(),
+            options: buildClaudeCapabilitiesProbeQueryOptions({
+              executablePath,
+              abortController,
+              environment: claudeEnvironment,
+              cwd,
+            }),
+          });
+          const authQuery = query as ClaudeQuery & {
+            claudeAuthenticate(loginWithClaudeAi: boolean): Promise<{
+              readonly manualUrl: string;
+              readonly automaticUrl: string;
+            }>;
+            claudeOAuthCallback(authorizationCode: string, state: string): Promise<unknown>;
+            claudeOAuthWaitForCompletion(): Promise<unknown>;
+          };
+
+          yield* Effect.tryPromise({
+            try: () => query.initializationResult(),
+            catch: (cause) =>
+              new ProviderAuthenticationError({
+                reason: "Claude sign-in could not initialize.",
+                cause,
+              }),
+          }).pipe(
+            Effect.tapError(() =>
+              Effect.sync(() => {
+                abortController.abort();
+                query.close();
+              }),
+            ),
+          );
+
+          return {
+            start: async () => {
+              const result = await authQuery.claudeAuthenticate(true);
+              const state = new URL(result.manualUrl).searchParams.get("state") ?? "";
+              return {
+                authorizationUrl: result.manualUrl,
+                state,
+              };
+            },
+            complete: async (authorizationCode, state) => {
+              await authQuery.claudeOAuthCallback(authorizationCode, state);
+              await authQuery.claudeOAuthWaitForCompletion();
+            },
+            close: () => {
+              abortController.abort();
+              query.close();
+            },
+          } satisfies ProviderAuthenticationQuery;
+        }).pipe(
+          Effect.mapError((cause) =>
+            cause instanceof ProviderAuthenticationError
+              ? cause
+              : new ProviderAuthenticationError({
+                  reason: "Claude sign-in could not initialize.",
+                  cause,
+                }),
+          ),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        ),
+        {
+          providerName: "Claude",
+          allowedAuthorizationHosts: new Set(["claude.com"]),
+        },
+      );
+      const authenticationWithCacheRefresh = {
+        ...authentication,
+        complete: (input: Parameters<typeof authentication.complete>[0]) =>
+          authentication
+            .complete(input)
+            .pipe(Effect.andThen(Cache.invalidate(capabilitiesProbeCache, capabilitiesCacheKey))),
+      };
+
       const checkProvider = checkClaudeProviderStatus(
         effectiveConfig,
         () => Cache.get(capabilitiesProbeCache, capabilitiesCacheKey),
@@ -229,6 +332,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         snapshot,
         orchestrationAdapter,
         textGeneration,
+        authentication: authenticationWithCacheRefresh,
       } satisfies ProviderInstance;
     }),
 };

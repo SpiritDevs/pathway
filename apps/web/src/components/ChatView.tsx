@@ -1398,6 +1398,18 @@ function ChatViewContent(props: ChatViewProps) {
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
   });
+  const startProviderAuthentication = useAtomCommand(
+    serverEnvironment.startProviderAuthentication,
+    { reportFailure: false },
+  );
+  const completeProviderAuthentication = useAtomCommand(
+    serverEnvironment.completeProviderAuthentication,
+    { reportFailure: false },
+  );
+  const cancelProviderAuthentication = useAtomCommand(
+    serverEnvironment.cancelProviderAuthentication,
+    { reportFailure: false },
+  );
   const openTerminal = useAtomCommand(terminalEnvironment.open, "terminal open");
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
@@ -3326,6 +3338,53 @@ function ChatViewContent(props: ChatViewProps) {
   )
     ? activeProviderStatus
     : null;
+  const providerAuthentication = useMemo(() => {
+    if (
+      !visibleProviderStatus ||
+      visibleProviderStatus.auth.status !== "unauthenticated" ||
+      visibleProviderStatus.auth.supportsLogin !== true
+    ) {
+      return undefined;
+    }
+    const target = {
+      provider: visibleProviderStatus.driver,
+      instanceId: visibleProviderStatus.instanceId,
+    };
+    return {
+      start: async () => {
+        const result = await startProviderAuthentication({
+          environmentId,
+          input: target,
+        });
+        if (result._tag === "Success") return result.value;
+        throw squashAtomCommandFailure(result);
+      },
+      complete: async (flowId: string, authorizationCode?: string) => {
+        const result = await completeProviderAuthentication({
+          environmentId,
+          input: {
+            ...target,
+            flowId,
+            ...(authorizationCode ? { authorizationCode } : {}),
+          },
+        });
+        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      },
+      cancel: async (flowId: string) => {
+        const result = await cancelProviderAuthentication({
+          environmentId,
+          input: { ...target, flowId },
+        });
+        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      },
+    };
+  }, [
+    cancelProviderAuthentication,
+    completeProviderAuthentication,
+    environmentId,
+    startProviderAuthentication,
+    visibleProviderStatus,
+  ]);
   const hasTimelineTopBanner = Boolean(visibleThreadError) || visibleProviderStatus !== null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
@@ -8467,6 +8526,7 @@ function ChatViewContent(props: ChatViewProps) {
             {/* Provider status overlays the timeline without changing its content height. */}
             <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
               <ProviderStatusBanner
+                authentication={providerAuthentication}
                 status={visibleProviderStatus}
                 onDismiss={() => setDismissedProviderStatusBannerKey(providerStatusBannerKey)}
               />

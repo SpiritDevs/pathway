@@ -27,6 +27,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -38,9 +39,14 @@ import {
   type CodexAdapterV2DriverEnv,
 } from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  makeCodexAuthenticationClient,
+  makeCodexAuthenticationQuery,
+} from "../CodexProviderAuthentication.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { checkCodexProviderStatus, makePendingCodexProvider } from "../Layers/CodexProvider.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { makeProviderAuthentication } from "../ProviderAuthentication.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
@@ -100,6 +106,7 @@ const withInstanceIdentity =
   }) =>
   (snapshot: ServerProviderDraft): ServerProvider => ({
     ...snapshot,
+    auth: { ...snapshot.auth, supportsLogin: true },
     instanceId: input.instanceId,
     driver: DRIVER_KIND,
     ...(input.displayName ? { displayName: input.displayName } : {}),
@@ -118,7 +125,9 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const scope = yield* Scope.Scope;
       const httpClient = yield* HttpClient.HttpClient;
+      const { cwd } = yield* ServerConfig;
       const serverSettings = yield* ServerSettingsService;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const homeLayout = yield* resolveCodexHomeLayout(config);
@@ -169,6 +178,21 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         ),
       );
       const textGeneration = yield* makeCodexTextGeneration(effectiveConfig, processEnv);
+      const authentication = yield* makeProviderAuthentication(
+        makeCodexAuthenticationClient({
+          settings: effectiveConfig,
+          environment: processEnv,
+          cwd,
+        }).pipe(
+          Effect.flatMap(makeCodexAuthenticationQuery),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(Scope.Scope, scope),
+        ),
+        {
+          providerName: "Codex",
+          allowedAuthorizationHosts: new Set(["auth.openai.com"]),
+        },
+      );
 
       // Build a managed snapshot whose settings never change — mutations come
       // in as instance rebuilds from the registry rather than in-place
@@ -216,6 +240,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         snapshot,
         orchestrationAdapter,
         textGeneration,
+        authentication,
       } satisfies ProviderInstance;
     }),
 };

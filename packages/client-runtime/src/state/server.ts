@@ -818,6 +818,24 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId }) => environmentId,
       },
     }),
+    startProviderAuthentication: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:start-provider-authentication",
+      tag: WS_METHODS.serverStartProviderAuthentication,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => `${environmentId}:${input.instanceId}`,
+      },
+    }),
+    completeProviderAuthentication: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:complete-provider-authentication",
+      tag: WS_METHODS.serverCompleteProviderAuthentication,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
+    cancelProviderAuthentication: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:cancel-provider-authentication",
+      tag: WS_METHODS.serverCancelProviderAuthentication,
+    }),
     refreshProviderUsage: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-provider-usage",
       tag: WS_METHODS.serverGetProviderUsage,

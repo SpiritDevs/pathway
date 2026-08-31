@@ -55,6 +55,7 @@ export type ServerProviderAuthStatus = typeof ServerProviderAuthStatus.Type;
 
 export const ServerProviderAuth = Schema.Struct({
   status: ServerProviderAuthStatus,
+  supportsLogin: Schema.optional(Schema.Boolean),
   type: Schema.optional(TrimmedNonEmptyString),
   label: Schema.optional(TrimmedNonEmptyString),
   email: Schema.optional(TrimmedNonEmptyString),
@@ -585,6 +586,51 @@ export const ServerProviderUpdatedPayload = Schema.Struct({
   providers: ServerProviders,
 });
 export type ServerProviderUpdatedPayload = typeof ServerProviderUpdatedPayload.Type;
+
+export const ServerProviderAuthenticationStartInput = Schema.Struct({
+  provider: ProviderDriverKind,
+  instanceId: ProviderInstanceId,
+});
+export type ServerProviderAuthenticationStartInput =
+  typeof ServerProviderAuthenticationStartInput.Type;
+
+export const ServerProviderAuthenticationStartResult = Schema.Struct({
+  flowId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  authorizationUrl: TrimmedNonEmptyString.check(Schema.isMaxLength(4_096)),
+  completion: Schema.optional(Schema.Literal("browser")),
+  userCode: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
+});
+export type ServerProviderAuthenticationStartResult =
+  typeof ServerProviderAuthenticationStartResult.Type;
+
+export const ServerProviderAuthenticationCompleteInput = Schema.Struct({
+  provider: ProviderDriverKind,
+  instanceId: ProviderInstanceId,
+  flowId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  authorizationCode: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+});
+export type ServerProviderAuthenticationCompleteInput =
+  typeof ServerProviderAuthenticationCompleteInput.Type;
+
+export const ServerProviderAuthenticationCancelInput = Schema.Struct({
+  provider: ProviderDriverKind,
+  instanceId: ProviderInstanceId,
+  flowId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+});
+export type ServerProviderAuthenticationCancelInput =
+  typeof ServerProviderAuthenticationCancelInput.Type;
+
+export class ServerProviderAuthenticationError extends Schema.TaggedErrorClass<ServerProviderAuthenticationError>()(
+  "ServerProviderAuthenticationError",
+  {
+    provider: ProviderDriverKind,
+    reason: TrimmedNonEmptyString,
+  },
+) {
+  override get message(): string {
+    return `Provider authentication failed for ${this.provider}: ${this.reason}`;
+  }
+}
 
 export const ServerProviderUpdateInput = Schema.Struct({
   provider: ProviderDriverKind,

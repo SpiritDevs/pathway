@@ -52,6 +52,7 @@ import {
   type RelayClientInstallProgressEvent,
   type ServerSelfUpdateError,
   type ServerSelfUpdateProgressEvent,
+  ServerProviderAuthenticationError,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
@@ -105,6 +106,7 @@ import { enforceIssueClientCutover } from "./issues/IssueClientCutover.ts";
 import * as EmailCapture from "./email/EmailCaptureService.ts";
 import * as EmailTrigger from "./email/EmailTriggerService.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import { makeIssueImportRpcHandlers } from "./cloud/issueImport/rpc.ts";
@@ -567,6 +569,7 @@ const makeWsRpcLayer = (
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+      const providerInstanceRegistry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
@@ -1448,6 +1451,76 @@ const makeWsRpcLayer = (
               ? providerRegistry.refreshInstance(input.instanceId)
               : providerRegistry.refresh()
             ).pipe(Effect.map((providers) => ({ providers }))),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverStartProviderAuthentication]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverStartProviderAuthentication,
+            Effect.gen(function* () {
+              const instance = yield* providerInstanceRegistry.getInstance(input.instanceId);
+              if (!instance || instance.driverKind !== input.provider || !instance.authentication) {
+                return yield* new ServerProviderAuthenticationError({
+                  provider: input.provider,
+                  reason: "This provider instance does not support one-click sign-in.",
+                });
+              }
+              return yield* instance.authentication.start.pipe(
+                Effect.mapError(
+                  (error) =>
+                    new ServerProviderAuthenticationError({
+                      provider: input.provider,
+                      reason: error.reason,
+                    }),
+                ),
+              );
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverCompleteProviderAuthentication]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverCompleteProviderAuthentication,
+            Effect.gen(function* () {
+              const instance = yield* providerInstanceRegistry.getInstance(input.instanceId);
+              if (!instance || instance.driverKind !== input.provider || !instance.authentication) {
+                return yield* new ServerProviderAuthenticationError({
+                  provider: input.provider,
+                  reason: "This provider instance does not support one-click sign-in.",
+                });
+              }
+              yield* instance.authentication
+                .complete({
+                  flowId: input.flowId,
+                  ...(input.authorizationCode
+                    ? { authorizationCode: input.authorizationCode }
+                    : {}),
+                })
+                .pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new ServerProviderAuthenticationError({
+                        provider: input.provider,
+                        reason: error.reason,
+                      }),
+                  ),
+                );
+              const providers = yield* providerRegistry.refreshInstance(input.instanceId);
+              return { providers };
+            }),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverCancelProviderAuthentication]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverCancelProviderAuthentication,
+            Effect.gen(function* () {
+              const instance = yield* providerInstanceRegistry.getInstance(input.instanceId);
+              if (
+                instance?.driverKind === input.provider &&
+                instance.authentication !== undefined
+              ) {
+                yield* instance.authentication.cancel(input.flowId);
+              }
+              return {};
+            }),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverUpdateProvider]: (input) =>

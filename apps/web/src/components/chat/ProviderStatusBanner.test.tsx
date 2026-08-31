@@ -26,6 +26,27 @@ function warningProvider(): ServerProvider {
   };
 }
 
+function unauthenticatedClaudeProvider(): ServerProvider {
+  return {
+    ...warningProvider(),
+    instanceId: ProviderInstanceId.make("claudeAgent"),
+    driver: ProviderDriverKind.make("claudeAgent"),
+    displayName: "Claude",
+    status: "error",
+    auth: { status: "unauthenticated", supportsLogin: true },
+    message: "Claude is not authenticated.",
+  };
+}
+
+function unauthenticatedCodexProvider(): ServerProvider {
+  return {
+    ...warningProvider(),
+    status: "error",
+    auth: { status: "unauthenticated", supportsLogin: true },
+    message: "Codex is not authenticated.",
+  };
+}
+
 describe("ProviderStatusBanner", () => {
   it("stays hidden after its current warning is dismissed", () => {
     const status = warningProvider();
@@ -62,5 +83,47 @@ describe("ProviderStatusBanner", () => {
     );
 
     expect(markup).toContain('aria-label="Dismiss Codex provider error"');
+  });
+
+  it("renders unauthenticated providers as a sign-in banner instead of a red error", () => {
+    const markup = renderToStaticMarkup(
+      <ProviderStatusBanner
+        authentication={{
+          start: async () => ({ flowId: "flow-1", authorizationUrl: "https://claude.com" }),
+          complete: async () => {},
+          cancel: async () => {},
+        }}
+        status={unauthenticatedClaudeProvider()}
+        onDismiss={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('data-variant="authentication"');
+    expect(markup).toContain("Sign in to Claude");
+    expect(markup).toContain(">Sign in</button>");
+    expect(markup).not.toContain("border-destructive/32");
+  });
+
+  it("offers the shared sign-in action for an unauthenticated Codex instance", () => {
+    const markup = renderToStaticMarkup(
+      <ProviderStatusBanner
+        authentication={{
+          start: async () => ({
+            flowId: "flow-1",
+            authorizationUrl: "https://auth.openai.com/codex/device",
+            completion: "browser",
+            userCode: "ABCD-EFGH",
+          }),
+          complete: async () => {},
+          cancel: async () => {},
+        }}
+        status={unauthenticatedCodexProvider()}
+        onDismiss={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Sign in to Codex");
+    expect(markup).toContain(">Sign in</button>");
+    expect(markup).not.toContain("Run `codex login`");
   });
 });
