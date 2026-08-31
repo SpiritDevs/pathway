@@ -17,6 +17,7 @@ import {
   calendarAnchor,
   calendarAnchorPatch,
   calendarDayBounds,
+  calendarEventsInRange,
   calendarGrabEdge,
   calendarInstantAt,
   calendarMinutesAtY,
@@ -30,6 +31,7 @@ import {
   formatCalendarMinutes,
   formatCalendarRangeLabel,
   isCalendarTimeGridMode,
+  makeCalendarCreateTarget,
   parseCalendarSearch,
   resolveCalendarAllDayDrop,
   resolveCalendarAllDayToggle,
@@ -106,11 +108,88 @@ describe("calendar search params", () => {
     expect(parseCalendarSearch({ date: "2026-8-1" }).date).toBeUndefined();
   });
 
+  it("refuses a date nobody can be on, rather than normalising it into another year", () => {
+    // `Date.UTC` would roll this one to 2034-06-07 while the toolbar still read 2026 off the string.
+    expect(parseCalendarSearch({ date: "2026-99-99" }).date).toBeUndefined();
+    expect(parseCalendarSearch({ date: "2026-02-30" }).date).toBeUndefined();
+    expect(parseCalendarSearch({ date: "2026-00-10" }).date).toBeUndefined();
+    expect(parseCalendarSearch({ date: "2026-02-28" }).date).toBe("2026-02-28");
+    // A leap day is a real day, and the year it is not one in is not.
+    expect(parseCalendarSearch({ date: "2028-02-29" }).date).toBe("2028-02-29");
+    expect(parseCalendarSearch({ date: "2026-02-29" }).date).toBeUndefined();
+  });
+
   it("separates the three grid modes from Timeline", () => {
     expect(isCalendarTimeGridMode("day")).toBe(true);
     expect(isCalendarTimeGridMode("week")).toBe(true);
     expect(isCalendarTimeGridMode("month")).toBe(true);
     expect(isCalendarTimeGridMode("timeline")).toBe(false);
+  });
+});
+
+describe("events reaching the range", () => {
+  const week = calendarRange("week", TODAY);
+
+  it("keeps what the week can draw and drops a lifetime of history", () => {
+    const kept = calendarEventsInRange(
+      [
+        event({
+          id: "on-monday",
+          startAt: Date.UTC(2026, 7, 10, 9, 0),
+          endAt: Date.UTC(2026, 7, 10, 10, 0),
+        }),
+        event({
+          id: "last-year",
+          startAt: Date.UTC(2025, 7, 12, 9, 0),
+          endAt: Date.UTC(2025, 7, 12, 10, 0),
+        }),
+        event({
+          id: "next-month",
+          startAt: Date.UTC(2026, 8, 12, 9, 0),
+          endAt: Date.UTC(2026, 8, 12, 10, 0),
+        }),
+      ],
+      week,
+    );
+    expect(kept.map((candidate) => candidate.id)).toEqual(["on-monday"]);
+  });
+
+  it("keeps an event that only runs through the range, having started before it", () => {
+    const kept = calendarEventsInRange(
+      [event({ startAt: Date.UTC(2026, 6, 1, 9, 0), endAt: Date.UTC(2026, 8, 1, 9, 0) })],
+      week,
+    );
+    expect(kept).toHaveLength(1);
+  });
+
+  it("keeps the edges whatever zone they are read in", () => {
+    // Midday UTC on the day either side of the week is on the range in some zone, so the filter
+    // pads by a day rather than reading a wall clock per event.
+    const kept = calendarEventsInRange(
+      [
+        event({
+          id: "sunday-before",
+          startAt: Date.UTC(2026, 7, 9, 12, 0),
+          endAt: Date.UTC(2026, 7, 9, 13, 0),
+        }),
+        event({
+          id: "monday-after",
+          startAt: Date.UTC(2026, 7, 17, 12, 0),
+          endAt: Date.UTC(2026, 7, 17, 13, 0),
+        }),
+      ],
+      week,
+    );
+    expect(kept).toHaveLength(2);
+  });
+
+  it("costs a spanning event the days on screen rather than the days it runs", () => {
+    const blocks = buildCalendarEventBlocks({
+      events: [event({ startAt: Date.UTC(2026, 0, 1, 9, 0), endAt: Date.UTC(2026, 11, 31, 9, 0) })],
+      days: weekDays(),
+    });
+    expect(blocks).toHaveLength(7);
+    expect(blocks.every((block) => block.clippedStart && block.clippedEnd)).toBe(true);
   });
 });
 
@@ -585,6 +664,70 @@ describe("month cell packing", () => {
     expect(cell?.chips.map((chip) => chip.id)).toEqual(["early", "late"]);
   });
 
+  it("shows an overnight event on both days, only timing the one it starts on", () => {
+    const cells = buildCalendarMonthCells({
+      days: monthDays(),
+      allDay: [],
+      events: [
+        event({
+          id: "night",
+          startAt: Date.UTC(2026, 7, 12, 22, 0),
+          endAt: Date.UTC(2026, 7, 13, 2, 0),
+        }),
+      ],
+      capacity: 4,
+      timestampFormat: "24-hour",
+    });
+    const covered = cells.filter((cell) => cell.chips.some((chip) => chip.id === "night"));
+    expect(covered.map((cell) => cell.date)).toEqual(["2026-08-12", "2026-08-13"]);
+    expect(covered.map((cell) => cell.chips[0]?.startsHere)).toEqual([true, false]);
+    expect(covered.map((cell) => cell.chips[0]?.time)).toEqual(["22:00", null]);
+  });
+
+  it("keeps an event ending at midnight in the cell it ran through", () => {
+    const cells = buildCalendarMonthCells({
+      days: monthDays(),
+      allDay: [],
+      events: [
+        event({
+          id: "night",
+          startAt: Date.UTC(2026, 7, 12, 22, 0),
+          endAt: Date.UTC(2026, 7, 13, 0, 0),
+        }),
+      ],
+      capacity: 4,
+      timestampFormat: "24-hour",
+    });
+    expect(
+      cells
+        .filter((cell) => cell.chips.some((chip) => chip.id === "night"))
+        .map((cell) => cell.date),
+    ).toEqual(["2026-08-12"]);
+  });
+
+  it("puts a continuation ahead of the events that start that morning", () => {
+    const cells = buildCalendarMonthCells({
+      days: monthDays(),
+      allDay: [],
+      events: [
+        event({
+          id: "night",
+          startAt: Date.UTC(2026, 7, 12, 22, 0),
+          endAt: Date.UTC(2026, 7, 13, 2, 0),
+        }),
+        event({
+          id: "standup",
+          startAt: Date.UTC(2026, 7, 13, 9, 0),
+          endAt: Date.UTC(2026, 7, 13, 9, 30),
+        }),
+      ],
+      capacity: 4,
+      timestampFormat: "24-hour",
+    });
+    const cell = cells.find((candidate) => candidate.date === "2026-08-13");
+    expect(cell?.chips.map((chip) => chip.id)).toEqual(["night", "standup"]);
+  });
+
   it("keeps every day of the grid, borrowed neighbours included", () => {
     const cells = buildCalendarMonthCells({
       days: monthDays(),
@@ -778,6 +921,52 @@ describe("crossing between the lane and the grid", () => {
 
   it("means nothing when the event is already the way it was dropped", () => {
     expect(resolveCalendarAllDayToggle({ event: event(), allDay: false, date: TODAY })).toBeNull();
+  });
+});
+
+describe("the first calendar", () => {
+  it("uses the calendar the member already has", async () => {
+    let made = 0;
+    const target = makeCalendarCreateTarget(async () => {
+      made += 1;
+      return "made";
+    });
+    await expect(target("calendar-1")).resolves.toBe("calendar-1");
+    expect(made).toBe(0);
+  });
+
+  it("makes one calendar for two creates that beat the change feed to it", async () => {
+    let made = 0;
+    const target = makeCalendarCreateTarget(async () => {
+      made += 1;
+      return `calendar-${made}`;
+    });
+    // Both creates happen while `defaultCalendarId` is still null: the replica has not echoed yet.
+    const [first, second] = await Promise.all([target(null), target(null)]);
+    expect([first, second]).toEqual(["calendar-1", "calendar-1"]);
+    expect(made).toBe(1);
+  });
+
+  it("lets the next create try again after one that failed", async () => {
+    let made = 0;
+    const target = makeCalendarCreateTarget(async () => {
+      made += 1;
+      if (made === 1) throw new Error("refused");
+      return "calendar-2";
+    });
+    await expect(target(null)).rejects.toThrow("refused");
+    await expect(target(null)).resolves.toBe("calendar-2");
+  });
+
+  it("follows the replica once it catches up", async () => {
+    let made = 0;
+    const target = makeCalendarCreateTarget(async () => {
+      made += 1;
+      return "calendar-1";
+    });
+    await target(null);
+    await expect(target("calendar-1")).resolves.toBe("calendar-1");
+    expect(made).toBe(1);
   });
 });
 

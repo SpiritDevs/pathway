@@ -12,6 +12,9 @@
  * a day-wide scale is a sub-pixel hairline. The Layers sidebar's three work sources are what filters
  * this view; its calendars have nothing to say here.
  *
+ * The scale covers every dated thing the enabled layers hold rather than the milestones alone, so a
+ * layer that is on always has somewhere to draw.
+ *
  * Bars are read-only. Dragging a milestone is `/issues/milestones`' job, where the tray that gives
  * an undated milestone its first dates also lives; a calendar showing the same bars twice-editable
  * would be two places to make the same write and one of them without the tray.
@@ -35,8 +38,8 @@ import {
   buildTimelineCycleBands,
   buildTimelineRows,
   buildTimelineScale,
-  milestonesTimelineRange,
   timelineLanes,
+  timelineScaleRange,
   type TimelineBar,
   type TimelineDueIssue,
   type TimelineScale,
@@ -67,9 +70,11 @@ export function CalendarTimelineView({
   const [collapsed, setCollapsed] = useState<ReadonlySet<ProjectId>>(() => new Set());
 
   const milestones = useMemo(() => groups.flatMap((group) => [...group.milestones]), [groups]);
+  // Every enabled layer is on the scale, not just the milestones: a due date or a cycle outside
+  // their span would be off it, and both are dropped rather than clamped.
   const scale = useMemo(
-    () => buildTimelineScale(milestonesTimelineRange(milestones, today), zoom),
-    [milestones, today, zoom],
+    () => buildTimelineScale(timelineScaleRange({ milestones, issues, cycles, today }), zoom),
+    [cycles, issues, milestones, today, zoom],
   );
   const rows = useMemo(
     () => buildTimelineRows({ groups, issues, progressByMilestone, scale }),

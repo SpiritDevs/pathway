@@ -23,6 +23,7 @@ import type {
   IssueId,
   IssueMilestoneId,
   CalendarEventId,
+  CalendarId,
 } from "@spiritdevs/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -38,10 +39,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { useClientSettings } from "~/hooks/useSettings";
+import { useTodayIssueDate } from "~/hooks/useTodayIssueDate";
 import { resolveShortcutCommand } from "~/keybindings";
 import { cn } from "~/lib/utils";
 import {
-  todayIssueDate,
   useIssueCycles,
   useIssueMilestoneProgress,
   useIssueMilestones,
@@ -69,11 +70,13 @@ import {
   buildCalendarDays,
   calendarAnchor,
   calendarAnchorPatch,
+  calendarEventsInRange,
   calendarMode,
   calendarRange,
   calendarWallClock,
   formatCalendarRangeLabel,
   isCalendarTimeGridMode,
+  makeCalendarCreateTarget,
   resolveCalendarNewEvent,
   shiftCalendarAnchor,
   type CalendarAllDayItem,
@@ -88,7 +91,6 @@ import {
   useCalendarLayers,
   useCalendarWriter,
   viewerTimeZone,
-  type CalendarLayersView,
   type CalendarWriter,
 } from "./useCalendarSurface";
 
@@ -120,9 +122,10 @@ export function CalendarPage({
   const surface = useCalendarLayers();
   const writer = useCalendarWriter(surface.viewer);
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
-  // Read once per mount rather than tracked: a page left open past midnight re-reads this on the
-  // next diff, and nothing here is worth a timer.
-  const today = useMemo(() => todayIssueDate(), []);
+  // Tracked rather than read once per mount: the Today button, the `t` key, the highlighted day and
+  // every cycle status read from this, and a calendar is exactly the surface somebody leaves open
+  // past midnight. One timeout on the boundary, not a tick.
+  const today = useTodayIssueDate();
   const timeZone = useMemo(() => viewerTimeZone(), []);
 
   const mode = calendarMode(search);
@@ -150,11 +153,18 @@ export function CalendarPage({
     [anchor, mode, range, today],
   );
 
+  // The surface holds every event on every visible calendar, which is a whole company's history and
+  // no cheaper to lay out for being off screen.
+  const events = useMemo(
+    () => calendarEventsInRange(surface.events, range),
+    [range, surface.events],
+  );
+
   const work = useCalendarWorkItems({ hiddenLayers: surface.hiddenLayers });
   const { writeDates } = work;
   const allDayItems = useMemo(
-    () => [...allDayEventItems(surface.events), ...work.allDayItems],
-    [surface.events, work.allDayItems],
+    () => [...allDayEventItems(events), ...work.allDayItems],
+    [events, work.allDayItems],
   );
 
   const openNewEvent = useCallback(
@@ -175,6 +185,13 @@ export function CalendarPage({
       else openNewEvent();
     },
   });
+
+  // Rebuilt with the writer, so switching company never lands an event on the other company's
+  // pending calendar.
+  const createTarget = useMemo(
+    () => makeCalendarCreateTarget(() => writer.createCalendar("My calendar")),
+    [writer],
+  );
 
   const writeEvent = useCallback(
     (
@@ -241,9 +258,9 @@ export function CalendarPage({
         <CalendarMonthGrid
           allDayItems={allDayItems}
           days={days}
-          events={surface.events}
+          events={events}
           onOpenChip={(chip) => {
-            const event = surface.events.find((candidate) => candidate.id === chip.id);
+            const event = events.find((candidate) => candidate.id === chip.id);
             if (event !== undefined) {
               setDialog(draftFromEvent(event));
               return;
@@ -261,7 +278,7 @@ export function CalendarPage({
         <CalendarTimeGrid
           allDayItems={allDayItems}
           days={days}
-          events={surface.events}
+          events={events}
           onAllDayWrite={writeAllDay}
           onCreate={writer.ready ? (slot) => openNewEvent(slot) : null}
           onEventWrite={writeEvent}
@@ -270,7 +287,7 @@ export function CalendarPage({
               work.openItem(item);
               return;
             }
-            const event = surface.events.find((candidate) => candidate.id === item.id);
+            const event = events.find((candidate) => candidate.id === item.id);
             if (event !== undefined) setDialog(draftFromEvent(event));
           }}
           onOpenEvent={(event) => setDialog(draftFromEvent(event))}
@@ -306,7 +323,9 @@ export function CalendarPage({
                 error,
               );
             if (next.mode === "create") {
-              void createEventOn(surface, writer, next).catch(failed);
+              void createEventOn(createTarget(surface.defaultCalendarId), writer, next).catch(
+                failed,
+              );
               return;
             }
             void writer
@@ -328,16 +347,16 @@ export function CalendarPage({
 /**
  * The first event a member creates has nowhere to go until they own a calendar, so the calendar is
  * made on the way. Doing it here rather than on first visit means somebody who only ever reads
- * other people's calendars never acquires an empty one of their own.
+ * other people's calendars never acquires an empty one of their own. Which calendar that is — and
+ * that two quick creates share one — is {@link makeCalendarCreateTarget}'s.
  */
 async function createEventOn(
-  surface: CalendarLayersView,
+  calendarId: Promise<string>,
   writer: CalendarWriter,
   draft: Extract<CalendarEventDraft, { mode: "create" }>,
 ): Promise<void> {
-  const calendarId = surface.defaultCalendarId ?? (await writer.createCalendar("My calendar"));
   await writer.createEvent({
-    calendarId,
+    calendarId: (await calendarId) as CalendarId,
     title: draft.title,
     startAt: draft.startAt,
     endAt: draft.endAt,

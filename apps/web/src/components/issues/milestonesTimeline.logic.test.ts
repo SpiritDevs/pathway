@@ -28,6 +28,7 @@ import {
   timelineDaysFromOffset,
   timelineGrabEdge,
   timelineLanes,
+  timelineScaleRange,
   timelineTrayDragId,
   timelineX,
   type TimelineDueIssue,
@@ -128,6 +129,55 @@ describe("milestonesTimelineRange", () => {
 
   it("gives an all-undated tracker the empty grid a tray chip is dropped onto", () => {
     expect(milestonesTimelineRange([milestone("a")], TODAY)).toEqual({
+      start: TODAY,
+      end: TODAY,
+    });
+  });
+});
+
+describe("timelineScaleRange", () => {
+  const range = (input: {
+    milestones?: ReadonlyArray<IssueMilestone>;
+    issues?: ReadonlyArray<TimelineDueIssue>;
+    cycles?: ReadonlyArray<IssueCycle>;
+  }) =>
+    timelineScaleRange({
+      milestones: input.milestones ?? [],
+      issues: input.issues ?? [],
+      cycles: input.cycles ?? [],
+      today: TODAY,
+    });
+
+  it("reaches a due date past the last milestone, which would otherwise be off the scale", () => {
+    expect(
+      range({
+        milestones: [milestone("a", { startDate: "2026-08-01", targetDate: "2026-08-20" })],
+        issues: [dueIssue("1", "prj_1", "2026-11-30")],
+      }),
+    ).toEqual({ start: "2026-08-01", end: "2026-11-30" });
+  });
+
+  it("reaches both ends of a cycle", () => {
+    expect(
+      range({
+        milestones: [milestone("a", { startDate: "2026-08-01", targetDate: "2026-08-20" })],
+        cycles: [cycle("cyc_1", "2026-06-01", "2026-06-14")],
+      }),
+    ).toEqual({ start: "2026-06-01", end: "2026-08-20" });
+  });
+
+  it("gives a tracker with no dated milestone somewhere to draw its other layers", () => {
+    expect(
+      range({
+        milestones: [milestone("a")],
+        issues: [dueIssue("1", "prj_1", "2026-09-30")],
+        cycles: [cycle("cyc_1", "2026-09-01", "2026-09-14")],
+      }),
+    ).toEqual({ start: TODAY, end: "2026-09-30" });
+  });
+
+  it("ignores an issue with no due date and still contains today", () => {
+    expect(range({ issues: [dueIssue("1", "prj_1", null)] })).toEqual({
       start: TODAY,
       end: TODAY,
     });

@@ -1,7 +1,8 @@
 /**
- * Everything `/calendar`'s time grid decides without the DOM: what a mode's range is, where a day
- * and an hour sit in pixels, how overlapping events share a column, what packs into the all-day
- * lane and a month cell, and what a finished drag means.
+ * Everything `/calendar`'s time grid decides without the DOM: what a mode's range is, which events
+ * can reach it, where a day and an hour sit in pixels, how overlapping events share a column, what
+ * packs into the all-day lane and a month cell, what a finished drag means, and which calendar a
+ * member's first event goes to.
  *
  * Two rules run through the whole module and are why it is arithmetic rather than a date library.
  *
@@ -60,6 +61,26 @@ export type CalendarSearchPatch = Partial<CalendarSearch>;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
+ * A date the surface can actually be built around.
+ *
+ * The shape is not enough: `2026-99-99` matches the pattern and `Date.UTC` quietly rolls it into
+ * 2034, so the toolbar would name one month from the raw string while the range was built around
+ * another. Only a date that reads back as the one that was written is accepted; anything else is a
+ * hand-edited param and takes the same fallback to today as `?date=yesterday`.
+ */
+function isCalendarDate(date: string): boolean {
+  if (!ISO_DATE.test(date)) return false;
+  const at = utcOf(date);
+  if (at === null) return false;
+  const read = new Date(at);
+  return (
+    read.getUTCFullYear() === Number(date.slice(0, 4)) &&
+    read.getUTCMonth() + 1 === Number(date.slice(5, 7)) &&
+    read.getUTCDate() === Number(date.slice(8, 10))
+  );
+}
+
+/**
  * Tolerant like {@link parseIssuesSearch}: a hand-edited or stale param falls back to the default
  * rather than failing the route, and each default rides as an absent param so `?mode=week` and a
  * bare URL are the same screen.
@@ -70,7 +91,7 @@ export function parseCalendarSearch(raw: Record<string, unknown>): CalendarSearc
   const matched = CALENDAR_MODES.find((candidate) => candidate === mode);
   return {
     mode: matched === undefined || matched === DEFAULT_CALENDAR_MODE ? undefined : matched,
-    date: typeof date === "string" && ISO_DATE.test(date) ? date : undefined,
+    date: typeof date === "string" && isCalendarDate(date) ? date : undefined,
   };
 }
 
@@ -466,6 +487,26 @@ export interface CalendarEventInput {
 }
 
 /**
+ * The events a range can draw, decided on instants alone.
+ *
+ * Every mode is handed every event on every visible calendar, and both grids cost what they are
+ * given, so this is what keeps Day at a day's work rather than at the company's whole history.
+ * It deliberately does not read a wall clock per event: a day of padding either side covers every
+ * offset a zone can sit at, so the handful it keeps past the edges are ones the grids clip away on
+ * their own, and the filter stays arithmetic.
+ */
+export function calendarEventsInRange(
+  events: ReadonlyArray<CalendarEventInput>,
+  range: CalendarRange,
+): ReadonlyArray<CalendarEventInput> {
+  const from = (utcOf(range.start) ?? 0) - DAY_MS;
+  const to = (utcOf(range.end) ?? 0) + 2 * DAY_MS;
+  return events.filter(
+    (event) => event.startAt <= to && Math.max(event.startAt, event.endAt) >= from,
+  );
+}
+
+/**
  * One event's presence in one day column. An event that runs past midnight has a segment in each
  * day it touches rather than one block hanging off the bottom, because the column below is where
  * the rest of it actually happens.
@@ -496,6 +537,44 @@ interface Segment {
   readonly clippedEnd: boolean;
 }
 
+interface TimedEventSpan {
+  readonly from: CalendarWallClock;
+  readonly to: CalendarWallClock;
+  /** Days from the first day the event covers to the last; 0 for one that stays inside a day. */
+  readonly span: number;
+}
+
+/**
+ * The days a timed event covers, read in its own zone. Shared by the hour grid and the month cells
+ * so an event crossing midnight is the same set of days in both.
+ */
+function timedEventSpan(event: CalendarEventInput): TimedEventSpan {
+  const from = calendarWallClock(event.startAt, event.timeZone);
+  const rawTo = calendarWallClock(Math.max(event.endAt, event.startAt), event.timeZone);
+  // An event ending exactly at midnight belongs to the day it ran through, not the one after.
+  const to =
+    rawTo.minutes === 0 && rawTo.date > from.date
+      ? { date: addIssueDays(rawTo.date, -1) as IssueDate, minutes: MINUTES_PER_DAY }
+      : rawTo;
+  return { from, to, span: Math.max(0, diffCalendarDays(from.date, to.date)) };
+}
+
+/**
+ * Which offsets of a span are on the days being drawn. Clamping to the range rather than walking
+ * the span and dropping the misses is what keeps a year-long event costing the days on screen.
+ */
+function visibleSpanOffsets(input: {
+  readonly from: IssueDate;
+  readonly span: number;
+  readonly first: IssueDate;
+  readonly last: IssueDate;
+}): { readonly first: number; readonly last: number } {
+  return {
+    first: Math.max(0, diffCalendarDays(input.from, input.first)),
+    last: Math.min(input.span, diffCalendarDays(input.from, input.last)),
+  };
+}
+
 /**
  * Every day column a timed event touches, clipped to each one.
  *
@@ -504,21 +583,24 @@ interface Segment {
  */
 function eventSegments(
   event: CalendarEventInput,
-  columnByDate: ReadonlyMap<string, number>,
+  columns: {
+    readonly byDate: ReadonlyMap<string, number>;
+    readonly first: IssueDate;
+    readonly last: IssueDate;
+  },
 ): ReadonlyArray<Segment> {
-  const from = calendarWallClock(event.startAt, event.timeZone);
-  const rawTo = calendarWallClock(Math.max(event.endAt, event.startAt), event.timeZone);
-  // An event ending exactly at midnight belongs to the day it ran through, not the one after.
-  const to =
-    rawTo.minutes === 0 && rawTo.date > from.date
-      ? { date: addIssueDays(rawTo.date, -1) as IssueDate, minutes: MINUTES_PER_DAY }
-      : rawTo;
+  const { from, to, span } = timedEventSpan(event);
+  const visible = visibleSpanOffsets({
+    from: from.date,
+    span,
+    first: columns.first,
+    last: columns.last,
+  });
 
-  const span = Math.max(0, diffCalendarDays(from.date, to.date));
   const segments: Array<Segment> = [];
-  for (let offset = 0; offset <= span; offset += 1) {
+  for (let offset = visible.first; offset <= visible.last; offset += 1) {
     const date = addIssueDays(from.date, offset);
-    const columnIndex = columnByDate.get(date);
+    const columnIndex = columns.byDate.get(date);
     if (columnIndex === undefined) continue;
     const startMinutes = offset === 0 ? from.minutes : 0;
     const endMinutes = offset === span ? Math.max(to.minutes, startMinutes) : MINUTES_PER_DAY;
@@ -558,11 +640,19 @@ export function buildCalendarEventBlocks(input: {
   readonly events: ReadonlyArray<CalendarEventInput>;
   readonly days: ReadonlyArray<CalendarDayColumn>;
 }): ReadonlyArray<CalendarEventBlock> {
-  const columnByDate = new Map(input.days.map((day) => [day.date as string, day.index]));
+  const first = input.days[0];
+  const last = input.days[input.days.length - 1];
+  if (first === undefined || last === undefined) return [];
+
+  const columns = {
+    byDate: new Map(input.days.map((day) => [day.date as string, day.index])),
+    first: first.date,
+    last: last.date,
+  };
   const byColumn = new Map<number, Array<Segment>>();
   for (const event of input.events) {
     if (event.allDay) continue;
-    for (const segment of eventSegments(event, columnByDate)) {
+    for (const segment of eventSegments(event, columns)) {
       const bucket = byColumn.get(segment.columnIndex);
       if (bucket === undefined) byColumn.set(segment.columnIndex, [segment]);
       else bucket.push(segment);
@@ -730,7 +820,7 @@ export interface CalendarMonthChip {
   readonly id: string;
   readonly kind: CalendarAllDayKind;
   readonly title: string;
-  /** The start time for a timed event; null for anything all-day. */
+  /** The start time, on the day the event starts. Null for an all-day span and for a continuation. */
   readonly time: string | null;
   readonly editable: boolean;
   /** False on the continuation days of a multi-day span, which read as a bar rather than a chip. */
@@ -751,8 +841,11 @@ export interface CalendarMonthCell {
  *
  * All-day spans come first and in lane order, so a milestone running Tuesday to Friday sits on the
  * same line in all four cells rather than jumping as each day's timed events change. Timed events
- * follow in start order. A cell holds `capacity` chips and counts the rest, because a cell that
- * grows to fit makes the row it is in grow with it and the month stops being a grid.
+ * follow in start order, and one that runs past midnight gets a chip in every day it reaches — the
+ * continuation the hour grid draws as a clipped block, labelled the way a spanning all-day item is:
+ * no time, because the day it names is not the day it started. A cell holds `capacity` chips and
+ * counts the rest, because a cell that grows to fit makes the row it is in grow with it and the
+ * month stops being a grid.
  */
 export function buildCalendarMonthCells(input: {
   readonly days: ReadonlyArray<CalendarDayColumn>;
@@ -780,32 +873,52 @@ export function buildCalendarMonthCells(input: {
     }
   }
 
-  const timed = new Map<string, Array<CalendarEventInput>>();
-  for (const event of input.events) {
-    if (event.allDay) continue;
-    const { date } = calendarWallClock(event.startAt, event.timeZone);
-    const bucket = timed.get(date);
-    if (bucket === undefined) timed.set(date, [event]);
-    else bucket.push(event);
+  const firstDay = input.days[0];
+  const lastDay = input.days[input.days.length - 1];
+  const timed = new Map<
+    string,
+    Array<{ readonly event: CalendarEventInput; readonly startsHere: boolean }>
+  >();
+  if (firstDay !== undefined && lastDay !== undefined) {
+    for (const event of input.events) {
+      if (event.allDay) continue;
+      const { from, span } = timedEventSpan(event);
+      const visible = visibleSpanOffsets({
+        from: from.date,
+        span,
+        first: firstDay.date,
+        last: lastDay.date,
+      });
+      for (let offset = visible.first; offset <= visible.last; offset += 1) {
+        const date = addIssueDays(from.date, offset);
+        const entry = { event, startsHere: offset === 0 };
+        const bucket = timed.get(date);
+        if (bucket === undefined) timed.set(date, [entry]);
+        else bucket.push(entry);
+      }
+    }
   }
 
   const capacity = Math.max(0, input.capacity);
   return input.days.map((day) => {
     const chips: Array<CalendarMonthChip> = [...(spanning.get(day.index) ?? [])];
-    for (const event of (timed.get(day.date) ?? []).sort(
+    for (const { event, startsHere } of (timed.get(day.date) ?? []).sort(
       (left, right) =>
-        left.startAt - right.startAt || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+        left.event.startAt - right.event.startAt ||
+        (left.event.id < right.event.id ? -1 : left.event.id > right.event.id ? 1 : 0),
     )) {
       chips.push({
         id: event.id,
         kind: "event",
         title: event.title,
-        time: formatCalendarMinutes(
-          calendarWallClock(event.startAt, event.timeZone).minutes,
-          input.timestampFormat,
-        ),
+        time: startsHere
+          ? formatCalendarMinutes(
+              calendarWallClock(event.startAt, event.timeZone).minutes,
+              input.timestampFormat,
+            )
+          : null,
         editable: event.editable,
-        startsHere: true,
+        startsHere,
       });
     }
     return {
@@ -970,5 +1083,35 @@ export function resolveCalendarNewEvent(input: {
     _tag: "Instants",
     startAt: calendarInstantAt(input.date, start, input.timeZone),
     endAt: calendarInstantAt(input.date, start + CALENDAR_DEFAULT_EVENT_MINUTES, input.timeZone),
+  };
+}
+
+// ── The first calendar ──────────────────────────────────────────────────
+
+/**
+ * Where a create lands while the member still has no calendar of their own.
+ *
+ * The default calendar is derived from the replica, so it stays null for the whole round trip after
+ * the first one is made — long enough for a second create to make a second "My calendar". The
+ * in-flight promise is held and shared until the feed catches up, and dropped again if the create
+ * fails so a later attempt is not stuck behind a rejection. One of these belongs to one writer:
+ * rebuild it when the company changes and the pending id goes with it.
+ */
+export function makeCalendarCreateTarget(
+  createCalendar: () => Promise<string>,
+): (defaultCalendarId: string | null) => Promise<string> {
+  let pending: Promise<string> | null = null;
+  return (defaultCalendarId) => {
+    if (defaultCalendarId !== null) {
+      pending = null;
+      return Promise.resolve(defaultCalendarId);
+    }
+    if (pending !== null) return pending;
+    const created = createCalendar();
+    pending = created;
+    void created.catch(() => {
+      if (pending === created) pending = null;
+    });
+    return created;
   };
 }

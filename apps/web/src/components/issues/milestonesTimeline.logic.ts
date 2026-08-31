@@ -164,6 +164,36 @@ export function milestonesTimelineRange(
   return { start, end };
 }
 
+/**
+ * What a scale has to cover when more than milestones sit on it.
+ *
+ * `/calendar`'s Timeline mode draws three layers, and a range built from milestones alone quietly
+ * loses the other two: a due date or a cycle past the last milestone is off the scale, and both are
+ * left out rather than clamped to an edge, so an enabled layer would show nothing at all — a
+ * tracker with no dated milestone anywhere has every one of them off scale. `/issues/milestones`
+ * keeps {@link milestonesTimelineRange}, which is the same rule with the two layers it does not
+ * draw.
+ */
+export function timelineScaleRange(input: {
+  readonly milestones: ReadonlyArray<Pick<IssueMilestone, "startDate" | "targetDate">>;
+  readonly issues: ReadonlyArray<Pick<Issue, "dueDate">>;
+  readonly cycles: ReadonlyArray<Pick<IssueCycle, "startDate" | "endDate">>;
+  readonly today: string;
+}): TimelineRange {
+  let { start, end } = milestonesTimelineRange(input.milestones, input.today);
+  const cover = (date: string | null) => {
+    if (date === null) return;
+    if (date < start) start = date;
+    if (date > end) end = date;
+  };
+  for (const issue of input.issues) cover(issue.dueDate);
+  for (const cycle of input.cycles) {
+    cover(cycle.startDate);
+    cover(cycle.endDate);
+  }
+  return { start, end };
+}
+
 function tickLabel(date: string, zoom: TimelineZoom): string {
   const month = MONTH_LABELS[Number(date.slice(5, 7)) - 1] ?? date.slice(5, 7);
   const day = String(Number(date.slice(8, 10)));
