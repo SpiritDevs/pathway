@@ -31,3 +31,41 @@ The popup opened from the Focus Strip's badge listing unread notifications group
 **Attention Event**:
 A thread state change that warrants the user's attention: an agent run finished on an unsettled thread, a pending approval, awaiting user input, or a failure. Attention events on threads produce notifications; settled threads do not.
 _Avoid_: Alert, Ping
+
+## Calendar
+
+**Calendar View**:
+The `/calendar` surface, in one of four modes: Day, Week, Month, and Timeline. The first three are a time grid; Timeline is a Gantt of projects, milestones, and cycles. One surface, one filter sidebar, one URL.
+_Avoid_: Schedule, Agenda, Planner
+
+**Event**:
+A single dated thing on the time grid, with a start and end instant, its own IANA time zone, and an all-day flag. Either Pathway-owned (created here, editable) or mirrored (copied read-only from Google). An Event optionally carries one Link.
+_Avoid_: Appointment, Meeting, Booking, Entry
+
+**Occurrence**:
+One expanded instance of a recurring Google event. Recurrence is expanded server-side into ordinary Events within the mirror window; Pathway-owned Events do not recur.
+_Avoid_: Instance, Repeat, Series item
+
+**Calendar**:
+The container an Event belongs to and the unit of both sharing and revocation: a member's Pathway calendar, or one mirrored Google calendar. Deleting a Calendar row removes its Events everywhere they were replicated.
+_Avoid_: Source, Feed
+
+**Calendar Account**:
+One connected Google account, owned by a member, holding the encrypted OAuth credential and owning many Calendars. Disconnecting it cascades to every Calendar, Event, and Grant beneath it.
+_Avoid_: Connection, Provider, Integration
+
+**Layer**:
+One toggleable row-source in the calendar sidebar — a Calendar, or a work source such as Issues, Milestones, Cycles, or Scheduled Tasks. Layer visibility is per-machine and per-company, like the Active Focus, and does not sync.
+_Avoid_: Filter, Overlay, Track
+
+**Grant**:
+An explicit edge from one Calendar to one member, giving read-only access to all details. Created by the Calendar's owner or a holder of `company.manage`. A Grant widens beyond `calendar.sharing` but never past an Event marked private, and never substitutes for the grantee's own `calendar.read`.
+_Avoid_: Share, ACL, Permission (reserve "permission" for `PermissionKey`)
+
+**Link**:
+The optional attachment from an Event to exactly one project, issue, or thread. Stored as its own owned entity so a mirrored Event can carry one without mutating the mirror, and so it survives a disconnect and reconnect. Visible from both ends.
+_Avoid_: Association, Tag, Reference
+
+**Mirror Window**:
+The rolling range of Google history copied into Convex — 90 days back, 365 days forward. Events outside it are not replicated and not rendered.
+_Avoid_: Sync range, Horizon
