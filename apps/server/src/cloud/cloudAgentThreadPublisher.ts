@@ -9,6 +9,7 @@ import {
 } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -23,7 +24,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { forkParkedFiber } from "../serverActivation.ts";
-import type { ConvexServiceTokenProvider } from "./convexServiceToken.ts";
+import { type ConvexServiceTokenProvider, convexErrorCode } from "./convexServiceToken.ts";
 import { getOrCreateCloudSyncDpopKeyPairFromSecretStore } from "./environmentKeys.ts";
 import {
   type ConvexClientLike,
@@ -41,6 +42,22 @@ import {
 } from "./syncDaemon.ts";
 
 export const DEFAULT_AGENT_THREAD_RECONCILE_INTERVAL = Duration.seconds(15);
+
+/**
+ * How long a shell the backend refused (no active project binding) stays parked. The refusal is
+ * terminal until an operator changes bindings, so retrying it at event cadence only spams the
+ * deployment log; the park also keys on the shell's identity, so an edited shell retries at once.
+ */
+export const AGENT_THREAD_UNPUBLISHABLE_PARK_INTERVAL = Duration.minutes(15);
+
+/**
+ * A typed `entity-not-found` refusal of an upsert (the project has no active binding on this
+ * environment) cannot succeed until an operator changes bindings; transport, auth, and validator
+ * failures stay retryable.
+ */
+export function isUnpublishableAgentThreadRefusal(cause: unknown): boolean {
+  return convexErrorCode(cause) === "entity-not-found";
+}
 
 interface CloudAgentThreadPublisherOptions {
   readonly companyId: CompanyId;
@@ -83,97 +100,127 @@ export function shouldPublishCloudAgentThreadEvent(event: OrchestrationV2DomainE
   );
 }
 
-const makePublisher = Effect.fn("cloud.agent_thread_publisher.make")(function* (
-  options: CloudAgentThreadPublisherOptions,
-) {
-  const client = options.client ?? convexHttpClientLike(options.convexUrl);
-  const lock = yield* Semaphore.make(1);
-  const published = yield* Ref.make<ReadonlyMap<ThreadId, string>>(new Map());
+export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publisher.make")(
+  function* (options: CloudAgentThreadPublisherOptions) {
+    const client = options.client ?? convexHttpClientLike(options.convexUrl);
+    const lock = yield* Semaphore.make(1);
+    const published = yield* Ref.make<ReadonlyMap<ThreadId, string>>(new Map());
+    const parked = yield* Ref.make<
+      ReadonlyMap<ThreadId, { readonly identity: string; readonly until: number }>
+    >(new Map());
 
-  const call = <A>(token: string, issue: (client: ConvexClientLike) => Promise<A>) =>
-    lock.withPermits(1)(
-      Effect.tryPromise({
-        try: () => {
-          client.setAuth(token);
-          return issue(client);
-        },
-        catch: (cause) =>
-          new CloudAgentThreadPublisherCallError({
-            reason: classifyConvexFailure(cause),
-            cause,
-          }),
-      }),
-    );
-  const authorized = <A>(issue: (client: ConvexClientLike) => Promise<A>) =>
-    Effect.gen(function* () {
-      const token = yield* options.tokens.token;
-      return yield* call(token, issue).pipe(
-        Effect.catchIf(
-          (error) => error.reason === "unauthorized",
-          () =>
-            options.tokens.invalidate(token).pipe(
-              Effect.andThen(options.tokens.token),
-              Effect.flatMap((refreshed) => call(refreshed, issue)),
-            ),
-        ),
+    const call = <A>(token: string, issue: (client: ConvexClientLike) => Promise<A>) =>
+      lock.withPermits(1)(
+        Effect.tryPromise({
+          try: () => {
+            client.setAuth(token);
+            return issue(client);
+          },
+          catch: (cause) =>
+            new CloudAgentThreadPublisherCallError({
+              reason: classifyConvexFailure(cause),
+              cause,
+            }),
+        }),
       );
-    });
+    const authorized = <A>(issue: (client: ConvexClientLike) => Promise<A>) =>
+      Effect.gen(function* () {
+        const token = yield* options.tokens.token;
+        return yield* call(token, issue).pipe(
+          Effect.catchIf(
+            (error) => error.reason === "unauthorized",
+            () =>
+              options.tokens.invalidate(token).pipe(
+                Effect.andThen(options.tokens.token),
+                Effect.flatMap((refreshed) => call(refreshed, issue)),
+              ),
+          ),
+        );
+      });
 
-  const publish = (shell: OrchestrationV2ThreadShell) =>
-    Effect.gen(function* () {
-      const encoded = encodeCloudShell(cloudSafeThreadShell(shell));
-      const identity = encodeCloudShellIdentity(cloudSafeThreadShell(shell));
-      if ((yield* Ref.get(published)).get(shell.id) === identity) return;
-      yield* authorized((convex) =>
-        convex.mutation(api.agentThreads.upsert, {
+    const publish = (shell: OrchestrationV2ThreadShell) =>
+      Effect.gen(function* () {
+        const encoded = encodeCloudShell(cloudSafeThreadShell(shell));
+        const identity = encodeCloudShellIdentity(cloudSafeThreadShell(shell));
+        if ((yield* Ref.get(published)).get(shell.id) === identity) return;
+        const now = yield* Clock.currentTimeMillis;
+        const hold = (yield* Ref.get(parked)).get(shell.id);
+        if (hold !== undefined && hold.identity === identity && now < hold.until) return;
+        const outcome = yield* authorized((convex) =>
+          convex.mutation(api.agentThreads.upsert, {
+            companyId: options.companyId,
+            environmentId: options.environmentId,
+            threadId: shell.id,
+            localProjectId: shell.projectId,
+            shell: encoded,
+          }),
+        ).pipe(
+          Effect.as("published" as const),
+          Effect.catchIf(
+            (error) => isUnpublishableAgentThreadRefusal(error.cause),
+            (error) =>
+              Effect.logWarning(
+                "Cloud Agent Thread upsert was refused; parking the shell before retrying",
+                {
+                  companyId: options.companyId,
+                  environmentId: options.environmentId,
+                  threadId: shell.id,
+                  projectId: shell.projectId,
+                  cause: error.cause,
+                },
+              ).pipe(Effect.as("parked" as const)),
+          ),
+        );
+        const until = now + Duration.toMillis(AGENT_THREAD_UNPUBLISHABLE_PARK_INTERVAL);
+        yield* Ref.update(parked, (current) => {
+          const next = new Map(current);
+          if (outcome === "parked") next.set(shell.id, { identity, until });
+          else next.delete(shell.id);
+          return next;
+        });
+        if (outcome === "parked") return;
+        yield* Ref.update(published, (current) => {
+          const next = new Map(current);
+          next.set(shell.id, identity);
+          return next;
+        });
+      });
+
+    const remove = (threadId: ThreadId) =>
+      authorized((convex) =>
+        convex.mutation(api.agentThreads.remove, {
           companyId: options.companyId,
           environmentId: options.environmentId,
-          threadId: shell.id,
-          localProjectId: shell.projectId,
-          shell: encoded,
+          threadId,
         }),
+      ).pipe(
+        Effect.tap(() =>
+          Ref.update(published, (current) => {
+            const next = new Map(current);
+            next.delete(threadId);
+            return next;
+          }),
+        ),
+        Effect.asVoid,
       );
-      yield* Ref.update(published, (current) => {
-        const next = new Map(current);
-        next.set(shell.id, identity);
-        return next;
-      });
-    });
 
-  const remove = (threadId: ThreadId) =>
-    authorized((convex) =>
-      convex.mutation(api.agentThreads.remove, {
-        companyId: options.companyId,
-        environmentId: options.environmentId,
-        threadId,
-      }),
-    ).pipe(
-      Effect.tap(() =>
-        Ref.update(published, (current) => {
-          const next = new Map(current);
-          next.delete(threadId);
-          return next;
+    const reconcileIds = (threadIds: ReadonlyArray<ThreadId>) =>
+      authorized((convex) =>
+        convex.mutation(api.agentThreads.reconcile, {
+          companyId: options.companyId,
+          environmentId: options.environmentId,
+          currentThreadIds: [...threadIds],
         }),
-      ),
-      Effect.asVoid,
-    );
+      ).pipe(Effect.asVoid);
 
-  const reconcileIds = (threadIds: ReadonlyArray<ThreadId>) =>
-    authorized((convex) =>
-      convex.mutation(api.agentThreads.reconcile, {
-        companyId: options.companyId,
-        environmentId: options.environmentId,
-        currentThreadIds: [...threadIds],
-      }),
-    ).pipe(Effect.asVoid);
-
-  return { publish, remove, reconcileIds } as const;
-});
+    return { publish, remove, reconcileIds } as const;
+  },
+);
 
 export const runCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publisher.run")(
   function* (options: CloudAgentThreadPublisherOptions) {
     const threads = yield* ThreadManagement.ThreadManagementService;
-    const publisher = yield* makePublisher(options);
+    const publisher = yield* makeCloudAgentThreadPublisher(options);
 
     const reportFailure = (operation: string, threadId?: ThreadId) =>
       Effect.catchCause((cause) =>
