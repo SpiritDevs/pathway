@@ -9,9 +9,23 @@
  * There is no date library in this repo and there is not going to be one for this: a calendar day
  * has no time zone under it, so `Date.UTC` plus string compare is the whole calculation.
  *
+ * The same arithmetic is the Gantt behind `/calendar`'s Timeline mode (ADR 0011), which is why the
+ * scale, the rows, and the bands are separate functions rather than one screen's worth of state:
+ * rows are projects that expand to their milestones, cycles are a band across the header, and issue
+ * due dates are ticks on their project's row. A caller hands in dates and gets pixels back, so the
+ * two surfaces cannot drift. Calendar events are deliberately absent and there is no row type that
+ * would take one — an hour on a day-wide scale is a sub-pixel hairline.
+ *
  * @module components/issues/milestonesTimeline.logic
  */
-import type { IssueDate, IssueMilestone, IssueMilestoneId, ProjectId } from "@spiritdevs/contracts";
+import type {
+  Issue,
+  IssueCycle,
+  IssueDate,
+  IssueMilestone,
+  IssueMilestoneId,
+  ProjectId,
+} from "@spiritdevs/contracts";
 
 import type { IssueProgress } from "~/state/issues";
 import { addIssueDays } from "./issuesList.logic";
@@ -262,12 +276,36 @@ export interface TimelineBar {
   readonly dated: TimelineBarDates;
 }
 
+/**
+ * What a due-date tick needs to know about the issue under it. A `Pick` rather than the whole
+ * {@link Issue} so a caller can hand over a projection: the tick draws a mark and names it, and
+ * everything else about the issue belongs to whatever opens when the mark is pressed.
+ */
+export type TimelineDueIssue = Pick<Issue, "id" | "key" | "title" | "projectId" | "dueDate">;
+
+/**
+ * One day's worth of due dates on a project's row. Grouped by day rather than one entry per issue
+ * because a day is 4px wide at quarter zoom: two issues due together are one mark carrying both,
+ * not two marks on the same pixel.
+ */
+export interface TimelineDueTick {
+  readonly date: IssueDate;
+  /** The centre of the day's column — a due date is a point on the scale, not a span of it. */
+  readonly x: number;
+  readonly issues: ReadonlyArray<TimelineDueIssue>;
+}
+
 export interface TimelineRow {
   readonly projectId: ProjectId;
   readonly title: string;
   readonly bars: ReadonlyArray<TimelineBar>;
   /** Milestones with no dates at all: they have no place on the scale, so they live in the tray. */
   readonly undated: ReadonlyArray<IssueMilestone>;
+  /**
+   * Issue due dates, on the project's own row rather than on a row each — an issue is a day, and a
+   * row per day would bury the milestones the row is about. Empty unless a caller passes issues.
+   */
+  readonly dueTicks: ReadonlyArray<TimelineDueTick>;
 }
 
 export interface TimelineRows {
@@ -277,6 +315,7 @@ export interface TimelineRows {
 }
 
 const NO_PROGRESS: IssueProgress = { done: 0, total: 0 };
+const NO_DUE_TICKS: ReadonlyArray<TimelineDueTick> = [];
 
 function barGeometry(
   milestone: IssueMilestone,
@@ -298,6 +337,60 @@ function barGeometry(
   return { x: clampedLeft, width: Math.max(scale.dayWidth, clampedRight - clampedLeft), dated };
 }
 
+/** Bucketed once for the whole build: a group scanning every issue would be a scan per project. */
+function dueIssuesByProject(
+  issues: ReadonlyArray<TimelineDueIssue>,
+): ReadonlyMap<ProjectId, ReadonlyArray<TimelineDueIssue>> {
+  const byProject = new Map<ProjectId, Array<TimelineDueIssue>>();
+  for (const issue of issues) {
+    if (issue.dueDate === null || issue.projectId === null) continue;
+    const bucket = byProject.get(issue.projectId);
+    if (bucket === undefined) byProject.set(issue.projectId, [issue]);
+    else bucket.push(issue);
+  }
+  return byProject;
+}
+
+/**
+ * One tick per day, in date order. A due date off the scale is dropped rather than clamped to its
+ * edge: unlike a bar, which is a span the edge honestly truncates, a mark parked on the edge would
+ * name a day it does not fall on.
+ */
+function dueTicksOn(
+  issues: ReadonlyArray<TimelineDueIssue>,
+  scale: TimelineScale,
+): ReadonlyArray<TimelineDueTick> {
+  const byDate = new Map<IssueDate, Array<TimelineDueIssue>>();
+  for (const issue of issues) {
+    const date = issue.dueDate;
+    if (date === null || date < scale.start || date > scale.end) continue;
+    const bucket = byDate.get(date);
+    if (bucket === undefined) byDate.set(date, [issue]);
+    else bucket.push(issue);
+  }
+  if (byDate.size === 0) return NO_DUE_TICKS;
+  return [...byDate.entries()]
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([date, held]) => ({
+      date,
+      x: timelineX(scale, date) + scale.dayWidth / 2,
+      issues: held,
+    }));
+}
+
+export interface TimelineRowsInput {
+  /** The overview's grouping, unchanged: the timeline is the same set the list shows. */
+  readonly groups: ReadonlyArray<MilestonesOverviewGroup>;
+  readonly progressByMilestone: ReadonlyMap<IssueMilestoneId, IssueProgress>;
+  readonly scale: TimelineScale;
+  /**
+   * Issues whose due dates mark their project's row. Left out by `/issues/milestones?view=timeline`,
+   * which is milestones and nothing else; `/calendar`'s Timeline mode passes the ones its layers ask
+   * for. An issue naming a project with no row is dropped, the rule milestones already follow.
+   */
+  readonly issues?: ReadonlyArray<TimelineDueIssue> | undefined;
+}
+
 /**
  * The overview's project groups read as lanes. Grouping is not redone here — {@link
  * milestonesOverviewGroups} already decided which projects show and in what order, and the timeline
@@ -306,11 +399,10 @@ function barGeometry(
  * A project whose milestones are all undated keeps an empty lane, because the lane is where they
  * land when they are dragged out of the tray.
  */
-export function buildTimelineRows(
-  groups: ReadonlyArray<MilestonesOverviewGroup>,
-  progressByMilestone: ReadonlyMap<IssueMilestoneId, IssueProgress>,
-  scale: TimelineScale,
-): TimelineRows {
+export function buildTimelineRows(input: TimelineRowsInput): TimelineRows {
+  const { groups, issues, progressByMilestone, scale } = input;
+  const dueByProject = issues === undefined ? null : dueIssuesByProject(issues);
+
   const rows: Array<TimelineRow> = [];
   const undated: Array<IssueMilestone> = [];
   for (const group of groups) {
@@ -335,10 +427,142 @@ export function buildTimelineRows(
       title: group.title,
       bars,
       undated: groupUndated,
+      // A logical project answers to every id it aggregates, so its issues arrive under any of them.
+      dueTicks:
+        dueByProject === null
+          ? NO_DUE_TICKS
+          : dueTicksOn(
+              [...new Set(group.projectIds ?? [group.projectId])].flatMap((projectId) => [
+                ...(dueByProject.get(projectId) ?? []),
+              ]),
+              scale,
+            ),
     });
     undated.push(...groupUndated);
   }
   return { rows, undated };
+}
+
+// ── Lanes ──────────────────────────────────────────────────────────────
+
+/**
+ * A project row and the milestone rows it opens onto, flattened into the order they render in.
+ *
+ * The flattening lives here rather than in a component because it is the part the two surfaces have
+ * to agree on: a project is one row whether or not it is showing its milestones, and a project
+ * showing none keeps a row of its own, because that empty lane is what a tray chip is dropped onto.
+ * `key` is the React key, decided here so the same list cannot be keyed two ways.
+ */
+export type TimelineLane =
+  | {
+      readonly kind: "project";
+      readonly key: string;
+      readonly row: TimelineRow;
+      readonly expanded: boolean;
+    }
+  | {
+      readonly kind: "milestone";
+      readonly key: string;
+      readonly projectId: ProjectId;
+      readonly bar: TimelineBar;
+    }
+  | { readonly kind: "empty"; readonly key: string; readonly projectId: ProjectId };
+
+/** Collapsed rather than expanded, because a project arrives open and closing one is the exception. */
+export function timelineLanes(
+  rows: ReadonlyArray<TimelineRow>,
+  collapsed: ReadonlySet<ProjectId>,
+): ReadonlyArray<TimelineLane> {
+  const lanes: Array<TimelineLane> = [];
+  for (const row of rows) {
+    const expanded = !collapsed.has(row.projectId);
+    lanes.push({ kind: "project", key: `project:${row.projectId}`, row, expanded });
+    if (!expanded) continue;
+    if (row.bars.length === 0) {
+      lanes.push({ kind: "empty", key: `empty:${row.projectId}`, projectId: row.projectId });
+      continue;
+    }
+    for (const bar of row.bars) {
+      lanes.push({
+        kind: "milestone",
+        key: `milestone:${bar.milestone.id}`,
+        projectId: row.projectId,
+        bar,
+      });
+    }
+  }
+  return lanes;
+}
+
+// ── Cycle bands ────────────────────────────────────────────────────────
+
+/**
+ * A cycle across the header rather than on a row of its own: a cycle spans every project at once,
+ * so it is the period the rows are read against, not another bar among them.
+ */
+export interface TimelineCycleBand {
+  readonly cycle: IssueCycle;
+  readonly x: number;
+  readonly width: number;
+  /** The band runs off that end of the scale rather than ending there — draw it square, not round. */
+  readonly clippedStart: boolean;
+  readonly clippedEnd: boolean;
+  /** Which header row it sits on. Always 0 until two cycles overlap, which nothing forbids. */
+  readonly lane: number;
+}
+
+/** Ascending `startDate`, `id` breaking ties — the order the bands are packed into rows in. */
+function compareCycleOrder(left: IssueCycle, right: IssueCycle): number {
+  if (left.startDate !== right.startDate) return left.startDate < right.startDate ? -1 : 1;
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+}
+
+/**
+ * Cycles as bands over the scale, in the order they start.
+ *
+ * A cycle with no day on the scale is left out entirely rather than clamped to an edge, and one
+ * that only partly fits is clipped and says so. Overlapping cycles stack onto further header rows:
+ * two can be active at once, and two bands on one row would read as a single wrong period.
+ */
+export function buildTimelineCycleBands(
+  cycles: ReadonlyArray<IssueCycle>,
+  scale: TimelineScale,
+): ReadonlyArray<TimelineCycleBand> {
+  const bands: Array<TimelineCycleBand> = [];
+  /** The last day already taken on each header row. */
+  const laneEnds: Array<string> = [];
+
+  for (const cycle of [...cycles].sort(compareCycleOrder)) {
+    // Backwards dates are refused by the service, so this only catches a row that predates that.
+    const end = cycle.endDate < cycle.startDate ? cycle.startDate : cycle.endDate;
+    if (end < scale.start || cycle.startDate > scale.end) continue;
+
+    const free = laneEnds.findIndex((taken) => taken < cycle.startDate);
+    const lane = free === -1 ? laneEnds.length : free;
+    laneEnds[lane] = end;
+
+    const left = Math.max(0, timelineX(scale, cycle.startDate));
+    const right = Math.min(scale.width, timelineX(scale, end) + scale.dayWidth);
+    bands.push({
+      cycle,
+      x: left,
+      width: Math.max(scale.dayWidth, right - left),
+      clippedStart: cycle.startDate < scale.start,
+      clippedEnd: end > scale.end,
+      lane,
+    });
+  }
+  return bands;
+}
+
+/**
+ * How many header rows the bands need. Zero when no cycle touches the scale, which is what keeps
+ * the header exactly the height it was on a surface that passes none.
+ */
+export function timelineCycleBandLanes(bands: ReadonlyArray<TimelineCycleBand>): number {
+  let lanes = 0;
+  for (const band of bands) lanes = Math.max(lanes, band.lane + 1);
+  return lanes;
 }
 
 // ── Drag ids ───────────────────────────────────────────────────────────

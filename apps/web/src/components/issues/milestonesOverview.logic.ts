@@ -80,6 +80,11 @@ export function milestoneIdInPathname(pathname: string): IssueMilestoneId | null
 export interface MilestonesOverviewGroup {
   readonly projectId: ProjectId;
   readonly title: string;
+  /**
+   * Every id this logical project answers to, `projectId` included — a project that aggregates
+   * several checkouts holds work under any of them. Absent means `projectId` and nothing else.
+   */
+  readonly projectIds?: ReadonlyArray<ProjectId> | undefined;
   readonly milestones: ReadonlyArray<IssueMilestone>;
 }
 
@@ -121,6 +126,7 @@ export function milestonesOverviewGroups(
     groups.push({
       projectId: project.id,
       title: project.title,
+      projectIds: [...projectIds],
       milestones: [...projectIds]
         .flatMap((projectId) => byProject.get(projectId) ?? [])
         .sort(compareMilestoneOrder),
