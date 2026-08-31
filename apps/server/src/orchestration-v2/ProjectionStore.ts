@@ -1060,6 +1060,7 @@ function shellFromState(input: {
     interactionMode: input.state.thread.interactionMode,
     branch: input.state.thread.branch,
     worktreePath: input.state.thread.worktreePath,
+    workspaceMove: input.state.thread.workspaceMove ?? null,
     lineage: input.state.thread.lineage,
     forkKind: input.state.thread.forkKind,
     forkedFrom: input.state.thread.forkedFrom,

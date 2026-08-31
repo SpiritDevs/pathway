@@ -2,6 +2,21 @@
 
 Project-specific vocabulary beyond the small glossary in `AGENTS.md`. Be opinionated: one canonical word per concept; alternates go under _Avoid_.
 
+## Thread workspaces
+
+**Workspace move**:
+The durable server workflow that moves an existing thread and the source checkout's tracked and untracked non-ignored changes into a new linked Git worktree. It is not a client-side sequence of Git calls.
+_Avoid_: Worktree copy, Repo copy, Workspace switch
+
+**Source checkout**:
+The project's root checkout before a workspace move. Other threads may share it, so active work and running terminals there block the move.
+
+**Target worktree**:
+The new linked Git checkout created for the thread from the source checkout's exact `HEAD`.
+
+**Transfer stash**:
+The temporary Git stash identified by object id that carries dirty state from the source checkout to the target worktree. Pathway drops it only after the target accepts the changes and the thread rebind succeeds. It remains available if automatic recovery fails.
+
 ## Focuses
 
 **Focus**:

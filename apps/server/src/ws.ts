@@ -82,6 +82,7 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import { issuePullRequestFromStatus } from "./orchestration-v2/RunFinalizationService.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
+import * as ThreadWorkspaceMove from "./orchestration-v2/ThreadWorkspaceMoveService.ts";
 import * as ContinuationLaunchService from "./orchestration-v2/ContinuationLaunchService.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import {
@@ -554,6 +555,7 @@ const makeWsRpcLayer = (
       );
       const continuationLaunch = yield* ContinuationLaunchService.ContinuationLaunchService;
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
+      const threadWorkspaceMove = yield* ThreadWorkspaceMove.ThreadWorkspaceMoveService;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const usage = yield* UsageService.UsageService;
@@ -1290,6 +1292,15 @@ const makeWsRpcLayer = (
                   }),
               ),
             ),
+            {
+              "rpc.aggregate": "orchestrationV2",
+              "orchestration_v2.thread_id": input.threadId,
+            },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.previewWorkspaceMove]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.previewWorkspaceMove,
+            threadWorkspaceMove.preview(input.threadId),
             {
               "rpc.aggregate": "orchestrationV2",
               "orchestration_v2.thread_id": input.threadId,

@@ -250,6 +250,7 @@ function commandThreadId(command: OrchestrationV2Command): ThreadId {
     case "thread.pin.reorder":
     case "thread.visit":
     case "thread.mark-unread":
+    case "thread.workspace-move.request":
     case "thread.metadata.update":
     case "thread.title.regeneration.complete":
     case "thread.browser-takeover.request":
@@ -1426,6 +1427,131 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       { concurrency: 1, discard: true },
     );
 
+  const dispatchWorkspaceMoveRequest = Effect.fn("orchestrationV2.dispatch.workspaceMoveRequest")(
+    function* (
+      command: Extract<OrchestrationV2Command, { readonly type: "thread.workspace-move.request" }>,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    ) {
+      const projection = yield* projectionStore.getThreadProjection(command.threadId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorProjectionError({
+              threadId: command.threadId,
+              cause,
+            }),
+        ),
+      );
+      const thread = projection.thread;
+      if (thread.deletedAt !== null || thread.archivedAt !== null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} is not active.`,
+        });
+      }
+      if (thread.worktreePath !== null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} is already attached to a worktree.`,
+        });
+      }
+      if (thread.workspaceMove?.status === "running") {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} already has a workspace move in progress.`,
+        });
+      }
+      if (
+        projection.runs.some((run) =>
+          ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+        ) ||
+        projection.runtimeRequests.some((request) => request.status === "pending") ||
+        (threadShellFromProjection(projection).pendingBackgroundTasks?.length ?? 0) > 0
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} has active or queued work.`,
+        });
+      }
+      const shell = yield* projectionStore.getShellSnapshot().pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorProjectionError({
+              threadId: command.threadId,
+              cause,
+            }),
+        ),
+      );
+      const sharedCheckoutBlocker = [...shell.threads, ...shell.archivedThreads].find(
+        (candidate) =>
+          candidate.id !== command.threadId &&
+          candidate.projectId === thread.projectId &&
+          candidate.worktreePath === null &&
+          (candidate.workspaceMove?.status === "running" ||
+            ["preparing", "queued", "starting", "running", "waiting"].includes(candidate.status) ||
+            candidate.pendingRuntimeRequest !== null ||
+            (candidate.pendingBackgroundTasks?.length ?? 0) > 0),
+      );
+      if (sharedCheckoutBlocker) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread “${sharedCheckoutBlocker.title}” is using the shared project checkout.`,
+        });
+      }
+
+      const now = yield* DateTime.now;
+      const updatedThread: OrchestrationV2AppThread = {
+        ...thread,
+        workspaceMove: {
+          id: command.commandId,
+          status: "running",
+          phase: "queued",
+          sourceCwd: null,
+          sourceHead: null,
+          fileCount: 0,
+          terminalCount: 0,
+          transferStashOid: null,
+          targetWorktreePath: null,
+          targetBranch: null,
+          setup: "pending",
+          detail: null,
+          startedAt: now,
+          updatedAt: now,
+          completedAt: null,
+        },
+        updatedAt: now,
+      };
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.metadata-updated",
+        threadId: command.threadId,
+        providerInstanceId: thread.providerInstanceId,
+        occurredAt: now,
+        payload: updatedThread,
+      });
+      yield* Ref.update(effects, (existing) => [
+        ...existing,
+        {
+          id: `effect:${command.commandId}:workspace-move.execute`,
+          commandId: command.commandId,
+          threadId: command.threadId,
+          request: {
+            type: "workspace-move.execute",
+            moveId: command.commandId,
+            stopTerminals: command.stopTerminals,
+          },
+        } satisfies PendingOrchestrationEffectV2,
+      ]);
+    },
+  );
+
   const dispatchThreadCreate = Effect.fn("orchestrationV2.dispatch.threadCreate")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "thread.create" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -1876,6 +2002,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(command.title === undefined ? {} : { title: command.title }),
             ...(command.branch === undefined ? {} : { branch: command.branch }),
             ...(command.worktreePath === undefined ? {} : { worktreePath: command.worktreePath }),
+            ...(command.workspaceMove === undefined
+              ? {}
+              : { workspaceMove: command.workspaceMove }),
             // regenerateTitle: true arms the in-flight marker; a landing title
             // or an explicit false (generation failed/abandoned) clears it.
             ...(command.regenerateTitle === true
@@ -3336,6 +3465,37 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) =>
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      if (projection.thread.workspaceMove?.status === "running") {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Wait for this thread's workspace move to finish before sending another message.",
+        });
+      }
+      if (projection.thread.worktreePath === null) {
+        const shell = yield* projectionStore.getShellSnapshot().pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestratorProjectionError({
+                threadId: command.threadId,
+                cause,
+              }),
+          ),
+        );
+        const workspaceMove = [...shell.threads, ...shell.archivedThreads].find(
+          (thread) =>
+            thread.projectId === projection.thread.projectId &&
+            thread.worktreePath === null &&
+            thread.workspaceMove?.status === "running",
+        );
+        if (workspaceMove) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Wait for “${workspaceMove.title}” to finish moving the shared project checkout.`,
+          });
+        }
+      }
       if (projection.thread.settledOverride !== null) {
         const now = yield* DateTime.now;
         const thread: OrchestrationV2AppThread = {
@@ -7468,6 +7628,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.source-control.record":
         yield* dispatchSourceControlRecord(command, events);
+        break;
+      case "thread.workspace-move.request":
+        yield* dispatchWorkspaceMoveRequest(command, events, effects);
         break;
       case "thread.archive":
       case "thread.unarchive":

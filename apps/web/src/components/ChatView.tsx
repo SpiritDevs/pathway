@@ -96,6 +96,7 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
+import { onOpenThreadWorkspaceMove } from "../threadWorkspaceMoveBus";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
@@ -320,6 +321,7 @@ import {
 } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel, type ThreadDetailsPanelProps } from "./chat/ThreadDetailsPanel";
+import { ThreadWorkspaceMoveDialog } from "./chat/ThreadWorkspaceMoveDialog";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { AgentsPanel } from "./AgentsPanel";
 import {
@@ -5364,6 +5366,20 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadRef, unsnoozeThreadMutation]);
   const [isRestoringThreadBranch, setIsRestoringThreadBranch] = useState(false);
   const [branchRestoreConfirmOpen, setBranchRestoreConfirmOpen] = useState(false);
+  const [workspaceMoveOpen, setWorkspaceMoveOpen] = useState(false);
+  useEffect(
+    () =>
+      onOpenThreadWorkspaceMove((target) => {
+        if (
+          activeThreadRef !== null &&
+          target.environmentId === activeThreadRef.environmentId &&
+          target.threadId === activeThreadRef.threadId
+        ) {
+          setWorkspaceMoveOpen(true);
+        }
+      }),
+    [activeThreadRef],
+  );
   // Once revealed for a given mismatch, the banner stays mounted until the
   // mismatch changes or resolves, so clearing the draft doesn't flicker it.
   const [revealedBranchMismatchKey, setRevealedBranchMismatchKey] = useState<string | null>(null);
@@ -8346,6 +8362,18 @@ function ChatViewContent(props: ChatViewProps) {
       ? { onHandoff: onOpenHandoff }
       : {}),
     ...(isServerThread ? { onRecoverPushFailure } : {}),
+    ...(isServerThread && activeThread.worktreePath === null && isGitRepo
+      ? {
+          onMoveToWorktree: () => setWorkspaceMoveOpen(true),
+          moveToWorktreeDisabled: isWorking || activeThread.workspaceMove?.status === "running",
+          moveToWorktreeTooltip:
+            activeThread.workspaceMove?.status === "running"
+              ? "This thread is already moving to a worktree"
+              : isWorking
+                ? "Wait for this thread's active or queued work to finish"
+                : "Move thread to a worktree",
+        }
+      : {}),
     onReconnectEnvironment: reconnectActiveEnvironment,
     onOpenConnectionSettings: openConnectionSettings,
     onRunProjectScript: runProjectScript,
@@ -9072,6 +9100,17 @@ function ChatViewContent(props: ChatViewProps) {
           void onSubmitContinuation(modelSelection, workspaceTarget);
         }}
       />
+      {isServerThread ? (
+        <ThreadWorkspaceMoveDialog
+          open={workspaceMoveOpen}
+          environmentId={activeThread.environmentId}
+          threadId={activeThread.id}
+          move={activeThread.workspaceMove}
+          setupScript={activeProject?.scripts.find((script) => script.runOnWorktreeCreate) ?? null}
+          onOpenChange={setWorkspaceMoveOpen}
+          onRunSetup={runProjectScript}
+        />
+      ) : null}
     </div>
   );
 }

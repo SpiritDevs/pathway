@@ -76,6 +76,9 @@ export interface ThreadDetailsPanelProps {
   onComposerFocusRequest: () => void;
   onOpenChanges?: () => void;
   onHandoff?: () => void;
+  onMoveToWorktree?: () => void;
+  moveToWorktreeDisabled?: boolean;
+  moveToWorktreeTooltip?: string;
   onRecoverPushFailure?: (prompt: string) => Promise<boolean>;
   onReconnectEnvironment: () => void;
   onOpenConnectionSettings: () => void;
@@ -179,6 +182,13 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     ...(props.onCheckoutPullRequestRequest
       ? { onCheckoutPullRequestRequest: props.onCheckoutPullRequestRequest }
       : {}),
+    ...(props.onMoveToWorktree ? { onMoveToWorktree: props.onMoveToWorktree } : {}),
+    ...(props.moveToWorktreeDisabled === undefined
+      ? {}
+      : { moveToWorktreeDisabled: props.moveToWorktreeDisabled }),
+    ...(props.moveToWorktreeTooltip === undefined
+      ? {}
+      : { moveToWorktreeTooltip: props.moveToWorktreeTooltip }),
   };
 
   const renderSection = (sectionId: ActionPaletteSectionId) => {

@@ -122,6 +122,20 @@ export interface GitDeleteLocalBranchInput {
   readonly force?: boolean;
 }
 
+export interface GitTransferStashInput {
+  readonly cwd: string;
+  readonly marker: string;
+}
+
+export interface GitTransferStashResult {
+  readonly oid: string | null;
+}
+
+export interface GitTransferStashRefInput {
+  readonly cwd: string;
+  readonly oid: string;
+}
+
 export interface GitPushResult {
   status: "pushed" | "skipped_up_to_date";
   branch: string;
@@ -285,6 +299,15 @@ export class GitVcsDriver extends Context.Service<
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
+    readonly createTransferStash: (
+      input: GitTransferStashInput,
+    ) => Effect.Effect<GitTransferStashResult, GitCommandError>;
+    readonly applyTransferStash: (
+      input: GitTransferStashRefInput,
+    ) => Effect.Effect<void, GitCommandError>;
+    readonly dropTransferStash: (
+      input: GitTransferStashRefInput,
+    ) => Effect.Effect<void, GitCommandError>;
     readonly fetchPullRequestBranch: (
       input: GitFetchPullRequestBranchInput,
     ) => Effect.Effect<void, GitCommandError>;

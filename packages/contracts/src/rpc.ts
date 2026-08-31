@@ -231,6 +231,7 @@ import {
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2RpcSchemas,
   OrchestrationV2ThreadLaunchError,
+  OrchestrationV2WorkspaceMovePreviewError,
 } from "./orchestrationV2.ts";
 import {
   ProjectListEntriesError,
@@ -1158,6 +1159,15 @@ export const WsOrchestrationV2GetThreadProjectionRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationV2PreviewWorkspaceMoveRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.previewWorkspaceMove,
+  {
+    payload: OrchestrationV2RpcSchemas.previewWorkspaceMove.input,
+    success: OrchestrationV2RpcSchemas.previewWorkspaceMove.output,
+    error: Schema.Union([OrchestrationV2WorkspaceMovePreviewError, EnvironmentAuthorizationError]),
+  },
+);
+
 export const WsOrchestrationV2GetWorkflowScriptRpc = Rpc.make(
   ORCHESTRATION_V2_WS_METHODS.getWorkflowScript,
   {
@@ -1949,6 +1959,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SearchThreadsRpc,
   WsOrchestrationV2GetArchivedShellSnapshotRpc,
   WsOrchestrationV2GetThreadProjectionRpc,
+  WsOrchestrationV2PreviewWorkspaceMoveRpc,
   WsOrchestrationV2LaunchContinuationRpc,
   WsOrchestrationV2LaunchThreadRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,

@@ -47,6 +47,7 @@ import {
   FileSearchIcon,
   FocusIcon,
   FolderIcon,
+  FolderGit2Icon,
   FolderPlusIcon,
   Layers3Icon,
   LinkIcon,
@@ -107,6 +108,7 @@ import {
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
 import { onOpenCommandPalette } from "../commandPaletteBus";
+import { openThreadWorkspaceMove } from "../threadWorkspaceMoveBus";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
@@ -1790,6 +1792,30 @@ function OpenCommandPaletteDialog(props: {
   ]);
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+
+  if (
+    activeThread &&
+    activeThread.worktreePath === null &&
+    activeThread.source.status === "idle" &&
+    activeThread.source.pendingRuntimeRequest === null &&
+    (activeThread.pendingBackgroundTasks?.length ?? 0) === 0 &&
+    activeThread.workspaceMove?.status !== "running"
+  ) {
+    actionItems.push({
+      kind: "action",
+      value: "action:move-thread-to-worktree",
+      searchTerms: ["move thread", "worktree", "checkout", "stash changes"],
+      title: "Move thread to a worktree",
+      description: activeThread.title,
+      icon: <FolderGit2Icon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        openThreadWorkspaceMove({
+          environmentId: activeThread.environmentId,
+          threadId: activeThread.id,
+        });
+      },
+    });
+  }
 
   if (projects.length > 0) {
     const activeProjectTitle =

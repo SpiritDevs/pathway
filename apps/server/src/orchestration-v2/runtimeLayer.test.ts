@@ -181,6 +181,93 @@ it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {
     }),
   );
 
+  it.effect("durably queues an idle workspace move and blocks new turns", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const outbox = yield* EffectOutboxV2;
+      const threadId = ThreadId.make("runtime-layer-workspace-move-thread");
+      const commandId = CommandId.make("runtime-layer-workspace-move");
+
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-workspace-move-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-workspace-move-project"),
+        title: "Move this thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "main",
+        worktreePath: null,
+      });
+
+      yield* orchestrator.dispatch({
+        type: "thread.workspace-move.request",
+        commandId,
+        threadId,
+        stopTerminals: true,
+      });
+
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(projection.thread.workspaceMove?.status, "running");
+      assert.equal(projection.thread.workspaceMove?.phase, "queued");
+      const effect = yield* outbox.get(`effect:${commandId}:workspace-move.execute`);
+      assert.equal(effect._tag, "Some");
+      if (effect._tag === "Some") {
+        assert.deepEqual(effect.value.request, {
+          type: "workspace-move.execute",
+          moveId: commandId,
+          stopTerminals: true,
+        });
+      }
+
+      const secondThreadId = ThreadId.make("runtime-layer-workspace-move-second-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-workspace-move-create-second"),
+        threadId: secondThreadId,
+        projectId: ProjectId.make("runtime-layer-workspace-move-project"),
+        title: "Second root thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "main",
+        worktreePath: null,
+      });
+      const concurrentMove = yield* orchestrator
+        .dispatch({
+          type: "thread.workspace-move.request",
+          commandId: CommandId.make("runtime-layer-workspace-move-second"),
+          threadId: secondThreadId,
+          stopTerminals: false,
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(concurrentMove, OrchestratorDispatchError);
+      assert.include(String(concurrentMove.cause), "shared project checkout");
+
+      const rejected = yield* orchestrator
+        .dispatch({
+          type: "message.dispatch",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make("runtime-layer-workspace-move-message"),
+          threadId,
+          messageId: MessageId.make("runtime-layer-workspace-move-message"),
+          text: "Start more work",
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: "start_immediately" },
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(rejected, OrchestratorDispatchError);
+      assert.include(String(rejected.cause), "workspace move");
+    }),
+  );
+
   it.effect("merges an explicit provider-finished run while checkpoint capture is pending", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;

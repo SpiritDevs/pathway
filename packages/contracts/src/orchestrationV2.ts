@@ -359,6 +359,36 @@ export const OrchestrationV2ThreadPreviewActivity = Schema.Struct({
 });
 export type OrchestrationV2ThreadPreviewActivity = typeof OrchestrationV2ThreadPreviewActivity.Type;
 
+export const OrchestrationV2WorkspaceMovePhase = Schema.Literals([
+  "queued",
+  "stopping_terminals",
+  "saving_changes",
+  "creating_worktree",
+  "applying_changes",
+  "moving_thread",
+  "starting_setup",
+]);
+export type OrchestrationV2WorkspaceMovePhase = typeof OrchestrationV2WorkspaceMovePhase.Type;
+
+export const OrchestrationV2WorkspaceMove = Schema.Struct({
+  id: CommandId,
+  status: Schema.Literals(["running", "completed", "failed", "manual_recovery"]),
+  phase: OrchestrationV2WorkspaceMovePhase,
+  sourceCwd: Schema.NullOr(TrimmedNonEmptyString),
+  sourceHead: Schema.NullOr(TrimmedNonEmptyString),
+  fileCount: NonNegativeInt,
+  terminalCount: NonNegativeInt,
+  transferStashOid: Schema.NullOr(TrimmedNonEmptyString),
+  targetWorktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  targetBranch: Schema.NullOr(TrimmedNonEmptyString),
+  setup: Schema.Literals(["pending", "started", "no_script", "failed"]),
+  detail: Schema.NullOr(Schema.String),
+  startedAt: Schema.DateTimeUtc,
+  updatedAt: Schema.DateTimeUtc,
+  completedAt: Schema.NullOr(Schema.DateTimeUtc),
+});
+export type OrchestrationV2WorkspaceMove = typeof OrchestrationV2WorkspaceMove.Type;
+
 /** Product views in which a thread is intentionally discoverable. */
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
@@ -424,6 +454,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   browserTakeover: Schema.optional(Schema.NullOr(OrchestrationV2BrowserTakeover)),
   /** Coalesced preview automation host/tab marker; see the schema doc. */
   previewActivity: Schema.optional(Schema.NullOr(OrchestrationV2ThreadPreviewActivity)),
+  /** Durable state for moving this thread from the project checkout into a worktree. */
+  workspaceMove: Schema.optional(Schema.NullOr(OrchestrationV2WorkspaceMove)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
@@ -1400,6 +1432,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspaceMove: OrchestrationV2AppThread.fields.workspaceMove,
   lineage: OrchestrationV2AppThreadLineage,
   forkKind: OrchestrationV2AppThread.fields.forkKind,
   locations: OrchestrationV2AppThread.fields.locations,
@@ -1533,6 +1566,16 @@ export const OrchestrationV2ThreadPreviewActivityJson =
 export type OrchestrationV2ThreadPreviewActivityJson =
   typeof OrchestrationV2ThreadPreviewActivityJson.Type;
 
+export const OrchestrationV2WorkspaceMoveJson = OrchestrationV2WorkspaceMove.mapFields(
+  (fields) => ({
+    ...fields,
+    startedAt: Schema.DateTimeUtcFromString,
+    updatedAt: Schema.DateTimeUtcFromString,
+    completedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  }),
+);
+export type OrchestrationV2WorkspaceMoveJson = typeof OrchestrationV2WorkspaceMoveJson.Type;
+
 export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((fields) => ({
   ...fields,
   createdAt: Schema.DateTimeUtcFromString,
@@ -1557,6 +1600,7 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
   ),
   browserTakeover: Schema.optional(Schema.NullOr(OrchestrationV2BrowserTakeoverJson)),
   previewActivity: Schema.optional(Schema.NullOr(OrchestrationV2ThreadPreviewActivityJson)),
+  workspaceMove: Schema.optional(Schema.NullOr(OrchestrationV2WorkspaceMoveJson)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 }));
 export type OrchestrationV2AppThreadJson = typeof OrchestrationV2AppThreadJson.Type;
@@ -2230,6 +2274,12 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
   }),
   Schema.Struct({
+    type: Schema.Literal("thread.workspace-move.request"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    stopTerminals: Schema.Boolean,
+  }),
+  Schema.Struct({
     type: Schema.Literal("thread.metadata.update"),
     commandId: CommandId,
     threadId: ThreadId,
@@ -2239,6 +2289,7 @@ export const OrchestrationV2Command = Schema.Union([
     branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     expectedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    workspaceMove: Schema.optional(Schema.NullOr(OrchestrationV2WorkspaceMove)),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.title.regeneration.complete"),
@@ -2515,6 +2566,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   searchThreads: "orchestration.searchThreads",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   getThreadProjection: "orchestration.getThreadProjection",
+  previewWorkspaceMove: "orchestration.previewWorkspaceMove",
   getWorkflowScript: "orchestration.getWorkflowScript",
   launchContinuation: "orchestration.launchContinuation",
   launchThread: "orchestration.launchThread",
@@ -2522,6 +2574,42 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
 } as const;
+
+export const OrchestrationV2WorkspaceMovePreviewInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type OrchestrationV2WorkspaceMovePreviewInput =
+  typeof OrchestrationV2WorkspaceMovePreviewInput.Type;
+
+export const OrchestrationV2WorkspaceMoveBlocker = Schema.Struct({
+  kind: Schema.Literals([
+    "already_in_worktree",
+    "thread_archived",
+    "thread_active",
+    "shared_thread_active",
+    "workspace_unavailable",
+    "not_git_repository",
+    "move_in_progress",
+  ]),
+  message: Schema.String,
+});
+export type OrchestrationV2WorkspaceMoveBlocker = typeof OrchestrationV2WorkspaceMoveBlocker.Type;
+
+export const OrchestrationV2WorkspaceMovePreview = Schema.Struct({
+  fileCount: NonNegativeInt,
+  terminalCount: NonNegativeInt,
+  blockers: Schema.Array(OrchestrationV2WorkspaceMoveBlocker),
+});
+export type OrchestrationV2WorkspaceMovePreview = typeof OrchestrationV2WorkspaceMovePreview.Type;
+
+export class OrchestrationV2WorkspaceMovePreviewError extends Schema.TaggedErrorClass<OrchestrationV2WorkspaceMovePreviewError>()(
+  "OrchestrationV2WorkspaceMovePreviewError",
+  {
+    threadId: ThreadId,
+    message: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
 export const OrchestrationV2ArchivedShellSnapshot = Schema.Struct({
   schemaVersion: PositiveInt,
@@ -2815,6 +2903,10 @@ export const OrchestrationV2RpcSchemas = {
   getThreadProjection: {
     input: OrchestrationV2GetThreadProjectionInput,
     output: OrchestrationV2ThreadProjection,
+  },
+  previewWorkspaceMove: {
+    input: OrchestrationV2WorkspaceMovePreviewInput,
+    output: OrchestrationV2WorkspaceMovePreview,
   },
   getWorkflowScript: {
     input: OrchestrationV2GetWorkflowScriptInput,

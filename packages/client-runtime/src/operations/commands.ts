@@ -115,6 +115,10 @@ export interface VisitThreadInput extends ThreadCommandInput {
 
 export type MarkThreadUnreadInput = ThreadCommandInput;
 
+export interface RequestWorkspaceMoveInput extends ThreadCommandInput {
+  readonly stopTerminals: boolean;
+}
+
 export interface AttachPullRequestInput extends ThreadCommandInput {
   readonly cwd: string;
   readonly reference: string;
@@ -595,6 +599,17 @@ export const markThreadUnread = Effect.fn("EnvironmentCommands.markThreadUnread"
     threadId: input.threadId,
   });
 });
+
+export const requestWorkspaceMove = Effect.fn("EnvironmentCommands.requestWorkspaceMove")(
+  function* (input: RequestWorkspaceMoveInput) {
+    return yield* dispatch({
+      type: "thread.workspace-move.request",
+      commandId: yield* allocateCommandId(input),
+      threadId: input.threadId,
+      stopTerminals: input.stopTerminals,
+    });
+  },
+);
 
 export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadMetadata")(
   function* (input: UpdateThreadMetadataInput) {

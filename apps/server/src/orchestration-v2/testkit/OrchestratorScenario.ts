@@ -128,6 +128,7 @@ function commandThreadIds(command: OrchestrationV2Command): ReadonlyArray<Thread
     case "thread.pin.reorder":
     case "thread.visit":
     case "thread.mark-unread":
+    case "thread.workspace-move.request":
     case "thread.metadata.update":
     case "thread.title.regeneration.complete":
     case "thread.browser-takeover.request":

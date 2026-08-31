@@ -65,6 +65,15 @@ export class GitWorkflowService extends Context.Service<
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
+    readonly createTransferStash: (
+      input: GitVcsDriver.GitTransferStashInput,
+    ) => Effect.Effect<GitVcsDriver.GitTransferStashResult, GitCommandError>;
+    readonly applyTransferStash: (
+      input: GitVcsDriver.GitTransferStashRefInput,
+    ) => Effect.Effect<void, GitCommandError>;
+    readonly dropTransferStash: (
+      input: GitVcsDriver.GitTransferStashRefInput,
+    ) => Effect.Effect<void, GitCommandError>;
     readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
     readonly fetchRemote: (input: {
       readonly cwd: string;
@@ -313,6 +322,18 @@ export const make = Effect.gen(function* () {
     createWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
         Effect.andThen(git.createWorktree(input)),
+      ),
+    createTransferStash: (input) =>
+      ensureGitCommand("GitWorkflowService.createTransferStash", input.cwd).pipe(
+        Effect.andThen(git.createTransferStash(input)),
+      ),
+    applyTransferStash: (input) =>
+      ensureGitCommand("GitWorkflowService.applyTransferStash", input.cwd).pipe(
+        Effect.andThen(git.applyTransferStash(input)),
+      ),
+    dropTransferStash: (input) =>
+      ensureGitCommand("GitWorkflowService.dropTransferStash", input.cwd).pipe(
+        Effect.andThen(git.dropTransferStash(input)),
       ),
     listLocalBranchNames: (cwd) =>
       ensureGitCommand("GitWorkflowService.listLocalBranchNames", cwd).pipe(

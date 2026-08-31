@@ -2812,6 +2812,84 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     };
   });
 
+  const listTransferStashes = Effect.fn("GitVcsDriver.listTransferStashes")(function* (
+    cwd: string,
+  ) {
+    const result = yield* executeGit(
+      "GitVcsDriver.listTransferStashes",
+      cwd,
+      ["stash", "list", "--format=%H%x09%gd%x09%gs"],
+      { fallbackErrorDetail: "git stash list failed" },
+    );
+    return result.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .flatMap((line) => {
+        const [oid, ref, ...subjectParts] = line.split("\t");
+        return oid && ref ? [{ oid, ref, subject: subjectParts.join("\t") }] : [];
+      });
+  });
+
+  const createTransferStash: GitVcsDriver.GitVcsDriver["Service"]["createTransferStash"] =
+    Effect.fn("GitVcsDriver.createTransferStash")(function* (input) {
+      const existing = (yield* listTransferStashes(input.cwd)).find((stash) =>
+        stash.subject.includes(input.marker),
+      );
+      if (existing) return { oid: existing.oid };
+
+      const details = yield* statusDetailsLocal(input.cwd);
+      if (!details.hasWorkingTreeChanges) return { oid: null };
+
+      yield* executeGit(
+        "GitVcsDriver.createTransferStash",
+        input.cwd,
+        ["stash", "push", "--include-untracked", "--message", input.marker],
+        {
+          fallbackErrorDetail: "git stash push failed",
+          timeoutMs: 120_000,
+        },
+      );
+      const created = (yield* listTransferStashes(input.cwd)).find((stash) =>
+        stash.subject.includes(input.marker),
+      );
+      if (!created) {
+        return yield* new GitCommandError({
+          operation: "GitVcsDriver.createTransferStash",
+          command: "git stash push",
+          cwd: input.cwd,
+          detail: "Git created no identifiable transfer stash.",
+        });
+      }
+      return { oid: created.oid };
+    });
+
+  const applyTransferStash: GitVcsDriver.GitVcsDriver["Service"]["applyTransferStash"] = Effect.fn(
+    "GitVcsDriver.applyTransferStash",
+  )(function* (input) {
+    yield* executeGit(
+      "GitVcsDriver.applyTransferStash",
+      input.cwd,
+      ["stash", "apply", "--index", input.oid],
+      {
+        fallbackErrorDetail: "git stash apply failed",
+        timeoutMs: 120_000,
+      },
+    );
+  });
+
+  const dropTransferStash: GitVcsDriver.GitVcsDriver["Service"]["dropTransferStash"] = Effect.fn(
+    "GitVcsDriver.dropTransferStash",
+  )(function* (input) {
+    const stash = (yield* listTransferStashes(input.cwd)).find(
+      (candidate) => candidate.oid === input.oid,
+    );
+    if (!stash) return;
+    yield* executeGit("GitVcsDriver.dropTransferStash", input.cwd, ["stash", "drop", stash.ref], {
+      fallbackErrorDetail: "git stash drop failed",
+    });
+  });
+
   const fetchPullRequestBranch: GitVcsDriver.GitVcsDriver["Service"]["fetchPullRequestBranch"] =
     Effect.fn("fetchPullRequestBranch")(function* (input) {
       const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
@@ -3277,6 +3355,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     readConfigValue,
     listRefs,
     createWorktree: (input) => withListRefsInvalidation(input.cwd, createWorktree(input)),
+    createTransferStash: (input) => withListRefsInvalidation(input.cwd, createTransferStash(input)),
+    applyTransferStash: (input) => withListRefsInvalidation(input.cwd, applyTransferStash(input)),
+    dropTransferStash: (input) => withListRefsInvalidation(input.cwd, dropTransferStash(input)),
     fetchPullRequestBranch: (input) =>
       withListRefsInvalidation(input.cwd, fetchPullRequestBranch(input)),
     fetchPullRequestHeadCommit,

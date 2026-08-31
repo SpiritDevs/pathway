@@ -1341,6 +1341,58 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("moves tracked and untracked changes through an exact transfer stash", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+
+        yield* writeTextFile(cwd, "README.md", "# changed in source\n");
+        yield* writeTextFile(cwd, "new-file.txt", "untracked\n");
+        yield* git(cwd, ["add", "README.md"]);
+        yield* git(cwd, ["stash", "push", "--include-untracked", "--message", "user-stash"]);
+        yield* git(cwd, ["stash", "apply", "--index", "stash@{0}"]);
+
+        const transfer = yield* driver.createTransferStash({
+          cwd,
+          marker: "pathway-workspace-move:test",
+        });
+        assert.isNotNull(transfer.oid);
+        assert.equal(yield* git(cwd, ["status", "--porcelain=v1"]), "");
+
+        const created = yield* driver.createWorktree({
+          cwd,
+          refName: "HEAD",
+          newRefName: "pathway/transfer-test",
+          baseRefName: "HEAD",
+          path: null,
+        });
+        yield* driver.applyTransferStash({ cwd: created.worktree.path, oid: transfer.oid! });
+
+        assert.equal(
+          yield* fileSystem.readFileString(pathService.join(created.worktree.path, "README.md")),
+          "# changed in source\n",
+        );
+        assert.equal(
+          yield* fileSystem.readFileString(pathService.join(created.worktree.path, "new-file.txt")),
+          "untracked\n",
+        );
+        assert.include(
+          yield* git(created.worktree.path, ["status", "--porcelain=v1"]),
+          "M  README.md",
+        );
+
+        yield* driver.dropTransferStash({ cwd, oid: transfer.oid! });
+        const remainingStashes = yield* git(cwd, ["stash", "list", "--format=%gs"]);
+        assert.include(remainingStashes, "user-stash");
+        assert.notInclude(remainingStashes, "pathway-workspace-move:test");
+        yield* driver.removeWorktree({ cwd, path: created.worktree.path, force: true });
+        yield* driver.deleteLocalBranch({ cwd, refName: "pathway/transfer-test", force: true });
+      }),
+    );
+
     it.effect("returns the existing refName when rename source and target match", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

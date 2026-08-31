@@ -168,6 +168,9 @@ export class TerminalManager extends Context.Service<
      */
     readonly close: (input: TerminalCloseInput) => Effect.Effect<void, TerminalError>;
 
+    /** Read the lightweight metadata snapshot without opening a subscription. */
+    readonly listMetadata: Effect.Effect<ReadonlyArray<TerminalSummary>>;
+
     /**
      * Subscribe to terminal runtime events with a direct callback.
      *
@@ -2699,6 +2702,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     clear,
     restart,
     close,
+    listMetadata: readAllTerminalMetadata(),
     subscribe,
     subscribeMetadata,
   });

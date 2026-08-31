@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "./ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { Button } from "./ui/button";
 
 export const PREVIOUS_WORKTREE_SELECT_VALUE = "previous-worktree";
 
@@ -37,6 +38,9 @@ interface BranchToolbarEnvModeSelectorProps {
   displayMode?: "toolbar" | "panel";
   previousWorktreeLabel?: string | null;
   onUsePreviousWorktree?: () => void;
+  onMoveToWorktree?: () => void;
+  moveToWorktreeDisabled?: boolean;
+  moveToWorktreeTooltip?: string;
 }
 
 export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSelector({
@@ -48,6 +52,9 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   displayMode = "toolbar",
   previousWorktreeLabel,
   onUsePreviousWorktree,
+  onMoveToWorktree,
+  moveToWorktreeDisabled = false,
+  moveToWorktreeTooltip = "Move thread to a worktree",
 }: BranchToolbarEnvModeSelectorProps) {
   const workspacePath = displayMode === "panel" ? (activeWorktreePath ?? workspaceRoot) : null;
   const workspaceDisplayName = resolveWorkspaceDisplayName(workspacePath);
@@ -97,6 +104,34 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
     );
 
     if (!workspacePath) return lockedRow;
+
+    if (displayMode === "panel" && !activeWorktreePath && onMoveToWorktree) {
+      return (
+        <div className="flex w-full items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger render={<span className="min-w-0 flex-1">{lockedRow}</span>} />
+            <TooltipPopup side="left">{workspacePath}</TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="Move thread to a worktree"
+                  aria-disabled={moveToWorktreeDisabled}
+                  className={moveToWorktreeDisabled ? "cursor-not-allowed opacity-64" : undefined}
+                  onClick={moveToWorktreeDisabled ? undefined : onMoveToWorktree}
+                />
+              }
+            >
+              <FolderGit2Icon />
+            </TooltipTrigger>
+            <TooltipPopup side="left">{moveToWorktreeTooltip}</TooltipPopup>
+          </Tooltip>
+        </div>
+      );
+    }
 
     return (
       <Tooltip>

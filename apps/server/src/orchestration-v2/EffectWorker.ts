@@ -31,6 +31,7 @@ import { ProviderTurnControlServiceV2 } from "./ProviderTurnControlService.ts";
 import { ProviderTurnStartServiceV2 } from "./ProviderTurnStartService.ts";
 import { RuntimeRequestServiceV2 } from "./RuntimeRequestService.ts";
 import { ThreadTitleRegenerationService } from "./ThreadTitleRegenerationService.ts";
+import { ThreadWorkspaceMoveService } from "./ThreadWorkspaceMoveService.ts";
 
 export class OrchestrationEffectExecutionError extends Schema.TaggedErrorClass<OrchestrationEffectExecutionError>()(
   "OrchestrationEffectExecutionError",
@@ -98,6 +99,7 @@ export const executorLayer: Layer.Layer<
     const providerTurnStart = yield* ProviderTurnStartServiceV2;
     const runtimeRequests = yield* RuntimeRequestServiceV2;
     const threadTitleRegeneration = yield* ThreadTitleRegenerationService;
+    const threadWorkspaceMove = yield* Effect.serviceOption(ThreadWorkspaceMoveService);
     const browserTakeover = yield* BrowserTakeoverService;
     return OrchestrationEffectExecutorV2.of({
       execute: (effect) => {
@@ -339,6 +341,36 @@ export const executorLayer: Layer.Layer<
                     }),
                 ),
               );
+          case "workspace-move.execute": {
+            const request = effect.request;
+            return Option.match(threadWorkspaceMove, {
+              onNone: () =>
+                Effect.fail(
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause: "The workspace move service is unavailable.",
+                  }),
+                ),
+              onSome: (service) =>
+                service
+                  .execute({
+                    threadId: effect.threadId,
+                    moveId: request.moveId,
+                    stopTerminals: request.stopTerminals,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new OrchestrationEffectExecutionError({
+                          effectId: effect.id,
+                          effectType: effect.request.type,
+                          cause,
+                        }),
+                    ),
+                  ),
+            });
+          }
           case "browser-takeover.establish":
           case "browser-takeover.proceed":
           case "browser-takeover.release": {

@@ -23,6 +23,12 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
         staleTimeMs: 0,
         idleTtlMs: 0,
       }),
+      workspaceMovePreview: createEnvironmentRpcQueryAtomFamily(runtime, {
+        label: "environment-data:orchestration-v2:workspace-move-preview",
+        tag: ORCHESTRATION_V2_WS_METHODS.previewWorkspaceMove,
+        staleTimeMs: 0,
+        idleTtlMs: 0,
+      }),
       shell: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
         label: "environment-data:orchestration-v2:shell",
         tag: ORCHESTRATION_V2_WS_METHODS.subscribeShell,

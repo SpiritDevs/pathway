@@ -77,6 +77,7 @@ export interface EnvironmentThreadShell {
   readonly interactionMode: OrchestrationV2ThreadShell["interactionMode"];
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  readonly workspaceMove: OrchestrationV2ThreadShell["workspaceMove"];
   readonly lineage: OrchestrationV2ThreadShell["lineage"];
   readonly forkKind?: OrchestrationV2ThreadShell["forkKind"];
   readonly locations?: OrchestrationV2ThreadShell["locations"];
@@ -192,6 +193,7 @@ export function presentThreadShell(
     interactionMode: thread.interactionMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
+    workspaceMove: thread.workspaceMove,
     lineage: thread.lineage,
     forkKind: thread.forkKind,
     ...(thread.locations === undefined ? {} : { locations: thread.locations }),

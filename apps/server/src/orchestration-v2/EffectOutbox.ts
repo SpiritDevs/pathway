@@ -104,6 +104,11 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
       Schema.Struct({ type: Schema.Literal("regenerate") }),
     ]),
   }),
+  Schema.Struct({
+    type: Schema.Literal("workspace-move.execute"),
+    moveId: CommandId,
+    stopTerminals: Schema.Boolean,
+  }),
   /**
    * Browser takeover steps. All three are process-bound: they own an in-memory
    * automation fence, so a claim inherited from a dead process must be failed
@@ -132,6 +137,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "terminal.cleanup",
   "attachment.cleanup",
   "thread-title.generate",
+  "workspace-move.execute",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 
 export const PROCESS_BOUND_EFFECT_TYPES = [

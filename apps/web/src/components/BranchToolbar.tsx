@@ -65,6 +65,9 @@ interface BranchToolbarProps {
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   onLinkEnvironmentRequest?: () => void;
+  onMoveToWorktree?: () => void;
+  moveToWorktreeDisabled?: boolean;
+  moveToWorktreeTooltip?: string;
 }
 
 interface MobileRunContextSelectorProps {
@@ -413,6 +416,9 @@ export const BranchToolbar = memo(function BranchToolbar({
   availableEnvironments,
   onEnvironmentChange,
   onLinkEnvironmentRequest,
+  onMoveToWorktree,
+  moveToWorktreeDisabled,
+  moveToWorktreeTooltip,
 }: BranchToolbarProps) {
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -525,6 +531,9 @@ export const BranchToolbar = memo(function BranchToolbar({
             onEnvModeChange={onEnvModeChange}
             previousWorktreeLabel={previousWorktreeLabel}
             onUsePreviousWorktree={onUsePreviousWorktree}
+            {...(serverThread !== null && onMoveToWorktree ? { onMoveToWorktree } : {})}
+            {...(moveToWorktreeDisabled === undefined ? {} : { moveToWorktreeDisabled })}
+            {...(moveToWorktreeTooltip === undefined ? {} : { moveToWorktreeTooltip })}
           />
         ) : null}
         {panelSection !== "workspace" ? (

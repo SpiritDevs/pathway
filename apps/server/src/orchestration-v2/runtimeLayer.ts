@@ -32,6 +32,7 @@ import { layerFromProviderInstanceRegistry as providerAdapterRegistryLayerFromPr
 import { layer as providerContinuationRequestsLayer } from "./ProviderContinuationRequests.ts";
 import { workerLive as providerContinuationWorkerLive } from "./ProviderContinuationService.ts";
 import { layer as threadTitleRegenerationServiceLayer } from "./ThreadTitleRegenerationService.ts";
+import { layer as threadWorkspaceMoveServiceLayer } from "./ThreadWorkspaceMoveService.ts";
 import { layer as providerEventIngestorLayer } from "./ProviderEventIngestor.ts";
 import { layer as providerSessionManagerLayer } from "./ProviderSessionManager.ts";
 import { layer as providerRuntimeRecoveryLayer } from "./ProviderRuntimeRecoveryService.ts";
@@ -234,6 +235,11 @@ const threadTitleRegenerationProvided = threadTitleRegenerationServiceLayer.pipe
     Layer.mergeAll(threadManagementProvided, ProjectionProjectRepositoryLive, TextGeneration.layer),
   ),
 );
+const threadWorkspaceMoveProvided = threadWorkspaceMoveServiceLayer.pipe(
+  Layer.provide(
+    Layer.mergeAll(projectionStoreLayer, ProjectionProjectRepositoryLive, threadManagementProvided),
+  ),
+);
 // The fence registry is exported alongside the service: the composition root
 // that builds the preview automation broker registers the live fence into it at
 // startup (orchestration and the broker are mutually dependent, so the binding
@@ -252,6 +258,7 @@ const effectExecutorProvided = effectExecutorLayer.pipe(
       providerTurnStartServiceProvided,
       runtimeRequestServiceProvided,
       threadTitleRegenerationProvided,
+      threadWorkspaceMoveProvided,
       browserTakeoverProvided,
     ),
   ),
@@ -274,6 +281,7 @@ const providerRuntimeRecoveryProvided = providerRuntimeRecoveryLayer.pipe(
 export const OrchestrationV2LayerLive = Layer.mergeAll(
   orchestratorProvided,
   threadManagementProvided,
+  threadWorkspaceMoveProvided,
   browserTakeoverProvided,
   browserTakeoverFenceRegistryProvided,
   effectWorkerProvided,
