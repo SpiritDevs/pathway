@@ -1,8 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { OrchestrationV2DomainEvent, OrchestrationV2ThreadShell } from "@spiritdevs/contracts";
+import { ConvexError } from "convex/values";
 
 import {
   cloudSafeThreadShell,
+  isUnpublishableAgentThreadRefusal,
   shouldPublishCloudAgentThreadEvent,
 } from "./cloudAgentThreadPublisher.ts";
 
@@ -51,5 +53,24 @@ describe("cloud Agent Thread publisher", () => {
         type: "thread.metadata-updated",
       } as OrchestrationV2DomainEvent),
     ).toBe(true);
+  });
+
+  it("parks only the typed binding refusal, never transport or auth failures", () => {
+    expect(
+      isUnpublishableAgentThreadRefusal(
+        new ConvexError({
+          code: "entity-not-found",
+          message: "The Agent Thread project has no active binding on this environment.",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isUnpublishableAgentThreadRefusal(
+        new ConvexError({ code: "permission-denied", message: "Missing permission." }),
+      ),
+    ).toBe(false);
+    expect(isUnpublishableAgentThreadRefusal(new ConvexError("plain payload"))).toBe(false);
+    expect(isUnpublishableAgentThreadRefusal(new Error("fetch failed"))).toBe(false);
+    expect(isUnpublishableAgentThreadRefusal(undefined)).toBe(false);
   });
 });
