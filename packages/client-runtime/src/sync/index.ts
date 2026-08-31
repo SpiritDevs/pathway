@@ -11,6 +11,8 @@
 // (`IDBDatabase`, `IDBFactory`), which would break every consumer compiled without the DOM lib
 // (e.g. `apps/server`). Browser platforms import it via `@spiritdevs/client-runtime/sync/indexeddb`.
 export * from "./adapter.ts";
+export * from "./calendarDomain.ts";
+export * from "./calendarReadModel.ts";
 export * from "./capability.ts";
 export * from "./codec.ts";
 export * from "./companyDomain.ts";

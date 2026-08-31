@@ -43,6 +43,7 @@ import {
 } from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
+import { useCalendarViewer } from "../../cloud/calendarReadModel";
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { readLocalApi } from "../../localApi";
@@ -644,7 +645,14 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
     ],
   ) satisfies Record<PrimaryNavigationDestination, MobileNavigationItem>;
 
-  const movableNavigationItems = viewOrder.map(
+  // Permission-gated destinations drop out of the rail entirely rather than greying out: a row you
+  // can press but cannot use is worse than one that is not there. `null` — the replica has not said
+  // yet — keeps the row, so a reconnect does not flicker it away and back.
+  const calendarAccess = useCalendarViewer().canRead;
+  const visibleViewOrder = viewOrder.filter(
+    (destination) => destination !== "calendar" || calendarAccess !== false,
+  );
+  const movableNavigationItems = visibleViewOrder.map(
     (destination) => navigationItemsByDestination[destination],
   );
   const fixedBottomNavigationItems = [
@@ -751,7 +759,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
                 .id as MovablePrimaryNavigationDestination;
             }}
           >
-            <SortableContext items={[...viewOrder]} strategy={verticalListSortingStrategy}>
+            <SortableContext items={[...visibleViewOrder]} strategy={verticalListSortingStrategy}>
               {movableNavigationItems.map((item) => (
                 <SortableNavigationRailButton
                   key={item.destination}

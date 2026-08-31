@@ -30,6 +30,8 @@ export interface ShortcutModifierStateLike {
 
 export interface ShortcutMatchContext {
   agentThreadsView: boolean;
+  /** True on `/calendar`, which is what lets that surface's bare-key defaults fire at all. */
+  calendarView: boolean;
   terminalFocus: boolean;
   terminalOpen: boolean;
   previewFocus: boolean;
@@ -125,6 +127,7 @@ function resolvePlatform(options: ShortcutMatchOptions | undefined): string {
 function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatchContext {
   return {
     agentThreadsView: false,
+    calendarView: false,
     terminalFocus: false,
     terminalOpen: false,
     previewFocus: false,

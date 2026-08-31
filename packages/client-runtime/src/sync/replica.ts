@@ -55,6 +55,46 @@ export interface ConfirmedChangeResult<Entity> {
   readonly quarantined: number;
 }
 
+const NO_CASCADE: ReadonlyArray<SyncEntityKey> = [];
+
+/**
+ * The entities a tombstone takes with it, transitively, removed from `entities` as they are found.
+ *
+ * One pass over the replica per *level* of the cascade rather than one per removed row: revoking a
+ * calendar account drops its calendars and then their events, which is two passes however many
+ * calendars the account holds. That is what keeps ADR 0013's promise — a revoke costs one feed row
+ * — from turning into a scan per row once it reaches the client.
+ *
+ * Cascaded rows deliberately leave `entityVersions` alone: no server version was assigned to a drop
+ * the client made on its own, so if the row is ever replicated again it arrives at a version this
+ * replica has not seen and is accepted normally.
+ */
+function cascadeTombstonedEntities<Entity, Operation>(input: {
+  readonly adapter: SyncDomainAdapter<Entity, Operation>;
+  readonly origin: SyncEntityKey;
+  readonly entities: Map<string, ConfirmedEntity<Entity>>;
+}): ReadonlyArray<SyncEntityKey> {
+  const cascade = input.adapter.cascadeTombstone;
+  if (cascade === undefined) return NO_CASCADE;
+  const first = cascade(input.origin);
+  if (first === null) return NO_CASCADE;
+
+  const dropped: Array<SyncEntityKey> = [];
+  let level = [first];
+  while (level.length > 0) {
+    const next: Array<(entity: Entity) => boolean> = [];
+    for (const [mapKey, confirmed] of input.entities) {
+      if (!level.some((matches) => matches(confirmed.entity))) continue;
+      input.entities.delete(mapKey);
+      dropped.push(confirmed.key);
+      const further = cascade(confirmed.key);
+      if (further !== null) next.push(further);
+    }
+    level = next;
+  }
+  return dropped;
+}
+
 /** Rebuilds the confirmed map from persisted rows, dropping rows this build cannot decode. */
 export function decodeConfirmedEntities<Entity, Operation>(input: {
   readonly adapter: SyncDomainAdapter<Entity, Operation>;
@@ -126,6 +166,15 @@ export function applyConfirmedChanges<Entity, Operation>(input: {
       entityVersions.set(mapKey, change.version);
       upserts.delete(mapKey);
       deletes.set(mapKey, key);
+      for (const cascaded of cascadeTombstonedEntities({
+        adapter: input.adapter,
+        origin: key,
+        entities,
+      })) {
+        const cascadedKey = syncEntityKey(cascaded);
+        upserts.delete(cascadedKey);
+        deletes.set(cascadedKey, cascaded);
+      }
       continue;
     }
 

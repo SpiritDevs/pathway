@@ -101,6 +101,18 @@ export interface SyncDomainAdapter<Entity, Operation> {
     readonly current: Entity | null;
     readonly incoming: Entity;
   }) => Entity;
+  /**
+   * Which other entities a tombstone takes with it, as a predicate over the rows the replica still
+   * holds — or `null` when it takes none, which is the answer for all but a handful of kinds and
+   * the one that must not cost a scan of the replica.
+   *
+   * This exists because the protocol deliberately leaves work here: the calendar domain un-shares a
+   * calendar by tombstoning one row and expects the client to drop the events keyed under it
+   * (ADR 0013), rather than emitting a tombstone per event and broadcasting them wider than the
+   * audience being narrowed. The engine applies the answer transitively, so a domain describes one
+   * level at a time and never has to hold the replica in its head.
+   */
+  readonly cascadeTombstone?: (key: SyncEntityKey) => ((entity: Entity) => boolean) | null;
 }
 
 /**

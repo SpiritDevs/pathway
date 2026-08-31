@@ -12,6 +12,7 @@ import {
 import * as Option from "effect/Option";
 
 import type { SyncDomainAdapter } from "./adapter.ts";
+import { isCalendarSyncEntityKind } from "./calendarDomain.ts";
 import {
   COMPANY_SYNC_ENTITY_KINDS,
   companyEntityCodec,
@@ -428,10 +429,12 @@ describe("company entity codecs", () => {
 describe("the widened adapter", () => {
   const adapter = makeIssueSyncAdapter();
 
-  it("routes every kind of both domains and nothing else", () => {
+  it("routes every kind of all three domains and nothing else", () => {
     for (const kind of SYNC_ENTITY_KINDS) {
       const known =
-        isCompanySyncEntityKind(kind) || ISSUE_SYNC_ENTITY_KINDS.includes(kind as never);
+        isCompanySyncEntityKind(kind) ||
+        isCalendarSyncEntityKind(kind) ||
+        ISSUE_SYNC_ENTITY_KINDS.includes(kind as never);
       expect(adapter.entityCodec(kind) === null ? "none" : "codec").toBe(known ? "codec" : "none");
     }
     expect(adapter.entityCodec("cloudProject")).not.toBeNull();

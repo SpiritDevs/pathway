@@ -47,6 +47,24 @@ export const MODEL_PICKER_KEYBINDING_COMMANDS = [
 ] as const;
 export type ModelPickerKeybindingCommand = (typeof MODEL_PICKER_KEYBINDING_COMMANDS)[number];
 
+/**
+ * `/calendar` is the first surface with keys of its own, and they are bare letters because every
+ * other default is modifier-based and so collides with none of them. What keeps them from typing
+ * into a composer is the `calendarView` context plus the text-entry guard the surface applies; see
+ * `apps/web/src/components/calendar/calendarKeybindings.logic.ts`.
+ */
+export const CALENDAR_KEYBINDING_COMMANDS = [
+  "calendar.day",
+  "calendar.week",
+  "calendar.month",
+  "calendar.timeline",
+  "calendar.today",
+  "calendar.previous",
+  "calendar.next",
+  "calendar.newEvent",
+] as const;
+export type CalendarKeybindingCommand = (typeof CALENDAR_KEYBINDING_COMMANDS)[number];
+
 export const BUILT_IN_KEYBINDING_COMMANDS = [
   "sidebar.toggle",
   "terminal.toggle",
@@ -75,6 +93,7 @@ export const BUILT_IN_KEYBINDING_COMMANDS = [
   "editor.openFavorite",
   ...MODEL_PICKER_KEYBINDING_COMMANDS,
   ...THREAD_KEYBINDING_COMMANDS,
+  ...CALENDAR_KEYBINDING_COMMANDS,
 ] as const;
 
 export const SCRIPT_RUN_COMMAND_PATTERN = Schema.TemplateLiteral([
