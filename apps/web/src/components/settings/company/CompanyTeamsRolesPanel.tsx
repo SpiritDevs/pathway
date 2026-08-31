@@ -30,6 +30,7 @@ import {
   type CompanyMemberRow,
   type CompanyTeamRow,
 } from "./companySettings.logic";
+import { permissionGroupSections, permissionPresentation } from "./permissionCatalog";
 import {
   CompanySectionCard,
   CompanySettingsEmptyState,
@@ -353,27 +354,45 @@ function RoleSheet({
           />
         </label>
       </div>
-      <fieldset className="space-y-2">
+      <fieldset className="space-y-4">
         <legend className="text-xs font-medium">Permissions</legend>
-        <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
-          {COMPANY_PERMISSIONS.map((permission) => (
-            <label
-              key={permission}
-              className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50"
-            >
-              <Checkbox
-                checked={permissions.has(permission)}
-                onCheckedChange={() => {
-                  const next = new Set(permissions);
-                  if (next.has(permission)) next.delete(permission);
-                  else next.add(permission);
-                  setPermissions(next);
-                }}
-              />
-              <span className="truncate font-mono text-[11px]">{permission}</span>
-            </label>
-          ))}
-        </div>
+        {permissionGroupSections().map((section) => (
+          <div key={section.group} className="space-y-2">
+            <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+              {section.group}
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {section.permissions.map((permission) => {
+                const presentation = permissionPresentation(permission);
+                return (
+                  <label
+                    key={permission}
+                    className="flex items-start gap-2 rounded-lg border p-2.5"
+                  >
+                    <Checkbox
+                      checked={permissions.has(permission)}
+                      onCheckedChange={() => {
+                        const next = new Set(permissions);
+                        if (next.has(permission)) next.delete(permission);
+                        else next.add(permission);
+                        setPermissions(next);
+                      }}
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-xs font-medium">{presentation.label}</span>
+                      <span className="block text-[11px] leading-[1.45] text-muted-foreground">
+                        {presentation.description}
+                      </span>
+                      <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground/70">
+                        {permission}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </fieldset>
     </CompanySettingsSheet>
   );

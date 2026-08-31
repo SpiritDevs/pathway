@@ -88,6 +88,15 @@ import {
 import { ModelSelection } from "./modelSelection.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { CapturedEmailMessage, EmailTagId, TrustedEmailSenderId } from "./email.ts";
+import {
+  CalendarAccountId,
+  CalendarEventId,
+  CalendarEventLinkId,
+  CalendarEventVisibility,
+  CalendarId,
+  CalendarKind,
+  CalendarSharing,
+} from "./calendar.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -270,6 +279,10 @@ export const SYNC_ENTITY_KINDS = [
   "issueView",
   "issueAuditEvent",
   "issueThreadLink",
+  "calendarAccount",
+  "calendar",
+  "calendarEvent",
+  "calendarEventLink",
 ] as const;
 export const SyncEntityKind = Schema.Literals(SYNC_ENTITY_KINDS);
 export type SyncEntityKind = typeof SyncEntityKind.Type;
@@ -581,6 +594,59 @@ export const SyncTrustedEmailSenderPayload = Schema.Struct({
   updatedAt: CloudTimestamp,
 });
 export type SyncTrustedEmailSenderPayload = typeof SyncTrustedEmailSenderPayload.Type;
+
+/** A connected Google account. Credential material never enters the feed. */
+export const SyncCalendarAccountPayload = Schema.Struct({
+  id: CalendarAccountId,
+  ownerMembershipId: MembershipId,
+  provider: Schema.Literal("google"),
+  providerAccountId: TrimmedNonEmptyString,
+  email: TrimmedNonEmptyString,
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+});
+export type SyncCalendarAccountPayload = typeof SyncCalendarAccountPayload.Type;
+
+/** A calendar is the replicated sharing and cascade boundary for its events. */
+export const SyncCalendarPayload = Schema.Struct({
+  id: CalendarId,
+  ownerMembershipId: MembershipId,
+  name: TrimmedNonEmptyString,
+  sharing: CalendarSharing,
+  teamId: Schema.NullOr(TeamId),
+  kind: CalendarKind,
+  accountId: Schema.NullOr(CalendarAccountId),
+  googleCalendarId: Schema.NullOr(TrimmedNonEmptyString),
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+});
+export type SyncCalendarPayload = typeof SyncCalendarPayload.Type;
+
+export const SyncCalendarEventPayload = Schema.Struct({
+  id: CalendarEventId,
+  calendarId: CalendarId,
+  ownerMembershipId: MembershipId,
+  title: TrimmedNonEmptyString,
+  startAt: CloudTimestamp,
+  endAt: CloudTimestamp,
+  timeZone: TrimmedNonEmptyString,
+  allDay: Schema.Boolean,
+  visibility: CalendarEventVisibility,
+  googleEventId: Schema.NullOr(TrimmedNonEmptyString),
+  createdAt: CloudTimestamp,
+  updatedAt: CloudTimestamp,
+});
+export type SyncCalendarEventPayload = typeof SyncCalendarEventPayload.Type;
+
+/** Survives mirror cascades because it names Google's stable event identity. */
+export const SyncCalendarEventLinkPayload = Schema.Struct({
+  id: CalendarEventLinkId,
+  issueId: IssueId,
+  googleEventId: TrimmedNonEmptyString,
+  createdByMembershipId: MembershipId,
+  createdAt: CloudTimestamp,
+});
+export type SyncCalendarEventLinkPayload = typeof SyncCalendarEventLinkPayload.Type;
 
 /**
  * One durable remote-control command as carried by bootstrap and the incremental feed.

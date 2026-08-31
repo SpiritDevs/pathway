@@ -1,4 +1,5 @@
 import {
+  CALENDAR_KEYBINDING_COMMANDS,
   type KeybindingRule,
   type KeybindingShortcut,
   type KeybindingWhenNode,
@@ -17,6 +18,22 @@ type WhenToken =
   | { type: "or" }
   | { type: "lparen" }
   | { type: "rparen" };
+
+/**
+ * The context identifier `/calendar` publishes, mirroring `agentThreadsView`. Named once so a
+ * rebinding in settings and the surface that dispatches cannot spell it two ways.
+ */
+const CALENDAR_VIEW = "calendarView";
+
+/** d / w / m / x, in the order the mode toggle shows them. */
+const CALENDAR_MODE_KEYS = [
+  ["d", "calendar.day"],
+  ["w", "calendar.week"],
+  ["m", "calendar.month"],
+  ["x", "calendar.timeline"],
+] as const satisfies ReadonlyArray<
+  readonly [string, (typeof CALENDAR_KEYBINDING_COMMANDS)[number]]
+>;
 
 export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+b", command: "sidebar.toggle" },
@@ -57,6 +74,15 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
     command,
     when: "modelPickerOpen",
   })),
+  // `/calendar`'s own keys. Bare letters are safe here for one reason and it is worth stating: every
+  // other default above carries a modifier, so a bare key can collide with none of them, and
+  // `calendarView` keeps them off every other surface. Bracket keys step the range for the same
+  // reason `mod+shift+[` steps a thread — same metaphor, one level down.
+  ...CALENDAR_MODE_KEYS.map(([key, command]) => ({ key, command, when: CALENDAR_VIEW })),
+  { key: "t", command: "calendar.today", when: CALENDAR_VIEW },
+  { key: "[", command: "calendar.previous", when: CALENDAR_VIEW },
+  { key: "]", command: "calendar.next", when: CALENDAR_VIEW },
+  { key: "c", command: "calendar.newEvent", when: CALENDAR_VIEW },
 ];
 
 function normalizeKeyToken(token: string): string {

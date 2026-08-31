@@ -64,6 +64,10 @@ export const SYNC_ENTITY_KINDS = [
   "issueView",
   "issueAuditEvent",
   "issueThreadLink",
+  "calendarAccount",
+  "calendar",
+  "calendarEvent",
+  "calendarEventLink",
 ] as const;
 export type SyncEntityKind = (typeof SYNC_ENTITY_KINDS)[number];
 

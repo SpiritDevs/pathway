@@ -414,6 +414,114 @@ export default defineSchema({
     .index("by_role", ["roleId"])
     .index("by_team", ["teamId"]),
 
+  // ---------------------------------------------------------------------------
+  // Calendar
+  // ---------------------------------------------------------------------------
+
+  /** A linked Google account. OAuth credentials and synchronization are deliberately not here yet. */
+  calendarAccount: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    ownerMembershipId: v.id("memberships"),
+    provider: v.literal("google"),
+    providerAccountId: v.string(),
+    email: v.string(),
+    /** Storage-only encrypted OAuth credential; never encoded into a change-feed payload. */
+    credentialCiphertext: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    disconnectedAt: v.union(v.number(), v.null()),
+    version: v.optional(v.number()),
+  })
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_owner", ["companyId", "ownerMembershipId"])
+    .index("by_company_and_provider_account", ["companyId", "provider", "providerAccountId"]),
+
+  /** The calendar row is the sharing and revocation boundary for all child events. */
+  calendar: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    ownerMembershipId: v.id("memberships"),
+    name: v.string(),
+    sharing: v.union(v.literal("private"), v.literal("team"), v.literal("company")),
+    /** Non-null exactly for team sharing; the domain team id is what role scopes carry. */
+    teamId: v.union(domainId, v.null()),
+    kind: v.union(v.literal("pathway"), v.literal("google")),
+    accountId: v.union(v.id("calendarAccount"), v.null()),
+    googleCalendarId: v.union(v.string(), v.null()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    deletedAt: v.union(v.number(), v.null()),
+    version: v.optional(v.number()),
+  })
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_owner", ["companyId", "ownerMembershipId"])
+    .index("by_company_and_account", ["companyId", "accountId"])
+    .index("by_company_account_and_deleted", ["companyId", "accountId", "deletedAt"])
+    .index("by_company_and_google_calendar", ["companyId", "googleCalendarId"]),
+
+  calendarEvent: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    calendarId: domainId,
+    ownerMembershipId: v.id("memberships"),
+    title: v.string(),
+    startAt: v.number(),
+    endAt: v.number(),
+    timeZone: v.string(),
+    allDay: v.boolean(),
+    visibility: v.union(v.literal("default"), v.literal("private")),
+    googleEventId: v.union(v.string(), v.null()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    deletedAt: v.union(v.number(), v.null()),
+    version: v.optional(v.number()),
+  })
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_calendar", ["companyId", "calendarId"])
+    .index("by_company_calendar_and_deleted", ["companyId", "calendarId", "deletedAt"])
+    .index("by_company_calendar_deleted_and_visibility", [
+      "companyId",
+      "calendarId",
+      "deletedAt",
+      "visibility",
+    ])
+    .index("by_company_and_google_event", ["companyId", "googleEventId"]),
+
+  /** Explicit read edge for one named calendar and one grantee membership. */
+  calendarGrant: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    calendarId: domainId,
+    granteeMembershipId: v.id("memberships"),
+    grantedByMembershipId: v.id("memberships"),
+    createdAt: v.number(),
+  })
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    /** The one additional index read used to build a change viewer for a whole page. */
+    .index("by_company_and_grantee", ["companyId", "granteeMembershipId"])
+    .index("by_company_calendar_and_grantee", ["companyId", "calendarId", "granteeMembershipId"])
+    .index("by_company_and_calendar", ["companyId", "calendarId"]),
+
+  /**
+   * An issue link keys the mirrored identity, not a transient mirror row. It intentionally has no
+   * calendar/account foreign key, so disconnect and reconnect cannot erase it.
+   */
+  calendarEventLink: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    issueId: domainId,
+    googleEventId: v.string(),
+    createdByMembershipId: v.id("memberships"),
+    createdAt: v.number(),
+    deletedAt: v.union(v.number(), v.null()),
+    version: v.optional(v.number()),
+  })
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_issue", ["companyId", "issueId"])
+    .index("by_company_issue_and_deleted", ["companyId", "issueId", "deletedAt"])
+    .index("by_company_and_google_event", ["companyId", "googleEventId"]),
+
   companyInvitations: defineTable({
     id: domainId,
     companyId: v.id("companies"),
@@ -1225,6 +1333,16 @@ export default defineSchema({
     changeKind: v.union(v.literal("upsert"), v.literal("tombstone")),
     /** Empty means company-wide; otherwise any listed team grants the whole payload. */
     teamIds: v.array(domainId),
+    /** Storage-only calendar authorization and cascade metadata. */
+    calendarId: v.optional(domainId),
+    calendarOwnerMembershipId: v.optional(v.id("memberships")),
+    calendarSharing: v.optional(
+      v.union(v.literal("private"), v.literal("team"), v.literal("company")),
+    ),
+    calendarTeamId: v.optional(v.union(domainId, v.null())),
+    calendarDepartureMembershipIds: v.optional(v.array(v.id("memberships"))),
+    calendarDeleted: v.optional(v.boolean()),
+    calendarEventOwnerMembershipId: v.optional(v.union(v.id("memberships"), v.null())),
     /**
      * Set on a row whose only job is to tell an audience the entity just *left* it — today, a saved
      * view that turned private. Such a row is filtered on `teamIds` alone; the owner-private gate

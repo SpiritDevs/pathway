@@ -82,6 +82,10 @@ import {
   encodeCapturedEmail,
   encodeEmailTag,
   encodeTrustedEmailSender,
+  encodeCalendarAccount,
+  encodeCalendar,
+  encodeCalendarEvent,
+  encodeCalendarEventLink,
   encodeMembership,
   encodeRole,
   encodeRoleAssignment,
@@ -1406,12 +1410,12 @@ function tooManyDependents(issue: Doc<"issues">): DomainOutcome {
 /**
  * Everything hanging off an issue, republished under the union of the audiences its move spans.
  *
- * Comments, todos, attachments, relations, and thread links carry no team scope of their own: they
- * inherit the parent issue's, both in the feed and in `bootstrap`. So moving the parent alone moves
- * *nothing* for a replica that already holds them or is about to need them — the teams gaining the
- * issue never hear the children exist, and the teams losing it keep theirs forever. Re-emitting each
- * child as an upsert at the union audience is what makes the gaining replicas acquire them and lets
- * the losing ones drop them alongside the parent.
+ * Comments, todos, attachments, relations, thread links, and calendar-event links carry no team
+ * scope of their own: they inherit the parent issue's, both in the feed and in `bootstrap`. So moving
+ * the parent alone moves *nothing* for a replica that already holds them or is about to need them —
+ * the teams gaining the issue never hear the children exist, and the teams losing it keep theirs
+ * forever. Re-emitting each child as an upsert at the union audience is what makes the gaining
+ * replicas acquire them and lets the losing ones drop them alongside the parent.
  *
  * Audit history is deliberately not republished: it is append-only and unbounded, the one thing that
  * could not fit a bounded migration, and a replica that newly gains an issue seeds its history on
@@ -1486,6 +1490,25 @@ async function issueScopeMigrationChanges(
         audience,
         row._id,
         await encodeIssueThreadLink(ctx, company, row),
+      ),
+    );
+  }
+  if (room() <= 0) return { ok: false, outcome: tooManyDependents(issue) };
+
+  const calendarEventLinks = await ctx.db
+    .query("calendarEventLink")
+    .withIndex("by_company_issue_and_deleted", (q) =>
+      q.eq("companyId", company._id).eq("issueId", issue.id).eq("deletedAt", null),
+    )
+    .take(room());
+  for (const row of calendarEventLinks) {
+    changes.push(
+      upsert(
+        "calendarEventLink",
+        row.id,
+        audience,
+        row._id,
+        await encodeCalendarEventLink(ctx, row),
       ),
     );
   }
@@ -3082,6 +3105,11 @@ export interface BootstrapRow {
   readonly ownerMembershipId: string | null;
   /** Wire payload; `null` when `deleted` (a deleted row is only a cursor position). */
   readonly payload: unknown;
+  readonly calendarId?: string;
+  readonly calendarOwnerMembershipId?: string;
+  readonly calendarSharing?: "private" | "team" | "company";
+  readonly calendarTeamId?: string | null;
+  readonly calendarEventOwnerMembershipId?: string | null;
 }
 
 /**
@@ -3186,7 +3214,11 @@ type CompanyBootstrapTable =
   | "agentThreads"
   | "capturedEmails"
   | "emailTags"
-  | "trustedEmailSenders";
+  | "trustedEmailSenders"
+  | "calendarAccount"
+  | "calendar"
+  | "calendarEvent"
+  | "calendarEventLink";
 
 function pageOf<TableName extends IssueDomainTable | CompanyBootstrapTable>(
   ctx: QueryCtx,
@@ -3521,5 +3553,81 @@ export async function readBootstrapRows(
         await pageOf(ctx, "trustedEmailSenders", company._id, afterId, limit),
         (row) => encodeTrustedEmailSender(row),
       );
+    case "calendarAccount": {
+      const rows = await pageOf(ctx, "calendarAccount", company._id, afterId, limit);
+      const lifted: BootstrapRow[] = [];
+      for (const row of rows) {
+        lifted.push({
+          id: row.id,
+          version: companyRowVersion(row),
+          deleted: row.disconnectedAt !== null,
+          teamIds: [],
+          ownerMembershipId: null,
+          calendarOwnerMembershipId: row.ownerMembershipId,
+          payload: row.disconnectedAt === null ? await encodeCalendarAccount(ctx, row) : null,
+        });
+      }
+      return lifted;
+    }
+    case "calendar": {
+      const rows = await pageOf(ctx, "calendar", company._id, afterId, limit);
+      const lifted: BootstrapRow[] = [];
+      for (const row of rows) {
+        const deleted = row.deletedAt !== null;
+        lifted.push({
+          id: row.id,
+          version: companyRowVersion(row),
+          deleted,
+          teamIds: [],
+          ownerMembershipId: null,
+          calendarId: row.id,
+          calendarOwnerMembershipId: row.ownerMembershipId,
+          calendarSharing: row.sharing,
+          calendarTeamId: row.teamId,
+          payload: deleted ? null : await encodeCalendar(ctx, row),
+        });
+      }
+      return lifted;
+    }
+    case "calendarEvent": {
+      const rows = await pageOf(ctx, "calendarEvent", company._id, afterId, limit);
+      const lifted: BootstrapRow[] = [];
+      for (const row of rows) {
+        const calendar = await ctx.db
+          .query("calendar")
+          .withIndex("by_company_and_domain_id", (q) =>
+            q.eq("companyId", company._id).eq("id", row.calendarId),
+          )
+          .unique();
+        const deleted = row.deletedAt !== null || calendar === null || calendar.deletedAt !== null;
+        lifted.push({
+          id: row.id,
+          version: companyRowVersion(row),
+          deleted,
+          teamIds: [],
+          ownerMembershipId: null,
+          calendarId: row.calendarId,
+          ...(calendar === null
+            ? {}
+            : {
+                calendarOwnerMembershipId: calendar.ownerMembershipId,
+                calendarSharing: calendar.sharing,
+                calendarTeamId: calendar.teamId,
+              }),
+          calendarEventOwnerMembershipId:
+            row.visibility === "private" ? row.ownerMembershipId : null,
+          payload: deleted ? null : await encodeCalendarEvent(ctx, row),
+        });
+      }
+      return lifted;
+    }
+    case "calendarEventLink": {
+      const rows = await pageOf(ctx, "calendarEventLink", company._id, afterId, limit);
+      return lift(
+        rows.map((row) => ({ ...row, version: companyRowVersion(row) })),
+        (row) => cachedIssueTeams(ctx, company, cache, row.issueId),
+        (row) => encodeCalendarEventLink(ctx, row),
+      );
+    }
   }
 }

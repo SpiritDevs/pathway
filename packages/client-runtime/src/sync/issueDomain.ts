@@ -99,6 +99,12 @@ import {
   type SyncApplyOutcome,
   type SyncDomainAdapter,
 } from "./adapter.ts";
+import {
+  CALENDAR_ENTITY_CODECS,
+  CALENDAR_SYNC_ENTITY_KINDS,
+  calendarSyncTombstoneCascade,
+  type CalendarSyncEntity,
+} from "./calendarDomain.ts";
 import type { SyncCodec } from "./codec.ts";
 import {
   COMPANY_ENTITY_CODECS,
@@ -456,14 +462,15 @@ export function issueEntityCodec(entityKind: SyncEntityKind): SyncCodec<IssueSyn
 }
 
 /**
- * Everything one replica holds: the issue domain's twelve tables plus the company read domain.
+ * Everything one replica holds: the issue domain's twelve tables, the company read domain, and the
+ * calendar read domain.
  *
  * They share an engine rather than getting one each because a replica has exactly one checkpoint
  * and one outbox per company — a second engine would fight the first over both. So the replicated
  * *entity* type is a union while the *operation* type stays issues-only, which is precisely the
- * shape of the rule: issues are edited offline, company administration is not.
+ * shape of the rule: issues are edited offline, company administration and calendars are not.
  */
-export type CloudSyncEntity = IssueSyncEntity | CompanySyncEntity;
+export type CloudSyncEntity = IssueSyncEntity | CompanySyncEntity | CalendarSyncEntity;
 
 /**
  * Widens one domain's codec to the union the engine holds.
@@ -494,13 +501,16 @@ const CLOUD_ENTITY_CODECS: ReadonlyMap<string, SyncCodec<CloudSyncEntity>> = new
   ...COMPANY_SYNC_ENTITY_KINDS.map(
     (kind) => [kind, widenEntityCodec(COMPANY_ENTITY_CODECS[kind])] as const,
   ),
+  ...CALENDAR_SYNC_ENTITY_KINDS.map(
+    (kind) => [kind, widenEntityCodec(CALENDAR_ENTITY_CODECS[kind])] as const,
+  ),
 ]);
 
 /**
- * Codec for one entity kind across both domains, or `null` for a kind this build cannot read.
+ * Codec for one entity kind across all three domains, or `null` for a kind this build cannot read.
  *
- * The two kind sets are disjoint by construction, so the dispatch cannot be ambiguous: a kind is an
- * issue table, a company table, or unknown to this build and therefore quarantined.
+ * The three kind sets are disjoint by construction, so the dispatch cannot be ambiguous: a kind is
+ * an issue table, a company table, a calendar table, or unknown to this build and quarantined.
  */
 export function cloudEntityCodec(entityKind: SyncEntityKind): SyncCodec<CloudSyncEntity> | null {
   return CLOUD_ENTITY_CODECS.get(entityKind) ?? null;
@@ -1210,6 +1220,9 @@ export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSy
     operationDependencies: (operation) => operation.dependsOn ?? [],
     decodeOperation: decodeIssueSyncOperation,
     apply,
+    // The only cross-entity effect the client is asked to compute. Everything else in `apply` sees
+    // one entity, but un-sharing a calendar arrives as a single row and means "and its events too".
+    cascadeTombstone: calendarSyncTombstoneCascade,
   };
 }
 

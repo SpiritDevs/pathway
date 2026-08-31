@@ -10,6 +10,10 @@
  * surface works from a keyboard. Undated milestones wait in the tray, and dragging a bar back into
  * it clears both dates again.
  *
+ * The chart around the bars — toolbar, header, gridlines, lanes — is `components/timeline`, shared
+ * with `/calendar`'s Timeline mode (ADR 0011). What stays here is what is milestones-shaped: the
+ * tray, the drag wiring, and the date popover.
+ *
  * @module components/issues/MilestonesTimeline
  */
 import {
@@ -26,22 +30,25 @@ import {
 } from "@dnd-kit/core";
 import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
 import type { IssueDate, IssueMilestone, IssueMilestoneId, ProjectId } from "@spiritdevs/contracts";
-import { ChevronDownIcon, ChevronRightIcon, FlagIcon } from "lucide-react";
+import { FlagIcon } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import type { IssueProgress } from "~/state/issues";
+import {
+  TimelineChart,
+  TimelineLaneRow,
+  TimelineProjectDisclosure,
+  TimelineToolbar,
+} from "../timeline/TimelineChart";
 import { Button } from "../ui/button";
 import { Label } from "../ui/label";
 import { Popover, PopoverClose, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
-import { formatIssueDateRange } from "./issuesList.logic";
 import { formatMilestoneDateRange, type MilestonesOverviewGroup } from "./milestonesOverview.logic";
 import {
   TIMELINE_GRID_DROP_ID,
   TIMELINE_TRAY_DROP_ID,
-  TIMELINE_ZOOMS,
-  TIMELINE_ZOOM_LABELS,
   buildTimelineRows,
   buildTimelineScale,
   milestonesTimelineRange,
@@ -53,8 +60,8 @@ import {
   timelineDateAtX,
   timelineDaysFromOffset,
   timelineGrabEdge,
+  timelineLanes,
   timelineTrayDragId,
-  timelineX,
   type TimelineBar,
   type TimelineDragEdge,
   type TimelineScale,
@@ -64,13 +71,6 @@ import {
 /** Native date entry, the same control the dates dialog and the cycle dialog use. */
 const DATE_INPUT_CLASS =
   "h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm tabular-nums outline-none [color-scheme:light] focus-visible:ring-2 focus-visible:ring-ring dark:[color-scheme:dark]";
-
-/** The frozen column of names, in pixels — the gridlines and the today rule start after it. */
-const NAME_COLUMN_PX = 176;
-
-/** Row heights, in pixels, so the lanes and the name column stay on the same lines. */
-const HEADER_ROW_PX = 28;
-const LANE_ROW_PX = 28;
 
 /** A one-day bar at quarter zoom is 4px wide. Nobody can grab 4px, so bars never render thinner. */
 const MIN_BAR_PX = 14;
@@ -104,9 +104,10 @@ export function MilestonesTimeline({
     [milestones, today, zoom],
   );
   const rows = useMemo(
-    () => buildTimelineRows(groups, progressByMilestone, scale),
+    () => buildTimelineRows({ groups, progressByMilestone, scale }),
     [groups, progressByMilestone, scale],
   );
+  const lanes = useMemo(() => timelineLanes(rows.rows, collapsed), [collapsed, rows]);
   const byId = useMemo(
     () => new Map(milestones.map((milestone) => [milestone.id, milestone])),
     [milestones],
@@ -156,28 +157,7 @@ export function MilestonesTimeline({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2 border-b border-border/50 px-3 py-1.5 sm:px-5">
-        <span className="text-xs tabular-nums text-muted-foreground">
-          {formatIssueDateRange(scale.start, scale.end, today)}
-        </span>
-        <ToggleGroup
-          aria-label="Timeline zoom"
-          className="ms-auto"
-          onValueChange={(next) => {
-            const chosen = TIMELINE_ZOOMS.find((candidate) => candidate === next[0]);
-            if (chosen !== undefined) setZoom(chosen);
-          }}
-          size="xs"
-          value={[zoom]}
-          variant="outline"
-        >
-          {TIMELINE_ZOOMS.map((candidate) => (
-            <ToggleGroupItem key={candidate} value={candidate}>
-              {TIMELINE_ZOOM_LABELS[candidate]}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-      </div>
+      <TimelineToolbar onZoom={setZoom} scale={scale} today={today} zoom={zoom} />
 
       <DndContext
         collisionDetection={pointerWithin}
@@ -196,94 +176,77 @@ export function MilestonesTimeline({
       >
         <MilestoneTray milestones={rows.undated} onDates={onDates} />
 
-        <div className="min-h-0 flex-1 overflow-auto">
-          <div
-            className="relative min-w-max pb-6"
-            style={{ minWidth: NAME_COLUMN_PX + scale.width }}
-          >
-            <TimelineGrid scale={scale} today={today} />
-
-            <div className="sticky top-0 z-30 flex bg-background" style={{ height: HEADER_ROW_PX }}>
-              <div
-                className="sticky z-40 shrink-0 bg-background"
-                style={{ insetInlineStart: 0, width: NAME_COLUMN_PX }}
+        <MilestonesTimelineChart scale={scale} today={today}>
+          {lanes.map((lane) => {
+            if (lane.kind === "project") {
+              return (
+                <TimelineLaneRow
+                  dueTicks={lane.row.dueTicks}
+                  key={lane.key}
+                  name={
+                    <TimelineProjectDisclosure
+                      expanded={lane.expanded}
+                      onToggle={() =>
+                        setCollapsed((previous) => {
+                          const next = new Set(previous);
+                          if (!next.delete(lane.row.projectId)) next.add(lane.row.projectId);
+                          return next;
+                        })
+                      }
+                      title={lane.row.title}
+                    />
+                  }
+                  scale={scale}
+                />
+              );
+            }
+            if (lane.kind === "empty") {
+              return (
+                <TimelineLaneRow
+                  indent
+                  key={lane.key}
+                  name={
+                    <span className="text-[11px] text-muted-foreground/60">Nothing scheduled</span>
+                  }
+                  scale={scale}
+                />
+              );
+            }
+            return (
+              <TimelineBarRow
+                bar={lane.bar}
+                key={lane.key}
+                onDates={onDates}
+                scale={scale}
+                today={today}
               />
-              <div className="relative shrink-0" style={{ width: scale.width }}>
-                {scale.ticks.map((tick) => (
-                  <span
-                    className={cn(
-                      "absolute top-1.5 ps-1 text-[10px] whitespace-nowrap tabular-nums",
-                      tick.major ? "text-muted-foreground" : "text-muted-foreground/50",
-                    )}
-                    key={tick.date}
-                    style={{ insetInlineStart: tick.x }}
-                  >
-                    {tick.label}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            <div className="relative z-10">
-              {rows.rows.map((row) => {
-                const open = !collapsed.has(row.projectId);
-                return (
-                  <div key={row.projectId}>
-                    <div className="flex" style={{ height: LANE_ROW_PX }}>
-                      <div
-                        className="sticky z-20 flex shrink-0 items-center bg-background pe-2"
-                        style={{ insetInlineStart: 0, width: NAME_COLUMN_PX }}
-                      >
-                        <button
-                          aria-expanded={open}
-                          className="flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
-                          onClick={() =>
-                            setCollapsed((previous) => {
-                              const next = new Set(previous);
-                              if (!next.delete(row.projectId)) next.add(row.projectId);
-                              return next;
-                            })
-                          }
-                          type="button"
-                        >
-                          {open ? (
-                            <ChevronDownIcon className="size-3.5 shrink-0" />
-                          ) : (
-                            <ChevronRightIcon className="size-3.5 shrink-0" />
-                          )}
-                          <span className="truncate">{row.title}</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {!open ? null : row.bars.length === 0 ? (
-                      <div className="flex" style={{ height: LANE_ROW_PX }}>
-                        <span
-                          className="sticky z-20 shrink-0 bg-background ps-7 text-[11px] leading-7 text-muted-foreground/60"
-                          style={{ insetInlineStart: 0, width: NAME_COLUMN_PX }}
-                        >
-                          Nothing scheduled
-                        </span>
-                      </div>
-                    ) : (
-                      row.bars.map((bar) => (
-                        <TimelineBarRow
-                          bar={bar}
-                          key={bar.milestone.id}
-                          onDates={onDates}
-                          scale={scale}
-                          today={today}
-                        />
-                      ))
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+            );
+          })}
+        </MilestonesTimelineChart>
       </DndContext>
     </div>
+  );
+}
+
+/**
+ * The chart, with its grid box registered as the drop target scheduled bars land on. It is its own
+ * component because `useDroppable` only has a context to register with from inside `DndContext`,
+ * and the chart itself knows nothing about dragging.
+ */
+function MilestonesTimelineChart({
+  children,
+  scale,
+  today,
+}: {
+  readonly children: ReactNode;
+  readonly scale: TimelineScale;
+  readonly today: IssueDate;
+}) {
+  const { setNodeRef } = useDroppable({ id: TIMELINE_GRID_DROP_ID });
+  return (
+    <TimelineChart gridRef={setNodeRef} scale={scale} today={today}>
+      {children}
+    </TimelineChart>
   );
 }
 
@@ -291,36 +254,6 @@ export function MilestonesTimeline({
 function dragEdgeOf(data: Record<string, unknown> | undefined): TimelineDragEdge {
   const edge = data?.edge;
   return edge === "start" || edge === "end" ? edge : "move";
-}
-
-/**
- * The gridlines, the today rule, and the drop target every scheduled bar lands on — one box, so the
- * droppable's left edge is exactly day zero and a dropped chip's date is a subtraction.
- *
- * It takes no pointer events: `pointerWithin` resolves against measured rects, not hit-testing, so
- * the layer can sit under the bars without stealing their presses.
- */
-function TimelineGrid({ scale, today }: { scale: TimelineScale; today: IssueDate }) {
-  const { setNodeRef } = useDroppable({ id: TIMELINE_GRID_DROP_ID });
-  return (
-    <div
-      className="pointer-events-none absolute bottom-0 z-0"
-      ref={setNodeRef}
-      style={{ insetInlineStart: NAME_COLUMN_PX, top: HEADER_ROW_PX, width: scale.width }}
-    >
-      {scale.ticks.map((tick) => (
-        <div
-          className={cn("absolute inset-y-0 w-px", tick.major ? "bg-border/70" : "bg-border/30")}
-          key={tick.date}
-          style={{ insetInlineStart: tick.x }}
-        />
-      ))}
-      <div
-        className="absolute inset-y-0 w-px bg-primary/60"
-        style={{ insetInlineStart: timelineX(scale, today) }}
-      />
-    </div>
-  );
 }
 
 /**
@@ -475,95 +408,91 @@ function TimelineBarRow({
   const resizing = isDragging && edge !== "move";
 
   return (
-    <div className="flex" style={{ height: LANE_ROW_PX }}>
-      <div
-        className="sticky z-20 flex shrink-0 items-center bg-background ps-7 pe-2"
-        style={{ insetInlineStart: 0, width: NAME_COLUMN_PX }}
-      >
-        <span className="truncate text-xs text-muted-foreground">{milestone.name}</span>
-      </div>
-      <div className="relative shrink-0" style={{ width: scale.width }}>
-        <Popover>
-          <PopoverTrigger
-            render={
-              <button
-                {...attributes}
-                {...listeners}
-                aria-label={`${milestone.name}, ${dates ?? "no dates"}`}
-                className={cn(
-                  "absolute top-1 h-5 touch-none overflow-hidden rounded-md border text-start outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  bar.dated === "both" ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
-                  complete ? "border-success/50 bg-success/15" : "border-border/60 bg-muted",
-                  isDragging && "z-40 shadow-xs",
-                )}
-                onClick={(event) => {
-                  if (!dragged.current) return;
-                  dragged.current = false;
-                  event.preventDefault();
-                }}
-                onPointerDown={(event) => {
-                  // A press that never became a drag has nothing to swallow on the way out.
-                  dragged.current = false;
-                  const rect = event.currentTarget.getBoundingClientRect();
-                  setEdge(
-                    bar.dated === "both"
-                      ? timelineGrabEdge({ offsetX: event.clientX - rect.left, width: rect.width })
-                      : "move",
-                  );
-                  // Ours shadows the sensor's own `onPointerDown`, so the drag starts from here —
-                  // after the edge is known, which is what the drag then resolves against.
-                  listeners?.onPointerDown?.(event);
-                }}
-                ref={setNodeRef}
-                style={{
-                  insetInlineStart: bar.x,
-                  width,
-                  transform:
-                    transform === null || edge !== "move"
-                      ? undefined
-                      : `translate3d(${snappedX}px, ${transform.y}px, 0)`,
-                }}
-                type="button"
-              />
-            }
-          >
-            <span
+    <TimelineLaneRow
+      indent
+      name={<span className="truncate text-xs text-muted-foreground">{milestone.name}</span>}
+      scale={scale}
+    >
+      <Popover>
+        <PopoverTrigger
+          render={
+            <button
+              {...attributes}
+              {...listeners}
+              aria-label={`${milestone.name}, ${dates ?? "no dates"}`}
               className={cn(
-                "absolute inset-y-0 start-0",
-                complete ? "bg-success/45" : "bg-primary/45",
+                "absolute top-1 h-5 touch-none overflow-hidden rounded-md border text-start outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                bar.dated === "both" ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+                complete ? "border-success/50 bg-success/15" : "border-border/60 bg-muted",
+                isDragging && "z-40 shadow-xs",
               )}
-              style={{ width: `${bar.completionRatio * 100}%` }}
-            />
-            <span className="relative flex h-full items-center px-1.5 text-[11px] whitespace-nowrap">
-              {milestone.name}
-            </span>
-            {bar.dated === "both" ? (
-              <>
-                <span className="absolute inset-y-0 start-0 w-1.5 cursor-ew-resize bg-foreground/10" />
-                <span className="absolute inset-y-0 end-0 w-1.5 cursor-ew-resize bg-foreground/10" />
-              </>
-            ) : null}
-          </PopoverTrigger>
-
-          {/* Where the edge being dragged is going to land, snapped to the day it will write. */}
-          {resizing ? (
-            <span
-              className="pointer-events-none absolute top-0.5 h-6 w-0.5 bg-primary"
-              style={{
-                insetInlineStart: edge === "start" ? bar.x : bar.x + width,
-                transform: `translate3d(${snappedX}px, 0, 0)`,
+              onClick={(event) => {
+                if (!dragged.current) return;
+                dragged.current = false;
+                event.preventDefault();
               }}
+              onPointerDown={(event) => {
+                // A press that never became a drag has nothing to swallow on the way out.
+                dragged.current = false;
+                const rect = event.currentTarget.getBoundingClientRect();
+                setEdge(
+                  bar.dated === "both"
+                    ? timelineGrabEdge({ offsetX: event.clientX - rect.left, width: rect.width })
+                    : "move",
+                );
+                // Ours shadows the sensor's own `onPointerDown`, so the drag starts from here —
+                // after the edge is known, which is what the drag then resolves against.
+                listeners?.onPointerDown?.(event);
+              }}
+              ref={setNodeRef}
+              style={{
+                insetInlineStart: bar.x,
+                width,
+                transform:
+                  transform === null || edge !== "move"
+                    ? undefined
+                    : `translate3d(${snappedX}px, ${transform.y}px, 0)`,
+              }}
+              type="button"
             />
-          ) : null}
-
-          <MilestoneDatesPopover
-            key={`${milestone.startDate ?? ""}:${milestone.targetDate ?? ""}`}
-            milestone={milestone}
-            onDates={onDates}
+          }
+        >
+          <span
+            className={cn(
+              "absolute inset-y-0 start-0",
+              complete ? "bg-success/45" : "bg-primary/45",
+            )}
+            style={{ width: `${bar.completionRatio * 100}%` }}
           />
-        </Popover>
-      </div>
-    </div>
+          <span className="relative flex h-full items-center px-1.5 text-[11px] whitespace-nowrap">
+            {milestone.name}
+          </span>
+          {bar.dated === "both" ? (
+            <>
+              <span className="absolute inset-y-0 start-0 w-1.5 cursor-ew-resize bg-foreground/10" />
+              <span className="absolute inset-y-0 end-0 w-1.5 cursor-ew-resize bg-foreground/10" />
+            </>
+          ) : null}
+        </PopoverTrigger>
+
+        {/* Where the edge being dragged is going to land, snapped to the day it will write. */}
+        {resizing ? (
+          <span
+            className="pointer-events-none absolute top-0.5 h-6 w-0.5 bg-primary"
+            style={{
+              insetInlineStart: edge === "start" ? bar.x : bar.x + width,
+              transform: `translate3d(${snappedX}px, 0, 0)`,
+            }}
+          />
+        ) : null}
+
+        <MilestoneDatesPopover
+          key={`${milestone.startDate ?? ""}:${milestone.targetDate ?? ""}`}
+          milestone={milestone}
+          onDates={onDates}
+        />
+      </Popover>
+    </TimelineLaneRow>
   );
 }
 

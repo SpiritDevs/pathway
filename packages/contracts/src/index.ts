@@ -18,6 +18,7 @@ export * from "./modelSelection.ts";
 export * from "./chatAttachment.ts";
 export * from "./checkpointDiff.ts";
 export * from "./cloudProject.ts";
+export * from "./calendar.ts";
 export * from "./focus.ts";
 export * from "./model.ts";
 export * from "./keybindings.ts";

@@ -58,6 +58,7 @@ const ATTACHMENT_ID = "0198c0de-6666-7666-8666-000000000001";
 const ATTACHMENT_OTHER_ID = "0198c0de-6666-7666-8666-000000000002";
 const ATTACHMENT_FOREIGN_OWNER_ID = "0198c0de-6666-7666-8666-000000000003";
 const THREAD_LINK_ID = "0198c0de-7777-7777-8777-000000000001";
+const CALENDAR_EVENT_LINK_ID = "0198c0de-7777-7777-8777-000000000002";
 /** A membership id no company here has ever issued. */
 const GHOST_MEMBERSHIP_ID = "0198c0de-aaaa-7aaa-8aaa-000000000909";
 const READER_ROLE_ID = "0198c0de-aaaa-7aaa-8aaa-000000000201";
@@ -3345,6 +3346,29 @@ describe("issue.setTeams dependent convergence", () => {
       ],
     });
     for (const receipt of created.receipts) expect(receipt).toMatchObject({ status: "accepted" });
+    await t.run(async (ctx) => {
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
+        .unique();
+      if (company === null) throw new Error("seed the company first");
+      const writer = await ctx.db
+        .query("memberships")
+        .withIndex("by_company_and_domain_id", (q) =>
+          q.eq("companyId", company._id).eq("id", WRITER_MEMBERSHIP_ID),
+        )
+        .unique();
+      if (writer === null) throw new Error("seed the writer first");
+      await ctx.db.insert("calendarEventLink", {
+        id: CALENDAR_EVENT_LINK_ID,
+        companyId: company._id,
+        issueId: ISSUE_A,
+        googleEventId: "google-event-scope-migration",
+        createdByMembershipId: writer._id,
+        createdAt: Date.now(),
+        deletedAt: null,
+      });
+    });
 
     const alphaBefore = await drain(asAlpha(t), 0);
     const betaBefore = await drain(asBeta(t), 0);
@@ -3362,6 +3386,7 @@ describe("issue.setTeams dependent convergence", () => {
     expect(betaRows).toContain(`issue:${ISSUE_A}`);
     expect(betaRows).toContain(`issueComment:${COMMENT_ID}`);
     expect(betaRows).toContain(`issueTodo:${TODO_ID}`);
+    expect(betaRows).toContain(`calendarEventLink:${CALENDAR_EVENT_LINK_ID}`);
 
     // Alpha hears the same rows, which is what lets its replica drop them alongside the issue: a
     // later bootstrap would not seed them, so nothing else would ever correct the divergence.
@@ -3369,5 +3394,6 @@ describe("issue.setTeams dependent convergence", () => {
     const alphaRows = alphaPage.changes.map((change) => `${change.entityKind}:${change.entityId}`);
     expect(alphaRows).toContain(`issueComment:${COMMENT_ID}`);
     expect(alphaRows).toContain(`issueTodo:${TODO_ID}`);
+    expect(alphaRows).toContain(`calendarEventLink:${CALENDAR_EVENT_LINK_ID}`);
   });
 });
