@@ -4,7 +4,13 @@ import { v } from "convex/values";
 
 import { ENVIRONMENT_REGISTRATION_OFFLINE_AFTER_MS } from "../src/environmentRegistrations.ts";
 import type { Doc } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server.js";
+import {
+  internalMutation,
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server.js";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { applyDirectIssueOperation } from "./lib/directIssueApply.ts";
 import { backendError } from "./lib/errors.ts";
@@ -70,6 +76,11 @@ const settingsRecord = v.object({
   settings: v.any(),
   createdAt: v.number(),
   updatedAt: v.number(),
+});
+
+const runtimeStatusRecord = v.object({
+  enabled: v.boolean(),
+  activatedAt: v.union(v.number(), v.null()),
 });
 
 const jobRecord = v.object({
@@ -199,25 +210,41 @@ function requireClaim(
   }
 }
 
+async function readSettings(ctx: QueryCtx, companyId: Doc<"companies">["_id"]) {
+  const row = await ctx.db
+    .query("issueAutomationSettings")
+    .withIndex("by_company", (q) => q.eq("companyId", companyId))
+    .unique();
+  if (row === null) return null;
+  return {
+    enabled: row.enabled,
+    activatedAt: row.activatedAt ?? null,
+    revision: row.revision,
+    settings: row.settings,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 export const getSettings = query({
   args: { companyId: domainIdArg },
   returns: v.union(settingsRecord, v.null()),
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "integrations.read");
-    const row = await ctx.db
-      .query("issueAutomationSettings")
-      .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-      .unique();
-    if (row === null) return null;
-    return {
-      enabled: row.enabled,
-      activatedAt: row.activatedAt ?? null,
-      revision: row.revision,
-      settings: row.settings,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    };
+    return await readSettings(ctx, actor.company._id);
+  },
+});
+
+/** Minimal activation status for registered environments that execute automation jobs. */
+export const runtimeStatus = query({
+  args: { companyId: domainIdArg },
+  returns: v.union(runtimeStatusRecord, v.null()),
+  handler: async (ctx, args) => {
+    const actor = requireEnvironment(await requireCompanyActor(ctx, args.companyId));
+    const settings = await readSettings(ctx, actor.company._id);
+    if (settings === null) return null;
+    return { enabled: settings.enabled, activatedAt: settings.activatedAt };
   },
 });
 

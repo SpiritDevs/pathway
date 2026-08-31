@@ -153,6 +153,19 @@ describe("Slack controller coordination", () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it("lets a registered environment discover integrations without a service-role grant", async () => {
+    const t = harness();
+    await seed(t);
+    const environment = asEnvironment(t, PRIMARY);
+
+    await expect(
+      environment.query(api.slackIntegrations.list, { companyId: COMPANY_ID }),
+    ).rejects.toThrow("Missing permission integrations.read");
+    await expect(
+      environment.query(api.slackIntegrations.runtimeList, { companyId: COMPANY_ID }),
+    ).resolves.toMatchObject([{ id: INTEGRATION_ID, workspaceId: "T123", state: "active" }]);
+  });
+
   it("saves the first V2 watched channel for a draft integration", async () => {
     const t = harness();
     await seed(t);

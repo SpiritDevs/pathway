@@ -106,6 +106,34 @@ describe("durable issue automation jobs", () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it("lets a registered environment read runtime settings without a service-role grant", async () => {
+    const t = harness();
+    await seed(t);
+    await t.run(async (ctx) => {
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", COMPANY_ID))
+        .unique();
+      await ctx.db.insert("issueAutomationSettings", {
+        companyId: company!._id,
+        enabled: true,
+        activatedAt: NOW,
+        revision: 1,
+        settings: { schemaVersion: 1 },
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+    });
+    const environment = asEnvironment(t);
+
+    await expect(
+      environment.query(api.issueAutomation.getSettings, { companyId: COMPANY_ID }),
+    ).rejects.toThrow("Missing permission integrations.read");
+    await expect(
+      environment.query(api.issueAutomation.runtimeStatus, { companyId: COMPANY_ID }),
+    ).resolves.toEqual({ enabled: true, activatedAt: NOW });
+  });
+
   it("reclaims an expired job and fences the stale generation", async () => {
     const t = harness();
     await seed(t);

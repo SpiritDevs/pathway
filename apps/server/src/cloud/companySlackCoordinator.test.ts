@@ -2,7 +2,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { EnvironmentId } from "@spiritdevs/contracts";
-import { ConvexError } from "convex/values";
 import * as Effect from "effect/Effect";
 
 import type { SlackApiClientShape } from "../issues/slack/SlackApiClient.ts";
@@ -11,7 +10,6 @@ import {
   removeCompanyOwnedSlackWorkspaces,
 } from "./companyIntegrationActivation.ts";
 import {
-  isAutomationPermissionRefusal,
   runCompanySlackCycle,
   type CompanySlackBackend,
   type CompanySlackRuntime,
@@ -113,7 +111,7 @@ describe("company Slack coordinator", () => {
           publishCapabilities: () => Effect.void,
           listIntegrations: () => Effect.succeed([integration]),
           ownedWorkspaceIds: () => Effect.succeed([integration.workspaceId]),
-          automationSettings: () => Effect.succeed(null),
+          automationStatus: () => Effect.succeed(null),
           heartbeat: ({
             integrationId,
             companyId: _companyId,
@@ -551,19 +549,4 @@ describe("company Slack coordinator", () => {
       expect(pending).toBeNull();
     }),
   );
-
-  it("pauses automation polling only for the typed permission refusal", () => {
-    expect(
-      isAutomationPermissionRefusal(
-        new ConvexError({ code: "permission-denied", message: "Missing permission." }),
-      ),
-    ).toBe(true);
-    expect(
-      isAutomationPermissionRefusal(
-        new ConvexError({ code: "entity-not-found", message: "Missing row." }),
-      ),
-    ).toBe(false);
-    expect(isAutomationPermissionRefusal(new Error("fetch failed"))).toBe(false);
-    expect(isAutomationPermissionRefusal(null)).toBe(false);
-  });
 });

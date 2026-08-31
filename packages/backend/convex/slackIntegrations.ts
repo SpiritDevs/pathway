@@ -177,6 +177,26 @@ async function encodeIntegration(ctx: QueryCtx, row: Doc<"slackIntegrations">) {
   };
 }
 
+async function listIntegrationRecords(
+  ctx: QueryCtx,
+  companyId: Doc<"companies">["_id"],
+  environmentId?: string,
+): Promise<IntegrationOutput[]> {
+  const rows = await ctx.db
+    .query("slackIntegrations")
+    .withIndex("by_company", (q) => q.eq("companyId", companyId))
+    .collect();
+  const visible =
+    environmentId === undefined
+      ? rows
+      : rows.filter(
+          (row) =>
+            row.preferredEnvironmentId === environmentId ||
+            row.backupEnvironmentIds.includes(environmentId),
+        );
+  return await Promise.all(visible.map((row) => encodeIntegration(ctx, row)));
+}
+
 function requireEnvironment(actor: CompanyActor): EnvironmentActor {
   if (actor.kind !== "environment") {
     throw backendError("permission-denied", "Only a registered environment may coordinate Slack.");
@@ -284,11 +304,17 @@ export const list = query({
   handler: async (ctx, args): Promise<IntegrationOutput[]> => {
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "integrations.read");
-    const rows = await ctx.db
-      .query("slackIntegrations")
-      .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
-      .collect();
-    return await Promise.all(rows.map((row) => encodeIntegration(ctx, row)));
+    return await listIntegrationRecords(ctx, actor.company._id);
+  },
+});
+
+/** Integration discovery for registered environments participating in controller pools. */
+export const runtimeList = query({
+  args: { companyId: domainIdArg },
+  returns: v.array(integrationRecord),
+  handler: async (ctx, args): Promise<IntegrationOutput[]> => {
+    const actor = requireEnvironment(await requireCompanyActor(ctx, args.companyId));
+    return await listIntegrationRecords(ctx, actor.company._id, actor.registration.environmentId);
   },
 });
 

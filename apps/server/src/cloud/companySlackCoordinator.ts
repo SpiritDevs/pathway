@@ -53,7 +53,7 @@ import {
   setExpectedCompanyIntegrationIds,
   setCompanyAutomationActive,
 } from "./companyIntegrationActivation.ts";
-import { type ConvexServiceTokenProvider, convexErrorCode } from "./convexServiceToken.ts";
+import type { ConvexServiceTokenProvider } from "./convexServiceToken.ts";
 import { convexHttpClientLike, type ConvexClientLike } from "./convexSyncTransport.ts";
 import {
   awaitCloudSyncLink,
@@ -72,17 +72,6 @@ import {
 } from "./companySlackRules.ts";
 
 export const COMPANY_SLACK_POLL_INTERVAL_MS = 30_000;
-/**
- * How long automation polling pauses after the backend refuses `getSettings` outright. The service
- * role lacking `integrations.read` cannot resolve on its own — an operator has to grant it — so
- * retrying at poll cadence only fills the deployment log with the same refusal.
- */
-export const AUTOMATION_PERMISSION_RETRY_INTERVAL = Duration.minutes(30);
-
-/** Only the typed permission refusal parks polling; everything else stays retryable. */
-export function isAutomationPermissionRefusal(error: unknown): boolean {
-  return convexErrorCode(error) === "permission-denied";
-}
 const MAX_HISTORY_PAGES = 10;
 const REACTION_WINDOW_SECONDS = 7 * 24 * 60 * 60;
 const REACTION_WINDOW_MESSAGES = 100;
@@ -101,12 +90,12 @@ const decodeRemediationSnapshotJson = Schema.decodeUnknownEffect(
   ),
 );
 
-type Integration = FunctionReturnType<typeof api.slackIntegrations.list>[number];
+type Integration = FunctionReturnType<typeof api.slackIntegrations.runtimeList>[number];
 type Lease = FunctionReturnType<typeof api.slackIntegrations.heartbeat>;
 type RuntimeWatch = FunctionReturnType<
   typeof api.slackOperations.runtimeConfiguration
 >["watches"][number];
-type JobSettings = FunctionReturnType<typeof api.issueAutomation.getSettings>;
+type AutomationStatus = FunctionReturnType<typeof api.issueAutomation.runtimeStatus>;
 type AutomationJob = FunctionReturnType<typeof api.issueAutomation.claim>[number];
 type AutomationContext = FunctionReturnType<typeof api.issueAutomation.executionContext>;
 
@@ -115,7 +104,7 @@ export interface CompanySlackBackend {
     companyId: string,
   ) => Effect.Effect<ReadonlyArray<Integration>, unknown>;
   readonly ownedWorkspaceIds: (companyId: string) => Effect.Effect<ReadonlyArray<string>, unknown>;
-  readonly automationSettings: (companyId: string) => Effect.Effect<JobSettings, unknown>;
+  readonly automationStatus: (companyId: string) => Effect.Effect<AutomationStatus, unknown>;
   readonly publishCapabilities: (input: {
     companyId: string;
     revision: number;
@@ -337,11 +326,11 @@ export const makeCompanySlackBackend = Effect.fn("cloud.company_slack.backend")(
     });
   return {
     listIntegrations: (companyId) =>
-      authorized((convex) => convex.query(api.slackIntegrations.list, { companyId })),
+      authorized((convex) => convex.query(api.slackIntegrations.runtimeList, { companyId })),
     ownedWorkspaceIds: (companyId) =>
       authorized((convex) => convex.query(api.slackIntegrations.ownedWorkspaceIds, { companyId })),
-    automationSettings: (companyId) =>
-      authorized((convex) => convex.query(api.issueAutomation.getSettings, { companyId })),
+    automationStatus: (companyId) =>
+      authorized((convex) => convex.query(api.issueAutomation.runtimeStatus, { companyId })),
     publishCapabilities: (args) =>
       authorized((convex) =>
         convex.mutation(api.slackIntegrations.publishCapabilities, {
@@ -1031,20 +1020,7 @@ const runAutomationJobs = Effect.fn("cloud.company_automation.run_jobs")(functio
 const runCompanyAutomationCycle = Effect.fn("cloud.company_automation.cycle")(function* (
   runtime: CompanySlackRuntime,
 ) {
-  const automation = yield* runtime.backend
-    .automationSettings(runtime.companyId)
-    .pipe(
-      Effect.catchIf(isAutomationPermissionRefusal, (error) =>
-        Effect.logWarning(
-          "Automation settings are not readable by this environment; pausing automation polling",
-          { companyId: runtime.companyId, cause: error },
-        ).pipe(
-          Effect.andThen(Effect.sync(() => setCompanyAutomationActive(runtime.companyId, false))),
-          Effect.andThen(Effect.sleep(AUTOMATION_PERMISSION_RETRY_INTERVAL)),
-          Effect.as(null),
-        ),
-      ),
-    );
+  const automation = yield* runtime.backend.automationStatus(runtime.companyId);
   setCompanyAutomationActive(
     runtime.companyId,
     automation !== null && automation.activatedAt !== null,
