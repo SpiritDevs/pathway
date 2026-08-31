@@ -182,6 +182,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/company-members",
       "/settings/company-teams",
       "/settings/company-roles",
+      "/settings/calendars",
       "/settings/environments",
     ]);
     expect(searchSettings("members and invitations")[0]).toMatchObject({
@@ -208,6 +209,10 @@ describe("SETTINGS_NAV_GROUPS", () => {
       id: "company-environments",
       to: "/settings/environments",
     });
+    expect(searchSettings("calendar sharing")[0]).toMatchObject({
+      id: "calendar-sharing",
+      to: "/settings/calendars",
+    });
     expect(searchSettings("Slack bot token")[0]).toMatchObject({
       id: "slack-bot-token",
       to: "/settings/integrations",
@@ -231,6 +236,12 @@ describe("SETTINGS_NAV_GROUPS", () => {
     );
     expect(settingsPathIsVisibleForWorkspace("/settings/company-teams", "organization")).toBe(true);
     expect(settingsPathIsVisibleForWorkspace("/settings/company-roles", "organization")).toBe(true);
+  });
+
+  it("keeps calendar sharing on personal and organization workspaces, but not the profile scope", () => {
+    expect(settingsPathIsVisibleForWorkspace("/settings/calendars", "personal")).toBe(true);
+    expect(settingsPathIsVisibleForWorkspace("/settings/calendars", "organization")).toBe(true);
+    expect(settingsPathIsVisibleForWorkspace("/settings/calendars", "profile")).toBe(false);
   });
 
   it("keeps app and personal settings visible in the profile scope", () => {

@@ -7,6 +7,7 @@ export type SettingsPath =
   | "/settings/company-members"
   | "/settings/company-teams"
   | "/settings/company-roles"
+  | "/settings/calendars"
   | "/settings/environments"
   | "/settings/integrations"
   | "/settings/providers"
@@ -71,6 +72,7 @@ const COMPANY_SCOPED_SETTINGS_PATHS: ReadonlySet<SettingsPath> = new Set([
   "/settings/company-members",
   "/settings/company-teams",
   "/settings/company-roles",
+  "/settings/calendars",
 ]);
 
 /**
@@ -87,6 +89,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/company-members": "Members",
   "/settings/company-teams": "Teams",
   "/settings/company-roles": "Roles",
+  "/settings/calendars": "Calendars",
   "/settings/environments": "Environments",
   "/settings/providers": "Providers",
   "/settings/scheduled-tasks": "Schedule Tasks",
@@ -129,6 +132,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/company-members",
       "/settings/company-teams",
       "/settings/company-roles",
+      "/settings/calendars",
       "/settings/environments",
     ],
   },
@@ -195,6 +199,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "company-sync",
     title: "Workspace sync status",
     to: "/settings/diagnostics",
+  },
+  {
+    id: "calendar-sharing",
+    title: "Calendar sharing and grants",
+    to: "/settings/calendars",
   },
   {
     id: "company-environments",

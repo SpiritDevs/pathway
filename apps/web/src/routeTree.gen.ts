@@ -50,6 +50,7 @@ import { Route as SettingsConnectionsRouteImport } from './routes/settings.conne
 import { Route as SettingsCompanyTeamsRouteImport } from './routes/settings.company-teams'
 import { Route as SettingsCompanyRolesRouteImport } from './routes/settings.company-roles'
 import { Route as SettingsCompanyMembersRouteImport } from './routes/settings.company-members'
+import { Route as SettingsCalendarsRouteImport } from './routes/settings.calendars'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
@@ -272,6 +273,11 @@ const SettingsCompanyMembersRoute = SettingsCompanyMembersRouteImport.update({
   path: '/company-members',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsCalendarsRoute = SettingsCalendarsRouteImport.update({
+  id: '/calendars',
+  path: '/calendars',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
   id: '/archived',
   path: '/archived',
@@ -378,6 +384,7 @@ export interface FileRoutesByFullPath {
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/calendars': typeof SettingsCalendarsRoute
   '/settings/company-members': typeof SettingsCompanyMembersRoute
   '/settings/company-roles': typeof SettingsCompanyRolesRoute
   '/settings/company-teams': typeof SettingsCompanyTeamsRoute
@@ -434,6 +441,7 @@ export interface FileRoutesByTo {
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/calendars': typeof SettingsCalendarsRoute
   '/settings/company-members': typeof SettingsCompanyMembersRoute
   '/settings/company-roles': typeof SettingsCompanyRolesRoute
   '/settings/company-teams': typeof SettingsCompanyTeamsRoute
@@ -493,6 +501,7 @@ export interface FileRoutesById {
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/calendars': typeof SettingsCalendarsRoute
   '/settings/company-members': typeof SettingsCompanyMembersRoute
   '/settings/company-roles': typeof SettingsCompanyRolesRoute
   '/settings/company-teams': typeof SettingsCompanyTeamsRoute
@@ -552,6 +561,7 @@ export interface FileRouteTypes {
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/calendars'
     | '/settings/company-members'
     | '/settings/company-roles'
     | '/settings/company-teams'
@@ -608,6 +618,7 @@ export interface FileRouteTypes {
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/calendars'
     | '/settings/company-members'
     | '/settings/company-roles'
     | '/settings/company-teams'
@@ -666,6 +677,7 @@ export interface FileRouteTypes {
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/calendars'
     | '/settings/company-members'
     | '/settings/company-roles'
     | '/settings/company-teams'
@@ -1012,6 +1024,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsCompanyMembersRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/calendars': {
+      id: '/settings/calendars'
+      path: '/calendars'
+      fullPath: '/settings/calendars'
+      preLoaderRoute: typeof SettingsCalendarsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/archived': {
       id: '/settings/archived'
       path: '/archived'
@@ -1157,6 +1176,7 @@ const ProjectsRouteWithChildren = ProjectsRoute._addFileChildren(
 interface SettingsRouteChildren {
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
+  SettingsCalendarsRoute: typeof SettingsCalendarsRoute
   SettingsCompanyMembersRoute: typeof SettingsCompanyMembersRoute
   SettingsCompanyRolesRoute: typeof SettingsCompanyRolesRoute
   SettingsCompanyTeamsRoute: typeof SettingsCompanyTeamsRoute
@@ -1188,6 +1208,7 @@ interface SettingsRouteChildren {
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsArchivedRoute: SettingsArchivedRoute,
+  SettingsCalendarsRoute: SettingsCalendarsRoute,
   SettingsCompanyMembersRoute: SettingsCompanyMembersRoute,
   SettingsCompanyRolesRoute: SettingsCompanyRolesRoute,
   SettingsCompanyTeamsRoute: SettingsCompanyTeamsRoute,
