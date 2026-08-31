@@ -84,12 +84,25 @@ import {
  * The two membership keys are two id spaces, not a duplicate: saved-view ownership is recorded as a
  * Convex id, company-domain payloads and entity ids are written in domain ids.
  */
-function changeViewer(actor: CompanyActor): ChangeViewer {
+async function changeViewer(
+  ctx: Parameters<typeof requireCompanyActor>[0],
+  actor: CompanyActor,
+): Promise<ChangeViewer> {
+  const grants =
+    actor.kind === "member"
+      ? await ctx.db
+          .query("calendarGrant")
+          .withIndex("by_company_and_grantee", (q) =>
+            q.eq("companyId", actor.company._id).eq("granteeMembershipId", actor.membership._id),
+          )
+          .collect()
+      : [];
   return {
     permissions: actor.permissions,
     ownRoleDomainIds: actor.kind === "member" ? actor.ownRoleDomainIds : new Set(),
     membershipId: actor.kind === "member" ? actor.membership._id : null,
     membershipDomainId: actor.kind === "member" ? actor.membership.id : null,
+    grantedCalendarIds: new Set(grants.map((grant) => grant.calendarId)),
   };
 }
 
@@ -197,7 +210,7 @@ export const listChanges = query({
     // stop being delivered to everyone but its owner, including by the historical upserts still
     // sitting between an older cursor and the head.
     const ownerBindings = await readOwnerPrivateBindings(ctx, actor.company, rows);
-    const viewer = changeViewer(actor);
+    const viewer = await changeViewer(ctx, actor);
 
     const page = takeChangePage(rows, args.cursor, {
       maxRows: limit,
@@ -212,6 +225,13 @@ export const listChanges = query({
           teamIds: row.teamIds,
           payload: row.payload,
           ownerMembershipId: feedRowOwnerBinding(row, ownerBindings),
+          calendarId: row.calendarId,
+          calendarOwnerMembershipId: row.calendarOwnerMembershipId,
+          calendarSharing: row.calendarSharing,
+          calendarTeamId: row.calendarTeamId,
+          calendarDepartureMembershipIds: row.calendarDepartureMembershipIds,
+          calendarDeleted: row.calendarDeleted,
+          calendarEventOwnerMembershipId: row.calendarEventOwnerMembershipId,
         }),
     });
 
@@ -290,7 +310,7 @@ export const bootstrap = query({
     }
 
     const pageSize = clampPageLimit(args.pageSize, SYNC_BOOTSTRAP_PAGE_SIZE);
-    const viewer = changeViewer(actor);
+    const viewer = await changeViewer(ctx, actor);
     const cache = emptyBootstrapCache();
     const entities: {
       version: number;
@@ -332,6 +352,11 @@ export const bootstrap = query({
             teamIds: row.teamIds,
             payload: row.payload,
             ownerMembershipId: row.ownerMembershipId,
+            calendarId: row.calendarId,
+            calendarOwnerMembershipId: row.calendarOwnerMembershipId,
+            calendarSharing: row.calendarSharing,
+            calendarTeamId: row.calendarTeamId,
+            calendarEventOwnerMembershipId: row.calendarEventOwnerMembershipId,
           })
         ) {
           const envelope = {

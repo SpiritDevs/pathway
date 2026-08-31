@@ -12,6 +12,7 @@
  */
 import {
   hasAnyScopePermission,
+  hasCompanyPermission,
   hasRecordPermission,
   type EffectivePermissions,
   type PermissionKey,
@@ -50,6 +51,10 @@ const READ_PERMISSION: Record<SyncEntityKind, PermissionKey> = {
   issueView: "issues.read",
   issueAuditEvent: "audit.read",
   issueThreadLink: "issues.read",
+  calendarAccount: "calendar.read",
+  calendar: "calendar.read",
+  calendarEvent: "calendar.read",
+  calendarEventLink: "issues.read",
 };
 
 export function readPermissionForEntityKind(kind: SyncEntityKind): PermissionKey {
@@ -134,6 +139,8 @@ export interface ChangeViewer {
    * or departed membership.
    */
   readonly membershipDomainId: string | null;
+  /** Calendar domain ids granted to this membership, resolved in one indexed read per page. */
+  readonly grantedCalendarIds: ReadonlySet<string>;
 }
 
 export interface VisibilityCandidate {
@@ -167,6 +174,52 @@ export interface VisibilityCandidate {
    * owner would withhold it from precisely the replicas it exists to reach.
    */
   readonly ownerMembershipId?: string | null;
+  readonly calendarId?: string | undefined;
+  readonly calendarOwnerMembershipId?: string | undefined;
+  readonly calendarSharing?: "private" | "team" | "company" | undefined;
+  readonly calendarTeamId?: string | null | undefined;
+  readonly calendarDepartureMembershipIds?: readonly string[] | undefined;
+  readonly calendarDeleted?: boolean | undefined;
+  readonly calendarEventOwnerMembershipId?: string | null | undefined;
+}
+
+function hasCalendarRead(viewer: ChangeViewer): boolean {
+  return hasAnyScopePermission(viewer.permissions, "calendar.read");
+}
+
+function calendarVisibleWithoutGrant(viewer: ChangeViewer, change: VisibilityCandidate): boolean {
+  if (viewer.membershipId !== null && change.calendarOwnerMembershipId === viewer.membershipId) {
+    return true;
+  }
+  if (change.calendarSharing === "company") {
+    return hasCompanyPermission(viewer.permissions, "calendar.readAll");
+  }
+  if (change.calendarSharing === "team" && change.calendarTeamId !== null) {
+    return hasRecordPermission(viewer.permissions, "calendar.readAll", [
+      change.calendarTeamId ?? "",
+    ]);
+  }
+  return false;
+}
+
+/** Calendar reachability is the ADR 0012 coarse permission plus one of its three fine paths. */
+function isCalendarChangeVisible(viewer: ChangeViewer, change: VisibilityCandidate): boolean {
+  if (!hasCalendarRead(viewer)) return false;
+  const calendarId =
+    change.calendarId ?? (change.entityKind === "calendar" ? change.entityId : null);
+  if (calendarId === null) return false;
+
+  const addressedDeparture =
+    viewer.membershipId !== null &&
+    change.calendarDepartureMembershipIds?.includes(viewer.membershipId) === true;
+  if (addressedDeparture) {
+    // A revoked grant emits exactly one tombstone. If another path still reaches the live calendar,
+    // suppress it; deletion/disconnect tombstones always remove the calendar for former grantees.
+    return change.calendarDeleted === true || !calendarVisibleWithoutGrant(viewer, change);
+  }
+
+  if (calendarVisibleWithoutGrant(viewer, change)) return true;
+  return viewer.grantedCalendarIds.has(calendarId);
 }
 
 /** Whether a row of this kind and shape is company catalog rather than a company-wide record. */
@@ -238,6 +291,24 @@ export function isChangeVisible(viewer: ChangeViewer, change: VisibilityCandidat
   const permission = READ_PERMISSION[change.entityKind as SyncEntityKind];
   // An entity kind this build does not know is withheld rather than leaked.
   if (permission === undefined) return false;
+
+  if (change.entityKind === "calendarAccount") {
+    return (
+      hasCalendarRead(viewer) &&
+      viewer.membershipId !== null &&
+      viewer.membershipId === change.calendarOwnerMembershipId
+    );
+  }
+  if (change.entityKind === "calendar" || change.entityKind === "calendarEvent") {
+    if (!isCalendarChangeVisible(viewer, change)) return false;
+    if (change.entityKind === "calendarEvent" && change.calendarEventOwnerMembershipId !== null) {
+      return (
+        viewer.membershipId !== null &&
+        viewer.membershipId === change.calendarEventOwnerMembershipId
+      );
+    }
+    return true;
+  }
 
   const owner = change.ownerMembershipId ?? null;
   if (owner !== null) {

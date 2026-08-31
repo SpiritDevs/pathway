@@ -17,7 +17,13 @@ const viewer = (
   membershipId: string | null = null,
   membershipDomainId: string | null = null,
   ownRoleDomainIds: ReadonlySet<string> = new Set(),
-): ChangeViewer => ({ permissions, membershipId, membershipDomainId, ownRoleDomainIds });
+): ChangeViewer => ({
+  permissions,
+  membershipId,
+  membershipDomainId,
+  ownRoleDomainIds,
+  grantedCalendarIds: new Set(),
+});
 
 /** Entity ids are load-bearing only for the company domain; issue rows get a stable filler. */
 const row = (

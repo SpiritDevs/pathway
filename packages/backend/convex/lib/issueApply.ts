@@ -82,6 +82,10 @@ import {
   encodeCapturedEmail,
   encodeEmailTag,
   encodeTrustedEmailSender,
+  encodeCalendarAccount,
+  encodeCalendar,
+  encodeCalendarEvent,
+  encodeCalendarEventLink,
   encodeMembership,
   encodeRole,
   encodeRoleAssignment,
@@ -3082,6 +3086,11 @@ export interface BootstrapRow {
   readonly ownerMembershipId: string | null;
   /** Wire payload; `null` when `deleted` (a deleted row is only a cursor position). */
   readonly payload: unknown;
+  readonly calendarId?: string;
+  readonly calendarOwnerMembershipId?: string;
+  readonly calendarSharing?: "private" | "team" | "company";
+  readonly calendarTeamId?: string | null;
+  readonly calendarEventOwnerMembershipId?: string | null;
 }
 
 /**
@@ -3186,7 +3195,11 @@ type CompanyBootstrapTable =
   | "agentThreads"
   | "capturedEmails"
   | "emailTags"
-  | "trustedEmailSenders";
+  | "trustedEmailSenders"
+  | "calendarAccount"
+  | "calendar"
+  | "calendarEvent"
+  | "calendarEventLink";
 
 function pageOf<TableName extends IssueDomainTable | CompanyBootstrapTable>(
   ctx: QueryCtx,
@@ -3521,5 +3534,81 @@ export async function readBootstrapRows(
         await pageOf(ctx, "trustedEmailSenders", company._id, afterId, limit),
         (row) => encodeTrustedEmailSender(row),
       );
+    case "calendarAccount": {
+      const rows = await pageOf(ctx, "calendarAccount", company._id, afterId, limit);
+      const lifted: BootstrapRow[] = [];
+      for (const row of rows) {
+        lifted.push({
+          id: row.id,
+          version: companyRowVersion(row),
+          deleted: row.disconnectedAt !== null,
+          teamIds: [],
+          ownerMembershipId: null,
+          calendarOwnerMembershipId: row.ownerMembershipId,
+          payload: row.disconnectedAt === null ? await encodeCalendarAccount(ctx, row) : null,
+        });
+      }
+      return lifted;
+    }
+    case "calendar": {
+      const rows = await pageOf(ctx, "calendar", company._id, afterId, limit);
+      const lifted: BootstrapRow[] = [];
+      for (const row of rows) {
+        const deleted = row.deletedAt !== null;
+        lifted.push({
+          id: row.id,
+          version: companyRowVersion(row),
+          deleted,
+          teamIds: [],
+          ownerMembershipId: null,
+          calendarId: row.id,
+          calendarOwnerMembershipId: row.ownerMembershipId,
+          calendarSharing: row.sharing,
+          calendarTeamId: row.teamId,
+          payload: deleted ? null : await encodeCalendar(ctx, row),
+        });
+      }
+      return lifted;
+    }
+    case "calendarEvent": {
+      const rows = await pageOf(ctx, "calendarEvent", company._id, afterId, limit);
+      const lifted: BootstrapRow[] = [];
+      for (const row of rows) {
+        const calendar = await ctx.db
+          .query("calendar")
+          .withIndex("by_company_and_domain_id", (q) =>
+            q.eq("companyId", company._id).eq("id", row.calendarId),
+          )
+          .unique();
+        const deleted = row.deletedAt !== null || calendar === null || calendar.deletedAt !== null;
+        lifted.push({
+          id: row.id,
+          version: companyRowVersion(row),
+          deleted,
+          teamIds: [],
+          ownerMembershipId: null,
+          calendarId: row.calendarId,
+          ...(calendar === null
+            ? {}
+            : {
+                calendarOwnerMembershipId: calendar.ownerMembershipId,
+                calendarSharing: calendar.sharing,
+                calendarTeamId: calendar.teamId,
+              }),
+          calendarEventOwnerMembershipId:
+            row.visibility === "private" ? row.ownerMembershipId : null,
+          payload: deleted ? null : await encodeCalendarEvent(ctx, row),
+        });
+      }
+      return lifted;
+    }
+    case "calendarEventLink": {
+      const rows = await pageOf(ctx, "calendarEventLink", company._id, afterId, limit);
+      return lift(
+        rows.map((row) => ({ ...row, version: companyRowVersion(row) })),
+        (row) => cachedIssueTeams(ctx, company, cache, row.issueId),
+        (row) => encodeCalendarEventLink(ctx, row),
+      );
+    }
   }
 }

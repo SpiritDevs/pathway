@@ -59,6 +59,10 @@ export type CompanyEntityKind = Extract<
   | "capturedEmail"
   | "emailTag"
   | "trustedEmailSender"
+  | "calendarAccount"
+  | "calendar"
+  | "calendarEvent"
+  | "calendarEventLink"
 >;
 
 /** The company-domain tables whose rows carry a `version` column this writer stamps. */
@@ -78,6 +82,10 @@ export type CompanyVersionedTable =
   | "capturedEmails"
   | "emailTags"
   | "trustedEmailSenders"
+  | "calendarAccount"
+  | "calendar"
+  | "calendarEvent"
+  | "calendarEventLink"
   | "issues"
   | "issueStatuses"
   | "issueLabels"
@@ -457,6 +465,71 @@ export function encodeTrustedEmailSender(doc: Doc<"trustedEmailSenders">) {
   };
 }
 
+async function calendarAccountDomainId(
+  ctx: QueryCtx,
+  id: Id<"calendarAccount"> | null,
+): Promise<string | null> {
+  if (id === null) return null;
+  const account = await ctx.db.get(id);
+  if (account === null)
+    throw backendError("entity-not-found", "Referenced calendar account is missing.");
+  return account.id;
+}
+
+export async function encodeCalendarAccount(ctx: QueryCtx, doc: Doc<"calendarAccount">) {
+  return {
+    id: doc.id,
+    ownerMembershipId: await requireMembershipDomainId(ctx, doc.ownerMembershipId),
+    provider: doc.provider,
+    providerAccountId: doc.providerAccountId,
+    email: doc.email,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+export async function encodeCalendar(ctx: QueryCtx, doc: Doc<"calendar">) {
+  return {
+    id: doc.id,
+    ownerMembershipId: await requireMembershipDomainId(ctx, doc.ownerMembershipId),
+    name: doc.name,
+    sharing: doc.sharing,
+    teamId: doc.teamId,
+    kind: doc.kind,
+    accountId: await calendarAccountDomainId(ctx, doc.accountId),
+    googleCalendarId: doc.googleCalendarId,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+export async function encodeCalendarEvent(ctx: QueryCtx, doc: Doc<"calendarEvent">) {
+  return {
+    id: doc.id,
+    calendarId: doc.calendarId,
+    ownerMembershipId: await requireMembershipDomainId(ctx, doc.ownerMembershipId),
+    title: doc.title,
+    startAt: doc.startAt,
+    endAt: doc.endAt,
+    timeZone: doc.timeZone,
+    allDay: doc.allDay,
+    visibility: doc.visibility,
+    googleEventId: doc.googleEventId,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+}
+
+export async function encodeCalendarEventLink(ctx: QueryCtx, doc: Doc<"calendarEventLink">) {
+  return {
+    id: doc.id,
+    issueId: doc.issueId,
+    googleEventId: doc.googleEventId,
+    createdByMembershipId: await requireMembershipDomainId(ctx, doc.createdByMembershipId),
+    createdAt: doc.createdAt,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The writer
 // ---------------------------------------------------------------------------
@@ -486,6 +559,16 @@ export interface CompanyChange {
   readonly versionDocId: Id<CompanyVersionedTable> | null;
   /** The encoded entity for `upsert`; must be `null` for `tombstone`. */
   readonly payload: unknown;
+  /** Calendar authorization metadata is storage-only; opaque payloads never drive access alone. */
+  readonly calendarId?: string;
+  readonly calendarOwnerMembershipId?: Id<"memberships">;
+  readonly calendarSharing?: "private" | "team" | "company";
+  readonly calendarTeamId?: string | null;
+  /** Formerly granted members addressed by a calendar-level departure tombstone. */
+  readonly calendarDepartureMembershipIds?: readonly Id<"memberships">[];
+  readonly calendarDeleted?: boolean;
+  /** Set for private events so the existing binary owner gate remains authoritative. */
+  readonly calendarEventOwnerMembershipId?: Id<"memberships"> | null;
 }
 
 export interface AppendCompanyChangesOptions {
@@ -581,6 +664,19 @@ export async function appendCompanyChanges(
       entityId: change.entityId,
       changeKind: change.changeKind,
       teamIds: [...(change.teamIds ?? [])],
+      ...(change.calendarId === undefined ? {} : { calendarId: change.calendarId }),
+      ...(change.calendarOwnerMembershipId === undefined
+        ? {}
+        : { calendarOwnerMembershipId: change.calendarOwnerMembershipId }),
+      ...(change.calendarSharing === undefined ? {} : { calendarSharing: change.calendarSharing }),
+      ...(change.calendarTeamId === undefined ? {} : { calendarTeamId: change.calendarTeamId }),
+      ...(change.calendarDepartureMembershipIds === undefined
+        ? {}
+        : { calendarDepartureMembershipIds: [...change.calendarDepartureMembershipIds] }),
+      ...(change.calendarDeleted === undefined ? {} : { calendarDeleted: change.calendarDeleted }),
+      ...(change.calendarEventOwnerMembershipId === undefined
+        ? {}
+        : { calendarEventOwnerMembershipId: change.calendarEventOwnerMembershipId }),
       payload,
       // Company administration is online-only: there is no client operation behind these rows, so
       // there is nothing to receipt and nothing to dedupe against.

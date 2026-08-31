@@ -79,6 +79,11 @@ export const BOOTSTRAP_ENTITY_ORDER = [
   "emailTag",
   // Remote-content trust joined after tags. Exact sender addresses are a company catalog.
   "trustedEmailSender",
+  // Calendar kinds were appended after the original company and issue domains.
+  "calendarAccount",
+  "calendar",
+  "calendarEvent",
+  "calendarEventLink",
 ] as const satisfies readonly SyncEntityKind[];
 
 export type BootstrapEntityKind = (typeof BOOTSTRAP_ENTITY_ORDER)[number];

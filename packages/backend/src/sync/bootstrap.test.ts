@@ -48,6 +48,13 @@ const COMPANY_DOMAIN_WALK = [
   "trustedEmailSender",
 ] as const;
 
+const CALENDAR_DOMAIN_WALK = [
+  "calendarAccount",
+  "calendar",
+  "calendarEvent",
+  "calendarEventLink",
+] as const;
+
 describe("BOOTSTRAP_ENTITY_ORDER", () => {
   it("names only known entity kinds, each once", () => {
     const known = new Set<string>(SYNC_ENTITY_KINDS);
@@ -56,7 +63,11 @@ describe("BOOTSTRAP_ENTITY_ORDER", () => {
   });
 
   it("walks both replicated domains, issue kinds then company kinds", () => {
-    expect([...BOOTSTRAP_ENTITY_ORDER]).toEqual([...ISSUE_DOMAIN_WALK, ...COMPANY_DOMAIN_WALK]);
+    expect([...BOOTSTRAP_ENTITY_ORDER]).toEqual([
+      ...ISSUE_DOMAIN_WALK,
+      ...COMPANY_DOMAIN_WALK,
+      ...CALENDAR_DOMAIN_WALK,
+    ]);
   });
 
   it("grew append-only: the previous walk is still a prefix of this one", () => {

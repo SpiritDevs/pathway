@@ -167,6 +167,8 @@ export const COMPANY_PERMISSIONS = [
   "billing.manage",
   "projects.read",
   "projects.manage",
+  "calendar.read",
+  "calendar.readAll",
   "issues.read",
   "issues.create",
   "issues.update",
