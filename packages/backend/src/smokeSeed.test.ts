@@ -29,6 +29,7 @@ describe("smokeServiceRolePermissions", () => {
         "environments.read",
         "issues.read",
         "audit.read",
+        "calendar.read",
         "workflow.manage",
       ].sort(),
     );
