@@ -646,6 +646,50 @@ describe("provider usage snapshots", () => {
     }
   });
 
+  it.live("cancels a scheduled refresh when the provider is disabled", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+    resetProviderUsageCache();
+    const blockedUntilMs = nowMs + 120_000;
+    let fetchCount = 0;
+    const fetchUsage = async (ctx: { readonly nowMs: number }) => {
+      fetchCount += 1;
+      return rateLimitedFetchResult({
+        provider: "cursor",
+        nowMs: ctx.nowMs,
+        untilMs: blockedUntilMs,
+      });
+    };
+    return Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        providerUsageTestKit.resolve(
+          { instanceId, provider: "cursor", nowMs, forceRefresh: true },
+          fetchUsage,
+        ),
+      );
+      yield* providerUsageTestKit.loadList().pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({
+            providerInstances: {
+              ...disabledLegacySlots,
+              [instanceId]: { driver: "cursor", enabled: false },
+            },
+          }),
+        ),
+      );
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(120_000));
+
+      expect(fetchCount).toBe(1);
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          resetProviderUsageCache();
+          vi.useRealTimers();
+        }),
+      ),
+    );
+  });
+
   it("detects the Claude CLI version and continues after a credential network error", async () => {
     resetProviderUsageCache();
     const versionRunner = vi.fn(async (command: string) => {

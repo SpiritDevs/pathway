@@ -1676,8 +1676,18 @@ const readCachedProviderUsageList = Effect.fn("ProviderUsage.readCachedList")(fu
   });
 });
 
+function cancelUnconfiguredRateLimitRefreshes(
+  inputs: ReadonlyArray<ServerGetProviderUsageInput>,
+): void {
+  const configuredKeys = new Set(inputs.map(cacheKeyFor));
+  for (const cacheKey of scheduledRateLimitRefreshes.keys()) {
+    if (!configuredKeys.has(cacheKey)) cancelScheduledRateLimitRefresh(cacheKey);
+  }
+}
+
 const loadProviderUsageList = Effect.fn("ProviderUsage.loadList")(function* () {
   const inputs = yield* configuredProviderUsageInputs();
+  cancelUnconfiguredRateLimitRefreshes(inputs);
   yield* Effect.forEach(inputs, (input) => getProviderUsage(input).pipe(Effect.asVoid), {
     concurrency: "unbounded",
     discard: true,
