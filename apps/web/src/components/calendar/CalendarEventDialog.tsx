@@ -52,12 +52,24 @@ import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
+  calendarAlertCapability,
+  primeCalendarAlerts,
+  type CalendarAlertCapability,
+} from "./calendarAlerts";
+import {
   CALENDAR_SNAP_MINUTES,
   MINUTES_PER_DAY,
   calendarDayBounds,
   calendarInstantAt,
   calendarWallClock,
 } from "./calendarGrid.logic";
+import {
+  newLocationSearchSession,
+  resolveMapboxSearchToken,
+  retrieveCalendarLocation,
+  searchCalendarLocations,
+  type CalendarLocationSuggestion,
+} from "./calendarLocations";
 
 /** Native entry, the same controls the milestone dates popover uses. */
 const FIELD_CLASS =
@@ -147,6 +159,8 @@ export function CalendarEventDialog({
     ReadonlyArray<CalendarEventAttachmentId>
   >([]);
   const [submitting, setSubmitting] = useState(false);
+  const [alertCapability, setAlertCapability] =
+    useState<CalendarAlertCapability>(calendarAlertCapability);
   const attachmentInput = useRef<HTMLInputElement>(null);
 
   const resolved = useMemo(
@@ -292,6 +306,25 @@ export function CalendarEventDialog({
             <p className="text-[11px] text-muted-foreground">
               A sound and notification always fire when the event starts.
             </p>
+            {alertCapability === "notifications-and-sound" ? (
+              <p className="text-[11px] text-muted-foreground">Notifications and sound enabled.</p>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Button
+                  onClick={() => void primeCalendarAlerts().then(setAlertCapability)}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  Enable alerts
+                </Button>
+                <span className="text-[11px] text-muted-foreground">
+                  {alertCapability === "sound-only"
+                    ? "Sound is enabled. Allow notifications in your browser settings."
+                    : "Required before Pathway can deliver event alerts."}
+                </span>
+              </div>
+            )}
             {editable ? (
               <div className="flex gap-2">
                 <select
@@ -369,26 +402,7 @@ export function CalendarEventDialog({
             values={urls}
           />
 
-          <EditableList
-            addLabel="Add invitee"
-            disabled={!editable}
-            icon={<UserRoundIcon className="size-3.5" />}
-            invalid={(value) =>
-              value.trim().length > 0 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
-            }
-            label="Invitees"
-            onChange={(values) =>
-              setInvitees(
-                values.map((email, index) => ({
-                  email,
-                  name: invitees[index]?.name ?? null,
-                  response: invitees[index]?.response ?? "needs-action",
-                })),
-              )
-            }
-            placeholder="person@example.com"
-            values={invitees.map((invitee) => invitee.email)}
-          />
+          <InviteeList disabled={!editable} invitees={invitees} onChange={setInvitees} />
 
           <section className="flex flex-col gap-2" aria-labelledby="event-attachments-label">
             <div
@@ -420,20 +434,26 @@ export function CalendarEventDialog({
                       title: "Attachments must be 25 MB or smaller",
                     });
                   }
-                  setNewAttachments((current) =>
-                    [
-                      ...current,
-                      ...accepted.filter(
-                        (file) =>
-                          !current.some(
-                            (item) =>
-                              item.name === file.name &&
-                              item.size === file.size &&
-                              item.lastModified === file.lastModified,
-                          ),
-                      ),
-                    ].slice(0, 8 - visibleAttachments.length),
-                  );
+                  setNewAttachments((current) => {
+                    const unique = accepted.filter(
+                      (file) =>
+                        !current.some(
+                          (item) =>
+                            item.name === file.name &&
+                            item.size === file.size &&
+                            item.lastModified === file.lastModified,
+                        ),
+                    );
+                    const remaining = Math.max(0, 8 - visibleAttachments.length - current.length);
+                    if (unique.length > remaining) {
+                      const omitted = unique.length - remaining;
+                      toastManager.add({
+                        type: "error",
+                        title: `Only eight attachments are allowed. ${omitted} ${omitted === 1 ? "file was" : "files were"} not added.`,
+                      });
+                    }
+                    return [...current, ...unique.slice(0, remaining)];
+                  });
                   event.currentTarget.value = "";
                 }}
                 ref={attachmentInput}
@@ -550,7 +570,9 @@ export function CalendarEventDialog({
                   newAttachments,
                   removedAttachmentIds,
                   ...resolved,
-                }).finally(() => setSubmitting(false));
+                })
+                  .catch(() => undefined)
+                  .finally(() => setSubmitting(false));
               }}
               size="sm"
             >
@@ -660,8 +682,95 @@ function EditableList({
   );
 }
 
-interface LocationSuggestion {
-  readonly display_name: string;
+function InviteeList({
+  disabled,
+  invitees,
+  onChange,
+}: {
+  readonly disabled: boolean;
+  readonly invitees: ReadonlyArray<CalendarEventInvitee>;
+  readonly onChange: (invitees: ReadonlyArray<CalendarEventInvitee>) => void;
+}) {
+  const rowKeys = useRef<ReadonlyArray<string>>([]);
+  if (rowKeys.current.length < invitees.length) {
+    rowKeys.current = [
+      ...rowKeys.current,
+      ...Array.from({ length: invitees.length - rowKeys.current.length }, randomUUID),
+    ];
+  } else if (rowKeys.current.length > invitees.length) {
+    rowKeys.current = rowKeys.current.slice(0, invitees.length);
+  }
+  const rows = invitees.map((invitee, index) => ({ key: rowKeys.current[index]!, invitee }));
+  return (
+    <section className="flex flex-col gap-2">
+      <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+        <UserRoundIcon className="size-3.5 text-muted-foreground" />
+        Invitees
+        {disabled ? null : (
+          <Button
+            className="ms-auto"
+            onClick={() => {
+              rowKeys.current = [...rowKeys.current, randomUUID()];
+              onChange([...invitees, { email: "", name: null, response: "needs-action" as const }]);
+            }}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <PlusIcon /> Add invitee
+          </Button>
+        )}
+      </div>
+      {rows.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground">None added.</p>
+      ) : (
+        rows.map((row) => (
+          <div className="flex items-center gap-2" key={row.key}>
+            <Input
+              aria-invalid={
+                row.invitee.email.trim().length > 0 &&
+                !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.invitee.email.trim())
+              }
+              disabled={disabled}
+              onChange={(event) => {
+                const index = rowKeys.current.indexOf(row.key);
+                onChange(
+                  invitees.map((invitee, itemIndex) =>
+                    itemIndex === index
+                      ? { ...invitee, email: event.currentTarget.value }
+                      : invitee,
+                  ),
+                );
+              }}
+              placeholder="person@example.com"
+              type="email"
+              value={row.invitee.email}
+            />
+            {row.invitee.response === "needs-action" ? null : (
+              <span className="shrink-0 text-[10px] capitalize text-muted-foreground">
+                {row.invitee.response}
+              </span>
+            )}
+            {disabled ? null : (
+              <Button
+                aria-label="Remove invitee"
+                onClick={() => {
+                  const index = rowKeys.current.indexOf(row.key);
+                  rowKeys.current = rowKeys.current.filter((key) => key !== row.key);
+                  onChange(invitees.filter((_, itemIndex) => itemIndex !== index));
+                }}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              >
+                <XIcon />
+              </Button>
+            )}
+          </div>
+        ))
+      )}
+    </section>
+  );
 }
 
 function LocationField({
@@ -673,43 +782,32 @@ function LocationField({
   readonly onChange: (value: string) => void;
   readonly value: string;
 }) {
-  const [suggestions, setSuggestions] = useState<ReadonlyArray<LocationSuggestion>>([]);
+  const token = useMemo(resolveMapboxSearchToken, []);
+  const sessionToken = useRef(newLocationSearchSession());
+  const language = navigator.language.split("-", 1)[0] || "en";
+  const [suggestions, setSuggestions] = useState<ReadonlyArray<CalendarLocationSuggestion>>([]);
   useEffect(() => {
-    if (disabled || value.trim().length < 3) {
+    if (disabled || token === null || value.trim().length < 3) {
       setSuggestions([]);
       return;
     }
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      const query = new URLSearchParams({
-        q: value,
-        format: "jsonv2",
-        addressdetails: "1",
-        limit: "5",
-      });
-      void fetch(`https://nominatim.openstreetmap.org/search?${query}`, {
-        headers: { "Accept-Language": navigator.language },
+      void searchCalendarLocations({
+        query: value,
+        token,
+        sessionToken: sessionToken.current,
+        language,
         signal: controller.signal,
       })
-        .then((response) => (response.ok ? response.json() : []))
-        .then((result: unknown) => {
-          if (Array.isArray(result))
-            setSuggestions(
-              result.filter(
-                (item): item is LocationSuggestion =>
-                  typeof item === "object" &&
-                  item !== null &&
-                  typeof (item as Record<string, unknown>)["display_name"] === "string",
-              ),
-            );
-        })
+        .then(setSuggestions)
         .catch(() => undefined);
-    }, 600);
+    }, 300);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [disabled, value]);
+  }, [disabled, language, token, value]);
   return (
     <section className="relative flex flex-col gap-1.5">
       <Label className="flex items-center gap-2 text-xs">
@@ -725,22 +823,29 @@ function LocationField({
       {suggestions.length === 0 ? null : (
         <ul className="absolute inset-x-0 top-full z-10 mt-1 overflow-hidden rounded-md border bg-popover shadow-md">
           {suggestions.map((suggestion) => (
-            <li key={suggestion.display_name}>
+            <li key={suggestion.id}>
               <button
                 className="w-full px-3 py-2 text-start text-xs hover:bg-accent"
                 onClick={() => {
-                  onChange(suggestion.display_name);
                   setSuggestions([]);
+                  if (token === null) return;
+                  void retrieveCalendarLocation({
+                    suggestion,
+                    token,
+                    sessionToken: sessionToken.current,
+                    language,
+                  }).then((location) => {
+                    onChange(location);
+                    sessionToken.current = newLocationSearchSession();
+                  });
                 }}
                 type="button"
               >
-                {suggestion.display_name}
+                {suggestion.label}
               </button>
             </li>
           ))}
-          <li className="border-t px-3 py-1 text-[9px] text-muted-foreground">
-            Search by OpenStreetMap
-          </li>
+          <li className="border-t px-3 py-1 text-[9px] text-muted-foreground">Search by Mapbox</li>
         </ul>
       )}
     </section>

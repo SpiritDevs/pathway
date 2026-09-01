@@ -50,6 +50,11 @@ describe("calendar event attachment client", () => {
       "calendars:prepareEventAttachmentUpload",
       "calendars:attachEventFile",
     ]);
+    expect(calls[0]?.args).toEqual({
+      companyId: COMPANY_ID,
+      eventId: EVENT_ID,
+      id: ATTACHMENT_ID,
+    });
     expect(fetcher).toHaveBeenCalledWith(
       "https://upload.example.test",
       expect.objectContaining({ method: "POST", body: file }),
@@ -62,6 +67,53 @@ describe("calendar event attachment client", () => {
       fileName: "agenda.pdf",
       mimeType: "application/pdf",
       byteSize: 6,
+    });
+  });
+
+  it("discards uploaded bytes when binding metadata fails", async () => {
+    const calls: Array<{ readonly name: string; readonly args: Record<string, unknown> }> = [];
+    const convex: CalendarEventsConvexClient = {
+      mutation: async (reference, args) => {
+        const name = getFunctionName(reference);
+        calls.push({ name, args });
+        if (name === "calendars:prepareEventAttachmentUpload") {
+          return "https://upload.example.test";
+        }
+        if (name === "calendars:attachEventFile") throw new Error("event changed");
+        return null;
+      },
+      query: vi.fn(),
+      setAuth: vi.fn(),
+      close: vi.fn(async () => undefined),
+    };
+    const client = makeCalendarEventsClient({
+      convexUrl: "https://example.convex.cloud",
+      fetchToken: async () => "token",
+      client: convex,
+      fetcher: async () =>
+        new Response(JSON.stringify({ storageId: "storage-orphan" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    });
+
+    await expect(
+      client.uploadAttachment({
+        companyId: COMPANY_ID,
+        eventId: EVENT_ID,
+        id: ATTACHMENT_ID,
+        file: new File(["agenda"], "agenda.pdf", { type: "application/pdf" }),
+      }),
+    ).rejects.toThrow();
+
+    expect(calls.at(-1)).toEqual({
+      name: "calendars:discardEventAttachmentUpload",
+      args: {
+        companyId: COMPANY_ID,
+        eventId: EVENT_ID,
+        attachmentId: ATTACHMENT_ID,
+        storageId: "storage-orphan",
+      },
     });
   });
 });

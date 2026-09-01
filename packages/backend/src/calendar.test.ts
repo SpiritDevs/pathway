@@ -611,6 +611,11 @@ describe("calendar administration", () => {
     });
 
     const bytes = new Blob(["agenda"], { type: "text/plain" });
+    await alice.mutation(api.calendars.prepareEventAttachmentUpload, {
+      companyId: COMPANY,
+      eventId: PUBLIC_EVENT,
+      id: "attachment-agenda",
+    });
     const storageId = await t.run(async (ctx) => await ctx.storage.store(bytes));
     await alice.mutation(api.calendars.attachEventFile, {
       companyId: COMPANY,
@@ -652,6 +657,49 @@ describe("calendar administration", () => {
         attachmentId: "attachment-agenda",
       }),
     ).rejects.toThrow("not available");
+
+    await alice.mutation(api.calendars.prepareEventAttachmentUpload, {
+      companyId: COMPANY,
+      eventId: PUBLIC_EVENT,
+      id: "attachment-abandoned",
+    });
+    const abandonedStorageId = await t.run(async (ctx) =>
+      ctx.storage.store(new Blob(["abandoned"])),
+    );
+    await alice.mutation(api.calendars.discardEventAttachmentUpload, {
+      companyId: COMPANY,
+      eventId: PUBLIC_EVENT,
+      attachmentId: "attachment-abandoned",
+      storageId: abandonedStorageId,
+    });
+    expect(await t.run(async (ctx) => ctx.db.system.get(abandonedStorageId))).toBeNull();
+  });
+
+  it("rejects oversized event URLs and invitee email addresses", async () => {
+    const t = harness();
+    await buildCalendarFixture(t);
+    const alice = asUser(t, "alice");
+
+    await expect(
+      alice.mutation(api.calendars.updateEvent, {
+        companyId: COMPANY,
+        eventId: PUBLIC_EVENT,
+        urls: [`https://example.test/${"a".repeat(2_048)}`],
+      }),
+    ).rejects.toThrow("cannot exceed 2048 characters");
+    await expect(
+      alice.mutation(api.calendars.updateEvent, {
+        companyId: COMPANY,
+        eventId: PUBLIC_EVENT,
+        invitees: [
+          {
+            email: `${"a".repeat(310)}@example.test`,
+            name: null,
+            response: "needs-action",
+          },
+        ],
+      }),
+    ).rejects.toThrow("cannot exceed 320 characters");
   });
 
   it("lets company managers enumerate calendars without widening event visibility", async () => {

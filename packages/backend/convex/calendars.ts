@@ -31,6 +31,8 @@ const MAX_NAME_LENGTH = 200;
 const MAX_TITLE_LENGTH = 500;
 const MAX_NOTES_LENGTH = 20_000;
 const MAX_LOCATION_LENGTH = 500;
+const MAX_URL_LENGTH = 2_048;
+const MAX_EMAIL_LENGTH = 320;
 const MAX_URLS = 10;
 const MAX_INVITEES = 100;
 const MAX_REMINDERS = 10;
@@ -110,9 +112,16 @@ function urlsOf(values: readonly string[]): string[] {
   }
   const result: string[] = [];
   for (const raw of values) {
+    const candidate = raw.trim();
+    if (candidate.length > MAX_URL_LENGTH) {
+      throw backendError(
+        "invalid-arguments",
+        `Event URLs cannot exceed ${MAX_URL_LENGTH} characters.`,
+      );
+    }
     let url: URL;
     try {
-      url = new URL(raw.trim());
+      url = new URL(candidate);
     } catch {
       throw backendError("invalid-arguments", `Invalid event URL: ${raw}`);
     }
@@ -152,6 +161,12 @@ function inviteesOf(
   const seen = new Set<string>();
   for (const invitee of values) {
     const email = invitee.email.trim().toLowerCase();
+    if (email.length > MAX_EMAIL_LENGTH) {
+      throw backendError(
+        "invalid-arguments",
+        `Invitee emails cannot exceed ${MAX_EMAIL_LENGTH} characters.`,
+      );
+    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       throw backendError("invalid-arguments", `Invalid invitee email: ${invitee.email}`);
     }
@@ -560,7 +575,7 @@ export const remove = mutation({
       );
     }
     for (const attachment of attachments) {
-      await ctx.storage.delete(attachment.storageId);
+      if (attachment.storageId !== null) await ctx.storage.delete(attachment.storageId);
       await ctx.db.delete(attachment._id);
     }
     for (const event of events) await ctx.db.patch(event._id, { deletedAt: now, updatedAt: now });
@@ -888,7 +903,7 @@ export const deleteEvent = mutation({
       )
       .collect();
     for (const attachment of attachments) {
-      await ctx.storage.delete(attachment.storageId);
+      if (attachment.storageId !== null) await ctx.storage.delete(attachment.storageId);
       await ctx.db.delete(attachment._id);
     }
     await ctx.db.patch(event._id, { deletedAt: now, updatedAt: now });
@@ -902,7 +917,7 @@ export const deleteEvent = mutation({
 });
 
 export const prepareEventAttachmentUpload = mutation({
-  args: { companyId: domainIdArg, eventId: domainIdArg },
+  args: { companyId: domainIdArg, eventId: domainIdArg, id: domainIdArg },
   returns: v.string(),
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
@@ -913,13 +928,75 @@ export const prepareEventAttachmentUpload = mutation({
     const calendar = await byCalendarId(ctx, actor.company._id, event.calendarId);
     if (calendar === null) throw backendError("entity-not-found", "Calendar not found.");
     requireOwnedPathwayCalendar(actor, calendar);
-    if ((event.attachments ?? []).length >= MAX_ATTACHMENTS) {
+    const attachmentRecords = await ctx.db
+      .query("calendarEventAttachments")
+      .withIndex("by_company_and_event", (q) =>
+        q.eq("companyId", actor.company._id).eq("eventId", event.id),
+      )
+      .take(MAX_ATTACHMENTS);
+    if (attachmentRecords.length >= MAX_ATTACHMENTS) {
       throw backendError(
         "invalid-arguments",
         `An event can have at most ${MAX_ATTACHMENTS} attachments.`,
       );
     }
+    const existing = await ctx.db
+      .query("calendarEventAttachments")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.id),
+      )
+      .unique();
+    if (existing !== null) {
+      throw backendError("foreign-id-conflict", "That event attachment id exists.");
+    }
+    await ctx.db.insert("calendarEventAttachments", {
+      id: args.id,
+      companyId: actor.company._id,
+      calendarId: calendar.id,
+      eventId: event.id,
+      storageId: null,
+      uploadedByMembershipId: actor.membership._id,
+      createdAt: Date.now(),
+    });
     return await ctx.storage.generateUploadUrl();
+  },
+});
+
+export const discardEventAttachmentUpload = mutation({
+  args: {
+    companyId: domainIdArg,
+    eventId: domainIdArg,
+    attachmentId: domainIdArg,
+    storageId: v.optional(v.id("_storage")),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requireMember(actor);
+    const reservation = await ctx.db
+      .query("calendarEventAttachments")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.attachmentId),
+      )
+      .unique();
+    if (
+      reservation === null ||
+      reservation.eventId !== args.eventId ||
+      reservation.storageId !== null ||
+      reservation.uploadedByMembershipId !== actor.membership._id
+    ) {
+      return null;
+    }
+    if (args.storageId !== undefined) {
+      const storageId = args.storageId;
+      const bound = await ctx.db
+        .query("calendarEventAttachments")
+        .withIndex("by_storage_id", (q) => q.eq("storageId", storageId))
+        .first();
+      if (bound === null) await ctx.storage.delete(storageId);
+    }
+    await ctx.db.delete(reservation._id);
+    return null;
   },
 });
 
@@ -951,14 +1028,19 @@ export const attachEventFile = mutation({
       );
     }
     if (current.some((attachment) => attachment.id === args.id)) return null;
-    const conflictingAttachment = await ctx.db
+    const reservation = await ctx.db
       .query("calendarEventAttachments")
       .withIndex("by_company_and_domain_id", (q) =>
         q.eq("companyId", actor.company._id).eq("id", args.id),
       )
       .unique();
-    if (conflictingAttachment !== null) {
-      throw backendError("foreign-id-conflict", "That event attachment id exists.");
+    if (
+      reservation === null ||
+      reservation.eventId !== event.id ||
+      reservation.storageId !== null ||
+      reservation.uploadedByMembershipId !== actor.membership._id
+    ) {
+      throw backendError("foreign-id-conflict", "That event attachment upload is not reserved.");
     }
     const stored = await ctx.db.system.get(args.storageId);
     if (
@@ -974,15 +1056,7 @@ export const attachEventFile = mutation({
     }
     const fileName = trimmed(args.fileName, "Attachment file name", 255);
     const mimeType = trimmed(args.mimeType, "Attachment MIME type", 100);
-    await ctx.db.insert("calendarEventAttachments", {
-      id: args.id,
-      companyId: actor.company._id,
-      calendarId: calendar.id,
-      eventId: event.id,
-      storageId: args.storageId,
-      uploadedByMembershipId: actor.membership._id,
-      createdAt: Date.now(),
-    });
+    await ctx.db.patch(reservation._id, { storageId: args.storageId });
     await ctx.db.patch(event._id, {
       attachments: [...current, { id: args.id, fileName, mimeType, byteSize: args.byteSize }],
       updatedAt: Date.now(),
@@ -1030,7 +1104,9 @@ export const eventAttachmentUrl = query({
         q.eq("companyId", actor.company._id).eq("id", args.attachmentId),
       )
       .unique();
-    if (attachment === null || attachment.eventId !== event.id) return null;
+    if (attachment === null || attachment.eventId !== event.id || attachment.storageId === null) {
+      return null;
+    }
     return await ctx.storage.getUrl(attachment.storageId);
   },
 });
@@ -1052,7 +1128,7 @@ export const removeEventAttachment = mutation({
       )
       .unique();
     if (attachment === null || attachment.eventId !== event.id) return null;
-    await ctx.storage.delete(attachment.storageId);
+    if (attachment.storageId !== null) await ctx.storage.delete(attachment.storageId);
     await ctx.db.delete(attachment._id);
     await ctx.db.patch(event._id, {
       attachments: (event.attachments ?? []).filter((item) => item.id !== args.attachmentId),

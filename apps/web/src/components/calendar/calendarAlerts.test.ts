@@ -42,4 +42,15 @@ describe("calendar alert occurrences", () => {
     ).toEqual([0]);
     expect(calendarAlertOccurrences([event()], at + 61_000)).toEqual([]);
   });
+
+  it("keeps alert identity stable across unrelated event edits", () => {
+    const now = 1_799_998_000_000;
+    const before = calendarAlertOccurrences([event()], now).map((item) => item.id);
+    const after = calendarAlertOccurrences(
+      [event({ notes: "Bring the prototype", updatedAt: 1_750_000_000_000 })],
+      now,
+    ).map((item) => item.id);
+
+    expect(after).toEqual(before);
+  });
 });

@@ -523,13 +523,14 @@ export default defineSchema({
     companyId: v.id("companies"),
     calendarId: domainId,
     eventId: domainId,
-    storageId: v.id("_storage"),
+    storageId: v.union(v.id("_storage"), v.null()),
     uploadedByMembershipId: v.id("memberships"),
     createdAt: v.number(),
   })
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_calendar", ["companyId", "calendarId"])
-    .index("by_company_and_event", ["companyId", "eventId"]),
+    .index("by_company_and_event", ["companyId", "eventId"])
+    .index("by_storage_id", ["storageId"]),
 
   /** Explicit read edge for one named calendar and one grantee membership. */
   calendarGrant: defineTable({

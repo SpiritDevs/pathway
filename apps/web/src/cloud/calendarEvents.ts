@@ -93,9 +93,16 @@ export const CALENDAR_EVENT_FUNCTION_REFERENCES = {
     {
       readonly companyId: CompanyId;
       readonly eventId: CalendarEventId;
+      readonly id: CalendarEventAttachmentId;
     },
     string
   >("calendars:prepareEventAttachmentUpload"),
+  discardEventAttachmentUpload: mutationReference<{
+    readonly companyId: CompanyId;
+    readonly eventId: CalendarEventId;
+    readonly attachmentId: CalendarEventAttachmentId;
+    readonly storageId?: string;
+  }>("calendars:discardEventAttachmentUpload"),
   attachEventFile: mutationReference<{
     readonly companyId: CompanyId;
     readonly eventId: CalendarEventId;
@@ -223,41 +230,73 @@ export function makeCalendarEventsClient(options: {
         });
       }
       let uploadUrl: string;
+      const discardUpload = async (storageId?: string) => {
+        await client
+          .mutation(CALENDAR_EVENT_FUNCTION_REFERENCES.discardEventAttachmentUpload, {
+            companyId: args.companyId,
+            eventId: args.eventId,
+            attachmentId: args.id,
+            ...(storageId === undefined ? {} : { storageId }),
+          })
+          .catch(() => undefined);
+      };
       try {
         uploadUrl = (await client.mutation(
           CALENDAR_EVENT_FUNCTION_REFERENCES.prepareEventAttachmentUpload,
-          { companyId: args.companyId, eventId: args.eventId },
+          { companyId: args.companyId, eventId: args.eventId, id: args.id },
         )) as string;
       } catch (error) {
         throw mapCalendarWriteError(error);
       }
-      const response = await fetcher(uploadUrl, {
-        method: "POST",
-        headers: { "Content-Type": args.file.type || "application/octet-stream" },
-        body: args.file,
-      });
+      let response: Response;
+      try {
+        response = await fetcher(uploadUrl, {
+          method: "POST",
+          headers: { "Content-Type": args.file.type || "application/octet-stream" },
+          body: args.file,
+        });
+      } catch (error) {
+        await discardUpload();
+        throw error;
+      }
       if (!response.ok) {
+        await discardUpload();
         throw new CalendarWriteError({
           code: "upload-failed",
           message: `The attachment upload failed with HTTP ${response.status}.`,
         });
       }
-      const uploaded = (await response.json()) as { storageId?: unknown };
+      let uploaded: { storageId?: unknown };
+      try {
+        uploaded = (await response.json()) as { storageId?: unknown };
+      } catch {
+        await discardUpload();
+        throw new CalendarWriteError({
+          code: "upload-failed",
+          message: "The attachment upload returned an invalid response.",
+        });
+      }
       if (typeof uploaded.storageId !== "string") {
+        await discardUpload();
         throw new CalendarWriteError({
           code: "upload-failed",
           message: "The attachment upload returned no file id.",
         });
       }
-      await mutation(CALENDAR_EVENT_FUNCTION_REFERENCES.attachEventFile, {
-        companyId: args.companyId,
-        eventId: args.eventId,
-        id: args.id,
-        storageId: uploaded.storageId,
-        fileName: args.file.name || "Attachment",
-        mimeType: args.file.type || "application/octet-stream",
-        byteSize: args.file.size,
-      });
+      try {
+        await mutation(CALENDAR_EVENT_FUNCTION_REFERENCES.attachEventFile, {
+          companyId: args.companyId,
+          eventId: args.eventId,
+          id: args.id,
+          storageId: uploaded.storageId,
+          fileName: args.file.name || "Attachment",
+          mimeType: args.file.type || "application/octet-stream",
+          byteSize: args.file.size,
+        });
+      } catch (error) {
+        await discardUpload(uploaded.storageId);
+        throw error;
+      }
     },
     removeAttachment: (args) =>
       mutation(CALENDAR_EVENT_FUNCTION_REFERENCES.removeEventAttachment, args),

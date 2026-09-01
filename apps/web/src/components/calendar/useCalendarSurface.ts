@@ -282,10 +282,18 @@ export function useCalendarWriter(viewer: CalendarViewer): CalendarWriter {
         await convex.removeAttachment({ companyId: company, eventId, attachmentId });
       },
       openAttachment: async (eventId, attachmentId) => {
-        const { client: convex, companyId: company } = requireTarget();
-        const url = await convex.attachmentUrl({ companyId: company, eventId, attachmentId });
-        if (url === null) throw new Error("That attachment is no longer available.");
-        window.open(url, "_blank", "noopener,noreferrer");
+        const popup = window.open("", "_blank");
+        if (popup === null) throw new Error("Your browser blocked the attachment window.");
+        popup.opener = null;
+        try {
+          const { client: convex, companyId: company } = requireTarget();
+          const url = await convex.attachmentUrl({ companyId: company, eventId, attachmentId });
+          if (url === null) throw new Error("That attachment is no longer available.");
+          popup.location.replace(url);
+        } catch (error) {
+          popup.close();
+          throw error;
+        }
       },
       createCalendar: async (name) => {
         const { client: convex, companyId: company } = requireTarget();
