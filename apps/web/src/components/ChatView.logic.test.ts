@@ -21,6 +21,7 @@ import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
+  canReplaceInitialThreadProject,
   createLocalDispatchSnapshot,
   deriveAcknowledgedOptimisticUserMessageIds,
   deriveCommittedServerUserMessageIds,
@@ -898,6 +899,42 @@ describe("startNewThreadForProject", () => {
       }),
     ).toBe(false);
     expect(called).toBe(false);
+  });
+});
+
+describe("canReplaceInitialThreadProject", () => {
+  const projection = (input: {
+    readonly runStatus: "running" | "interrupted";
+    readonly roles: ReadonlyArray<"user" | "assistant">;
+  }) =>
+    ({
+      messages: input.roles.map((role, index) => ({ id: `message-${index}`, role })),
+      runs: [{ id: "run-1", status: input.runStatus }],
+    }) as unknown as OrchestrationV2ThreadProjection;
+
+  it("unlocks after the first user turn is interrupted before an assistant message", () => {
+    expect(
+      canReplaceInitialThreadProject(projection({ runStatus: "interrupted", roles: ["user"] })),
+    ).toBe(true);
+  });
+
+  it("stays locked while running and after the assistant has replied", () => {
+    expect(
+      canReplaceInitialThreadProject(projection({ runStatus: "running", roles: ["user"] })),
+    ).toBe(false);
+    expect(
+      canReplaceInitialThreadProject(
+        projection({ runStatus: "interrupted", roles: ["user", "assistant"] }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not unlock a later interrupted turn", () => {
+    expect(
+      canReplaceInitialThreadProject(
+        projection({ runStatus: "interrupted", roles: ["user", "user"] }),
+      ),
+    ).toBe(false);
   });
 });
 

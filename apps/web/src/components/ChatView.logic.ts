@@ -12,6 +12,7 @@ import {
   type ScopedProjectRef,
   type ScopedThreadRef,
   type ThreadId,
+  type UploadChatAttachment,
   type RunId,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
@@ -84,6 +85,47 @@ export function startNewThreadForProject(
   void handleNewThread(projectRef);
 
   return true;
+}
+
+/** A stopped first turn can be replaced until the agent has written into the conversation. */
+export function canReplaceInitialThreadProject(
+  projection: OrchestrationV2ThreadProjection | null | undefined,
+): boolean {
+  if (!projection || projection.messages.some((message) => message.role === "assistant")) {
+    return false;
+  }
+  if (projection.messages.filter((message) => message.role === "user").length !== 1) {
+    return false;
+  }
+  return projection.runs.findLast(() => true)?.status === "interrupted";
+}
+
+/** Re-uploads a first message's durable attachments under its replacement thread. */
+export async function copyMessageAttachmentsForNewThread(
+  attachments: ReadonlyArray<ChatAttachment>,
+  attachmentUrlById: ReadonlyMap<string, string>,
+): Promise<UploadChatAttachment[]> {
+  return Promise.all(
+    attachments.map(async (attachment) => {
+      if (attachment.type !== "image" && attachment.type !== "file") {
+        throw new Error(`Pathway cannot move the attachment type '${attachment.type}'.`);
+      }
+      const url = attachmentUrlById.get(attachment.id);
+      if (!url) throw new Error(`Could not load ${attachment.name}.`);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Could not load ${attachment.name}.`);
+      const file = new File([await response.blob()], attachment.name, {
+        type: attachment.mimeType,
+      });
+      return {
+        type: attachment.type,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+        dataUrl: await readFileAsDataUrl(file),
+      };
+    }),
+  );
 }
 
 /**

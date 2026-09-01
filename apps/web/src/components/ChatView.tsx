@@ -383,7 +383,9 @@ import {
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
+  canReplaceInitialThreadProject,
   collectUserMessageBlobPreviewUrls,
+  copyMessageAttachmentsForNewThread,
   createLocalDispatchSnapshot,
   deriveAcknowledgedOptimisticUserMessageIds,
   deriveCommittedServerUserMessageIds,
@@ -414,7 +416,6 @@ import {
   revokeUserMessagePreviewUrls,
   resolveThreadProjectionWorkingPresentation,
   shouldShowComposerContextStrip,
-  startNewThreadForProject,
   threadProjectionIsPending,
   waitForStartedServerThread,
 } from "./ChatView.logic";
@@ -2144,9 +2145,6 @@ function ChatViewContent(props: ChatViewProps) {
   // going quiet. See docs/internals/decisions/0006-issue-tracker.md.
   const { ensureWorkspaceRoot: ensureActiveProjectWorkspaceRoot } =
     useEnsureProjectWorkspace(activeProject);
-  const handleNewThreadInActiveProject = useCallback(() => {
-    startNewThreadForProject(activeProjectRef, handleNewThread);
-  }, [activeProjectRef, handleNewThread]);
   const handleRenameActiveThread = useCallback(
     (title: string) => {
       if (!isServerThread || !activeThread) return;
@@ -6263,6 +6261,142 @@ function ChatViewContent(props: ChatViewProps) {
     () => resolveThreadBreadcrumbAncestors(activeThread, serverThreadShells),
     [activeThread, serverThreadShells],
   );
+  const projectSwitchInFlightRef = useRef(false);
+  const canChangeHeaderProject =
+    (isLocalDraftThread && timelineEntries.length === 0 && !isWorking) ||
+    (isServerThread && canReplaceInitialThreadProject(serverProjection) && !isWorking);
+  const handleHeaderProjectChange = useCallback(
+    async (projectRef: { environmentId: EnvironmentId; projectId: ProjectId }) => {
+      if (projectSwitchInFlightRef.current || !activeThread || !canChangeHeaderProject) return;
+      if (
+        projectRef.environmentId === activeThread.environmentId &&
+        projectRef.projectId === activeThread.projectId
+      ) {
+        return;
+      }
+
+      if (!isServerThread) {
+        await handleNewThread(projectRef, { replace: true });
+        return;
+      }
+
+      const firstUserMessage = serverProjection?.messages.find(
+        (message) => message.role === "user",
+      );
+      if (!firstUserMessage) return;
+
+      projectSwitchInFlightRef.current = true;
+      setThreadError(activeThread.id, null);
+      const replacementThreadId = newThreadId();
+      const replacementMessageId = newMessageId();
+      let replacementCreated = false;
+      let originalDeleted = false;
+      try {
+        const attachments = await copyMessageAttachmentsForNewThread(
+          firstUserMessage.attachments,
+          serverAttachmentUrlById,
+        );
+        const createdAt = new Date().toISOString();
+        const startResult = await startThreadTurn({
+          environmentId: projectRef.environmentId,
+          input: {
+            threadId: replacementThreadId,
+            message: {
+              messageId: replacementMessageId,
+              role: "user",
+              text: firstUserMessage.text,
+              attachments,
+            },
+            modelSelection: activeThread.modelSelection,
+            titleSeed: activeThread.title,
+            runtimeMode: activeThread.runtimeMode,
+            interactionMode: activeThread.interactionMode,
+            bootstrap: {
+              createThread: {
+                projectId: projectRef.projectId,
+                title: activeThread.title,
+                modelSelection: activeThread.modelSelection,
+                runtimeMode: activeThread.runtimeMode,
+                interactionMode: activeThread.interactionMode,
+                locations: activeThread.locations ?? ["agents"],
+                branch: null,
+                worktreePath: null,
+                createdAt,
+              },
+            },
+            createdAt,
+          },
+        });
+        if (startResult._tag === "Failure") {
+          throw squashAtomCommandFailure(startResult);
+        }
+        replacementCreated = true;
+        const replacementStarted = await waitForStartedServerThread(
+          scopeThreadRef(projectRef.environmentId, replacementThreadId),
+        );
+        if (!replacementStarted) {
+          throw new Error("The replacement thread did not become available.");
+        }
+
+        const deleteResult = await deleteThread({
+          environmentId: activeThread.environmentId,
+          input: { threadId: activeThread.id },
+        });
+        if (deleteResult._tag === "Failure") {
+          throw squashAtomCommandFailure(deleteResult);
+        }
+        originalDeleted = true;
+
+        await navigate({
+          to: "/threads/$environmentId/$threadId",
+          params: buildThreadRouteParams(
+            scopeThreadRef(projectRef.environmentId, replacementThreadId),
+          ),
+          replace: true,
+        });
+      } catch (error) {
+        if (replacementCreated && !originalDeleted) {
+          const cleanupResult = await deleteThread({
+            environmentId: projectRef.environmentId,
+            input: { threadId: replacementThreadId },
+          });
+          if (cleanupResult._tag === "Failure" && !isAtomCommandInterrupted(cleanupResult)) {
+            console.warn(
+              "Failed to clean up a replacement thread after its project switch failed.",
+              squashAtomCommandFailure(cleanupResult),
+            );
+          }
+        }
+        const description =
+          error instanceof Error ? error.message : "Failed to change the thread's project.";
+        if (originalDeleted) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: "Project changed",
+              description: `The replacement thread was created, but Pathway could not open it: ${description}`,
+            }),
+          );
+        } else {
+          setThreadError(activeThread.id, description);
+        }
+      } finally {
+        projectSwitchInFlightRef.current = false;
+      }
+    },
+    [
+      activeThread,
+      canChangeHeaderProject,
+      deleteThread,
+      handleNewThread,
+      isServerThread,
+      navigate,
+      serverAttachmentUrlById,
+      serverProjection,
+      setThreadError,
+      startThreadTurn,
+    ],
+  );
 
   const sideChatCreateInFlightRef = useRef(false);
   const createSideChat = useCallback(
@@ -8506,9 +8640,11 @@ function ChatViewContent(props: ChatViewProps) {
               activeThreadTitle={activeThread.title}
               activeProjectName={activeProject?.title}
               activeProjectCwd={activeProject?.workspaceRoot ?? null}
+              activeProjectRef={activeProjectRef}
+              projectSelectionEnabled={canChangeHeaderProject}
               threadAncestors={threadBreadcrumbAncestors}
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
-              onNewThreadInProject={handleNewThreadInActiveProject}
+              onProjectChange={handleHeaderProjectChange}
               onOpenThread={onOpenRelatedThread}
               {...(isServerThread ? { onRenameThread: handleRenameActiveThread } : {})}
             />
