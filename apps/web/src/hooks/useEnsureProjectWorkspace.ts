@@ -36,6 +36,34 @@ export interface EnsureProjectWorkspace {
   readonly ensureWorkspaceRoot: (reason?: string) => Promise<string | null>;
 }
 
+export async function ensureProjectWorkspaceRoot(input: {
+  readonly project: ProjectWorkspaceTarget | null | undefined;
+  readonly attachDirectory: ReturnType<typeof useAttachProjectDirectory>;
+  readonly reason?: string;
+}): Promise<string | null> {
+  const decision = ensureProjectWorkspaceDecision(input.project);
+  if (decision.kind === "unavailable") return null;
+  if (decision.kind === "ready") return decision.workspaceRoot;
+  if (decision.kind === "provision") {
+    const attached = await input.attachDirectory({
+      environmentId: decision.project.environmentId,
+      projectId: decision.project.id,
+      plan: {
+        kind: "attach",
+        workspaceRoot: decision.workspaceRoot,
+        createWorkspaceRootIfMissing: true,
+        initializeGit: false,
+      },
+    });
+    if (attached.ok) return decision.workspaceRoot;
+  }
+  const promptResult = await requestProjectWorkspace({
+    project: decision.project,
+    reason: input.reason ?? null,
+  });
+  return resolveEnsuredWorkspaceRoot({ workspaceRoot: null, promptResult });
+}
+
 export function useEnsureProjectWorkspace(
   project: ProjectWorkspaceTarget | null | undefined,
 ): EnsureProjectWorkspace {
@@ -44,35 +72,13 @@ export function useEnsureProjectWorkspace(
   const attachDirectory = useAttachProjectDirectory();
 
   const ensureWorkspaceRoot = useCallback(
-    async (reason?: string): Promise<string | null> => {
-      if (decision.kind === "unavailable") return null;
-      if (decision.kind === "ready") return decision.workspaceRoot;
-      if (decision.kind === "provision") {
-        // Not every project is a checkout. Provision a folder below the home directory and carry
-        // on, rather than interrupting with a file picker whose answer nobody has yet formed.
-        const attached = await attachDirectory({
-          environmentId: decision.project.environmentId,
-          projectId: decision.project.id,
-          plan: {
-            kind: "attach",
-            workspaceRoot: decision.workspaceRoot,
-            createWorkspaceRootIfMissing: true,
-            initializeGit: false,
-          },
-        });
-        // Falling back to the picker keeps a permissions failure or a name collision recoverable
-        // instead of dead-ending the action that asked for a directory.
-        if (attached.ok) return decision.workspaceRoot;
-      }
-      const promptResult = await requestProjectWorkspace({
-        project: decision.project,
-        reason: reason ?? null,
-      });
-      // The project object captured above is a snapshot; re-reading its root from the snapshot
-      // would miss the attach that just happened, which is why the prompt answers with the path.
-      return resolveEnsuredWorkspaceRoot({ workspaceRoot: null, promptResult });
-    },
-    [attachDirectory, decision],
+    (reason?: string) =>
+      ensureProjectWorkspaceRoot({
+        project,
+        attachDirectory,
+        ...(reason === undefined ? {} : { reason }),
+      }),
+    [attachDirectory, project],
   );
 
   return {

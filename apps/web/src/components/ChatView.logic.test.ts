@@ -22,6 +22,7 @@ import {
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
   canReplaceInitialThreadProject,
+  copyMessageAttachmentsForNewThread,
   createLocalDispatchSnapshot,
   deriveAcknowledgedOptimisticUserMessageIds,
   deriveCommittedServerUserMessageIds,
@@ -221,6 +222,44 @@ describe("loadQueuedComposerImages", () => {
     } finally {
       fetchSpy.mockRestore();
       previewSpy.mockRestore();
+    }
+  });
+});
+
+describe("copyMessageAttachmentsForNewThread", () => {
+  it("sends file bytes through the pending upload path", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(new Blob(["file bytes"], { type: "application/pdf" })));
+    const uploadFile = vi.fn().mockResolvedValue({
+      type: "file",
+      id: "pending-00000000-0000-4000-8000-000000000001-pdf",
+      name: "large.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 20 * 1024 * 1024,
+    });
+
+    try {
+      const [copied] = await copyMessageAttachmentsForNewThread(
+        [
+          {
+            type: "file",
+            id: "source-file",
+            name: "large.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 20 * 1024 * 1024,
+          },
+        ],
+        new Map([["source-file", "https://example.test/large.pdf"]]),
+        uploadFile,
+      );
+
+      expect(uploadFile).toHaveBeenCalledOnce();
+      expect(uploadFile.mock.calls[0]?.[0]).toBeInstanceOf(File);
+      expect(copied).toMatchObject({ id: expect.stringContaining("pending-"), type: "file" });
+      expect(copied).not.toHaveProperty("dataUrl");
+    } finally {
+      fetchSpy.mockRestore();
     }
   });
 });
@@ -906,10 +945,12 @@ describe("canReplaceInitialThreadProject", () => {
   const projection = (input: {
     readonly runStatus: "running" | "interrupted";
     readonly roles: ReadonlyArray<"user" | "assistant">;
+    readonly turnItemTypes?: ReadonlyArray<"command_execution" | "file_search">;
   }) =>
     ({
       messages: input.roles.map((role, index) => ({ id: `message-${index}`, role })),
       runs: [{ id: "run-1", status: input.runStatus }],
+      turnItems: (input.turnItemTypes ?? []).map((type) => ({ type })),
     }) as unknown as OrchestrationV2ThreadProjection;
 
   it("unlocks after the first user turn is interrupted before an assistant message", () => {
@@ -935,6 +976,27 @@ describe("canReplaceInitialThreadProject", () => {
         projection({ runStatus: "interrupted", roles: ["user", "user"] }),
       ),
     ).toBe(false);
+  });
+
+  it("stays locked after a potentially side-effecting tool starts", () => {
+    expect(
+      canReplaceInitialThreadProject(
+        projection({
+          runStatus: "interrupted",
+          roles: ["user"],
+          turnItemTypes: ["command_execution"],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      canReplaceInitialThreadProject(
+        projection({
+          runStatus: "interrupted",
+          roles: ["user"],
+          turnItemTypes: ["file_search"],
+        }),
+      ),
+    ).toBe(true);
   });
 });
 

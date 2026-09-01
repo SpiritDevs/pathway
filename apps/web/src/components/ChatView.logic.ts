@@ -7,6 +7,8 @@ import {
   type MessageId,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ProjectedTurnItem,
+  orchestrationV2ProjectionCanReplaceInitialProject,
+  type PendingChatAttachment,
   type ProviderDriverKind,
   type ServerProvider,
   type ScopedProjectRef,
@@ -91,41 +93,40 @@ export function startNewThreadForProject(
 export function canReplaceInitialThreadProject(
   projection: OrchestrationV2ThreadProjection | null | undefined,
 ): boolean {
-  if (!projection || projection.messages.some((message) => message.role === "assistant")) {
-    return false;
-  }
-  if (projection.messages.filter((message) => message.role === "user").length !== 1) {
-    return false;
-  }
-  return projection.runs.findLast(() => true)?.status === "interrupted";
+  return projection ? orchestrationV2ProjectionCanReplaceInitialProject(projection) : false;
 }
 
 /** Re-uploads a first message's durable attachments under its replacement thread. */
 export async function copyMessageAttachmentsForNewThread(
   attachments: ReadonlyArray<ChatAttachment>,
   attachmentUrlById: ReadonlyMap<string, string>,
-): Promise<UploadChatAttachment[]> {
-  return Promise.all(
-    attachments.map(async (attachment) => {
-      if (attachment.type !== "image" && attachment.type !== "file") {
-        throw new Error(`Pathway cannot move the attachment type '${attachment.type}'.`);
-      }
-      const url = attachmentUrlById.get(attachment.id);
-      if (!url) throw new Error(`Could not load ${attachment.name}.`);
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Could not load ${attachment.name}.`);
-      const file = new File([await response.blob()], attachment.name, {
-        type: attachment.mimeType,
-      });
-      return {
-        type: attachment.type,
-        name: attachment.name,
-        mimeType: attachment.mimeType,
-        sizeBytes: attachment.sizeBytes,
-        dataUrl: await readFileAsDataUrl(file),
-      };
-    }),
-  );
+  uploadFile: (file: File, attachment: ChatAttachment) => Promise<PendingChatAttachment>,
+): Promise<Array<PendingChatAttachment | UploadChatAttachment>> {
+  const copied: Array<PendingChatAttachment | UploadChatAttachment> = [];
+  for (const attachment of attachments) {
+    if (attachment.type !== "image" && attachment.type !== "file") {
+      throw new Error(`Pathway cannot move the attachment type '${attachment.type}'.`);
+    }
+    const url = attachmentUrlById.get(attachment.id);
+    if (!url) throw new Error(`Could not load ${attachment.name}.`);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Could not load ${attachment.name}.`);
+    const file = new File([await response.blob()], attachment.name, {
+      type: attachment.mimeType,
+    });
+    copied.push(
+      attachment.type === "file"
+        ? await uploadFile(file, attachment)
+        : {
+            type: "image",
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            dataUrl: await readFileAsDataUrl(file),
+          },
+    );
+  }
+  return copied;
 }
 
 /**

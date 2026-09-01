@@ -1398,6 +1398,34 @@ export const OrchestrationV2ThreadProjection = Schema.Struct({
 });
 export type OrchestrationV2ThreadProjection = typeof OrchestrationV2ThreadProjection.Type;
 
+const REPLACEABLE_INITIAL_THREAD_SIDE_EFFECT_ITEM_TYPES = new Set([
+  "command_execution",
+  "dynamic_tool",
+  "file_change",
+  "fork",
+  "source_control",
+  "subagent",
+  "thread_created",
+]);
+
+export function orchestrationV2ProjectionCanReplaceInitialProject(
+  projection: OrchestrationV2ThreadProjection,
+  expected?: { readonly messageId: MessageId; readonly runId: RunId },
+): boolean {
+  const userMessages = projection.messages.filter((message) => message.role === "user");
+  const run = projection.runs.length === 1 ? projection.runs[0] : undefined;
+  return (
+    userMessages.length === 1 &&
+    !projection.messages.some((message) => message.role === "assistant") &&
+    run?.status === "interrupted" &&
+    (expected === undefined ||
+      (userMessages[0]?.id === expected.messageId && run.id === expected.runId)) &&
+    !projection.turnItems.some((item) =>
+      REPLACEABLE_INITIAL_THREAD_SIDE_EFFECT_ITEM_TYPES.has(item.type),
+    )
+  );
+}
+
 export const OrchestrationV2ShellThreadStatus = Schema.Union([
   Schema.Literal("idle"),
   OrchestrationV2RunStatus,
@@ -2190,6 +2218,9 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.delete"),
     commandId: CommandId,
     threadId: ThreadId,
+    replaceableInitialThread: Schema.optional(
+      Schema.Struct({ messageId: MessageId, runId: RunId }),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.settle"),

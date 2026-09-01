@@ -40,6 +40,7 @@ import {
   archiveThread,
   attachPullRequest,
   createProject,
+  deleteThread,
   detachPullRequest,
   forkThreadFromRun,
   launchThreadContinuation,
@@ -294,6 +295,31 @@ describe("V2 environment commands", () => {
 
       expect(commands).toEqual([
         { type: "thread.archive", commandId: "queued-command", threadId: "thread-1" },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("passes a projection precondition through guarded thread deletion", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+
+      yield* deleteThread({
+        commandId: CommandId.make("guarded-delete"),
+        threadId: ThreadId.make("thread-1"),
+        replaceableInitialThread: {
+          messageId: MessageId.make("message-1"),
+          runId: RunId.make("run-1"),
+        },
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(commands).toEqual([
+        {
+          type: "thread.delete",
+          commandId: "guarded-delete",
+          threadId: "thread-1",
+          replaceableInitialThread: { messageId: "message-1", runId: "run-1" },
+        },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );

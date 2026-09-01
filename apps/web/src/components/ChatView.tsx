@@ -143,7 +143,10 @@ import {
   type Thread,
   type TurnDiffSummary,
 } from "../types";
-import { useEnsureProjectWorkspace } from "../hooks/useEnsureProjectWorkspace";
+import {
+  ensureProjectWorkspaceRoot,
+  useEnsureProjectWorkspace,
+} from "../hooks/useEnsureProjectWorkspace";
 import { useTheme } from "../hooks/useTheme";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
@@ -257,8 +260,11 @@ import {
 import {
   awaitAttachmentUploads,
   getUploadedFileAttachments,
+  releasePersistedAttachmentUpload,
   releaseDraftAttachment,
+  uploadStandaloneFileAttachment,
 } from "../lib/attachmentUploadQueue";
+import { useAttachProjectDirectory } from "./projects/useProjectWorkspaceCommands";
 import {
   appendTerminalContextsToPrompt,
   formatTerminalContextLabel,
@@ -2145,6 +2151,7 @@ function ChatViewContent(props: ChatViewProps) {
   // going quiet. See docs/internals/decisions/0006-issue-tracker.md.
   const { ensureWorkspaceRoot: ensureActiveProjectWorkspaceRoot } =
     useEnsureProjectWorkspace(activeProject);
+  const attachProjectDirectory = useAttachProjectDirectory();
   const handleRenameActiveThread = useCallback(
     (title: string) => {
       if (!isServerThread || !activeThread) return;
@@ -6280,10 +6287,10 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
 
-      const firstUserMessage = serverProjection?.messages.find(
-        (message) => message.role === "user",
-      );
-      if (!firstUserMessage) return;
+      if (!serverProjection) return;
+      const firstUserMessage = serverProjection.messages.find((message) => message.role === "user");
+      const initialRun = serverProjection.runs[0];
+      if (!firstUserMessage || !initialRun) return;
 
       projectSwitchInFlightRef.current = true;
       setThreadError(activeThread.id, null);
@@ -6291,10 +6298,37 @@ function ChatViewContent(props: ChatViewProps) {
       const replacementMessageId = newMessageId();
       let replacementCreated = false;
       let originalDeleted = false;
+      const pendingAttachmentIds: string[] = [];
       try {
+        const targetProject = allProjects.find(
+          (project) =>
+            project.environmentId === projectRef.environmentId &&
+            project.id === projectRef.projectId,
+        );
+        if (
+          targetProject &&
+          (await ensureProjectWorkspaceRoot({
+            project: targetProject,
+            attachDirectory: attachProjectDirectory,
+            reason: "Choose a folder before moving this thread to the project.",
+          })) === null
+        ) {
+          return;
+        }
         const attachments = await copyMessageAttachmentsForNewThread(
           firstUserMessage.attachments,
           serverAttachmentUrlById,
+          async (file, attachment) => {
+            const pending = await uploadStandaloneFileAttachment({
+              environmentId: projectRef.environmentId,
+              file,
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+            });
+            pendingAttachmentIds.push(pending.id);
+            return pending;
+          },
         );
         const createdAt = new Date().toISOString();
         const startResult = await startThreadTurn({
@@ -6335,12 +6369,26 @@ function ChatViewContent(props: ChatViewProps) {
           scopeThreadRef(projectRef.environmentId, replacementThreadId),
         );
         if (!replacementStarted) {
-          throw new Error("The replacement thread did not become available.");
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: "Replacement thread started",
+              description:
+                "It has not reached this client yet. The original thread was kept, and the replacement will appear when the environment catches up.",
+            }),
+          );
+          return;
         }
 
         const deleteResult = await deleteThread({
           environmentId: activeThread.environmentId,
-          input: { threadId: activeThread.id },
+          input: {
+            threadId: activeThread.id,
+            replaceableInitialThread: {
+              messageId: firstUserMessage.id,
+              runId: initialRun.id,
+            },
+          },
         });
         if (deleteResult._tag === "Failure") {
           throw squashAtomCommandFailure(deleteResult);
@@ -6381,11 +6429,19 @@ function ChatViewContent(props: ChatViewProps) {
           setThreadError(activeThread.id, description);
         }
       } finally {
+        for (const attachmentId of pendingAttachmentIds) {
+          releasePersistedAttachmentUpload({
+            environmentId: projectRef.environmentId,
+            attachmentId,
+          });
+        }
         projectSwitchInFlightRef.current = false;
       }
     },
     [
       activeThread,
+      allProjects,
+      attachProjectDirectory,
       canChangeHeaderProject,
       deleteThread,
       handleNewThread,

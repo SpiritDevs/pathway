@@ -203,6 +203,19 @@ describe("orchestration V2 contracts", () => {
     expect(command.replacementMessageId).toBe(MessageId.make("message-replacement"));
   });
 
+  it("decodes a guarded thread deletion", () => {
+    const command = decodeOrchestrationV2Command({
+      type: "thread.delete",
+      commandId: "command-delete-1",
+      threadId: "thread-1",
+      replaceableInitialThread: { messageId: "message-1", runId: "run-1" },
+    });
+
+    expect(command.type).toBe("thread.delete");
+    if (command.type !== "thread.delete") throw new Error("expected delete command");
+    expect(command.replaceableInitialThread).toEqual({ messageId: "message-1", runId: "run-1" });
+  });
+
   it("decodes durable source-control marker commands and items", () => {
     const command = decodeOrchestrationV2Command({
       type: "thread.source-control.record",
