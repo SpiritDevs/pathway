@@ -1750,7 +1750,7 @@ function claudeSubagentAsyncLaunchAck(
 // A parent already on that family keeps its exact generation; anything else
 // resolves to the family's current slug.
 const CLAUDE_SUBAGENT_MODEL_ALIASES = new Map<string, string>([
-  ["fable", "claude-fable-5"],
+  ["fable", "claude-fable-5-1"],
   ["haiku", "claude-haiku-4-5"],
   ["opus", "claude-opus-5"],
   ["sonnet", "claude-sonnet-5"],
