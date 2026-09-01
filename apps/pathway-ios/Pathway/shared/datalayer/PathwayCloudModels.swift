@@ -104,6 +104,11 @@ struct PathwayThreadLineage: Codable, Equatable, Sendable {
     let relationshipToParent: String?
 }
 
+struct PathwayPullRequestAttachment: Codable, Equatable, Sendable {
+    let number: Int
+    let url: String
+}
+
 struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let id: String
     let projectId: String
@@ -126,6 +131,7 @@ struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let pendingRuntimeRequest: PathwayRuntimeRequestSummary?
     let latestVisibleMessage: PathwayLatestMessageSummary?
     let latestUserMessageAt: String?
+    let attachedPullRequest: PathwayPullRequestAttachment?
     let hasActionableProposedPlan: Bool
     let itemCount: Int
     let visibleItemCount: Int

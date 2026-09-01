@@ -910,7 +910,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
   });
-  const prState = pr?.state ?? null;
+  const displayedPrBadge = resolveThreadPrBadge({
+    branchPullRequest: pr,
+    attachedPullRequest: thread.attachedPullRequest,
+    provider: gitStatus.data?.sourceControlProvider,
+  });
+  const displayedPr = displayedPrBadge?.pullRequest ?? null;
+  const displayedPrStatus = displayedPrBadge?.status ?? null;
+  const prState = displayedPrBadge?.changeRequestState ?? null;
 
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
@@ -1002,13 +1009,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     activeThreadBranch: thread.branch,
     currentGitBranch: gitStatus.data?.refName ?? null,
   });
-  const displayedPrBadge = resolveThreadPrBadge({
-    branchPullRequest: pr,
-    attachedPullRequest: thread.attachedPullRequest,
-    provider: gitStatus.data?.sourceControlProvider,
-  });
-  const displayedPr = displayedPrBadge?.pullRequest ?? null;
-  const displayedPrStatus = displayedPrBadge?.status ?? null;
   const settledPrHoverClass = pr ? settledPrHoverColorClass(pr.state) : undefined;
   // Report the PR state up: the parent partitions rows with effectiveSettled,
   // and a merged PR auto-settles a thread. Only data rows have that state.

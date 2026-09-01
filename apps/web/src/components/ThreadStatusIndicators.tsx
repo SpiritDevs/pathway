@@ -128,6 +128,7 @@ export function resolveThreadPrBadge(input: {
 }): {
   readonly pullRequest: OrchestrationV2PullRequestAttachment;
   readonly status: PrStatusIndicator;
+  readonly changeRequestState: NonNullable<ThreadPr>["state"] | null;
 } | null {
   const { attachedPullRequest, branchPullRequest, provider } = input;
   if (attachedPullRequest) {
@@ -136,13 +137,16 @@ export function resolveThreadPrBadge(input: {
       branchPullRequest.url === attachedPullRequest.url;
     return {
       pullRequest: attachedPullRequest,
+      changeRequestState: matchesBranchPullRequest ? branchPullRequest.state : null,
       status:
         (matchesBranchPullRequest ? prStatusIndicator(branchPullRequest, provider) : null) ??
         attachedPrStatusIndicator(attachedPullRequest),
     };
   }
   const status = prStatusIndicator(branchPullRequest, provider);
-  return branchPullRequest && status ? { pullRequest: branchPullRequest, status } : null;
+  return branchPullRequest && status
+    ? { pullRequest: branchPullRequest, status, changeRequestState: branchPullRequest.state }
+    : null;
 }
 
 export function ChangeRequestStatusIcon({ className }: { className?: string }) {

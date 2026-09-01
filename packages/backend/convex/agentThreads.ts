@@ -40,6 +40,7 @@ export const AGENT_THREAD_SHELL_FIELDS = new Set([
   "pendingRuntimeRequest",
   "latestVisibleMessage",
   "latestUserMessageAt",
+  "attachedPullRequest",
   "hasActionableProposedPlan",
   "pendingBackgroundTasks",
   "itemCount",

@@ -130,6 +130,7 @@ describe("resolveThreadPrBadge", () => {
     ).toMatchObject({
       pullRequest: { number: 5153 },
       status: { label: "PR attached" },
+      changeRequestState: null,
     });
   });
 
@@ -142,8 +143,20 @@ describe("resolveThreadPrBadge", () => {
         branchPullRequest,
         attachedPullRequest: branchPullRequest,
         provider: undefined,
-      })?.status.label,
-    ).toBe("PR open");
+      }),
+    ).toMatchObject({ status: { label: "PR open" }, changeRequestState: "open" });
+  });
+
+  it("reports lifecycle state for an automatically detected branch PR", () => {
+    const branchPullRequest = status().pr;
+
+    expect(
+      resolveThreadPrBadge({
+        branchPullRequest,
+        attachedPullRequest: null,
+        provider: undefined,
+      })?.changeRequestState,
+    ).toBe("open");
   });
 });
 
