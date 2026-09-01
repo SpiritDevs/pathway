@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 import { appAtomRegistry, resetAppAtomRegistryForTests } from "../rpc/atomRegistry";
 import { companyRegistryReplicasAtom } from "./companyRegistryReplica";
 import {
+  cloudAgentThreadCompanyId,
   cloudEnvironmentProjectsAtom,
   cloudEnvironmentProjectsFromReplicas,
   cloudEnvironmentThreadsAtom,
@@ -453,6 +454,23 @@ describe("cloud Agent Thread read model", () => {
         { id: THREAD_ID, settledOverride: "active", settledAt: null },
       ]);
     }
+  });
+
+  it("resolves the company that owns a cloud Agent Thread shell", () => {
+    expect(
+      cloudAgentThreadCompanyId(
+        new Map([[COMPANY_ID, replica(agentThread)]]),
+        ENVIRONMENT_ID,
+        THREAD_ID,
+      ),
+    ).toBe(COMPANY_ID);
+    expect(
+      cloudAgentThreadCompanyId(
+        new Map([[COMPANY_ID, replica(agentThread)]]),
+        ENVIRONMENT_ID,
+        "missing-thread",
+      ),
+    ).toBeNull();
   });
 
   it("filters connected environment snapshots without narrowing All companies", () => {

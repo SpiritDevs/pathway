@@ -205,6 +205,10 @@ interface TimelineRowSharedState {
   onOpenFilePreview: (relativePath: string, line?: number) => void;
   onOpenIssueContext: (context: IssueContextSelection) => void;
   onPanelSurfaceOpen: () => void;
+  onStopConnecting: () => void;
+  onResumeConnecting: () => void;
+  onRemoveMissingThread: () => void;
+  removingMissingThread: boolean;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   onDetachPullRequest: (pullRequest: { readonly number: number; readonly url: string }) => void;
   activeAttachedPullRequestItemId: string | null;
@@ -280,6 +284,10 @@ interface MessagesTimelineProps {
   onOpenFilePreview?: (relativePath: string, line?: number) => void;
   onOpenIssueContext?: (context: IssueContextSelection) => void;
   onPanelSurfaceOpen?: () => void;
+  onStopConnecting?: () => void;
+  onResumeConnecting?: () => void;
+  onRemoveMissingThread?: () => void;
+  removingMissingThread?: boolean;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   parentThreadLink?: {
     readonly threadId: ThreadId;
@@ -357,6 +365,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenFilePreview = NOOP_OPEN_FILE_PREVIEW,
   onOpenIssueContext = NOOP_OPEN_ISSUE_CONTEXT,
   onPanelSurfaceOpen = NOOP_PANEL_SURFACE_OPEN,
+  onStopConnecting = NOOP_PANEL_SURFACE_OPEN,
+  onResumeConnecting = NOOP_PANEL_SURFACE_OPEN,
+  onRemoveMissingThread = NOOP_PANEL_SURFACE_OPEN,
+  removingMissingThread = false,
   onOpenThread,
   parentThreadLink = null,
   onContinueFromRun,
@@ -796,6 +808,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenFilePreview,
       onOpenIssueContext,
       onPanelSurfaceOpen,
+      onStopConnecting,
+      onResumeConnecting,
+      onRemoveMissingThread,
+      removingMissingThread,
       onOpenThread,
       onDetachPullRequest,
       activeAttachedPullRequestItemId,
@@ -838,6 +854,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onOpenFilePreview,
       onOpenIssueContext,
       onPanelSurfaceOpen,
+      onStopConnecting,
+      onResumeConnecting,
+      onRemoveMissingThread,
+      removingMissingThread,
       onOpenThread,
       onDetachPullRequest,
       activeAttachedPullRequestItemId,
@@ -2224,7 +2244,9 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
 }
 
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
+  const ctx = use(TimelineRowCtx);
   const isConnecting = row.presentation !== "activity";
+  const loadingStopped = row.presentation === "connecting-stopped";
   return (
     <div className="py-0.5 pl-1.5">
       <div
@@ -2235,9 +2257,24 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
         )}
       >
         <span className="inline-flex items-center gap-[3px]">
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse" />
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:200ms]" />
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:400ms]" />
+          <span
+            className={cn(
+              "h-1 w-1 rounded-full bg-muted-foreground/30",
+              !loadingStopped && "animate-status-pulse",
+            )}
+          />
+          <span
+            className={cn(
+              "h-1 w-1 rounded-full bg-muted-foreground/30",
+              !loadingStopped && "animate-status-pulse [animation-delay:200ms]",
+            )}
+          />
+          <span
+            className={cn(
+              "h-1 w-1 rounded-full bg-muted-foreground/30",
+              !loadingStopped && "animate-status-pulse [animation-delay:400ms]",
+            )}
+          />
         </span>
         {isConnecting ? (
           <span className="flex min-w-0 flex-col gap-0.5">
@@ -2246,18 +2283,43 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
                 ? "Work completed"
                 : row.presentation === "connecting-settled"
                   ? "Agent stopped"
-                  : row.presentation === "connecting-neutral"
-                    ? "Still connecting"
-                    : "Agent is working…"}
+                  : loadingStopped
+                    ? "Loading stopped"
+                    : row.presentation === "connecting-neutral"
+                      ? "Still connecting"
+                      : "Agent is working…"}
             </span>
             <span className="text-muted-foreground/55">
               {row.presentation === "connecting-complete"
                 ? "Still connecting to load this chat."
                 : row.presentation === "connecting-settled"
                   ? "The agent is no longer working. Still connecting to load this chat."
-                  : row.presentation === "connecting-neutral"
-                    ? "Loading the latest thread details."
-                    : "Still connecting to this chat. The agent is continuing in the background."}
+                  : loadingStopped
+                    ? "This thread could not be loaded. You can try again or remove its stale entry."
+                    : row.presentation === "connecting-neutral"
+                      ? "Loading the latest thread details."
+                      : "Still connecting to this chat. The agent is continuing in the background."}
+            </span>
+            <span className="mt-1 flex items-center gap-1.5">
+              {loadingStopped ? (
+                <>
+                  <Button size="xs" variant="outline" onClick={ctx.onResumeConnecting}>
+                    Try again
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="destructive"
+                    disabled={ctx.removingMissingThread}
+                    onClick={ctx.onRemoveMissingThread}
+                  >
+                    {ctx.removingMissingThread ? "Removing…" : "Remove thread"}
+                  </Button>
+                </>
+              ) : (
+                <Button size="xs" variant="outline" onClick={ctx.onStopConnecting}>
+                  Stop loading
+                </Button>
+              )}
             </span>
           </span>
         ) : (

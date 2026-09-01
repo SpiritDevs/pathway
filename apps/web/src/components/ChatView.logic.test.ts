@@ -126,6 +126,14 @@ describe("resolveThreadProjectionWorkingPresentation", () => {
     expect(
       resolveThreadProjectionWorkingPresentation({
         projectionPending: true,
+        loadingStopped: true,
+        isWorking: true,
+        latestRun: runningThread.latestRun,
+      }),
+    ).toBe("connecting-stopped");
+    expect(
+      resolveThreadProjectionWorkingPresentation({
+        projectionPending: true,
         isWorking: true,
         latestRun: runningThread.latestRun,
       }),

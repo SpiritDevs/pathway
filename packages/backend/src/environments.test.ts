@@ -1113,6 +1113,51 @@ describe("environment registry", () => {
     ).resolves.toEqual({ outcome: "unchanged" });
   });
 
+  it("lets a project manager remove a confirmed-missing Agent Thread shell", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db.query("environmentRegistrations").unique();
+      if (registration === null) throw new Error("missing environment fixture");
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+    });
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: PROJECT_ID,
+      localWorkspaceRoot: "/workspace/pathway",
+      name: "Pathway",
+    });
+    await asEnvironment(t).mutation(api.agentThreads.upsert, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "thread-missing",
+      localProjectId: PROJECT_ID,
+      shell: { id: "thread-missing", projectId: PROJECT_ID, title: "Missing thread" },
+    });
+
+    await expect(
+      asUser(t, "reader").mutation(api.agentThreads.removeMissing, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        threadId: "thread-missing",
+      }),
+    ).rejects.toThrow("projects.manage");
+
+    await asUser(t, "manager").mutation(api.agentThreads.removeMissing, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "thread-missing",
+    });
+
+    expect(await t.run(async (ctx) => await ctx.db.query("agentThreads").collect())).toEqual([]);
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "agentThread",
+      entityId: `${ENVIRONMENT_ID}:thread-missing`,
+      changeKind: "tombstone",
+    });
+  });
+
   it("publishes parsed captured mail with source provenance and reconciles retention", async () => {
     const t = harness();
     await seedRegistration(t);

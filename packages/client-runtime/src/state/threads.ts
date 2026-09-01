@@ -13,7 +13,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { Atom } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { connectionProjectionPhase } from "../connection/model.ts";
@@ -28,6 +28,7 @@ import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
+  STOPPED_ENVIRONMENT_THREAD_STATE,
   type EnvironmentThreadState,
   type EnvironmentThreadStatus,
 } from "./threadState.ts";
@@ -393,21 +394,35 @@ export function createEnvironmentThreadStateAtoms<R, E>(
     E
   >,
 ) {
-  const family = Atom.family((key: string) => {
+  const sourceFamily = Atom.family((key: string) => {
     const { environmentId, threadId } = parseThreadKey(key);
     return runtime
       .atom(threadStateChanges(environmentId, threadId), {
         initialValue: EMPTY_ENVIRONMENT_THREAD_STATE,
       })
-      .pipe(
-        Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
-        Atom.withLabel(`environment-thread-state:${key}`),
-      );
+      .pipe(Atom.withLabel(`environment-thread-state-source:${key}`));
   });
+
+  const loadEnabledFamily = Atom.family((key: string) =>
+    Atom.make(true).pipe(Atom.withLabel(`environment-thread-load-enabled:${key}`)),
+  );
+
+  const family = Atom.family((key: string) =>
+    Atom.make((get) =>
+      get(loadEnabledFamily(key))
+        ? get(sourceFamily(key))
+        : AsyncResult.success(STOPPED_ENVIRONMENT_THREAD_STATE),
+    ).pipe(
+      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
+      Atom.withLabel(`environment-thread-state:${key}`),
+    ),
+  );
 
   return {
     stateAtom: (environmentId: EnvironmentIdType, threadId: ThreadIdType) =>
       family(threadKey({ environmentId, threadId })),
+    loadEnabledAtom: (environmentId: EnvironmentIdType, threadId: ThreadIdType) =>
+      loadEnabledFamily(threadKey({ environmentId, threadId })),
   };
 }
 

@@ -200,7 +200,8 @@ export type WorkingPresentation =
   | "connecting"
   | "connecting-complete"
   | "connecting-settled"
-  | "connecting-neutral";
+  | "connecting-neutral"
+  | "connecting-stopped";
 
 export type MessagesTimelineRow =
   | {

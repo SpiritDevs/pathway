@@ -6,7 +6,12 @@ import type { Doc } from "./_generated/dataModel.js";
 import { mutation, type MutationCtx } from "./_generated/server.js";
 import { appendCompanyChanges, encodeAgentThread } from "./lib/companyApply.ts";
 import { backendError } from "./lib/errors.ts";
-import { actorRecord, requireCompanyActor, requirePermission } from "./lib/identity.ts";
+import {
+  actorRecord,
+  requireCompanyActor,
+  requirePermission,
+  requireRecordPermission,
+} from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
 
 const MAX_RECONCILE_REMOVALS = 100;
@@ -269,6 +274,32 @@ export const remove = mutation({
           .eq("threadId", threadId),
       )
       .unique();
+    await removeRows(ctx, actor, row === null ? [] : [row]);
+    return null;
+  },
+});
+
+/** Removes a discovery shell that a person confirmed no longer resolves on its owning environment. */
+export const removeMissing = mutation({
+  args: { companyId: domainIdArg, environmentId: v.string(), threadId: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const environmentId = requireTrimmed(args.environmentId, "Environment id");
+    const threadId = requireTrimmed(args.threadId, "Thread id");
+    const row = await ctx.db
+      .query("agentThreads")
+      .withIndex("by_company_and_environment_and_thread", (q) =>
+        q
+          .eq("companyId", actor.company._id)
+          .eq("environmentId", environmentId)
+          .eq("threadId", threadId),
+      )
+      .unique();
+    if (row !== null) {
+      const project = await ctx.db.get(row.cloudProjectId);
+      requireRecordPermission(actor, "projects.manage", project?.teamIds ?? []);
+    }
     await removeRows(ctx, actor, row === null ? [] : [row]);
     return null;
   },

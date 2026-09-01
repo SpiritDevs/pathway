@@ -593,6 +593,7 @@ export function threadProjectionIsPending(
 
 export function resolveThreadProjectionWorkingPresentation(input: {
   projectionPending: boolean;
+  loadingStopped?: boolean;
   isWorking: boolean;
   latestRun: Thread["latestRun"];
 }):
@@ -600,8 +601,10 @@ export function resolveThreadProjectionWorkingPresentation(input: {
   | "connecting"
   | "connecting-complete"
   | "connecting-settled"
-  | "connecting-neutral" {
+  | "connecting-neutral"
+  | "connecting-stopped" {
   if (!input.projectionPending) return "activity";
+  if (input.loadingStopped) return "connecting-stopped";
   if (input.isWorking) return "connecting";
   switch (input.latestRun?.status) {
     case "completed":

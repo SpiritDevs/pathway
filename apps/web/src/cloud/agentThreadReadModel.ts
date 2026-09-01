@@ -279,6 +279,29 @@ export function cloudEnvironmentThreadsFromReplicas(
   return threads.length === 0 ? EMPTY_THREADS : threads;
 }
 
+export function cloudAgentThreadCompanyId(
+  replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
+  environmentId: EnvironmentId,
+  threadId: string,
+): CompanyId | null {
+  let match: { readonly companyId: CompanyId; readonly updatedAt: number } | null = null;
+  for (const [companyId, replica] of replicas) {
+    for (const value of replica.view.values()) {
+      if (
+        !isAgentThread(value) ||
+        value.environmentId !== environmentId ||
+        value.shell.id !== threadId
+      ) {
+        continue;
+      }
+      if (match === null || value.updatedAt > match.updatedAt) {
+        match = { companyId, updatedAt: value.updatedAt };
+      }
+    }
+  }
+  return match?.companyId ?? null;
+}
+
 export const cloudEnvironmentThreadsAtom = Atom.family((environmentId: EnvironmentId) =>
   Atom.make(
     (get): ReadonlyArray<OrchestrationV2ThreadShell> =>

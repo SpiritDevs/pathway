@@ -264,6 +264,21 @@ describe("MessagesTimeline", () => {
     expect(fadedMarkup).toContain("chat-timeline-scroll-fade");
   });
 
+  it("keeps recovery controls available after thread loading is stopped", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[]}
+        workingPresentation="connecting-stopped"
+      />,
+    );
+
+    expect(markup).toContain("Loading stopped");
+    expect(markup).toContain("Try again");
+    expect(markup).toContain("Remove thread");
+    expect(markup).not.toContain("animate-status-pulse");
+  });
+
   it("keeps assistant changed-files headers sticky below the thread header", () => {
     const assistantMessageId = MessageId.make("message-assistant-with-files");
     const runId = RunId.make("run-with-files");

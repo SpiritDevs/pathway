@@ -1334,6 +1334,26 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
   });
 
+  it("keeps a stopped loading placeholder available for recovery", () => {
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [],
+      isWorking: false,
+      workingPresentation: "connecting-stopped",
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    expect(rows).toEqual([
+      {
+        kind: "working",
+        id: "working-indicator-row",
+        createdAt: null,
+        presentation: "connecting-stopped",
+      },
+    ]);
+  });
+
   it("only shows assistant metadata on the terminal assistant message", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [

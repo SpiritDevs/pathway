@@ -69,7 +69,7 @@ import {
   resolveTerminalSessionLabel,
 } from "@spiritdevs/shared/terminalLabels";
 import { Debouncer } from "@tanstack/react-pacer";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import {
   lazy,
   memo,
@@ -280,6 +280,9 @@ import { appendIssueContextsToPrompt, type IssueContextSelection } from "../lib/
 import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
 import { appendReviewCommentsToPrompt, type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
+import { scopedCompanyRegistryReplicasAtom } from "../cloud/activeCompany";
+import { useAgentThreadAdmin } from "../cloud/agentThreadAdmin";
+import { cloudAgentThreadCompanyId } from "../cloud/agentThreadReadModel";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { projectEnvironment } from "../state/projects";
@@ -291,7 +294,7 @@ import {
   serverEnvironment,
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
-import { threadEnvironment } from "../state/threads";
+import { environmentThreads, threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
@@ -302,6 +305,7 @@ import {
   useThreadProjection,
   useThreadShell,
   useThreadShells,
+  useThreadStatus,
   useThreadRefs,
   useThreadTitlesByKey,
   useThreadVisibleTurnItems,
@@ -1479,11 +1483,18 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
   );
   const serverThread = useThreadShell(routeThreadRef);
+  const serverThreadStatus = useThreadStatus(routeThreadRef);
+  const setThreadLoadEnabled = useAtomSet(
+    environmentThreads.loadEnabledAtom(environmentId, threadId),
+  );
+  const threadLoadStopped = serverThreadStatus === "stopped";
   const routeThreadDetailRef = resolveThreadDetailRef(routeThreadRef, {
     shellExists: serverThread !== null,
     waitForShell: draftThread !== null,
   });
-  const serverThreadProjection = useThreadProjection(routeThreadDetailRef);
+  const serverThreadProjection = useThreadProjection(
+    threadLoadStopped ? null : routeThreadDetailRef,
+  );
   const serverProjection = serverThreadProjection?.projection ?? null;
   // Agents surface (#5219): on orchestration-v2 the panel model comes from the
   // projected subagent entities — the v2 leg of the spec's mapper swap. The
@@ -1526,6 +1537,14 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
+  const companyReplicas = useAtomValue(scopedCompanyRegistryReplicasAtom);
+  const agentThreadAdmin = useAgentThreadAdmin();
+  const missingThreadCompanyId = useMemo(
+    () => cloudAgentThreadCompanyId(companyReplicas, environmentId, threadId),
+    [companyReplicas, environmentId, threadId],
+  );
+  const [isRemovingMissingThread, setIsRemovingMissingThread] = useState(false);
+  const missingThreadPromptInFlightRef = useRef(false);
   const { resolvedTheme } = useTheme();
   // Granular store selectors — avoid subscribing to prompt changes.
   const composerRuntimeMode = useComposerDraftStore(
@@ -7621,7 +7640,87 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
+  const removeMissingThread = useCallback(async () => {
+    if (missingThreadPromptInFlightRef.current || isRemovingMissingThread) return;
+    missingThreadPromptInFlightRef.current = true;
+    try {
+      const localApi = readLocalApi();
+      if (localApi === undefined) return;
+      const confirmed = await localApi.dialogs.confirm(
+        `Remove thread "${serverThread?.title ?? threadId}"?\n\nPathway could not find this thread on its owning environment. Removing it clears the stale shared entry; it does not delete any project files or worktree.`,
+        { variant: "destructive" },
+      );
+      if (!confirmed) return;
+      if (agentThreadAdmin === null || missingThreadCompanyId === null) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not remove thread",
+            description: "The shared thread record is not available in the active company.",
+          }),
+        );
+        return;
+      }
+      setIsRemovingMissingThread(true);
+      try {
+        await agentThreadAdmin.removeMissing({
+          companyId: missingThreadCompanyId,
+          environmentId,
+          threadId,
+        });
+        await navigate({ to: "/threads", replace: true });
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not remove thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      } finally {
+        setIsRemovingMissingThread(false);
+      }
+    } finally {
+      missingThreadPromptInFlightRef.current = false;
+    }
+  }, [
+    agentThreadAdmin,
+    environmentId,
+    isRemovingMissingThread,
+    missingThreadCompanyId,
+    navigate,
+    serverThread?.title,
+    threadId,
+  ]);
+
+  const stopThreadLoading = useCallback(
+    (askToRemove: boolean) => {
+      setThreadLoadEnabled(false);
+      if (askToRemove) void removeMissingThread();
+    },
+    [removeMissingThread, setThreadLoadEnabled],
+  );
+  const resumeThreadLoading = useCallback(() => {
+    setThreadLoadEnabled(true);
+  }, [setThreadLoadEnabled]);
+  const handleStopThreadLoading = useCallback(() => {
+    stopThreadLoading(true);
+  }, [stopThreadLoading]);
+  const handleRemoveMissingThread = useCallback(() => {
+    void removeMissingThread();
+  }, [removeMissingThread]);
+
+  useEffect(() => {
+    if (serverThreadStatus === "deleted") {
+      stopThreadLoading(true);
+    }
+  }, [serverThreadStatus, stopThreadLoading]);
+
   const onInterrupt = async () => {
+    if (isThreadProjectionPending) {
+      stopThreadLoading(true);
+      return;
+    }
     if (!activeThread) return;
     const result = await interruptThreadTurn({
       environmentId,
@@ -8759,6 +8858,7 @@ function ChatViewContent(props: ChatViewProps) {
                 isWorking={isWorking}
                 workingPresentation={resolveThreadProjectionWorkingPresentation({
                   projectionPending: isThreadProjectionPending,
+                  loadingStopped: threadLoadStopped,
                   isWorking,
                   latestRun: activeLatestRun,
                 })}
@@ -8781,6 +8881,10 @@ function ChatViewContent(props: ChatViewProps) {
                 onOpenFilePreview={openFileSurface}
                 onOpenIssueContext={openIssueContext}
                 onPanelSurfaceOpen={revealPanelThreadAsPage}
+                onStopConnecting={handleStopThreadLoading}
+                onResumeConnecting={resumeThreadLoading}
+                onRemoveMissingThread={handleRemoveMissingThread}
+                removingMissingThread={isRemovingMissingThread}
                 onOpenThread={onOpenRelatedThread}
                 parentThreadLink={parentThreadLink}
                 onContinueFromRun={onContinueFromRun}
