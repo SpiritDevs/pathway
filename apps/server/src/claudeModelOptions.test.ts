@@ -29,6 +29,18 @@ describe("compileClaudeModelSelection", () => {
     });
   });
 
+  it("preserves xhigh effort and the 1M default context for Claude Fable 5.1", () => {
+    expect(
+      compileClaudeModelSelection(
+        selection("claude-fable-5-1", [{ id: "effort", value: "xhigh" }]),
+      ),
+    ).toMatchObject({
+      apiModelId: "claude-fable-5-1[1m]",
+      effort: "xhigh",
+      settings: {},
+    });
+  });
+
   it("compiles fast mode only for models that expose it", () => {
     expect(
       compileClaudeModelSelection(selection("claude-opus-4-6", [{ id: "fastMode", value: true }]))
