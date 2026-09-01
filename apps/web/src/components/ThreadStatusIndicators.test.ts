@@ -2,8 +2,10 @@ import type { VcsStatusResult } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  attachedPrStatusIndicator,
   prStatusIndicator,
   resolveThreadPr,
+  resolveThreadPrBadge,
   settledPrHoverColorClass,
 } from "./ThreadStatusIndicators";
 
@@ -86,6 +88,62 @@ describe("prStatusIndicator", () => {
     expect(prStatusIndicator({ ...closedPr, state: "closed" }, undefined)?.colorClass).toContain(
       "text-red-600",
     );
+  });
+});
+
+describe("attachedPrStatusIndicator", () => {
+  it("formats a manually attached pull request without inventing repository state", () => {
+    expect(
+      attachedPrStatusIndicator({
+        number: 5153,
+        url: "https://github.com/coreybain/pathway/pull/5153",
+      }),
+    ).toMatchObject({
+      label: "PR attached",
+      tooltip: "PR #5153 - Attached: Attached to thread",
+      url: "https://github.com/coreybain/pathway/pull/5153",
+    });
+  });
+
+  it("uses merge-request terminology for GitLab attachments", () => {
+    expect(
+      attachedPrStatusIndicator({
+        number: 47,
+        url: "https://gitlab.com/acme/repo/-/merge_requests/47",
+      })?.label,
+    ).toBe("MR attached");
+  });
+});
+
+describe("resolveThreadPrBadge", () => {
+  it("prefers an explicit attachment over a different branch-derived pull request", () => {
+    const branchPullRequest = status().pr;
+    expect(
+      resolveThreadPrBadge({
+        branchPullRequest,
+        attachedPullRequest: {
+          number: 5153,
+          url: "https://github.com/coreybain/pathway/pull/5153",
+        },
+        provider: undefined,
+      }),
+    ).toMatchObject({
+      pullRequest: { number: 5153 },
+      status: { label: "PR attached" },
+    });
+  });
+
+  it("retains live repository state when the explicit attachment matches the branch PR", () => {
+    const branchPullRequest = status().pr;
+    if (!branchPullRequest) throw new Error("Expected pull request fixture");
+
+    expect(
+      resolveThreadPrBadge({
+        branchPullRequest,
+        attachedPullRequest: branchPullRequest,
+        provider: undefined,
+      })?.status.label,
+    ).toBe("PR open");
   });
 });
 

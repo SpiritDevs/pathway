@@ -65,7 +65,18 @@ describe("V2 client presentation", () => {
     expect(shell.environmentId).toBe(environmentId);
     expect(shell.createdAt).toBe("2026-06-20T00:00:00.000Z");
     expect(shell.runtime).toBeNull();
+    expect(shell.attachedPullRequest).toBeNull();
     expect(shell.source).toBe(v2ThreadShell);
+  });
+
+  it("presents a manual pull request attachment from the thread shell", () => {
+    const attachedPullRequest = {
+      number: 5153,
+      url: "https://github.com/SpiritDevs/pathway/pull/5153",
+    };
+    const shell = presentThreadShell(environmentId, { ...v2ThreadShell, attachedPullRequest });
+
+    expect(shell.attachedPullRequest).toEqual(attachedPullRequest);
   });
 
   it("presents provider errors carried by failed thread shells", () => {

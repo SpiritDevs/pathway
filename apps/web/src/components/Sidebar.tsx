@@ -171,8 +171,8 @@ import { useRightPanelStore } from "../rightPanelStore";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   ThreadWorktreeIndicator,
-  prStatusIndicator,
   resolveThreadPr,
+  resolveThreadPrBadge,
   settledPrHoverColorClass,
   terminalStatusFromRunningIds,
   type TerminalStatusIndicator,
@@ -1002,7 +1002,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     activeThreadBranch: thread.branch,
     currentGitBranch: gitStatus.data?.refName ?? null,
   });
-  const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
+  const displayedPrBadge = resolveThreadPrBadge({
+    branchPullRequest: pr,
+    attachedPullRequest: thread.attachedPullRequest,
+    provider: gitStatus.data?.sourceControlProvider,
+  });
+  const displayedPr = displayedPrBadge?.pullRequest ?? null;
+  const displayedPrStatus = displayedPrBadge?.status ?? null;
   const settledPrHoverClass = pr ? settledPrHoverColorClass(pr.state) : undefined;
   // Report the PR state up: the parent partitions rows with effectiveSettled,
   // and a merged PR auto-settles a thread. Only data rows have that state.
@@ -1201,17 +1207,24 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   }, [showSnoozeButton]);
   const handlePrClick = useCallback(
     (event: ReactMouseEvent<HTMLElement>) => {
-      if (!pr?.url) return;
+      if (!displayedPr?.url) return;
       const openedInRightPanel = openPrLink(
         event,
-        pr.url,
+        displayedPr.url,
         openPullRequestsInRightPanel ? threadRef : undefined,
       );
       if (openedInRightPanel && openPullRequestsInRightPanel && !props.isActive) {
         onThreadActivate(threadRef);
       }
     },
-    [onThreadActivate, openPrLink, openPullRequestsInRightPanel, pr, props.isActive, threadRef],
+    [
+      displayedPr,
+      onThreadActivate,
+      openPrLink,
+      openPullRequestsInRightPanel,
+      props.isActive,
+      threadRef,
+    ],
   );
 
   // All sidebar rows share one surface model. Live threads used to look
@@ -1278,7 +1291,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   );
 
   const prBadge =
-    prStatus && pr ? (
+    displayedPrStatus && displayedPr ? (
       <button
         type="button"
         onClick={handlePrClick}
@@ -1290,11 +1303,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             ? props.isActive
               ? "text-secondary-label"
               : cn("text-secondary-label transition-colors", settledPrHoverClass)
-            : prStatus.colorClass,
+            : displayedPrStatus.colorClass,
         )}
-        aria-label={prStatus.tooltip}
+        aria-label={displayedPrStatus.tooltip}
       >
-        #{pr.number}
+        #{displayedPr.number}
       </button>
     ) : null;
   const terminalStatusIcon = terminalStatus ? (

@@ -3,7 +3,12 @@ import {
   scopedThreadKey,
   scopeThreadRef,
 } from "@spiritdevs/client-runtime/environment";
-import type { VcsStatusResult } from "@spiritdevs/contracts";
+import type {
+  OrchestrationV2PullRequestAttachment,
+  SourceControlProviderInfo,
+  VcsStatusResult,
+} from "@spiritdevs/contracts";
+import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceControl";
 import { CloudIcon, FolderGit2Icon, GitPullRequestIcon, TerminalIcon } from "lucide-react";
 import { useMemo } from "react";
 import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
@@ -98,6 +103,46 @@ export function prStatusIndicator(
     };
   }
   return null;
+}
+
+export function attachedPrStatusIndicator(
+  pr: OrchestrationV2PullRequestAttachment,
+): PrStatusIndicator {
+  const terminology = getChangeRequestTerminologyFromUrl(pr.url);
+  const tooltipLead = `${terminology.shortLabel} #${pr.number} - Attached`;
+  const tooltipTitle = "Attached to thread";
+  return {
+    label: `${terminology.shortLabel} attached`,
+    colorClass: "text-secondary-label hover:text-foreground",
+    tooltip: `${tooltipLead}: ${tooltipTitle}`,
+    tooltipLead,
+    tooltipTitle,
+    url: pr.url,
+  };
+}
+
+export function resolveThreadPrBadge(input: {
+  readonly branchPullRequest: ThreadPr;
+  readonly attachedPullRequest: OrchestrationV2PullRequestAttachment | null | undefined;
+  readonly provider: SourceControlProviderInfo | null | undefined;
+}): {
+  readonly pullRequest: OrchestrationV2PullRequestAttachment;
+  readonly status: PrStatusIndicator;
+} | null {
+  const { attachedPullRequest, branchPullRequest, provider } = input;
+  if (attachedPullRequest) {
+    const matchesBranchPullRequest =
+      branchPullRequest?.number === attachedPullRequest.number &&
+      branchPullRequest.url === attachedPullRequest.url;
+    return {
+      pullRequest: attachedPullRequest,
+      status:
+        (matchesBranchPullRequest ? prStatusIndicator(branchPullRequest, provider) : null) ??
+        attachedPrStatusIndicator(attachedPullRequest),
+    };
+  }
+  const status = prStatusIndicator(branchPullRequest, provider);
+  return branchPullRequest && status ? { pullRequest: branchPullRequest, status } : null;
 }
 
 export function ChangeRequestStatusIcon({ className }: { className?: string }) {
@@ -259,7 +304,11 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
   });
-  const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
+  const changeRequestStatus = resolveThreadPrBadge({
+    branchPullRequest: pr,
+    attachedPullRequest: thread.attachedPullRequest,
+    provider: gitStatus.data?.sourceControlProvider,
+  })?.status;
   const threadStatus = resolveThreadStatusPill({
     thread: {
       ...thread,
@@ -267,26 +316,26 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
     },
   });
 
-  if (!prStatus && !threadStatus) {
+  if (!changeRequestStatus && !threadStatus) {
     return null;
   }
 
   return (
     <span className="inline-flex shrink-0 items-center gap-1.5">
-      {prStatus ? (
+      {changeRequestStatus ? (
         <Tooltip>
           <TooltipTrigger
             render={
               <span
-                aria-label={prStatus.tooltip}
-                className={`inline-flex items-center justify-center ${prStatus.colorClass}`}
+                aria-label={changeRequestStatus.tooltip}
+                className={`inline-flex items-center justify-center ${changeRequestStatus.colorClass}`}
               />
             }
           >
             <ChangeRequestStatusIcon className="size-3" />
           </TooltipTrigger>
           <TooltipPopup side="top">
-            <PrStatusTooltipContent status={prStatus} />
+            <PrStatusTooltipContent status={changeRequestStatus} />
           </TooltipPopup>
         </Tooltip>
       ) : null}

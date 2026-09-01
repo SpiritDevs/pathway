@@ -29,6 +29,33 @@ export function sourceControlMarkerLabel(
   return item.committed ? "Committed and pushed" : "Pushed";
 }
 
+export interface ActivePullRequestAttachment {
+  readonly itemId: string;
+  readonly pullRequest: { readonly number: number; readonly url: string };
+}
+
+/** Resolves the one local PR attachment represented by source-control markers. */
+export function resolveActivePullRequestAttachment(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+): ActivePullRequestAttachment | null {
+  let active: ActivePullRequestAttachment | null = null;
+  for (const item of items) {
+    if (item.type !== "source_control" || item.pullRequest === null) continue;
+    if (item.pullRequestAction === "attached") {
+      active = { itemId: item.id, pullRequest: item.pullRequest };
+    }
+    if (
+      item.pullRequestAction === "detached" &&
+      active !== null &&
+      active.pullRequest.number === item.pullRequest.number &&
+      active.pullRequest.url === item.pullRequest.url
+    ) {
+      active = null;
+    }
+  }
+  return active;
+}
+
 export interface ChangeRequestPresentation {
   readonly icon: "github" | "gitlab" | "azure-devops" | "bitbucket" | "change-request";
   readonly providerName: string;
