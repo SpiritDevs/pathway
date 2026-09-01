@@ -6,8 +6,8 @@
  * this file exists next to a read model instead of inside one. The change feed brings calendars and
  * events *in*; nothing carries them back out, because `SYNC_OPERATION_KINDS` has no calendar verb
  * and an outbox that could not ship one would only be a queue of writes that never leave. So a
- * drag calls the mutation and the block stays where it was until the feed echoes the write back —
- * the same bargain `/issues/milestones` makes with its timeline bars.
+ * drag calls the mutation while the calendar surface holds an optimistic overlay until the change
+ * feed echoes it. A refused mutation drops that overlay.
  *
  * Sharing is deliberately absent: grants belong to the calendar settings surface, which owns
  * `calendars.share` and `calendars.revoke`.

@@ -88,7 +88,7 @@ export interface CalendarTimeGridProps {
   readonly timestampFormat: TimestampFormat;
   /** The viewer's zone: what a new event is created in, and where the now rule is read. */
   readonly timeZone: string;
-  /** A timed drag or resize finished. Nothing is optimistic; the block waits for the feed. */
+  /** A timed drag or resize finished. The page keeps the write visible until the feed confirms it. */
   readonly onEventWrite: (
     event: CalendarEventInput,
     write: { readonly startAt: number; readonly endAt: number; readonly allDay?: boolean },

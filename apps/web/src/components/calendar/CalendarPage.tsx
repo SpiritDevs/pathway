@@ -88,6 +88,13 @@ import {
 } from "./calendarGrid.logic";
 import { calendarKeyAction, calendarKeyIsAllowed } from "./calendarKeybindings.logic";
 import {
+  applyOptimisticCalendarEventWrites,
+  reconcileOptimisticCalendarEventWrites,
+  rollbackOptimisticCalendarEventWrite,
+  type CalendarEventOptimisticPatch,
+  type OptimisticCalendarEventWrites,
+} from "./calendarOptimistic.logic";
+import {
   useCalendarLayers,
   useCalendarWriter,
   viewerTimeZone,
@@ -131,6 +138,10 @@ export function CalendarPage({
   const mode = calendarMode(search);
   const anchor = calendarAnchor(search, today);
   const [dialog, setDialog] = useState<CalendarEventDraft | null>(null);
+  const [optimisticEventWrites, setOptimisticEventWrites] = useState<OptimisticCalendarEventWrites>(
+    () => new Map(),
+  );
+  const optimisticRevision = useRef(0);
 
   const setMode = useCallback((next: CalendarMode) => onSearch({ mode: next }), [onSearch]);
   const goTo = useCallback(
@@ -155,9 +166,19 @@ export function CalendarPage({
 
   // The surface holds every event on every visible calendar, which is a whole company's history and
   // no cheaper to lay out for being off screen.
+  useEffect(() => {
+    setOptimisticEventWrites((current) =>
+      reconcileOptimisticCalendarEventWrites(surface.events, current),
+    );
+  }, [surface.events]);
+
+  const optimisticEvents = useMemo(
+    () => applyOptimisticCalendarEventWrites(surface.events, optimisticEventWrites),
+    [optimisticEventWrites, surface.events],
+  );
   const events = useMemo(
-    () => calendarEventsInRange(surface.events, range),
-    [range, surface.events],
+    () => calendarEventsInRange(optimisticEvents, range),
+    [optimisticEvents, range],
   );
 
   const work = useCalendarWorkItems({ hiddenLayers: surface.hiddenLayers });
@@ -193,40 +214,56 @@ export function CalendarPage({
     [writer],
   );
 
+  const updateEventOptimistically = useCallback(
+    (eventId: CalendarEventId, patch: CalendarEventOptimisticPatch, failureTitle: string) => {
+      const revision = ++optimisticRevision.current;
+      // A drag result can carry its runtime `_tag` through structural typing. Copy only mutation
+      // fields so Convex never receives an unknown property.
+      const cleanPatch: CalendarEventOptimisticPatch = {
+        ...(patch.title === undefined ? {} : { title: patch.title }),
+        ...(patch.startAt === undefined ? {} : { startAt: patch.startAt }),
+        ...(patch.endAt === undefined ? {} : { endAt: patch.endAt }),
+        ...(patch.allDay === undefined ? {} : { allDay: patch.allDay }),
+      };
+      setOptimisticEventWrites((current) =>
+        new Map(current).set(eventId, { revision, patch: cleanPatch }),
+      );
+      void writer.updateEvent({ eventId, ...cleanPatch }).catch((error: unknown) => {
+        setOptimisticEventWrites((current) =>
+          rollbackOptimisticCalendarEventWrite(current, eventId, revision),
+        );
+        reportCalendarFailure(failureTitle, error);
+      });
+    },
+    [writer],
+  );
+
   const writeEvent = useCallback(
     (
       event: CalendarEventInput,
       patch: { readonly startAt: number; readonly endAt: number; readonly allDay?: boolean },
     ) => {
-      // Built field by field: `patch` is often a tagged drop result, and a spread would send its
-      // `_tag` to a Convex validator that rejects unknown fields.
-      void writer
-        .updateEvent({
-          eventId: event.id as CalendarEventId,
-          startAt: patch.startAt,
-          endAt: patch.endAt,
-          ...(patch.allDay === undefined ? {} : { allDay: patch.allDay }),
-        })
-        .catch((error: unknown) => reportCalendarFailure("Failed to move the event", error));
+      updateEventOptimistically(event.id as CalendarEventId, patch, "Failed to move the event");
     },
-    [writer],
+    [updateEventOptimistically],
   );
 
   const writeAllDay = useCallback(
     (item: CalendarAllDayItem, result: CalendarDropWrite) => {
       if (result._tag === "Instants") {
-        void writer
-          .updateEvent({
-            eventId: item.id as CalendarEventId,
+        updateEventOptimistically(
+          item.id as CalendarEventId,
+          {
             startAt: result.startAt,
             endAt: result.endAt,
-          })
-          .catch((error: unknown) => reportCalendarFailure("Failed to move the event", error));
+          },
+          "Failed to move the event",
+        );
         return;
       }
       writeDates(item, result.startDate, result.endDate);
     },
-    [writer, writeDates],
+    [updateEventOptimistically, writeDates],
   );
 
   if (surface.viewer.canRead === false) {
@@ -335,15 +372,16 @@ export function CalendarPage({
               );
               return;
             }
-            void writer
-              .updateEvent({
-                eventId: next.eventId,
+            updateEventOptimistically(
+              next.eventId,
+              {
                 title: next.title,
                 startAt: next.startAt,
                 endAt: next.endAt,
                 allDay: next.allDay,
-              })
-              .catch(failed);
+              },
+              "Failed to save the event",
+            );
           }}
         />
       )}
@@ -375,9 +413,8 @@ async function createEventOn(
 /**
  * What a refused calendar write says.
  *
- * Nothing on this surface is optimistic — a block stays where it was until the feed echoes the
- * write back — so a refusal is indistinguishable from a press that never registered unless it says
- * so. The message is already friendly by the time it arrives; `mapCalendarWriteError` did that.
+ * Event updates roll back when refused, but the toast still explains why the block moved back. The
+ * message is already friendly by the time it arrives; `mapCalendarWriteError` did that.
  */
 function reportCalendarFailure(title: string, error: unknown): void {
   toastManager.add(
