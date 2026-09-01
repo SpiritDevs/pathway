@@ -47,14 +47,12 @@ import {
 export const DEFAULT_AGENT_THREAD_RECONCILE_INTERVAL = Duration.seconds(15);
 
 /**
- * How long a project the backend reports as unbound (no active binding on this environment) stays
- * parked. Being unbound is a property of the project, not of any one shell: a checkout that was
- * never assigned to this company, or whose binding was revoked, cannot publish any thread until an
- * operator changes bindings. Every thread of a parked project is therefore skipped, however often
- * its shell changes, and the project is probed again once per interval so that a newly assigned
- * project's threads appear within a few minutes.
+ * How long a thread the backend reports as unbound (no active project binding on this environment)
+ * stays parked. The park must remain thread-scoped: already-indexed sibling threads intentionally
+ * stay updatable after their binding is revoked. Shell edits do not bypass the park, and the thread
+ * is probed again once per interval so a newly assigned project appears within a few minutes.
  */
-export const AGENT_THREAD_UNBOUND_PROJECT_PARK_INTERVAL = Duration.minutes(5);
+export const AGENT_THREAD_UNBOUND_PARK_INTERVAL = Duration.minutes(5);
 
 const AGENT_THREAD_UNBOUND_MESSAGE =
   "The Agent Thread project has no active binding on this environment.";
@@ -120,9 +118,8 @@ export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publi
     const requestLock = yield* Semaphore.make(1);
     const publishLock = yield* Semaphore.make(1);
     const published = yield* Ref.make<ReadonlyMap<ThreadId, string>>(new Map());
-    // Unbound projects, each with the time its next probe is allowed. A project stays in the map
-    // (and stays announced) until one of its threads publishes, so re-probes are not re-announced.
-    const parkedProjects = yield* Ref.make<ReadonlyMap<ProjectId, number>>(new Map());
+    const parkedThreads = yield* Ref.make<ReadonlyMap<ThreadId, number>>(new Map());
+    const announcedUnboundProjects = yield* Ref.make<ReadonlySet<ProjectId>>(new Set());
 
     const call = <A>(token: string, issue: (client: ConvexClientLike) => Promise<A>) =>
       requestLock.withPermits(1)(
@@ -160,7 +157,7 @@ export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publi
           const identity = encodeCloudShellIdentity(cloudSafeThreadShell(shell));
           if ((yield* Ref.get(published)).get(shell.id) === identity) return;
           const now = yield* Clock.currentTimeMillis;
-          const nextProbeAt = (yield* Ref.get(parkedProjects)).get(shell.projectId);
+          const nextProbeAt = (yield* Ref.get(parkedThreads)).get(shell.id);
           if (nextProbeAt !== undefined && now < nextProbeAt) return;
           const outcome = yield* authorized((convex) =>
             convex.mutation(api.agentThreads.upsert, {
@@ -179,7 +176,8 @@ export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publi
             ),
           );
           if (outcome === "unbound") {
-            if (nextProbeAt === undefined) {
+            const announced = yield* Ref.get(announcedUnboundProjects);
+            if (!announced.has(shell.projectId)) {
               yield* Effect.logInfo(
                 "Cloud Agent Thread project has no active binding on this environment; its threads stay local until it is assigned",
                 {
@@ -188,17 +186,18 @@ export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publi
                   projectId: shell.projectId,
                 },
               );
+              yield* Ref.update(announcedUnboundProjects, (current) =>
+                new Set(current).add(shell.projectId),
+              );
             }
-            const until = now + Duration.toMillis(AGENT_THREAD_UNBOUND_PROJECT_PARK_INTERVAL);
-            yield* Ref.update(parkedProjects, (current) =>
-              new Map(current).set(shell.projectId, until),
-            );
+            const until = now + Duration.toMillis(AGENT_THREAD_UNBOUND_PARK_INTERVAL);
+            yield* Ref.update(parkedThreads, (current) => new Map(current).set(shell.id, until));
             return;
           }
-          yield* Ref.update(parkedProjects, (current) => {
-            if (!current.has(shell.projectId)) return current;
+          yield* Ref.update(parkedThreads, (current) => {
+            if (!current.has(shell.id)) return current;
             const next = new Map(current);
-            next.delete(shell.projectId);
+            next.delete(shell.id);
             return next;
           });
           yield* Ref.update(published, (current) => new Map(current).set(shell.id, identity));

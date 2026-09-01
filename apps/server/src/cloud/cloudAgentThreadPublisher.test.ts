@@ -15,7 +15,7 @@ import * as TestClock from "effect/testing/TestClock";
 import type { ConvexServiceTokenProvider } from "./convexServiceToken.ts";
 import type { ConvexClientLike } from "./convexSyncTransport.ts";
 import {
-  AGENT_THREAD_UNBOUND_PROJECT_PARK_INTERVAL,
+  AGENT_THREAD_UNBOUND_PARK_INTERVAL,
   cloudSafeThreadShell,
   isUnpublishableAgentThreadRefusal,
   makeCloudAgentThreadPublisher,
@@ -62,8 +62,8 @@ function shellOf(id: string, projectId: string, title = "Title"): OrchestrationV
   });
 }
 
-/** A fake Convex client whose upsert answer is swapped by the test; other calls succeed with null. */
-function fakeClient(answer: () => Promise<unknown>) {
+/** A fake Convex client whose upsert answer is supplied by the test; other calls succeed. */
+function fakeClient(answer: (args: Record<string, unknown>) => Promise<unknown>) {
   const upserts: Array<{ readonly threadId: unknown; readonly localProjectId: unknown }> = [];
   const client: ConvexClientLike = {
     setAuth: () => {},
@@ -71,7 +71,7 @@ function fakeClient(answer: () => Promise<unknown>) {
     mutation: ((reference: FunctionReference<"mutation">, args: Record<string, unknown>) => {
       if (getFunctionName(reference) !== "agentThreads:upsert") return Promise.resolve(null);
       upserts.push({ threadId: args["threadId"], localProjectId: args["localProjectId"] });
-      return answer();
+      return answer(args);
     }) as ConvexClientLike["mutation"],
   };
   return { client, upserts };
@@ -172,10 +172,14 @@ describe("cloud Agent Thread publisher", () => {
     expect(isUnpublishableAgentThreadRefusal(undefined)).toBe(false);
   });
 
-  it.effect("parks every thread of an unbound project, whatever its shell says", () =>
+  it.effect("parks only the refused thread while indexed siblings keep updating", () =>
     Effect.gen(function* () {
-      let outcome: "unbound" | "published" = "unbound";
-      const { client, upserts } = fakeClient(() => Promise.resolve({ outcome }));
+      const unboundThreads = new Set(["thread-new"]);
+      const { client, upserts } = fakeClient((args) =>
+        Promise.resolve({
+          outcome: unboundThreads.has(String(args["threadId"])) ? "unbound" : "published",
+        }),
+      );
       const publisher = yield* makeCloudAgentThreadPublisher({
         companyId: COMPANY_ID,
         environmentId: ENVIRONMENT_ID,
@@ -184,43 +188,34 @@ describe("cloud Agent Thread publisher", () => {
         client,
       });
 
-      // Reconciliation publishes concurrently, but only one sibling probes the project.
-      yield* Effect.all(
-        [
-          publisher.publish(shellOf("thread-one", "project-unbound")),
-          publisher.publish(shellOf("thread-two", "project-unbound")),
-        ],
-        { concurrency: "unbounded", discard: true },
-      );
-      // Further sibling threads and edited shells of the parked project make no calls.
-      yield* publisher.publish(shellOf("thread-two", "project-unbound"));
-      yield* publisher.publish(shellOf("thread-one", "project-unbound", "Renamed"));
+      yield* publisher.publish(shellOf("thread-new", "project-unbound"));
+      // Shell edits do not bypass the refused thread's park.
+      yield* publisher.publish(shellOf("thread-new", "project-unbound", "Renamed"));
       assert.strictEqual(upserts.length, 1);
-      assert.strictEqual(upserts[0]?.localProjectId, "project-unbound");
 
-      // Other projects are unaffected by the park.
-      outcome = "published";
-      yield* publisher.publish(shellOf("thread-three", "project-bound"));
-      outcome = "unbound";
-      assert.strictEqual(upserts.length, 2);
+      // An already-indexed sibling remains publishable after the binding is revoked.
+      yield* publisher.publish(shellOf("thread-indexed", "project-unbound"));
+      yield* publisher.publish(shellOf("thread-indexed", "project-unbound", "Updated"));
+      assert.deepEqual(upserts.slice(1), [
+        { threadId: "thread-indexed", localProjectId: "project-unbound" },
+        { threadId: "thread-indexed", localProjectId: "project-unbound" },
+      ]);
 
-      // Once the park expires the project is probed again, by whichever thread comes first.
-      yield* TestClock.adjust(AGENT_THREAD_UNBOUND_PROJECT_PARK_INTERVAL);
-      yield* publisher.publish(shellOf("thread-two", "project-unbound"));
-      yield* publisher.publish(shellOf("thread-one", "project-unbound"));
+      // Once the park expires only the refused thread is probed again.
+      yield* TestClock.adjust(AGENT_THREAD_UNBOUND_PARK_INTERVAL);
+      yield* publisher.publish(shellOf("thread-new", "project-unbound"));
       assert.deepEqual(upserts.at(-1), {
-        threadId: "thread-two",
+        threadId: "thread-new",
         localProjectId: "project-unbound",
       });
-      assert.strictEqual(upserts.length, 3);
+      assert.strictEqual(upserts.length, 4);
 
-      // A successful probe after the operator binds the project lifts the park for its siblings.
-      yield* TestClock.adjust(AGENT_THREAD_UNBOUND_PROJECT_PARK_INTERVAL);
-      outcome = "published";
-      yield* publisher.publish(shellOf("thread-one", "project-unbound"));
-      yield* publisher.publish(shellOf("thread-two", "project-unbound"));
+      // A successful probe after assignment lifts this thread's park.
+      yield* TestClock.adjust(AGENT_THREAD_UNBOUND_PARK_INTERVAL);
+      unboundThreads.clear();
+      yield* publisher.publish(shellOf("thread-new", "project-unbound"));
       // An unchanged published shell is not resent.
-      yield* publisher.publish(shellOf("thread-one", "project-unbound"));
+      yield* publisher.publish(shellOf("thread-new", "project-unbound"));
       assert.strictEqual(upserts.length, 5);
     }),
   );
@@ -244,8 +239,9 @@ describe("cloud Agent Thread publisher", () => {
       });
 
       yield* publisher.publish(shellOf("thread-one", "project-unbound"));
+      yield* publisher.publish(shellOf("thread-one", "project-unbound", "Renamed"));
       yield* publisher.publish(shellOf("thread-two", "project-unbound"));
-      assert.strictEqual(upserts.length, 1);
+      assert.strictEqual(upserts.length, 2);
     }),
   );
 
@@ -266,7 +262,7 @@ describe("cloud Agent Thread publisher", () => {
     }),
   );
 
-  it.effect("keeps transport failures retryable instead of parking the project", () =>
+  it.effect("keeps transport failures retryable instead of parking the thread", () =>
     Effect.gen(function* () {
       const { client, upserts } = fakeClient(() => Promise.reject(new Error("fetch failed")));
       const publisher = yield* makeCloudAgentThreadPublisher({

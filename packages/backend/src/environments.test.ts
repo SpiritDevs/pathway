@@ -1056,6 +1056,63 @@ describe("environment registry", () => {
     ).rejects.toThrow("may not contain message text");
   });
 
+  it("reports an unbound project as an outcome instead of failing the upsert", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db.query("environmentRegistrations").unique();
+      if (registration === null) throw new Error("missing environment fixture");
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+    });
+    const shell = {
+      id: "thread-one",
+      projectId: "project-never-assigned",
+      title: "Local-only thread",
+      settleAfterCompletion: false,
+      latestVisibleMessage: null,
+    };
+
+    // A checkout that was never assigned to this company has no binding; environments publish
+    // every local thread regardless, so this is a routine answer, not an error to log.
+    await expect(
+      asEnvironment(t).mutation(api.agentThreads.upsert, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        threadId: "thread-one",
+        localProjectId: "project-never-assigned",
+        shell,
+      }),
+    ).resolves.toEqual({ outcome: "unbound" });
+    expect(await t.run(async (ctx) => await ctx.db.query("agentThreads").collect())).toEqual([]);
+    expect(await feedRows(t)).toHaveLength(0);
+
+    await asUser(t, "manager").mutation(api.cloudProjects.ensureEnvironmentProject, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      localProjectId: "project-never-assigned",
+      localWorkspaceRoot: "/workspace/assigned",
+      name: "Assigned later",
+    });
+    await expect(
+      asEnvironment(t).mutation(api.agentThreads.upsert, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        threadId: "thread-one",
+        localProjectId: "project-never-assigned",
+        shell,
+      }),
+    ).resolves.toEqual({ outcome: "published" });
+    await expect(
+      asEnvironment(t).mutation(api.agentThreads.upsert, {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        threadId: "thread-one",
+        localProjectId: "project-never-assigned",
+        shell,
+      }),
+    ).resolves.toEqual({ outcome: "unchanged" });
+  });
+
   it("publishes parsed captured mail with source provenance and reconciles retention", async () => {
     const t = harness();
     await seedRegistration(t);
