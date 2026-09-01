@@ -63,6 +63,7 @@ import {
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
+import { parseClaudeAuthorizationCode } from "./ClaudeAuthorizationCode.ts";
 import { resolveClaudeSdkExecutablePath } from "./ClaudeExecutable.ts";
 import {
   makeClaudeCapabilitiesCacheKey,
@@ -246,7 +247,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
               };
             },
             complete: async (authorizationCode, state) => {
-              await authQuery.claudeOAuthCallback(authorizationCode, state);
+              const parsed = parseClaudeAuthorizationCode(authorizationCode, state);
+              if (!parsed.ok) {
+                throw new ProviderAuthenticationError({ reason: parsed.reason });
+              }
+              await authQuery.claudeOAuthCallback(parsed.code, state);
               await authQuery.claudeOAuthWaitForCompletion();
             },
             close: () => {
