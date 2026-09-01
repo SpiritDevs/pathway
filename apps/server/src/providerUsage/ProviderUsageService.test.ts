@@ -393,7 +393,11 @@ describe("provider usage snapshots", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(rateLimited.fetchedAt).toBe(original.fetchedAt);
       expect(blocked).toMatchObject({ stale: true, fetchedAt: original.fetchedAt });
-      expect(blocked.detail).toContain("refresh paused until");
+      expect(blocked).toMatchObject({
+        detail:
+          "Claude usage is rate limited by the provider. Refreshes resume in about 2 minutes.",
+        rateLimitedUntil: DateTime.formatIso(DateTime.makeUnsafe(refreshedAt + 120_000)),
+      });
       expect(providerUsageTestKit.retryAfterUntilMs("120", refreshedAt)).toBe(
         refreshedAt + 120_000,
       );
@@ -406,6 +410,142 @@ describe("provider usage snapshots", () => {
     } finally {
       fetchMock.mockRestore();
       resetProviderUsageCache();
+    }
+  });
+
+  it.each([
+    { label: "a missing header", headers: undefined },
+    { label: "retry-after: 0", headers: { "Retry-After": "0" } },
+  ])("uses the default 429 backoff for $label", async ({ headers }) => {
+    resetProviderUsageCache();
+    providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response("{}", { status: 429, ...(headers === undefined ? {} : { headers }) }),
+      );
+    try {
+      const rateLimited = await providerUsageTestKit.resolve(
+        { instanceId, provider: "claudeAgent", nowMs, forceRefresh: true },
+        () =>
+          providerUsageTestKit.fetchClaude({ instanceId, provider: "claudeAgent", nowMs }, [
+            { accessToken: "first" },
+          ]),
+      );
+      const expectedUntil = nowMs + providerUsageTestKit.defaultRateLimitBackoffMs;
+      const blocked = await providerUsageTestKit.resolve(
+        { instanceId, provider: "claudeAgent", nowMs: nowMs + 1, forceRefresh: true },
+        async () => {
+          throw new Error("default rate-limit gate should prevent this fetch");
+        },
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(rateLimited).toMatchObject({
+        status: "error",
+        detail:
+          "Claude usage is rate limited by the provider. Refreshes resume in about 5 minutes.",
+        rateLimitedUntil: DateTime.formatIso(DateTime.makeUnsafe(expectedUntil)),
+      });
+      expect(blocked.rateLimitedUntil).toBe(rateLimited.rateLimitedUntil);
+    } finally {
+      fetchMock.mockRestore();
+      resetProviderUsageCache();
+    }
+  });
+
+  it("reloads and displays a persisted rate-limit gate after a process reset", async () => {
+    resetProviderUsageCache();
+    const tempDir = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "pathway-provider-usage-rate-limit-"),
+    );
+    const persistencePath = NodePath.join(tempDir, "provider-usage-rate-limits.json");
+    providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response("{}", { status: 429 }));
+    try {
+      const first = await providerUsageTestKit.resolve(
+        {
+          instanceId,
+          provider: "claudeAgent",
+          nowMs,
+          forceRefresh: true,
+          rateLimitPersistencePath: persistencePath,
+        },
+        () =>
+          providerUsageTestKit.fetchClaude({ instanceId, provider: "claudeAgent", nowMs }, [
+            { accessToken: "first" },
+          ]),
+      );
+      resetProviderUsageCache();
+      providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
+      const reloaded = await providerUsageTestKit.resolve(
+        {
+          instanceId,
+          provider: "claudeAgent",
+          nowMs: nowMs + 1,
+          forceRefresh: true,
+          rateLimitPersistencePath: persistencePath,
+        },
+        async () => {
+          throw new Error("persisted rate-limit gate should prevent this fetch");
+        },
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(reloaded.rateLimitedUntil).toBe(first.rateLimitedUntil);
+      expect(reloaded.source).toBe("provider-rate-limit");
+      expect(providerUsageTestKit.cacheSizes().snapshots).toBe(1);
+    } finally {
+      fetchMock.mockRestore();
+      resetProviderUsageCache();
+      await NodeFSP.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("drops expired persisted gates before fetching again", async () => {
+    resetProviderUsageCache();
+    const tempDir = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "pathway-provider-usage-rate-limit-"),
+    );
+    const persistencePath = NodePath.join(tempDir, "provider-usage-rate-limits.json");
+    providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("{}", { status: 429 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ five_hour: { utilization: 17 } }), { status: 200 }),
+      );
+    const resolveAt = (requestNowMs: number) =>
+      providerUsageTestKit.resolve(
+        {
+          instanceId,
+          provider: "claudeAgent",
+          nowMs: requestNowMs,
+          forceRefresh: true,
+          rateLimitPersistencePath: persistencePath,
+        },
+        () =>
+          providerUsageTestKit.fetchClaude(
+            { instanceId, provider: "claudeAgent", nowMs: requestNowMs },
+            [{ accessToken: "first" }],
+          ),
+      );
+    try {
+      await resolveAt(nowMs);
+      resetProviderUsageCache();
+      const refreshed = await resolveAt(nowMs + providerUsageTestKit.defaultRateLimitBackoffMs + 1);
+      const persisted = JSON.parse(await NodeFSP.readFile(persistencePath, "utf8")) as {
+        providerGates: Record<string, unknown>;
+      };
+
+      expect(refreshed.status).toBe("ok");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(persisted.providerGates[`${instanceId}:claudeAgent`]).toBeUndefined();
+    } finally {
+      fetchMock.mockRestore();
+      resetProviderUsageCache();
+      await NodeFSP.rm(tempDir, { recursive: true, force: true });
     }
   });
 
