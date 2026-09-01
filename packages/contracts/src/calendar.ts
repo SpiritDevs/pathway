@@ -8,6 +8,7 @@
  * @module calendar
  */
 import * as Schema from "effect/Schema";
+import * as Effect from "effect/Effect";
 
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { CloudTimestamp, CompanyId, MembershipId, TeamId } from "./company.ts";
@@ -20,6 +21,8 @@ export const CalendarId = calendarEntityId("CalendarId");
 export type CalendarId = typeof CalendarId.Type;
 export const CalendarEventId = calendarEntityId("CalendarEventId");
 export type CalendarEventId = typeof CalendarEventId.Type;
+export const CalendarEventAttachmentId = calendarEntityId("CalendarEventAttachmentId");
+export type CalendarEventAttachmentId = typeof CalendarEventAttachmentId.Type;
 export const CalendarGrantId = calendarEntityId("CalendarGrantId");
 export type CalendarGrantId = typeof CalendarGrantId.Type;
 export const CalendarAccountId = calendarEntityId("CalendarAccountId");
@@ -33,6 +36,21 @@ export const CalendarKind = Schema.Literals(["pathway", "google"]);
 export type CalendarKind = typeof CalendarKind.Type;
 export const CalendarEventVisibility = Schema.Literals(["default", "private"]);
 export type CalendarEventVisibility = typeof CalendarEventVisibility.Type;
+
+export const CalendarEventInvitee = Schema.Struct({
+  email: TrimmedNonEmptyString,
+  name: Schema.NullOr(TrimmedNonEmptyString),
+  response: Schema.Literals(["needs-action", "accepted", "declined", "tentative"]),
+});
+export type CalendarEventInvitee = typeof CalendarEventInvitee.Type;
+
+export const CalendarEventAttachment = Schema.Struct({
+  id: CalendarEventAttachmentId,
+  fileName: TrimmedNonEmptyString,
+  mimeType: TrimmedNonEmptyString,
+  byteSize: Schema.Number,
+});
+export type CalendarEventAttachment = typeof CalendarEventAttachment.Type;
 
 export const Calendar = Schema.Struct({
   id: CalendarId,
@@ -62,6 +80,21 @@ export const CalendarEvent = Schema.Struct({
   /** IANA time-zone name used to interpret and display this event. */
   timeZone: TrimmedNonEmptyString,
   allDay: Schema.Boolean,
+  notes: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
+  /** Lead times in minutes. Event-start delivery is implicit and is not stored here. */
+  reminderMinutes: Schema.Array(Schema.Number).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
+  urls: Schema.Array(TrimmedNonEmptyString).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  location: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
+  invitees: Schema.Array(CalendarEventInvitee).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
+  attachments: Schema.Array(CalendarEventAttachment).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
   visibility: CalendarEventVisibility,
   /** Google's stable event id for a mirrored occurrence; null for Pathway-owned events. */
   googleEventId: Schema.NullOr(TrimmedNonEmptyString),

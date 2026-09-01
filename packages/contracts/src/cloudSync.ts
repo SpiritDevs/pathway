@@ -90,7 +90,9 @@ import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { CapturedEmailMessage, EmailTagId, TrustedEmailSenderId } from "./email.ts";
 import {
   CalendarAccountId,
+  CalendarEventAttachment,
   CalendarEventId,
+  CalendarEventInvitee,
   CalendarEventLinkId,
   CalendarEventVisibility,
   CalendarId,
@@ -631,6 +633,20 @@ export const SyncCalendarEventPayload = Schema.Struct({
   endAt: CloudTimestamp,
   timeZone: TrimmedNonEmptyString,
   allDay: Schema.Boolean,
+  notes: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
+  reminderMinutes: Schema.Array(Schema.Number).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
+  urls: Schema.Array(TrimmedNonEmptyString).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  location: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
+  invitees: Schema.Array(CalendarEventInvitee).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
+  attachments: Schema.Array(CalendarEventAttachment).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
   visibility: CalendarEventVisibility,
   googleEventId: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: CloudTimestamp,

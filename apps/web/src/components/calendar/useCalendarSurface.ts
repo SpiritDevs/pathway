@@ -15,7 +15,13 @@
  */
 import { useAuth } from "@clerk/react";
 import type { CalendarEventEntity } from "@spiritdevs/client-runtime/sync";
-import type { CalendarEventId, CalendarId, IssueDate } from "@spiritdevs/contracts";
+import type {
+  CalendarEventAttachmentId,
+  CalendarEventId,
+  CalendarEventInvitee,
+  CalendarId,
+  IssueDate,
+} from "@spiritdevs/contracts";
 import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 
@@ -71,15 +77,34 @@ export interface CalendarWriter {
     readonly endAt: number;
     readonly timeZone: string;
     readonly allDay: boolean;
-  }) => Promise<void>;
+    readonly notes: string;
+    readonly reminderMinutes: ReadonlyArray<number>;
+    readonly urls: ReadonlyArray<string>;
+    readonly location: string | null;
+    readonly invitees: ReadonlyArray<CalendarEventInvitee>;
+  }) => Promise<CalendarEventId>;
   readonly updateEvent: (input: {
     readonly eventId: CalendarEventId;
     readonly title?: string;
     readonly startAt?: number;
     readonly endAt?: number;
     readonly allDay?: boolean;
+    readonly notes?: string;
+    readonly reminderMinutes?: ReadonlyArray<number>;
+    readonly urls?: ReadonlyArray<string>;
+    readonly location?: string | null;
+    readonly invitees?: ReadonlyArray<CalendarEventInvitee>;
   }) => Promise<void>;
   readonly deleteEvent: (eventId: CalendarEventId) => Promise<void>;
+  readonly uploadAttachment: (eventId: CalendarEventId, file: File) => Promise<void>;
+  readonly removeAttachment: (
+    eventId: CalendarEventId,
+    attachmentId: CalendarEventAttachmentId,
+  ) => Promise<void>;
+  readonly openAttachment: (
+    eventId: CalendarEventId,
+    attachmentId: CalendarEventAttachmentId,
+  ) => Promise<void>;
   /** The first calendar a member gets, made on demand the first time they create an event. */
   readonly createCalendar: (name: string) => Promise<CalendarId>;
 }
@@ -109,6 +134,12 @@ function toEventInput(
     endAt: event.endAt,
     timeZone: event.timeZone,
     allDay: event.allDay,
+    notes: event.notes,
+    reminderMinutes: event.reminderMinutes,
+    urls: event.urls,
+    location: event.location,
+    invitees: event.invitees,
+    attachments: event.attachments,
     editable: editableCalendars.has(event.calendarId),
   };
 }
@@ -221,11 +252,13 @@ export function useCalendarWriter(viewer: CalendarViewer): CalendarWriter {
       ready: client !== null && companyId !== null,
       createEvent: async (input) => {
         const { client: convex, companyId: company } = requireTarget();
+        const id = newCompanyDomainId() as CalendarEventId;
         await convex.createEvent({
           companyId: company,
-          id: newCompanyDomainId() as CalendarEventId,
+          id,
           ...input,
         });
+        return id;
       },
       updateEvent: async (input) => {
         const { client: convex, companyId: company } = requireTarget();
@@ -234,6 +267,25 @@ export function useCalendarWriter(viewer: CalendarViewer): CalendarWriter {
       deleteEvent: async (eventId) => {
         const { client: convex, companyId: company } = requireTarget();
         await convex.deleteEvent({ companyId: company, eventId });
+      },
+      uploadAttachment: async (eventId, file) => {
+        const { client: convex, companyId: company } = requireTarget();
+        await convex.uploadAttachment({
+          companyId: company,
+          eventId,
+          id: newCompanyDomainId() as CalendarEventAttachmentId,
+          file,
+        });
+      },
+      removeAttachment: async (eventId, attachmentId) => {
+        const { client: convex, companyId: company } = requireTarget();
+        await convex.removeAttachment({ companyId: company, eventId, attachmentId });
+      },
+      openAttachment: async (eventId, attachmentId) => {
+        const { client: convex, companyId: company } = requireTarget();
+        const url = await convex.attachmentUrl({ companyId: company, eventId, attachmentId });
+        if (url === null) throw new Error("That attachment is no longer available.");
+        window.open(url, "_blank", "noopener,noreferrer");
       },
       createCalendar: async (name) => {
         const { client: convex, companyId: company } = requireTarget();

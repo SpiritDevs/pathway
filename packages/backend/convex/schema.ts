@@ -470,6 +470,35 @@ export default defineSchema({
     endAt: v.number(),
     timeZone: v.string(),
     allDay: v.boolean(),
+    notes: v.optional(v.string()),
+    /** Lead times only. Delivery at the start instant is implicit. */
+    reminderMinutes: v.optional(v.array(v.number())),
+    urls: v.optional(v.array(v.string())),
+    location: v.optional(v.union(v.string(), v.null())),
+    invitees: v.optional(
+      v.array(
+        v.object({
+          email: v.string(),
+          name: v.union(v.string(), v.null()),
+          response: v.union(
+            v.literal("needs-action"),
+            v.literal("accepted"),
+            v.literal("declined"),
+            v.literal("tentative"),
+          ),
+        }),
+      ),
+    ),
+    attachments: v.optional(
+      v.array(
+        v.object({
+          id: domainId,
+          fileName: v.string(),
+          mimeType: v.string(),
+          byteSize: v.number(),
+        }),
+      ),
+    ),
     visibility: v.union(v.literal("default"), v.literal("private")),
     googleEventId: v.union(v.string(), v.null()),
     createdAt: v.number(),
@@ -487,6 +516,20 @@ export default defineSchema({
       "visibility",
     ])
     .index("by_company_and_google_event", ["companyId", "googleEventId"]),
+
+  /** Private byte-store identity for metadata embedded in a calendar event. */
+  calendarEventAttachments: defineTable({
+    id: domainId,
+    companyId: v.id("companies"),
+    calendarId: domainId,
+    eventId: domainId,
+    storageId: v.id("_storage"),
+    uploadedByMembershipId: v.id("memberships"),
+    createdAt: v.number(),
+  })
+    .index("by_company_and_domain_id", ["companyId", "id"])
+    .index("by_company_and_calendar", ["companyId", "calendarId"])
+    .index("by_company_and_event", ["companyId", "eventId"]),
 
   /** Explicit read edge for one named calendar and one grantee membership. */
   calendarGrant: defineTable({

@@ -62,7 +62,12 @@ import { ToggleGroup, ToggleGroupItem } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
 import { CalendarAccessDenied } from "./CalendarSidebar";
-import { CalendarEventDialog, type CalendarEventDraft } from "./CalendarEventDialog";
+import {
+  CalendarEventDialog,
+  type CalendarEventDraft,
+  type CalendarEventSubmission,
+} from "./CalendarEventDialog";
+import { primeCalendarAlerts } from "./calendarAlerts";
 import { CalendarMonthGrid } from "./CalendarMonthGrid";
 import { CalendarTimeGrid } from "./CalendarTimeGrid";
 import { CalendarTimelineView } from "./CalendarTimelineView";
@@ -192,7 +197,19 @@ export function CalendarPage({
     (slot?: { readonly startAt: number; readonly endAt: number }) => {
       if (surface.defaultCalendarId === null && !writer.ready) return;
       const start = slot ?? defaultSlotOn(anchor, timeZone);
-      setDialog({ mode: "create", title: "", timeZone, allDay: false, ...start });
+      setDialog({
+        mode: "create",
+        title: "",
+        timeZone,
+        allDay: false,
+        notes: "",
+        reminderMinutes: [],
+        urls: [],
+        location: null,
+        invitees: [],
+        attachments: [],
+        ...start,
+      });
     },
     [anchor, surface.defaultCalendarId, writer.ready, timeZone],
   );
@@ -359,29 +376,44 @@ export function CalendarPage({
                 }
               : null
           }
-          onSubmit={(next) => {
-            setDialog(null);
-            const failed = (error: unknown) =>
+          onOpenAttachment={(eventId, attachmentId) => writer.openAttachment(eventId, attachmentId)}
+          onSubmit={async (next) => {
+            await primeCalendarAlerts();
+            try {
+              if (next.mode === "create") {
+                await createEventOn(createTarget(surface.defaultCalendarId), writer, next);
+              } else {
+                await writer.updateEvent({
+                  eventId: next.eventId,
+                  title: next.title,
+                  startAt: next.startAt,
+                  endAt: next.endAt,
+                  allDay: next.allDay,
+                  notes: next.notes,
+                  reminderMinutes: next.reminderMinutes,
+                  urls: next.urls,
+                  location: next.location,
+                  invitees: next.invitees,
+                });
+                for (const attachmentId of next.removedAttachmentIds) {
+                  await writer.removeAttachment(next.eventId, attachmentId);
+                }
+                for (const file of next.newAttachments) {
+                  await writer
+                    .uploadAttachment(next.eventId, file)
+                    .catch((error: unknown) =>
+                      reportCalendarFailure(`Failed to attach ${file.name}`, error),
+                    );
+                }
+              }
+              setDialog(null);
+            } catch (error) {
               reportCalendarFailure(
                 next.mode === "create" ? "Failed to create the event" : "Failed to save the event",
                 error,
               );
-            if (next.mode === "create") {
-              void createEventOn(createTarget(surface.defaultCalendarId), writer, next).catch(
-                failed,
-              );
-              return;
+              throw error;
             }
-            updateEventOptimistically(
-              next.eventId,
-              {
-                title: next.title,
-                startAt: next.startAt,
-                endAt: next.endAt,
-                allDay: next.allDay,
-              },
-              "Failed to save the event",
-            );
           }}
         />
       )}
@@ -398,16 +430,26 @@ export function CalendarPage({
 async function createEventOn(
   calendarId: Promise<string>,
   writer: CalendarWriter,
-  draft: Extract<CalendarEventDraft, { mode: "create" }>,
+  draft: Extract<CalendarEventSubmission, { mode: "create" }>,
 ): Promise<void> {
-  await writer.createEvent({
+  const eventId = await writer.createEvent({
     calendarId: (await calendarId) as CalendarId,
     title: draft.title,
     startAt: draft.startAt,
     endAt: draft.endAt,
     timeZone: draft.timeZone,
     allDay: draft.allDay,
+    notes: draft.notes,
+    reminderMinutes: draft.reminderMinutes,
+    urls: draft.urls,
+    location: draft.location,
+    invitees: draft.invitees,
   });
+  for (const file of draft.newAttachments) {
+    await writer
+      .uploadAttachment(eventId, file)
+      .catch((error: unknown) => reportCalendarFailure(`Failed to attach ${file.name}`, error));
+  }
 }
 
 /**
@@ -435,6 +477,12 @@ function draftFromEvent(event: CalendarEventInput): CalendarEventDraft {
     endAt: event.endAt,
     timeZone: event.timeZone,
     allDay: event.allDay,
+    notes: event.notes,
+    reminderMinutes: event.reminderMinutes,
+    urls: event.urls,
+    location: event.location,
+    invitees: event.invitees,
+    attachments: event.attachments,
     editable: event.editable,
   };
 }

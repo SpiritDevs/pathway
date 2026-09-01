@@ -590,6 +590,70 @@ describe("calendar revocation cascades", () => {
 });
 
 describe("calendar administration", () => {
+  it("persists event details and keeps attachment bytes behind calendar visibility", async () => {
+    const t = harness();
+    const ids = await buildCalendarFixture(t);
+    const alice = asUser(t, "alice");
+    await alice.mutation(api.calendars.updateEvent, {
+      companyId: COMPANY,
+      eventId: PUBLIC_EVENT,
+      notes: "Bring the launch checklist.",
+      reminderMinutes: [30, 5, 30],
+      urls: ["https://meet.example.com/launch"],
+      location: "1 Martin Place, Sydney NSW",
+      invitees: [
+        {
+          email: "BOB@example.test",
+          name: "Bob",
+          response: "accepted",
+        },
+      ],
+    });
+
+    const bytes = new Blob(["agenda"], { type: "text/plain" });
+    const storageId = await t.run(async (ctx) => await ctx.storage.store(bytes));
+    await alice.mutation(api.calendars.attachEventFile, {
+      companyId: COMPANY,
+      eventId: PUBLIC_EVENT,
+      id: "attachment-agenda",
+      storageId,
+      fileName: "agenda.txt",
+      mimeType: "text/plain",
+      byteSize: bytes.size,
+    });
+
+    const event = await t.run(async (ctx) =>
+      ctx.db
+        .query("calendarEvent")
+        .withIndex("by_company_and_domain_id", (q) =>
+          q.eq("companyId", ids.companyId).eq("id", PUBLIC_EVENT),
+        )
+        .unique(),
+    );
+    expect(event).toMatchObject({
+      notes: "Bring the launch checklist.",
+      reminderMinutes: [5, 30],
+      urls: ["https://meet.example.com/launch"],
+      location: "1 Martin Place, Sydney NSW",
+      invitees: [{ email: "bob@example.test", response: "accepted" }],
+      attachments: [{ id: "attachment-agenda", fileName: "agenda.txt" }],
+    });
+
+    const sharedUrl = await asUser(t, "bob").query(api.calendars.eventAttachmentUrl, {
+      companyId: COMPANY,
+      eventId: PUBLIC_EVENT,
+      attachmentId: "attachment-agenda",
+    });
+    expect(sharedUrl).toContain("http");
+    await expect(
+      asUser(t, "blind").query(api.calendars.eventAttachmentUrl, {
+        companyId: COMPANY,
+        eventId: PUBLIC_EVENT,
+        attachmentId: "attachment-agenda",
+      }),
+    ).rejects.toThrow("not available");
+  });
+
   it("lets company managers enumerate calendars without widening event visibility", async () => {
     const t = harness();
     await buildCalendarFixture(t);

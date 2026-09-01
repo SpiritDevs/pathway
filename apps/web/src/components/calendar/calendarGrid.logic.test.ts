@@ -62,6 +62,12 @@ function event(overrides: Partial<CalendarEventInput> = {}): CalendarEventInput 
     endAt: AUG_12_0900Z + 60 * 60_000,
     timeZone: UTC,
     allDay: false,
+    notes: "",
+    reminderMinutes: [],
+    urls: [],
+    location: null,
+    invitees: [],
+    attachments: [],
     editable: true,
     ...overrides,
   };

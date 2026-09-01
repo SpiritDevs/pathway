@@ -8,7 +8,9 @@ Switch modes with the toolbar or the keys `d` (Day), `w` (Week), `m` (Month), an
 
 ## Events
 
-Click an empty slot (or press `c`) to create an event. Events have a start and end time in their own time zone, or can be marked all-day. Drag an event to move it, or drag its edge to change its length. Month mode shows events as compact chips on each day they touch.
+Click an empty slot (or press `c`) to create an event. The event sheet holds its title, times, notes, location, web links, invitee email addresses, and up to eight file attachments. Start typing a physical address to see OpenStreetMap suggestions, or enter an online room name. Drag an event to move it, or drag its edge to change its length. Month mode shows events as compact chips on each day they touch.
+
+Every event sends a notification and plays a sound when it starts. You can add several earlier alerts, such as 5, 15, or 30 minutes before. Allow notifications when Pathway asks. Web alerts need Pathway open; the desktop app can remain in the background.
 
 An event can be marked **private**. A private event is visible only to you, even on a calendar you have shared.
 
