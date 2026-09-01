@@ -9,6 +9,9 @@ import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  BackendDeployKeyMissingError,
+  BackendDeployKeyUnrecognizedError,
+  BackendDeployTargetMismatchError,
   BuildCommandFailedError,
   createStageWorkspaceConfig,
   createStagePatchedDependencies,
@@ -29,6 +32,7 @@ import {
   resolveMacPasskeySigningConfiguration,
   resolveDesktopRuntimeDependencies,
   resolveFffNativeDependencies,
+  resolveBackendDeployPlan,
   resolveBuildOptions,
   resolveDesktopBuildIconAssets,
   resolveDesktopProductName,
@@ -676,6 +680,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         buildVersion: Option.none(),
         outputDir: Option.none(),
         skipBuild: Option.none(),
+        skipBackendDeploy: Option.none(),
         keepStage: Option.none(),
         signed: Option.none(),
         verbose: Option.none(),
@@ -716,6 +721,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             buildVersion: Option.none(),
             outputDir: Option.none(),
             skipBuild: Option.none(),
+            skipBackendDeploy: Option.none(),
             keepStage: Option.none(),
             signed: Option.none(),
             verbose: Option.none(),
@@ -731,6 +737,72 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect("deploys the backend to the deployment the build targets", () =>
+    Effect.gen(function* () {
+      const plan = yield* resolveBackendDeployPlan({
+        convexUrl: "https://sleek-lion-657.convex.cloud",
+        deployKey: "prod:sleek-lion-657|secret",
+        skip: false,
+      });
+      assert.deepEqual(plan, {
+        kind: "deploy",
+        deploymentName: "sleek-lion-657",
+        convexUrl: "https://sleek-lion-657.convex.cloud",
+      });
+    }),
+  );
+
+  it.effect("skips the backend deploy only by flag or when cloud sync is off", () =>
+    Effect.gen(function* () {
+      assert.deepEqual(
+        yield* resolveBackendDeployPlan({
+          convexUrl: "https://sleek-lion-657.convex.cloud",
+          deployKey: "prod:sleek-lion-657|secret",
+          skip: true,
+        }),
+        { kind: "skip", reason: "skipped-by-flag" },
+      );
+      assert.deepEqual(
+        yield* resolveBackendDeployPlan({ convexUrl: "  ", deployKey: undefined, skip: false }),
+        { kind: "skip", reason: "cloud-sync-disabled" },
+      );
+    }),
+  );
+
+  it.effect("refuses to build against a deployment it cannot deploy to", () =>
+    Effect.gen(function* () {
+      // A configured deployment without a key is the forgotten-deploy case, so it
+      // fails the build instead of quietly packaging an app ahead of its backend.
+      const missing = yield* Effect.flip(
+        resolveBackendDeployPlan({
+          convexUrl: "https://sleek-lion-657.convex.cloud",
+          deployKey: "",
+          skip: false,
+        }),
+      );
+      assert.instanceOf(missing, BackendDeployKeyMissingError);
+
+      const mismatch = yield* Effect.flip(
+        resolveBackendDeployPlan({
+          convexUrl: "https://sleek-lion-657.convex.cloud",
+          deployKey: "dev:chatty-ermine-52|secret",
+          skip: false,
+        }),
+      );
+      assert.instanceOf(mismatch, BackendDeployTargetMismatchError);
+      assert.equal(mismatch.deploymentName, "chatty-ermine-52");
+
+      const unrecognized = yield* Effect.flip(
+        resolveBackendDeployPlan({
+          convexUrl: "https://sleek-lion-657.convex.cloud",
+          deployKey: "preview:team:project|secret",
+          skip: false,
+        }),
+      );
+      assert.instanceOf(unrecognized, BackendDeployKeyUnrecognizedError);
+    }),
+  );
+
   it.effect("preserves explicit false boolean flags over true env defaults", () =>
     Effect.gen(function* () {
       const resolved = yield* resolveBuildOptions({
@@ -740,6 +812,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         buildVersion: Option.none(),
         outputDir: Option.some("release-test"),
         skipBuild: Option.some(false),
+        skipBackendDeploy: Option.some(false),
         keepStage: Option.some(false),
         signed: Option.some(false),
         verbose: Option.some(false),
@@ -752,6 +825,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             ConfigProvider.fromEnv({
               env: {
                 PATHWAY_DESKTOP_SKIP_BUILD: "true",
+                PATHWAY_DESKTOP_SKIP_BACKEND_DEPLOY: "true",
                 PATHWAY_DESKTOP_KEEP_STAGE: "true",
                 PATHWAY_DESKTOP_SIGNED: "true",
                 PATHWAY_DESKTOP_VERBOSE: "true",
@@ -763,6 +837,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
 
       assert.equal(resolved.skipBuild, false);
+      assert.equal(resolved.skipBackendDeploy, false);
       assert.equal(resolved.keepStage, false);
       assert.equal(resolved.signed, false);
       assert.equal(resolved.verbose, false);
