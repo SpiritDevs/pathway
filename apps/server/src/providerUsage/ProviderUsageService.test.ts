@@ -48,6 +48,27 @@ function fetchResult(snapshot: ServerProviderUsageSnapshot, retryAfterUntilMs?: 
   };
 }
 
+function rateLimitedFetchResult(input: {
+  provider: ServerProviderUsageSnapshot["provider"];
+  nowMs: number;
+  untilMs: number;
+}) {
+  return {
+    snapshot: {
+      instanceId,
+      provider: input.provider,
+      source: "provider-test",
+      updatedAt: DateTime.formatIso(DateTime.makeUnsafe(input.nowMs)),
+      limits: [],
+      usageLines: [],
+      status: "error" as const,
+      detail: "Rate limited by provider.",
+      rateLimitedUntil: DateTime.formatIso(DateTime.makeUnsafe(input.untilMs)),
+    },
+    retryAfterUntilMs: input.untilMs,
+  };
+}
+
 function cursorSnapshot(input: {
   instanceId?: ProviderInstanceId;
   nowMs: number;
@@ -351,6 +372,48 @@ describe("provider usage snapshots", () => {
     }
   });
 
+  it("does not let an older request clear a newer rate-limit gate", async () => {
+    resetProviderUsageCache();
+    const regular = deferred<ReturnType<typeof fetchResult>>();
+    const forced = deferred<ReturnType<typeof rateLimitedFetchResult>>();
+    let fetchCount = 0;
+    const fetchUsage = () => {
+      fetchCount += 1;
+      return fetchCount === 1 ? regular.promise : forced.promise;
+    };
+    try {
+      const regularRequest = providerUsageTestKit.resolve(
+        { instanceId, provider: "cursor", nowMs },
+        fetchUsage,
+      );
+      const forcedRequest = providerUsageTestKit.resolve(
+        { instanceId, provider: "cursor", nowMs: nowMs + 1, forceRefresh: true },
+        fetchUsage,
+      );
+      const blockedUntilMs = nowMs + 120_000;
+      forced.resolve(
+        rateLimitedFetchResult({ provider: "cursor", nowMs: nowMs + 1, untilMs: blockedUntilMs }),
+      );
+      await forcedRequest;
+      regular.resolve(fetchResult(cursorSnapshot({ nowMs, usedPercent: 10 })));
+      await regularRequest;
+
+      const blocked = await providerUsageTestKit.resolve(
+        { instanceId, provider: "cursor", nowMs: nowMs + 2, forceRefresh: true },
+        async () => {
+          throw new Error("newer rate-limit gate should prevent this fetch");
+        },
+      );
+
+      expect(fetchCount).toBe(2);
+      expect(blocked.rateLimitedUntil).toBe(
+        DateTime.formatIso(DateTime.makeUnsafe(blockedUntilMs)),
+      );
+    } finally {
+      resetProviderUsageCache();
+    }
+  });
+
   it("honors Retry-After seconds and HTTP dates without re-hitting the provider", async () => {
     resetProviderUsageCache();
     providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
@@ -546,6 +609,40 @@ describe("provider usage snapshots", () => {
       fetchMock.mockRestore();
       resetProviderUsageCache();
       await NodeFSP.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes automatically when a rate-limit gate expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+    resetProviderUsageCache();
+    const blockedUntilMs = nowMs + 120_000;
+    let fetchCount = 0;
+    const fetchUsage = async (ctx: { readonly nowMs: number }) => {
+      fetchCount += 1;
+      return fetchCount === 1
+        ? rateLimitedFetchResult({ provider: "cursor", nowMs: ctx.nowMs, untilMs: blockedUntilMs })
+        : fetchResult(cursorSnapshot({ nowMs: ctx.nowMs, usedPercent: 25 }));
+    };
+    try {
+      await providerUsageTestKit.resolve(
+        { instanceId, provider: "cursor", nowMs, forceRefresh: true },
+        fetchUsage,
+      );
+
+      expect(fetchCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(fetchCount).toBe(2);
+      const refreshed = await providerUsageTestKit.resolve(
+        { instanceId, provider: "cursor", nowMs: blockedUntilMs + 1 },
+        async () => {
+          throw new Error("automatic refresh should populate the cache");
+        },
+      );
+      expect(refreshed).toMatchObject({ status: "ok", limits: [{ usedPercent: 25 }] });
+    } finally {
+      resetProviderUsageCache();
+      vi.useRealTimers();
     }
   });
 

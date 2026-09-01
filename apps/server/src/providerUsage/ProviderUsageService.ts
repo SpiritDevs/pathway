@@ -29,6 +29,7 @@ import {
   ProviderInstanceId,
 } from "@spiritdevs/contracts";
 import { HostProcessEnvironment, HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -94,9 +95,15 @@ interface InFlightFetch {
   readonly promise: Promise<ServerProviderUsageSnapshot>;
 }
 
+interface ScheduledRateLimitRefresh {
+  readonly untilMs: number;
+  readonly controller: AbortController;
+}
+
 const snapshotCache = new Map<string, CachedSnapshot>();
 const inFlightFetches = new Map<string, InFlightFetch>();
 const retryAfterGates = new Map<string, number>();
+const scheduledRateLimitRefreshes = new Map<string, ScheduledRateLimitRefresh>();
 // Cursor's credit-balance endpoint throttles independently of the main quota
 // endpoint; gate it separately so a credits 429 never blocks quota refreshes.
 const cursorCreditsGates = new Map<string, number>();
@@ -1471,6 +1478,38 @@ export const ingestPushedSnapshot = Effect.fn("ProviderUsage.ingestPushedSnapsho
   return stored.snapshot;
 });
 
+function cancelScheduledRateLimitRefresh(cacheKey: string): void {
+  const scheduled = scheduledRateLimitRefreshes.get(cacheKey);
+  if (scheduled === undefined) return;
+  scheduled.controller.abort();
+  scheduledRateLimitRefreshes.delete(cacheKey);
+}
+
+function scheduleRateLimitRefresh(
+  ctx: ProviderContext,
+  untilMs: number,
+  fetchUsage: (ctx: ProviderContext) => Promise<ProviderFetchResult>,
+): void {
+  const cacheKey = cacheKeyFor(ctx);
+  const scheduled = scheduledRateLimitRefreshes.get(cacheKey);
+  if (scheduled?.untilMs === untilMs) return;
+  if (scheduled !== undefined) scheduled.controller.abort();
+  const controller = new AbortController();
+  scheduledRateLimitRefreshes.set(cacheKey, { untilMs, controller });
+  void Effect.runPromise(
+    Effect.gen(function* () {
+      yield* Effect.sleep(Math.max(0, untilMs - ctx.nowMs));
+      if (scheduledRateLimitRefreshes.get(cacheKey)?.controller !== controller) return;
+      scheduledRateLimitRefreshes.delete(cacheKey);
+      const nowMs = yield* Clock.currentTimeMillis;
+      yield* Effect.promise(() =>
+        resolveProviderUsage({ ...ctx, nowMs: Math.max(nowMs, untilMs) }, true, fetchUsage),
+      );
+    }),
+    { signal: controller.signal },
+  ).catch(() => undefined);
+}
+
 async function resolveProviderUsage(
   ctx: ProviderContext,
   forceRefresh: boolean,
@@ -1484,6 +1523,7 @@ async function resolveProviderUsage(
   const cached = getLru(snapshotCache, cacheKey);
   if (blockedUntil !== undefined) {
     if (blockedUntil > ctx.nowMs) {
+      scheduleRateLimitRefresh(ctx, blockedUntil, fetchUsage);
       const rateLimitedUntil = DateTime.formatIso(DateTime.makeUnsafe(blockedUntil));
       const detail = rateLimitDetail(providerName(ctx.provider), blockedUntil, ctx.nowMs);
       if (cached) {
@@ -1507,6 +1547,7 @@ async function resolveProviderUsage(
       return stored.snapshot;
     }
     retryAfterGates.delete(cacheKey);
+    cancelScheduledRateLimitRefresh(cacheKey);
     await persistRateLimitState();
   }
   const pending = getLru(inFlightFetches, cacheKey);
@@ -1516,13 +1557,6 @@ async function resolveProviderUsage(
   }
   let entry: InFlightFetch;
   const request = fetchUsage(ctx).then(async (outcome) => {
-    if (outcome.retryAfterUntilMs !== undefined) {
-      setBounded(retryAfterGates, cacheKey, outcome.retryAfterUntilMs);
-      await persistRateLimitState();
-    } else if (outcome.snapshot.status === "ok") {
-      const removedGate = retryAfterGates.delete(cacheKey);
-      if (removedGate) await persistRateLimitState();
-    }
     const result = outcome.snapshot;
     let resolved: ServerProviderUsageSnapshot;
     if (result.status === "error" && cached?.snapshot.status === "ok") {
@@ -1539,6 +1573,15 @@ async function resolveProviderUsage(
       resolved = result;
     }
     if (inFlightFetches.get(cacheKey) !== entry) return resolved;
+    if (outcome.retryAfterUntilMs !== undefined) {
+      setBounded(retryAfterGates, cacheKey, outcome.retryAfterUntilMs);
+      scheduleRateLimitRefresh(ctx, outcome.retryAfterUntilMs, fetchUsage);
+      await persistRateLimitState();
+    } else if (outcome.snapshot.status === "ok") {
+      const removedGate = retryAfterGates.delete(cacheKey);
+      cancelScheduledRateLimitRefresh(cacheKey);
+      if (removedGate) await persistRateLimitState();
+    }
     const stored = storeSnapshot({
       snapshot: resolved,
       fetchedAtMs:
@@ -1723,8 +1766,8 @@ export const providerUsageTestKit = {
   loadList: loadProviderUsageList,
   resolve: (
     input: Parameters<typeof testingContext>[0] & { forceRefresh?: boolean },
-    fetchUsage: () => Promise<ProviderFetchResult>,
-  ) => resolveProviderUsage(testingContext(input), input.forceRefresh === true, () => fetchUsage()),
+    fetchUsage: (ctx: ProviderContext) => Promise<ProviderFetchResult>,
+  ) => resolveProviderUsage(testingContext(input), input.forceRefresh === true, fetchUsage),
   retryAfterUntilMs,
   defaultRateLimitBackoffMs: DEFAULT_RATE_LIMIT_BACKOFF_MS,
   setClaudeVersionRunner: (runner: ClaudeVersionRunner) => {
@@ -1735,9 +1778,11 @@ export const providerUsageTestKit = {
 
 /** Test-only cache reset. */
 export function resetProviderUsageCache(): void {
+  for (const scheduled of scheduledRateLimitRefreshes.values()) scheduled.controller.abort();
   snapshotCache.clear();
   inFlightFetches.clear();
   retryAfterGates.clear();
+  scheduledRateLimitRefreshes.clear();
   cursorCreditsGates.clear();
   activeRateLimitPersistence = null;
   rateLimitPersistenceLoad = null;

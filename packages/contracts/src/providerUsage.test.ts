@@ -20,11 +20,12 @@ describe("provider usage contracts", () => {
     expect(decodeSnapshot(legacySnapshot)).toEqual(legacySnapshot);
   });
 
-  it("decodes machine-readable window metadata and provider fetch time", () => {
+  it("decodes machine-readable window metadata, provider fetch time, and rate-limit time", () => {
     expect(
       decodeSnapshot({
         ...legacySnapshot,
         fetchedAt: "2026-08-29T23:59:00.000Z",
+        rateLimitedUntil: "2026-08-30T00:05:00.000Z",
         limits: [
           {
             window: "Sonnet weekly",
@@ -36,6 +37,7 @@ describe("provider usage contracts", () => {
       }),
     ).toMatchObject({
       fetchedAt: "2026-08-29T23:59:00.000Z",
+      rateLimitedUntil: "2026-08-30T00:05:00.000Z",
       limits: [{ windowKey: "weekly", scope: "Sonnet" }],
     });
   });

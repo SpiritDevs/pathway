@@ -4,6 +4,7 @@ import {
   deriveProviderUsageLimits,
   formatDuration,
   formatProviderUsageCaptureAge,
+  formatProviderUsageRateLimit,
   formatProviderUsageReset,
   shouldCollapseProviderUsage,
 } from "./providerUsageDisplay";
@@ -72,6 +73,19 @@ describe("provider usage display", () => {
         Date.parse("2026-08-12T00:12:00.000Z"),
       ),
     ).toBe("as of 12m ago");
+  });
+
+  it("formats live rate-limit countdowns from the structured pause time", () => {
+    const now = Date.parse("2026-08-12T00:00:00.000Z");
+    expect(formatProviderUsageRateLimit("Claude", "2026-08-12T00:00:45.000Z", now)).toBe(
+      "Claude usage is rate limited by the provider. Refreshes resume in less than a minute.",
+    );
+    expect(formatProviderUsageRateLimit("Claude", "2026-08-12T00:58:00.000Z", now)).toBe(
+      "Claude usage is rate limited by the provider. Refreshes resume in about 58 minutes.",
+    );
+    expect(formatProviderUsageRateLimit("Claude", "2026-08-12T03:01:00.000Z", now)).toBe(
+      "Claude usage is rate limited by the provider. Refreshes resume in about 4 hours.",
+    );
   });
 
   it("only offers disclosure when there is more than one quota bar", () => {

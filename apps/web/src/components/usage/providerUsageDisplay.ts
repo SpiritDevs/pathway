@@ -41,6 +41,28 @@ export function formatProviderUsageCaptureAge(
   return `as of ${formatDuration(nowMs - fetchedAtMs)} ago`;
 }
 
+export function formatProviderUsageRateLimit(
+  providerName: string,
+  rateLimitedUntil: string,
+  nowMs = Date.now(),
+): string | null {
+  const untilMs = Date.parse(rateLimitedUntil);
+  if (!Number.isFinite(untilMs)) return null;
+  const remainingMs = Math.max(0, untilMs - nowMs);
+  if (remainingMs === 0) {
+    return `${providerName} usage is rate limited by the provider. Refreshes can resume now.`;
+  }
+  if (remainingMs < 60_000) {
+    return `${providerName} usage is rate limited by the provider. Refreshes resume in less than a minute.`;
+  }
+  if (remainingMs < 2 * 60 * 60_000) {
+    const minutes = Math.ceil(remainingMs / 60_000);
+    return `${providerName} usage is rate limited by the provider. Refreshes resume in about ${minutes} ${minutes === 1 ? "minute" : "minutes"}.`;
+  }
+  const hours = Math.ceil(remainingMs / (60 * 60_000));
+  return `${providerName} usage is rate limited by the provider. Refreshes resume in about ${hours} ${hours === 1 ? "hour" : "hours"}.`;
+}
+
 export function deriveProviderUsageLimits(
   limits: ReadonlyArray<ServerProviderUsageLimit>,
   nowMs = Date.now(),

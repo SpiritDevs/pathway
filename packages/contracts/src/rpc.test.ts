@@ -1,7 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Schema from "effect/Schema";
 
 import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
-import { WS_METHODS, WsRpcGroup } from "./rpc.ts";
+import { WS_METHODS, WsRpcGroup, WsServerGetProviderUsageRpc } from "./rpc.ts";
 
 describe("WebSocket RPC contracts", () => {
   it("exposes only the V2 orchestration transport surface", () => {
@@ -22,5 +23,24 @@ describe("WebSocket RPC contracts", () => {
 
   it("exposes the provider usage subscription", () => {
     expect([...WsRpcGroup.requests.keys()]).toContain(WS_METHODS.serverSubscribeProviderUsage);
+  });
+
+  it("round-trips provider rate-limit deadlines", () => {
+    const decode = Schema.decodeUnknownSync(WsServerGetProviderUsageRpc.successSchema);
+    const encode = Schema.encodeUnknownSync(WsServerGetProviderUsageRpc.successSchema);
+    const snapshot = decode({
+      instanceId: "usage_test",
+      provider: "claudeAgent",
+      source: "provider-rate-limit",
+      updatedAt: "2026-09-01T20:00:00.000Z",
+      limits: [],
+      usageLines: [],
+      status: "error",
+      rateLimitedUntil: "2026-09-01T20:05:00.000Z",
+    });
+
+    expect(encode(snapshot)).toMatchObject({
+      rateLimitedUntil: "2026-09-01T20:05:00.000Z",
+    });
   });
 });
