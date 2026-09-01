@@ -198,8 +198,15 @@ export function CalendarPage({
       event: CalendarEventInput,
       patch: { readonly startAt: number; readonly endAt: number; readonly allDay?: boolean },
     ) => {
+      // Built field by field: `patch` is often a tagged drop result, and a spread would send its
+      // `_tag` to a Convex validator that rejects unknown fields.
       void writer
-        .updateEvent({ eventId: event.id as CalendarEventId, ...patch })
+        .updateEvent({
+          eventId: event.id as CalendarEventId,
+          startAt: patch.startAt,
+          endAt: patch.endAt,
+          ...(patch.allDay === undefined ? {} : { allDay: patch.allDay }),
+        })
         .catch((error: unknown) => reportCalendarFailure("Failed to move the event", error));
     },
     [writer],
