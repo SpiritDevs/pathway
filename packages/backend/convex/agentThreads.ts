@@ -10,7 +10,8 @@ import { actorRecord, requireCompanyActor, requirePermission } from "./lib/ident
 import { domainIdArg } from "./lib/validators.ts";
 
 const MAX_RECONCILE_REMOVALS = 100;
-const AGENT_THREAD_SHELL_FIELDS = new Set([
+/** Must cover every field of the contracts `CloudAgentThreadShell`; upserts with unknown fields are rejected. */
+export const AGENT_THREAD_SHELL_FIELDS = new Set([
   "createdBy",
   "creationSource",
   "id",
@@ -22,6 +23,7 @@ const AGENT_THREAD_SHELL_FIELDS = new Set([
   "interactionMode",
   "branch",
   "worktreePath",
+  "workspaceMove",
   "lineage",
   "forkKind",
   "locations",
