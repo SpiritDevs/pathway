@@ -102,7 +102,14 @@ async function activeBinding(
   ).find((binding) => binding.localProjectId === localProjectId && binding.status === "active");
 }
 
-/** Upserts one shell after proving that its local project has an active company binding. */
+/**
+ * Upserts one shell after proving that its local project has an active company binding.
+ *
+ * A new thread whose project has no active binding is reported as `unbound` rather than thrown:
+ * environments publish every local thread, and a checkout that was never assigned to this
+ * company (or whose binding was revoked) is an expected steady state, not a fault. Throwing left
+ * an uncaught error in the deployment log for every probe of every such thread.
+ */
 export const upsert = mutation({
   args: {
     companyId: domainIdArg,
@@ -111,7 +118,9 @@ export const upsert = mutation({
     localProjectId: v.string(),
     shell: v.any(),
   },
-  returns: v.null(),
+  returns: v.object({
+    outcome: v.union(v.literal("published"), v.literal("unchanged"), v.literal("unbound")),
+  }),
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
     const environmentId = requireTrimmed(args.environmentId, "Environment id");
@@ -158,26 +167,15 @@ export const upsert = mutation({
     // shell must stay updatable after the binding is revoked (e.g. duplicate
     // project identities merged away), or one such thread wedges the
     // environment's reconcile loop forever.
-    if (binding === undefined && existing === null) {
-      throw backendError(
-        "entity-not-found",
-        "The Agent Thread project has no active binding on this environment.",
-      );
-    }
     const cloudProjectId = binding?.cloudProjectId ?? existing?.cloudProjectId;
-    if (cloudProjectId === undefined) {
-      throw backendError(
-        "entity-not-found",
-        "The Agent Thread project has no active binding on this environment.",
-      );
-    }
+    if (cloudProjectId === undefined) return { outcome: "unbound" as const };
     if (
       existing !== null &&
       existing.cloudProjectId === cloudProjectId &&
       existing.localProjectId === localProjectId &&
       JSON.stringify(existing.shell) === JSON.stringify(args.shell)
     ) {
-      return null;
+      return { outcome: "unchanged" as const };
     }
     const now = Date.now();
     let row: Doc<"agentThreads">;
@@ -223,7 +221,7 @@ export const upsert = mutation({
         },
       ],
     });
-    return null;
+    return { outcome: "published" as const };
   },
 });
 

@@ -5,15 +5,18 @@ import {
   type EnvironmentId,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadShell,
+  type ProjectId,
   type ThreadId,
 } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
+import { ConvexError } from "convex/values";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Predicate from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -44,19 +47,25 @@ import {
 export const DEFAULT_AGENT_THREAD_RECONCILE_INTERVAL = Duration.seconds(15);
 
 /**
- * How long a shell the backend refused (no active project binding) stays parked. The refusal is
- * terminal until an operator changes bindings, so retrying it at event cadence only spams the
- * deployment log; the park also keys on the shell's identity, so an edited shell retries at once.
+ * How long a thread the backend reports as unbound (no active project binding on this environment)
+ * stays parked. The park must remain thread-scoped: already-indexed sibling threads intentionally
+ * stay updatable after their binding is revoked. Shell edits do not bypass the park, and the thread
+ * is probed again once per interval so a newly assigned project appears within a few minutes.
  */
-export const AGENT_THREAD_UNPUBLISHABLE_PARK_INTERVAL = Duration.minutes(15);
+export const AGENT_THREAD_UNBOUND_PARK_INTERVAL = Duration.minutes(5);
+
+const AGENT_THREAD_UNBOUND_MESSAGE =
+  "The Agent Thread project has no active binding on this environment.";
 
 /**
- * A typed `entity-not-found` refusal of an upsert (the project has no active binding on this
- * environment) cannot succeed until an operator changes bindings; transport, auth, and validator
- * failures stay retryable.
+ * A backend that predates the `unbound` upsert outcome throws a typed `entity-not-found` refusal
+ * instead; it means the same thing. Transport, auth, and validator failures stay retryable.
  */
 export function isUnpublishableAgentThreadRefusal(cause: unknown): boolean {
-  return convexErrorCode(cause) === "entity-not-found";
+  if (convexErrorCode(cause) !== "entity-not-found" || !(cause instanceof ConvexError))
+    return false;
+  const data: unknown = cause.data;
+  return Predicate.isObject(data) && data["message"] === AGENT_THREAD_UNBOUND_MESSAGE;
 }
 
 interface CloudAgentThreadPublisherOptions {
@@ -106,14 +115,14 @@ export function shouldPublishCloudAgentThreadEvent(event: OrchestrationV2DomainE
 export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publisher.make")(
   function* (options: CloudAgentThreadPublisherOptions) {
     const client = options.client ?? convexHttpClientLike(options.convexUrl);
-    const lock = yield* Semaphore.make(1);
+    const requestLock = yield* Semaphore.make(1);
+    const publishLock = yield* Semaphore.make(1);
     const published = yield* Ref.make<ReadonlyMap<ThreadId, string>>(new Map());
-    const parked = yield* Ref.make<
-      ReadonlyMap<ThreadId, { readonly identity: string; readonly until: number }>
-    >(new Map());
+    const parkedThreads = yield* Ref.make<ReadonlyMap<ThreadId, number>>(new Map());
+    const announcedUnboundProjects = yield* Ref.make<ReadonlySet<ProjectId>>(new Set());
 
     const call = <A>(token: string, issue: (client: ConvexClientLike) => Promise<A>) =>
-      lock.withPermits(1)(
+      requestLock.withPermits(1)(
         Effect.tryPromise({
           try: () => {
             client.setAuth(token);
@@ -142,52 +151,58 @@ export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publi
       });
 
     const publish = (shell: OrchestrationV2ThreadShell) =>
-      Effect.gen(function* () {
-        const encoded = encodeCloudShell(cloudSafeThreadShell(shell));
-        const identity = encodeCloudShellIdentity(cloudSafeThreadShell(shell));
-        if ((yield* Ref.get(published)).get(shell.id) === identity) return;
-        const now = yield* Clock.currentTimeMillis;
-        const hold = (yield* Ref.get(parked)).get(shell.id);
-        if (hold !== undefined && hold.identity === identity && now < hold.until) return;
-        const outcome = yield* authorized((convex) =>
-          convex.mutation(api.agentThreads.upsert, {
-            companyId: options.companyId,
-            environmentId: options.environmentId,
-            threadId: shell.id,
-            localProjectId: shell.projectId,
-            shell: encoded,
-          }),
-        ).pipe(
-          Effect.as("published" as const),
-          Effect.catchIf(
-            (error) => isUnpublishableAgentThreadRefusal(error.cause),
-            (error) =>
-              Effect.logWarning(
-                "Cloud Agent Thread upsert was refused; parking the shell before retrying",
+      publishLock.withPermits(1)(
+        Effect.gen(function* () {
+          const encoded = encodeCloudShell(cloudSafeThreadShell(shell));
+          const identity = encodeCloudShellIdentity(cloudSafeThreadShell(shell));
+          if ((yield* Ref.get(published)).get(shell.id) === identity) return;
+          const now = yield* Clock.currentTimeMillis;
+          const nextProbeAt = (yield* Ref.get(parkedThreads)).get(shell.id);
+          if (nextProbeAt !== undefined && now < nextProbeAt) return;
+          const outcome = yield* authorized((convex) =>
+            convex.mutation(api.agentThreads.upsert, {
+              companyId: options.companyId,
+              environmentId: options.environmentId,
+              threadId: shell.id,
+              localProjectId: shell.projectId,
+              shell: encoded,
+            }),
+          ).pipe(
+            // Old deployments returned null for successful upserts.
+            Effect.map((result) => result?.outcome ?? ("published" as const)),
+            Effect.catchIf(
+              (error) => isUnpublishableAgentThreadRefusal(error.cause),
+              () => Effect.succeed("unbound" as const),
+            ),
+          );
+          if (outcome === "unbound") {
+            const announced = yield* Ref.get(announcedUnboundProjects);
+            if (!announced.has(shell.projectId)) {
+              yield* Effect.logInfo(
+                "Cloud Agent Thread project has no active binding on this environment; its threads stay local until it is assigned",
                 {
                   companyId: options.companyId,
                   environmentId: options.environmentId,
-                  threadId: shell.id,
                   projectId: shell.projectId,
-                  cause: error.cause,
                 },
-              ).pipe(Effect.as("parked" as const)),
-          ),
-        );
-        const until = now + Duration.toMillis(AGENT_THREAD_UNPUBLISHABLE_PARK_INTERVAL);
-        yield* Ref.update(parked, (current) => {
-          const next = new Map(current);
-          if (outcome === "parked") next.set(shell.id, { identity, until });
-          else next.delete(shell.id);
-          return next;
-        });
-        if (outcome === "parked") return;
-        yield* Ref.update(published, (current) => {
-          const next = new Map(current);
-          next.set(shell.id, identity);
-          return next;
-        });
-      });
+              );
+              yield* Ref.update(announcedUnboundProjects, (current) =>
+                new Set(current).add(shell.projectId),
+              );
+            }
+            const until = now + Duration.toMillis(AGENT_THREAD_UNBOUND_PARK_INTERVAL);
+            yield* Ref.update(parkedThreads, (current) => new Map(current).set(shell.id, until));
+            return;
+          }
+          yield* Ref.update(parkedThreads, (current) => {
+            if (!current.has(shell.id)) return current;
+            const next = new Map(current);
+            next.delete(shell.id);
+            return next;
+          });
+          yield* Ref.update(published, (current) => new Map(current).set(shell.id, identity));
+        }),
+      );
 
     const remove = (threadId: ThreadId) =>
       authorized((convex) =>
