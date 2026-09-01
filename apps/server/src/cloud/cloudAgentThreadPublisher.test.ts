@@ -46,6 +46,25 @@ describe("cloud Agent Thread publisher", () => {
     expect(
       shouldPublishCloudAgentThreadEvent({
         type: "turn-item.updated",
+        payload: { type: "assistant_message" },
+      } as OrchestrationV2DomainEvent),
+    ).toBe(false);
+    expect(
+      shouldPublishCloudAgentThreadEvent({
+        type: "turn-item.updated",
+        payload: { type: "source_control", pullRequestAction: "attached" },
+      } as OrchestrationV2DomainEvent),
+    ).toBe(true);
+    expect(
+      shouldPublishCloudAgentThreadEvent({
+        type: "turn-item.updated",
+        payload: { type: "source_control", pullRequestAction: "detached" },
+      } as OrchestrationV2DomainEvent),
+    ).toBe(true);
+    expect(
+      shouldPublishCloudAgentThreadEvent({
+        type: "turn-item.updated",
+        payload: { type: "source_control" },
       } as OrchestrationV2DomainEvent),
     ).toBe(false);
     expect(

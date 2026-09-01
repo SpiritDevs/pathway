@@ -271,7 +271,7 @@ struct PathwayTests {
 }
 
 // swiftlint:disable:next function_body_length
-private func makeAgentThread(
+func makeAgentThread(
     latestRunCompletedAt: String? = "2026-08-29T02:00:00.000Z",
     archivedAt: String? = nil,
     settledOverride: String? = nil,
@@ -279,7 +279,8 @@ private func makeAgentThread(
     snoozedUntil: String? = nil,
     pinnedAt: String? = nil,
     pendingRequestKind: String? = nil,
-    relationshipToParent: String? = nil
+    relationshipToParent: String? = nil,
+    attachedPullRequest: PathwayPullRequestAttachment? = nil
 ) -> PathwayAgentThread {
     PathwayAgentThread(
         companyId: "company-1",
@@ -321,6 +322,7 @@ private func makeAgentThread(
             },
             latestVisibleMessage: nil,
             latestUserMessageAt: latestRunCompletedAt,
+            attachedPullRequest: attachedPullRequest,
             hasActionableProposedPlan: false,
             itemCount: 1,
             visibleItemCount: 1,

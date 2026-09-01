@@ -18,6 +18,7 @@ import {
   resolvePathwayMcpToolPresentation,
   type PathwayMcpToolPresentation,
 } from "@spiritdevs/shared/pathwayMcpToolPresentation";
+import { resolveActivePullRequestAttachment } from "@spiritdevs/shared/sourceControl";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
 export const TIMELINE_MINIMAP_ITEM_SPACING = 8;
@@ -273,28 +274,12 @@ export interface StableMessagesTimelineRowsState {
 export function resolveActiveAttachedPullRequestItemId(
   rows: ReadonlyArray<MessagesTimelineRow>,
 ): string | null {
-  let active: {
-    readonly itemId: string;
-    readonly pullRequest: { readonly number: number; readonly url: string };
-  } | null = null;
-  for (const row of rows) {
-    if (row.kind !== "event" || row.projectedItem.visibility !== "local") continue;
-    const item = row.projectedItem.item;
-    if (item.type !== "source_control") continue;
-    if (item.pullRequestAction === "attached" && item.pullRequest !== null) {
-      active = { itemId: item.id, pullRequest: item.pullRequest };
-    }
-    if (
-      item.pullRequestAction === "detached" &&
-      item.pullRequest !== null &&
-      active !== null &&
-      active.pullRequest.number === item.pullRequest.number &&
-      active.pullRequest.url === item.pullRequest.url
-    ) {
-      active = null;
-    }
-  }
-  return active?.itemId ?? null;
+  const localItems = rows.flatMap((row) =>
+    row.kind === "event" && row.projectedItem.visibility === "local"
+      ? [row.projectedItem.item]
+      : [],
+  );
+  return resolveActivePullRequestAttachment(localItems)?.itemId ?? null;
 }
 
 export function computeMessageDurationStart(

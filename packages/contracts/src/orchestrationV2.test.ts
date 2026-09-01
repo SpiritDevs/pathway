@@ -804,7 +804,7 @@ describe("orchestration V2 contracts", () => {
     expect(runtimeThread.pendingBackgroundTasks).toEqual([]);
   });
 
-  it("decodes historical thread shell JSON without pendingBackgroundTasks as empty roster", () => {
+  it("defaults newer thread shell summaries when decoding historical JSON", () => {
     const shell = decodeOrchestrationV2ThreadShell({
       createdBy: "user",
       creationSource: "web",
@@ -845,6 +845,7 @@ describe("orchestration V2 contracts", () => {
     });
 
     expect(shell.pendingBackgroundTasks).toEqual([]);
+    expect(shell.attachedPullRequest).toBeNull();
   });
 
   it("decodes an exact-run continuation launch with target model and workspace policy", () => {

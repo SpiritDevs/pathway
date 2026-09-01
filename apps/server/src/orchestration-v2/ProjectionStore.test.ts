@@ -153,6 +153,106 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect("summarizes the active manual pull request attachment in thread shells", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:projection-pr-attachment");
+      const projectId = ProjectId.make("project:projection-pr-attachment");
+
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-pr-attachment:thread"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: {
+          createdBy: "user",
+          creationSource: "web",
+          id: threadId,
+          projectId,
+          title: "Manual PR attachment",
+          providerInstanceId,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: "main",
+          worktreePath: null,
+          activeProviderThreadId: null,
+          lineage: {
+            parentThreadId: null,
+            relationshipToParent: null,
+            rootThreadId: threadId,
+          },
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          lastVisitedAt: null,
+          deletedAt: null,
+        },
+      });
+
+      const recordAttachment = (
+        id: string,
+        ordinal: number,
+        action: "attached" | "detached",
+        number: number,
+      ) =>
+        projectionStore.apply({
+          id: EventId.make(`event:projection-pr-attachment:${id}`),
+          type: "turn-item.updated",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make(`turn-item:projection-pr-attachment:${id}`),
+            threadId,
+            runId: null,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal,
+            status: "completed",
+            title: null,
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "source_control",
+            committed: false,
+            pullRequestAction: action,
+            pullRequest: {
+              number,
+              url: `https://github.com/SpiritDevs/pathway/pull/${number}`,
+            },
+          },
+        });
+
+      yield* recordAttachment("attach-1", 1, "attached", 1);
+      yield* recordAttachment("attach-2", 2, "attached", 2);
+      yield* recordAttachment("stale-detach-1", 3, "detached", 1);
+
+      const projection = yield* projectionStore.getThreadProjection(threadId);
+      const snapshotShell = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      const threadShell = yield* projectionStore.getThreadShell(threadId);
+      const expected = {
+        number: 2,
+        url: "https://github.com/SpiritDevs/pathway/pull/2",
+      };
+
+      assert.deepEqual(threadShellFromProjection(projection).attachedPullRequest, expected);
+      assert.deepEqual(snapshotShell?.attachedPullRequest, expected);
+      assert.deepEqual(threadShell?.attachedPullRequest, expected);
+
+      yield* recordAttachment("detach-2", 4, "detached", 2);
+      assert.isNull((yield* projectionStore.getThreadShell(threadId))?.attachedPullRequest ?? null);
+    }),
+  );
+
   it.effect("does not treat visited or marked-unread state as thread activity", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStoreV2;

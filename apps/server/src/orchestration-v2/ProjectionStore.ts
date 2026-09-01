@@ -37,6 +37,7 @@ import {
   isOrchestrationV2TurnItemVisible,
 } from "@spiritdevs/shared/orchestrationV2Timeline";
 import { derivePendingBackgroundWork } from "@spiritdevs/shared/orchestrationV2PendingBackgroundWork";
+import { resolveActivePullRequestAttachment } from "@spiritdevs/shared/sourceControl";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -861,6 +862,9 @@ export function threadShellFromProjection(
     activeProviderThreadId: projection.thread.activeProviderThreadId,
     runs: projection.runs,
   });
+  const attachedPullRequest =
+    resolveActivePullRequestAttachment(activeLocalTurnItems(projection).map((row) => row.item))
+      ?.pullRequest ?? null;
   return {
     createdBy: projection.thread.createdBy,
     creationSource: projection.thread.creationSource,
@@ -904,6 +908,7 @@ export function threadShellFromProjection(
             updatedAt: latestVisibleMessage.updatedAt,
           },
     latestUserMessageAt: latestUserMessage?.updatedAt ?? null,
+    attachedPullRequest,
     hasActionableProposedPlan: projection.plans.some(
       (plan) => plan.kind === "proposed_plan" && plan.status === "active",
     ),
@@ -953,6 +958,7 @@ type ShellThreadState = {
   readonly pendingRuntimeRequest: OrchestrationV2ThreadProjection["runtimeRequests"][number] | null;
   readonly latestVisibleMessage: OrchestrationV2ConversationMessage | null;
   readonly latestUserMessageAt: DateTime.Utc | null;
+  readonly attachedPullRequest: OrchestrationV2ThreadShell["attachedPullRequest"];
   readonly hasActionableProposedPlan: boolean;
   readonly pendingBackgroundTasks: OrchestrationV2ThreadShell["pendingBackgroundTasks"];
   readonly itemCount: number;
@@ -1094,6 +1100,7 @@ function shellFromState(input: {
             updatedAt: input.state.latestVisibleMessage.updatedAt,
           },
     latestUserMessageAt: input.state.latestUserMessageAt,
+    attachedPullRequest: input.state.attachedPullRequest,
     hasActionableProposedPlan: input.state.hasActionableProposedPlan,
     pendingBackgroundTasks: input.state.pendingBackgroundTasks,
     itemCount: input.state.itemCount,
@@ -2416,6 +2423,30 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               AND i.thread_id IN ${sql.in(threadIds)}
           `;
 
+    const selectShellPullRequestAttachmentRows = (threadIds?: ReadonlyArray<ThreadId>) =>
+      threadIds === undefined
+        ? sql<PayloadRow & { readonly thread_id: string }>`
+            SELECT i.thread_id, i.payload_json
+            FROM orchestration_v2_projection_turn_items i
+            LEFT JOIN orchestration_v2_projection_runs r
+              ON r.run_id = i.run_id
+            WHERE i.type = 'source_control'
+              AND json_extract(i.payload_json, '$.pullRequestAction') IN ('attached', 'detached')
+              AND (i.run_id IS NULL OR r.status <> 'rolled_back')
+            ORDER BY i.thread_id ASC, i.ordinal ASC, i.turn_item_id ASC
+          `
+        : sql<PayloadRow & { readonly thread_id: string }>`
+            SELECT i.thread_id, i.payload_json
+            FROM orchestration_v2_projection_turn_items i
+            LEFT JOIN orchestration_v2_projection_runs r
+              ON r.run_id = i.run_id
+            WHERE i.type = 'source_control'
+              AND json_extract(i.payload_json, '$.pullRequestAction') IN ('attached', 'detached')
+              AND (i.run_id IS NULL OR r.status <> 'rolled_back')
+              AND i.thread_id IN ${sql.in(threadIds)}
+            ORDER BY i.thread_id ASC, i.ordinal ASC, i.turn_item_id ASC
+          `;
+
     const runMapsByThreadId = (input: {
       readonly runRows: ReadonlyArray<ShellRunRow>;
       readonly itemCountRows: ReadonlyArray<ShellRunItemCountRow>;
@@ -2472,6 +2503,20 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         return { providerThreadsByThreadId, pendingTurnItemsByThreadId };
       });
 
+    const pullRequestAttachmentItemsByThreadId = (
+      rows: ReadonlyArray<PayloadRow & { readonly thread_id: string }>,
+    ) =>
+      Effect.gen(function* () {
+        const itemsByThreadId = new Map<ThreadId, Array<OrchestrationV2TurnItem>>();
+        for (const row of rows) {
+          const threadId = ThreadId.make(row.thread_id);
+          const existing = itemsByThreadId.get(threadId) ?? [];
+          existing.push(yield* decodeTurnItemPayload(row.payload_json));
+          itemsByThreadId.set(threadId, existing);
+        }
+        return itemsByThreadId;
+      });
+
     const shellThreadStateFromRow = (input: {
       readonly row: ShellThreadRow;
       readonly runOrdinalsByThreadId: ReadonlyMap<ThreadId, Map<RunId, number>>;
@@ -2484,6 +2529,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ThreadId,
         ReadonlyArray<OrchestrationV2TurnItem>
       >;
+      readonly pullRequestAttachmentItemsByThreadId: ReadonlyMap<
+        ThreadId,
+        ReadonlyArray<OrchestrationV2TurnItem>
+      >;
     }) =>
       Effect.gen(function* () {
         const {
@@ -2492,6 +2541,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           itemCountsByThreadId,
           providerThreadsByThreadId,
           pendingTurnItemsByThreadId,
+          pullRequestAttachmentItemsByThreadId,
         } = input;
         const thread = yield* decodeThreadPayload(row.payload_json);
         const pendingRuntimeRequest =
@@ -2551,6 +2601,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             row.latest_user_message_at === null
               ? null
               : DateTime.makeUnsafe(row.latest_user_message_at),
+          attachedPullRequest:
+            resolveActivePullRequestAttachment(
+              pullRequestAttachmentItemsByThreadId.get(thread.id) ?? [],
+            )?.pullRequest ?? null,
           hasActionableProposedPlan: row.has_actionable_proposed_plan === 1,
           pendingBackgroundTasks,
           itemCount: row.item_count,
@@ -2572,6 +2626,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               sequenceRows,
               providerThreadRows,
               pendingTurnItemRows,
+              pullRequestAttachmentRows,
             ] = yield* Effect.all([
               selectShellThreadRows(),
               selectShellRunRows(),
@@ -2584,6 +2639,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           `,
               selectShellProviderThreadRows(),
               selectShellPendingTurnItemRows(),
+              selectShellPullRequestAttachmentRows(),
             ]);
 
             const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
@@ -2592,6 +2648,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             });
             const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
               yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
+            const attachmentItemsByThreadId =
+              yield* pullRequestAttachmentItemsByThreadId(pullRequestAttachmentRows);
             const states = yield* Effect.forEach(threadRows, (row) =>
               shellThreadStateFromRow({
                 row,
@@ -2599,6 +2657,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 itemCountsByThreadId,
                 providerThreadsByThreadId,
                 pendingTurnItemsByThreadId,
+                pullRequestAttachmentItemsByThreadId: attachmentItemsByThreadId,
               }),
             );
             const statesByThreadId = new Map(states.map((state) => [state.thread.id, state]));
@@ -2660,19 +2719,27 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             }
 
             const threadIds = [...rowsByThreadId.keys()];
-            const [runRows, itemCountRows, providerThreadRows, pendingTurnItemRows] =
-              yield* Effect.all([
-                selectShellRunRows(threadIds),
-                selectShellRunItemCounts(threadIds),
-                selectShellProviderThreadRows(threadIds),
-                selectShellPendingTurnItemRows(threadIds),
-              ]);
+            const [
+              runRows,
+              itemCountRows,
+              providerThreadRows,
+              pendingTurnItemRows,
+              pullRequestAttachmentRows,
+            ] = yield* Effect.all([
+              selectShellRunRows(threadIds),
+              selectShellRunItemCounts(threadIds),
+              selectShellProviderThreadRows(threadIds),
+              selectShellPendingTurnItemRows(threadIds),
+              selectShellPullRequestAttachmentRows(threadIds),
+            ]);
             const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
               runRows,
               itemCountRows,
             });
             const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
               yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
+            const attachmentItemsByThreadId =
+              yield* pullRequestAttachmentItemsByThreadId(pullRequestAttachmentRows);
 
             const states = yield* Effect.forEach([...rowsByThreadId.values()], (row) =>
               shellThreadStateFromRow({
@@ -2681,6 +2748,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 itemCountsByThreadId,
                 providerThreadsByThreadId,
                 pendingTurnItemsByThreadId,
+                pullRequestAttachmentItemsByThreadId: attachmentItemsByThreadId,
               }),
             );
             const statesByThreadId = new Map(states.map((state) => [state.thread.id, state]));

@@ -4,6 +4,7 @@ import {
   detectSourceControlProviderFromRemoteUrl,
   getChangeRequestTerminologyFromUrl,
   getChangeRequestTerminologyForKind,
+  resolveActivePullRequestAttachment,
   resolveChangeRequestPresentation,
   sourceControlMarkerLabel,
 } from "./sourceControl.ts";
@@ -54,6 +55,35 @@ describe("source control timeline markers", () => {
         pullRequest: { number: 47, url: "https://gitlab.com/acme/repo/-/merge_requests/47" },
       }),
     ).toBe("MR attached");
+  });
+});
+
+describe("active pull request attachments", () => {
+  const marker = (id: string, action: "attached" | "detached", number: number) =>
+    ({
+      ...sourceControlItem,
+      id,
+      pullRequestAction: action,
+      pullRequest: { number, url: `https://github.com/SpiritDevs/pathway/pull/${number}` },
+    }) as Parameters<typeof resolveActivePullRequestAttachment>[0][number];
+
+  it("keeps a newer attachment when a stale detach arrives", () => {
+    expect(
+      resolveActivePullRequestAttachment([
+        marker("attach-1", "attached", 1),
+        marker("attach-2", "attached", 2),
+        marker("detach-1", "detached", 1),
+      ]),
+    ).toMatchObject({ itemId: "attach-2", pullRequest: { number: 2 } });
+  });
+
+  it("clears the active attachment when its matching detach arrives", () => {
+    expect(
+      resolveActivePullRequestAttachment([
+        marker("attach-2", "attached", 2),
+        marker("detach-2", "detached", 2),
+      ]),
+    ).toBeNull();
   });
 });
 

@@ -930,6 +930,12 @@ const OrchestrationV2ProviderFailureMessage = TrimmedNonEmptyString.check(
 );
 const OrchestrationV2ProviderFailureCode = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
 
+export const OrchestrationV2PullRequestAttachment = Schema.Struct({
+  number: PositiveInt,
+  url: Schema.String,
+});
+export type OrchestrationV2PullRequestAttachment = typeof OrchestrationV2PullRequestAttachment.Type;
+
 /**
  * Transport-safe failure information suitable for persistence and display.
  * Producers must redact credentials before constructing this value. The
@@ -1171,12 +1177,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached"])),
     // Absent on historical markers and pushes that had nothing new to commit.
     commitSha: Schema.optional(TrimmedNonEmptyString),
-    pullRequest: Schema.NullOr(
-      Schema.Struct({
-        number: PositiveInt,
-        url: Schema.String,
-      }),
-    ),
+    pullRequest: Schema.NullOr(OrchestrationV2PullRequestAttachment),
   }).check(validSourceControlPullRequestAction),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1451,6 +1452,10 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pendingRuntimeRequest: Schema.NullOr(OrchestrationV2PendingRuntimeRequestSummary),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
+  /** Current manual attachment, if one has not subsequently been detached. */
+  attachedPullRequest: Schema.optional(Schema.NullOr(OrchestrationV2PullRequestAttachment)).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   hasActionableProposedPlan: Schema.Boolean,
   // Normalized post-settlement background work for sidebar Waiting pills.
   // Empty when the latest root run is still active or no pending work remains.
@@ -1893,12 +1898,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached"])),
     // Absent on historical markers and pushes that had nothing new to commit.
     commitSha: Schema.optional(TrimmedNonEmptyString),
-    pullRequest: Schema.NullOr(
-      Schema.Struct({
-        number: PositiveInt,
-        url: Schema.String,
-      }),
-    ),
+    pullRequest: Schema.NullOr(OrchestrationV2PullRequestAttachment),
   }).check(validSourceControlPullRequestAction),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -2209,12 +2209,7 @@ export const OrchestrationV2Command = Schema.Union([
     committed: Schema.Boolean,
     pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached"])),
     commitSha: Schema.optional(TrimmedNonEmptyString),
-    pullRequest: Schema.NullOr(
-      Schema.Struct({
-        number: PositiveInt,
-        url: Schema.String,
-      }),
-    ),
+    pullRequest: Schema.NullOr(OrchestrationV2PullRequestAttachment),
   }).check(validSourceControlPullRequestAction),
   Schema.Struct({
     type: Schema.Literal("thread.unsettle"),

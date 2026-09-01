@@ -264,6 +264,10 @@ private struct CompactAgentThreadRow: View {
 
             Spacer(minLength: 8)
 
+            if let pullRequest = thread.shell.attachedPullRequest {
+                AgentThreadPullRequestBadge(pullRequest: pullRequest)
+            }
+
             Text(thread.lifecycleSortDate, format: .relative(presentation: .named))
                 .font(.caption)
                 .lineLimit(1)
@@ -301,6 +305,10 @@ private struct AgentThreadRow: View {
 
             HStack(spacing: 6) {
                 status
+
+                if let pullRequest = thread.shell.attachedPullRequest {
+                    AgentThreadPullRequestBadge(pullRequest: pullRequest)
+                }
 
                 if let projectName {
                     Text(projectName)
@@ -358,6 +366,16 @@ private struct AgentThreadRow: View {
             companyId: thread.companyId,
             environmentId: thread.environmentId
         )
+    }
+}
+
+private struct AgentThreadPullRequestBadge: View {
+    let pullRequest: PathwayPullRequestAttachment
+
+    var body: some View {
+        Label("#\(pullRequest.number)", systemImage: "arrow.triangle.pull")
+            .lineLimit(1)
+            .accessibilityLabel("Attached pull request \(pullRequest.number)")
     }
 }
 
