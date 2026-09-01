@@ -1,4 +1,4 @@
-import { type EnvironmentId, type ThreadId } from "@spiritdevs/contracts";
+import { type EnvironmentId, type ScopedProjectRef, type ThreadId } from "@spiritdevs/contracts";
 import {
   memo,
   useCallback,
@@ -12,6 +12,7 @@ import {
 import { cn } from "~/lib/utils";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { WorkspaceProjectSelector } from "./WorkspaceProjectSelector";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -19,9 +20,11 @@ interface ChatHeaderProps {
   activeThreadTitle: string;
   activeProjectName: string | undefined;
   activeProjectCwd: string | null;
+  activeProjectRef: ScopedProjectRef | null;
+  projectSelectionEnabled: boolean;
   threadAncestors: ReadonlyArray<ThreadBreadcrumbAncestor>;
   rightPanelOpen: boolean;
-  onNewThreadInProject: () => void;
+  onProjectChange: (projectRef: ScopedProjectRef) => void | Promise<void>;
   onOpenThread: (threadId: ThreadId) => void;
   onRenameThread?: (title: string) => void;
 }
@@ -80,9 +83,11 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadTitle,
   activeProjectName,
   activeProjectCwd,
+  activeProjectRef,
+  projectSelectionEnabled,
   threadAncestors,
   rightPanelOpen,
-  onNewThreadInProject,
+  onProjectChange,
   onOpenThread,
   onRenameThread,
 }: ChatHeaderProps) {
@@ -143,26 +148,42 @@ export const ChatHeader = memo(function ChatHeader({
               doesn't answer it. */}
           {activeProjectName ? (
             <li className="inline-flex shrink-0 items-center gap-2">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={`New thread in ${activeProjectName}`}
-                      onClick={onNewThreadInProject}
-                      className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+              {projectSelectionEnabled ? (
+                <WorkspaceProjectSelector
+                  activeProjectRef={activeProjectRef}
+                  activeProjectTitle={activeProjectName}
+                  ariaLabel="Change project"
+                  triggerClassName="inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                  menuAlign="start"
+                  renderTrigger={(displayName) => (
+                    <>
+                      <ProjectFavicon
+                        environmentId={activeThreadEnvironmentId}
+                        cwd={activeProjectCwd ?? ""}
+                        className="size-3.5"
+                      />
+                      <span className="max-w-40 truncate text-sm font-medium">{displayName}</span>
+                    </>
+                  )}
+                  onSelectProject={onProjectChange}
+                />
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={<span className="inline-flex min-w-0 items-center gap-1.5" />}
+                  >
+                    <ProjectFavicon
+                      environmentId={activeThreadEnvironmentId}
+                      cwd={activeProjectCwd ?? ""}
+                      className="size-3.5"
                     />
-                  }
-                >
-                  <ProjectFavicon
-                    environmentId={activeThreadEnvironmentId}
-                    cwd={activeProjectCwd ?? ""}
-                    className="size-3.5"
-                  />
-                  <span className="max-w-40 truncate text-sm font-medium">{activeProjectName}</span>
-                </TooltipTrigger>
-                <TooltipPopup side="top">New thread in {activeProjectName}</TooltipPopup>
-              </Tooltip>
+                    <span className="max-w-40 truncate text-sm font-medium text-muted-foreground">
+                      {activeProjectName}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{activeProjectName}</TooltipPopup>
+                </Tooltip>
+              )}
               <span aria-hidden className="text-muted-foreground/40">
                 /
               </span>

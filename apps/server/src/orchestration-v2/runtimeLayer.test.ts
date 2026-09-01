@@ -553,6 +553,20 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         },
       );
 
+      const staleDelete = yield* orchestrator
+        .dispatch({
+          type: "thread.delete",
+          commandId: CommandId.make("runtime-layer-lifecycle-stale-delete"),
+          threadId,
+          replaceableInitialThread: {
+            messageId: MessageId.make("message-stale"),
+            runId: RunId.make("run-stale"),
+          },
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(staleDelete, OrchestratorDispatchError);
+      assert.isNull((yield* orchestrator.getThreadProjection(threadId)).thread.deletedAt);
+
       const remove = yield* orchestrator.dispatch({
         type: "thread.delete",
         commandId: CommandId.make("runtime-layer-lifecycle-delete"),

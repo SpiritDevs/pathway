@@ -1,4 +1,8 @@
-import type { ChatFileAttachment, EnvironmentId } from "@spiritdevs/contracts";
+import type {
+  ChatFileAttachment,
+  EnvironmentId,
+  PendingChatAttachment,
+} from "@spiritdevs/contracts";
 import { resolveAssetUrl } from "@spiritdevs/client-runtime/state/assets";
 import {
   deletePendingAttachmentUpload,
@@ -98,6 +102,44 @@ function uploadBytes(input: {
     xhr.send(input.file);
   });
   return { done, abort: () => xhr.abort() };
+}
+
+export async function uploadStandaloneFileAttachment(input: {
+  readonly environmentId: EnvironmentId;
+  readonly file: File;
+  readonly name: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+}): Promise<PendingChatAttachment> {
+  const result = await runAttachmentUploadCycle({
+    registry: appAtomRegistry,
+    createUploadUrl: attachmentEnvironment.createUploadUrl,
+    remove: attachmentEnvironment.remove,
+    environmentId: input.environmentId,
+    upload: {
+      type: "file",
+      name: input.name,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes,
+    },
+    resolveUploadUrl: (relativeUrl) => {
+      const connection = readPreparedConnection(input.environmentId);
+      return connection ? resolveAssetUrl(connection.httpBaseUrl, relativeUrl) : null;
+    },
+    transport: (url) => uploadBytes({ url, file: input.file, onProgress: () => {} }),
+  });
+  if (result.status === "uploaded") {
+    return {
+      type: "file",
+      id: result.attachmentId,
+      name: input.name,
+      mimeType: input.mimeType,
+      sizeBytes: input.sizeBytes,
+    };
+  }
+  if (result.attachmentId) removePending(input.environmentId, result.attachmentId);
+  if (result.status === "cancelled") throw new Error("Attachment upload was cancelled.");
+  throw result.error instanceof Error ? result.error : new Error("Attachment upload failed.");
 }
 
 async function runUpload(job: UploadJob): Promise<void> {

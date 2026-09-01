@@ -3,6 +3,7 @@ import {
   CommandId,
   type MessageId,
   type ModelSelection,
+  orchestrationV2ProjectionCanReplaceInitialProject,
   OrchestrationV2Command,
   type OrchestrationV2AppThread,
   type OrchestrationV2BrowserTakeover,
@@ -1700,6 +1701,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandId: command.commandId,
         commandType: command.type,
         cause: `Thread ${command.threadId} is deleted.`,
+      });
+    }
+    if (
+      command.type === "thread.delete" &&
+      command.replaceableInitialThread !== undefined &&
+      !orchestrationV2ProjectionCanReplaceInitialProject(
+        projection,
+        command.replaceableInitialThread,
+      )
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} changed before it could be deleted.`,
       });
     }
     if (
