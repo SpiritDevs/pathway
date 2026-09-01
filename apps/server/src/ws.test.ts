@@ -4,15 +4,35 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
-import { CommandId, ProjectId } from "@spiritdevs/contracts";
+import { CommandId, ProjectId, ThreadId } from "@spiritdevs/contracts";
 import { MembershipId } from "@spiritdevs/contracts/company";
 
 import {
   resolveAvailableEditorsForConfig,
   refreshLocalGitStatusAfterMutation,
+  requireThreadResumeTarget,
   resolveIssueConnectionActor,
   wsProjectUpdateInputFromMutation,
 } from "./ws.ts";
+
+it.effect(
+  "rejects a cached thread resume when the owning environment no longer has the thread",
+  () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread:missing-cached-resume");
+      const failure = yield* Effect.flip(requireThreadResumeTarget(threadId, Effect.succeed(null)));
+
+      assert.strictEqual(failure._tag, "OrchestrationV2GetThreadProjectionError");
+      assert.strictEqual(failure.threadId, threadId);
+    }),
+);
+
+it.effect("allows a cached thread resume when the owning environment still has the thread", () =>
+  requireThreadResumeTarget(
+    ThreadId.make("thread:existing-cached-resume"),
+    Effect.succeed({ exists: true }),
+  ),
+);
 
 it.effect("waits for local Git status before completing a ref mutation", () =>
   Effect.gen(function* () {

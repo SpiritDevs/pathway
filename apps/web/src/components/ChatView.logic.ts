@@ -19,6 +19,7 @@ import {
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import { presentThreadShell } from "@spiritdevs/client-runtime/state/shell";
+import type { EnvironmentThreadState } from "@spiritdevs/client-runtime/state/threads";
 import { modelSelectionsEqual } from "@spiritdevs/shared/model";
 import { resolveThreadForkKind } from "@spiritdevs/client-runtime/state/thread-relationships";
 import { type ChatMessage, type SessionPhase, type Thread } from "../types";
@@ -589,6 +590,13 @@ export function threadProjectionIsPending(
   projectionAvailable: boolean,
 ): boolean {
   return !projectionAvailable && threadHasStarted(thread);
+}
+
+export function resolveThreadStopAction(input: {
+  projectionPending: boolean;
+  threadStatus: EnvironmentThreadState["status"];
+}): "interrupt" | "stop-loading" {
+  return input.projectionPending || input.threadStatus !== "live" ? "stop-loading" : "interrupt";
 }
 
 export function resolveThreadProjectionWorkingPresentation(input: {

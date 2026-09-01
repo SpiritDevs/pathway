@@ -41,6 +41,7 @@ import {
   resolveEditableV2UserMessageId,
   resolveRetryableV2UserMessageId,
   resolveThreadProjectionWorkingPresentation,
+  resolveThreadStopAction,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   startNewThreadForProject,
@@ -55,6 +56,29 @@ const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
 const now = "2026-03-29T00:00:00.000Z";
+
+describe("resolveThreadStopAction", () => {
+  it("interrupts a live thread", () => {
+    expect(resolveThreadStopAction({ projectionPending: false, threadStatus: "live" })).toBe(
+      "interrupt",
+    );
+  });
+
+  it.each(["empty", "cached", "synchronizing", "deleted", "stopped"] as const)(
+    "stops local loading for a %s thread",
+    (threadStatus) => {
+      expect(resolveThreadStopAction({ projectionPending: false, threadStatus })).toBe(
+        "stop-loading",
+      );
+    },
+  );
+
+  it("stops local loading while a projection is pending", () => {
+    expect(resolveThreadStopAction({ projectionPending: true, threadStatus: "live" })).toBe(
+      "stop-loading",
+    );
+  });
+});
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return makeThreadFixture({

@@ -425,6 +425,7 @@ import {
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
   resolveThreadProjectionWorkingPresentation,
+  resolveThreadStopAction,
   shouldShowComposerContextStrip,
   threadProjectionIsPending,
   waitForStartedServerThread,
@@ -7717,7 +7718,12 @@ function ChatViewContent(props: ChatViewProps) {
   }, [serverThreadStatus, stopThreadLoading]);
 
   const onInterrupt = async () => {
-    if (isThreadProjectionPending) {
+    if (
+      resolveThreadStopAction({
+        projectionPending: isThreadProjectionPending,
+        threadStatus: serverThreadStatus,
+      }) === "stop-loading"
+    ) {
       stopThreadLoading(true);
       return;
     }

@@ -80,6 +80,7 @@ import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import type { OrchestratorV2Error } from "./orchestration-v2/Orchestrator.ts";
 import { issuePullRequestFromStatus } from "./orchestration-v2/RunFinalizationService.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadWorkspaceMove from "./orchestration-v2/ThreadWorkspaceMoveService.ts";
@@ -191,6 +192,30 @@ export const resolveIssueConnectionActor = Effect.fn("ws.issues.resolveActor")(f
   // inventing a membership would make audit history confidently wrong.
   return member ?? ({ kind: "user" } as const satisfies IssueActor);
 });
+
+export const requireThreadResumeTarget = Effect.fn("ws.orchestrationV2.requireThreadResumeTarget")(
+  function* (
+    threadId: ThreadId,
+    lookup: Effect.Effect<unknown | null, OrchestratorV2Error>,
+  ): Effect.fn.Return<void, OrchestrationV2GetThreadProjectionError> {
+    const target = yield* lookup.pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestrationV2GetThreadProjectionError({
+            threadId,
+            message: `Failed to validate orchestration V2 thread ${threadId} before resuming`,
+            cause,
+          }),
+      ),
+    );
+    if (target === null) {
+      return yield* new OrchestrationV2GetThreadProjectionError({
+        threadId,
+        message: `Orchestration V2 thread ${threadId} is not available on this environment`,
+      });
+    }
+  },
+);
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
@@ -839,6 +864,10 @@ const makeWsRpcLayer = (
           // published during the replay window is lost; overlapping events are
           // deduped by sequence on the client.
           if (input.afterSequence !== undefined) {
+            yield* requireThreadResumeTarget(
+              input.threadId,
+              threadManagement.getThreadShell(input.threadId),
+            );
             const highWater = yield* applicationEvents.latestAgentSequence(input.threadId).pipe(
               Effect.mapError(
                 (cause) =>
