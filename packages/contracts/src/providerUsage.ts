@@ -38,6 +38,7 @@ export const ServerProviderUsageSnapshot = Schema.Struct({
   status: ProviderUsageStatus,
   planName: Schema.optional(TrimmedNonEmptyString),
   detail: Schema.optional(TrimmedNonEmptyString),
+  rateLimitedUntil: Schema.optional(IsoDateTime),
   stale: Schema.optional(Schema.Boolean),
 });
 export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Type;

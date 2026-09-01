@@ -578,6 +578,7 @@ function makeReplayServerConfig(
       dbPath: path.join(stateDir, "state.sqlite"),
       keybindingsConfigPath: path.join(stateDir, "keybindings.json"),
       settingsPath: path.join(stateDir, "settings.json"),
+      providerUsageRateLimitsPath: path.join(stateDir, "provider-usage-rate-limits.json"),
       providerStatusCacheDir,
       worktreesDir,
       attachmentsDir,

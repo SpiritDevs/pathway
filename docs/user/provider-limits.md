@@ -6,4 +6,4 @@ Each signed-in provider account shows a bar per limit window with the percentage
 
 Limits update live while agents run. If a provider can't be reached, Pathway keeps the last known values and shows how old they are (for example "as of 12m ago") instead of clearing the bars. If a bar shows **Not signed in**, sign in with that provider's CLI (for example `codex` or `claude`) and the bar recovers on the next refresh.
 
-Use the refresh button beside the bars to fetch the latest values immediately. If a provider is rate-limiting refreshes, Pathway waits out the pause automatically and says so.
+Use the refresh button beside the bars to fetch the latest values immediately. If a provider is rate-limiting refreshes, Pathway shows how long the pause has left and waits automatically. Restarting Pathway does not reset that pause.

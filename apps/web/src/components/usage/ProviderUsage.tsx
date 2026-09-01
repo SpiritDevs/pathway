@@ -13,7 +13,7 @@ import {
   type ServerProviderUsageSnapshot,
 } from "@spiritdevs/contracts";
 import { ChevronDownIcon, RefreshCwIcon } from "lucide-react";
-import { useCallback, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
 import { cn } from "~/lib/utils";
 import { useEnvironments } from "~/state/environments";
@@ -34,6 +34,7 @@ import { THREAD_DETAILS_PANEL_DISCLOSURE_ROW_CLASS } from "../chat/threadDetails
 import {
   deriveProviderUsageLimits,
   formatProviderUsageCaptureAge,
+  formatProviderUsageRateLimit,
   selectPrimaryProviderUsageLimit,
   shouldCollapseProviderUsage,
   type ProviderUsageDisplayLimit,
@@ -257,6 +258,21 @@ function ProviderUsageDetails({
   error: string | null;
   compact?: boolean;
 }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const rateLimitedUntil = snapshot?.rateLimitedUntil;
+  useEffect(() => {
+    if (rateLimitedUntil === undefined) return;
+    const untilMs = Date.parse(rateLimitedUntil);
+    const initialNowMs = Date.now();
+    setNowMs(initialNowMs);
+    if (!Number.isFinite(untilMs) || untilMs <= initialNowMs) return;
+    const timer = globalThis.setInterval(() => {
+      const nextNowMs = Date.now();
+      setNowMs(nextNowMs);
+      if (nextNowMs >= untilMs) globalThis.clearInterval(timer);
+    }, 60_000);
+    return () => globalThis.clearInterval(timer);
+  }, [rateLimitedUntil]);
   if (loading && snapshot === null) {
     return <p className="text-xs text-muted-foreground">Loading provider usage…</p>;
   }
@@ -266,17 +282,21 @@ function ProviderUsageDetails({
     );
   }
   if (snapshot === null) return null;
+  const detail = rateLimitedUntil
+    ? (formatProviderUsageRateLimit(providerName(snapshot.provider), rateLimitedUntil, nowMs) ??
+      snapshot.detail)
+    : snapshot.detail;
   if (snapshot.status !== "ok") {
-    return <p className="text-xs leading-relaxed text-muted-foreground">{snapshot.detail}</p>;
+    return <p className="text-xs leading-relaxed text-muted-foreground">{detail}</p>;
   }
   const limits = deriveProviderUsageLimits(snapshot.limits);
   const captureAge = snapshot.fetchedAt ? formatProviderUsageCaptureAge(snapshot.fetchedAt) : null;
   const hasUsage = limits.length > 0 || snapshot.usageLines.length > 0;
   return (
     <div className={cn("space-y-3", compact && "space-y-2.5")}>
-      {snapshot.stale && (snapshot.detail || captureAge) ? (
+      {snapshot.stale && (detail || captureAge) ? (
         <p className="text-xs leading-relaxed text-warning-foreground">
-          {[snapshot.detail, captureAge].filter(Boolean).join(" · ")}
+          {[detail, captureAge].filter(Boolean).join(" · ")}
         </p>
       ) : null}
       {!hasUsage ? (

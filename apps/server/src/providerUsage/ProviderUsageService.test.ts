@@ -48,6 +48,27 @@ function fetchResult(snapshot: ServerProviderUsageSnapshot, retryAfterUntilMs?: 
   };
 }
 
+function rateLimitedFetchResult(input: {
+  provider: ServerProviderUsageSnapshot["provider"];
+  nowMs: number;
+  untilMs: number;
+}) {
+  return {
+    snapshot: {
+      instanceId,
+      provider: input.provider,
+      source: "provider-test",
+      updatedAt: DateTime.formatIso(DateTime.makeUnsafe(input.nowMs)),
+      limits: [],
+      usageLines: [],
+      status: "error" as const,
+      detail: "Rate limited by provider.",
+      rateLimitedUntil: DateTime.formatIso(DateTime.makeUnsafe(input.untilMs)),
+    },
+    retryAfterUntilMs: input.untilMs,
+  };
+}
+
 function cursorSnapshot(input: {
   instanceId?: ProviderInstanceId;
   nowMs: number;
@@ -351,6 +372,48 @@ describe("provider usage snapshots", () => {
     }
   });
 
+  it("does not let an older request clear a newer rate-limit gate", async () => {
+    resetProviderUsageCache();
+    const regular = deferred<ReturnType<typeof fetchResult>>();
+    const forced = deferred<ReturnType<typeof rateLimitedFetchResult>>();
+    let fetchCount = 0;
+    const fetchUsage = () => {
+      fetchCount += 1;
+      return fetchCount === 1 ? regular.promise : forced.promise;
+    };
+    try {
+      const regularRequest = providerUsageTestKit.resolve(
+        { instanceId, provider: "cursor", nowMs },
+        fetchUsage,
+      );
+      const forcedRequest = providerUsageTestKit.resolve(
+        { instanceId, provider: "cursor", nowMs: nowMs + 1, forceRefresh: true },
+        fetchUsage,
+      );
+      const blockedUntilMs = nowMs + 120_000;
+      forced.resolve(
+        rateLimitedFetchResult({ provider: "cursor", nowMs: nowMs + 1, untilMs: blockedUntilMs }),
+      );
+      await forcedRequest;
+      regular.resolve(fetchResult(cursorSnapshot({ nowMs, usedPercent: 10 })));
+      await regularRequest;
+
+      const blocked = await providerUsageTestKit.resolve(
+        { instanceId, provider: "cursor", nowMs: nowMs + 2, forceRefresh: true },
+        async () => {
+          throw new Error("newer rate-limit gate should prevent this fetch");
+        },
+      );
+
+      expect(fetchCount).toBe(2);
+      expect(blocked.rateLimitedUntil).toBe(
+        DateTime.formatIso(DateTime.makeUnsafe(blockedUntilMs)),
+      );
+    } finally {
+      resetProviderUsageCache();
+    }
+  });
+
   it("honors Retry-After seconds and HTTP dates without re-hitting the provider", async () => {
     resetProviderUsageCache();
     providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
@@ -393,7 +456,11 @@ describe("provider usage snapshots", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(rateLimited.fetchedAt).toBe(original.fetchedAt);
       expect(blocked).toMatchObject({ stale: true, fetchedAt: original.fetchedAt });
-      expect(blocked.detail).toContain("refresh paused until");
+      expect(blocked).toMatchObject({
+        detail:
+          "Claude usage is rate limited by the provider. Refreshes resume in about 2 minutes.",
+        rateLimitedUntil: DateTime.formatIso(DateTime.makeUnsafe(refreshedAt + 120_000)),
+      });
       expect(providerUsageTestKit.retryAfterUntilMs("120", refreshedAt)).toBe(
         refreshedAt + 120_000,
       );
@@ -407,6 +474,220 @@ describe("provider usage snapshots", () => {
       fetchMock.mockRestore();
       resetProviderUsageCache();
     }
+  });
+
+  it.each([
+    { label: "a missing header", headers: undefined },
+    { label: "retry-after: 0", headers: { "Retry-After": "0" } },
+  ])("uses the default 429 backoff for $label", async ({ headers }) => {
+    resetProviderUsageCache();
+    providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response("{}", { status: 429, ...(headers === undefined ? {} : { headers }) }),
+      );
+    try {
+      const rateLimited = await providerUsageTestKit.resolve(
+        { instanceId, provider: "claudeAgent", nowMs, forceRefresh: true },
+        () =>
+          providerUsageTestKit.fetchClaude({ instanceId, provider: "claudeAgent", nowMs }, [
+            { accessToken: "first" },
+          ]),
+      );
+      const expectedUntil = nowMs + providerUsageTestKit.defaultRateLimitBackoffMs;
+      const blocked = await providerUsageTestKit.resolve(
+        { instanceId, provider: "claudeAgent", nowMs: nowMs + 1, forceRefresh: true },
+        async () => {
+          throw new Error("default rate-limit gate should prevent this fetch");
+        },
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(rateLimited).toMatchObject({
+        status: "error",
+        detail:
+          "Claude usage is rate limited by the provider. Refreshes resume in about 5 minutes.",
+        rateLimitedUntil: DateTime.formatIso(DateTime.makeUnsafe(expectedUntil)),
+      });
+      expect(blocked.rateLimitedUntil).toBe(rateLimited.rateLimitedUntil);
+    } finally {
+      fetchMock.mockRestore();
+      resetProviderUsageCache();
+    }
+  });
+
+  it("reloads and displays a persisted rate-limit gate after a process reset", async () => {
+    resetProviderUsageCache();
+    const tempDir = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "pathway-provider-usage-rate-limit-"),
+    );
+    const persistencePath = NodePath.join(tempDir, "provider-usage-rate-limits.json");
+    providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response("{}", { status: 429 }));
+    try {
+      const first = await providerUsageTestKit.resolve(
+        {
+          instanceId,
+          provider: "claudeAgent",
+          nowMs,
+          forceRefresh: true,
+          rateLimitPersistencePath: persistencePath,
+        },
+        () =>
+          providerUsageTestKit.fetchClaude({ instanceId, provider: "claudeAgent", nowMs }, [
+            { accessToken: "first" },
+          ]),
+      );
+      resetProviderUsageCache();
+      providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
+      const reloaded = await providerUsageTestKit.resolve(
+        {
+          instanceId,
+          provider: "claudeAgent",
+          nowMs: nowMs + 1,
+          forceRefresh: true,
+          rateLimitPersistencePath: persistencePath,
+        },
+        async () => {
+          throw new Error("persisted rate-limit gate should prevent this fetch");
+        },
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(reloaded.rateLimitedUntil).toBe(first.rateLimitedUntil);
+      expect(reloaded.source).toBe("provider-rate-limit");
+      expect(providerUsageTestKit.cacheSizes().snapshots).toBe(1);
+    } finally {
+      fetchMock.mockRestore();
+      resetProviderUsageCache();
+      await NodeFSP.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("drops expired persisted gates before fetching again", async () => {
+    resetProviderUsageCache();
+    const tempDir = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "pathway-provider-usage-rate-limit-"),
+    );
+    const persistencePath = NodePath.join(tempDir, "provider-usage-rate-limits.json");
+    providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("{}", { status: 429 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ five_hour: { utilization: 17 } }), { status: 200 }),
+      );
+    const resolveAt = (requestNowMs: number) =>
+      providerUsageTestKit.resolve(
+        {
+          instanceId,
+          provider: "claudeAgent",
+          nowMs: requestNowMs,
+          forceRefresh: true,
+          rateLimitPersistencePath: persistencePath,
+        },
+        () =>
+          providerUsageTestKit.fetchClaude(
+            { instanceId, provider: "claudeAgent", nowMs: requestNowMs },
+            [{ accessToken: "first" }],
+          ),
+      );
+    try {
+      await resolveAt(nowMs);
+      resetProviderUsageCache();
+      const refreshed = await resolveAt(nowMs + providerUsageTestKit.defaultRateLimitBackoffMs + 1);
+      const persisted = JSON.parse(await NodeFSP.readFile(persistencePath, "utf8")) as {
+        providerGates: Record<string, unknown>;
+      };
+
+      expect(refreshed.status).toBe("ok");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(persisted.providerGates[`${instanceId}:claudeAgent`]).toBeUndefined();
+    } finally {
+      fetchMock.mockRestore();
+      resetProviderUsageCache();
+      await NodeFSP.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes automatically when a rate-limit gate expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+    resetProviderUsageCache();
+    const blockedUntilMs = nowMs + 120_000;
+    let fetchCount = 0;
+    const fetchUsage = async (ctx: { readonly nowMs: number }) => {
+      fetchCount += 1;
+      return fetchCount === 1
+        ? rateLimitedFetchResult({ provider: "cursor", nowMs: ctx.nowMs, untilMs: blockedUntilMs })
+        : fetchResult(cursorSnapshot({ nowMs: ctx.nowMs, usedPercent: 25 }));
+    };
+    try {
+      await providerUsageTestKit.resolve(
+        { instanceId, provider: "cursor", nowMs, forceRefresh: true },
+        fetchUsage,
+      );
+
+      expect(fetchCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(fetchCount).toBe(2);
+      const refreshed = await providerUsageTestKit.resolve(
+        { instanceId, provider: "cursor", nowMs: blockedUntilMs + 1 },
+        async () => {
+          throw new Error("automatic refresh should populate the cache");
+        },
+      );
+      expect(refreshed).toMatchObject({ status: "ok", limits: [{ usedPercent: 25 }] });
+    } finally {
+      resetProviderUsageCache();
+      vi.useRealTimers();
+    }
+  });
+
+  it.live("cancels a scheduled refresh when the provider is disabled", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+    resetProviderUsageCache();
+    const blockedUntilMs = nowMs + 120_000;
+    let fetchCount = 0;
+    const fetchUsage = async (ctx: { readonly nowMs: number }) => {
+      fetchCount += 1;
+      return rateLimitedFetchResult({
+        provider: "cursor",
+        nowMs: ctx.nowMs,
+        untilMs: blockedUntilMs,
+      });
+    };
+    return Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        providerUsageTestKit.resolve(
+          { instanceId, provider: "cursor", nowMs, forceRefresh: true },
+          fetchUsage,
+        ),
+      );
+      yield* providerUsageTestKit.loadList().pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({
+            providerInstances: {
+              ...disabledLegacySlots,
+              [instanceId]: { driver: "cursor", enabled: false },
+            },
+          }),
+        ),
+      );
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(120_000));
+
+      expect(fetchCount).toBe(1);
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          resetProviderUsageCache();
+          vi.useRealTimers();
+        }),
+      ),
+    );
   });
 
   it("detects the Claude CLI version and continues after a credential network error", async () => {
