@@ -1,29 +1,17 @@
-import type { CalendarEventEntity } from "@spiritdevs/client-runtime/sync";
+import type { CalendarEventId } from "@spiritdevs/contracts";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import { describe, expect, it } from "vite-plus/test";
 
-import { calendarAlertOccurrences } from "./calendarAlerts";
+import { calendarAlertOccurrences, type CalendarAlertEvent } from "./calendarAlerts";
 
-function event(overrides: Partial<CalendarEventEntity> = {}): CalendarEventEntity {
+function event(overrides: Partial<CalendarAlertEvent> = {}): CalendarAlertEvent {
   return {
-    entityKind: "calendarEvent",
-    id: "event-alert" as CalendarEventEntity["id"],
-    calendarId: "calendar-alert" as CalendarEventEntity["calendarId"],
-    ownerMembershipId: "member-alert" as CalendarEventEntity["ownerMembershipId"],
+    companyId: "company-alert" as CompanyId,
+    id: "event-alert" as CalendarEventId,
     title: "Design review",
     startAt: 1_800_000_000_000,
-    endAt: 1_800_003_600_000,
-    timeZone: "Australia/Sydney",
-    allDay: false,
-    notes: "",
     reminderMinutes: [30, 5, 30],
-    urls: [],
     location: null,
-    invitees: [],
-    attachments: [],
-    visibility: "default",
-    googleEventId: null,
-    createdAt: 1_700_000_000_000,
-    updatedAt: 1_700_000_000_000,
     ...overrides,
   };
 }
@@ -47,7 +35,7 @@ describe("calendar alert occurrences", () => {
     const now = 1_799_998_000_000;
     const before = calendarAlertOccurrences([event()], now).map((item) => item.id);
     const after = calendarAlertOccurrences(
-      [event({ notes: "Bring the prototype", updatedAt: 1_750_000_000_000 })],
+      [event({ title: "Design review with prototype" })],
       now,
     ).map((item) => item.id);
 

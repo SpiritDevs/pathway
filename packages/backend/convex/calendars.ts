@@ -38,6 +38,7 @@ const MAX_INVITEES = 100;
 const MAX_REMINDERS = 10;
 const MAX_ATTACHMENTS = 8;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const ATTACHMENT_RESERVATION_TTL_MS = 15 * 60_000;
 const CALENDAR_REMOVE_MAX_DEPENDENT_ROWS = 500;
 const CALENDAR_EVENT_RESEED_PAGE_SIZE = 50;
 const sharingArg = v.union(v.literal("private"), v.literal("team"), v.literal("company"));
@@ -336,6 +337,74 @@ function canReadCalendar(
     hasRecordPermission(actor.permissions, "calendar.readAll", [calendar.teamId])
   );
 }
+
+export const listAlertEvents = query({
+  args: { companyId: domainIdArg, after: v.number() },
+  returns: v.array(
+    v.object({
+      id: domainIdArg,
+      title: v.string(),
+      startAt: v.number(),
+      reminderMinutes: v.array(v.number()),
+      location: v.union(v.string(), v.null()),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const grants =
+      actor.kind === "member"
+        ? await ctx.db
+            .query("calendarGrant")
+            .withIndex("by_company_and_grantee", (q) =>
+              q.eq("companyId", actor.company._id).eq("granteeMembershipId", actor.membership._id),
+            )
+            .collect()
+        : [];
+    const grantedCalendarIds = new Set(grants.map((grant) => grant.calendarId));
+    const calendars = await ctx.db
+      .query("calendar")
+      .withIndex("by_company_and_domain_id", (q) => q.eq("companyId", actor.company._id))
+      .collect();
+    const result: Array<{
+      id: string;
+      title: string;
+      startAt: number;
+      reminderMinutes: number[];
+      location: string | null;
+    }> = [];
+    for (const calendar of calendars) {
+      if (calendar.deletedAt !== null || !canReadCalendar(actor, calendar, grantedCalendarIds)) {
+        continue;
+      }
+      const events = await ctx.db
+        .query("calendarEvent")
+        .withIndex("by_company_calendar_deleted_and_start", (q) =>
+          q
+            .eq("companyId", actor.company._id)
+            .eq("calendarId", calendar.id)
+            .eq("deletedAt", null)
+            .gt("startAt", args.after),
+        )
+        .collect();
+      for (const event of events) {
+        if (
+          event.visibility === "private" &&
+          (actor.kind !== "member" || actor.membership._id !== event.ownerMembershipId)
+        ) {
+          continue;
+        }
+        result.push({
+          id: event.id,
+          title: event.title,
+          startAt: event.startAt,
+          reminderMinutes: event.reminderMinutes ?? [],
+          location: event.location ?? null,
+        });
+      }
+    }
+    return result.sort((left, right) => left.startAt - right.startAt);
+  },
+});
 
 export const listGroupedByOwner = query({
   args: { companyId: domainIdArg },
@@ -933,8 +1002,17 @@ export const prepareEventAttachmentUpload = mutation({
       .withIndex("by_company_and_event", (q) =>
         q.eq("companyId", actor.company._id).eq("eventId", event.id),
       )
-      .take(MAX_ATTACHMENTS);
-    if (attachmentRecords.length >= MAX_ATTACHMENTS) {
+      .collect();
+    const reservationCutoff = Date.now() - ATTACHMENT_RESERVATION_TTL_MS;
+    let liveAttachmentCount = 0;
+    for (const attachment of attachmentRecords) {
+      if (attachment.storageId === null && attachment.createdAt < reservationCutoff) {
+        await ctx.db.delete(attachment._id);
+      } else {
+        liveAttachmentCount += 1;
+      }
+    }
+    if (liveAttachmentCount >= MAX_ATTACHMENTS) {
       throw backendError(
         "invalid-arguments",
         `An event can have at most ${MAX_ATTACHMENTS} attachments.`,
@@ -993,7 +1071,11 @@ export const discardEventAttachmentUpload = mutation({
         .query("calendarEventAttachments")
         .withIndex("by_storage_id", (q) => q.eq("storageId", storageId))
         .first();
-      if (bound === null) await ctx.storage.delete(storageId);
+      const issueAttachment = await ctx.db
+        .query("issueAttachments")
+        .withIndex("by_storage_id", (q) => q.eq("storageId", storageId))
+        .first();
+      if (bound === null && issueAttachment === null) await ctx.storage.delete(storageId);
     }
     await ctx.db.delete(reservation._id);
     return null;

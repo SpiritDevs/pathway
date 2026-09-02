@@ -834,10 +834,15 @@ function LocationField({
                     token,
                     sessionToken: sessionToken.current,
                     language,
-                  }).then((location) => {
-                    onChange(location);
-                    sessionToken.current = newLocationSearchSession();
-                  });
+                  })
+                    .then((location) => {
+                      onChange(location);
+                      sessionToken.current = newLocationSearchSession();
+                    })
+                    .catch(() => {
+                      onChange(suggestion.label);
+                      sessionToken.current = newLocationSearchSession();
+                    });
                 }}
                 type="button"
               >

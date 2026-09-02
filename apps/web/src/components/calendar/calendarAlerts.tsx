@@ -1,7 +1,13 @@
-import type { CalendarEventEntity } from "@spiritdevs/client-runtime/sync";
+import { useAuth } from "@clerk/react";
+import type { CalendarEventId } from "@spiritdevs/contracts";
+import type { CompanyId } from "@spiritdevs/contracts/company";
+import { ConvexClient } from "convex/browser";
+import { makeFunctionReference } from "convex/server";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { useSyncedCalendarEvents } from "~/cloud/calendarReadModel";
+import { useCalendarAlertCompanyIds } from "~/cloud/calendarReadModel";
+import { resolveCloudSyncConvexUrl } from "~/cloud/publicConfig";
+import { makeClerkConvexTokenFetcher } from "~/cloud/syncTransportAuth";
 
 const DELIVERED_KEY = "pathway:calendar-alerts:delivered:v1";
 const ALERTS_ENABLED_EVENT = "pathway:calendar-alerts-enabled";
@@ -9,6 +15,23 @@ const DELIVERY_GRACE_MS = 60_000;
 const MAX_TIMER_MS = 2_147_000_000;
 let audioContext: AudioContext | null = null;
 const deliveredThisSession = new Set<string>();
+
+export interface CalendarAlertEvent {
+  readonly companyId: CompanyId;
+  readonly id: CalendarEventId;
+  readonly title: string;
+  readonly startAt: number;
+  readonly reminderMinutes: ReadonlyArray<number>;
+  readonly location: string | null;
+}
+
+type CalendarAlertEventWire = Omit<CalendarAlertEvent, "companyId">;
+
+const listAlertEventsReference = makeFunctionReference<
+  "query",
+  { readonly companyId: CompanyId; readonly after: number },
+  ReadonlyArray<CalendarAlertEventWire>
+>("calendars:listAlertEvents");
 
 export type CalendarAlertCapability = "notifications-and-sound" | "sound-only" | "blocked";
 
@@ -20,13 +43,17 @@ export function calendarAlertCapability(): CalendarAlertCapability {
 }
 
 export async function primeCalendarAlerts(): Promise<CalendarAlertCapability> {
+  let audioReady: Promise<void> = Promise.resolve();
+  if (typeof AudioContext !== "undefined") {
+    audioContext ??= new AudioContext();
+    if (audioContext.state === "suspended") {
+      audioReady = audioContext.resume().catch(() => undefined);
+    }
+  }
   if (typeof Notification !== "undefined" && Notification.permission === "default") {
     await Notification.requestPermission().catch(() => "denied" as const);
   }
-  if (typeof AudioContext !== "undefined") {
-    audioContext ??= new AudioContext();
-    if (audioContext.state === "suspended") await audioContext.resume().catch(() => undefined);
-  }
+  await audioReady;
   const capability = calendarAlertCapability();
   window.dispatchEvent(new Event(ALERTS_ENABLED_EVENT));
   return capability;
@@ -34,13 +61,13 @@ export async function primeCalendarAlerts(): Promise<CalendarAlertCapability> {
 
 interface CalendarAlertOccurrence {
   readonly id: string;
-  readonly event: CalendarEventEntity;
+  readonly event: CalendarAlertEvent;
   readonly minutesBefore: number;
   readonly dueAt: number;
 }
 
 export function calendarAlertOccurrences(
-  events: ReadonlyArray<CalendarEventEntity>,
+  events: ReadonlyArray<CalendarAlertEvent>,
   now: number,
 ): ReadonlyArray<CalendarAlertOccurrence> {
   const occurrences: CalendarAlertOccurrence[] = [];
@@ -51,7 +78,7 @@ export function calendarAlertOccurrences(
       const dueAt = event.startAt - minutesBefore * 60_000;
       if (dueAt < now - DELIVERY_GRACE_MS) continue;
       occurrences.push({
-        id: `${event.id}:${dueAt}`,
+        id: `${event.companyId}:${event.id}:${dueAt}`,
         event,
         minutesBefore,
         dueAt,
@@ -59,6 +86,47 @@ export function calendarAlertOccurrences(
     }
   }
   return occurrences.sort((left, right) => left.dueAt - right.dueAt);
+}
+
+function useCalendarAlertEvents(): ReadonlyArray<CalendarAlertEvent> {
+  const companyIds = useCalendarAlertCompanyIds();
+  const { getToken, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
+  const convexUrl = resolveCloudSyncConvexUrl();
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
+  const [events, setEvents] = useState<ReadonlyArray<CalendarAlertEvent>>([]);
+
+  useEffect(() => {
+    if (!isSignedIn || convexUrl === null || companyIds.length === 0) {
+      setEvents([]);
+      return;
+    }
+    setEvents([]);
+    const client = new ConvexClient(convexUrl);
+    client.setAuth((args) => makeClerkConvexTokenFetcher(getTokenRef.current)(args));
+    const byCompany = new Map<CompanyId, ReadonlyArray<CalendarAlertEvent>>();
+    const publish = () => setEvents([...byCompany.values()].flat());
+    const unsubscribes = companyIds.map((companyId) =>
+      client.onUpdate(
+        listAlertEventsReference,
+        { companyId, after: Date.now() - DELIVERY_GRACE_MS },
+        (value) => {
+          byCompany.set(
+            companyId,
+            value.map((event) => ({ ...event, companyId })),
+          );
+          publish();
+        },
+        (error) => console.warn("Could not subscribe to calendar alerts.", error),
+      ),
+    );
+    return () => {
+      for (const unsubscribe of unsubscribes) unsubscribe();
+      void client.close();
+    };
+  }, [companyIds, convexUrl, isSignedIn]);
+
+  return events;
 }
 
 function deliveredIds(): string[] {
@@ -140,7 +208,7 @@ async function deliver(occurrence: CalendarAlertOccurrence): Promise<"delivered"
 
 /** One timer for the next occurrence, mounted above the router so navigation cannot cancel it. */
 export function CalendarAlertHost() {
-  const events = useSyncedCalendarEvents();
+  const events = useCalendarAlertEvents();
   const [revision, setRevision] = useState(0);
   const blocked = useRef(new Set<string>());
   const next = useMemo(

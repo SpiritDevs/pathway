@@ -509,6 +509,12 @@ export default defineSchema({
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_calendar", ["companyId", "calendarId"])
     .index("by_company_calendar_and_deleted", ["companyId", "calendarId", "deletedAt"])
+    .index("by_company_calendar_deleted_and_start", [
+      "companyId",
+      "calendarId",
+      "deletedAt",
+      "startAt",
+    ])
     .index("by_company_calendar_deleted_and_visibility", [
       "companyId",
       "calendarId",
@@ -1798,6 +1804,7 @@ export default defineSchema({
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_issue", ["companyId", "issueId"])
     .index("by_company_and_state", ["companyId", "state"])
+    .index("by_storage_id", ["storageId"])
     .index("by_state_and_created_at", ["state", "createdAt"])
     .index("by_company_uploader_and_request", [
       "companyId",

@@ -258,6 +258,19 @@ describe("calendar change-feed visibility", () => {
     expect(granted.has(PUBLIC_EVENT)).toBe(true);
     expect(granted.has(PRIVATE_EVENT)).toBe(false);
     expect(owner.has(PRIVATE_EVENT)).toBe(true);
+
+    await expect(
+      asUser(t, "bob").query(api.calendars.listAlertEvents, {
+        companyId: COMPANY,
+        after: 1_700_000_000_000,
+      }),
+    ).resolves.toEqual([expect.objectContaining({ id: PUBLIC_EVENT, title: "Shared details" })]);
+    await expect(
+      asUser(t, "blind").query(api.calendars.listAlertEvents, {
+        companyId: COMPANY,
+        after: 1_700_000_000_000,
+      }),
+    ).resolves.toEqual([]);
   });
 });
 
@@ -673,6 +686,73 @@ describe("calendar administration", () => {
       storageId: abandonedStorageId,
     });
     expect(await t.run(async (ctx) => ctx.db.system.get(abandonedStorageId))).toBeNull();
+
+    const issueStorageId = await t.run(async (ctx) => ctx.storage.store(new Blob(["issue-file"])));
+    await t.run(async (ctx) => {
+      await ctx.db.insert("issueAttachments", {
+        id: "issue-attachment-protected",
+        companyId: ids.companyId,
+        issueId: "issue-protected",
+        commentId: null,
+        storageId: issueStorageId,
+        fileName: "issue.txt",
+        mimeType: "text/plain",
+        byteSize: 10,
+        checksum: "checksum",
+        uploadedByMembershipId: ids.alice,
+        state: "finalized",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        deletedAt: null,
+        version: 1,
+      });
+    });
+    await alice.mutation(api.calendars.prepareEventAttachmentUpload, {
+      companyId: COMPANY,
+      eventId: PUBLIC_EVENT,
+      id: "attachment-safe-discard",
+    });
+    await alice.mutation(api.calendars.discardEventAttachmentUpload, {
+      companyId: COMPANY,
+      eventId: PUBLIC_EVENT,
+      attachmentId: "attachment-safe-discard",
+      storageId: issueStorageId,
+    });
+    expect(await t.run(async (ctx) => ctx.db.system.get(issueStorageId))).not.toBeNull();
+  });
+
+  it("expires abandoned upload reservations before enforcing the attachment limit", async () => {
+    const t = harness();
+    const ids = await buildCalendarFixture(t);
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 8; index += 1) {
+        await ctx.db.insert("calendarEventAttachments", {
+          id: `expired-reservation-${index}`,
+          companyId: ids.companyId,
+          calendarId: COMPANY_CALENDAR,
+          eventId: PUBLIC_EVENT,
+          storageId: null,
+          uploadedByMembershipId: ids.alice,
+          createdAt: Date.now() - 16 * 60_000,
+        });
+      }
+    });
+
+    await asUser(t, "alice").mutation(api.calendars.prepareEventAttachmentUpload, {
+      companyId: COMPANY,
+      eventId: PUBLIC_EVENT,
+      id: "replacement-reservation",
+    });
+
+    const reservations = await t.run(async (ctx) =>
+      ctx.db
+        .query("calendarEventAttachments")
+        .withIndex("by_company_and_event", (q) =>
+          q.eq("companyId", ids.companyId).eq("eventId", PUBLIC_EVENT),
+        )
+        .collect(),
+    );
+    expect(reservations.map((row) => row.id)).toEqual(["replacement-reservation"]);
   });
 
   it("rejects oversized event URLs and invitee email addresses", async () => {
