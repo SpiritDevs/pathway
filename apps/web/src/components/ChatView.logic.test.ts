@@ -47,6 +47,7 @@ import {
   startNewThreadForProject,
   shouldShowBranchMismatchBanner,
   shouldShowComposerContextStrip,
+  shouldStopMissingThreadLoading,
   shouldWriteThreadErrorToCurrentServerThread,
   threadProjectionIsPending,
   visibleTurnItemsForThreadPresentation,
@@ -77,6 +78,26 @@ describe("resolveThreadStopAction", () => {
     expect(resolveThreadStopAction({ projectionPending: true, threadStatus: "live" })).toBe(
       "stop-loading",
     );
+  });
+});
+
+describe("shouldStopMissingThreadLoading", () => {
+  it("stops a deleted thread when there is no draft promotion to recover", () => {
+    expect(shouldStopMissingThreadLoading({ threadStatus: "deleted", hasDraftThread: false })).toBe(
+      true,
+    );
+  });
+
+  it("keeps probing when a promoted draft briefly looks deleted", () => {
+    expect(shouldStopMissingThreadLoading({ threadStatus: "deleted", hasDraftThread: true })).toBe(
+      false,
+    );
+  });
+
+  it("does not stop other thread states", () => {
+    expect(
+      shouldStopMissingThreadLoading({ threadStatus: "synchronizing", hasDraftThread: false }),
+    ).toBe(false);
   });
 });
 
