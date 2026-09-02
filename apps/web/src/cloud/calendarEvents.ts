@@ -14,7 +14,12 @@
  *
  * @module cloud/calendarEvents
  */
-import type { CalendarEventId, CalendarId } from "@spiritdevs/contracts";
+import type {
+  CalendarEventAttachmentId,
+  CalendarEventId,
+  CalendarEventInvitee,
+  CalendarId,
+} from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference, type FunctionReference } from "convex/server";
@@ -24,14 +29,15 @@ import type { ConvexAuthTokenFetcher } from "./syncTransport";
 
 type ConvexArgs = Record<string, unknown>;
 
-const mutationReference = <Request extends ConvexArgs>(name: string) =>
-  makeFunctionReference<"mutation", Request, null>(name);
+const mutationReference = <Request extends ConvexArgs, Response = null>(name: string) =>
+  makeFunctionReference<"mutation", Request, Response>(name);
 
 export interface CalendarEventsConvexClient {
   readonly mutation: (
     reference: FunctionReference<"mutation">,
     args: ConvexArgs,
   ) => Promise<unknown>;
+  readonly query: (reference: FunctionReference<"query">, args: ConvexArgs) => Promise<unknown>;
   readonly setAuth: (fetchToken: ConvexAuthTokenFetcher) => void;
   readonly close: () => Promise<void>;
 }
@@ -53,6 +59,11 @@ export interface CalendarEventCreateArgs extends ConvexArgs {
   /** IANA name. The zone the event is both interpreted and drawn in. */
   readonly timeZone: string;
   readonly allDay: boolean;
+  readonly notes: string;
+  readonly reminderMinutes: ReadonlyArray<number>;
+  readonly urls: ReadonlyArray<string>;
+  readonly location: string | null;
+  readonly invitees: ReadonlyArray<CalendarEventInvitee>;
 }
 
 export interface CalendarEventUpdateArgs extends ConvexArgs {
@@ -63,6 +74,11 @@ export interface CalendarEventUpdateArgs extends ConvexArgs {
   readonly endAt?: number;
   readonly timeZone?: string;
   readonly allDay?: boolean;
+  readonly notes?: string;
+  readonly reminderMinutes?: ReadonlyArray<number>;
+  readonly urls?: ReadonlyArray<string>;
+  readonly location?: string | null;
+  readonly invitees?: ReadonlyArray<CalendarEventInvitee>;
 }
 
 export const CALENDAR_EVENT_FUNCTION_REFERENCES = {
@@ -73,7 +89,45 @@ export const CALENDAR_EVENT_FUNCTION_REFERENCES = {
     readonly companyId: CompanyId;
     readonly eventId: CalendarEventId;
   }>("calendars:deleteEvent"),
+  prepareEventAttachmentUpload: mutationReference<
+    {
+      readonly companyId: CompanyId;
+      readonly eventId: CalendarEventId;
+      readonly id: CalendarEventAttachmentId;
+    },
+    string
+  >("calendars:prepareEventAttachmentUpload"),
+  discardEventAttachmentUpload: mutationReference<{
+    readonly companyId: CompanyId;
+    readonly eventId: CalendarEventId;
+    readonly attachmentId: CalendarEventAttachmentId;
+    readonly storageId?: string;
+  }>("calendars:discardEventAttachmentUpload"),
+  attachEventFile: mutationReference<{
+    readonly companyId: CompanyId;
+    readonly eventId: CalendarEventId;
+    readonly id: CalendarEventAttachmentId;
+    readonly storageId: string;
+    readonly fileName: string;
+    readonly mimeType: string;
+    readonly byteSize: number;
+  }>("calendars:attachEventFile"),
+  removeEventAttachment: mutationReference<{
+    readonly companyId: CompanyId;
+    readonly eventId: CalendarEventId;
+    readonly attachmentId: CalendarEventAttachmentId;
+  }>("calendars:removeEventAttachment"),
 } as const;
+
+const eventAttachmentUrlReference = makeFunctionReference<
+  "query",
+  {
+    readonly companyId: CompanyId;
+    readonly eventId: CalendarEventId;
+    readonly attachmentId: CalendarEventAttachmentId;
+  },
+  string | null
+>("calendars:eventAttachmentUrl");
 
 const FRIENDLY_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   "permission-denied": "You do not have permission to change this calendar.",
@@ -125,6 +179,22 @@ export interface CalendarEventsClient {
     readonly companyId: CompanyId;
     readonly eventId: CalendarEventId;
   }) => Promise<void>;
+  readonly uploadAttachment: (args: {
+    readonly companyId: CompanyId;
+    readonly eventId: CalendarEventId;
+    readonly id: CalendarEventAttachmentId;
+    readonly file: File;
+  }) => Promise<void>;
+  readonly removeAttachment: (args: {
+    readonly companyId: CompanyId;
+    readonly eventId: CalendarEventId;
+    readonly attachmentId: CalendarEventAttachmentId;
+  }) => Promise<void>;
+  readonly attachmentUrl: (args: {
+    readonly companyId: CompanyId;
+    readonly eventId: CalendarEventId;
+    readonly attachmentId: CalendarEventAttachmentId;
+  }) => Promise<string | null>;
   readonly close: () => Promise<void>;
 }
 
@@ -132,9 +202,11 @@ export function makeCalendarEventsClient(options: {
   readonly convexUrl: string;
   readonly fetchToken: ConvexAuthTokenFetcher;
   readonly client?: CalendarEventsConvexClient;
+  readonly fetcher?: typeof fetch;
 }): CalendarEventsClient {
   const ownsClient = options.client === undefined;
   const client: CalendarEventsConvexClient = options.client ?? new ConvexClient(options.convexUrl);
+  const fetcher = options.fetcher ?? fetch;
   client.setAuth(options.fetchToken);
 
   const mutation = async (reference: FunctionReference<"mutation">, args: ConvexArgs) => {
@@ -150,6 +222,91 @@ export function makeCalendarEventsClient(options: {
     createEvent: (args) => mutation(CALENDAR_EVENT_FUNCTION_REFERENCES.createEvent, args),
     updateEvent: (args) => mutation(CALENDAR_EVENT_FUNCTION_REFERENCES.updateEvent, args),
     deleteEvent: (args) => mutation(CALENDAR_EVENT_FUNCTION_REFERENCES.deleteEvent, args),
+    uploadAttachment: async (args) => {
+      if (args.file.size > 25 * 1024 * 1024) {
+        throw new CalendarWriteError({
+          code: "invalid-arguments",
+          message: "Attachments must be no larger than 25 MB.",
+        });
+      }
+      let uploadUrl: string;
+      const discardUpload = async (storageId?: string) => {
+        await client
+          .mutation(CALENDAR_EVENT_FUNCTION_REFERENCES.discardEventAttachmentUpload, {
+            companyId: args.companyId,
+            eventId: args.eventId,
+            attachmentId: args.id,
+            ...(storageId === undefined ? {} : { storageId }),
+          })
+          .catch(() => undefined);
+      };
+      try {
+        uploadUrl = (await client.mutation(
+          CALENDAR_EVENT_FUNCTION_REFERENCES.prepareEventAttachmentUpload,
+          { companyId: args.companyId, eventId: args.eventId, id: args.id },
+        )) as string;
+      } catch (error) {
+        throw mapCalendarWriteError(error);
+      }
+      let response: Response;
+      try {
+        response = await fetcher(uploadUrl, {
+          method: "POST",
+          headers: { "Content-Type": args.file.type || "application/octet-stream" },
+          body: args.file,
+        });
+      } catch (error) {
+        await discardUpload();
+        throw error;
+      }
+      if (!response.ok) {
+        await discardUpload();
+        throw new CalendarWriteError({
+          code: "upload-failed",
+          message: `The attachment upload failed with HTTP ${response.status}.`,
+        });
+      }
+      let uploaded: { storageId?: unknown };
+      try {
+        uploaded = (await response.json()) as { storageId?: unknown };
+      } catch {
+        await discardUpload();
+        throw new CalendarWriteError({
+          code: "upload-failed",
+          message: "The attachment upload returned an invalid response.",
+        });
+      }
+      if (typeof uploaded.storageId !== "string") {
+        await discardUpload();
+        throw new CalendarWriteError({
+          code: "upload-failed",
+          message: "The attachment upload returned no file id.",
+        });
+      }
+      try {
+        await mutation(CALENDAR_EVENT_FUNCTION_REFERENCES.attachEventFile, {
+          companyId: args.companyId,
+          eventId: args.eventId,
+          id: args.id,
+          storageId: uploaded.storageId,
+          fileName: args.file.name || "Attachment",
+          mimeType: args.file.type || "application/octet-stream",
+          byteSize: args.file.size,
+        });
+      } catch (error) {
+        await discardUpload(uploaded.storageId);
+        throw error;
+      }
+    },
+    removeAttachment: (args) =>
+      mutation(CALENDAR_EVENT_FUNCTION_REFERENCES.removeEventAttachment, args),
+    attachmentUrl: async (args) => {
+      try {
+        return (await client.query(eventAttachmentUrlReference, args)) as string | null;
+      } catch (error) {
+        throw mapCalendarWriteError(error);
+      }
+    },
     close: () => (ownsClient ? client.close() : Promise.resolve()),
   };
 }

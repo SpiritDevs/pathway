@@ -46,6 +46,7 @@ import {
   ToastProvider,
   toastManager,
 } from "../components/ui/toast";
+import { CalendarAlertHost } from "../components/calendar/calendarAlerts";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { applyAppearanceFontVariables } from "~/appearanceFonts";
 import { useClientSettings } from "../hooks/useSettings";
@@ -410,6 +411,7 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {/* Captured mail toasts from any route, so a verification code finds you mid-thread. */}
         {primaryEnvironmentAuthenticated ? <EmailCaptureToastHost /> : null}
+        {primaryEnvironmentAuthenticated ? <CalendarAlertHost /> : null}
         {appShell}
         {/* Above the router: a theme draft is judged by walking the app, so the
             editor has to survive navigation away from settings. */}

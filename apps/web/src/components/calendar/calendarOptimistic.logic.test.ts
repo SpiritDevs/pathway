@@ -16,6 +16,12 @@ const event = (overrides: Partial<CalendarEventInput> = {}): CalendarEventInput 
   endAt: 200,
   timeZone: "UTC",
   allDay: false,
+  notes: "",
+  reminderMinutes: [],
+  urls: [],
+  location: null,
+  invitees: [],
+  attachments: [],
   editable: true,
   ...overrides,
 });

@@ -75,6 +75,17 @@ export const syncedCalendarEventLinksAtom = Atom.make(
   (get) => get(syncedCalendarAtom).calendarEventLinks,
 ).pipe(Atom.withLabel("cloud-sync:calendar-event-links"));
 
+function sameCompanyIds(
+  current: ReadonlyArray<CompanyId>,
+  next: ReadonlyArray<CompanyId>,
+): boolean {
+  return current.length === next.length && current.every((id, index) => id === next[index]);
+}
+
+const calendarAlertCompanyIdsAtom = Atom.make((get) => [
+  ...get(scopedCompanyRegistryReplicasAtom).keys(),
+]).pipe(Atom.withEquality(sameCompanyIds), Atom.withLabel("cloud-sync:calendar-alert-company-ids"));
+
 export function useSyncedCalendar(): SyncedCalendarReadModel {
   return useAtomValue(syncedCalendarAtom);
 }
@@ -93,6 +104,10 @@ export function useSyncedCalendarAccounts(): ReadonlyArray<CalendarAccountEntity
 
 export function useSyncedCalendarEventLinks(): ReadonlyArray<CalendarEventLinkEntity> {
   return useAtomValue(syncedCalendarEventLinksAtom);
+}
+
+export function useCalendarAlertCompanyIds(): ReadonlyArray<CompanyId> {
+  return useAtomValue(calendarAlertCompanyIdsAtom);
 }
 
 // ---------------------------------------------------------------------------

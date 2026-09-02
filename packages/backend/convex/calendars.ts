@@ -29,10 +29,30 @@ import { domainIdArg } from "./lib/validators.ts";
 
 const MAX_NAME_LENGTH = 200;
 const MAX_TITLE_LENGTH = 500;
+const MAX_NOTES_LENGTH = 20_000;
+const MAX_LOCATION_LENGTH = 500;
+const MAX_URL_LENGTH = 2_048;
+const MAX_EMAIL_LENGTH = 320;
+const MAX_URLS = 10;
+const MAX_INVITEES = 100;
+const MAX_REMINDERS = 10;
+const MAX_ATTACHMENTS = 8;
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const ATTACHMENT_RESERVATION_TTL_MS = 15 * 60_000;
 const CALENDAR_REMOVE_MAX_DEPENDENT_ROWS = 500;
 const CALENDAR_EVENT_RESEED_PAGE_SIZE = 50;
 const sharingArg = v.union(v.literal("private"), v.literal("team"), v.literal("company"));
 const visibilityArg = v.union(v.literal("default"), v.literal("private"));
+const inviteeArg = v.object({
+  email: v.string(),
+  name: v.union(v.string(), v.null()),
+  response: v.union(
+    v.literal("needs-action"),
+    v.literal("accepted"),
+    v.literal("declined"),
+    v.literal("tentative"),
+  ),
+});
 
 function trimmed(value: string, label: string, max: number): string {
   const result = value.trim();
@@ -61,6 +81,105 @@ function timeRange(startAt: number, endAt: number): void {
   ) {
     throw backendError("invalid-arguments", "Event endAt must be after startAt.");
   }
+}
+
+function notesOf(value: string): string {
+  if (value.length > MAX_NOTES_LENGTH) {
+    throw backendError(
+      "invalid-arguments",
+      `Event notes cannot exceed ${MAX_NOTES_LENGTH} characters.`,
+    );
+  }
+  return value;
+}
+
+function remindersOf(values: readonly number[]): number[] {
+  if (values.length > MAX_REMINDERS) {
+    throw backendError("invalid-arguments", `Choose at most ${MAX_REMINDERS} reminders.`);
+  }
+  const unique = [...new Set(values)];
+  if (unique.some((value) => !Number.isSafeInteger(value) || value <= 0 || value > 40_320)) {
+    throw backendError(
+      "invalid-arguments",
+      "Reminder lead times must be whole minutes within four weeks.",
+    );
+  }
+  return unique.sort((left, right) => left - right);
+}
+
+function urlsOf(values: readonly string[]): string[] {
+  if (values.length > MAX_URLS) {
+    throw backendError("invalid-arguments", `Attach at most ${MAX_URLS} web links.`);
+  }
+  const result: string[] = [];
+  for (const raw of values) {
+    const candidate = raw.trim();
+    if (candidate.length > MAX_URL_LENGTH) {
+      throw backendError(
+        "invalid-arguments",
+        `Event URLs cannot exceed ${MAX_URL_LENGTH} characters.`,
+      );
+    }
+    let url: URL;
+    try {
+      url = new URL(candidate);
+    } catch {
+      throw backendError("invalid-arguments", `Invalid event URL: ${raw}`);
+    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      throw backendError("invalid-arguments", "Event URLs must use http or https.");
+    }
+    const normalized = url.toString();
+    if (!result.includes(normalized)) result.push(normalized);
+  }
+  return result;
+}
+
+function locationOf(value: string | null): string | null {
+  if (value === null) return null;
+  const location = value.trim();
+  if (location.length === 0) return null;
+  if (location.length > MAX_LOCATION_LENGTH) {
+    throw backendError(
+      "invalid-arguments",
+      `Event location cannot exceed ${MAX_LOCATION_LENGTH} characters.`,
+    );
+  }
+  return location;
+}
+
+function inviteesOf(
+  values: ReadonlyArray<{
+    readonly email: string;
+    readonly name: string | null;
+    readonly response: "needs-action" | "accepted" | "declined" | "tentative";
+  }>,
+) {
+  if (values.length > MAX_INVITEES) {
+    throw backendError("invalid-arguments", `An event can have at most ${MAX_INVITEES} invitees.`);
+  }
+  const result: Array<(typeof values)[number]> = [];
+  const seen = new Set<string>();
+  for (const invitee of values) {
+    const email = invitee.email.trim().toLowerCase();
+    if (email.length > MAX_EMAIL_LENGTH) {
+      throw backendError(
+        "invalid-arguments",
+        `Invitee emails cannot exceed ${MAX_EMAIL_LENGTH} characters.`,
+      );
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw backendError("invalid-arguments", `Invalid invitee email: ${invitee.email}`);
+    }
+    if (seen.has(email)) continue;
+    seen.add(email);
+    result.push({
+      email,
+      name: invitee.name === null ? null : trimmed(invitee.name, "Invitee name", 200),
+      response: invitee.response,
+    });
+  }
+  return result;
 }
 
 async function byCalendarId(
@@ -101,7 +220,10 @@ function canManageCalendar(actor: CompanyActor, calendar: Doc<"calendar">): bool
   );
 }
 
-function requireOwnedPathwayCalendar(actor: CompanyActor, calendar: Doc<"calendar">): void {
+function requireOwnedPathwayCalendar(
+  actor: CompanyActor,
+  calendar: Doc<"calendar">,
+): asserts actor is Extract<CompanyActor, { kind: "member" }> {
   requireMember(actor);
   if (!hasAnyScopePermission(actor.permissions, "calendar.read")) {
     throw backendError("permission-denied", "Missing permission calendar.read.");
@@ -215,6 +337,74 @@ function canReadCalendar(
     hasRecordPermission(actor.permissions, "calendar.readAll", [calendar.teamId])
   );
 }
+
+export const listAlertEvents = query({
+  args: { companyId: domainIdArg, after: v.number() },
+  returns: v.array(
+    v.object({
+      id: domainIdArg,
+      title: v.string(),
+      startAt: v.number(),
+      reminderMinutes: v.array(v.number()),
+      location: v.union(v.string(), v.null()),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const grants =
+      actor.kind === "member"
+        ? await ctx.db
+            .query("calendarGrant")
+            .withIndex("by_company_and_grantee", (q) =>
+              q.eq("companyId", actor.company._id).eq("granteeMembershipId", actor.membership._id),
+            )
+            .collect()
+        : [];
+    const grantedCalendarIds = new Set(grants.map((grant) => grant.calendarId));
+    const calendars = await ctx.db
+      .query("calendar")
+      .withIndex("by_company_and_domain_id", (q) => q.eq("companyId", actor.company._id))
+      .collect();
+    const result: Array<{
+      id: string;
+      title: string;
+      startAt: number;
+      reminderMinutes: number[];
+      location: string | null;
+    }> = [];
+    for (const calendar of calendars) {
+      if (calendar.deletedAt !== null || !canReadCalendar(actor, calendar, grantedCalendarIds)) {
+        continue;
+      }
+      const events = await ctx.db
+        .query("calendarEvent")
+        .withIndex("by_company_calendar_deleted_and_start", (q) =>
+          q
+            .eq("companyId", actor.company._id)
+            .eq("calendarId", calendar.id)
+            .eq("deletedAt", null)
+            .gt("startAt", args.after),
+        )
+        .collect();
+      for (const event of events) {
+        if (
+          event.visibility === "private" &&
+          (actor.kind !== "member" || actor.membership._id !== event.ownerMembershipId)
+        ) {
+          continue;
+        }
+        result.push({
+          id: event.id,
+          title: event.title,
+          startAt: event.startAt,
+          reminderMinutes: event.reminderMinutes ?? [],
+          location: event.location ?? null,
+        });
+      }
+    }
+    return result.sort((left, right) => left.startAt - right.startAt);
+  },
+});
 
 export const listGroupedByOwner = query({
   args: { companyId: domainIdArg },
@@ -420,11 +610,24 @@ export const remove = mutation({
         q.eq("companyId", calendar.companyId).eq("calendarId", calendar.id),
       )
       .take(CALENDAR_REMOVE_MAX_DEPENDENT_ROWS + 1);
-    const eventRoom = CALENDAR_REMOVE_MAX_DEPENDENT_ROWS - grants.length;
-    if (eventRoom < 0) {
+    const attachmentRoom = CALENDAR_REMOVE_MAX_DEPENDENT_ROWS - grants.length;
+    if (attachmentRoom < 0) {
       throw backendError(
         "invalid-arguments",
         `This calendar has more than ${CALENDAR_REMOVE_MAX_DEPENDENT_ROWS} dependent records; revoke grants or delete events before deleting it.`,
+      );
+    }
+    const attachments = await ctx.db
+      .query("calendarEventAttachments")
+      .withIndex("by_company_and_calendar", (q) =>
+        q.eq("companyId", actor.company._id).eq("calendarId", calendar.id),
+      )
+      .take(attachmentRoom + 1);
+    const eventRoom = attachmentRoom - attachments.length;
+    if (eventRoom < 0) {
+      throw backendError(
+        "invalid-arguments",
+        `This calendar has more than ${CALENDAR_REMOVE_MAX_DEPENDENT_ROWS} dependent records; remove attachments before deleting it.`,
       );
     }
     const now = Date.now();
@@ -440,9 +643,11 @@ export const remove = mutation({
         `This calendar has more than ${CALENDAR_REMOVE_MAX_DEPENDENT_ROWS} dependent records; revoke grants or delete events before deleting it.`,
       );
     }
-    for (const event of events) {
-      await ctx.db.patch(event._id, { deletedAt: now, updatedAt: now });
+    for (const attachment of attachments) {
+      if (attachment.storageId !== null) await ctx.storage.delete(attachment.storageId);
+      await ctx.db.delete(attachment._id);
     }
+    for (const event of events) await ctx.db.patch(event._id, { deletedAt: now, updatedAt: now });
     for (const grant of grants) await ctx.db.delete(grant._id);
     await ctx.db.patch(calendar._id, { deletedAt: now, updatedAt: now });
     await appendCompanyChanges(ctx, {
@@ -633,6 +838,11 @@ export const createEvent = mutation({
     endAt: v.number(),
     timeZone: v.string(),
     allDay: v.boolean(),
+    notes: v.optional(v.string()),
+    reminderMinutes: v.optional(v.array(v.number())),
+    urls: v.optional(v.array(v.string())),
+    location: v.optional(v.union(v.string(), v.null())),
+    invitees: v.optional(v.array(inviteeArg)),
     visibility: v.optional(visibilityArg),
   },
   returns: v.null(),
@@ -656,6 +866,12 @@ export const createEvent = mutation({
       endAt: args.endAt,
       timeZone: timeZoneOf(args.timeZone),
       allDay: args.allDay,
+      notes: notesOf(args.notes ?? ""),
+      reminderMinutes: remindersOf(args.reminderMinutes ?? []),
+      urls: urlsOf(args.urls ?? []),
+      location: locationOf(args.location ?? null),
+      invitees: inviteesOf(args.invitees ?? []),
+      attachments: [],
       visibility: args.visibility ?? "default",
       googleEventId: null,
       createdAt: now,
@@ -682,6 +898,11 @@ export const updateEvent = mutation({
     endAt: v.optional(v.number()),
     timeZone: v.optional(v.string()),
     allDay: v.optional(v.boolean()),
+    notes: v.optional(v.string()),
+    reminderMinutes: v.optional(v.array(v.number())),
+    urls: v.optional(v.array(v.string())),
+    location: v.optional(v.union(v.string(), v.null())),
+    invitees: v.optional(v.array(inviteeArg)),
     visibility: v.optional(visibilityArg),
   },
   returns: v.null(),
@@ -705,6 +926,14 @@ export const updateEvent = mutation({
       endAt,
       timeZone: args.timeZone === undefined ? event.timeZone : timeZoneOf(args.timeZone),
       allDay: args.allDay ?? event.allDay,
+      notes: args.notes === undefined ? (event.notes ?? "") : notesOf(args.notes),
+      reminderMinutes:
+        args.reminderMinutes === undefined
+          ? (event.reminderMinutes ?? [])
+          : remindersOf(args.reminderMinutes),
+      urls: args.urls === undefined ? (event.urls ?? []) : urlsOf(args.urls),
+      location: args.location === undefined ? (event.location ?? null) : locationOf(args.location),
+      invitees: args.invitees === undefined ? (event.invitees ?? []) : inviteesOf(args.invitees),
       visibility: args.visibility ?? event.visibility,
       updatedAt: Date.now(),
     };
@@ -736,11 +965,263 @@ export const deleteEvent = mutation({
     if (calendar === null) throw backendError("entity-not-found", "Calendar not found.");
     requireOwnedPathwayCalendar(actor, calendar);
     const now = Date.now();
+    const attachments = await ctx.db
+      .query("calendarEventAttachments")
+      .withIndex("by_company_and_event", (q) =>
+        q.eq("companyId", actor.company._id).eq("eventId", event.id),
+      )
+      .collect();
+    for (const attachment of attachments) {
+      if (attachment.storageId !== null) await ctx.storage.delete(attachment.storageId);
+      await ctx.db.delete(attachment._id);
+    }
     await ctx.db.patch(event._id, { deletedAt: now, updatedAt: now });
     await appendCompanyChanges(ctx, {
       companyId: actor.company._id,
       actor: actorRecord(actor),
       changes: [eventChange(calendar, event, "tombstone", null)],
+    });
+    return null;
+  },
+});
+
+export const prepareEventAttachmentUpload = mutation({
+  args: { companyId: domainIdArg, eventId: domainIdArg, id: domainIdArg },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const event = await byEventId(ctx, actor.company._id, args.eventId);
+    if (event === null || event.deletedAt !== null) {
+      throw backendError("entity-not-found", "Event not found.");
+    }
+    const calendar = await byCalendarId(ctx, actor.company._id, event.calendarId);
+    if (calendar === null) throw backendError("entity-not-found", "Calendar not found.");
+    requireOwnedPathwayCalendar(actor, calendar);
+    const attachmentRecords = await ctx.db
+      .query("calendarEventAttachments")
+      .withIndex("by_company_and_event", (q) =>
+        q.eq("companyId", actor.company._id).eq("eventId", event.id),
+      )
+      .collect();
+    const reservationCutoff = Date.now() - ATTACHMENT_RESERVATION_TTL_MS;
+    let liveAttachmentCount = 0;
+    for (const attachment of attachmentRecords) {
+      if (attachment.storageId === null && attachment.createdAt < reservationCutoff) {
+        await ctx.db.delete(attachment._id);
+      } else {
+        liveAttachmentCount += 1;
+      }
+    }
+    if (liveAttachmentCount >= MAX_ATTACHMENTS) {
+      throw backendError(
+        "invalid-arguments",
+        `An event can have at most ${MAX_ATTACHMENTS} attachments.`,
+      );
+    }
+    const existing = await ctx.db
+      .query("calendarEventAttachments")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.id),
+      )
+      .unique();
+    if (existing !== null) {
+      throw backendError("foreign-id-conflict", "That event attachment id exists.");
+    }
+    await ctx.db.insert("calendarEventAttachments", {
+      id: args.id,
+      companyId: actor.company._id,
+      calendarId: calendar.id,
+      eventId: event.id,
+      storageId: null,
+      uploadedByMembershipId: actor.membership._id,
+      createdAt: Date.now(),
+    });
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+export const discardEventAttachmentUpload = mutation({
+  args: {
+    companyId: domainIdArg,
+    eventId: domainIdArg,
+    attachmentId: domainIdArg,
+    storageId: v.optional(v.id("_storage")),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requireMember(actor);
+    const reservation = await ctx.db
+      .query("calendarEventAttachments")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.attachmentId),
+      )
+      .unique();
+    if (
+      reservation === null ||
+      reservation.eventId !== args.eventId ||
+      reservation.storageId !== null ||
+      reservation.uploadedByMembershipId !== actor.membership._id
+    ) {
+      return null;
+    }
+    if (args.storageId !== undefined) {
+      const storageId = args.storageId;
+      const bound = await ctx.db
+        .query("calendarEventAttachments")
+        .withIndex("by_storage_id", (q) => q.eq("storageId", storageId))
+        .first();
+      const issueAttachment = await ctx.db
+        .query("issueAttachments")
+        .withIndex("by_storage_id", (q) => q.eq("storageId", storageId))
+        .first();
+      if (bound === null && issueAttachment === null) await ctx.storage.delete(storageId);
+    }
+    await ctx.db.delete(reservation._id);
+    return null;
+  },
+});
+
+export const attachEventFile = mutation({
+  args: {
+    companyId: domainIdArg,
+    eventId: domainIdArg,
+    id: domainIdArg,
+    storageId: v.id("_storage"),
+    fileName: v.string(),
+    mimeType: v.string(),
+    byteSize: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const event = await byEventId(ctx, actor.company._id, args.eventId);
+    if (event === null || event.deletedAt !== null) {
+      throw backendError("entity-not-found", "Event not found.");
+    }
+    const calendar = await byCalendarId(ctx, actor.company._id, event.calendarId);
+    if (calendar === null) throw backendError("entity-not-found", "Calendar not found.");
+    requireOwnedPathwayCalendar(actor, calendar);
+    const current = event.attachments ?? [];
+    if (current.length >= MAX_ATTACHMENTS) {
+      throw backendError(
+        "invalid-arguments",
+        `An event can have at most ${MAX_ATTACHMENTS} attachments.`,
+      );
+    }
+    if (current.some((attachment) => attachment.id === args.id)) return null;
+    const reservation = await ctx.db
+      .query("calendarEventAttachments")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.id),
+      )
+      .unique();
+    if (
+      reservation === null ||
+      reservation.eventId !== event.id ||
+      reservation.storageId !== null ||
+      reservation.uploadedByMembershipId !== actor.membership._id
+    ) {
+      throw backendError("foreign-id-conflict", "That event attachment upload is not reserved.");
+    }
+    const stored = await ctx.db.system.get(args.storageId);
+    if (
+      stored === null ||
+      stored.size !== args.byteSize ||
+      args.byteSize <= 0 ||
+      args.byteSize > MAX_ATTACHMENT_BYTES
+    ) {
+      throw backendError(
+        "invalid-arguments",
+        `Attachments must be no larger than ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`,
+      );
+    }
+    const fileName = trimmed(args.fileName, "Attachment file name", 255);
+    const mimeType = trimmed(args.mimeType, "Attachment MIME type", 100);
+    await ctx.db.patch(reservation._id, { storageId: args.storageId });
+    await ctx.db.patch(event._id, {
+      attachments: [...current, { id: args.id, fileName, mimeType, byteSize: args.byteSize }],
+      updatedAt: Date.now(),
+    });
+    const updated = await ctx.db.get(event._id);
+    if (updated === null) throw backendError("entity-not-found", "Calendar event vanished.");
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes: [eventChange(calendar, updated, "upsert", await encodeCalendarEvent(ctx, updated))],
+    });
+    return null;
+  },
+});
+
+export const eventAttachmentUrl = query({
+  args: { companyId: domainIdArg, eventId: domainIdArg, attachmentId: domainIdArg },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const event = await byEventId(ctx, actor.company._id, args.eventId);
+    if (event === null || event.deletedAt !== null) return null;
+    const calendar = await byCalendarId(ctx, actor.company._id, event.calendarId);
+    if (calendar === null || calendar.deletedAt !== null) return null;
+    const grants = await grantsForCalendar(ctx, calendar);
+    const grantedCalendarIds = new Set(
+      actor.kind === "member"
+        ? grants
+            .filter((grant) => grant.granteeMembershipId === actor.membership._id)
+            .map((grant) => grant.calendarId)
+        : [],
+    );
+    if (!canReadCalendar(actor, calendar, grantedCalendarIds)) {
+      throw backendError("permission-denied", "Event attachment is not available.");
+    }
+    if (
+      event.visibility === "private" &&
+      (actor.kind !== "member" || actor.membership._id !== event.ownerMembershipId)
+    ) {
+      throw backendError("permission-denied", "Event attachment is private.");
+    }
+    const attachment = await ctx.db
+      .query("calendarEventAttachments")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.attachmentId),
+      )
+      .unique();
+    if (attachment === null || attachment.eventId !== event.id || attachment.storageId === null) {
+      return null;
+    }
+    return await ctx.storage.getUrl(attachment.storageId);
+  },
+});
+
+export const removeEventAttachment = mutation({
+  args: { companyId: domainIdArg, eventId: domainIdArg, attachmentId: domainIdArg },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    const event = await byEventId(ctx, actor.company._id, args.eventId);
+    if (event === null || event.deletedAt !== null) return null;
+    const calendar = await byCalendarId(ctx, actor.company._id, event.calendarId);
+    if (calendar === null) throw backendError("entity-not-found", "Calendar not found.");
+    requireOwnedPathwayCalendar(actor, calendar);
+    const attachment = await ctx.db
+      .query("calendarEventAttachments")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.attachmentId),
+      )
+      .unique();
+    if (attachment === null || attachment.eventId !== event.id) return null;
+    if (attachment.storageId !== null) await ctx.storage.delete(attachment.storageId);
+    await ctx.db.delete(attachment._id);
+    await ctx.db.patch(event._id, {
+      attachments: (event.attachments ?? []).filter((item) => item.id !== args.attachmentId),
+      updatedAt: Date.now(),
+    });
+    const updated = await ctx.db.get(event._id);
+    if (updated === null) throw backendError("entity-not-found", "Calendar event vanished.");
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes: [eventChange(calendar, updated, "upsert", await encodeCalendarEvent(ctx, updated))],
     });
     return null;
   },

@@ -482,6 +482,12 @@ export interface CalendarEventInput {
   /** IANA name. Both ends of the event are read in it; see the module note. */
   readonly timeZone: string;
   readonly allDay: boolean;
+  readonly notes: string;
+  readonly reminderMinutes: ReadonlyArray<number>;
+  readonly urls: ReadonlyArray<string>;
+  readonly location: string | null;
+  readonly invitees: ReadonlyArray<import("@spiritdevs/contracts").CalendarEventInvitee>;
+  readonly attachments: ReadonlyArray<import("@spiritdevs/contracts").CalendarEventAttachment>;
   /** Pathway-owned events are editable; a mirrored Google event is read-only. */
   readonly editable: boolean;
 }
