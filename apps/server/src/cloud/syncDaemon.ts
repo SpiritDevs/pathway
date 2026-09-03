@@ -856,6 +856,7 @@ export const startCloudSyncDaemon = Effect.fn("cloud.sync_daemon.start")(functio
       onNone: () => null,
       onSome: (registry) => registry,
     }) ?? (yield* makeCloudSyncEngineRegistry);
+  yield* engineRegistry.expectIssueRouting(environmentId);
   const restartDelay = options.restartDelay ?? DEFAULT_SYNC_DAEMON_RESTART_DELAY;
   const linkWaitInterval = options.linkWaitInterval ?? DEFAULT_SYNC_DAEMON_LINK_WAIT_INTERVAL;
   const linkWaitAttempts = options.linkWaitAttempts ?? DEFAULT_SYNC_DAEMON_LINK_WAIT_ATTEMPTS;

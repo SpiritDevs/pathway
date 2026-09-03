@@ -26,10 +26,12 @@ import {
   SYNC_BOOTSTRAP_GENERATION,
   SYNC_DOCUMENT_SCHEMA_VERSION,
   type CloudSyncEntity,
+  type IssueSyncOperation,
   type StoredSyncEntity,
   type StoredSyncState,
 } from "@spiritdevs/client-runtime/sync";
 import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
+import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
 import {
   AuthorizationEpoch,
   CompanyVersion,
@@ -37,6 +39,7 @@ import {
   SYNC_PROTOCOL_VERSION,
   SyncClientId,
   SyncEntityId,
+  type SyncActor,
   type SyncEntityKind,
 } from "@spiritdevs/contracts/cloudSync";
 import { assert, describe, it } from "@effect/vitest";
@@ -118,7 +121,28 @@ function readyReplicaReader(entities: ReadonlyArray<StoredSyncEntity> = []): Iss
     localSequenceHighWater: LocalSequence.make(0),
   });
   if (readModel === null) throw new Error("The ready replica fixture did not decode.");
+  const handle: CloudSyncIssueEngineHandle = {
+    companyId: ROUTED_COMPANY_ID,
+    environmentId: ROUTED_ENVIRONMENT_ID,
+    enqueue: () => Effect.die("unused"),
+    sync: Effect.die("unused"),
+    operationDisposition: () => Effect.die("unused"),
+    readIssueSnapshot: Effect.succeed({ readModel, bootstrapped: true, quarantined: 0 }),
+  };
+  const route = {
+    companyId: ROUTED_COMPANY_ID,
+    engine: handle,
+    actor: {
+      kind: "agent" as const,
+      provider: ProviderDriverKind.make("codex"),
+      onBehalfOfMembershipId: null,
+    },
+    readModel,
+    read: Effect.succeed(readModel),
+    cloudProjectIdForLocal: (localProjectId: string) => CloudProjectId.make(localProjectId),
+  };
   return {
+    resolve: Effect.succeed(route),
     companyId: Effect.succeed(ROUTED_COMPANY_ID),
     read: Effect.succeed(readModel),
     memberActorForCloudUserId: () => Effect.succeed(null),
@@ -428,11 +452,17 @@ describe("IssueTrackerService", () => {
         localSequenceHighWater: LocalSequence.make(0),
       });
       const sequence = yield* Ref.make(0);
+      const routeResolutions = yield* Ref.make(0);
+      const enqueued = yield* Ref.make<
+        ReadonlyArray<{ readonly operation: IssueSyncOperation; readonly actor: SyncActor }>
+      >([]);
       const handle: CloudSyncIssueEngineHandle = {
         companyId: ROUTED_COMPANY_ID,
         environmentId: ROUTED_ENVIRONMENT_ID,
         enqueue: ({ operationId, operation, actor }) =>
           Effect.gen(function* () {
+            if (actor === undefined) throw new Error("A routed write must carry its actor.");
+            yield* Ref.update(enqueued, (items) => [...items, { operation, actor }]);
             const localSequence = LocalSequence.make(
               yield* Ref.updateAndGet(sequence, (n) => n + 1),
             );
@@ -470,22 +500,56 @@ describe("IssueTrackerService", () => {
           }),
         sync: Effect.die(new Error("restore is not used by this test")),
         operationDisposition: () => Effect.succeed({ _tag: "Pending" }),
-        readIssueDomain: Ref.get(stored).pipe(
+        readIssueSnapshot: Ref.get(stored).pipe(
           Effect.map(issueReadModelFromStoredReplica),
-          Effect.map((readModel) => readModel!),
+          Effect.map((readModel) => ({
+            readModel: readModel!,
+            bootstrapped: true,
+            quarantined: 0,
+          })),
         ),
-        readEntities: Effect.succeed(new Map()),
       };
       const registry = CloudSyncEngineRegistry.of({
+        expectIssueRouting: () => Effect.void,
         registerIssueEngine: () => Effect.void,
         unregisterIssueEngine: () => Effect.void,
         withIssueEngine: (_input, use) => use,
         issueEngine: () => Effect.succeed(handle),
-        issueEngineForProject: () => Effect.succeed({ _tag: "Ready", engine: handle }),
+        issueEngineForProject: () =>
+          Ref.get(stored).pipe(
+            Effect.map(issueReadModelFromStoredReplica),
+            Effect.map((readModel) => ({
+              _tag: "Ready" as const,
+              engine: handle,
+              readModel: readModel!,
+              projectBindings: [],
+            })),
+          ),
       } satisfies CloudSyncEngineRegistryShape);
+      const read = Ref.get(stored).pipe(
+        Effect.map(issueReadModelFromStoredReplica),
+        Effect.map((readModel) => readModel!),
+      );
       const replicaReader: IssueReplicaReader = {
+        resolve: Effect.gen(function* () {
+          yield* Ref.update(routeResolutions, (count) => count + 1);
+          const readModel = yield* read;
+          return {
+            companyId: ROUTED_COMPANY_ID,
+            engine: handle,
+            actor: {
+              kind: "agent" as const,
+              provider: ProviderDriverKind.make("codex"),
+              onBehalfOfMembershipId: null,
+            },
+            readModel,
+            read,
+            cloudProjectIdForLocal: (localProjectId: string) =>
+              localProjectId === PROJECT ? CloudProjectId.make("cloud-project-alpha") : null,
+          };
+        }),
         companyId: Effect.succeed(ROUTED_COMPANY_ID),
-        read: Ref.get(stored).pipe(Effect.map(issueReadModelFromStoredReplica)),
+        read,
         memberActorForCloudUserId: () => Effect.succeed(null),
       };
 
@@ -494,11 +558,25 @@ describe("IssueTrackerService", () => {
         syncEngineRegistry: registry,
       });
       const created = yield* tracker.create(
-        { title: "Server-routed", statusId: IssueStatusId.make("status-routed") },
+        {
+          title: "Server-routed",
+          statusId: IssueStatusId.make("status-routed"),
+          projectId: PROJECT,
+        },
         AGENT,
       );
       assert.strictEqual(created.issue.key, "Draft");
       assert.strictEqual(created.issue.title, "Server-routed");
+      const firstWrite = (yield* Ref.get(enqueued))[0]!;
+      assert.strictEqual(firstWrite.operation.kind, "issue.create");
+      if (firstWrite.operation.kind !== "issue.create") throw new Error("Expected issue.create");
+      assert.strictEqual(firstWrite.operation.args.projectId, "cloud-project-alpha");
+      assert.deepStrictEqual(firstWrite.actor, {
+        kind: "agent",
+        provider: ProviderDriverKind.make("codex"),
+        onBehalfOfMembershipId: null,
+      });
+      assert.strictEqual(yield* Ref.get(routeResolutions), 1);
       const snapshot = yield* tracker.getSnapshot();
       assert.strictEqual(snapshot.issues[0]?.id, created.issue.id);
 
@@ -506,7 +584,10 @@ describe("IssueTrackerService", () => {
         { issueId: created.issue.id, body: "Written by MCP" },
         AGENT,
       );
-      assert.deepStrictEqual(comment.comment.author, { kind: "system", source: "automation" });
+      assert.deepStrictEqual(comment.comment.author, {
+        kind: "agent",
+        provider: ProviderDriverKind.make("codex"),
+      });
       assert.strictEqual(
         (yield* tracker.commentsList({ issueId: created.issue.id })).comments.length,
         1,

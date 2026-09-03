@@ -18,6 +18,7 @@ import type {
 } from "@spiritdevs/client-runtime/sync";
 import { syncedIssueDomainFromEntities } from "@spiritdevs/client-runtime/sync";
 import type { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
+import type { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import type { SyncOperationId } from "@spiritdevs/contracts/cloudSync";
 import type { SyncActor } from "@spiritdevs/contracts/cloudSync";
@@ -45,19 +46,34 @@ export interface CloudSyncIssueEngineHandle {
   readonly operationDisposition: (
     operationId: SyncOperationId,
   ) => Effect.Effect<CloudSyncOperationDisposition>;
-  /** Current optimistic issue model for this company. */
-  readonly readIssueDomain: Effect.Effect<SyncedIssueDomainReadModel>;
-  /** Current optimistic entity map, used for company membership resolution. */
-  readonly readEntities: Effect.Effect<ReadonlyMap<string, CloudSyncEntity>>;
+  /** One atomic view of the current optimistic issue model and its completeness gates. */
+  readonly readIssueSnapshot: Effect.Effect<{
+    readonly readModel: SyncedIssueDomainReadModel;
+    readonly bootstrapped: boolean;
+    readonly quarantined: number;
+  }>;
+}
+
+export interface CloudSyncIssueProjectBinding {
+  readonly localProjectId: ProjectId;
+  readonly cloudProjectId: CloudProjectId;
 }
 
 export type CloudSyncIssueEngineRoute =
   | { readonly _tag: "Legacy" }
   | { readonly _tag: "Unbound"; readonly companyIds: ReadonlyArray<CompanyId> }
   | { readonly _tag: "Ambiguous"; readonly companyIds: ReadonlyArray<CompanyId> }
-  | { readonly _tag: "Ready"; readonly engine: CloudSyncIssueEngineHandle };
+  | { readonly _tag: "Unavailable"; readonly companyIds: ReadonlyArray<CompanyId> }
+  | {
+      readonly _tag: "Ready";
+      readonly engine: CloudSyncIssueEngineHandle;
+      readonly readModel: SyncedIssueDomainReadModel;
+      readonly projectBindings: ReadonlyArray<CloudSyncIssueProjectBinding>;
+    };
 
 export interface CloudSyncEngineRegistryShape {
+  /** Records that this environment is configured for cloud sync, even before an engine starts. */
+  readonly expectIssueRouting: (environmentId: EnvironmentId) => Effect.Effect<void>;
   readonly registerIssueEngine: (input: {
     readonly environmentId: EnvironmentId;
     readonly engine: SyncEngine<CloudSyncEntity, IssueSyncOperation>;
@@ -103,6 +119,10 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
   }
 
   const current = yield* Ref.make<ReadonlyMap<CompanyId, RegisteredIssueEngine>>(new Map());
+  const expectedEnvironments = yield* Ref.make<ReadonlySet<EnvironmentId>>(new Set());
+
+  const expectIssueRouting: CloudSyncEngineRegistryShape["expectIssueRouting"] = (environmentId) =>
+    Ref.update(expectedEnvironments, (expected) => new Set(expected).add(environmentId));
 
   const registerIssueEngine: CloudSyncEngineRegistryShape["registerIssueEngine"] = (input) =>
     Ref.update(current, (registered) => {
@@ -129,11 +149,12 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
                 : { _tag: "Settled" };
             }),
           ),
-        readIssueDomain: SubscriptionRef.get(input.engine.state).pipe(
-          Effect.map((state) => syncedIssueDomainFromEntities(state.view.values())),
-        ),
-        readEntities: SubscriptionRef.get(input.engine.state).pipe(
-          Effect.map((state) => state.view),
+        readIssueSnapshot: SubscriptionRef.get(input.engine.state).pipe(
+          Effect.map((state) => ({
+            readModel: syncedIssueDomainFromEntities(state.view.values()),
+            bootstrapped: state.bootstrapped,
+            quarantined: state.quarantined.length,
+          })),
         ),
       };
       return new Map(registered).set(input.engine.companyId, { engine: input.engine, handle });
@@ -156,28 +177,57 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
       const registered = [...(yield* Ref.get(current)).values()].filter(
         ({ handle }) => handle.environmentId === input.environmentId,
       );
-      if (registered.length === 0) return { _tag: "Legacy" } as const;
-      if (input.localProjectId === undefined) {
-        return {
-          _tag: "Unbound",
-          companyIds: registered.map(({ handle }) => handle.companyId),
-        } as const;
+      if (registered.length === 0) {
+        const expected = yield* Ref.get(expectedEnvironments);
+        return expected.has(input.environmentId)
+          ? ({ _tag: "Unavailable", companyIds: [] } as const)
+          : ({ _tag: "Legacy" } as const);
       }
 
-      const matches: CloudSyncIssueEngineHandle[] = [];
+      const matches: Array<Extract<CloudSyncIssueEngineRoute, { readonly _tag: "Ready" }>> = [];
+      const unavailable: CompanyId[] = [];
       for (const { handle } of registered) {
-        const entities = yield* handle.readEntities;
-        const bound = [...entities.values()].some(
-          (entity) =>
-            entity.entityKind === "environmentBinding" &&
-            entity.environmentId === input.environmentId &&
-            entity.localProjectId === input.localProjectId &&
-            entity.status === "active",
+        const snapshot = yield* handle.readIssueSnapshot;
+        if (!snapshot.bootstrapped || snapshot.quarantined > 0) {
+          unavailable.push(handle.companyId);
+          continue;
+        }
+        const latestByLocalProject = new Map<
+          ProjectId,
+          (typeof snapshot.readModel.environmentBindings)[number]
+        >();
+        for (const binding of snapshot.readModel.environmentBindings) {
+          if (binding.environmentId !== input.environmentId) continue;
+          const existing = latestByLocalProject.get(binding.localProjectId);
+          if (existing === undefined || binding.updatedAt > existing.updatedAt) {
+            latestByLocalProject.set(binding.localProjectId, binding);
+          }
+        }
+        const projectBindings = [...latestByLocalProject.values()]
+          .filter((binding) => binding.status === "active")
+          .map(
+            (binding): CloudSyncIssueProjectBinding => ({
+              localProjectId: binding.localProjectId,
+              cloudProjectId: binding.cloudProjectId,
+            }),
+          );
+        const bound = projectBindings.some(
+          (binding) => binding.localProjectId === input.localProjectId,
         );
-        if (bound) matches.push(handle);
+        if (bound) {
+          matches.push({
+            _tag: "Ready",
+            engine: handle,
+            readModel: snapshot.readModel,
+            projectBindings,
+          });
+        }
       }
-      if (matches.length === 1) return { _tag: "Ready", engine: matches[0]! } as const;
+      if (matches.length === 1) return matches[0]!;
       if (matches.length === 0) {
+        if (unavailable.length > 0) {
+          return { _tag: "Unavailable", companyIds: unavailable } as const;
+        }
         return {
           _tag: "Unbound",
           companyIds: registered.map(({ handle }) => handle.companyId),
@@ -185,7 +235,7 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
       }
       return {
         _tag: "Ambiguous",
-        companyIds: matches.map((handle) => handle.companyId),
+        companyIds: matches.map(({ engine }) => engine.companyId),
       } as const;
     });
 
@@ -197,6 +247,7 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
     );
 
   return CloudSyncEngineRegistry.of({
+    expectIssueRouting,
     registerIssueEngine,
     unregisterIssueEngine,
     withIssueEngine,

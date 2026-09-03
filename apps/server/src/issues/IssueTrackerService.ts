@@ -263,6 +263,7 @@ import {
   makeIssueReplicaReader,
   routeReplicaIssueRead,
   type IssueReplicaReader,
+  type IssueReplicaRoute,
 } from "./IssueReplicaReader.ts";
 import {
   readLocalIssueSnapshotFrom,
@@ -273,6 +274,10 @@ import {
 const DEFAULT_ISSUE_KEY_PREFIX = "ISS";
 /** `IssueKeyPrefix` in the contracts caps a prefix at ten characters. */
 const ISSUE_KEY_PREFIX_MAX_CHARS = 10;
+
+class ActiveIssueReplicaRoute extends Context.Service<ActiveIssueReplicaRoute, IssueReplicaRoute>()(
+  "@spiritdevs/pathway/issues/IssueTrackerService/ActiveIssueReplicaRoute",
+) {}
 /** The change log is a feed, not a diff viewer: a 100k-character body is stored, not replayed. */
 const EVENT_VALUE_MAX_CHARS = 512;
 
@@ -1361,33 +1366,77 @@ export const makeIssueTrackerService = Effect.fn(function* (
   const syncWriteFailure = (message: string) =>
     new IssueTrackerError({ reason: "storage", message: `Cloud issue write failed: ${message}` });
 
-  const requireSyncEngine = Effect.fn("IssueTrackerService.requireSyncEngine")(function* () {
-    const companyId = yield* replicaReader.companyId;
-    if (companyId === null || syncEngineRegistry === null) {
-      return yield* syncWriteFailure(
-        "the replica is routable but its daemon engine is unavailable",
-      );
+  const requireSyncEngine = Effect.map(ActiveIssueReplicaRoute, (route) => route.engine);
+
+  const translateOperationProjectIds = Effect.fn(
+    "IssueTrackerService.translateOperationProjectIds",
+  )(function* (route: IssueReplicaRoute, operation: IssueSyncOperation) {
+    const translate = (projectId: string) => {
+      const cloudProjectId = route.cloudProjectIdForLocal(projectId);
+      return cloudProjectId === null
+        ? Effect.fail(
+            syncWriteFailure(
+              `local project ${projectId} has no active cloud binding in company ${route.companyId}`,
+            ),
+          )
+        : Effect.succeed(cloudProjectId);
+    };
+    switch (operation.kind) {
+      case "issue.create":
+        if (operation.args.projectId === undefined) return operation;
+        return {
+          ...operation,
+          args: {
+            ...operation.args,
+            projectId: yield* translate(operation.args.projectId),
+          },
+        };
+      case "issue.update":
+        if (operation.args.projectId === undefined || operation.args.projectId === null) {
+          return operation;
+        }
+        return {
+          ...operation,
+          args: {
+            ...operation.args,
+            projectId: yield* translate(operation.args.projectId),
+          },
+        };
+      case "issueMilestone.create":
+        return {
+          ...operation,
+          args: {
+            ...operation.args,
+            cloudProjectId: yield* translate(operation.args.cloudProjectId),
+          },
+        };
+      case "issueMilestone.update":
+        if (operation.args.cloudProjectId === undefined) return operation;
+        return {
+          ...operation,
+          args: {
+            ...operation.args,
+            cloudProjectId: yield* translate(operation.args.cloudProjectId),
+          },
+        };
+      default:
+        return operation;
     }
-    const engine = yield* syncEngineRegistry.issueEngine(companyId);
-    if (engine === null) {
-      return yield* syncWriteFailure(
-        "the replica is routable but its daemon engine is unavailable",
-      );
-    }
-    return engine;
   });
 
   const enqueueReplicaOperations = Effect.fn("IssueTrackerService.enqueueReplicaOperations")(
     function* (plans: ReadonlyArray<ReplicaOperationPlan>) {
-      const engine = yield* requireSyncEngine();
+      const route = yield* ActiveIssueReplicaRoute;
+      const engine = route.engine;
       const operationIds: SyncOperationId[] = [];
       for (const plan of plans) {
         const operationId = plan.operationId ?? SyncOperationId.make(yield* newId);
+        const operation = yield* translateOperationProjectIds(route, plan.operation);
         const receipt = yield* engine
           .enqueue({
             operationId,
-            operation: plan.operation,
-            ...(plan.actor === undefined ? {} : { actor: plan.actor }),
+            operation,
+            actor: plan.actor ?? route.actor,
           })
           .pipe(Effect.mapError((error) => syncWriteFailure(error.message)));
         if (!receipt.accepted) {
@@ -1395,12 +1444,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         }
         operationIds.push(operationId);
       }
-      const readModel = yield* replicaReader.read;
-      if (readModel === null) {
-        return yield* syncWriteFailure(
-          "the durable outbox was written but its optimistic replica could not be read",
-        );
-      }
+      const readModel = yield* route.read;
       return { engine, operationIds, readModel };
     },
   );
@@ -4772,10 +4816,19 @@ export const makeIssueTrackerService = Effect.fn(function* (
   const routedDetail = (readModel: SyncedIssueDomainReadModel, issueId: IssueId) =>
     issueDetailProjectionFromReplica(syncedIssueDetailById(readModel, issueId));
   const routeWrite = <A>(
-    fromReplica: (readModel: SyncedIssueDomainReadModel) => Effect.Effect<A, IssueTrackerError>,
+    fromReplica: (
+      readModel: SyncedIssueDomainReadModel,
+    ) => Effect.Effect<A, IssueTrackerError, ActiveIssueReplicaRoute>,
     fromLegacy: Effect.Effect<A, IssueTrackerError>,
-  ) => routeReplicaIssueRead({ replica: replicaReader.read, fromReplica, fromLegacy });
-  const replicaRoutable = replicaReader.read.pipe(Effect.map((readModel) => readModel !== null));
+  ) =>
+    replicaReader.resolve.pipe(
+      Effect.flatMap((route) =>
+        route === null
+          ? fromLegacy
+          : Effect.provideService(fromReplica(route.readModel), ActiveIssueReplicaRoute, route),
+      ),
+    );
+  const replicaRoutable = replicaReader.resolve.pipe(Effect.map((route) => route !== null));
   const replicaAttachmentUnsupported = () =>
     invalid(
       "Server-produced issue attachments are not supported for cloud-synced companies yet. Add the attachment from the Pathway web comment composer instead.",
@@ -4810,89 +4863,91 @@ export const makeIssueTrackerService = Effect.fn(function* (
     }));
 
   const intakeCreateIssue: IssueTrackerServiceShape["intakeCreateIssue"] = (input) =>
-    Effect.flatMap(replicaReader.read, (readModel) => {
-      if (readModel === null) return legacyIntakeCreateIssue(input);
-      return Effect.gen(function* () {
-        const processed = yield* readProcessedMessage(input.channelId, input.messageTs);
-        if (Option.isSome(processed) && processed.value.issueId !== null) {
-          const existing = routedIssue(readModel, processed.value.issueId);
-          if (existing !== undefined) return { issue: existing, created: false };
-          // The replica keeps no row for a rejected or deleted issue, unlike the legacy store's
-          // soft deletes, so absence here means dismissed, not gone for good. Honoring the ledger
-          // is what stops an overlapping poll from refiling a triage item someone rejected.
-          return { issue: null, created: false };
-        }
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const processed = yield* readProcessedMessage(input.channelId, input.messageTs);
+          if (Option.isSome(processed) && processed.value.issueId !== null) {
+            const existing = routedIssue(readModel, processed.value.issueId);
+            if (existing !== undefined) return { issue: existing, created: false };
+            // The replica keeps no row for a rejected or deleted issue, unlike the legacy store's
+            // soft deletes, so absence here means dismissed, not gone for good. Honoring the ledger
+            // is what stops an overlapping poll from refiling a triage item someone rejected.
+            return { issue: null, created: false };
+          }
 
-        const issueId = IssueId.make(yield* newId);
-        const slackSource: IssueSlackSource = {
-          issueId,
-          channelId: input.channelId,
-          messageTs: input.messageTs,
-          permalink: nullableTrimmed(input.permalink),
-          authorName: nullableTrimmed(input.authorName),
-        };
-        const createInput: IssueCreateInput = {
-          title: normalizeSlackTitle(input.title),
-          triage: true,
-          ...(input.description === undefined ? {} : { description: input.description }),
-          ...(input.projectId == null ? {} : { projectId: input.projectId }),
-          ...(input.cycleId == null ? {} : { cycleId: input.cycleId }),
-        };
-        const written = yield* enqueueReplicaOperations(
-          plans([issueCreateOperation(createInput, issueId, slackSource)], SLACK_ACTOR),
-        );
-        const issue = routedIssue(written.readModel, issueId);
-        if (issue === undefined) {
-          return yield* syncWriteFailure(
-            `Slack intake issue ${issueId} is absent from the optimistic replica`,
+          const issueId = IssueId.make(yield* newId);
+          const slackSource: IssueSlackSource = {
+            issueId,
+            channelId: input.channelId,
+            messageTs: input.messageTs,
+            permalink: nullableTrimmed(input.permalink),
+            authorName: nullableTrimmed(input.authorName),
+          };
+          const createInput: IssueCreateInput = {
+            title: normalizeSlackTitle(input.title),
+            triage: true,
+            ...(input.description === undefined ? {} : { description: input.description }),
+            ...(input.projectId == null ? {} : { projectId: input.projectId }),
+            ...(input.cycleId == null ? {} : { cycleId: input.cycleId }),
+          };
+          const written = yield* enqueueReplicaOperations(
+            plans([issueCreateOperation(createInput, issueId, slackSource)], SLACK_ACTOR),
           );
-        }
-        yield* recordProcessedMessage(input.channelId, input.messageTs, issueId);
-        return { issue, created: true };
-      });
-    });
+          const issue = routedIssue(written.readModel, issueId);
+          if (issue === undefined) {
+            return yield* syncWriteFailure(
+              `Slack intake issue ${issueId} is absent from the optimistic replica`,
+            );
+          }
+          yield* recordProcessedMessage(input.channelId, input.messageTs, issueId);
+          return { issue, created: true };
+        }),
+      legacyIntakeCreateIssue(input),
+    );
 
   const intakeAddComment: IssueTrackerServiceShape["intakeAddComment"] = (input) =>
-    Effect.flatMap(replicaReader.read, (readModel) => {
-      if (readModel === null) return legacyIntakeAddComment(input);
-      return Effect.gen(function* () {
-        const already = yield* readProcessedMessage(input.channelId, input.messageTs);
-        if (Option.isSome(already)) return { comment: null };
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const already = yield* readProcessedMessage(input.channelId, input.messageTs);
+          if (Option.isSome(already)) return { comment: null };
 
-        const parent = yield* readProcessedMessage(input.channelId, input.threadTs);
-        const issueId = Option.isSome(parent) ? parent.value.issueId : null;
-        if (issueId === null || routedIssue(readModel, issueId) === undefined) {
-          yield* recordProcessedMessage(input.channelId, input.messageTs, null);
-          return { comment: null };
-        }
+          const parent = yield* readProcessedMessage(input.channelId, input.threadTs);
+          const issueId = Option.isSome(parent) ? parent.value.issueId : null;
+          if (issueId === null || routedIssue(readModel, issueId) === undefined) {
+            yield* recordProcessedMessage(input.channelId, input.messageTs, null);
+            return { comment: null };
+          }
 
-        const authorName = nullableTrimmed(input.authorName);
-        const body = authorName === null ? input.body : `**${authorName}:** ${input.body}`;
-        const attachmentIds = input.attachmentIds ?? [];
-        const commentId = IssueCommentId.make(yield* newId);
-        const written = yield* enqueueReplicaOperations(
-          plans(
-            [
-              issueCommentCreateOperation(
-                { issueId, body, ...(attachmentIds.length === 0 ? {} : { attachmentIds }) },
-                commentId,
-              ),
-            ],
-            SLACK_ACTOR,
-          ),
-        );
-        const comment = routedDetail(written.readModel, issueId).comments.find(
-          (candidate) => candidate.id === commentId,
-        );
-        if (comment === undefined) {
-          return yield* syncWriteFailure(
-            `Slack intake comment ${commentId} is absent from the optimistic replica`,
+          const authorName = nullableTrimmed(input.authorName);
+          const body = authorName === null ? input.body : `**${authorName}:** ${input.body}`;
+          const attachmentIds = input.attachmentIds ?? [];
+          const commentId = IssueCommentId.make(yield* newId);
+          const written = yield* enqueueReplicaOperations(
+            plans(
+              [
+                issueCommentCreateOperation(
+                  { issueId, body, ...(attachmentIds.length === 0 ? {} : { attachmentIds }) },
+                  commentId,
+                ),
+              ],
+              SLACK_ACTOR,
+            ),
           );
-        }
-        yield* recordProcessedMessage(input.channelId, input.messageTs, issueId);
-        return { comment };
-      });
-    });
+          const comment = routedDetail(written.readModel, issueId).comments.find(
+            (candidate) => candidate.id === commentId,
+          );
+          if (comment === undefined) {
+            return yield* syncWriteFailure(
+              `Slack intake comment ${commentId} is absent from the optimistic replica`,
+            );
+          }
+          yield* recordProcessedMessage(input.channelId, input.messageTs, issueId);
+          return { comment };
+        }),
+      legacyIntakeAddComment(input),
+    );
 
   const triageAccept: IssueTrackerServiceShape["triageAccept"] = (input, actor) =>
     routeWrite(
@@ -5030,8 +5085,8 @@ export const makeIssueTrackerService = Effect.fn(function* (
           const written = yield* enqueueReplicaOperations(plans([issueRestoreOperation(input)]));
           const operationId = written.operationIds[0]!;
           yield* flushReplicaOperation(written.engine, operationId);
-          const confirmed = yield* replicaReader.read;
-          const issue = confirmed === null ? undefined : routedIssue(confirmed, input.issueId);
+          const route = yield* ActiveIssueReplicaRoute;
+          const issue = routedIssue(yield* route.read, input.issueId);
           return issue === undefined
             ? yield* syncWriteFailure(`restore ${operationId} completed without a readable issue`)
             : { issue };
@@ -5466,7 +5521,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     routeWrite(
       (readModel) =>
         Effect.gen(function* () {
-          const engine = yield* requireSyncEngine();
+          const engine = yield* requireSyncEngine;
           const existing = readModel.issueThreadLinks.find(
             (link) =>
               link.issueId === input.issueId &&
@@ -5523,7 +5578,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     routeWrite(
       (readModel) =>
         Effect.gen(function* () {
-          const engine = yield* requireSyncEngine();
+          const engine = yield* requireSyncEngine;
           const existing = readModel.issueThreadLinks.find(
             (link) =>
               link.issueId === input.issueId &&

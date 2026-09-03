@@ -24,6 +24,7 @@ const engine = (companyId: CompanyId) =>
 const projectEngine = Effect.fn("test.projectEngine")(function* (
   companyId: CompanyId,
   localProjectId: ProjectId,
+  complete = true,
 ) {
   const binding = {
     entityKind: "environmentBinding",
@@ -42,6 +43,8 @@ const projectEngine = Effect.fn("test.projectEngine")(function* (
     view: new Map([[String(binding.id), binding]]),
     pending: [],
     rejected: [],
+    bootstrapped: complete,
+    quarantined: complete ? [] : [{ reason: "fixture" }],
   } as never);
   return { companyId, state } as unknown as SyncEngine<CloudSyncEntity, IssueSyncOperation>;
 });
@@ -104,6 +107,11 @@ describe("CloudSyncEngineRegistry", () => {
       expect(yield* registry.issueEngineForProject({ environmentId: ENVIRONMENT_ID })).toEqual({
         _tag: "Legacy",
       });
+      yield* registry.expectIssueRouting(ENVIRONMENT_ID);
+      expect(yield* registry.issueEngineForProject({ environmentId: ENVIRONMENT_ID })).toEqual({
+        _tag: "Unavailable",
+        companyIds: [],
+      });
 
       const first = yield* projectEngine(COMPANY_A, PROJECT_ID);
       yield* registry.registerIssueEngine({ environmentId: ENVIRONMENT_ID, engine: first });
@@ -119,7 +127,15 @@ describe("CloudSyncEngineRegistry", () => {
         localProjectId: PROJECT_ID,
       });
       expect(resolved._tag).toBe("Ready");
-      if (resolved._tag === "Ready") expect(resolved.engine.companyId).toBe(COMPANY_A);
+      if (resolved._tag === "Ready") {
+        expect(resolved.engine.companyId).toBe(COMPANY_A);
+        expect(resolved.projectBindings).toEqual([
+          {
+            localProjectId: PROJECT_ID,
+            cloudProjectId: `cloud-project-${COMPANY_A}`,
+          },
+        ]);
+      }
 
       const second = yield* projectEngine(COMPANY_B, PROJECT_ID);
       yield* registry.registerIssueEngine({ environmentId: ENVIRONMENT_ID, engine: second });
@@ -129,6 +145,21 @@ describe("CloudSyncEngineRegistry", () => {
           localProjectId: PROJECT_ID,
         }),
       ).toEqual({ _tag: "Ambiguous", companyIds: [COMPANY_A, COMPANY_B] });
+    }),
+  );
+
+  it.effect("refuses an unbootstrapped or quarantined company replica", () =>
+    Effect.gen(function* () {
+      const registry = yield* makeCloudSyncEngineRegistry;
+      const incomplete = yield* projectEngine(COMPANY_A, PROJECT_ID, false);
+      yield* registry.registerIssueEngine({ environmentId: ENVIRONMENT_ID, engine: incomplete });
+
+      expect(
+        yield* registry.issueEngineForProject({
+          environmentId: ENVIRONMENT_ID,
+          localProjectId: PROJECT_ID,
+        }),
+      ).toEqual({ _tag: "Unavailable", companyIds: [COMPANY_A] });
     }),
   );
 });

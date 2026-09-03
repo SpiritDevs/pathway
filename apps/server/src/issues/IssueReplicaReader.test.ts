@@ -19,6 +19,7 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@spiritdevs/contracts";
+import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
 import { CloudUserId, CompanyId, MembershipId } from "@spiritdevs/contracts/company";
 import {
   AuthorizationEpoch,
@@ -286,14 +287,18 @@ describe("routeReplicaIssueRead", () => {
   it.effect("routes an MCP invocation through its project-bound company engine", () =>
     Effect.gen(function* () {
       const readModel = issueReadModelFromStoredReplica(replica())!;
-      const entities = new Map<string, CloudSyncEntity>([
-        [
-          "membership-active",
+      const routedReadModel = {
+        ...readModel,
+        issues: readModel.issues.map((issue) => ({
+          ...issue,
+          projectId: CloudProjectId.make("cloud-project-server-issue-reads"),
+        })),
+        memberships: [
           {
-            entityKind: "membership",
+            entityKind: "membership" as const,
             id: MembershipId.make("membership-active"),
             userId: CloudUserId.make("cloud-user"),
-            state: "active",
+            state: "active" as const,
             displayNameSnapshot: "Corey",
             emailSnapshot: "corey@example.com",
             invitedByMembershipId: null,
@@ -302,17 +307,21 @@ describe("routeReplicaIssueRead", () => {
             updatedAt: 1,
           },
         ],
-      ]);
+      };
       const handle = {
         companyId: COMPANY_ID,
         environmentId: ENVIRONMENT_ID,
         enqueue: () => Effect.die("unused"),
         sync: Effect.die("unused"),
         operationDisposition: () => Effect.die("unused"),
-        readIssueDomain: Effect.succeed(readModel),
-        readEntities: Effect.succeed(entities),
+        readIssueSnapshot: Effect.succeed({
+          readModel: routedReadModel,
+          bootstrapped: true,
+          quarantined: 0,
+        }),
       } satisfies CloudSyncIssueEngineHandle;
       const registry = CloudSyncEngineRegistry.of({
+        expectIssueRouting: () => Effect.void,
         registerIssueEngine: () => Effect.void,
         unregisterIssueEngine: () => Effect.void,
         withIssueEngine: (_input, use) => use,
@@ -322,7 +331,17 @@ describe("routeReplicaIssueRead", () => {
             environmentId: ENVIRONMENT_ID,
             localProjectId: PROJECT_ID,
           });
-          return Effect.succeed({ _tag: "Ready", engine: handle });
+          return Effect.succeed({
+            _tag: "Ready",
+            engine: handle,
+            readModel: routedReadModel,
+            projectBindings: [
+              {
+                localProjectId: PROJECT_ID,
+                cloudProjectId: CloudProjectId.make("cloud-project-server-issue-reads"),
+              },
+            ],
+          });
         },
       } satisfies CloudSyncEngineRegistryShape);
       const reader = yield* makeIssueReplicaReader(registry);
@@ -332,7 +351,15 @@ describe("routeReplicaIssueRead", () => {
       );
 
       expect(yield* reader.companyId.pipe(provideInvocation)).toBe(COMPANY_ID);
-      expect((yield* reader.read.pipe(provideInvocation))?.issues[0]?.key).toBe("SYNC-7");
+      const routed = yield* reader.resolve.pipe(provideInvocation);
+      expect(routed?.readModel.issues[0]?.key).toBe("SYNC-7");
+      expect(routed?.readModel.issues[0]?.projectId).toBe(PROJECT_ID);
+      expect(routed?.cloudProjectIdForLocal(PROJECT_ID)).toBe("cloud-project-server-issue-reads");
+      expect(routed?.actor).toEqual({
+        kind: "agent",
+        provider: "codex",
+        onBehalfOfMembershipId: null,
+      });
       expect(yield* reader.memberActorForCloudUserId("cloud-user").pipe(provideInvocation)).toEqual(
         {
           kind: "member",
@@ -345,6 +372,7 @@ describe("routeReplicaIssueRead", () => {
   it.effect("fails closed when cloud sync is active but the project has no company binding", () =>
     Effect.gen(function* () {
       const registry = CloudSyncEngineRegistry.of({
+        expectIssueRouting: () => Effect.void,
         registerIssueEngine: () => Effect.void,
         unregisterIssueEngine: () => Effect.void,
         withIssueEngine: (_input, use) => use,

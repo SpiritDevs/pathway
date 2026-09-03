@@ -19,13 +19,30 @@ import {
   type SyncedIssueDomainReadModel,
 } from "@spiritdevs/client-runtime/sync";
 import { IssueTrackerError, type IssueMemberActor } from "@spiritdevs/contracts";
+import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
 import { MembershipId, type CompanyId } from "@spiritdevs/contracts/company";
+import type { SyncActor } from "@spiritdevs/contracts/cloudSync";
 import * as Effect from "effect/Effect";
 
-import type { CloudSyncEngineRegistryShape } from "../cloud/CloudSyncEngineRegistry.ts";
+import type {
+  CloudSyncEngineRegistryShape,
+  CloudSyncIssueEngineHandle,
+  CloudSyncIssueProjectBinding,
+} from "../cloud/CloudSyncEngineRegistry.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 
+export interface IssueReplicaRoute {
+  readonly companyId: CompanyId;
+  readonly engine: CloudSyncIssueEngineHandle;
+  readonly actor: SyncActor;
+  readonly readModel: SyncedIssueDomainReadModel;
+  readonly read: Effect.Effect<SyncedIssueDomainReadModel, IssueTrackerError>;
+  readonly cloudProjectIdForLocal: (localProjectId: string) => CloudProjectId | null;
+}
+
 export interface IssueReplicaReader {
+  /** Resolves one stable company route for the full lifetime of a write. */
+  readonly resolve: Effect.Effect<IssueReplicaRoute | null, IssueTrackerError>;
   /** Null when this environment has no configured company route. */
   readonly companyId: Effect.Effect<CompanyId | null, IssueTrackerError>;
   /** Null means legacy fallback; a ready replica may legitimately project to an empty domain. */
@@ -133,6 +150,7 @@ export function routeReplicaIssueRead<A, E, R>(input: {
 }
 
 const unavailableReader: IssueReplicaReader = {
+  resolve: Effect.succeed(null),
   companyId: Effect.succeed(null),
   read: Effect.succeed(null),
   memberActorForCloudUserId: () => Effect.succeed(null),
@@ -144,6 +162,34 @@ const routingFailure = (message: string) =>
     message: `Cloud issue routing failed: ${message}`,
   });
 
+function translateProjectIds(
+  readModel: SyncedIssueDomainReadModel,
+  projectBindings: ReadonlyArray<CloudSyncIssueProjectBinding>,
+): SyncedIssueDomainReadModel {
+  const localByCloud = new Map(
+    projectBindings.map(({ cloudProjectId, localProjectId }) => [cloudProjectId, localProjectId]),
+  );
+  const localProjectId = (cloudProjectId: CloudProjectId) => {
+    const local = localByCloud.get(cloudProjectId);
+    return local === undefined ? cloudProjectId : CloudProjectId.make(local);
+  };
+  return {
+    ...readModel,
+    cloudProjects: readModel.cloudProjects.map((project) => ({
+      ...project,
+      id: localProjectId(project.id),
+    })),
+    issues: readModel.issues.map((issue) => ({
+      ...issue,
+      projectId: issue.projectId === null ? null : localProjectId(issue.projectId),
+    })),
+    issueMilestones: readModel.issueMilestones.map((milestone) => ({
+      ...milestone,
+      cloudProjectId: localProjectId(milestone.cloudProjectId),
+    })),
+  };
+}
+
 /**
  * Builds a reader whose route is resolved when the operation runs, after MCP authentication has
  * installed the invocation scope. Non-MCP server automation keeps its existing legacy route.
@@ -153,7 +199,7 @@ export const makeIssueReplicaReader = (
 ): Effect.Effect<IssueReplicaReader> => {
   if (registry === null) return Effect.succeed(unavailableReader);
 
-  const resolve = Effect.gen(function* () {
+  const resolve: IssueReplicaReader["resolve"] = Effect.gen(function* () {
     const invocation = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
     if (invocation._tag === "None") return null;
     const route = yield* registry.issueEngineForProject({
@@ -163,6 +209,11 @@ export const makeIssueReplicaReader = (
         : { localProjectId: invocation.value.projectId }),
     });
     if (route._tag === "Legacy") return null;
+    if (route._tag === "Unavailable") {
+      return yield* routingFailure(
+        `cloud sync is configured for environment ${invocation.value.environmentId}, but no complete company replica is available${route.companyIds.length === 0 ? "" : ` (${route.companyIds.join(", ")})`}; refusing to use the legacy tracker`,
+      );
+    }
     if (route._tag === "Unbound") {
       return yield* routingFailure(
         `project ${invocation.value.projectId ?? "(missing)"} is not bound to a ready company replica on environment ${invocation.value.environmentId}; refusing to use the legacy tracker`,
@@ -173,24 +224,49 @@ export const makeIssueReplicaReader = (
         `project ${invocation.value.projectId ?? "(missing)"} is bound to more than one company replica (${route.companyIds.join(", ")}); refusing to guess`,
       );
     }
-    return route.engine;
+    const cloudByLocal = new Map<string, CloudProjectId>(
+      route.projectBindings.map(({ localProjectId, cloudProjectId }) => [
+        localProjectId,
+        cloudProjectId,
+      ]),
+    );
+    const translate = (readModel: SyncedIssueDomainReadModel) =>
+      translateProjectIds(readModel, route.projectBindings);
+    const read = route.engine.readIssueSnapshot.pipe(
+      Effect.flatMap((snapshot) =>
+        !snapshot.bootstrapped || snapshot.quarantined > 0
+          ? Effect.fail(
+              routingFailure(
+                `company replica ${route.engine.companyId} became incomplete during the operation`,
+              ),
+            )
+          : Effect.succeed(translate(snapshot.readModel)),
+      ),
+    );
+    return {
+      companyId: route.engine.companyId,
+      engine: route.engine,
+      actor: {
+        kind: "agent",
+        provider: invocation.value.providerDriverKind,
+        onBehalfOfMembershipId: null,
+      },
+      readModel: translate(route.readModel),
+      read,
+      cloudProjectIdForLocal: (localProjectId) => cloudByLocal.get(localProjectId) ?? null,
+    };
   });
 
   return Effect.succeed({
-    companyId: resolve.pipe(Effect.map((engine) => engine?.companyId ?? null)),
-    read: resolve.pipe(
-      Effect.flatMap((engine) => (engine === null ? Effect.succeed(null) : engine.readIssueDomain)),
-    ),
+    resolve,
+    companyId: resolve.pipe(Effect.map((route) => route?.companyId ?? null)),
+    read: resolve.pipe(Effect.map((route) => route?.readModel ?? null)),
     memberActorForCloudUserId: (cloudUserId) =>
       resolve.pipe(
-        Effect.flatMap((engine) =>
-          engine === null
-            ? Effect.succeed(null)
-            : engine.readEntities.pipe(
-                Effect.map((entities) =>
-                  issueMemberActorFromEntities(entities.values(), cloudUserId),
-                ),
-              ),
+        Effect.map((route) =>
+          route === null
+            ? null
+            : issueMemberActorFromEntities(route.readModel.memberships, cloudUserId),
         ),
       ),
   });

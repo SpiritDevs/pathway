@@ -10,7 +10,11 @@
 import type { IssueId } from "@spiritdevs/contracts";
 import * as Schema from "effect/Schema";
 
-import { CloudProjectSyncEntity } from "./companyDomain.ts";
+import {
+  CloudProjectSyncEntity,
+  EnvironmentBindingEntity,
+  MembershipEntity,
+} from "./companyDomain.ts";
 import {
   IssueAttachmentEntity,
   IssueAuditEventEntity,
@@ -28,6 +32,8 @@ import {
 } from "./issueDomain.ts";
 
 const isCloudProject = Schema.is(CloudProjectSyncEntity);
+const isEnvironmentBinding = Schema.is(EnvironmentBindingEntity);
+const isMembership = Schema.is(MembershipEntity);
 const isIssue = Schema.is(IssueEntity);
 const isIssueStatus = Schema.is(IssueStatusEntity);
 const isIssueLabel = Schema.is(IssueLabelEntity);
@@ -44,6 +50,8 @@ const isIssueThreadLink = Schema.is(IssueThreadLinkEntity);
 /** All synced rows needed by issue list screens and per-issue detail composition. */
 export interface SyncedIssueDomainReadModel {
   readonly cloudProjects: ReadonlyArray<CloudProjectSyncEntity>;
+  readonly environmentBindings: ReadonlyArray<EnvironmentBindingEntity>;
+  readonly memberships: ReadonlyArray<MembershipEntity>;
   readonly issues: ReadonlyArray<IssueEntity>;
   readonly issueStatuses: ReadonlyArray<IssueStatusEntity>;
   readonly issueLabels: ReadonlyArray<IssueLabelEntity>;
@@ -72,6 +80,8 @@ export interface SyncedIssueDetail {
 
 export const EMPTY_SYNCED_ISSUE_DOMAIN: SyncedIssueDomainReadModel = Object.freeze({
   cloudProjects: Object.freeze([]),
+  environmentBindings: Object.freeze([]),
+  memberships: Object.freeze([]),
   issues: Object.freeze([]),
   issueStatuses: Object.freeze([]),
   issueLabels: Object.freeze([]),
@@ -94,6 +104,8 @@ export function syncedIssueDomainFromEntities(
   values: Iterable<unknown>,
 ): SyncedIssueDomainReadModel {
   const cloudProjects: CloudProjectSyncEntity[] = [];
+  const environmentBindings: EnvironmentBindingEntity[] = [];
+  const memberships: MembershipEntity[] = [];
   const issues: IssueEntity[] = [];
   const issueStatuses: IssueStatusEntity[] = [];
   const issueLabels: IssueLabelEntity[] = [];
@@ -109,6 +121,8 @@ export function syncedIssueDomainFromEntities(
 
   for (const value of values) {
     if (isCloudProject(value)) cloudProjects.push(value);
+    else if (isEnvironmentBinding(value)) environmentBindings.push(value);
+    else if (isMembership(value)) memberships.push(value);
     else if (isIssue(value)) issues.push(value);
     else if (isIssueStatus(value)) issueStatuses.push(value);
     else if (isIssueLabel(value)) issueLabels.push(value);
@@ -126,6 +140,8 @@ export function syncedIssueDomainFromEntities(
   cloudProjects.sort(
     (left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id),
   );
+  environmentBindings.sort((left, right) => byId(left, right));
+  memberships.sort((left, right) => byId(left, right));
   issues.sort((left, right) => left.keyNumber - right.keyNumber || byId(left, right));
   issueStatuses.sort(
     (left, right) =>
@@ -161,6 +177,8 @@ export function syncedIssueDomainFromEntities(
 
   return {
     cloudProjects,
+    environmentBindings,
+    memberships,
     issues,
     issueStatuses,
     issueLabels,
