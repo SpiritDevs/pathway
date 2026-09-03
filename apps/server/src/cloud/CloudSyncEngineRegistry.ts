@@ -223,11 +223,11 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
           });
         }
       }
+      if (unavailable.length > 0) {
+        return { _tag: "Unavailable", companyIds: unavailable } as const;
+      }
       if (matches.length === 1) return matches[0]!;
       if (matches.length === 0) {
-        if (unavailable.length > 0) {
-          return { _tag: "Unavailable", companyIds: unavailable } as const;
-        }
         return {
           _tag: "Unbound",
           companyIds: registered.map(({ handle }) => handle.companyId),

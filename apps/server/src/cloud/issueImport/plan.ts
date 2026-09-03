@@ -445,12 +445,6 @@ function threadLinkEntityId(sourceEnvironmentId: EnvironmentId, issueId: string,
   return SyncEntityId.make(stableUuid(["issueThreadLink", sourceEnvironmentId, issueId, threadId]));
 }
 
-function issueIdentityEventId(config: IssueImportPlanConfig, issueId: string): IssueEventId {
-  return IssueEventId.make(
-    stableUuid(["issueKeyIdentity", config.sourceEnvironmentId, config.importRunId, issueId]),
-  );
-}
-
 function epoch(value: string): number | null {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
@@ -564,7 +558,6 @@ export function planIssueImport(
   const entities: IssueSyncEntity[] = [];
   const rejected: IssueImportRejectedRecord[] = [];
   const attachmentUploads: PlannedIssueAttachmentUpload[] = [];
-  const issueIdentityEvents: IssueAuditEventEntity[] = [];
   const batches: Record<IssueImportBatchStage, PlannedIssueImportOperation[]> = {
     trackerConfig: [],
     catalog: [],
@@ -892,16 +885,6 @@ export function planIssueImport(
         },
       }),
     );
-    issueIdentityEvents.push({
-      entityKind: "issueAuditEvent",
-      id: issueIdentityEventId(config, issue.id),
-      issueId: issue.id,
-      kind: "imported",
-      actor: { kind: "system", source: "import" },
-      payload: { key: issue.key },
-      operationId: null,
-      createdAt,
-    });
     if (issue.deletedAt !== null) {
       addOperation(
         "tombstones",
@@ -1169,8 +1152,6 @@ export function planIssueImport(
     };
     entities.push(entity);
   }
-  entities.push(...issueIdentityEvents);
-
   const counts = emptyCounts();
   counts.issue = snapshot.issues.length;
   counts.issueStatus = snapshot.statuses.length;
@@ -1182,7 +1163,7 @@ export function planIssueImport(
   counts.issueComment = snapshot.comments.length;
   counts.issueAttachment = snapshot.attachments.length;
   counts.issueView = snapshot.views.length;
-  counts.issueAuditEvent = snapshot.auditEvents.length + issueIdentityEvents.length;
+  counts.issueAuditEvent = snapshot.auditEvents.length;
   counts.issueThreadLink = snapshot.threadLinks.length;
 
   const keyed = snapshot.issues

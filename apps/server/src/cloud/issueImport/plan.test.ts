@@ -220,15 +220,7 @@ describe("planIssueImport", () => {
     assert.equal(create.operation.args.key, "PAT-2");
     assert.equal(create.sourceEntity.createdAt, Date.parse(CREATED));
 
-    const identity = plan.entities.find(
-      (entity) =>
-        entity.entityKind === "issueAuditEvent" &&
-        entity.issueId === ISSUE_A &&
-        entity.kind === "imported",
-    );
-    assert.ok(identity?.entityKind === "issueAuditEvent");
-    assert.deepEqual(identity.payload, { key: "PAT-2" });
-    assert.equal(plan.preview.counts.issueAuditEvent, snapshot().auditEvents.length + 2);
+    assert.equal(plan.preview.counts.issueAuditEvent, snapshot().auditEvents.length);
   });
 
   it("maps anonymous human assignees and historical actors to the importing membership", () => {

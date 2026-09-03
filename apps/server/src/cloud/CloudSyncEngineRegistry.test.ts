@@ -162,4 +162,21 @@ describe("CloudSyncEngineRegistry", () => {
       ).toEqual({ _tag: "Unavailable", companyIds: [COMPANY_A] });
     }),
   );
+
+  it.effect("does not select a ready route while another company replica is incomplete", () =>
+    Effect.gen(function* () {
+      const registry = yield* makeCloudSyncEngineRegistry;
+      const ready = yield* projectEngine(COMPANY_A, PROJECT_ID);
+      const incomplete = yield* projectEngine(COMPANY_B, PROJECT_ID, false);
+      yield* registry.registerIssueEngine({ environmentId: ENVIRONMENT_ID, engine: ready });
+      yield* registry.registerIssueEngine({ environmentId: ENVIRONMENT_ID, engine: incomplete });
+
+      expect(
+        yield* registry.issueEngineForProject({
+          environmentId: ENVIRONMENT_ID,
+          localProjectId: PROJECT_ID,
+        }),
+      ).toEqual({ _tag: "Unavailable", companyIds: [COMPANY_B] });
+    }),
+  );
 });

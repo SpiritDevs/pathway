@@ -1719,7 +1719,9 @@ export const makeIssueTrackerService = Effect.fn(function* (
         previousOperationId = finalizeOperationId;
       }
 
-      return (yield* enqueueReplicaOperations(operationPlans)).readModel;
+      const written = yield* enqueueReplicaOperations(operationPlans);
+      yield* flushReplicaOperation(written.engine, written.operationIds.at(-1)!);
+      return written.readModel;
     },
   );
 
@@ -4277,36 +4279,46 @@ export const makeIssueTrackerService = Effect.fn(function* (
   const getThreadLinks: IssueTrackerServiceShape["getThreadLinks"] = Effect.fn(
     "IssueTrackerService.getThreadLinks",
   )(function* (input) {
-    return yield* routeReplicaIssueRead({
-      replica: readReplica,
-      fromReplica: (readModel) =>
-        requireReplicaDetailProjection(readModel, input.issueId).pipe(
-          Effect.map((projection) => ({ issueId: input.issueId, links: projection.threadLinks })),
-        ),
-      fromLegacy: requireIssueRecord(input.issueId).pipe(
+    const route = yield* resolveReplicaRoute;
+    if (route === null) {
+      const links = yield* requireIssueRecord(input.issueId).pipe(
         Effect.andThen(readThreadLinks(input.issueId)),
-        Effect.map((links) => ({ issueId: input.issueId, links })),
+      );
+      return { issueId: input.issueId, links };
+    }
+    const readModel = yield* route.read;
+    yield* requireReplicaDetailProjection(readModel, input.issueId);
+    return {
+      issueId: input.issueId,
+      links: issueThreadLinksFromReplica(
+        readModel.issueThreadLinks.filter(
+          (link) =>
+            link.issueId === input.issueId && link.environmentId === route.engine.environmentId,
+        ),
       ),
-    });
+    };
   });
 
   const getIssueLinksForThread: IssueTrackerServiceShape["getIssueLinksForThread"] = Effect.fn(
     "IssueTrackerService.getIssueLinksForThread",
   )(function* (input) {
-    return yield* routeReplicaIssueRead({
-      replica: readReplica,
-      fromReplica: (readModel) =>
-        Effect.succeed({
-          threadId: input.threadId,
-          links: issueThreadLinksFromReplica(readModel.issueThreadLinks).filter(
-            (link) => link.threadId === input.threadId,
-          ),
-        }),
-      fromLegacy: threadLinkRepository.listByThread(input).pipe(
-        Effect.mapError(storage("Failed to read the thread's issue links")),
-        Effect.map((links) => ({ threadId: input.threadId, links })),
+    const route = yield* resolveReplicaRoute;
+    if (route === null) {
+      const links = yield* threadLinkRepository
+        .listByThread(input)
+        .pipe(Effect.mapError(storage("Failed to read the thread's issue links")));
+      return { threadId: input.threadId, links };
+    }
+    const readModel = yield* route.read;
+    return {
+      threadId: input.threadId,
+      links: issueThreadLinksFromReplica(
+        readModel.issueThreadLinks.filter(
+          (link) =>
+            link.threadId === input.threadId && link.environmentId === route.engine.environmentId,
+        ),
       ),
-    });
+    };
   });
 
   const pullRequestEventValue = (pullRequest: IssuePullRequest) =>

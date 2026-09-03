@@ -514,6 +514,24 @@ describe("IssueTrackerService", () => {
             operationId: null,
             createdAt: 1_700_000_000_000,
           }),
+          routedStoredEntity("issueThreadLink", {
+            id: "thread-link-local",
+            issueId: "issue-cycle-carry",
+            environmentId: ROUTED_ENVIRONMENT_ID,
+            threadId: "thread-shared",
+            origin: "manual",
+            createdByMembershipId: null,
+            createdAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueThreadLink", {
+            id: "thread-link-remote",
+            issueId: "issue-cycle-carry",
+            environmentId: EnvironmentId.make("environment-remote"),
+            threadId: "thread-shared",
+            origin: "manual",
+            createdByMembershipId: null,
+            createdAt: 1_700_000_000_001,
+          }),
         ],
         outbox: [],
         rejected: [],
@@ -525,6 +543,8 @@ describe("IssueTrackerService", () => {
       const seenOperationIds = yield* Ref.make<ReadonlySet<SyncOperationId>>(new Set());
       const pendingOperationIds = yield* Ref.make<ReadonlySet<SyncOperationId>>(new Set());
       const holdQueuedCreate = yield* Ref.make(false);
+      const rejectCycleFinalization = yield* Ref.make(false);
+      const rejectedOperationIds = yield* Ref.make<ReadonlySet<SyncOperationId>>(new Set());
       const enqueued = yield* Ref.make<
         ReadonlyArray<{
           readonly operationId: SyncOperationId;
@@ -557,6 +577,15 @@ describe("IssueTrackerService", () => {
             ) {
               yield* Ref.update(pendingOperationIds, (pending) =>
                 new Set(pending).add(operationId),
+              );
+            }
+            if (
+              operation.kind === "issueCycle.update" &&
+              operation.args.finalize === true &&
+              (yield* Ref.get(rejectCycleFinalization))
+            ) {
+              yield* Ref.update(rejectedOperationIds, (rejected) =>
+                new Set(rejected).add(operationId),
               );
             }
             yield* Ref.update(enqueued, (items) => [...items, { operationId, operation, actor }]);
@@ -645,13 +674,18 @@ describe("IssueTrackerService", () => {
           };
         }),
         operationDisposition: (operationId) =>
-          Ref.get(pendingOperationIds).pipe(
-            Effect.map((pending) =>
-              pending.has(operationId)
-                ? ({ _tag: "Pending" } as const)
-                : ({ _tag: "Settled" } as const),
-            ),
-          ),
+          Effect.gen(function* () {
+            if ((yield* Ref.get(rejectedOperationIds)).has(operationId)) {
+              return {
+                _tag: "Rejected" as const,
+                code: "forbidden",
+                message: "Cycle finalization is not permitted",
+              };
+            }
+            return (yield* Ref.get(pendingOperationIds)).has(operationId)
+              ? ({ _tag: "Pending" } as const)
+              : ({ _tag: "Settled" } as const);
+          }),
         readIssueSnapshot: Ref.get(stored).pipe(
           Effect.map(issueReadModelFromStoredReplica),
           Effect.map((readModel) => ({
@@ -779,6 +813,11 @@ describe("IssueTrackerService", () => {
         2,
       );
       assert.strictEqual(yield* Ref.get(routeResolutions), 1);
+      yield* Ref.set(rejectCycleFinalization, true);
+      const cycleError = yield* tracker.getSnapshot().pipe(Effect.flip);
+      assert.strictEqual(cycleError.reason, "invalid");
+      assert.strictEqual(cycleError.message, "Cycle finalization is not permitted");
+      yield* Ref.set(rejectCycleFinalization, false);
       const snapshot = yield* tracker.getSnapshot();
       assert.isTrue(snapshot.issues.some((issue) => issue.id === created.issue.id));
       assert.strictEqual(
@@ -786,6 +825,20 @@ describe("IssueTrackerService", () => {
         "cycle-next",
       );
       assert.isNotNull(snapshot.cycles.find((cycle) => cycle.id === "cycle-ended")?.completedAt);
+      const threadLinks = yield* tracker.getThreadLinks({
+        issueId: IssueId.make("issue-cycle-carry"),
+      });
+      assert.deepStrictEqual(
+        threadLinks.links.map((link) => link.threadId),
+        [ThreadId.make("thread-shared")],
+      );
+      const reverseThreadLinks = yield* tracker.getIssueLinksForThread({
+        threadId: ThreadId.make("thread-shared"),
+      });
+      assert.deepStrictEqual(
+        reverseThreadLinks.links.map((link) => link.issueId),
+        [IssueId.make("issue-cycle-carry")],
+      );
       const cycleWrites = yield* Ref.get(enqueued);
       assert.isTrue(
         cycleWrites.some(
