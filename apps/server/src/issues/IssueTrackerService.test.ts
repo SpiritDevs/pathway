@@ -40,6 +40,7 @@ import {
   SYNC_PROTOCOL_VERSION,
   SyncClientId,
   SyncEntityId,
+  SyncOperationId,
   type SyncActor,
   type SyncEntityKind,
 } from "@spiritdevs/contracts/cloudSync";
@@ -140,6 +141,7 @@ function readyReplicaReader(entities: ReadonlyArray<StoredSyncEntity> = []): Iss
     },
     readModel,
     read: Effect.succeed(readModel),
+    memberActorForCloudUserId: () => null,
     cloudProjectIdForLocal: (localProjectId: string) => CloudProjectId.make(localProjectId),
   };
   return {
@@ -363,6 +365,17 @@ describe("IssueTrackerService", () => {
       const tracker = yield* makeIssueTrackerService({
         replicaReader: {
           ...replicaReader,
+          resolve: replicaReader.resolve.pipe(
+            Effect.map((route) =>
+              route === null
+                ? null
+                : {
+                    ...route,
+                    memberActorForCloudUserId: (userId: string) =>
+                      userId === "user-a" ? MEMBER_A : null,
+                  },
+            ),
+          ),
           memberActorForCloudUserId: (userId) =>
             Effect.succeed(userId === "user-a" ? MEMBER_A : null),
         },
@@ -495,7 +508,7 @@ describe("IssueTrackerService", () => {
           routedStoredEntity("issueAuditEvent", {
             id: "audit-cycle-carry-created",
             issueId: "issue-cycle-carry",
-            kind: "created",
+            kind: "imported",
             actor: { kind: "environment", environmentId: ROUTED_ENVIRONMENT_ID },
             payload: { key: "SYNC-50" },
             operationId: null,
@@ -509,8 +522,15 @@ describe("IssueTrackerService", () => {
       });
       const sequence = yield* Ref.make(0);
       const routeResolutions = yield* Ref.make(0);
+      const seenOperationIds = yield* Ref.make<ReadonlySet<SyncOperationId>>(new Set());
+      const pendingOperationIds = yield* Ref.make<ReadonlySet<SyncOperationId>>(new Set());
+      const holdQueuedCreate = yield* Ref.make(false);
       const enqueued = yield* Ref.make<
-        ReadonlyArray<{ readonly operation: IssueSyncOperation; readonly actor: SyncActor }>
+        ReadonlyArray<{
+          readonly operationId: SyncOperationId;
+          readonly operation: IssueSyncOperation;
+          readonly actor: SyncActor;
+        }>
       >([]);
       const handle: CloudSyncIssueEngineHandle = {
         companyId: ROUTED_COMPANY_ID,
@@ -518,7 +538,28 @@ describe("IssueTrackerService", () => {
         enqueue: ({ operationId, operation, actor }) =>
           Effect.gen(function* () {
             if (actor === undefined) throw new Error("A routed write must carry its actor.");
-            yield* Ref.update(enqueued, (items) => [...items, { operation, actor }]);
+            const duplicate = yield* Ref.modify(seenOperationIds, (seen) => [
+              seen.has(operationId),
+              new Set(seen).add(operationId),
+            ]);
+            if (duplicate) {
+              return {
+                accepted: false,
+                operationId,
+                localSequence: LocalSequence.make(0),
+                status: { _tag: "Pending" as const },
+              };
+            }
+            if (
+              operation.kind === "issue.create" &&
+              operation.args.title === "Queued create" &&
+              (yield* Ref.get(holdQueuedCreate))
+            ) {
+              yield* Ref.update(pendingOperationIds, (pending) =>
+                new Set(pending).add(operationId),
+              );
+            }
+            yield* Ref.update(enqueued, (items) => [...items, { operationId, operation, actor }]);
             const localSequence = LocalSequence.make(
               yield* Ref.updateAndGet(sequence, (n) => n + 1),
             );
@@ -554,42 +595,46 @@ describe("IssueTrackerService", () => {
               status: { _tag: "Pending" as const },
             };
           }),
-        sync: Ref.update(stored, (current) => {
-          const optimistic = issueReadModelFromStoredReplica(current);
-          const created = current.outbox.find((entry) => entry.envelope.kind === "issue.create");
-          const createdIssue =
-            created === undefined
-              ? undefined
-              : (optimistic?.issues.find(
-                  (issue) => issue.id === IssueId.make(created.envelope.entityId),
-                ) ?? undefined);
-          const confirmed =
-            createdIssue === undefined
-              ? []
-              : [
-                  routedStoredEntity("issue", {
-                    ...createdIssue,
-                    key: "SYNC-51",
-                    keyNumber: 51,
-                  }),
-                ];
+        sync: Effect.gen(function* () {
+          const pending = yield* Ref.get(pendingOperationIds);
+          yield* Ref.update(stored, (current) => {
+            const optimistic = issueReadModelFromStoredReplica(current);
+            const created = current.outbox.find((entry) => entry.envelope.kind === "issue.create");
+            if (created !== undefined && pending.has(created.envelope.operationId)) return current;
+            const createdIssue =
+              created === undefined
+                ? undefined
+                : (optimistic?.issues.find(
+                    (issue) => issue.id === IssueId.make(created.envelope.entityId),
+                  ) ?? undefined);
+            const keyNumber = createdIssue?.title === "Queued create" ? 52 : 51;
+            const confirmed =
+              createdIssue === undefined
+                ? []
+                : [
+                    routedStoredEntity("issue", {
+                      ...createdIssue,
+                      key: `SYNC-${keyNumber}`,
+                      keyNumber,
+                    }),
+                  ];
+            return {
+              ...current,
+              entities: [
+                ...current.entities.filter(
+                  (entity) =>
+                    !confirmed.some(
+                      (candidate) =>
+                        candidate.entityKind === entity.entityKind &&
+                        candidate.entityId === entity.entityId,
+                    ),
+                ),
+                ...confirmed,
+              ],
+              outbox: [],
+            };
+          });
           return {
-            ...current,
-            entities: [
-              ...current.entities.filter(
-                (entity) =>
-                  !confirmed.some(
-                    (candidate) =>
-                      candidate.entityKind === entity.entityKind &&
-                      candidate.entityId === entity.entityId,
-                  ),
-              ),
-              ...confirmed,
-            ],
-            outbox: [],
-          };
-        }).pipe(
-          Effect.as({
             outcome: "synced" as const,
             cursor: CompanyVersion.make(2),
             authorizationEpoch: AuthorizationEpoch.make(1),
@@ -597,9 +642,16 @@ describe("IssueTrackerService", () => {
             acceptedOperations: 1,
             rejectedOperations: 0,
             error: null,
-          }),
-        ),
-        operationDisposition: () => Effect.succeed({ _tag: "Settled" }),
+          };
+        }),
+        operationDisposition: (operationId) =>
+          Ref.get(pendingOperationIds).pipe(
+            Effect.map((pending) =>
+              pending.has(operationId)
+                ? ({ _tag: "Pending" } as const)
+                : ({ _tag: "Settled" } as const),
+            ),
+          ),
         readIssueSnapshot: Ref.get(stored).pipe(
           Effect.map(issueReadModelFromStoredReplica),
           Effect.map((readModel) => ({
@@ -644,6 +696,7 @@ describe("IssueTrackerService", () => {
             },
             readModel,
             read,
+            memberActorForCloudUserId: () => null,
             cloudProjectIdForLocal: (localProjectId: string) =>
               localProjectId === PROJECT ? CloudProjectId.make("cloud-project-alpha") : null,
           };
@@ -657,14 +710,52 @@ describe("IssueTrackerService", () => {
         replicaReader,
         syncEngineRegistry: registry,
       });
-      const created = yield* tracker.create(
-        {
-          title: "Server-routed",
-          statusId: IssueStatusId.make("status-routed"),
-          projectId: PROJECT,
-        },
-        AGENT,
+      const queuedIdentity = `issue-create:${ROUTED_COMPANY_ID}:queued-request`;
+      const [created, retried, queuedError, resumed] = yield* tracker.withPinnedRoute(
+        Effect.gen(function* () {
+          const first = yield* tracker.create(
+            {
+              title: "Server-routed",
+              statusId: IssueStatusId.make("status-routed"),
+              projectId: PROJECT,
+            },
+            AGENT,
+            "create-request-1",
+          );
+          const retry = yield* tracker.create(
+            {
+              title: "Server-routed",
+              statusId: IssueStatusId.make("status-routed"),
+              projectId: PROJECT,
+            },
+            AGENT,
+            `issue-create:${ROUTED_COMPANY_ID}:create-request-1`,
+          );
+          yield* Ref.set(holdQueuedCreate, true);
+          const pendingError = yield* tracker
+            .create(
+              {
+                title: "Queued create",
+                statusId: IssueStatusId.make("status-routed"),
+              },
+              AGENT,
+              "queued-request",
+            )
+            .pipe(Effect.flip);
+          yield* Ref.set(holdQueuedCreate, false);
+          yield* Ref.set(pendingOperationIds, new Set());
+          const resumedCreate = yield* tracker.create(
+            {
+              title: "Queued create",
+              statusId: IssueStatusId.make("status-routed"),
+            },
+            AGENT,
+            queuedIdentity,
+          );
+          return [first, retry, pendingError, resumedCreate] as const;
+        }),
       );
+      assert.match(created.issue.id, /^[0-9a-f-]{36}$/u);
       assert.strictEqual(created.issue.key, "SYNC-51");
       assert.strictEqual(created.issue.title, "Server-routed");
       const firstWrite = (yield* Ref.get(enqueued))[0]!;
@@ -676,6 +767,17 @@ describe("IssueTrackerService", () => {
         provider: ProviderDriverKind.make("codex"),
         onBehalfOfMembershipId: null,
       });
+      assert.strictEqual(retried.issue.id, created.issue.id);
+      assert.strictEqual(queuedError.reason, "conflict");
+      assert.strictEqual(queuedError.subject, queuedIdentity);
+      assert.include(queuedError.message, `idempotencyKey "${queuedIdentity}"`);
+      assert.match(resumed.issue.id, /^[0-9a-f-]{36}$/u);
+      assert.strictEqual(resumed.issue.key, "SYNC-52");
+      assert.strictEqual(
+        (yield* Ref.get(enqueued)).filter(({ operation }) => operation.kind === "issue.create")
+          .length,
+        2,
+      );
       assert.strictEqual(yield* Ref.get(routeResolutions), 1);
       const snapshot = yield* tracker.getSnapshot();
       assert.isTrue(snapshot.issues.some((issue) => issue.id === created.issue.id));

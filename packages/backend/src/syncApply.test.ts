@@ -570,6 +570,12 @@ describe("tombstones in the change feed", () => {
     ]);
     expect(page.cursor).toBe(page.latestVersion);
     expect(page.hasMore).toBe(false);
+    await t.run(async (ctx) => {
+      const deleted = (await ctx.db.query("issueAuditEvents").collect()).find(
+        (event) => event.issueId === ISSUE_A && event.kind === "deleted",
+      );
+      expect(deleted?.payload).toEqual({ key: "PAT-1" });
+    });
   });
 });
 

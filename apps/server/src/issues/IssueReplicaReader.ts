@@ -37,6 +37,7 @@ export interface IssueReplicaRoute {
   readonly actor: SyncActor;
   readonly readModel: SyncedIssueDomainReadModel;
   readonly read: Effect.Effect<SyncedIssueDomainReadModel, IssueTrackerError>;
+  readonly memberActorForCloudUserId: (cloudUserId: string) => IssueMemberActor | null;
   readonly cloudProjectIdForLocal: (localProjectId: string) => CloudProjectId | null;
 }
 
@@ -261,6 +262,8 @@ export const makeIssueReplicaReader = (
       },
       readModel: translate(route.readModel),
       read,
+      memberActorForCloudUserId: (cloudUserId) =>
+        issueMemberActorFromEntities(route.readModel.memberships, cloudUserId),
       cloudProjectIdForLocal: (localProjectId) => cloudByLocal.get(localProjectId) ?? null,
     };
   });

@@ -1135,7 +1135,17 @@ const issueDelete: EnvApply = async ({ ctx, actor, company, feedActor, operation
   await ctx.db.patch(issue._id, { deletedAt: now, updatedAt: now });
   return applied(
     tombstone("issue", issue.id, issue.teamIds, issue._id),
-    await appendAuditEvent(ctx, company, feedActor, operation, 0, issue, "deleted", {}, now),
+    await appendAuditEvent(
+      ctx,
+      company,
+      feedActor,
+      operation,
+      0,
+      issue,
+      "deleted",
+      { key: issue.key },
+      now,
+    ),
   );
 };
 
@@ -1160,7 +1170,7 @@ const issueTriageReject: EnvApply = async ({ ctx, actor, company, feedActor, ope
       0,
       issue,
       "triage_rejected",
-      {},
+      { key: issue.key },
       now,
     ),
   );

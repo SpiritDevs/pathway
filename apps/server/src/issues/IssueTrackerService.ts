@@ -194,6 +194,7 @@ import {
   type SyncedIssueDomainReadModel,
 } from "@spiritdevs/client-runtime/sync";
 import { SyncEntityId, SyncOperationId, type SyncActor } from "@spiritdevs/contracts/cloudSync";
+import * as NodeCrypto from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -281,6 +282,10 @@ const ISSUE_KEY_PREFIX_MAX_CHARS = 10;
 class ActiveIssueReplicaRoute extends Context.Service<ActiveIssueReplicaRoute, IssueReplicaRoute>()(
   "@spiritdevs/pathway/issues/IssueTrackerService/ActiveIssueReplicaRoute",
 ) {}
+class PinnedIssueReplicaRoute extends Context.Service<
+  PinnedIssueReplicaRoute,
+  IssueReplicaRoute | null
+>()("@spiritdevs/pathway/issues/IssueTrackerService/PinnedIssueReplicaRoute") {}
 /** The change log is a feed, not a diff viewer: a 100k-character body is stored, not replayed. */
 const EVENT_VALUE_MAX_CHARS = 512;
 
@@ -325,7 +330,16 @@ const CATEGORY_COLORS: Readonly<Record<IssueStatusCategory, string>> = {
 /** Every write intake makes is the tracker acting on somebody's behalf, never a person. */
 const SLACK_ACTOR = { kind: "system", source: "slack" } as const satisfies IssueActor;
 const CYCLE_ACTOR = { kind: "system", source: "cycles" } as const satisfies SyncActor;
-const decodeCreatedIssueAuditPayload = Schema.decodeUnknownOption(Schema.Struct({ key: IssueKey }));
+const decodeIssueKeyAuditPayload = Schema.decodeUnknownOption(Schema.Struct({ key: IssueKey }));
+
+/** Keep retry tokens human-portable while retaining the UUID-shaped ids expected by sync entities. */
+function stableCreateId(retryIdentity: string): string {
+  const bytes = NodeCrypto.createHash("sha256").update(retryIdentity).digest().subarray(0, 16);
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x50;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 function issueIdByKeyFromReplica(
   readModel: SyncedIssueDomainReadModel,
@@ -334,8 +348,7 @@ function issueIdByKeyFromReplica(
   const live = readModel.issues.find((issue) => issue.key === key);
   if (live !== undefined) return live.id;
   for (const event of readModel.issueAuditEvents) {
-    if (event.kind !== "created") continue;
-    const payload = decodeCreatedIssueAuditPayload(event.payload);
+    const payload = decodeIssueKeyAuditPayload(event.payload);
     if (Option.isSome(payload) && payload.value.key === key) return event.issueId;
   }
   return null;
@@ -442,6 +455,10 @@ export interface IssueIntakeCommentResult {
 }
 
 export interface IssueTrackerServiceShape {
+  /** Resolves the company once and keeps every tracker call in `effect` on that route. */
+  readonly withPinnedRoute: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | IssueTrackerError, R>;
   /** Whether the complete company replica is the authority for issue reads in this environment. */
   readonly replicaRoutable: Effect.Effect<boolean, IssueTrackerError>;
   /** Specific active membership for a cloud identity, or null outside a ready company replica. */
@@ -469,6 +486,7 @@ export interface IssueTrackerServiceShape {
   readonly create: (
     input: IssueCreateInput,
     actor: IssueActor,
+    retryIdentity?: string,
   ) => Effect.Effect<IssueResult, IssueTrackerError>;
   readonly update: (
     input: IssueUpdateInput,
@@ -1385,7 +1403,28 @@ export const makeIssueTrackerService = Effect.fn(function* (
     readonly operation: IssueSyncOperation;
     readonly operationId?: SyncOperationId;
     readonly actor?: SyncActor;
+    readonly acceptExisting?: boolean;
   };
+
+  const resolveReplicaRoute = Effect.serviceOption(PinnedIssueReplicaRoute).pipe(
+    Effect.flatMap((pinned) =>
+      Option.isSome(pinned) ? Effect.succeed(pinned.value) : replicaReader.resolve,
+    ),
+  );
+  const readReplica = resolveReplicaRoute.pipe(
+    Effect.flatMap((route) => (route === null ? Effect.succeed(null) : route.read)),
+  );
+
+  const withPinnedRoute: IssueTrackerServiceShape["withPinnedRoute"] = (effect) =>
+    resolveReplicaRoute.pipe(
+      Effect.flatMap((route) =>
+        Effect.provideService(
+          route === null ? effect : Effect.provideService(effect, ActiveIssueReplicaRoute, route),
+          PinnedIssueReplicaRoute,
+          route,
+        ),
+      ),
+    );
 
   const syncWriteFailure = (message: string) =>
     new IssueTrackerError({ reason: "storage", message: `Cloud issue write failed: ${message}` });
@@ -1463,7 +1502,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
             actor: plan.actor ?? route.actor,
           })
           .pipe(Effect.mapError((error) => syncWriteFailure(error.message)));
-        if (!receipt.accepted) {
+        if (!receipt.accepted && plan.acceptExisting !== true) {
           return yield* syncWriteFailure(`operation ${operationId} was already enqueued`);
         }
         operationIds.push(operationId);
@@ -1685,7 +1724,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   );
 
   const getSnapshot: IssueTrackerServiceShape["getSnapshot"] = () =>
-    replicaReader.resolve.pipe(
+    resolveReplicaRoute.pipe(
       Effect.flatMap((route) => {
         if (route === null) {
           return finalizeEndedCycles().pipe(Effect.andThen(readLegacySnapshot()));
@@ -2515,7 +2554,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   /** Replica-owned issue data with the legacy row and labels composed for local executors. */
   const requireRoutedIssue = (issueId: IssueId): Effect.Effect<Issue, IssueTrackerError> =>
     routeReplicaIssueRead({
-      replica: replicaReader.read,
+      replica: readReplica,
       fromReplica: (readModel) => {
         const entity = readModel.issues.find((candidate) => candidate.id === issueId);
         return entity === undefined
@@ -2557,7 +2596,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     "IssueTrackerService.getDetail",
   )(function* (input) {
     return yield* routeReplicaIssueRead({
-      replica: replicaReader.read,
+      replica: readReplica,
       fromReplica: (readModel) =>
         requireReplicaDetailProjection(readModel, input.issueId).pipe(
           Effect.map((projection) => projection.detail!),
@@ -3400,7 +3439,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     "IssueTrackerService.commentsList",
   )(function* (input) {
     return yield* routeReplicaIssueRead({
-      replica: replicaReader.read,
+      replica: readReplica,
       fromReplica: (readModel) =>
         requireReplicaDetailProjection(readModel, input.issueId).pipe(
           Effect.map((projection) => ({ issueId: input.issueId, comments: projection.comments })),
@@ -3906,7 +3945,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     "IssueTrackerService.getEvents",
   )(function* (input) {
     return yield* routeReplicaIssueRead({
-      replica: replicaReader.read,
+      replica: readReplica,
       fromReplica: (readModel) =>
         requireReplicaDetailProjection(readModel, input.issueId).pipe(
           Effect.map((projection) => ({ events: projection.events })),
@@ -4239,7 +4278,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     "IssueTrackerService.getThreadLinks",
   )(function* (input) {
     return yield* routeReplicaIssueRead({
-      replica: replicaReader.read,
+      replica: readReplica,
       fromReplica: (readModel) =>
         requireReplicaDetailProjection(readModel, input.issueId).pipe(
           Effect.map((projection) => ({ issueId: input.issueId, links: projection.threadLinks })),
@@ -4255,7 +4294,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     "IssueTrackerService.getIssueLinksForThread",
   )(function* (input) {
     return yield* routeReplicaIssueRead({
-      replica: replicaReader.read,
+      replica: readReplica,
       fromReplica: (readModel) =>
         Effect.succeed({
           threadId: input.threadId,
@@ -4941,14 +4980,14 @@ export const makeIssueTrackerService = Effect.fn(function* (
     ) => Effect.Effect<A, IssueTrackerError, ActiveIssueReplicaRoute>,
     fromLegacy: Effect.Effect<A, IssueTrackerError>,
   ) =>
-    replicaReader.resolve.pipe(
+    resolveReplicaRoute.pipe(
       Effect.flatMap((route) =>
         route === null
           ? fromLegacy
           : Effect.provideService(fromReplica(route.readModel), ActiveIssueReplicaRoute, route),
       ),
     );
-  const replicaRoutable = replicaReader.resolve.pipe(Effect.map((route) => route !== null));
+  const replicaRoutable = resolveReplicaRoute.pipe(Effect.map((route) => route !== null));
   const replicaAttachmentUnsupported = () =>
     invalid(
       "Server-produced issue attachments are not supported for cloud-synced companies yet. Add the attachment from the Pathway web comment composer instead.",
@@ -4961,8 +5000,15 @@ export const makeIssueTrackerService = Effect.fn(function* (
     Effect.flatMap(replicaRoutable, (routable) =>
       routable ? replicaAttachmentUnsupported() : legacyStoreCommentEvidence(input),
     );
-  const memberActorForCloudUserId: IssueTrackerServiceShape["memberActorForCloudUserId"] =
-    replicaReader.memberActorForCloudUserId;
+  const memberActorForCloudUserId: IssueTrackerServiceShape["memberActorForCloudUserId"] = (
+    cloudUserId,
+  ) =>
+    resolveReplicaRoute.pipe(
+      Effect.map((route) => {
+        if (route === null) return null;
+        return route.memberActorForCloudUserId(cloudUserId);
+      }),
+    );
   const linkedMemberActor: IssueTrackerServiceShape["linkedMemberActor"] = secretStore
     .get(CLOUD_LINKED_USER_ID)
     .pipe(
@@ -5119,21 +5165,48 @@ export const makeIssueTrackerService = Effect.fn(function* (
       legacyTriageReject(input, actor),
     );
 
-  const create: IssueTrackerServiceShape["create"] = (input, actor) =>
+  const createConfirmationPending = (retryIdentity: string) =>
+    new IssueTrackerError({
+      reason: "conflict",
+      subject: retryIdentity,
+      message: `Issue creation ${retryIdentity} is durably queued but not confirmed. Do not file it again with a new identity. Retry issues_create with idempotencyKey "${retryIdentity}" to resume this create.`,
+    });
+
+  const create: IssueTrackerServiceShape["create"] = (input, actor, suppliedRetryIdentity) =>
     routeWrite(
       (_readModel) =>
         Effect.gen(function* () {
-          const issueId = IssueId.make(yield* newId);
-          const written = yield* enqueueReplicaOperations(
-            plans([issueCreateOperation(input, issueId)]),
-          );
-          const operationId = written.operationIds[0]!;
-          yield* flushReplicaOperation(written.engine, operationId);
           const route = yield* ActiveIssueReplicaRoute;
+          const retryPrefix = `issue-create:${route.companyId}:`;
+          const supplied = suppliedRetryIdentity ?? (yield* newId);
+          if (supplied.startsWith("issue-create:") && !supplied.startsWith(retryPrefix)) {
+            return yield* invalid(
+              "This issue-create retry belongs to another company. Restore the original project binding before retrying it.",
+              supplied,
+            );
+          }
+          const retryIdentity = supplied.startsWith(retryPrefix)
+            ? supplied
+            : `${retryPrefix}${supplied}`;
+          const stableId = stableCreateId(retryIdentity);
+          const issueId = IssueId.make(stableId);
+          const operationId = SyncOperationId.make(stableId);
+          const written = yield* enqueueReplicaOperations([
+            {
+              operationId,
+              operation: issueCreateOperation(input, issueId),
+              acceptExisting: true,
+            },
+          ]);
+          yield* flushReplicaOperation(written.engine, operationId).pipe(
+            Effect.catch((error) =>
+              error.reason === "storage"
+                ? Effect.fail(createConfirmationPending(retryIdentity))
+                : Effect.fail(error),
+            ),
+          );
           const issue = routedIssue(yield* route.read, issueId);
-          return issue === undefined
-            ? yield* syncWriteFailure(`create ${operationId} completed without a readable issue`)
-            : { issue };
+          return issue === undefined ? yield* createConfirmationPending(retryIdentity) : { issue };
         }),
       legacyCreate(input, actor),
     );
@@ -5802,6 +5875,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   );
 
   return {
+    withPinnedRoute,
     replicaRoutable,
     memberActorForCloudUserId,
     linkedMemberActor,
@@ -5878,7 +5952,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           // reach this client, whereas a repeated upsert is a no-op. Opening the stream is also a
           // read of the tracker, so it carries any lazy cycle finalisation with it.
           const subscription = yield* PubSub.subscribe(changes);
-          const readModel = yield* replicaReader.read;
+          const readModel = yield* readReplica;
           if (readModel !== null) {
             const [slackWatches, status, config] = yield* Effect.all([
               listSlackWatches(),
@@ -5928,7 +6002,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
             Stream.filterEffect((event) =>
               isReplicaIssueStreamEventAllowed(event)
                 ? Effect.succeed(true)
-                : replicaReader.read.pipe(Effect.map((readModel) => readModel === null)),
+                : readReplica.pipe(Effect.map((readModel) => readModel === null)),
             ),
           );
           return Stream.concat(Stream.fromIterable(initial), live);

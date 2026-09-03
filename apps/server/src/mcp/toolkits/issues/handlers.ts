@@ -247,6 +247,9 @@ const callerActor = Effect.fn("issues_mcp.actor")(function* () {
   return { kind: "agent", provider: invocation.providerDriverKind } as const satisfies IssueActor;
 });
 
+const withinPinnedRoute = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.flatMap(IssueTrackerService, (tracker) => tracker.withPinnedRoute(effect));
+
 const resolveIssue = (
   index: TrackerIndex,
   key: string,
@@ -615,7 +618,7 @@ const handlers = {
         returned: page.length,
         truncated: matched.length > page.length,
       };
-    }),
+    }).pipe(withinPinnedRoute),
 
   issues_get: (input) =>
     Effect.gen(function* () {
@@ -625,7 +628,7 @@ const handlers = {
       const detail = yield* tracker.getDetail({ issueId: issue.id });
       const links = yield* tracker.getThreadLinks({ issueId: issue.id });
       return formatIssueDetail(index, issue, detail, links.links);
-    }),
+    }).pipe(withinPinnedRoute),
 
   issues_get_attachment: (input) =>
     Effect.gen(function* () {
@@ -644,7 +647,7 @@ const handlers = {
         );
       }
       return { key: issue.key, attachment };
-    }),
+    }).pipe(withinPinnedRoute),
 
   issues_milestones_list: (input) =>
     Effect.gen(function* () {
@@ -656,7 +659,7 @@ const handlers = {
           .filter((milestone) => project === null || milestone.projectId === project.projectId)
           .map((milestone) => formatMilestone(index, milestone)),
       };
-    }),
+    }).pipe(withinPinnedRoute),
 
   issues_milestone_create: (input) =>
     Effect.gen(function* () {
@@ -671,7 +674,7 @@ const handlers = {
         ...(input.targetDate === undefined ? {} : { targetDate: input.targetDate }),
       });
       return { milestone: formatMilestone(index, created.milestone) };
-    }),
+    }).pipe(withinPinnedRoute),
 
   issues_milestone_update: (input) =>
     Effect.gen(function* () {
@@ -697,7 +700,7 @@ const handlers = {
       );
       const after = yield* readIndex();
       return { milestone: formatMilestone(after, updated.milestone) };
-    }),
+    }).pipe(withinPinnedRoute),
 
   issues_milestone_delete: (input) =>
     Effect.gen(function* () {
@@ -712,9 +715,9 @@ const handlers = {
       ).length;
       yield* tracker.milestoneDelete({ milestoneId: milestone.id }, actor);
       return { deleted, clearedIssues };
-    }),
+    }).pipe(withinPinnedRoute),
 
-  issues_create: (input) =>
+  issues_create: (input, context) =>
     Effect.gen(function* () {
       const tracker = yield* IssueTrackerService;
       const actor = yield* callerActor();
@@ -782,7 +785,11 @@ const handlers = {
         ...(input.dueDate === undefined ? {} : { dueDate: input.dueDate }),
         ...(input.triage === undefined ? {} : { triage: input.triage }),
       };
-      const created = yield* tracker.create(create, actor);
+      const created = yield* tracker.create(
+        create,
+        actor,
+        input.idempotencyKey ?? context.toolCallId,
+      );
       // `create` takes no assignee: assignment is a field change, and the change log should say so
       // rather than hiding an owner inside a "created" row.
       const issue =
@@ -792,7 +799,7 @@ const handlers = {
               .issue;
       const after = yield* readIndex();
       return { issue: formatIssueRow(after, issue) };
-    }),
+    }).pipe(withinPinnedRoute),
 
   issues_update: (input) =>
     Effect.gen(function* () {
@@ -868,7 +875,7 @@ const handlers = {
       const updated = yield* tracker.update({ issueId: issue.id, patch }, actor);
       const after = yield* readIndex();
       return { issue: formatIssueRow(after, updated.issue) };
-    }),
+    }).pipe(withinPinnedRoute),
 
   issues_comment: (input) =>
     Effect.gen(function* () {
@@ -881,7 +888,7 @@ const handlers = {
         key: issue.key,
         comment: formatMcpComment(created.comment),
       };
-    }),
+    }).pipe(withinPinnedRoute),
 
   issues_comment_evidence: (input) =>
     Effect.gen(function* () {
@@ -976,7 +983,7 @@ const handlers = {
         actor,
       );
       return { key: issue.key, comment: formatMcpComment(created.comment) };
-    }),
+    }).pipe(withinPinnedRoute),
 
   issues_delete: (input) =>
     Effect.gen(function* () {
@@ -986,7 +993,7 @@ const handlers = {
       const issue = yield* resolveIssue(index, input.key);
       const removed = yield* tracker.remove({ issueId: issue.id }, actor);
       return { issue: formatIssueRow(index, removed.issue) };
-    }),
+    }).pipe(withinPinnedRoute),
 
   issues_restore: (input) =>
     Effect.gen(function* () {
@@ -996,7 +1003,7 @@ const handlers = {
       const key = IssueKey.make(normalizeIssueKey(input.key));
       const restored = yield* tracker.restoreByKey(key, actor);
       return { issue: formatIssueRow(index, restored.issue) };
-    }),
+    }).pipe(withinPinnedRoute),
 
   issues_link_thread: (input) =>
     Effect.gen(function* () {
@@ -1023,7 +1030,7 @@ const handlers = {
           createdAt: link.createdAt,
         })),
       };
-    }),
+    }).pipe(withinPinnedRoute),
 } satisfies Parameters<typeof IssuesToolkit.toLayer>[0];
 
 export const IssuesToolkitHandlersLive = IssuesToolkit.toLayer(handlers);
