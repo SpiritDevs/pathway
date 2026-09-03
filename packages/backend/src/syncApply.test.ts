@@ -385,7 +385,8 @@ describe("sync.applyOperations", () => {
       payload: { title: "Fix the crash for good" },
     });
 
-    // Soft delete keeps the payload available for the issue bin.
+    // Soft delete keeps the established tombstone for rolling clients; a separate open audit row
+    // carries the bin snapshot for clients that understand it.
     const deleted = await asWriter(t).mutation(api.sync.applyOperations, {
       companyId: COMPANY_ID,
       operations: [op("issue.delete", ISSUE_A, {})],
@@ -397,18 +398,28 @@ describe("sync.applyOperations", () => {
       cursor: afterUpdate.cursor,
     });
     if (afterDelete._tag !== "Changes") throw new Error("expected Changes");
-    const deletedUpsert = afterDelete.changes.find((c) => c.entityKind === "issue");
-    expect(deletedUpsert).toMatchObject({
-      changeKind: "upsert",
+    const deletedChange = afterDelete.changes.find((c) => c.entityKind === "issue");
+    expect(deletedChange).toMatchObject({
+      changeKind: "tombstone",
       entityKind: "issue",
       entityId: ISSUE_A,
-      payload: { deletedAt: expect.any(Number) },
+      payload: null,
     });
+    expect(afterDelete.changes).toContainEqual(
+      expect.objectContaining({
+        entityKind: "issueAuditEvent",
+        changeKind: "upsert",
+        payload: expect.objectContaining({
+          kind: "deleted_snapshot",
+          payload: { deletedIssue: expect.objectContaining({ id: ISSUE_A }) },
+        }),
+      }),
+    );
 
     await t.run(async (ctx) => {
       const issue = (await ctx.db.query("issues").collect()).find((row) => row.id === ISSUE_A);
       expect(issue?.deletedAt).not.toBeNull();
-      expect(issue?.version).toBe(deletedUpsert?.version);
+      expect(issue?.version).toBe(deletedChange?.version);
     });
   });
 
@@ -496,8 +507,12 @@ describe("sync.applyOperations", () => {
       const events = (await ctx.db.query("issueAuditEvents").collect()).filter(
         (event) => event.issueId === ISSUE_A,
       );
-      expect(events.map((event) => event.kind)).toEqual(["created", "triage_rejected"]);
-      expect(events.map((event) => event.actor)).toEqual([slackActor, slackActor]);
+      expect(events.map((event) => event.kind)).toEqual([
+        "created",
+        "triage_rejected",
+        "deleted_snapshot",
+      ]);
+      expect(events.map((event) => event.actor)).toEqual([slackActor, slackActor, slackActor]);
     });
   });
 
@@ -549,7 +564,7 @@ describe("sync.applyOperations", () => {
 });
 
 describe("soft deletes in the change feed", () => {
-  it("a reader drains the live and deleted upserts, but never the audit events", async () => {
+  it("keeps issue tombstones for old clients and exposes only the bin snapshot to readers", async () => {
     const t = harness();
     await seed(t);
     const op = makeOps(WRITER_MEMBERSHIP_ID);
@@ -567,13 +582,17 @@ describe("soft deletes in the change feed", () => {
       cursor: 0,
     });
     if (page._tag !== "Changes") throw new Error("expected Changes");
-    // The reader holds `issues.read` but not `audit.read`, so the two audit events are filtered
-    // while the cursor still advances over them to the head.
+    // The reader holds `issues.read` but not `audit.read`: ordinary audit rows stay filtered, while
+    // the open snapshot row is harmless to old clients and lets new clients rebuild the bin.
     expect(page.changes.map((c) => [c.entityKind, c.changeKind])).toEqual([
       ["issue", "upsert"],
-      ["issue", "upsert"],
+      ["issue", "tombstone"],
+      ["issueAuditEvent", "upsert"],
     ]);
-    expect(page.changes.at(-1)?.payload).toMatchObject({ deletedAt: expect.any(Number) });
+    expect(page.changes.at(-1)?.payload).toMatchObject({
+      kind: "deleted_snapshot",
+      payload: { deletedIssue: { id: ISSUE_A, deletedAt: expect.any(Number) } },
+    });
     expect(page.cursor).toBe(page.latestVersion);
     expect(page.hasMore).toBe(false);
     await t.run(async (ctx) => {
@@ -649,19 +668,30 @@ describe("sync.bootstrap", () => {
     }
     expect(cursor).toBeNull();
 
-    // The reader sees the status, live issues, and the soft-deleted issue for the bin. Audit events
-    // remain behind the missing `audit.read` permission.
-    const issueRows = entities.filter((e) => e.entityKind.startsWith("issue"));
+    // The issue table still seeds only live rows. The deleted issue is carried in an open audit
+    // snapshot that old clients ignore and new clients project into the bin.
+    const issueRows = entities.filter((e) => e.entityKind === "issue");
     expect(issueRows.map((e) => [e.entityKind, e.entityId]).sort()).toEqual(
       [
-        ["issueStatus", STATUS_ID],
         ["issue", ISSUE_A],
-        ["issue", ISSUE_B],
         ["issue", ISSUE_C],
       ].sort(),
     );
-    expect(issueRows.find((entity) => entity.entityId === ISSUE_B)?.payload).toMatchObject({
-      deletedAt: expect.any(Number),
+    expect(entities).toContainEqual(
+      expect.objectContaining({
+        entityKind: "issueStatus",
+        entityId: STATUS_ID,
+      }),
+    );
+    const binSnapshot = entities.find(
+      (entity) =>
+        entity.entityKind === "issueAuditEvent" &&
+        typeof entity.payload === "object" &&
+        entity.payload !== null &&
+        (entity.payload as { readonly kind?: unknown }).kind === "deleted_snapshot",
+    );
+    expect(binSnapshot?.payload).toMatchObject({
+      payload: { deletedIssue: { id: ISSUE_B, deletedAt: expect.any(Number) } },
     });
     // The walk continues into the company domain (`BOOTSTRAP_ENTITY_ORDER`). The reader holds no
     // administration switch, so it receives exactly its self rows: the company it is a member of,

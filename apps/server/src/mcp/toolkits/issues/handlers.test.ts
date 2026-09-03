@@ -49,7 +49,12 @@ import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepository } from "../../../persistence/Services/ProjectionProjects.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
-import { IssuesToolkitHandlersLive, parseIssueAssignee, resolveIssueAssignee } from "./handlers.ts";
+import {
+  IssuesToolkitHandlersLive,
+  issueCreateContinuationFailure,
+  parseIssueAssignee,
+  resolveIssueAssignee,
+} from "./handlers.ts";
 import {
   IssuesToolkit,
   type IssuesMcpGetAttachmentResult,
@@ -79,6 +84,16 @@ const invocation: McpInvocationContext.McpInvocationScope = {
   capabilities: new Set(["preview"] as const),
   issuedAt: 1,
 };
+
+it("returns the same create identity when work after the durable create fails", () => {
+  const error = issueCreateContinuationFailure(
+    "mcp:provider-session-1:request-9",
+    new IssueTrackerError({ reason: "storage", message: "Assignee update failed." }),
+  );
+  assert.strictEqual(error.reason, "conflict");
+  assert.strictEqual(error.subject, "mcp:provider-session-1:request-9");
+  assert.include(error.message, 'idempotencyKey "mcp:provider-session-1:request-9"');
+});
 
 /**
  * A real tracker over an in-memory database, with the toolkit's handlers on top. Nothing is

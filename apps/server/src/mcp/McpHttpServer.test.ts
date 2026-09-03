@@ -41,6 +41,16 @@ const invocation: McpInvocationScope = {
   capabilities: new Set(["preview"]),
   issuedAt: 1,
 };
+
+it("derives a stable per-request idempotency identity inside the MCP session", () => {
+  const first = McpHttpServer.invocationForToolRequest(invocation, "tool-request-7");
+  const retry = McpHttpServer.invocationForToolRequest(invocation, "tool-request-7");
+  const other = McpHttpServer.invocationForToolRequest(invocation, "tool-request-8");
+  expect(first.providerSessionId).toBe(invocation.providerSessionId);
+  expect(first.requestIdempotencyKey).toMatch(/^mcp-request:v1:[A-Za-z0-9_-]{43}$/u);
+  expect(first).toEqual(retry);
+  expect(other.requestIdempotencyKey).not.toBe(first.requestIdempotencyKey);
+});
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const ErrorResponse = Schema.Struct({
   error: Schema.Struct({

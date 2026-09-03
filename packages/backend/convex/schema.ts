@@ -1849,7 +1849,7 @@ export default defineSchema({
     id: domainId,
     companyId: v.id("companies"),
     issueId: domainId,
-    /** An `IssueEventKind` value. */
+    /** An `IssueEventKind` value, or an internal open-envelope carrier such as a bin snapshot. */
     kind: v.string(),
     actor,
     /** Includes before/after values, which is how a stale-base overwrite stays recoverable. */

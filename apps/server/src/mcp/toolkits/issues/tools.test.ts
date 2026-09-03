@@ -1,8 +1,11 @@
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as Schema from "effect/Schema";
 import { Tool } from "effect/unstable/ai";
 
-import { IssuesToolkit } from "./tools.ts";
+import { IssuesMcpCreateInput, IssuesToolkit } from "./tools.ts";
+
+const isIssuesMcpCreateInput = Schema.is(IssuesMcpCreateInput);
 
 const schemaHasDescription = (schema: unknown): boolean => {
   if (!schema || typeof schema !== "object") return false;
@@ -86,4 +89,15 @@ it("marks the read tools read-only and the delete destructive", () => {
       tool.name === "issues_comment_evidence",
     );
   }
+});
+
+it("accepts the compact retry token returned for a maximum-length caller key", () => {
+  const retryToken = `issue-retry:v1:${"c".repeat(16)}:${"r".repeat(43)}`;
+  expect(
+    isIssuesMcpCreateInput({
+      title: "Resume the same create",
+      idempotencyKey: retryToken,
+    }),
+  ).toBe(true);
+  expect(retryToken.length).toBeLessThanOrEqual(512);
 });

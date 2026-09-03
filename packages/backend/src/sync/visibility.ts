@@ -292,6 +292,18 @@ export function isChangeVisible(viewer: ChangeViewer, change: VisibilityCandidat
   // An entity kind this build does not know is withheld rather than leaked.
   if (permission === undefined) return false;
 
+  // A deletion snapshot reuses the open audit envelope so old clients can ignore it while the
+  // issue itself keeps its established tombstone semantics. It is bin data, not audit history,
+  // and therefore follows the deleted issue's ordinary read scope.
+  if (
+    change.entityKind === "issueAuditEvent" &&
+    typeof change.payload === "object" &&
+    change.payload !== null &&
+    (change.payload as { readonly kind?: unknown }).kind === "deleted_snapshot"
+  ) {
+    return hasRecordPermission(viewer.permissions, "issues.read", change.teamIds);
+  }
+
   if (change.entityKind === "calendarAccount") {
     return (
       hasCalendarRead(viewer) &&

@@ -199,9 +199,9 @@ async function membershipDomainId(
 // ---------------------------------------------------------------------------
 
 // Payloads carry domain identifiers only: the Convex `_id`, `_creationTime`, storage references,
-// and the row `version` (which rides the envelope) stay server-side. Issue payloads retain
-// `deletedAt` because a soft-deleted issue remains readable in the bin; hard removals and every
-// other deleted domain row still travel as payloadless tombstones.
+// and the row `version` (which rides the envelope) stay server-side. Live issue payloads include
+// `deletedAt` for forward compatibility; soft deletes still use tombstones so pre-upgrade clients
+// cannot mistake a deleted row for a live issue. The retained audit event carries the bin snapshot.
 
 export function encodeIssue(company: Doc<"companies">, doc: Doc<"issues">): unknown {
   return {
@@ -472,7 +472,13 @@ async function appendAuditEvent(
   operation: SyncOperationEnvelope,
   eventIndex: number,
   issue: { readonly id: string; readonly teamIds: readonly string[] },
-  kind: "created" | "field_changed" | "deleted" | "restored" | "triage_rejected",
+  kind:
+    | "created"
+    | "field_changed"
+    | "deleted"
+    | "deleted_snapshot"
+    | "restored"
+    | "triage_rejected",
   payload: unknown,
   now: number,
 ): Promise<DomainChange> {
@@ -1137,7 +1143,7 @@ const issueDelete: EnvApply = async ({ ctx, actor, company, feedActor, operation
   await ctx.db.patch(issue._id, { deletedAt: now, updatedAt: now });
   const doc = await mustGet(ctx, issue._id);
   return applied(
-    upsert("issue", doc.id, doc.teamIds, issue._id, encodeIssue(company, doc)),
+    tombstone("issue", doc.id, doc.teamIds, issue._id),
     await appendAuditEvent(
       ctx,
       company,
@@ -1147,6 +1153,17 @@ const issueDelete: EnvApply = async ({ ctx, actor, company, feedActor, operation
       issue,
       "deleted",
       { key: issue.key },
+      now,
+    ),
+    await appendAuditEvent(
+      ctx,
+      company,
+      feedActor,
+      operation,
+      1,
+      doc,
+      "deleted_snapshot",
+      { deletedIssue: encodeIssue(company, doc) },
       now,
     ),
   );
@@ -1165,7 +1182,7 @@ const issueTriageReject: EnvApply = async ({ ctx, actor, company, feedActor, ope
   await ctx.db.patch(issue._id, { deletedAt: now, updatedAt: now });
   const doc = await mustGet(ctx, issue._id);
   return applied(
-    upsert("issue", doc.id, doc.teamIds, issue._id, encodeIssue(company, doc)),
+    tombstone("issue", doc.id, doc.teamIds, issue._id),
     await appendAuditEvent(
       ctx,
       company,
@@ -1175,6 +1192,17 @@ const issueTriageReject: EnvApply = async ({ ctx, actor, company, feedActor, ope
       issue,
       "triage_rejected",
       { key: issue.key },
+      now,
+    ),
+    await appendAuditEvent(
+      ctx,
+      company,
+      feedActor,
+      operation,
+      1,
+      doc,
+      "deleted_snapshot",
+      { deletedIssue: encodeIssue(company, doc) },
       now,
     ),
   );
@@ -3394,17 +3422,12 @@ export async function readBootstrapRows(
         (row) => teamScope(row.teamId),
         (row) => encodeIssueCycle(company, row),
       );
-    case "issue": {
-      const rows = await pageOf(ctx, "issues", company._id, afterId, limit);
-      return rows.map((row) => ({
-        id: row.id,
-        version: row.version,
-        deleted: false,
-        teamIds: row.teamIds,
-        ownerMembershipId: null,
-        payload: encodeIssue(company, row),
-      }));
-    }
+    case "issue":
+      return lift(
+        await pageOf(ctx, "issues", company._id, afterId, limit),
+        (row) => row.teamIds,
+        (row) => encodeIssue(company, row),
+      );
     case "issueTodo":
       return lift(
         await pageOf(ctx, "issueTodos", company._id, afterId, limit),

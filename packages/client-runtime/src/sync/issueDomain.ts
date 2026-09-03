@@ -6,8 +6,9 @@
  * replays those operations over confirmed state to produce the view the UI renders. The reducer
  * mirrors the Convex handlers field for field, which is what lets an optimistic edit and the
  * accepted result agree — two writes to different fields merge, two to the same field resolve to
- * whichever Convex accepted last, and a delete tombstones the row so a later edit blocks instead
- * of resurrecting it.
+ * whichever Convex accepted last, and a pending soft delete marks the row deleted so a later edit
+ * blocks instead of resurrecting it. Confirmation replaces that row with the server tombstone and
+ * a retained audit snapshot that the read model projects back into the recoverable bin.
  *
  * Three deliberate differences from the server:
  *
@@ -152,8 +153,9 @@ export function isIssueSyncEntityKind(value: string): value is IssueSyncEntityKi
 // Every field below mirrors one encoder in `convex/lib/issueApply.ts`. Timestamps are epoch
 // milliseconds because that is what Convex stores; ids are the client-generated domain ids, never
 // a Convex `_id`. `companyId` rides the wire but is dropped here: the replica is company-scoped by
-// construction. `version` never appears. Issue payloads retain `deletedAt` so the bin works from
-// the replica; hard removals and deleted rows from other domains arrive as payloadless tombstones.
+// construction. `version` never appears. Live issue payloads accept `deletedAt` for compatibility;
+// confirmed soft deletes are tombstones plus retained audit snapshots, while the optimistic reducer
+// keeps the row only until that confirmation arrives.
 
 /**
  * `key` is the human identifier, or the local {@link ISSUE_KEY_DRAFT_PLACEHOLDER} for an issue
@@ -457,6 +459,14 @@ const ENTITY_CODECS: Record<IssueSyncEntityKind, SyncCodec<IssueSyncEntity>> = {
   issueAuditEvent: taggedEntityCodec("issueAuditEvent", Schema.Struct(issueAuditEventEntityFields)),
   issueThreadLink: taggedEntityCodec("issueThreadLink", Schema.Struct(issueThreadLinkEntityFields)),
 };
+
+/** Decodes the issue payload embedded in a retained deletion audit for the recoverable bin. */
+export function decodeIssueEntityPayload(input: unknown): Option.Option<IssueEntity> {
+  return Option.filter(
+    ENTITY_CODECS.issue.decode(input),
+    (entity): entity is IssueEntity => entity.entityKind === "issue",
+  );
+}
 
 /** Codec for one entity kind, or `null` for a kind this domain does not replicate. */
 export function issueEntityCodec(entityKind: SyncEntityKind): SyncCodec<IssueSyncEntity> | null {
@@ -770,7 +780,7 @@ const missing = (label: string): SyncApplyOutcome<IssueSyncEntity> =>
  * whether the actor may write, because the server answers that and a rejection returns through
  * the outbox. Creates are idempotent (re-applying one over the confirmed row is a no-op, which is
  * what an acknowledged create replays as), updates against a missing or hard-tombstoned row block
- * with a visible reason, and soft issue deletes retain their payload for the bin.
+ * with a visible reason, and pending soft issue deletes retain their payload until confirmation.
  *
  * The company kinds it now decodes never reach the reducer. They have no operation kind, so no
  * envelope naming one survives {@link decodeIssueSyncOperation}; a forged one is quarantined by the

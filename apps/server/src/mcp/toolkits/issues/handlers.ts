@@ -105,6 +105,14 @@ const invalid = (message: string, subject?: string) =>
 
 const storage = (message: string) => new IssueTrackerError({ reason: "storage", message });
 
+/** Turns a post-create failure into an actionable retry of the already-created issue. */
+export const issueCreateContinuationFailure = (retryIdentity: string, error: IssueTrackerError) =>
+  new IssueTrackerError({
+    reason: "conflict",
+    subject: retryIdentity,
+    message: `Issue creation succeeded, but the remaining create workflow did not finish: ${error.message} Retry issues_create with idempotencyKey "${retryIdentity}" to resume the same issue.`,
+  });
+
 const evidenceFailure = (cause: { readonly message: string }) =>
   new IssueTrackerError({
     reason: "storage",
@@ -274,16 +282,17 @@ const resolveIssue = (
 const resolveStatus = (
   index: TrackerIndex,
   value: string,
+  statuses: ReadonlyArray<IssueStatus> = index.statuses,
 ): Effect.Effect<IssueStatus, IssueTrackerError> => {
   const wanted = normalizeName(value);
-  const byName = index.statuses.find((status) => normalizeName(status.name) === wanted);
+  const byName = statuses.find((status) => normalizeName(status.name) === wanted);
   if (byName) return Effect.succeed(byName);
-  const byCategory = index.statuses.find((status) => status.category === wanted);
+  const byCategory = statuses.find((status) => status.category === wanted);
   if (byCategory) return Effect.succeed(byCategory);
   return Effect.fail(
     notFound(
       `No issue status called "${value.trim()}". Valid statuses: ${quoteOptions(
-        index.statuses.map((status) => status.name),
+        statuses.map((status) => status.name),
       )}. Valid categories: ${quoteOptions(ISSUE_STATUS_CATEGORIES)}.`,
       value.trim(),
     ),
@@ -720,6 +729,7 @@ const handlers = {
   issues_create: (input, context) =>
     Effect.gen(function* () {
       const tracker = yield* IssueTrackerService;
+      const invocation = yield* McpInvocationContext.McpInvocationContext;
       const actor = yield* callerActor();
       const index = yield* readIndex();
 
@@ -785,19 +795,20 @@ const handlers = {
         ...(input.dueDate === undefined ? {} : { dueDate: input.dueDate }),
         ...(input.triage === undefined ? {} : { triage: input.triage }),
       };
-      const created = yield* tracker.create(
-        create,
-        actor,
-        input.idempotencyKey ?? context.toolCallId,
-      );
+      const retryIdentity =
+        input.idempotencyKey ?? invocation.requestIdempotencyKey ?? context.toolCallId;
+      const created = yield* tracker.create(create, actor, retryIdentity);
+      const afterCreateFailure = (error: IssueTrackerError) =>
+        retryIdentity === undefined ? error : issueCreateContinuationFailure(retryIdentity, error);
       // `create` takes no assignee: assignment is a field change, and the change log should say so
       // rather than hiding an owner inside a "created" row.
       const issue =
         assignee === undefined
           ? created.issue
-          : (yield* tracker.update({ issueId: created.issue.id, patch: { assignee } }, actor))
-              .issue;
-      const after = yield* readIndex();
+          : (yield* tracker
+              .update({ issueId: created.issue.id, patch: { assignee } }, actor)
+              .pipe(Effect.mapError(afterCreateFailure))).issue;
+      const after = yield* readIndex().pipe(Effect.mapError(afterCreateFailure));
       return { issue: formatIssueRow(after, issue) };
     }).pipe(withinPinnedRoute),
 
@@ -814,7 +825,8 @@ const handlers = {
       if (input.title !== undefined) patch.title = input.title;
       if (input.description !== undefined) patch.description = input.description;
       if (input.status !== undefined) {
-        patch.statusId = (yield* resolveStatus(index, input.status)).id;
+        const statuses = yield* tracker.statusesForIssue({ issueId: issue.id });
+        patch.statusId = (yield* resolveStatus(index, input.status, statuses)).id;
       }
       if (input.priority !== undefined) patch.priority = input.priority;
       if (input.assignee !== undefined) {

@@ -64,6 +64,23 @@ describe("isChangeVisible", () => {
   it("withholds audit events from an issue-only grant", () => {
     expect(isChangeVisible(viewer(teamScoped), row("issueAuditEvent", ["team-a"]))).toBe(false);
 
+    expect(
+      isChangeVisible(
+        viewer(teamScoped),
+        row("issueAuditEvent", ["team-a"], {
+          payload: { kind: "deleted_snapshot", payload: { deletedIssue: { id: "issue-1" } } },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isChangeVisible(
+        viewer(teamScoped),
+        row("issueAuditEvent", ["team-b"], {
+          payload: { kind: "deleted_snapshot", payload: { deletedIssue: { id: "issue-1" } } },
+        }),
+      ),
+    ).toBe(false);
+
     const auditor = resolveEffectivePermissions({
       isOwner: false,
       roles: [auditReader],

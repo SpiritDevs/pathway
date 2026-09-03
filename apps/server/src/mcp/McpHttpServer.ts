@@ -15,6 +15,7 @@ import {
   type McpHttpHandler,
   type ServerEvent,
 } from "@modelcontextprotocol/server";
+import * as NodeCrypto from "node:crypto";
 import Mime from "@effect/platform-node/Mime";
 import { rpcSessionLayer } from "@spiritdevs/client-runtime/rpc";
 import {
@@ -547,6 +548,19 @@ const invocationSubscriptionKey = (
   requestId: JSONRPCRequest["id"],
 ) => `${invocation.providerSessionId}:${String(requestId)}`;
 
+/** Adds the stable JSON-RPC identity that a retried tool request keeps within one MCP session. */
+export const invocationForToolRequest = (
+  invocation: McpInvocationContext.McpInvocationScope,
+  requestId: JSONRPCRequest["id"],
+): McpInvocationContext.McpInvocationScope => ({
+  ...invocation,
+  requestIdempotencyKey: `mcp-request:v1:${NodeCrypto.createHash("sha256")
+    .update(invocation.providerSessionId)
+    .update("\0")
+    .update(String(requestId))
+    .digest("base64url")}`,
+});
+
 const notificationForServerEvent = (
   event: ServerEvent,
   subscriptionId: JSONRPCRequest["id"],
@@ -940,13 +954,19 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
           }
         }
       }
+      const requestInvocation =
+        classified.kind === "modern" &&
+        classified.messageKind === "request" &&
+        classified.message.method === "tools/call"
+          ? invocationForToolRequest(invocation, classified.message.id)
+          : invocation;
       return sdk.fetch(request, {
         parsedBody,
         authInfo: {
           token: "pathway-mcp-credential",
           clientId: invocation.providerInstanceId,
           scopes: [],
-          extra: { invocation },
+          extra: { invocation: requestInvocation },
         },
       });
     },

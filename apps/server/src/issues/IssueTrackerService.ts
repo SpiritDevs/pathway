@@ -148,6 +148,7 @@ import {
 import {
   issueCollectionProjectionFromReplica,
   issueDetailProjectionFromReplica,
+  effectiveIssueStatusesForOwnerFromReplica,
   issueThreadLinksFromReplica,
 } from "@spiritdevs/backend/sync/issueLegacyProjection";
 import {
@@ -477,6 +478,10 @@ export interface IssueTrackerServiceShape {
    * there is no scheduler here, so finalisation rides on the next read.
    */
   readonly getSnapshot: () => Effect.Effect<IssuesSnapshot, IssueTrackerError>;
+  /** Statuses in the issue's effective workflow, rather than the flattened company catalog. */
+  readonly statusesForIssue: (
+    input: IssueRefInput,
+  ) => Effect.Effect<ReadonlyArray<IssueStatus>, IssueTrackerError>;
   /**
    * The per-issue tail — todos, relations, comments — read when a detail sheet opens. These are
    * the three sets that grow with usage rather than configuration, which is why they are not in
@@ -1692,6 +1697,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         const carried = readModel.issues.filter((issue) => {
           const category = statusCategory(issue.statusId as IssueStatusId);
           return (
+            issue.deletedAt == null &&
             cycleByIssue.get(issue.id) === cycle.id &&
             category !== "completed" &&
             category !== "canceled"
@@ -5201,9 +5207,13 @@ export const makeIssueTrackerService = Effect.fn(function* (
       (_readModel) =>
         Effect.gen(function* () {
           const route = yield* ActiveIssueReplicaRoute;
-          const retryPrefix = `issue-create:${route.companyId}:`;
+          const companyToken = NodeCrypto.createHash("sha256")
+            .update(route.companyId)
+            .digest("base64url")
+            .slice(0, 16);
+          const retryPrefix = `issue-retry:v1:${companyToken}:`;
           const supplied = suppliedRetryIdentity ?? (yield* newId);
-          if (supplied.startsWith("issue-create:") && !supplied.startsWith(retryPrefix)) {
+          if (supplied.startsWith("issue-retry:v1:") && !supplied.startsWith(retryPrefix)) {
             return yield* invalid(
               "This issue-create retry belongs to another company. Restore the original project binding before retrying it.",
               supplied,
@@ -5211,7 +5221,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           }
           const retryIdentity = supplied.startsWith(retryPrefix)
             ? supplied
-            : `${retryPrefix}${supplied}`;
+            : `${retryPrefix}${NodeCrypto.createHash("sha256").update(supplied).digest("base64url")}`;
           const stableId = stableCreateId(retryIdentity);
           const issueId = IssueId.make(stableId);
           const operationId = SyncOperationId.make(stableId);
@@ -5840,6 +5850,16 @@ export const makeIssueTrackerService = Effect.fn(function* (
       legacyUnlinkThread(input, actor),
     );
 
+  const statusesForIssue: IssueTrackerServiceShape["statusesForIssue"] = (input) =>
+    routeWrite((readModel) => {
+      const issue = readModel.issues.find((candidate) => candidate.id === input.issueId);
+      return issue === undefined
+        ? Effect.fail(notFound(input.issueId, `No issue with id ${input.issueId}.`))
+        : Effect.succeed(
+            effectiveIssueStatusesForOwnerFromReplica(readModel.issueStatuses, issue.workflowOwner),
+          );
+    }, listStatuses());
+
   // Once at startup, before anybody can subscribe: a run is a live process, so whatever was
   // queued or running when this server stopped is dead. Leaving those rows in flight would block
   // every one of their issues from ever being investigated again.
@@ -5914,6 +5934,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     linkedMemberActor,
     readLocalIssueSnapshot: localIssueSnapshot,
     getSnapshot,
+    statusesForIssue,
     getDetail,
     create,
     update,

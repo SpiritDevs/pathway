@@ -28,8 +28,10 @@ import {
   IssueThreadLinkEntity,
   IssueTodoEntity,
   IssueViewEntity,
+  decodeIssueEntityPayload,
   type CloudSyncEntity,
 } from "./issueDomain.ts";
+import * as Option from "effect/Option";
 
 const isCloudProject = Schema.is(CloudProjectSyncEntity);
 const isEnvironmentBinding = Schema.is(EnvironmentBindingEntity);
@@ -98,6 +100,9 @@ export const EMPTY_SYNCED_ISSUE_DOMAIN: SyncedIssueDomainReadModel = Object.free
 
 const byId = <T extends { readonly id: string }>(left: T, right: T) =>
   left.id.localeCompare(right.id);
+const decodeDeletedIssueAuditPayload = Schema.decodeUnknownOption(
+  Schema.Struct({ deletedIssue: Schema.Unknown }),
+);
 
 /** Narrows and deterministically orders the heterogeneous values from one company replica. */
 export function syncedIssueDomainFromEntities(
@@ -142,6 +147,21 @@ export function syncedIssueDomainFromEntities(
   );
   environmentBindings.sort((left, right) => byId(left, right));
   memberships.sort((left, right) => byId(left, right));
+  issueAuditEvents.sort((left, right) => left.createdAt - right.createdAt || byId(left, right));
+  const latestDeletionSnapshotByIssue = new Map<string, IssueAuditEventEntity>();
+  for (const event of issueAuditEvents) {
+    if (event.kind === "deleted_snapshot") latestDeletionSnapshotByIssue.set(event.issueId, event);
+  }
+  const liveIssueIds = new Set(issues.map((issue) => issue.id));
+  for (const event of latestDeletionSnapshotByIssue.values()) {
+    if (liveIssueIds.has(event.issueId)) continue;
+    const payload = decodeDeletedIssueAuditPayload(event.payload);
+    if (Option.isNone(payload)) continue;
+    const issue = decodeIssueEntityPayload(payload.value.deletedIssue);
+    if (Option.isSome(issue) && issue.value.id === event.issueId && issue.value.deletedAt != null) {
+      issues.push(issue.value);
+    }
+  }
   issues.sort((left, right) => left.keyNumber - right.keyNumber || byId(left, right));
   issueStatuses.sort(
     (left, right) =>
@@ -172,7 +192,6 @@ export function syncedIssueDomainFromEntities(
   );
   issueRelations.sort((left, right) => left.createdAt - right.createdAt || byId(left, right));
   issueAttachments.sort((left, right) => left.createdAt - right.createdAt || byId(left, right));
-  issueAuditEvents.sort((left, right) => left.createdAt - right.createdAt || byId(left, right));
   issueThreadLinks.sort((left, right) => left.createdAt - right.createdAt || byId(left, right));
 
   return {
