@@ -60,6 +60,7 @@ import {
   type IssueLabelResult,
   type IssueLabelUpdateInput,
   type IssueLabelsResult,
+  IssueKey,
   type IssueKeyPrefixInput,
   type IssueMilestone,
   type IssueMilestoneCreateInput,
@@ -157,6 +158,7 @@ import {
   issueCreateOperation,
   issueCycleCreateOperation,
   issueCycleDeleteOperation,
+  issueCycleFinalizeOperation,
   issueCycleUpdateOperation,
   issueDeleteOperation,
   issueLabelCreateOperation,
@@ -203,6 +205,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import {
@@ -321,6 +324,22 @@ const CATEGORY_COLORS: Readonly<Record<IssueStatusCategory, string>> = {
 
 /** Every write intake makes is the tracker acting on somebody's behalf, never a person. */
 const SLACK_ACTOR = { kind: "system", source: "slack" } as const satisfies IssueActor;
+const CYCLE_ACTOR = { kind: "system", source: "cycles" } as const satisfies SyncActor;
+const decodeCreatedIssueAuditPayload = Schema.decodeUnknownOption(Schema.Struct({ key: IssueKey }));
+
+function issueIdByKeyFromReplica(
+  readModel: SyncedIssueDomainReadModel,
+  key: IssueKey,
+): IssueId | null {
+  const live = readModel.issues.find((issue) => issue.key === key);
+  if (live !== undefined) return live.id;
+  for (const event of readModel.issueAuditEvents) {
+    if (event.kind !== "created") continue;
+    const payload = decodeCreatedIssueAuditPayload(event.payload);
+    if (Option.isSome(payload) && payload.value.key === key) return event.issueId;
+  }
+  return null;
+}
 
 /** A watch created without one: configured, watched, and filing nothing until it is switched on. */
 const PAUSED_SLACK_TRIGGER: SlackIntakeTrigger = {
@@ -461,6 +480,11 @@ export interface IssueTrackerServiceShape {
   ) => Effect.Effect<IssueResult, IssueTrackerError>;
   readonly restore: (
     input: IssueRefInput,
+    actor: IssueActor,
+  ) => Effect.Effect<IssueResult, IssueTrackerError>;
+  /** Restores by durable human key, including a cloud issue whose live row is tombstoned. */
+  readonly restoreByKey: (
+    key: IssueKey,
     actor: IssueActor,
   ) => Effect.Effect<IssueResult, IssueTrackerError>;
   readonly bulkUpdate: (
@@ -1588,20 +1612,104 @@ export const makeIssueTrackerService = Effect.fn(function* (
       ),
     );
 
+  const finalizeReplicaEndedCycles = Effect.fn("IssueTrackerService.finalizeReplicaEndedCycles")(
+    function* (readModel: SyncedIssueDomainReadModel) {
+      const today = yield* todayLocal;
+      const ended = readModel.issueCycles
+        .filter((cycle) => cycle.completedAt === null && cycle.endDate < today)
+        .toSorted((left, right) => left.endDate.localeCompare(right.endDate));
+      if (ended.length === 0) return readModel;
+
+      const statuses = new Map(readModel.issueStatuses.map((status) => [status.id, status]));
+      const statusCategory = (statusId: IssueStatusId) => {
+        const status = statuses.get(statusId);
+        if (status === undefined) return null;
+        if (status.category !== null) return status.category;
+        return status.baseStatusId === null
+          ? null
+          : (statuses.get(status.baseStatusId)?.category ?? null);
+      };
+      const cycleByIssue = new Map(
+        readModel.issues.map((issue) => [issue.id, issue.cycleId] as const),
+      );
+      const operationPlans: ReplicaOperationPlan[] = [];
+      let previousOperationId: SyncOperationId | null = null;
+
+      for (const cycle of ended) {
+        const next =
+          readModel.issueCycles.find(
+            (candidate) =>
+              candidate.id !== cycle.id &&
+              candidate.teamId === cycle.teamId &&
+              candidate.startDate > cycle.startDate,
+          ) ?? null;
+        const carried = readModel.issues.filter((issue) => {
+          const category = statusCategory(issue.statusId as IssueStatusId);
+          return (
+            cycleByIssue.get(issue.id) === cycle.id &&
+            category !== "completed" &&
+            category !== "canceled"
+          );
+        });
+        for (const issue of carried) {
+          const operationId = SyncOperationId.make(yield* newId);
+          const update = issueUpdateOperation({
+            issueId: issue.id,
+            patch: { cycleId: next?.id ?? null },
+          });
+          operationPlans.push({
+            operationId,
+            operation:
+              previousOperationId === null
+                ? update
+                : { ...update, dependsOn: [previousOperationId] },
+            actor: CYCLE_ACTOR,
+          });
+          cycleByIssue.set(issue.id, next?.id ?? null);
+          previousOperationId = operationId;
+        }
+        const finalizeOperationId = SyncOperationId.make(yield* newId);
+        operationPlans.push({
+          operationId: finalizeOperationId,
+          operation: issueCycleFinalizeOperation(
+            cycle.id,
+            previousOperationId === null ? undefined : [previousOperationId],
+          ),
+          actor: CYCLE_ACTOR,
+        });
+        previousOperationId = finalizeOperationId;
+      }
+
+      return (yield* enqueueReplicaOperations(operationPlans)).readModel;
+    },
+  );
+
   const getSnapshot: IssueTrackerServiceShape["getSnapshot"] = () =>
-    routeReplicaIssueRead({
-      replica: replicaReader.read,
-      fromReplica: (readModel) =>
-        Effect.all([listSlackWatches(), Ref.get(slackStatus), readConfig()]).pipe(
-          Effect.map(([slackWatches, status, config]) => ({
-            ...issueCollectionProjectionFromReplica(readModel),
-            slackWatches,
-            slackStatus: status,
-            config,
-          })),
-        ),
-      fromLegacy: finalizeEndedCycles().pipe(Effect.andThen(readLegacySnapshot())),
-    });
+    replicaReader.resolve.pipe(
+      Effect.flatMap((route) => {
+        if (route === null) {
+          return finalizeEndedCycles().pipe(Effect.andThen(readLegacySnapshot()));
+        }
+        return Effect.provideService(
+          Effect.gen(function* () {
+            const readModel = yield* finalizeReplicaEndedCycles(route.readModel);
+            const [slackWatches, status, config] = yield* Effect.all([
+              listSlackWatches(),
+              Ref.get(slackStatus),
+              readConfig(),
+            ]);
+            return {
+              ...issueCollectionProjectionFromReplica(readModel),
+              slackWatches,
+              slackStatus: status,
+              config,
+            };
+          }),
+          ActiveIssueReplicaRoute,
+          route,
+        );
+      }),
+    );
 
   const appendChangeLog = (input: {
     readonly issueId: IssueId;
@@ -2122,6 +2230,18 @@ export const makeIssueTrackerService = Effect.fn(function* (
     const issue: Issue = { ...record, labelIds, deletedAt: null, updatedAt };
     yield* publish({ _tag: "IssueUpserted", issue });
     return { issue };
+  });
+
+  const legacyRestoreByKey: IssueTrackerServiceShape["restoreByKey"] = Effect.fn(
+    "IssueTrackerService.restoreByKey",
+  )(function* (key, actor) {
+    const found = yield* issueRepository
+      .getByKey({ key })
+      .pipe(Effect.mapError(storage("Failed to read the issue")));
+    if (Option.isNone(found)) {
+      return yield* notFound(key, `No issue with key ${key}.`);
+    }
+    return yield* legacyRestore({ issueId: found.value.id }, actor);
   });
 
   const publishStatuses = () =>
@@ -5007,11 +5127,12 @@ export const makeIssueTrackerService = Effect.fn(function* (
           const written = yield* enqueueReplicaOperations(
             plans([issueCreateOperation(input, issueId)]),
           );
-          const issue = routedIssue(written.readModel, issueId);
+          const operationId = written.operationIds[0]!;
+          yield* flushReplicaOperation(written.engine, operationId);
+          const route = yield* ActiveIssueReplicaRoute;
+          const issue = routedIssue(yield* route.read, issueId);
           return issue === undefined
-            ? yield* syncWriteFailure(
-                `created issue ${issueId} is absent from the optimistic replica`,
-              )
+            ? yield* syncWriteFailure(`create ${operationId} completed without a readable issue`)
             : { issue };
         }),
       legacyCreate(input, actor),
@@ -5078,20 +5199,31 @@ export const makeIssueTrackerService = Effect.fn(function* (
       legacyRemove(input, actor),
     );
 
+  const restoreReplica = Effect.fn("IssueTrackerService.restoreReplica")(function* (
+    issueId: IssueId,
+  ) {
+    const written = yield* enqueueReplicaOperations(plans([issueRestoreOperation({ issueId })]));
+    const operationId = written.operationIds[0]!;
+    yield* flushReplicaOperation(written.engine, operationId);
+    const route = yield* ActiveIssueReplicaRoute;
+    const issue = routedIssue(yield* route.read, issueId);
+    return issue === undefined
+      ? yield* syncWriteFailure(`restore ${operationId} completed without a readable issue`)
+      : { issue };
+  });
+
   const restore: IssueTrackerServiceShape["restore"] = (input, actor) =>
+    routeWrite(() => restoreReplica(input.issueId), legacyRestore(input, actor));
+
+  const restoreByKey: IssueTrackerServiceShape["restoreByKey"] = (key, actor) =>
     routeWrite(
-      () =>
-        Effect.gen(function* () {
-          const written = yield* enqueueReplicaOperations(plans([issueRestoreOperation(input)]));
-          const operationId = written.operationIds[0]!;
-          yield* flushReplicaOperation(written.engine, operationId);
-          const route = yield* ActiveIssueReplicaRoute;
-          const issue = routedIssue(yield* route.read, input.issueId);
-          return issue === undefined
-            ? yield* syncWriteFailure(`restore ${operationId} completed without a readable issue`)
-            : { issue };
-        }),
-      legacyRestore(input, actor),
+      (readModel) => {
+        const issueId = issueIdByKeyFromReplica(readModel, key);
+        return issueId === null
+          ? Effect.fail(notFound(key, `No issue with key ${key}.`))
+          : restoreReplica(issueId);
+      },
+      legacyRestoreByKey(key, actor),
     );
 
   const createStatus: IssueTrackerServiceShape["createStatus"] = (input) =>
@@ -5680,6 +5812,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     update,
     remove,
     restore,
+    restoreByKey,
     bulkUpdate,
     setSortOrder,
     createStatus,

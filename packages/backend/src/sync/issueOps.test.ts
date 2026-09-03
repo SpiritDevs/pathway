@@ -5,9 +5,11 @@ import {
   defaultIssueSortOrder,
   derivedDomainId,
   ISSUE_TITLE_MAX_CHARS,
+  isCycleFinalizationActor,
   issueKeyNumber,
   orderKeyAfter,
   parseIssueCreateArgs,
+  parseIssueCyclePatchArgs,
   parseIssuePatchArgs,
   parseIssueStatusCreateArgs,
   parseIssueViewCreateArgs,
@@ -19,6 +21,33 @@ function expectRejected(result: ArgsResult<unknown>, fragment: string): void {
   if (result.ok) throw new Error(`expected a refusal mentioning ${fragment}`);
   expect(result.message).toContain(fragment);
 }
+
+describe("parseIssueCyclePatchArgs", () => {
+  it("accepts only the server finalisation literal", () => {
+    expect(parseIssueCyclePatchArgs({ finalize: true })).toEqual({
+      ok: true,
+      args: { name: undefined, startDate: undefined, endDate: undefined, finalize: true },
+    });
+    expectRejected(parseIssueCyclePatchArgs({ finalize: false }), "must be true");
+  });
+
+  it("recognizes only the authenticated cycle automation identity", () => {
+    const input = {
+      authenticatedEnvironmentId: "environment-1",
+      operationEnvironmentId: "environment-1",
+      assertedActorKind: "system",
+      assertedSystemSource: "cycles",
+    };
+
+    expect(isCycleFinalizationActor(input)).toBe(true);
+    expect(isCycleFinalizationActor({ ...input, authenticatedEnvironmentId: null })).toBe(false);
+    expect(isCycleFinalizationActor({ ...input, operationEnvironmentId: "environment-2" })).toBe(
+      false,
+    );
+    expect(isCycleFinalizationActor({ ...input, assertedActorKind: "member" })).toBe(false);
+    expect(isCycleFinalizationActor({ ...input, assertedSystemSource: "other" })).toBe(false);
+  });
+});
 
 describe("parseIssueCreateArgs", () => {
   it("accepts a minimal create and leaves every optional field undefined", () => {

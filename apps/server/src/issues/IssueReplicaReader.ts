@@ -18,7 +18,7 @@ import {
   type StoredSyncState,
   type SyncedIssueDomainReadModel,
 } from "@spiritdevs/client-runtime/sync";
-import { IssueTrackerError, type IssueMemberActor } from "@spiritdevs/contracts";
+import { IssueTrackerError, type IssueMemberActor, type ProjectId } from "@spiritdevs/contracts";
 import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
 import { MembershipId, type CompanyId } from "@spiritdevs/contracts/company";
 import type { SyncActor } from "@spiritdevs/contracts/cloudSync";
@@ -165,10 +165,18 @@ const routingFailure = (message: string) =>
 function translateProjectIds(
   readModel: SyncedIssueDomainReadModel,
   projectBindings: ReadonlyArray<CloudSyncIssueProjectBinding>,
+  preferredLocalProjectId: string | undefined,
 ): SyncedIssueDomainReadModel {
-  const localByCloud = new Map(
-    projectBindings.map(({ cloudProjectId, localProjectId }) => [cloudProjectId, localProjectId]),
+  const localByCloud = new Map<CloudProjectId, ProjectId>();
+  for (const { cloudProjectId, localProjectId } of projectBindings) {
+    if (!localByCloud.has(cloudProjectId)) localByCloud.set(cloudProjectId, localProjectId);
+  }
+  const preferred = projectBindings.find(
+    ({ localProjectId }) => localProjectId === preferredLocalProjectId,
   );
+  if (preferred !== undefined) {
+    localByCloud.set(preferred.cloudProjectId, preferred.localProjectId);
+  }
   const localProjectId = (cloudProjectId: CloudProjectId) => {
     const local = localByCloud.get(cloudProjectId);
     return local === undefined ? cloudProjectId : CloudProjectId.make(local);
@@ -231,7 +239,7 @@ export const makeIssueReplicaReader = (
       ]),
     );
     const translate = (readModel: SyncedIssueDomainReadModel) =>
-      translateProjectIds(readModel, route.projectBindings);
+      translateProjectIds(readModel, route.projectBindings, invocation.value.projectId);
     const read = route.engine.readIssueSnapshot.pipe(
       Effect.flatMap((snapshot) =>
         !snapshot.bootstrapped || snapshot.quarantined > 0

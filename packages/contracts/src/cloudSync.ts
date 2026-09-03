@@ -993,6 +993,8 @@ export const SyncIssueCyclePatchArgs = Schema.Struct({
   name: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(ISSUE_TITLE_MAX_CHARS))),
   startDate: Schema.optional(IssueDate),
   endDate: Schema.optional(IssueDate),
+  /** Server-authored lazy finalisation. User-facing cycle updates never set this field. */
+  finalize: Schema.optional(Schema.Literal(true)),
 });
 export type SyncIssueCyclePatchArgs = typeof SyncIssueCyclePatchArgs.Type;
 

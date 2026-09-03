@@ -278,6 +278,17 @@ export const issueCycleUpdateOperation = (
     args: input.patch,
   });
 
+export const issueCycleFinalizeOperation = (
+  cycleId: IssueCycleId,
+  dependsOn?: ReadonlyArray<SyncOperationId>,
+): IssueSyncOperationOf<"issueCycle.update"> =>
+  issueSyncOperation({
+    kind: "issueCycle.update",
+    entityId: entityId(cycleId),
+    args: { finalize: true },
+    ...(dependsOn === undefined ? {} : { dependsOn }),
+  });
+
 export const issueCycleDeleteOperation = (
   input: IssueCycleDeleteInput,
 ): IssueSyncOperationOf<"issueCycle.delete"> =>

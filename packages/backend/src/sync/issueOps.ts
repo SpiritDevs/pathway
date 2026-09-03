@@ -718,6 +718,21 @@ export interface IssueCyclePatchArgs {
   readonly name?: string | undefined;
   readonly startDate?: string | undefined;
   readonly endDate?: string | undefined;
+  readonly finalize?: true | undefined;
+}
+
+export function isCycleFinalizationActor(input: {
+  readonly authenticatedEnvironmentId: string | null;
+  readonly operationEnvironmentId: string | null;
+  readonly assertedActorKind: string;
+  readonly assertedSystemSource: string | null;
+}): boolean {
+  return (
+    input.authenticatedEnvironmentId !== null &&
+    input.operationEnvironmentId === input.authenticatedEnvironmentId &&
+    input.assertedActorKind === "system" &&
+    input.assertedSystemSource === "cycles"
+  );
 }
 
 export function parseIssueCyclePatchArgs(value: unknown): ArgsResult<IssueCyclePatchArgs> {
@@ -727,10 +742,15 @@ export function parseIssueCyclePatchArgs(value: unknown): ArgsResult<IssueCycleP
       const raw = field(source, key);
       return raw === undefined ? undefined : decode(raw, `args.${key}`);
     };
+    const rawFinalize = field(source, "finalize");
+    if (rawFinalize !== undefined && rawFinalize !== true) {
+      invalid("args.finalize must be true when present.");
+    }
     return {
       name: opt("name", (v, label) => trimmedNonEmpty(v, label, ISSUE_TITLE_MAX_CHARS)),
       startDate: opt("startDate", issueDate),
       endDate: opt("endDate", issueDate),
+      finalize: rawFinalize as true | undefined,
     };
   });
 }

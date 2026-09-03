@@ -22,6 +22,7 @@ import {
   auditEventDomainId,
   defaultIssueSortOrder,
   issueKeyNumber,
+  isCycleFinalizationActor,
   orderKeyAfter,
   parseIssueCommentCreateArgs,
   parseIssueCommentPatchArgs,
@@ -2318,6 +2319,32 @@ const issueCycleUpdate: EnvApply = async ({ ctx, actor, company, operation, now 
   if (cycle === null) return rejected("entity-not-found", `No cycle ${operation.entityId}.`);
   if (cycle.deletedAt !== null) return rejected("entity-deleted", "This cycle is deleted.");
   if (!can(actor, "workflow.manage", teamScope(cycle.teamId))) return denied("workflow.manage");
+
+  if (args.finalize === true) {
+    const isCycleAutomation = isCycleFinalizationActor({
+      authenticatedEnvironmentId:
+        actor.kind === "environment" ? actor.registration.environmentId : null,
+      operationEnvironmentId: operation.environmentId,
+      assertedActorKind: operation.actor.kind,
+      assertedSystemSource: operation.actor.kind === "system" ? operation.actor.source : null,
+    });
+    if (!isCycleAutomation) return denied("workflow.manage");
+    if (args.name !== undefined || args.startDate !== undefined || args.endDate !== undefined) {
+      return rejected("invalid-arguments", "Cycle finalisation cannot edit cycle fields.");
+    }
+    if (cycle.completedAt !== null) return applied();
+    await ctx.db.patch(cycle._id, { completedAt: now, updatedAt: now });
+    const finalized = await mustGet(ctx, cycle._id);
+    return applied(
+      upsert(
+        "issueCycle",
+        finalized.id,
+        teamScope(finalized.teamId),
+        cycle._id,
+        encodeIssueCycle(company, finalized),
+      ),
+    );
+  }
 
   const startDate = args.startDate ?? cycle.startDate;
   const endDate = args.endDate ?? cycle.endDate;

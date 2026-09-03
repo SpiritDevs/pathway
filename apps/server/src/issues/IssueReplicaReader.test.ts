@@ -340,6 +340,10 @@ describe("routeReplicaIssueRead", () => {
                 localProjectId: PROJECT_ID,
                 cloudProjectId: CloudProjectId.make("cloud-project-server-issue-reads"),
               },
+              {
+                localProjectId: ProjectId.make("sibling-checkout"),
+                cloudProjectId: CloudProjectId.make("cloud-project-server-issue-reads"),
+              },
             ],
           });
         },
@@ -355,6 +359,9 @@ describe("routeReplicaIssueRead", () => {
       expect(routed?.readModel.issues[0]?.key).toBe("SYNC-7");
       expect(routed?.readModel.issues[0]?.projectId).toBe(PROJECT_ID);
       expect(routed?.cloudProjectIdForLocal(PROJECT_ID)).toBe("cloud-project-server-issue-reads");
+      expect(routed?.cloudProjectIdForLocal("sibling-checkout")).toBe(
+        "cloud-project-server-issue-reads",
+      );
       expect(routed?.actor).toEqual({
         kind: "agent",
         provider: "codex",

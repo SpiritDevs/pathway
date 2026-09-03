@@ -1056,6 +1056,7 @@ export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSy
           name: args.name ?? existing.name,
           startDate: args.startDate ?? existing.startDate,
           endDate: args.endDate ?? existing.endDate,
+          completedAt: args.finalize === true ? now : existing.completedAt,
           updatedAt: now,
         });
       }

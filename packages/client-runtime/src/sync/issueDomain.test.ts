@@ -1123,6 +1123,21 @@ describe("issue apply", () => {
     expect(issueKeyNumber("PAT-221")).toBe(221);
   });
 
+  it("optimistically marks a server-finalized cycle complete", () => {
+    const cycle = appliedOf(
+      applyTo(
+        CYCLE,
+        issueSyncOperation({
+          kind: "issueCycle.update",
+          entityId: CYCLE_ID,
+          args: { finalize: true },
+        }),
+      ),
+      "issueCycle",
+    );
+    expect(cycle.completedAt).toBe(1_000);
+  });
+
   it("places an unpositioned milestone where the server's append will place it", () => {
     // `issueMilestoneCreate` (convex/lib/issueApply.ts) appends: the project's highest position
     // plus one. The reducer sees one entity, so it cannot read that index — what it can do is sort

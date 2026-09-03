@@ -21,6 +21,7 @@ import {
   type IssueCycle,
   type IssueDetail,
   type IssueId,
+  IssueKey,
   type IssueLabel,
   type IssueLabelId,
   type IssueMilestone,
@@ -992,8 +993,8 @@ const handlers = {
       const tracker = yield* IssueTrackerService;
       const actor = yield* callerActor();
       const index = yield* readIndex();
-      const issue = yield* resolveIssue(index, input.key);
-      const restored = yield* tracker.restore({ issueId: issue.id }, actor);
+      const key = IssueKey.make(normalizeIssueKey(input.key));
+      const restored = yield* tracker.restoreByKey(key, actor);
       return { issue: formatIssueRow(index, restored.issue) };
     }),
 
