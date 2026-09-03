@@ -32,7 +32,7 @@ import {
   type StoredSyncEntity,
   type StoredSyncState,
 } from "@spiritdevs/client-runtime/sync";
-import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
+import { CompanyId, MembershipId, TeamId } from "@spiritdevs/contracts/company";
 import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
 import {
   AuthorizationEpoch,
@@ -447,6 +447,17 @@ describe("IssueTrackerService", () => {
           bootstrapped: true,
         },
         entities: [
+          routedStoredEntity("cloudProject", {
+            id: "cloud-project-alpha",
+            name: "Pathway",
+            description: "Team B project",
+            teamIds: ["team-b"],
+            defaultWorkflowOwner: { kind: "team", teamId: "team-b" },
+            preferredBindingId: null,
+            archivedAt: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
           routedStoredEntity("issueStatus", {
             id: "status-routed",
             scope: "company",
@@ -937,6 +948,7 @@ describe("IssueTrackerService", () => {
       assert.strictEqual(firstWrite.operation.kind, "issue.create");
       if (firstWrite.operation.kind !== "issue.create") throw new Error("Expected issue.create");
       assert.strictEqual(firstWrite.operation.args.projectId, "cloud-project-alpha");
+      assert.deepStrictEqual(firstWrite.operation.args.teamIds, [TeamId.make("team-b")]);
       assert.deepStrictEqual(firstWrite.actor, {
         kind: "agent",
         provider: ProviderDriverKind.make("codex"),
@@ -967,6 +979,11 @@ describe("IssueTrackerService", () => {
       });
       assert.deepStrictEqual(
         workflowStatuses.map((status) => status.id),
+        [IssueStatusId.make("status-routed"), IssueStatusId.make("status-team-b-qa")],
+      );
+      const projectStatuses = yield* tracker.statusesForProject({ projectId: PROJECT });
+      assert.deepStrictEqual(
+        projectStatuses.map((status) => status.id),
         [IssueStatusId.make("status-routed"), IssueStatusId.make("status-team-b-qa")],
       );
       yield* Ref.set(rejectCycleFinalization, true);

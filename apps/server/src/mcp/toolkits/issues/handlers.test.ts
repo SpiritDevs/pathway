@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  type IssueStatus,
   IssueStatusId,
   PREVIEW_AUTOMATION_OPERATIONS,
   PreviewTabId,
@@ -52,6 +53,7 @@ import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import {
   IssuesToolkitHandlersLive,
   issueCreateContinuationFailure,
+  matchingStatuses,
   parseIssueAssignee,
   resolveIssueAssignee,
 } from "./handlers.ts";
@@ -93,6 +95,35 @@ it("returns the same create identity when work after the durable create fails", 
   assert.strictEqual(error.reason, "conflict");
   assert.strictEqual(error.subject, "mcp:provider-session-1:request-9");
   assert.include(error.message, 'idempotencyKey "mcp:provider-session-1:request-9"');
+});
+
+it("matches every workflow-specific status sharing a name or category", () => {
+  const status = (id: string, name: string, category: IssueStatus["category"]): IssueStatus => ({
+    id: IssueStatusId.make(id),
+    name,
+    color: "#123456",
+    category,
+    position: 0,
+    createdAt: "2026-09-04T00:00:00.000Z",
+    updatedAt: "2026-09-04T00:00:00.000Z",
+  });
+  const statuses = [
+    status("team-a-qa", "QA", "review"),
+    status("team-b-qa", "QA", "review"),
+    status("company-review", "Review", "review"),
+  ];
+  assert.deepStrictEqual(
+    matchingStatuses(statuses, "qa").map((candidate) => candidate.id),
+    [IssueStatusId.make("team-a-qa"), IssueStatusId.make("team-b-qa")],
+  );
+  assert.deepStrictEqual(
+    matchingStatuses(statuses, "review").map((candidate) => candidate.id),
+    [
+      IssueStatusId.make("team-a-qa"),
+      IssueStatusId.make("team-b-qa"),
+      IssueStatusId.make("company-review"),
+    ],
+  );
 });
 
 /**

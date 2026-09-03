@@ -482,6 +482,10 @@ export interface IssueTrackerServiceShape {
   readonly statusesForIssue: (
     input: IssueRefInput,
   ) => Effect.Effect<ReadonlyArray<IssueStatus>, IssueTrackerError>;
+  /** Statuses in the workflow a new issue for this project would inherit. */
+  readonly statusesForProject: (input: {
+    readonly projectId: ProjectId | null;
+  }) => Effect.Effect<ReadonlyArray<IssueStatus>, IssueTrackerError>;
   /**
    * The per-issue tail — todos, relations, comments — read when a detail sheet opens. These are
    * the three sets that grow with usage rather than configuration, which is why they are not in
@@ -1452,11 +1456,22 @@ export const makeIssueTrackerService = Effect.fn(function* (
     switch (operation.kind) {
       case "issue.create":
         if (operation.args.projectId === undefined) return operation;
+        const cloudProjectId = yield* translate(operation.args.projectId);
+        const project = route.readModel.cloudProjects.find(
+          (candidate) =>
+            candidate.id === operation.args.projectId || candidate.id === cloudProjectId,
+        );
+        if (project === undefined) {
+          return yield* syncWriteFailure(
+            `local project ${operation.args.projectId} is absent from the company replica`,
+          );
+        }
         return {
           ...operation,
           args: {
             ...operation.args,
-            projectId: yield* translate(operation.args.projectId),
+            projectId: cloudProjectId,
+            teamIds: project.teamIds,
           },
         };
       case "issue.update":
@@ -5860,6 +5875,36 @@ export const makeIssueTrackerService = Effect.fn(function* (
           );
     }, listStatuses());
 
+  const statusesForProject: IssueTrackerServiceShape["statusesForProject"] = (input) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          if (input.projectId === null) {
+            return effectiveIssueStatusesForOwnerFromReplica(readModel.issueStatuses, {
+              kind: "company",
+            });
+          }
+          const route = yield* ActiveIssueReplicaRoute;
+          const cloudProjectId = route.cloudProjectIdForLocal(input.projectId);
+          const project = readModel.cloudProjects.find(
+            (candidate) =>
+              String(candidate.id) === input.projectId ||
+              (cloudProjectId !== null && candidate.id === cloudProjectId),
+          );
+          if (project === undefined) {
+            return yield* notFound(
+              input.projectId,
+              `No cloud project with local id ${input.projectId}.`,
+            );
+          }
+          return effectiveIssueStatusesForOwnerFromReplica(
+            readModel.issueStatuses,
+            project.defaultWorkflowOwner ?? { kind: "company" },
+          );
+        }),
+      listStatuses(),
+    );
+
   // Once at startup, before anybody can subscribe: a run is a live process, so whatever was
   // queued or running when this server stopped is dead. Leaving those rows in flight would block
   // every one of their issues from ever being investigated again.
@@ -5935,6 +5980,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     readLocalIssueSnapshot: localIssueSnapshot,
     getSnapshot,
     statusesForIssue,
+    statusesForProject,
     getDetail,
     create,
     update,

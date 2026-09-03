@@ -21,6 +21,7 @@ import type { BootstrapEntityKind } from "../../src/sync/bootstrap.ts";
 import {
   auditEventDomainId,
   defaultIssueSortOrder,
+  derivedDomainId,
   issueKeyNumber,
   isCycleFinalizationActor,
   orderKeyAfter,
@@ -494,6 +495,48 @@ async function appendAuditEvent(
     createdAt: now,
     version: 0,
   });
+  const doc = await mustGet(ctx, docId);
+  return upsert("issueAuditEvent", id, issue.teamIds, docId, encodeIssueAuditEvent(company, doc));
+}
+
+/**
+ * The deleted-issue bin is state, not history: one current snapshot per issue is enough. Reusing a
+ * stable audit-envelope id keeps repeated delete/restore cycles from multiplying large issue
+ * payloads in retained storage or every future bootstrap.
+ */
+async function upsertDeletedSnapshot(
+  ctx: MutationCtx,
+  company: Doc<"companies">,
+  feedActor: FeedActor,
+  operation: SyncOperationEnvelope,
+  issue: Doc<"issues">,
+  now: number,
+): Promise<DomainChange> {
+  const id = derivedDomainId(`${issue.id}:deleted_snapshot`);
+  const payload = { deletedIssue: encodeIssue(company, issue) };
+  const existing = await byDomain(ctx, "issueAuditEvents", company._id, id);
+  const docId =
+    existing === null
+      ? await ctx.db.insert("issueAuditEvents", {
+          id,
+          companyId: company._id,
+          issueId: issue.id,
+          kind: "deleted_snapshot",
+          actor: feedActor,
+          payload,
+          operationId: operation.operationId,
+          createdAt: now,
+          version: 0,
+        })
+      : existing._id;
+  if (existing !== null) {
+    await ctx.db.patch(existing._id, {
+      actor: feedActor,
+      payload,
+      operationId: operation.operationId,
+      createdAt: now,
+    });
+  }
   const doc = await mustGet(ctx, docId);
   return upsert("issueAuditEvent", id, issue.teamIds, docId, encodeIssueAuditEvent(company, doc));
 }
@@ -1155,17 +1198,7 @@ const issueDelete: EnvApply = async ({ ctx, actor, company, feedActor, operation
       { key: issue.key },
       now,
     ),
-    await appendAuditEvent(
-      ctx,
-      company,
-      feedActor,
-      operation,
-      1,
-      doc,
-      "deleted_snapshot",
-      { deletedIssue: encodeIssue(company, doc) },
-      now,
-    ),
+    await upsertDeletedSnapshot(ctx, company, feedActor, operation, doc, now),
   );
 };
 
@@ -1194,17 +1227,7 @@ const issueTriageReject: EnvApply = async ({ ctx, actor, company, feedActor, ope
       { key: issue.key },
       now,
     ),
-    await appendAuditEvent(
-      ctx,
-      company,
-      feedActor,
-      operation,
-      1,
-      doc,
-      "deleted_snapshot",
-      { deletedIssue: encodeIssue(company, doc) },
-      now,
-    ),
+    await upsertDeletedSnapshot(ctx, company, feedActor, operation, doc, now),
   );
 };
 

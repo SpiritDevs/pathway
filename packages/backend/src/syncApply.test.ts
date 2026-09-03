@@ -421,6 +421,30 @@ describe("sync.applyOperations", () => {
       expect(issue?.deletedAt).not.toBeNull();
       expect(issue?.version).toBe(deletedChange?.version);
     });
+
+    const firstSnapshotId = afterDelete.changes.find(
+      (change) =>
+        change.entityKind === "issueAuditEvent" &&
+        (change.payload as { readonly kind?: unknown } | null)?.kind === "deleted_snapshot",
+    )?.entityId;
+    await asWriter(t).mutation(api.sync.applyOperations, {
+      companyId: COMPANY_ID,
+      operations: [
+        op("issue.restore", ISSUE_A, {}),
+        op("issue.update", ISSUE_A, { title: "Revised before another delete" }),
+        op("issue.delete", ISSUE_A, {}),
+      ],
+    });
+    await t.run(async (ctx) => {
+      const snapshots = (await ctx.db.query("issueAuditEvents").collect()).filter(
+        (event) => event.issueId === ISSUE_A && event.kind === "deleted_snapshot",
+      );
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]?.id).toBe(firstSnapshotId);
+      expect(snapshots[0]?.payload).toMatchObject({
+        deletedIssue: { title: "Revised before another delete" },
+      });
+    });
   });
 
   it("a payload that fails validation receipts invalid-arguments and moves nothing", async () => {

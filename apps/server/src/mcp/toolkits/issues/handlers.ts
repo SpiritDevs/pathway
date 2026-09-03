@@ -279,16 +279,26 @@ const resolveIssue = (
  * "completed" is a fact about the workflow, while the name of the done column is a local decision
  * an agent cannot know.
  */
-const resolveStatus = (
+export const matchingStatuses = (
+  statuses: ReadonlyArray<IssueStatus>,
+  value: string,
+): ReadonlyArray<IssueStatus> => {
+  const wanted = normalizeName(value);
+  const byCategory = statuses.filter((status) => status.category === wanted);
+  if (ISSUE_STATUS_CATEGORIES.includes(wanted as IssueStatusCategory) && byCategory.length > 0) {
+    return byCategory;
+  }
+  const byName = statuses.filter((status) => normalizeName(status.name) === wanted);
+  return byName.length > 0 ? byName : byCategory;
+};
+
+const resolveStatuses = (
   index: TrackerIndex,
   value: string,
   statuses: ReadonlyArray<IssueStatus> = index.statuses,
-): Effect.Effect<IssueStatus, IssueTrackerError> => {
-  const wanted = normalizeName(value);
-  const byName = statuses.find((status) => normalizeName(status.name) === wanted);
-  if (byName) return Effect.succeed(byName);
-  const byCategory = statuses.find((status) => status.category === wanted);
-  if (byCategory) return Effect.succeed(byCategory);
+): Effect.Effect<ReadonlyArray<IssueStatus>, IssueTrackerError> => {
+  const matches = matchingStatuses(statuses, value);
+  if (matches.length > 0) return Effect.succeed(matches);
   return Effect.fail(
     notFound(
       `No issue status called "${value.trim()}". Valid statuses: ${quoteOptions(
@@ -298,6 +308,13 @@ const resolveStatus = (
     ),
   );
 };
+
+const resolveStatus = (
+  index: TrackerIndex,
+  value: string,
+  statuses: ReadonlyArray<IssueStatus> = index.statuses,
+): Effect.Effect<IssueStatus, IssueTrackerError> =>
+  resolveStatuses(index, value, statuses).pipe(Effect.map((matches) => matches[0]!));
 
 const resolveProject = (
   index: TrackerIndex,
@@ -551,9 +568,19 @@ const handlers = {
       const tracker = yield* IssueTrackerService;
       const invocation = yield* McpInvocationContext.McpInvocationContext;
       const index = yield* readIndex();
-      const status = input.status === undefined ? null : yield* resolveStatus(index, input.status);
       const project =
         input.project === undefined ? null : yield* resolveProject(index, input.project);
+      const statuses =
+        input.status === undefined
+          ? null
+          : yield* resolveStatuses(
+              index,
+              input.status,
+              project === null
+                ? index.statuses
+                : yield* tracker.statusesForProject({ projectId: project.projectId }),
+            );
+      const statusIds = statuses === null ? null : new Set(statuses.map((status) => status.id));
       const assignee =
         input.assignee === undefined
           ? undefined
@@ -581,7 +608,7 @@ const handlers = {
         .filter((issue) => {
           if (!includeDeleted && issue.deletedAt !== null) return false;
           if (input.triage !== undefined && issue.triage !== input.triage) return false;
-          if (status !== null && issue.statusId !== status.id) return false;
+          if (statusIds !== null && !statusIds.has(issue.statusId)) return false;
           if (input.statusCategory !== undefined) {
             const category = index.statusById.get(issue.statusId)?.category;
             if (category !== input.statusCategory) return false;
@@ -733,7 +760,6 @@ const handlers = {
       const actor = yield* callerActor();
       const index = yield* readIndex();
 
-      const status = input.status === undefined ? null : yield* resolveStatus(index, input.status);
       let project =
         input.project === undefined ? null : yield* resolveProject(index, input.project);
       let milestone: IssueMilestone | null = null;
@@ -770,6 +796,14 @@ const handlers = {
           }
         }
       }
+      const status =
+        input.status === undefined
+          ? null
+          : yield* resolveStatus(
+              index,
+              input.status,
+              yield* tracker.statusesForProject({ projectId: project?.projectId ?? null }),
+            );
       const cycle = input.cycle === undefined ? null : yield* resolveCycle(index, input.cycle);
       const parent =
         input.parentKey === undefined ? null : yield* resolveIssue(index, input.parentKey);
