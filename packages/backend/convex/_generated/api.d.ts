@@ -9,9 +9,9 @@
  */
 
 import type * as agentThreads from "../agentThreads.js";
-import type * as capturedEmails from "../capturedEmails.js";
 import type * as calendarAccounts from "../calendarAccounts.js";
 import type * as calendars from "../calendars.js";
+import type * as capturedEmails from "../capturedEmails.js";
 import type * as cloudProjects from "../cloudProjects.js";
 import type * as companies from "../companies.js";
 import type * as connectGrants from "../connectGrants.js";
@@ -50,9 +50,9 @@ import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server
 
 declare const fullApi: ApiFromModules<{
   agentThreads: typeof agentThreads;
-  capturedEmails: typeof capturedEmails;
   calendarAccounts: typeof calendarAccounts;
   calendars: typeof calendars;
+  capturedEmails: typeof capturedEmails;
   cloudProjects: typeof cloudProjects;
   companies: typeof companies;
   connectGrants: typeof connectGrants;

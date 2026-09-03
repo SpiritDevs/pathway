@@ -2295,7 +2295,7 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
                 : row.presentation === "connecting-settled"
                   ? "The agent is no longer working. Still connecting to load this chat."
                   : loadingStopped
-                    ? "This thread could not be loaded. You can try again or remove its stale entry."
+                    ? "Thread loading was stopped. You can try again or remove its stale entry."
                     : row.presentation === "connecting-neutral"
                       ? "Loading the latest thread details."
                       : "Still connecting to this chat. The agent is continuing in the background."}

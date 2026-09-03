@@ -599,13 +599,6 @@ export function resolveThreadStopAction(input: {
   return input.projectionPending || input.threadStatus !== "live" ? "stop-loading" : "interrupt";
 }
 
-export function shouldStopMissingThreadLoading(input: {
-  threadStatus: EnvironmentThreadState["status"];
-  hasDraftThread: boolean;
-}): boolean {
-  return input.threadStatus === "deleted" && !input.hasDraftThread;
-}
-
 export function resolveThreadProjectionWorkingPresentation(input: {
   projectionPending: boolean;
   loadingStopped?: boolean;

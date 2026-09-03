@@ -274,6 +274,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Loading stopped");
+    expect(markup).toContain("Thread loading was stopped.");
     expect(markup).toContain("Try again");
     expect(markup).toContain("Remove thread");
     expect(markup).not.toContain("animate-status-pulse");

@@ -427,7 +427,6 @@ import {
   resolveThreadProjectionWorkingPresentation,
   resolveThreadStopAction,
   shouldShowComposerContextStrip,
-  shouldStopMissingThreadLoading,
   threadProjectionIsPending,
   waitForStartedServerThread,
 } from "./ChatView.logic";
@@ -7711,17 +7710,6 @@ function ChatViewContent(props: ChatViewProps) {
   const handleRemoveMissingThread = useCallback(() => {
     void removeMissingThread();
   }, [removeMissingThread]);
-
-  useEffect(() => {
-    if (
-      shouldStopMissingThreadLoading({
-        threadStatus: serverThreadStatus,
-        hasDraftThread: draftThread !== null,
-      })
-    ) {
-      stopThreadLoading(true);
-    }
-  }, [draftThread, serverThreadStatus, stopThreadLoading]);
 
   const onInterrupt = async () => {
     if (
