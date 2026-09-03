@@ -419,11 +419,11 @@ export interface IssueIntakeCommentResult {
 
 export interface IssueTrackerServiceShape {
   /** Whether the complete company replica is the authority for issue reads in this environment. */
-  readonly replicaRoutable: Effect.Effect<boolean>;
+  readonly replicaRoutable: Effect.Effect<boolean, IssueTrackerError>;
   /** Specific active membership for a cloud identity, or null outside a ready company replica. */
   readonly memberActorForCloudUserId: (
     cloudUserId: string,
-  ) => Effect.Effect<Extract<IssueActor, { readonly kind: "member" }> | null>;
+  ) => Effect.Effect<Extract<IssueActor, { readonly kind: "member" }> | null, IssueTrackerError>;
   /** The environment owner's membership, used by local MCP aliases and local cloud sessions. */
   readonly linkedMemberActor: Effect.Effect<Extract<
     IssueActor,
@@ -1255,11 +1255,12 @@ export interface IssueTrackerServiceOptions {
 export const makeIssueTrackerService = Effect.fn(function* (
   options: IssueTrackerServiceOptions = {},
 ) {
-  const replicaReader = options.replicaReader ?? (yield* makeIssueReplicaReader);
   const syncEngineRegistry =
     options.syncEngineRegistry === undefined
       ? Option.getOrNull(yield* Effect.serviceOption(CloudSyncEngineRegistry))
       : options.syncEngineRegistry;
+  const replicaReader =
+    options.replicaReader ?? (yield* makeIssueReplicaReader(syncEngineRegistry));
   const crypto = yield* Crypto.Crypto;
   const issueRepository = yield* IssueRepository;
   const statusRepository = yield* IssueStatusRepository;
@@ -1361,12 +1362,13 @@ export const makeIssueTrackerService = Effect.fn(function* (
     new IssueTrackerError({ reason: "storage", message: `Cloud issue write failed: ${message}` });
 
   const requireSyncEngine = Effect.fn("IssueTrackerService.requireSyncEngine")(function* () {
-    if (replicaReader.companyId === null || syncEngineRegistry === null) {
+    const companyId = yield* replicaReader.companyId;
+    if (companyId === null || syncEngineRegistry === null) {
       return yield* syncWriteFailure(
         "the replica is routable but its daemon engine is unavailable",
       );
     }
-    const engine = yield* syncEngineRegistry.issueEngine(replicaReader.companyId);
+    const engine = yield* syncEngineRegistry.issueEngine(companyId);
     if (engine === null) {
       return yield* syncWriteFailure(
         "the replica is routable but its daemon engine is unavailable",

@@ -347,8 +347,12 @@ export const layerWithOptions = (
                   dropMcpCredentialReservation(threadId, existing.providerSessionId);
                 }
                 yield* mcpSessionRegistry.revokeThread(threadId);
+                const projection = yield* projectionStore
+                  .getThreadProjection(threadId)
+                  .pipe(Effect.orDie);
                 const credential = yield* mcpSessionRegistry.issue({
                   threadId,
+                  projectId: projection.thread.projectId,
                   providerInstanceId,
                 });
                 McpProviderSession.setMcpProviderSession(credential.config);

@@ -10,12 +10,14 @@
 import type {
   CloudSyncEntity,
   IssueSyncOperation,
+  SyncedIssueDomainReadModel,
   SyncCycleReceipt,
   SyncEngine,
   SyncEnqueueReceipt,
   SyncStoreError,
 } from "@spiritdevs/client-runtime/sync";
-import type { EnvironmentId } from "@spiritdevs/contracts";
+import { syncedIssueDomainFromEntities } from "@spiritdevs/client-runtime/sync";
+import type { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import type { SyncOperationId } from "@spiritdevs/contracts/cloudSync";
 import type { SyncActor } from "@spiritdevs/contracts/cloudSync";
@@ -43,7 +45,17 @@ export interface CloudSyncIssueEngineHandle {
   readonly operationDisposition: (
     operationId: SyncOperationId,
   ) => Effect.Effect<CloudSyncOperationDisposition>;
+  /** Current optimistic issue model for this company. */
+  readonly readIssueDomain: Effect.Effect<SyncedIssueDomainReadModel>;
+  /** Current optimistic entity map, used for company membership resolution. */
+  readonly readEntities: Effect.Effect<ReadonlyMap<string, CloudSyncEntity>>;
 }
+
+export type CloudSyncIssueEngineRoute =
+  | { readonly _tag: "Legacy" }
+  | { readonly _tag: "Unbound"; readonly companyIds: ReadonlyArray<CompanyId> }
+  | { readonly _tag: "Ambiguous"; readonly companyIds: ReadonlyArray<CompanyId> }
+  | { readonly _tag: "Ready"; readonly engine: CloudSyncIssueEngineHandle };
 
 export interface CloudSyncEngineRegistryShape {
   readonly registerIssueEngine: (input: {
@@ -66,6 +78,17 @@ export interface CloudSyncEngineRegistryShape {
     use: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>;
   readonly issueEngine: (companyId: CompanyId) => Effect.Effect<CloudSyncIssueEngineHandle | null>;
+  /**
+   * Resolves the company that owns one local project on this environment.
+   *
+   * No registered company engines means the legacy tracker is still authoritative. Once any
+   * company engine exists for the environment, a missing or ambiguous binding is reported rather
+   * than guessed so an MCP write cannot disappear into the environment-local tracker.
+   */
+  readonly issueEngineForProject: (input: {
+    readonly environmentId: EnvironmentId;
+    readonly localProjectId?: ProjectId | undefined;
+  }) => Effect.Effect<CloudSyncIssueEngineRoute>;
 }
 
 export class CloudSyncEngineRegistry extends Context.Service<
@@ -106,6 +129,12 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
                 : { _tag: "Settled" };
             }),
           ),
+        readIssueDomain: SubscriptionRef.get(input.engine.state).pipe(
+          Effect.map((state) => syncedIssueDomainFromEntities(state.view.values())),
+        ),
+        readEntities: SubscriptionRef.get(input.engine.state).pipe(
+          Effect.map((state) => state.view),
+        ),
       };
       return new Map(registered).set(input.engine.companyId, { engine: input.engine, handle });
     });
@@ -122,6 +151,44 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
   const issueEngine: CloudSyncEngineRegistryShape["issueEngine"] = (companyId) =>
     Ref.get(current).pipe(Effect.map((registered) => registered.get(companyId)?.handle ?? null));
 
+  const issueEngineForProject: CloudSyncEngineRegistryShape["issueEngineForProject"] = (input) =>
+    Effect.gen(function* () {
+      const registered = [...(yield* Ref.get(current)).values()].filter(
+        ({ handle }) => handle.environmentId === input.environmentId,
+      );
+      if (registered.length === 0) return { _tag: "Legacy" } as const;
+      if (input.localProjectId === undefined) {
+        return {
+          _tag: "Unbound",
+          companyIds: registered.map(({ handle }) => handle.companyId),
+        } as const;
+      }
+
+      const matches: CloudSyncIssueEngineHandle[] = [];
+      for (const { handle } of registered) {
+        const entities = yield* handle.readEntities;
+        const bound = [...entities.values()].some(
+          (entity) =>
+            entity.entityKind === "environmentBinding" &&
+            entity.environmentId === input.environmentId &&
+            entity.localProjectId === input.localProjectId &&
+            entity.status === "active",
+        );
+        if (bound) matches.push(handle);
+      }
+      if (matches.length === 1) return { _tag: "Ready", engine: matches[0]! } as const;
+      if (matches.length === 0) {
+        return {
+          _tag: "Unbound",
+          companyIds: registered.map(({ handle }) => handle.companyId),
+        } as const;
+      }
+      return {
+        _tag: "Ambiguous",
+        companyIds: matches.map((handle) => handle.companyId),
+      } as const;
+    });
+
   const withIssueEngine: CloudSyncEngineRegistryShape["withIssueEngine"] = (input, use) =>
     Effect.acquireUseRelease(
       registerIssueEngine(input),
@@ -134,6 +201,7 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
     unregisterIssueEngine,
     withIssueEngine,
     issueEngine,
+    issueEngineForProject,
   });
 });
 

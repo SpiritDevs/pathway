@@ -1,4 +1,4 @@
-import { ProviderDriverKind, ProviderInstanceId, ThreadId } from "@spiritdevs/contracts";
+import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@spiritdevs/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -13,6 +13,8 @@ import * as McpProviderSession from "./McpProviderSession.ts";
 
 export interface McpCredentialRequest {
   readonly threadId: ThreadId;
+  /** Local project owning the thread. Cloud-backed tools fail closed when this is unavailable. */
+  readonly projectId: ProjectId;
   readonly providerInstanceId: ProviderInstanceId;
   /**
    * The driver behind the instance. Optional because the instance id *is* the driver kind for
@@ -134,6 +136,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const scope: McpInvocationContext.McpInvocationScope = {
         environmentId,
         threadId: ThreadId.make(request.threadId),
+        projectId: ProjectId.make(request.projectId),
         providerSessionId,
         providerInstanceId,
         providerDriverKind:

@@ -119,7 +119,7 @@ function readyReplicaReader(entities: ReadonlyArray<StoredSyncEntity> = []): Iss
   });
   if (readModel === null) throw new Error("The ready replica fixture did not decode.");
   return {
-    companyId: ROUTED_COMPANY_ID,
+    companyId: Effect.succeed(ROUTED_COMPANY_ID),
     read: Effect.succeed(readModel),
     memberActorForCloudUserId: () => Effect.succeed(null),
   };
@@ -470,15 +470,21 @@ describe("IssueTrackerService", () => {
           }),
         sync: Effect.die(new Error("restore is not used by this test")),
         operationDisposition: () => Effect.succeed({ _tag: "Pending" }),
+        readIssueDomain: Ref.get(stored).pipe(
+          Effect.map(issueReadModelFromStoredReplica),
+          Effect.map((readModel) => readModel!),
+        ),
+        readEntities: Effect.succeed(new Map()),
       };
       const registry = CloudSyncEngineRegistry.of({
         registerIssueEngine: () => Effect.void,
         unregisterIssueEngine: () => Effect.void,
         withIssueEngine: (_input, use) => use,
         issueEngine: () => Effect.succeed(handle),
+        issueEngineForProject: () => Effect.succeed({ _tag: "Ready", engine: handle }),
       } satisfies CloudSyncEngineRegistryShape);
       const replicaReader: IssueReplicaReader = {
-        companyId: ROUTED_COMPANY_ID,
+        companyId: Effect.succeed(ROUTED_COMPANY_ID),
         read: Ref.get(stored).pipe(Effect.map(issueReadModelFromStoredReplica)),
         memberActorForCloudUserId: () => Effect.succeed(null),
       };
