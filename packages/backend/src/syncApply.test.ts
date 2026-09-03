@@ -385,7 +385,7 @@ describe("sync.applyOperations", () => {
       payload: { title: "Fix the crash for good" },
     });
 
-    // Delete: a tombstone with no payload, and a soft-deleted row stamped at the tombstone version.
+    // Soft delete keeps the payload available for the issue bin.
     const deleted = await asWriter(t).mutation(api.sync.applyOperations, {
       companyId: COMPANY_ID,
       operations: [op("issue.delete", ISSUE_A, {})],
@@ -397,13 +397,18 @@ describe("sync.applyOperations", () => {
       cursor: afterUpdate.cursor,
     });
     if (afterDelete._tag !== "Changes") throw new Error("expected Changes");
-    const tombstone = afterDelete.changes.find((c) => c.changeKind === "tombstone");
-    expect(tombstone).toMatchObject({ entityKind: "issue", entityId: ISSUE_A, payload: null });
+    const deletedUpsert = afterDelete.changes.find((c) => c.entityKind === "issue");
+    expect(deletedUpsert).toMatchObject({
+      changeKind: "upsert",
+      entityKind: "issue",
+      entityId: ISSUE_A,
+      payload: { deletedAt: expect.any(Number) },
+    });
 
     await t.run(async (ctx) => {
       const issue = (await ctx.db.query("issues").collect()).find((row) => row.id === ISSUE_A);
       expect(issue?.deletedAt).not.toBeNull();
-      expect(issue?.version).toBe(tombstone?.version);
+      expect(issue?.version).toBe(deletedUpsert?.version);
     });
   });
 
@@ -543,8 +548,8 @@ describe("sync.applyOperations", () => {
   });
 });
 
-describe("tombstones in the change feed", () => {
-  it("a reader drains the upsert and then the tombstone, but never the audit events", async () => {
+describe("soft deletes in the change feed", () => {
+  it("a reader drains the live and deleted upserts, but never the audit events", async () => {
     const t = harness();
     await seed(t);
     const op = makeOps(WRITER_MEMBERSHIP_ID);
@@ -566,8 +571,9 @@ describe("tombstones in the change feed", () => {
     // while the cursor still advances over them to the head.
     expect(page.changes.map((c) => [c.entityKind, c.changeKind])).toEqual([
       ["issue", "upsert"],
-      ["issue", "tombstone"],
+      ["issue", "upsert"],
     ]);
+    expect(page.changes.at(-1)?.payload).toMatchObject({ deletedAt: expect.any(Number) });
     expect(page.cursor).toBe(page.latestVersion);
     expect(page.hasMore).toBe(false);
     await t.run(async (ctx) => {
@@ -643,16 +649,20 @@ describe("sync.bootstrap", () => {
     }
     expect(cursor).toBeNull();
 
-    // The reader sees the status and the two live issues — not the deleted issue, and not the
-    // audit events its missing `audit.read` gates.
+    // The reader sees the status, live issues, and the soft-deleted issue for the bin. Audit events
+    // remain behind the missing `audit.read` permission.
     const issueRows = entities.filter((e) => e.entityKind.startsWith("issue"));
     expect(issueRows.map((e) => [e.entityKind, e.entityId]).sort()).toEqual(
       [
         ["issueStatus", STATUS_ID],
         ["issue", ISSUE_A],
+        ["issue", ISSUE_B],
         ["issue", ISSUE_C],
       ].sort(),
     );
+    expect(issueRows.find((entity) => entity.entityId === ISSUE_B)?.payload).toMatchObject({
+      deletedAt: expect.any(Number),
+    });
     // The walk continues into the company domain (`BOOTSTRAP_ENTITY_ORDER`). The reader holds no
     // administration switch, so it receives exactly its self rows: the company it is a member of,
     // and its own membership, role assignment, and the role definition that assignment references.

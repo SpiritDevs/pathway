@@ -1487,28 +1487,35 @@ export const makeIssueTrackerService = Effect.fn(function* (
     }
   });
 
+  const enqueueReplicaOperationBatch = Effect.fn(
+    "IssueTrackerService.enqueueReplicaOperationBatch",
+  )(function* (plans: ReadonlyArray<ReplicaOperationPlan>) {
+    const route = yield* ActiveIssueReplicaRoute;
+    const engine = route.engine;
+    const operationIds: SyncOperationId[] = [];
+    for (const plan of plans) {
+      const operationId = plan.operationId ?? SyncOperationId.make(yield* newId);
+      const operation = yield* translateOperationProjectIds(route, plan.operation);
+      const receipt = yield* engine
+        .enqueue({
+          operationId,
+          operation,
+          actor: plan.actor ?? route.actor,
+        })
+        .pipe(Effect.mapError((error) => syncWriteFailure(error.message)));
+      if (!receipt.accepted && plan.acceptExisting !== true) {
+        return yield* syncWriteFailure(`operation ${operationId} was already enqueued`);
+      }
+      operationIds.push(operationId);
+    }
+    return { engine, operationIds, route };
+  });
+
   const enqueueReplicaOperations = Effect.fn("IssueTrackerService.enqueueReplicaOperations")(
     function* (plans: ReadonlyArray<ReplicaOperationPlan>) {
-      const route = yield* ActiveIssueReplicaRoute;
-      const engine = route.engine;
-      const operationIds: SyncOperationId[] = [];
-      for (const plan of plans) {
-        const operationId = plan.operationId ?? SyncOperationId.make(yield* newId);
-        const operation = yield* translateOperationProjectIds(route, plan.operation);
-        const receipt = yield* engine
-          .enqueue({
-            operationId,
-            operation,
-            actor: plan.actor ?? route.actor,
-          })
-          .pipe(Effect.mapError((error) => syncWriteFailure(error.message)));
-        if (!receipt.accepted && plan.acceptExisting !== true) {
-          return yield* syncWriteFailure(`operation ${operationId} was already enqueued`);
-        }
-        operationIds.push(operationId);
-      }
-      const readModel = yield* route.read;
-      return { engine, operationIds, readModel };
+      const written = yield* enqueueReplicaOperationBatch(plans);
+      const readModel = yield* written.route.read;
+      return { engine: written.engine, operationIds: written.operationIds, readModel };
     },
   );
 
@@ -1733,7 +1740,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         }
         return Effect.provideService(
           Effect.gen(function* () {
-            const readModel = yield* finalizeReplicaEndedCycles(route.readModel);
+            const readModel = yield* finalizeReplicaEndedCycles(yield* route.read);
             const [slackWatches, status, config] = yield* Effect.all([
               listSlackWatches(),
               Ref.get(slackStatus),
@@ -4996,7 +5003,11 @@ export const makeIssueTrackerService = Effect.fn(function* (
       Effect.flatMap((route) =>
         route === null
           ? fromLegacy
-          : Effect.provideService(fromReplica(route.readModel), ActiveIssueReplicaRoute, route),
+          : Effect.provideService(
+              route.read.pipe(Effect.flatMap(fromReplica)),
+              ActiveIssueReplicaRoute,
+              route,
+            ),
       ),
     );
   const replicaRoutable = resolveReplicaRoute.pipe(Effect.map((route) => route !== null));
@@ -5047,10 +5058,11 @@ export const makeIssueTrackerService = Effect.fn(function* (
           const processed = yield* readProcessedMessage(input.channelId, input.messageTs);
           if (Option.isSome(processed) && processed.value.issueId !== null) {
             const existing = routedIssue(readModel, processed.value.issueId);
-            if (existing !== undefined) return { issue: existing, created: false };
-            // The replica keeps no row for a rejected or deleted issue, unlike the legacy store's
-            // soft deletes, so absence here means dismissed, not gone for good. Honoring the ledger
-            // is what stops an overlapping poll from refiling a triage item someone rejected.
+            if (existing !== undefined && existing.deletedAt === null) {
+              return { issue: existing, created: false };
+            }
+            // Honoring the ledger stops an overlapping poll from refiling a triage item after a
+            // rejection, whether this replica has its soft-deleted row or an older tombstone.
             return { issue: null, created: false };
           }
 
@@ -5203,7 +5215,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           const stableId = stableCreateId(retryIdentity);
           const issueId = IssueId.make(stableId);
           const operationId = SyncOperationId.make(stableId);
-          const written = yield* enqueueReplicaOperations([
+          const written = yield* enqueueReplicaOperationBatch([
             {
               operationId,
               operation: issueCreateOperation(input, issueId),
@@ -5217,7 +5229,16 @@ export const makeIssueTrackerService = Effect.fn(function* (
                 : Effect.fail(error),
             ),
           );
-          const issue = routedIssue(yield* route.read, issueId);
+          const issue = routedIssue(
+            yield* route.read.pipe(
+              Effect.catch((error) =>
+                error.reason === "storage"
+                  ? Effect.fail(createConfirmationPending(retryIdentity))
+                  : Effect.fail(error),
+              ),
+            ),
+            issueId,
+          );
           return issue === undefined ? yield* createConfirmationPending(retryIdentity) : { issue };
         }),
       legacyCreate(input, actor),

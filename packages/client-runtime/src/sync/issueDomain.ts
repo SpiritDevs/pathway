@@ -152,8 +152,8 @@ export function isIssueSyncEntityKind(value: string): value is IssueSyncEntityKi
 // Every field below mirrors one encoder in `convex/lib/issueApply.ts`. Timestamps are epoch
 // milliseconds because that is what Convex stores; ids are the client-generated domain ids, never
 // a Convex `_id`. `companyId` rides the wire but is dropped here: the replica is company-scoped by
-// construction. `deletedAt` and `version` never appear — an upsert is live by definition and a
-// delete arrives as a payloadless tombstone.
+// construction. `version` never appears. Issue payloads retain `deletedAt` so the bin works from
+// the replica; hard removals and deleted rows from other domains arrive as payloadless tombstones.
 
 /**
  * `key` is the human identifier, or the local {@link ISSUE_KEY_DRAFT_PLACEHOLDER} for an issue
@@ -187,6 +187,8 @@ const issueEntityFields = {
   pullRequest: Schema.NullOr(IssuePullRequest),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
+  /** Missing only in replicas written before soft-deleted issues became readable offline. */
+  deletedAt: Schema.optional(Schema.NullOr(Schema.Number)),
 };
 export const IssueEntity = Schema.Struct({
   entityKind: Schema.Literal("issue"),
@@ -767,8 +769,8 @@ const missing = (label: string): SyncApplyOutcome<IssueSyncEntity> =>
  * The reducer is total over the thirty-three operation kinds and structural only: it never asks
  * whether the actor may write, because the server answers that and a rejection returns through
  * the outbox. Creates are idempotent (re-applying one over the confirmed row is a no-op, which is
- * what an acknowledged create replays as), updates against a missing or tombstoned row block with
- * a visible reason, and deletes tombstone unconditionally.
+ * what an acknowledged create replays as), updates against a missing or hard-tombstoned row block
+ * with a visible reason, and soft issue deletes retain their payload for the bin.
  *
  * The company kinds it now decodes never reach the reducer. They have no operation kind, so no
  * envelope naming one survives {@link decodeIssueSyncOperation}; a forged one is quarantined by the
@@ -830,11 +832,12 @@ export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSy
           pullRequest: null,
           createdAt: now,
           updatedAt: now,
+          deletedAt: null,
         });
       }
       case "issue.update": {
         const existing = entityOf(current, "issue");
-        if (existing === null) return missing("issue");
+        if (existing === null || existing.deletedAt != null) return missing("issue");
         const args = operation.args;
         // Absent leaves a field alone and explicit null clears it — the distinction that makes two
         // offline edits to different fields merge.
@@ -860,16 +863,23 @@ export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSy
         });
       }
       case "issue.delete":
-      case "issue.triageReject":
-        return deleted();
-      case "issue.restore":
-        // A tombstoned row is gone locally, payload included, so there is nothing to bring back
-        // until the server answers. Blocking would be worse: a blocked operation is never sent,
-        // and the restore would sit in the outbox forever.
-        return current === null ? deleted() : applied(current);
+      case "issue.triageReject": {
+        const existing = entityOf(current, "issue");
+        return existing === null
+          ? deleted()
+          : applied({ ...existing, deletedAt: now, updatedAt: now });
+      }
+      case "issue.restore": {
+        const existing = entityOf(current, "issue");
+        // A hard tombstone still has no payload to restore optimistically. The server owns that
+        // answer, so the operation must remain sendable rather than becoming blocked.
+        return existing === null
+          ? deleted()
+          : applied({ ...existing, deletedAt: null, updatedAt: now });
+      }
       case "issue.setSortOrder": {
         const existing = entityOf(current, "issue");
-        if (existing === null) return missing("issue");
+        if (existing === null || existing.deletedAt != null) return missing("issue");
         // The key is used as given: a fractional key is chosen against the neighbours the mover
         // saw, so rewriting it here would undo the convergence it exists for.
         return applied({
@@ -881,7 +891,7 @@ export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSy
       }
       case "issue.setWorkflowOwner": {
         const existing = entityOf(current, "issue");
-        if (existing === null) return missing("issue");
+        if (existing === null || existing.deletedAt != null) return missing("issue");
         // Without the status catalog the client cannot pick the matching status in the target
         // workflow; an explicit `statusId` is honoured and otherwise the server's choice lands
         // with the accepted change.
@@ -894,7 +904,7 @@ export function makeIssueSyncAdapter(options?: IssueSyncAdapterOptions): IssueSy
       }
       case "issue.setTeams": {
         const existing = entityOf(current, "issue");
-        if (existing === null) return missing("issue");
+        if (existing === null || existing.deletedAt != null) return missing("issue");
         const teamIds = [...operation.args.teamIds];
         // Detaching the owning team drops workflow ownership back to the company chain. The rest
         // of the server's scope migration — team labels, team cycles, project references — needs

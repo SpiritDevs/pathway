@@ -72,8 +72,10 @@ export function issueFromReplica(entity: IssueEntity): Issue {
     slackSource: entity.slackSource,
     createdAt: isoTimestampFromReplica(entity.createdAt),
     updatedAt: isoTimestampFromReplica(entity.updatedAt),
-    // Live replica maps contain upserts only; a synced delete removes/tombstones the entity.
-    deletedAt: null,
+    deletedAt:
+      entity.deletedAt === undefined || entity.deletedAt === null
+        ? null
+        : isoTimestampFromReplica(entity.deletedAt),
   };
 }
 

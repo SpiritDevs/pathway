@@ -54,5 +54,43 @@ describe("issueFromReplica", () => {
       permalink: "https://example.slack.com/archives/C123/p1723459200001900",
       authorName: "Corey",
     });
+    expect(projected.deletedAt).toBeNull();
+  });
+
+  it("projects a soft-deleted replica issue into the legacy bin", () => {
+    const codec = issueEntityCodec("issue");
+    if (codec === null) throw new Error("Missing issue entity codec.");
+    const entity = Option.getOrThrow(
+      codec.decode({
+        id: "issue-deleted",
+        key: "PAT-9",
+        keyNumber: 9,
+        title: "Deleted issue",
+        description: "Still readable",
+        statusId: "status-1",
+        priority: "none",
+        assignee: null,
+        projectId: null,
+        milestoneId: null,
+        cycleId: null,
+        parentId: null,
+        sortOrder: "m",
+        labelIds: [],
+        dueDate: null,
+        triage: false,
+        slackSource: null,
+        teamIds: [],
+        workflowOwner: { kind: "company" },
+        workModelSelection: null,
+        automationAssignment: null,
+        pullRequest: null,
+        createdAt: Date.UTC(2026, 0, 1),
+        updatedAt: Date.UTC(2026, 0, 3),
+        deletedAt: Date.UTC(2026, 0, 3),
+      }),
+    );
+    if (entity.entityKind !== "issue") throw new Error("Decoded the wrong entity kind.");
+
+    expect(issueFromReplica(entity).deletedAt).toBe("2026-01-03T00:00:00.000Z");
   });
 });

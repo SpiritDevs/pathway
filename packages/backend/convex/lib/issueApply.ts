@@ -199,8 +199,9 @@ async function membershipDomainId(
 // ---------------------------------------------------------------------------
 
 // Payloads carry domain identifiers only: the Convex `_id`, `_creationTime`, storage references,
-// and the row `version` (which rides the envelope) stay server-side. `deletedAt` is omitted
-// because an upsert is by construction live and a tombstone carries no payload at all.
+// and the row `version` (which rides the envelope) stay server-side. Issue payloads retain
+// `deletedAt` because a soft-deleted issue remains readable in the bin; hard removals and every
+// other deleted domain row still travel as payloadless tombstones.
 
 export function encodeIssue(company: Doc<"companies">, doc: Doc<"issues">): unknown {
   return {
@@ -231,6 +232,7 @@ export function encodeIssue(company: Doc<"companies">, doc: Doc<"issues">): unkn
     pullRequest: doc.pullRequest ?? null,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
+    deletedAt: doc.deletedAt,
   };
 }
 
@@ -1133,8 +1135,9 @@ const issueDelete: EnvApply = async ({ ctx, actor, company, feedActor, operation
   if (issue.deletedAt !== null) return applied();
 
   await ctx.db.patch(issue._id, { deletedAt: now, updatedAt: now });
+  const doc = await mustGet(ctx, issue._id);
   return applied(
-    tombstone("issue", issue.id, issue.teamIds, issue._id),
+    upsert("issue", doc.id, doc.teamIds, issue._id, encodeIssue(company, doc)),
     await appendAuditEvent(
       ctx,
       company,
@@ -1160,8 +1163,9 @@ const issueTriageReject: EnvApply = async ({ ctx, actor, company, feedActor, ope
   if (!issue.triage) return rejected("invalid-arguments", "Only a triage item can be rejected.");
 
   await ctx.db.patch(issue._id, { deletedAt: now, updatedAt: now });
+  const doc = await mustGet(ctx, issue._id);
   return applied(
-    tombstone("issue", issue.id, issue.teamIds, issue._id),
+    upsert("issue", doc.id, doc.teamIds, issue._id, encodeIssue(company, doc)),
     await appendAuditEvent(
       ctx,
       company,
@@ -3390,12 +3394,17 @@ export async function readBootstrapRows(
         (row) => teamScope(row.teamId),
         (row) => encodeIssueCycle(company, row),
       );
-    case "issue":
-      return lift(
-        await pageOf(ctx, "issues", company._id, afterId, limit),
-        (row) => row.teamIds,
-        (row) => encodeIssue(company, row),
-      );
+    case "issue": {
+      const rows = await pageOf(ctx, "issues", company._id, afterId, limit);
+      return rows.map((row) => ({
+        id: row.id,
+        version: row.version,
+        deleted: false,
+        teamIds: row.teamIds,
+        ownerMembershipId: null,
+        payload: encodeIssue(company, row),
+      }));
+    }
     case "issueTodo":
       return lift(
         await pageOf(ctx, "issueTodos", company._id, afterId, limit),

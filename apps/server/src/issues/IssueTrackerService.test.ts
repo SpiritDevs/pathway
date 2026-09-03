@@ -3,6 +3,7 @@ import {
   EnvironmentId,
   ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
   IssueCommentAgentRunId,
+  IssueCycleId,
   IssueEnrichmentRunId,
   IssueId,
   IssueKey,
@@ -479,6 +480,16 @@ describe("IssueTrackerService", () => {
             createdAt: 1_700_000_000_000,
             updatedAt: 1_700_000_000_000,
           }),
+          routedStoredEntity("issueCycle", {
+            id: "cycle-requested",
+            teamId: null,
+            name: "Requested",
+            startDate: "3000-01-01",
+            endDate: "3000-01-31",
+            completedAt: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
           routedStoredEntity("issue", {
             id: "issue-cycle-carry",
             key: "SYNC-50",
@@ -545,6 +556,7 @@ describe("IssueTrackerService", () => {
       const holdQueuedCreate = yield* Ref.make(false);
       const rejectCycleFinalization = yield* Ref.make(false);
       const rejectedOperationIds = yield* Ref.make<ReadonlySet<SyncOperationId>>(new Set());
+      const failNextRouteRead = yield* Ref.make(false);
       const enqueued = yield* Ref.make<
         ReadonlyArray<{
           readonly operationId: SyncOperationId;
@@ -626,6 +638,11 @@ describe("IssueTrackerService", () => {
           }),
         sync: Effect.gen(function* () {
           const pending = yield* Ref.get(pendingOperationIds);
+          const failReadBack = (yield* Ref.get(stored)).outbox.some(
+            (entry) =>
+              entry.envelope.kind === "issue.create" &&
+              (entry.envelope.args as { readonly title?: unknown }).title === "Read-back failure",
+          );
           yield* Ref.update(stored, (current) => {
             const optimistic = issueReadModelFromStoredReplica(current);
             const created = current.outbox.find((entry) => entry.envelope.kind === "issue.create");
@@ -636,7 +653,12 @@ describe("IssueTrackerService", () => {
                 : (optimistic?.issues.find(
                     (issue) => issue.id === IssueId.make(created.envelope.entityId),
                   ) ?? undefined);
-            const keyNumber = createdIssue?.title === "Queued create" ? 52 : 51;
+            const keyNumber =
+              createdIssue?.title === "Queued create"
+                ? 52
+                : createdIssue?.title === "Read-back failure"
+                  ? 53
+                  : 51;
             const confirmed =
               createdIssue === undefined
                 ? []
@@ -663,6 +685,7 @@ describe("IssueTrackerService", () => {
               outbox: [],
             };
           });
+          if (failReadBack) yield* Ref.set(failNextRouteRead, true);
           return {
             outcome: "synced" as const,
             cursor: CompanyVersion.make(2),
@@ -712,10 +735,16 @@ describe("IssueTrackerService", () => {
             })),
           ),
       } satisfies CloudSyncEngineRegistryShape);
-      const read = Ref.get(stored).pipe(
-        Effect.map(issueReadModelFromStoredReplica),
-        Effect.map((readModel) => readModel!),
-      );
+      const read = Effect.gen(function* () {
+        if (yield* Ref.get(failNextRouteRead)) {
+          yield* Ref.set(failNextRouteRead, false);
+          return yield* new IssueTrackerError({
+            reason: "storage",
+            message: "Replica became unavailable during read-back",
+          });
+        }
+        return issueReadModelFromStoredReplica(yield* Ref.get(stored))!;
+      });
       const replicaReader: IssueReplicaReader = {
         resolve: Effect.gen(function* () {
           yield* Ref.update(routeResolutions, (count) => count + 1);
@@ -745,50 +774,77 @@ describe("IssueTrackerService", () => {
         syncEngineRegistry: registry,
       });
       const queuedIdentity = `issue-create:${ROUTED_COMPANY_ID}:queued-request`;
-      const [created, retried, queuedError, resumed] = yield* tracker.withPinnedRoute(
-        Effect.gen(function* () {
-          const first = yield* tracker.create(
-            {
-              title: "Server-routed",
-              statusId: IssueStatusId.make("status-routed"),
-              projectId: PROJECT,
-            },
-            AGENT,
-            "create-request-1",
-          );
-          const retry = yield* tracker.create(
-            {
-              title: "Server-routed",
-              statusId: IssueStatusId.make("status-routed"),
-              projectId: PROJECT,
-            },
-            AGENT,
-            `issue-create:${ROUTED_COMPANY_ID}:create-request-1`,
-          );
-          yield* Ref.set(holdQueuedCreate, true);
-          const pendingError = yield* tracker
-            .create(
+      const readRetryIdentity = `issue-create:${ROUTED_COMPANY_ID}:read-failure`;
+      const [created, retried, queuedError, resumed, readError, readRecovered] =
+        yield* tracker.withPinnedRoute(
+          Effect.gen(function* () {
+            const first = yield* tracker.create(
+              {
+                title: "Server-routed",
+                statusId: IssueStatusId.make("status-routed"),
+                projectId: PROJECT,
+              },
+              AGENT,
+              "create-request-1",
+            );
+            const retry = yield* tracker.create(
+              {
+                title: "Server-routed",
+                statusId: IssueStatusId.make("status-routed"),
+                projectId: PROJECT,
+              },
+              AGENT,
+              `issue-create:${ROUTED_COMPANY_ID}:create-request-1`,
+            );
+            yield* Ref.set(holdQueuedCreate, true);
+            const pendingError = yield* tracker
+              .create(
+                {
+                  title: "Queued create",
+                  statusId: IssueStatusId.make("status-routed"),
+                },
+                AGENT,
+                "queued-request",
+              )
+              .pipe(Effect.flip);
+            yield* Ref.set(holdQueuedCreate, false);
+            yield* Ref.set(pendingOperationIds, new Set());
+            const resumedCreate = yield* tracker.create(
               {
                 title: "Queued create",
                 statusId: IssueStatusId.make("status-routed"),
               },
               AGENT,
-              "queued-request",
-            )
-            .pipe(Effect.flip);
-          yield* Ref.set(holdQueuedCreate, false);
-          yield* Ref.set(pendingOperationIds, new Set());
-          const resumedCreate = yield* tracker.create(
-            {
-              title: "Queued create",
-              statusId: IssueStatusId.make("status-routed"),
-            },
-            AGENT,
-            queuedIdentity,
-          );
-          return [first, retry, pendingError, resumedCreate] as const;
-        }),
-      );
+              queuedIdentity,
+            );
+            const failedReadBack = yield* tracker
+              .create(
+                {
+                  title: "Read-back failure",
+                  statusId: IssueStatusId.make("status-routed"),
+                },
+                AGENT,
+                "read-failure",
+              )
+              .pipe(Effect.flip);
+            const recoveredReadBack = yield* tracker.create(
+              {
+                title: "Read-back failure",
+                statusId: IssueStatusId.make("status-routed"),
+              },
+              AGENT,
+              readRetryIdentity,
+            );
+            return [
+              first,
+              retry,
+              pendingError,
+              resumedCreate,
+              failedReadBack,
+              recoveredReadBack,
+            ] as const;
+          }),
+        );
       assert.match(created.issue.id, /^[0-9a-f-]{36}$/u);
       assert.strictEqual(created.issue.key, "SYNC-51");
       assert.strictEqual(created.issue.title, "Server-routed");
@@ -807,10 +863,14 @@ describe("IssueTrackerService", () => {
       assert.include(queuedError.message, `idempotencyKey "${queuedIdentity}"`);
       assert.match(resumed.issue.id, /^[0-9a-f-]{36}$/u);
       assert.strictEqual(resumed.issue.key, "SYNC-52");
+      assert.strictEqual(readError.reason, "conflict");
+      assert.strictEqual(readError.subject, readRetryIdentity);
+      assert.include(readError.message, `idempotencyKey "${readRetryIdentity}"`);
+      assert.strictEqual(readRecovered.issue.key, "SYNC-53");
       assert.strictEqual(
         (yield* Ref.get(enqueued)).filter(({ operation }) => operation.kind === "issue.create")
           .length,
-        2,
+        3,
       );
       assert.strictEqual(yield* Ref.get(routeResolutions), 1);
       yield* Ref.set(rejectCycleFinalization, true);
@@ -825,6 +885,22 @@ describe("IssueTrackerService", () => {
         "cycle-next",
       );
       assert.isNotNull(snapshot.cycles.find((cycle) => cycle.id === "cycle-ended")?.completedAt);
+      const requestedSnapshot = yield* tracker.withPinnedRoute(
+        Effect.gen(function* () {
+          yield* tracker.update(
+            {
+              issueId: IssueId.make("issue-cycle-carry"),
+              patch: { cycleId: IssueCycleId.make("cycle-requested") },
+            },
+            AGENT,
+          );
+          return yield* tracker.getSnapshot();
+        }),
+      );
+      assert.strictEqual(
+        requestedSnapshot.issues.find((issue) => issue.id === "issue-cycle-carry")?.cycleId,
+        "cycle-requested",
+      );
       const threadLinks = yield* tracker.getThreadLinks({
         issueId: IssueId.make("issue-cycle-carry"),
       });
@@ -915,8 +991,8 @@ describe("IssueTrackerService", () => {
       const rejected = yield* tracker.triageReject({ issueId: rejectable.issue.id }, AGENT);
       assert.isNotNull(rejected.issue.deletedAt);
 
-      // An overlapping poll re-seeing the rejected message must not resurrect it: the ledger
-      // decision stands even though the replica keeps no row for the tombstoned issue.
+      // An overlapping poll re-seeing the rejected message must not resurrect it. The ledger
+      // decision stands even though the replica keeps the soft-deleted issue for the bin.
       const refused = yield* tracker.intakeCreateIssue({
         channelId: "C123",
         messageTs: "1723459201.001901",
@@ -948,6 +1024,14 @@ describe("IssueTrackerService", () => {
         AGENT,
       );
       assert.isNotNull(deletedCycleIssue.issue.deletedAt);
+      const deletedSnapshot = yield* tracker.getSnapshot();
+      assert.isNotNull(
+        deletedSnapshot.issues.find((issue) => issue.id === "issue-cycle-carry")?.deletedAt,
+      );
+      const deletedDetail = yield* tracker.getDetail({
+        issueId: IssueId.make("issue-cycle-carry"),
+      });
+      assert.deepStrictEqual(deletedDetail.comments, []);
       const restoredCycleIssue = yield* tracker.restoreByKey(IssueKey.make("SYNC-50"), AGENT);
       assert.strictEqual(restoredCycleIssue.issue.id, "issue-cycle-carry");
       assert.isNull(restoredCycleIssue.issue.deletedAt);

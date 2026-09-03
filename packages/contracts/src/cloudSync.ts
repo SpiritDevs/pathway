@@ -330,8 +330,8 @@ export type SyncChangeEnvelope = typeof SyncChangeEnvelope.Type;
  *
  * - **No `companyId`.** A replica is one company by construction, and the id would be the same
  *   value on every row of every page.
- * - **No `version` and no `deletedAt`.** The envelope carries the version, and a delete is a
- *   payloadless `tombstone` rather than a flag inside a payload.
+ * - **No `version`.** The envelope carries the version. Most deletes are payloadless tombstones;
+ *   soft-deleted issues retain `deletedAt` so replicas can render and restore the issue bin.
  * - **Timestamps are epoch milliseconds** ({@link CloudTimestamp}), matching what Convex stores.
  * - **Free text is not validated.** Names, descriptions, and the membership snapshots decode as
  *   plain strings: the check belongs on the mutation that writes them, and quarantining a whole
