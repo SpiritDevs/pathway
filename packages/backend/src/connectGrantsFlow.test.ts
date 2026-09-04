@@ -12,6 +12,7 @@ import { CONNECT_GRANT_TTL_MS, hashConnectGrantToken } from "./connectGrants.ts"
 const RELAY_ISSUER = "https://relay.example.test";
 const CLERK_ISSUER = "https://clerk.example.test";
 process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
+process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY_ISSUER}/.well-known/jwks.json`;
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
