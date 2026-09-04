@@ -37,7 +37,7 @@ describe("remote", () => {
     expect(
       resolveRemotePairingTarget({
         pairingUrl:
-          "https://app.spiritdevs.com/pair?host=https%3A%2F%2Fdesktop.example.com%3A44342%2F#token=pairing-token",
+          "https://app.pathway.app/pair?host=https%3A%2F%2Fdesktop.example.com%3A44342%2F#token=pairing-token",
       }),
     ).toEqual({
       credential: "pairing-token",
@@ -89,7 +89,7 @@ describe("remote", () => {
     expect(
       resolveRemotePairingTarget({
         pairingUrl:
-          "https://app.spiritdevs.com/pair?host=%2F%2Fremote.example.com#token=pairing-token",
+          "https://app.pathway.app/pair?host=%2F%2Fremote.example.com#token=pairing-token",
       }),
     ).toEqual({
       credential: "pairing-token",
@@ -157,7 +157,7 @@ describe("remote", () => {
     try {
       resolveRemotePairingTarget({
         pairingUrl:
-          "https://app.spiritdevs.com/pair?host=ftp%3A%2F%2Fremote.example.com#token=pairing-token",
+          "https://app.pathway.app/pair?host=ftp%3A%2F%2Fremote.example.com#token=pairing-token",
       });
     } catch (cause) {
       hostError = cause;

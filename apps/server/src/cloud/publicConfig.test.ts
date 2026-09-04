@@ -52,9 +52,9 @@ it.effect("normalizes the hosted app URL to an absolute origin", () =>
   Effect.gen(function* () {
     assert.equal(
       yield* hostedAppUrlConfig.pipe(
-        provideEnv({ PATHWAY_HOSTED_APP_URL: "https://nightly.app.spiritdevs.com" }),
+        provideEnv({ PATHWAY_HOSTED_APP_URL: "https://app.pathway.dev" }),
       ),
-      "https://nightly.app.spiritdevs.com",
+      "https://app.pathway.dev",
     );
     assert.equal(
       yield* hostedAppUrlConfig.pipe(
@@ -68,10 +68,10 @@ it.effect("normalizes the hosted app URL to an absolute origin", () =>
 it.effect("rejects malformed or insecure hosted app URLs", () =>
   Effect.gen(function* () {
     for (const value of [
-      "app.spiritdevs.com",
-      "http://app.spiritdevs.com",
-      "https://app.spiritdevs.com/nested",
-      "https://app.spiritdevs.com?alias=true",
+      "app.pathway.app",
+      "http://app.pathway.app",
+      "https://app.pathway.app/nested",
+      "https://app.pathway.app?alias=true",
     ]) {
       const result = yield* hostedAppUrlConfig.pipe(
         provideEnv({ PATHWAY_HOSTED_APP_URL: value }),

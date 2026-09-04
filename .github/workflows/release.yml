@@ -1,35 +1,16 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
-      - "!v*-nightly.*"
   schedule:
     # Off minute zero: GitHub delays scheduled runs most at the top of the hour.
     - cron: "7 */3 * * *"
   workflow_dispatch:
-    inputs:
-      channel:
-        description: "Release channel"
-        required: false
-        default: stable
-        type: choice
-        options:
-          - stable
-          - nightly
-      version:
-        description: "Release version (for example 1.2.3 or v1.2.3)"
-        required: false
-        type: string
 
-# Serialize nightlies (scheduled and manual) so overlapping runs cannot build
-# the same commit twice or publish out of order. Stable tag releases get their
-# own group so a nightly never blocks them. Running publishers are never
-# canceled. GitHub retains the newest pending run for each channel, and queued
-# nightlies with no new commits skip via check_changes.
+# Serialize nightlies so overlapping runs cannot publish out of order. Running
+# publishers are never canceled, and scheduled runs with no new commits skip via
+# check_changes.
 concurrency:
-  group: release-${{ (github.event_name == 'schedule' || inputs.channel == 'nightly') && 'nightly' || 'stable' }}
+  group: release-nightly
   cancel-in-progress: false
 
 permissions:
@@ -89,7 +70,6 @@ jobs:
       release_name: ${{ steps.release_meta.outputs.name }}
       short_sha: ${{ steps.release_meta.outputs.short_sha }}
       previous_tag: ${{ steps.previous_tag.outputs.previous_tag }}
-      cli_dist_tag: ${{ steps.release_meta.outputs.cli_dist_tag }}
       is_prerelease: ${{ steps.release_meta.outputs.is_prerelease }}
       make_latest: ${{ steps.release_meta.outputs.make_latest }}
       ref: ${{ github.sha }}
@@ -117,55 +97,21 @@ jobs:
         name: Resolve release version
         shell: bash
         env:
-          DISPATCH_CHANNEL: ${{ github.event.inputs.channel }}
-          DISPATCH_VERSION: ${{ github.event.inputs.version }}
           NIGHTLY_DATE: ${{ github.run_started_at }}
           NIGHTLY_SHA: ${{ github.sha }}
           NIGHTLY_RUN_NUMBER: ${{ github.run_number }}
         run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "schedule" || ( "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${DISPATCH_CHANNEL:-stable}" == "nightly" ) ]]; then
-            nightly_date="$(date -u -d "$NIGHTLY_DATE" +%Y%m%d)"
+          nightly_date="$(date -u -d "$NIGHTLY_DATE" +%Y%m%d)"
 
-            node scripts/resolve-nightly-release.ts \
-              --date "$nightly_date" \
-              --run-number "$NIGHTLY_RUN_NUMBER" \
-              --sha "$NIGHTLY_SHA" \
-              --github-output
+          node scripts/resolve-nightly-release.ts \
+            --date "$nightly_date" \
+            --run-number "$NIGHTLY_RUN_NUMBER" \
+            --sha "$NIGHTLY_SHA" \
+            --github-output
 
-            echo "release_channel=nightly" >> "$GITHUB_OUTPUT"
-            echo "cli_dist_tag=nightly" >> "$GITHUB_OUTPUT"
-            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "make_latest=false" >> "$GITHUB_OUTPUT"
-          else
-            if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-              raw="${DISPATCH_VERSION}"
-              if [[ -z "$raw" ]]; then
-                echo "workflow_dispatch stable releases require the version input." >&2
-                exit 1
-              fi
-            else
-              raw="${GITHUB_REF_NAME}"
-            fi
-
-            version="${raw#v}"
-            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-              echo "Invalid release version: $raw" >&2
-              exit 1
-            fi
-
-            echo "release_channel=stable" >> "$GITHUB_OUTPUT"
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-            echo "tag=v$version" >> "$GITHUB_OUTPUT"
-            echo "name=Pathway v$version" >> "$GITHUB_OUTPUT"
-            echo "cli_dist_tag=latest" >> "$GITHUB_OUTPUT"
-            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
-              echo "make_latest=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-              echo "make_latest=false" >> "$GITHUB_OUTPUT"
-            fi
-          fi
+          echo "release_channel=nightly" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          echo "make_latest=false" >> "$GITHUB_OUTPUT"
 
       - name: Check
         run: vp check
@@ -204,60 +150,18 @@ jobs:
       clerk_cli_oauth_client_id: ${{ steps.public_config.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ steps.public_config.outputs.relay_url }}
     env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
-      RELAY_API_ZONE_NAME: ${{ vars.RELAY_API_ZONE_NAME }}
       CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
       CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
       CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.CLERK_CLI_OAUTH_CLIENT_ID }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.sha }}
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: |
-            args:
-              - --filter=pathway-relay...
-
-      - id: relay_state
-        name: Read production relay tracing config
-        shell: bash
-        run: |
-          vp run --filter pathway-relay deploy \
-            --stage prod \
-            --read-state \
-            --github-output \
-            --github-env-file "$RUNNER_TEMP/relay-client-tracing.env"
-
-      - name: Upload relay client tracing config
-        uses: actions/upload-artifact@v7
-        with:
-          name: relay-client-tracing-config
-          path: ${{ runner.temp }}/relay-client-tracing.env
-          if-no-files-found: error
-          retention-days: 1
-
       - id: public_config
         name: Resolve production relay public config
         shell: bash
         run: |
           set -euo pipefail
 
-          relay_domain="${RELAY_DOMAIN:-}"
-          if [[ -z "$relay_domain" && -n "${RELAY_API_ZONE_NAME:-}" ]]; then
-            relay_domain="relay.$RELAY_API_ZONE_NAME"
-          fi
+          relay_domain="${RELAY_DOMAIN:-relay.spiritdevs.com}"
           required=(
             relay_domain
             CLERK_PUBLISHABLE_KEY
@@ -280,72 +184,9 @@ jobs:
           echo "clerk_cli_oauth_client_id=$CLERK_CLI_OAUTH_CLIENT_ID" >> "$GITHUB_OUTPUT"
           echo "relay_url=https://$relay_domain" >> "$GITHUB_OUTPUT"
 
-  # node-pty publishes no Linux prebuilt and the WSL backend runs under the
-  # distro's own (Linux) Node, which can't load the Windows/Electron binary. We
-  # build the Linux pty.node here, on Linux, and hand it to the Windows packaging
-  # job — the Windows artifact then ships a ready WSL backend binary with no
-  # cross-compiling and no first-launch compiler/node-gyp/network on the user's
-  # machine. node-pty is N-API, so one binary works across all WSL Node versions.
-  build_wsl_node_pty:
-    name: Build WSL node-pty (linux-x64)
-    # Same gating as relay_public_config: only the commit SHA is needed, so this
-    # runs alongside preflight. See the condition comment there.
-    needs: [check_changes]
-    if: |
-      !failure() && !cancelled() &&
-      (github.event_name != 'schedule' || needs.check_changes.outputs.has_changes == 'true')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.sha }}
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: |
-            args:
-              - --filter=@spiritdevs/pathway...
-
-      - name: Build node-pty linux-x64 prebuild
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Resolve node-pty from apps/server (where it's a dependency) and build
-          # its native binary from source for Linux. node-addon-api resolves from
-          # node-pty's own dependency tree, so node-gyp has everything it needs.
-          pty_pkg="$(node -e "console.log(require.resolve('node-pty/package.json', { paths: ['$GITHUB_WORKSPACE/apps/server'] }))")"
-          pty_dir="$(dirname "$pty_pkg")"
-          ( cd "$pty_dir" && npx --yes node-gyp rebuild )
-          mkdir -p wsl-prebuild
-          cp "$pty_dir/build/Release/pty.node" wsl-prebuild/pty.node
-          file wsl-prebuild/pty.node
-
-      - name: Upload node-pty linux-x64 prebuild
-        uses: actions/upload-artifact@v7
-        with:
-          name: wsl-node-pty-x64
-          path: wsl-prebuild/pty.node
-          if-no-files-found: error
-
   build:
     name: Build ${{ matrix.label }}
-    # build_wsl_node_pty stays in `needs` so it runs first and its artifact is
-    # available to download, but only the Windows matrix entry consumes it. We
-    # therefore gate the job on preflight + relay (must succeed) WITHOUT requiring
-    # build_wsl_node_pty, so a failed Linux prebuild doesn't skip the macOS/Linux
-    # builds. `!cancelled()` (not `!failure()`) lets the job run even when
-    # build_wsl_node_pty failed; the Windows-only download step below then fails
-    # that single platform if the prebuild is missing.
-    needs: [preflight, relay_public_config, build_wsl_node_pty]
+    needs: [preflight, relay_public_config]
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -365,32 +206,6 @@ jobs:
             arch: arm64
             rust_target: aarch64-apple-darwin
             resource_key: darwin-arm64
-          - label: macOS x64
-            runner: blacksmith-12vcpu-macos-26
-            platform: mac
-            target: dmg
-            arch: x64
-            rust_target: x86_64-apple-darwin
-            resource_key: darwin-x64
-          - label: Linux x64
-            runner: blacksmith-32vcpu-ubuntu-2404
-            platform: linux
-            target: AppImage
-            arch: x64
-            rust_target: x86_64-unknown-linux-gnu
-            resource_key: linux-x64
-          - label: Windows x64
-            runner: blacksmith-32vcpu-windows-2025
-            platform: win
-            target: nsis
-            arch: x64
-            rust_target: x86_64-pc-windows-msvc
-            resource_key: win32-x64
-          # - label: Windows arm64
-          #   runner: windows-11-arm
-          #   platform: win
-          #   target: nsis
-          #   arch: arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -416,20 +231,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
-
-      - name: Download relay client tracing config
-        uses: actions/download-artifact@v8
-        with:
-          name: relay-client-tracing-config
-          path: ${{ runner.temp }}/relay-client-tracing
-
-      - name: Load relay client tracing config
-        shell: bash
-        run: |
-          config_path="$RUNNER_TEMP/relay-client-tracing/relay-client-tracing.env"
-          tracing_token="$(sed -n 's/^PATHWAY_RELAY_CLIENT_OTLP_TRACES_TOKEN=//p' "$config_path")"
-          echo "::add-mask::$tracing_token"
-          cat "$config_path" >> "$GITHUB_ENV"
 
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
@@ -546,13 +347,6 @@ jobs:
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           MACOS_PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
           PATHWAY_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
         run: |
           args=(
             --platform "${{ matrix.platform }}"
@@ -571,49 +365,30 @@ jobs:
             return 0
           }
 
-          if [[ "${{ matrix.platform }}" == "mac" ]]; then
-            if has_all "$CSC_LINK" "$CSC_KEY_PASSWORD" "$APPLE_API_KEY" "$APPLE_API_KEY_ID" "$APPLE_API_ISSUER"; then
-              if ! has_all "$APPLE_TEAM_ID" "$MACOS_PROVISIONING_PROFILE"; then
-                echo "macOS signing is configured, but APPLE_TEAM_ID or MACOS_PROVISIONING_PROFILE is missing." >&2
-                exit 1
-              fi
-
-              key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
-              printf '%s' "$APPLE_API_KEY" > "$key_path"
-              export APPLE_API_KEY="$key_path"
-
-              profile_path="$RUNNER_TEMP/pathway.provisionprofile"
-              printf '%s' "$MACOS_PROVISIONING_PROFILE" | base64 -D > "$profile_path"
-              security cms -D -i "$profile_path" >/dev/null
-              export PATHWAY_APPLE_TEAM_ID="$APPLE_TEAM_ID"
-              export PATHWAY_MACOS_PROVISIONING_PROFILE="$profile_path"
-
-              echo "macOS signing enabled."
-              args+=(--signed)
-            else
-              echo "macOS signing disabled (missing one or more Apple signing secrets)."
-            fi
-          elif [[ "${{ matrix.platform }}" == "win" ]]; then
-            # Bundle the Linux node-pty binary built by the build_wsl_node_pty job
-            # so the packaged WSL backend ships a ready binary (no first-launch
-            # compile). Required for a working WSL backend on Windows.
-            args+=(--wsl-prebuild "$GITHUB_WORKSPACE/wsl-prebuild/pty.node")
-            if has_all \
-              "$AZURE_TENANT_ID" \
-              "$AZURE_CLIENT_ID" \
-              "$AZURE_CLIENT_SECRET" \
-              "$AZURE_TRUSTED_SIGNING_ENDPOINT" \
-              "$AZURE_TRUSTED_SIGNING_ACCOUNT_NAME" \
-              "$AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME" \
-              "$AZURE_TRUSTED_SIGNING_PUBLISHER_NAME"; then
-              echo "Windows signing enabled (Azure Trusted Signing)."
-              args+=(--signed)
-            else
-              echo "Windows signing disabled (missing one or more Azure Trusted Signing secrets)."
-            fi
-          else
-            echo "Signing disabled for ${{ matrix.platform }}."
+          if ! has_all \
+            "$CSC_LINK" \
+            "$CSC_KEY_PASSWORD" \
+            "$APPLE_API_KEY" \
+            "$APPLE_API_KEY_ID" \
+            "$APPLE_API_ISSUER" \
+            "$APPLE_TEAM_ID" \
+            "$MACOS_PROVISIONING_PROFILE"; then
+            echo "macOS nightly releases require all signing and notarization secrets." >&2
+            exit 1
           fi
+
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_API_KEY" > "$key_path"
+          export APPLE_API_KEY="$key_path"
+
+          profile_path="$RUNNER_TEMP/pathway.provisionprofile"
+          printf '%s' "$MACOS_PROVISIONING_PROFILE" | base64 -D > "$profile_path"
+          security cms -D -i "$profile_path" >/dev/null
+          export PATHWAY_APPLE_TEAM_ID="$APPLE_TEAM_ID"
+          export PATHWAY_MACOS_PROVISIONING_PROFILE="$profile_path"
+
+          echo "macOS signing enabled."
+          args+=(--signed)
 
           vp run dist:desktop:artifact "${args[@]}"
 
@@ -685,7 +460,9 @@ jobs:
   publish_cli:
     name: Publish CLI to npm
     needs: [preflight, relay_public_config, build]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.build.result == 'success' }}
+    # Stable CLI publishing remains dormant while the release workflow is
+    # nightly-only. npm trusted publishing does not support Blacksmith runners.
+    if: ${{ needs.preflight.outputs.release_channel == 'stable' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404 # blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10
     permissions:
@@ -716,20 +493,6 @@ jobs:
               - --filter=@spiritdevs/pathway...
               - --filter=@spiritdevs/web...
               - --filter=@spiritdevs/scripts...
-
-      - name: Download relay client tracing config
-        uses: actions/download-artifact@v8
-        with:
-          name: relay-client-tracing-config
-          path: ${{ runner.temp }}/relay-client-tracing
-
-      - name: Load relay client tracing config
-        shell: bash
-        run: |
-          config_path="$RUNNER_TEMP/relay-client-tracing/relay-client-tracing.env"
-          tracing_token="$(sed -n 's/^PATHWAY_RELAY_CLIENT_OTLP_TRACES_TOKEN=//p' "$config_path")"
-          echo "::add-mask::$tracing_token"
-          cat "$config_path" >> "$GITHUB_ENV"
 
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
@@ -762,8 +525,8 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [preflight, build, publish_cli]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' && needs.publish_cli.result == 'success' }}
+    needs: [preflight, build]
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     permissions:
@@ -778,32 +541,12 @@ jobs:
             !/.repos/
           sparse-checkout-cone-mode: false
 
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: |
-            args:
-              - --filter=@spiritdevs/scripts...
-
       - name: Download all desktop artifacts
         uses: actions/download-artifact@v8
         with:
           pattern: desktop-*
           merge-multiple: true
           path: release-assets
-
-      - name: Merge macOS updater manifests
-        run: |
-          shopt -s nullglob
-          for x64_manifest in release-assets/*-mac-x64.yml; do
-            arm64_manifest="${x64_manifest%-x64.yml}.yml"
-            if [[ -f "$arm64_manifest" ]]; then
-              node scripts/merge-update-manifests.ts --platform mac "$arm64_manifest" "$x64_manifest"
-              rm -f "$x64_manifest"
-            fi
-          done
 
       # - name: Merge Windows updater manifests
       #   run: |
@@ -848,8 +591,6 @@ jobs:
           files: |
             release-assets/*.dmg
             release-assets/*.zip
-            release-assets/*.AppImage
-            release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
           fail_on_unmatched_files: true
@@ -868,8 +609,6 @@ jobs:
           files: |
             release-assets/*.dmg
             release-assets/*.zip
-            release-assets/*.AppImage
-            release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
           fail_on_unmatched_files: true
@@ -889,10 +628,7 @@ jobs:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      PATHWAY_WEB_ROUTER_URL: ${{ vars.PATHWAY_WEB_ROUTER_URL }}
-      PATHWAY_WEB_LATEST_DOMAIN: ${{ vars.PATHWAY_WEB_LATEST_DOMAIN }}
       PATHWAY_WEB_NIGHTLY_DOMAIN: ${{ vars.PATHWAY_WEB_NIGHTLY_DOMAIN }}
-      VERCEL_TEAM_SLUG: ${{ vars.VERCEL_TEAM_SLUG }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -913,20 +649,6 @@ jobs:
               - --filter=@spiritdevs/scripts...
               - --filter=@spiritdevs/web...
 
-      - name: Download relay client tracing config
-        uses: actions/download-artifact@v8
-        with:
-          name: relay-client-tracing-config
-          path: ${{ runner.temp }}/relay-client-tracing
-
-      - name: Load relay client tracing config
-        shell: bash
-        run: |
-          config_path="$RUNNER_TEMP/relay-client-tracing/relay-client-tracing.env"
-          tracing_token="$(sed -n 's/^PATHWAY_RELAY_CLIENT_OTLP_TRACES_TOKEN=//p' "$config_path")"
-          echo "::add-mask::$tracing_token"
-          cat "$config_path" >> "$GITHUB_ENV"
-
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
 
@@ -943,23 +665,8 @@ jobs:
             exit 1
           fi
 
-          router_url="${PATHWAY_WEB_ROUTER_URL:-https://app.spiritdevs.com}"
-          latest_domain="${PATHWAY_WEB_LATEST_DOMAIN:-latest.app.spiritdevs.com}"
-          nightly_domain="${PATHWAY_WEB_NIGHTLY_DOMAIN:-nightly.app.spiritdevs.com}"
-          router_domain="${router_url#http://}"
-          router_domain="${router_domain#https://}"
-          router_domain="${router_domain%%/*}"
-
-          if [[ "${{ needs.preflight.outputs.release_channel }}" == "stable" ]]; then
-            channel_domain="$latest_domain"
-            channel_name="latest"
-          else
-            channel_domain="$nightly_domain"
-            channel_name="nightly"
-          fi
-
-          vercel_scope="${VERCEL_TEAM_SLUG:-$VERCEL_ORG_ID}"
-          vercel_scope_args=(--scope "$vercel_scope")
+          channel_domain="${PATHWAY_WEB_NIGHTLY_DOMAIN:-app.pathway.dev}"
+          channel_name="nightly"
 
           echo "Deploying hosted web app for $channel_name channel."
           deployment_url="$(
@@ -968,31 +675,17 @@ jobs:
               --prod \
               --skip-domain \
               --yes \
-              --token "$VERCEL_TOKEN" \
-              "${vercel_scope_args[@]}" \
               --build-env "APP_VERSION=${{ needs.preflight.outputs.version }}" \
               --build-env "PATHWAY_CLERK_PUBLISHABLE_KEY=${PATHWAY_CLERK_PUBLISHABLE_KEY:-}" \
               --build-env "PATHWAY_CLERK_JWT_TEMPLATE=${PATHWAY_CLERK_JWT_TEMPLATE:-}" \
               --build-env "PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID=${PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID:-}" \
               --build-env "PATHWAY_RELAY_URL=${PATHWAY_RELAY_URL:-}" \
-              --build-env "PATHWAY_RELAY_CLIENT_OTLP_TRACES_URL=${PATHWAY_RELAY_CLIENT_OTLP_TRACES_URL:-}" \
-              --build-env "PATHWAY_RELAY_CLIENT_OTLP_TRACES_DATASET=${PATHWAY_RELAY_CLIENT_OTLP_TRACES_DATASET:-}" \
-              --build-env "PATHWAY_RELAY_CLIENT_OTLP_TRACES_TOKEN=${PATHWAY_RELAY_CLIENT_OTLP_TRACES_TOKEN:-}" \
-              --build-env "VITE_HOSTED_APP_URL=$router_url" \
+              --build-env "VITE_HOSTED_APP_URL=https://$channel_domain" \
               --build-env "VITE_HOSTED_APP_CHANNEL=$channel_name"
           )"
 
           echo "Aliasing $deployment_url to $channel_domain."
-          vp dlx vercel@53.1.1 alias set "$deployment_url" "$channel_domain" \
-            --token "$VERCEL_TOKEN" \
-            "${vercel_scope_args[@]}"
-
-          if [[ "$channel_name" == "latest" && -n "$router_domain" && "$router_domain" != "$channel_domain" ]]; then
-            echo "Aliasing $deployment_url to router domain $router_domain."
-            vp dlx vercel@53.1.1 alias set "$deployment_url" "$router_domain" \
-              --token "$VERCEL_TOKEN" \
-              "${vercel_scope_args[@]}"
-          fi
+          vp dlx vercel@53.1.1 alias set "$deployment_url" "$channel_domain"
 
   finalize:
     name: Finalize release
@@ -1075,13 +768,8 @@ jobs:
 
   announce_discord:
     name: Announce release on Discord
-    if: |
-      always() && !cancelled() &&
-      needs.preflight.result == 'success' &&
-      needs.relay_public_config.result == 'success' &&
-      needs.release.result == 'success' &&
-      needs.deploy_web.result == 'success' &&
-      (needs.finalize.result == 'success' || needs.finalize.result == 'skipped')
+    # Notifications stay dormant during the nightly pilot.
+    if: ${{ false }}
     needs: [preflight, relay_public_config, release, deploy_web, finalize]
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 10

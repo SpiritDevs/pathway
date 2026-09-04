@@ -1,4 +1,4 @@
-import { DEFAULT_HOSTED_APP_URL } from "@spiritdevs/shared/connectAuth";
+import { DEFAULT_HOSTED_APP_URL, NIGHTLY_HOSTED_APP_URL } from "@spiritdevs/shared/connectAuth";
 
 import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "./pairingUrl";
 
@@ -83,7 +83,8 @@ export function buildHostedPairingUrl(input: {
 export function buildHostedChannelSelectionUrl(input: {
   readonly channel: HostedAppChannel;
 }): string {
-  const url = new URL("/__pathway/channel", configuredHostedAppUrl());
-  url.searchParams.set("channel", input.channel);
-  return url.toString();
+  return new URL(
+    "/",
+    input.channel === "nightly" ? NIGHTLY_HOSTED_APP_URL : DEFAULT_HOSTED_APP_URL,
+  ).toString();
 }
