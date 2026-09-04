@@ -39,12 +39,6 @@ import { usePathwayConnectAuthPrompt } from "./usePathwayConnectAuthPrompt";
 
 const customProfilePageRoots = new WeakMap<HTMLDivElement, Root>();
 
-export function shouldShowCompanyMenu(
-  companies: ReadonlyArray<{ readonly workspaceKind: "personal" | "organization" }>,
-): boolean {
-  return companies.length > 0;
-}
-
 function mountCustomProfilePage(element: HTMLDivElement, content: ReactNode) {
   const root = createRoot(element);
   customProfilePageRoots.set(element, root);
@@ -126,7 +120,7 @@ function ConfiguredPathwayConnectProfileButton() {
             </div>
           </div>
           <DropdownMenuSeparator />
-          {shouldShowCompanyMenu(companies) ? (
+          {companyChoices.length > 0 ? (
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <Building2Icon />

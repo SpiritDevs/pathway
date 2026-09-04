@@ -95,17 +95,19 @@ describe("PathwayConnectProfileButton", () => {
     expect(markup).toContain("Manage account");
     expect(markup).toContain("Sign out");
     expect(markup).not.toContain("cl-userButton");
+    expect(markup).not.toContain(">Company<");
+    expect(markup).not.toContain("Create company");
   });
 
-  it("keeps the personal workspace out of the company list while offering company creation", () => {
+  it("hides the company submenu when only a personal workspace is available", () => {
     testState.companies = [
       { id: "company-a", name: "Corey's Workspace", workspaceKind: "personal" },
     ];
 
     const markup = renderToStaticMarkup(<PathwayConnectProfileButton />);
 
-    expect(markup).toContain("Company");
-    expect(markup).toContain("Create company");
+    expect(markup).not.toContain(">Company<");
+    expect(markup).not.toContain("Create company");
     expect(markup).not.toContain("Corey&#x27;s Workspace");
   });
 
@@ -135,6 +137,8 @@ describe("PathwayConnectProfileButton", () => {
 
     const markup = renderToStaticMarkup(<PathwayConnectProfileButton />);
 
+    expect(markup).toContain(">Company<");
+    expect(markup).toContain("Beta Labs");
     expect(markup).toContain("All companies");
     expect(markup).toContain('data-checked="true"');
   });
