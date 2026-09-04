@@ -55,7 +55,7 @@ import {
 const SMOKE_ENABLED = process.env.PATHWAY_CONVEX_SMOKE === "1";
 
 describe.skipIf(!SMOKE_ENABLED)("convex sync relay-flow smoke (live)", () => {
-  it.effect(
+  it.live(
     "exercises CLI credential → link → key-binding exchange → Convex → negatives → cleanup",
     () =>
       Effect.gen(function* () {
