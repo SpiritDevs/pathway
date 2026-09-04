@@ -64,6 +64,44 @@ describe("CloudSyncEngineRegistry", () => {
     }),
   );
 
+  it.effect("carries the authorized attachment resolver on the registered handle", () =>
+    Effect.gen(function* () {
+      const registry = yield* makeCloudSyncEngineRegistry;
+      const resolveIssueAttachmentUrls = () =>
+        Effect.succeed([
+          {
+            attachmentId: "attachment-1",
+            fileName: "evidence.png",
+            mimeType: "image/png",
+            byteSize: 3,
+            url: "https://files.example.test/evidence.png",
+          },
+        ]);
+      yield* registry.registerIssueEngine({
+        environmentId: ENVIRONMENT_ID,
+        engine: engine(COMPANY_A),
+        resolveIssueAttachmentUrls,
+      });
+
+      const registered = yield* registry.issueEngine(COMPANY_A);
+      expect(
+        yield* registered!.resolveIssueAttachmentUrls!({
+          companyId: COMPANY_A,
+          issueId: "issue-1",
+          attachmentIds: ["attachment-1"],
+        }),
+      ).toEqual([
+        {
+          attachmentId: "attachment-1",
+          fileName: "evidence.png",
+          mimeType: "image/png",
+          byteSize: 3,
+          url: "https://files.example.test/evidence.png",
+        },
+      ]);
+    }),
+  );
+
   it.effect("does not let an old engine unregister its replacement", () =>
     Effect.gen(function* () {
       const registry = yield* makeCloudSyncEngineRegistry;

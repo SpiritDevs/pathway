@@ -497,6 +497,42 @@ describe("IssueTrackerService", () => {
             createdAt: 1_700_000_000_000,
             updatedAt: 1_700_000_000_000,
           }),
+          routedStoredEntity("issueLabel", {
+            id: "label-team-a-ops",
+            teamId: "team-a",
+            name: "Ops",
+            color: "#aaaaaa",
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueLabel", {
+            id: "label-team-b-ops",
+            teamId: "team-b",
+            name: "Ops",
+            color: "#bbbbbb",
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueCycle", {
+            id: "cycle-team-a-current",
+            teamId: "team-a",
+            name: "Current",
+            startDate: "2998-01-01",
+            endDate: "2998-01-31",
+            completedAt: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueCycle", {
+            id: "cycle-team-b-current",
+            teamId: "team-b",
+            name: "Current",
+            startDate: "2998-01-01",
+            endDate: "2998-01-31",
+            completedAt: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
           routedStoredEntity("issueCycle", {
             id: "cycle-ended",
             teamId: null,
@@ -784,6 +820,16 @@ describe("IssueTrackerService", () => {
             quarantined: 0,
           })),
         ),
+        resolveIssueAttachmentUrls: (input) =>
+          Effect.succeed(
+            input.attachmentIds.map((attachmentId) => ({
+              attachmentId,
+              fileName: "evidence.png",
+              mimeType: "image/png",
+              byteSize: 3,
+              url: "https://files.example.test/evidence.png",
+            })),
+          ),
       };
       const registry = CloudSyncEngineRegistry.of({
         expectIssueRouting: () => Effect.void,
@@ -824,7 +870,13 @@ describe("IssueTrackerService", () => {
               provider: ProviderDriverKind.make("codex"),
               onBehalfOfMembershipId: null,
             },
-            readModel,
+            readModel: {
+              ...readModel,
+              cloudProjects: readModel.cloudProjects.map((project) => ({
+                ...project,
+                teamIds: [TeamId.make("team-a"), TeamId.make("team-b")],
+              })),
+            },
             read,
             memberActorForCloudUserId: () => null,
             cloudProjectIdForLocal: (localProjectId: string) =>
@@ -985,6 +1037,26 @@ describe("IssueTrackerService", () => {
       assert.deepStrictEqual(
         projectStatuses.map((status) => status.id),
         [IssueStatusId.make("status-routed"), IssueStatusId.make("status-team-b-qa")],
+      );
+      const issueCatalog = yield* tracker.scopedCatalogForIssue({
+        issueId: IssueId.make("issue-cycle-carry"),
+      });
+      assert.deepStrictEqual(
+        issueCatalog.labels.map((label) => label.id),
+        ["label-team-b-ops"],
+      );
+      assert.isTrue(issueCatalog.cycles.some((cycle) => cycle.id === "cycle-team-b-current"));
+      assert.isFalse(issueCatalog.cycles.some((cycle) => cycle.id === "cycle-team-a-current"));
+      assert.deepStrictEqual(
+        yield* tracker.cloudAttachmentSource({
+          key: IssueKey.make("SYNC-50"),
+          attachmentId: "attachment-1",
+        }),
+        {
+          mimeType: "image/png",
+          sizeBytes: 3,
+          url: "https://files.example.test/evidence.png",
+        },
       );
       yield* Ref.set(rejectCycleFinalization, true);
       const cycleError = yield* tracker.getSnapshot().pipe(Effect.flip);

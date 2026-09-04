@@ -367,15 +367,16 @@ const resolveMilestone = (
 const resolveCycle = (
   index: TrackerIndex,
   value: string,
+  cycles: ReadonlyArray<IssueCycle> = index.cycles,
 ): Effect.Effect<IssueCycle, IssueTrackerError> => {
   const wanted = normalizeName(value);
-  const cycle = index.cycles.find((candidate) => normalizeName(candidate.name) === wanted);
+  const cycle = cycles.find((candidate) => normalizeName(candidate.name) === wanted);
   return cycle
     ? Effect.succeed(cycle)
     : Effect.fail(
         notFound(
           `No cycle called "${value.trim()}". Valid cycles: ${quoteOptions(
-            index.cycles.map((candidate) => candidate.name),
+            cycles.map((candidate) => candidate.name),
           )}.`,
           value.trim(),
         ),
@@ -804,7 +805,13 @@ const handlers = {
               input.status,
               yield* tracker.statusesForProject({ projectId: project?.projectId ?? null }),
             );
-      const cycle = input.cycle === undefined ? null : yield* resolveCycle(index, input.cycle);
+      const scopedCatalog = yield* tracker.scopedCatalogForProject({
+        projectId: project?.projectId ?? null,
+      });
+      const cycle =
+        input.cycle === undefined
+          ? null
+          : yield* resolveCycle(index, input.cycle, scopedCatalog.cycles);
       const parent =
         input.parentKey === undefined ? null : yield* resolveIssue(index, input.parentKey);
       const assignee =
@@ -814,7 +821,7 @@ const handlers = {
       const labelIds =
         input.labels === undefined
           ? undefined
-          : yield* resolveLabelIds(tracker, index.snapshot.labels, input.labels);
+          : yield* resolveLabelIds(tracker, scopedCatalog.labels, input.labels);
 
       const create: IssueCreateInput = {
         title: input.title,
@@ -852,6 +859,7 @@ const handlers = {
       const actor = yield* callerActor();
       const index = yield* readIndex();
       const issue = yield* resolveIssue(index, input.key);
+      const scopedCatalog = yield* tracker.scopedCatalogForIssue({ issueId: issue.id });
 
       const patch: {
         -readonly [K in keyof IssuePatch]: IssuePatch[K];
@@ -888,7 +896,10 @@ const handlers = {
         }
       }
       if (input.cycle !== undefined) {
-        patch.cycleId = input.cycle === null ? null : (yield* resolveCycle(index, input.cycle)).id;
+        patch.cycleId =
+          input.cycle === null
+            ? null
+            : (yield* resolveCycle(index, input.cycle, scopedCatalog.cycles)).id;
       }
       if (input.dueDate !== undefined) patch.dueDate = input.dueDate;
       if (input.parentKey !== undefined) {
@@ -907,12 +918,13 @@ const handlers = {
         );
       }
       if (input.labels !== undefined) {
-        patch.labelIds = yield* resolveLabelIds(tracker, index.snapshot.labels, input.labels);
+        patch.labelIds = yield* resolveLabelIds(tracker, scopedCatalog.labels, input.labels);
       } else if (input.addLabels !== undefined || input.removeLabels !== undefined) {
-        const added = yield* resolveLabelIds(tracker, index.snapshot.labels, input.addLabels ?? []);
+        const added = yield* resolveLabelIds(tracker, scopedCatalog.labels, input.addLabels ?? []);
+        const scopedLabelById = new Map(scopedCatalog.labels.map((label) => [label.id, label]));
         const removedNames = new Set((input.removeLabels ?? []).map(normalizeName));
         const kept = issue.labelIds.filter((id) => {
-          const label = index.labelById.get(id);
+          const label = scopedLabelById.get(id);
           return label === undefined || !removedNames.has(normalizeName(label.name));
         });
         patch.labelIds = [...new Set([...kept, ...added])];

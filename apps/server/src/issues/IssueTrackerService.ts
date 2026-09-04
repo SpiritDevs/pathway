@@ -455,6 +455,12 @@ export interface IssueIntakeCommentResult {
   readonly comment: IssueComment | null;
 }
 
+export interface IssueCloudAttachmentSource {
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly url: string;
+}
+
 export interface IssueTrackerServiceShape {
   /** Resolves the company once and keeps every tracker call in `effect` on that route. */
   readonly withPinnedRoute: <A, E, R>(
@@ -486,6 +492,25 @@ export interface IssueTrackerServiceShape {
   readonly statusesForProject: (input: {
     readonly projectId: ProjectId | null;
   }) => Effect.Effect<ReadonlyArray<IssueStatus>, IssueTrackerError>;
+  /** Team-visible labels and cycles for an existing issue. */
+  readonly scopedCatalogForIssue: (
+    input: IssueRefInput,
+  ) => Effect.Effect<
+    { readonly labels: ReadonlyArray<IssueLabel>; readonly cycles: ReadonlyArray<IssueCycle> },
+    IssueTrackerError
+  >;
+  /** Team-visible labels and cycles a new issue in this project may reference. */
+  readonly scopedCatalogForProject: (input: {
+    readonly projectId: ProjectId | null;
+  }) => Effect.Effect<
+    { readonly labels: ReadonlyArray<IssueLabel>; readonly cycles: ReadonlyArray<IssueCycle> },
+    IssueTrackerError
+  >;
+  /** Undefined selects the local store; null means a routed cloud attachment has no available URL. */
+  readonly cloudAttachmentSource: (input: {
+    readonly key: IssueKey;
+    readonly attachmentId: string;
+  }) => Effect.Effect<IssueCloudAttachmentSource | null | undefined, IssueTrackerError>;
   /**
    * The per-issue tail — todos, relations, comments — read when a detail sheet opens. These are
    * the three sets that grow with usage rather than configuration, which is why they are not in
@@ -1442,7 +1467,11 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
   const translateOperationProjectIds = Effect.fn(
     "IssueTrackerService.translateOperationProjectIds",
-  )(function* (route: IssueReplicaRoute, operation: IssueSyncOperation) {
+  )(function* (
+    route: IssueReplicaRoute,
+    readModel: SyncedIssueDomainReadModel,
+    operation: IssueSyncOperation,
+  ) {
     const translate = (projectId: string) => {
       const cloudProjectId = route.cloudProjectIdForLocal(projectId);
       return cloudProjectId === null
@@ -1457,7 +1486,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       case "issue.create":
         if (operation.args.projectId === undefined) return operation;
         const cloudProjectId = yield* translate(operation.args.projectId);
-        const project = route.readModel.cloudProjects.find(
+        const project = readModel.cloudProjects.find(
           (candidate) =>
             candidate.id === operation.args.projectId || candidate.id === cloudProjectId,
         );
@@ -1512,10 +1541,11 @@ export const makeIssueTrackerService = Effect.fn(function* (
   )(function* (plans: ReadonlyArray<ReplicaOperationPlan>) {
     const route = yield* ActiveIssueReplicaRoute;
     const engine = route.engine;
+    const readModel = yield* route.read;
     const operationIds: SyncOperationId[] = [];
     for (const plan of plans) {
       const operationId = plan.operationId ?? SyncOperationId.make(yield* newId);
-      const operation = yield* translateOperationProjectIds(route, plan.operation);
+      const operation = yield* translateOperationProjectIds(route, readModel, plan.operation);
       const receipt = yield* engine
         .enqueue({
           operationId,
@@ -5014,6 +5044,19 @@ export const makeIssueTrackerService = Effect.fn(function* (
     routedCollection(readModel).issues.find((issue) => issue.id === issueId);
   const routedDetail = (readModel: SyncedIssueDomainReadModel, issueId: IssueId) =>
     issueDetailProjectionFromReplica(syncedIssueDetailById(readModel, issueId));
+  const scopedCatalog = (readModel: SyncedIssueDomainReadModel, teamIds: ReadonlyArray<string>) => {
+    const teams = new Set(teamIds);
+    const projected = issueCollectionProjectionFromReplica({
+      ...readModel,
+      issueLabels: readModel.issueLabels.filter(
+        (label) => label.teamId === null || teams.has(label.teamId),
+      ),
+      issueCycles: readModel.issueCycles.filter(
+        (cycle) => cycle.teamId === null || teams.has(cycle.teamId),
+      ),
+    });
+    return { labels: projected.labels, cycles: projected.cycles };
+  };
   const routeWrite = <A>(
     fromReplica: (
       readModel: SyncedIssueDomainReadModel,
@@ -5905,6 +5948,66 @@ export const makeIssueTrackerService = Effect.fn(function* (
       listStatuses(),
     );
 
+  const legacyScopedCatalog = Effect.all({ labels: listLabels(), cycles: listCycles() });
+  const scopedCatalogForIssue: IssueTrackerServiceShape["scopedCatalogForIssue"] = (input) =>
+    routeWrite((readModel) => {
+      const issue = readModel.issues.find((candidate) => candidate.id === input.issueId);
+      return issue === undefined
+        ? Effect.fail(notFound(input.issueId, `No issue with id ${input.issueId}.`))
+        : Effect.succeed(scopedCatalog(readModel, issue.teamIds));
+    }, legacyScopedCatalog);
+
+  const scopedCatalogForProject: IssueTrackerServiceShape["scopedCatalogForProject"] = (input) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          if (input.projectId === null) return scopedCatalog(readModel, []);
+          const route = yield* ActiveIssueReplicaRoute;
+          const cloudProjectId = route.cloudProjectIdForLocal(input.projectId);
+          const project = readModel.cloudProjects.find(
+            (candidate) =>
+              String(candidate.id) === input.projectId ||
+              (cloudProjectId !== null && candidate.id === cloudProjectId),
+          );
+          if (project === undefined) {
+            return yield* notFound(
+              input.projectId,
+              `No cloud project with local id ${input.projectId}.`,
+            );
+          }
+          return scopedCatalog(readModel, project.teamIds);
+        }),
+      legacyScopedCatalog,
+    );
+
+  const cloudAttachmentSource: IssueTrackerServiceShape["cloudAttachmentSource"] = (input) =>
+    routeWrite(
+      (readModel) =>
+        Effect.gen(function* () {
+          const issue = readModel.issues.find((candidate) => candidate.key === input.key);
+          if (issue === undefined) {
+            return yield* notFound(input.key, `No issue with key ${input.key}.`);
+          }
+          const route = yield* ActiveIssueReplicaRoute;
+          const resolveUrls = route.engine.resolveIssueAttachmentUrls;
+          if (resolveUrls === undefined) {
+            return yield* syncWriteFailure(
+              "the active cloud transport cannot resolve issue attachments",
+            );
+          }
+          const sources = yield* resolveUrls({
+            companyId: route.companyId,
+            issueId: issue.id,
+            attachmentIds: [input.attachmentId],
+          }).pipe(Effect.mapError((error) => syncWriteFailure(error.message)));
+          const source = sources.find((candidate) => candidate.attachmentId === input.attachmentId);
+          return source === undefined
+            ? null
+            : { mimeType: source.mimeType, sizeBytes: source.byteSize, url: source.url };
+        }),
+      Effect.succeed(undefined),
+    );
+
   // Once at startup, before anybody can subscribe: a run is a live process, so whatever was
   // queued or running when this server stopped is dead. Leaving those rows in flight would block
   // every one of their issues from ever being investigated again.
@@ -5981,6 +6084,9 @@ export const makeIssueTrackerService = Effect.fn(function* (
     getSnapshot,
     statusesForIssue,
     statusesForProject,
+    scopedCatalogForIssue,
+    scopedCatalogForProject,
+    cloudAttachmentSource,
     getDetail,
     create,
     update,

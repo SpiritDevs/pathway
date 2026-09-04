@@ -536,6 +536,16 @@ describe("convex sync transport", () => {
             };
           case "sync:applyOperations":
             return { receipts: [], versionFrom: 3, versionTo: 4, authorizationEpoch: 4 };
+          case "issueAttachments:urls":
+            return [
+              {
+                attachmentId: "attachment-1",
+                fileName: "evidence.png",
+                mimeType: "image/png",
+                byteSize: 3,
+                url: "https://files.example.test/evidence.png",
+              },
+            ];
           default:
             return { prefix: "PW", blockStart: 1, blockEnd: 50, firstKey: "PW-1" };
         }
@@ -561,6 +571,11 @@ describe("convex sync transport", () => {
         clientId: CLIENT_ID,
         blockSize: 50,
       });
+      yield* transport.issueAttachmentUrls!({
+        companyId: COMPANY_ID,
+        issueId: "issue-1",
+        attachmentIds: ["attachment-1"],
+      });
 
       assert.deepEqual(
         fake.calls.map((call) => [call.kind, call.name]),
@@ -569,6 +584,7 @@ describe("convex sync transport", () => {
           ["query", "sync:listChanges"],
           ["mutation", "sync:applyOperations"],
           ["mutation", "sync:reserveIssueKeys"],
+          ["query", "issueAttachments:urls"],
         ],
       );
       assert.deepEqual(fake.calls[0]?.args, {
@@ -595,6 +611,11 @@ describe("convex sync transport", () => {
             dependsOn: [],
           },
         ],
+      });
+      assert.deepEqual(fake.calls[4]?.args, {
+        companyId: COMPANY_ID,
+        issueId: "issue-1",
+        attachmentIds: ["attachment-1"],
       });
       assert.deepEqual(fake.calls[3]?.args, {
         companyId: COMPANY_ID,

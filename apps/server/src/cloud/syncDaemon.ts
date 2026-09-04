@@ -832,7 +832,13 @@ const runCloudSyncCompany = Effect.fn("cloud.sync_daemon.run_company")(function*
     );
   });
   yield* input.engineRegistry.withIssueEngine(
-    { environmentId: input.environmentId, engine },
+    {
+      environmentId: input.environmentId,
+      engine,
+      ...(transport.issueAttachmentUrls === undefined
+        ? {}
+        : { resolveIssueAttachmentUrls: transport.issueAttachmentUrls }),
+    },
     Effect.raceFirst(supervise, reconcileCloudProjects),
   );
 });

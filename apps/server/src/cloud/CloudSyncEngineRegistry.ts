@@ -33,6 +33,22 @@ export type CloudSyncOperationDisposition =
   | { readonly _tag: "Rejected"; readonly code: string; readonly message: string }
   | { readonly _tag: "Settled" };
 
+export interface CloudIssueAttachmentUrl {
+  readonly attachmentId: string;
+  readonly fileName: string;
+  readonly mimeType: string;
+  readonly byteSize: number;
+  readonly url: string;
+}
+
+export interface CloudIssueAttachmentResolver {
+  readonly resolveIssueAttachmentUrls: (input: {
+    readonly companyId: string;
+    readonly issueId: string;
+    readonly attachmentIds: ReadonlyArray<string>;
+  }) => Effect.Effect<ReadonlyArray<CloudIssueAttachmentUrl>, { readonly message: string }>;
+}
+
 export interface CloudSyncIssueEngineHandle {
   readonly companyId: CompanyId;
   readonly environmentId: EnvironmentId;
@@ -52,6 +68,9 @@ export interface CloudSyncIssueEngineHandle {
     readonly bootstrapped: boolean;
     readonly quarantined: number;
   }>;
+  readonly resolveIssueAttachmentUrls?:
+    | CloudIssueAttachmentResolver["resolveIssueAttachmentUrls"]
+    | undefined;
 }
 
 export interface CloudSyncIssueProjectBinding {
@@ -77,6 +96,9 @@ export interface CloudSyncEngineRegistryShape {
   readonly registerIssueEngine: (input: {
     readonly environmentId: EnvironmentId;
     readonly engine: SyncEngine<CloudSyncEntity, IssueSyncOperation>;
+    readonly resolveIssueAttachmentUrls?:
+      | CloudIssueAttachmentResolver["resolveIssueAttachmentUrls"]
+      | undefined;
   }) => Effect.Effect<void>;
   /**
    * Removes this exact engine registration. The identity check prevents an older stopping daemon
@@ -90,6 +112,9 @@ export interface CloudSyncEngineRegistryShape {
     input: {
       readonly environmentId: EnvironmentId;
       readonly engine: SyncEngine<CloudSyncEntity, IssueSyncOperation>;
+      readonly resolveIssueAttachmentUrls?:
+        | CloudIssueAttachmentResolver["resolveIssueAttachmentUrls"]
+        | undefined;
     },
     use: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E, R>;
@@ -156,6 +181,9 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
             quarantined: state.quarantined.length,
           })),
         ),
+        ...(input.resolveIssueAttachmentUrls === undefined
+          ? {}
+          : { resolveIssueAttachmentUrls: input.resolveIssueAttachmentUrls }),
       };
       return new Map(registered).set(input.engine.companyId, { engine: input.engine, handle });
     });
