@@ -9003,12 +9003,63 @@ function ChatViewContent(props: ChatViewProps) {
                     }
                   >
                     <div
+                      aria-hidden={!showComposerContextStrip}
                       className={cn(
-                        "chat-composer-glass-shell relative mx-auto w-full max-w-3xl",
-                        showComposerContextStrip && "chat-composer-glass-shell-with-context",
+                        "grid transition-[grid-template-rows,opacity,transform] motion-reduce:transition-none",
+                        showComposerContextStrip
+                          ? "grid-rows-[1fr] translate-y-0 opacity-100"
+                          : "pointer-events-none grid-rows-[0fr] -translate-y-1 opacity-0",
                       )}
+                      data-composer-context-strip={
+                        showComposerContextStrip ? "expanded" : "collapsed"
+                      }
+                      inert={showComposerContextStrip ? undefined : true}
+                      style={{
+                        transitionDuration: `${DRAFT_HERO_TRANSITION_DURATION_MS}ms`,
+                        transitionTimingFunction: DRAFT_HERO_TRANSITION_EASING,
+                      }}
                     >
-                      <div className="chat-composer-glass-host relative z-10 w-full rounded-[22px]">
+                      <div className="min-h-0 overflow-hidden">
+                        <div
+                          data-terminal-open={terminalUiState.terminalOpen ? "true" : undefined}
+                          className="relative z-0"
+                        >
+                          {renderComposerContextStrip && (
+                            <div className="pointer-events-auto">
+                              <BranchToolbar
+                                environmentId={activeThread.environmentId}
+                                threadId={activeThread.id}
+                                showGitControls={isGitRepo}
+                                {...(routeKind === "draft" && draftId ? { draftId } : {})}
+                                onEnvModeChange={onEnvModeChange}
+                                startFromOrigin={startFromOrigin}
+                                onStartFromOriginChange={onStartFromOriginChange}
+                                {...(canOverrideServerThreadEnvMode
+                                  ? { effectiveEnvModeOverride: envMode }
+                                  : {})}
+                                {...(canOverrideServerThreadEnvMode
+                                  ? {
+                                      activeThreadBranchOverride: activeThreadBranch,
+                                      onActiveThreadBranchOverrideChange:
+                                        setActiveThreadBranchOverride,
+                                    }
+                                  : {})}
+                                envLocked={envLocked}
+                                onComposerFocusRequest={scheduleComposerFocus}
+                                {...(canCheckoutPullRequestIntoThread
+                                  ? { onCheckoutPullRequestRequest: openPullRequestDialog }
+                                  : {})}
+                                {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
+                                onLinkEnvironmentRequest={onLinkEnvironmentRequest}
+                                availableEnvironments={logicalProjectEnvironments}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="chat-composer-glass-shell chat-composer-glass-shell-with-context chat-composer-content-sized-shell relative mx-auto w-full max-w-3xl">
+                      <div className="relative z-10 w-full">
                         <div className="relative z-10">
                           <ChatComposer
                             composerRef={composerRef}
@@ -9023,7 +9074,6 @@ function ChatViewContent(props: ChatViewProps) {
                             activeThread={activeThread}
                             isServerThread={isServerThread}
                             isLocalDraftThread={isLocalDraftThread}
-                            forceExpandedOnMobile={forceExpandedMobileComposer && isDraftHeroState}
                             projectSelectionRequired={isLocalDraftThread && activeProject === null}
                             phase={phase}
                             isConnecting={isConnecting}
@@ -9100,62 +9150,6 @@ function ChatViewContent(props: ChatViewProps) {
                             onExpandImage={onExpandTimelineImage}
                             onOpenIssueContext={openIssueContext}
                           />
-                        </div>
-                      </div>
-                      <div
-                        aria-hidden={!showComposerContextStrip}
-                        className={cn(
-                          "grid transition-[grid-template-rows,opacity,transform] motion-reduce:transition-none",
-                          showComposerContextStrip
-                            ? "grid-rows-[1fr] translate-y-0 opacity-100"
-                            : "pointer-events-none grid-rows-[0fr] -translate-y-1 opacity-0",
-                        )}
-                        data-composer-context-strip={
-                          showComposerContextStrip ? "expanded" : "collapsed"
-                        }
-                        inert={showComposerContextStrip ? undefined : true}
-                        style={{
-                          transitionDuration: `${DRAFT_HERO_TRANSITION_DURATION_MS}ms`,
-                          transitionTimingFunction: DRAFT_HERO_TRANSITION_EASING,
-                        }}
-                      >
-                        <div className="min-h-0 overflow-hidden">
-                          <div
-                            data-terminal-open={terminalUiState.terminalOpen ? "true" : undefined}
-                            className="relative z-0"
-                          >
-                            {renderComposerContextStrip && (
-                              <div className="pointer-events-auto">
-                                <BranchToolbar
-                                  environmentId={activeThread.environmentId}
-                                  threadId={activeThread.id}
-                                  showGitControls={isGitRepo}
-                                  {...(routeKind === "draft" && draftId ? { draftId } : {})}
-                                  onEnvModeChange={onEnvModeChange}
-                                  startFromOrigin={startFromOrigin}
-                                  onStartFromOriginChange={onStartFromOriginChange}
-                                  {...(canOverrideServerThreadEnvMode
-                                    ? { effectiveEnvModeOverride: envMode }
-                                    : {})}
-                                  {...(canOverrideServerThreadEnvMode
-                                    ? {
-                                        activeThreadBranchOverride: activeThreadBranch,
-                                        onActiveThreadBranchOverrideChange:
-                                          setActiveThreadBranchOverride,
-                                      }
-                                    : {})}
-                                  envLocked={envLocked}
-                                  onComposerFocusRequest={scheduleComposerFocus}
-                                  {...(canCheckoutPullRequestIntoThread
-                                    ? { onCheckoutPullRequestRequest: openPullRequestDialog }
-                                    : {})}
-                                  {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
-                                  onLinkEnvironmentRequest={onLinkEnvironmentRequest}
-                                  availableEnvironments={logicalProjectEnvironments}
-                                />
-                              </div>
-                            )}
-                          </div>
                         </div>
                       </div>
                     </div>
