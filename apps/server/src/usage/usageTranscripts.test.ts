@@ -130,9 +130,14 @@ describe("parseCodexLine", () => {
     // A token_count before its turn_context is dropped; the identical event
     // re-emitted once the model is known must still be counted.
     const state = initialCodexScanState();
-    expect(parseCodexLine(tokenCount(100, 0, 10, 0), state)).toBeNull();
-    parseCodexLine(turnContext, state);
-    expect(parseCodexLine(tokenCount(100, 0, 10, 0), state)).not.toBeNull();
+    let malformed = 0;
+    const onMalformed = () => {
+      malformed += 1;
+    };
+    expect(parseCodexLine(tokenCount(100, 0, 10, 0), state, onMalformed)).toBeNull();
+    parseCodexLine(turnContext, state, onMalformed);
+    expect(parseCodexLine(tokenCount(100, 0, 10, 0), state, onMalformed)).not.toBeNull();
+    expect(malformed).toBe(0);
   });
 
   // A forked/subagent rollout opens with the parent's history copied in and
@@ -248,4 +253,37 @@ describe("totalTokens", () => {
       }),
     ).toBe(100);
   });
+});
+
+it("reports malformed usage-shaped records without flagging ordinary non-usage messages", () => {
+  let malformed = 0;
+  const onMalformed = () => {
+    malformed += 1;
+  };
+  parseClaudeLine(JSON.stringify({ type: "user", message: {} }), onMalformed);
+  parseClaudeLine(
+    JSON.stringify({
+      type: "assistant",
+      timestamp: "invalid",
+      message: { model: "claude-fable-5", usage: { input_tokens: 10, output_tokens: 5 } },
+    }),
+    onMalformed,
+  );
+  parseClaudeLine(
+    JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-09-05T00:00:00Z",
+      message: { usage: { input_tokens: 10, output_tokens: 5 } },
+    }),
+    onMalformed,
+  );
+  parseClaudeLine(
+    JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-09-05T00:00:00Z",
+      message: { model: "claude-fable-5", usage: { input_tokens: "bad", output_tokens: 5 } },
+    }),
+    onMalformed,
+  );
+  expect(malformed).toBe(3);
 });

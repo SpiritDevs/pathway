@@ -7,6 +7,8 @@ import {
   type UsageProviderKind,
 } from "@spiritdevs/contracts";
 
+import { expandHomePath } from "../pathExpansion.ts";
+
 /** Mirror explicit instance precedence, including credential-home overrides. */
 export function usageTranscriptRoots(
   settings: ServerSettings,
@@ -46,7 +48,7 @@ export function usageTranscriptRoots(
     const environmentHome =
       (instance.driver === "codex" ? env.CODEX_HOME : env.CLAUDE_CONFIG_DIR)?.trim() || undefined;
     const raw =
-      configured ??
+      (configured ? expandHomePath(configured) : undefined) ??
       (hasShadow ? path.join(NodeOS.homedir(), ".codex") : environmentHome) ??
       path.join(home, instance.driver === "codex" ? ".codex" : ".claude");
     const resolved = path.resolve(

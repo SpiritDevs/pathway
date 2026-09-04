@@ -55,6 +55,14 @@ it.effect("reports partial scans on cold and warm reads and includes archived us
           .map((line) => encodeTranscript(line))
           .join("\n"),
       );
+      yield* fs.writeFileString(
+        `${claude}/invalid-shape.jsonl`,
+        encodeTranscript({
+          type: "assistant",
+          timestamp: "invalid",
+          message: { model: "claude-fable-5", usage: { input_tokens: 10, output_tokens: 5 } },
+        }),
+      );
       const service = yield* make.pipe(
         Effect.provide(
           Layer.merge(
@@ -91,7 +99,7 @@ it.effect("reports partial scans on cold and warm reads and includes archived us
         expect(result.buckets.every((bucket) => Boolean(bucket.sourceId))).toBe(true);
         expect(
           result.sources.find((source) => source.fingerprint.provider === "claude"),
-        ).toMatchObject({ status: "partial", malformedRecords: 1, scannedFiles: 1 });
+        ).toMatchObject({ status: "partial", malformedRecords: 2, scannedFiles: 1 });
         expect(result.projects.every((project) => project.provider === "claude")).toBe(true);
       }
     }),

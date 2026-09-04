@@ -388,6 +388,14 @@ export function EnvironmentProviderUsage({
         })
       : null;
 
+  if (
+    isPanel &&
+    usageProvider === "claudeAgent" &&
+    (provider.auth.status === "unauthenticated" || snapshot?.status === "needs-auth")
+  ) {
+    return null;
+  }
+
   if (!shouldCollapseProviderUsage(limits)) {
     return (
       <section
@@ -542,7 +550,11 @@ export function EnvironmentProviderUsageList({
   const supported = useMemo(
     () =>
       deriveProviderInstanceEntries(providers ?? []).filter(
-        (entry) => entry.enabled && entry.installed && isProviderUsageDriver(entry.driverKind),
+        (entry) =>
+          entry.enabled &&
+          entry.installed &&
+          isProviderUsageDriver(entry.driverKind) &&
+          !(entry.driverKind === "claudeAgent" && entry.snapshot.auth.status === "unauthenticated"),
       ),
     [providers],
   );

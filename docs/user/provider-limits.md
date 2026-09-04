@@ -13,3 +13,5 @@ While a client is connected, Pathway checks for quota updates in the background.
 Configured accounts remain separate across environments, even when their emails match, because a personal subscription and a team subscription can share an email. Changing a configured credential home invalidates its previous quota and retry state.
 
 When offering to wait after a usage-limit failure, Pathway prefers the reset time in the provider's failure message. Otherwise it uses the latest reset among the exhausted windows that apply to the selected model. Unknown or stale reset information does not schedule automatic recovery.
+
+Thread details hide Claude usage when that account is not signed in. Check Settings → Providers to see its sign-in status.

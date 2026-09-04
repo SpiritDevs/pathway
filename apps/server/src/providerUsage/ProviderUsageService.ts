@@ -483,7 +483,9 @@ async function readJsonFile(path: string): Promise<unknown | null> {
   }
 }
 
-async function readKeychainPassword(input: {
+let readKeychainPassword = defaultReadKeychainPassword;
+
+async function defaultReadKeychainPassword(input: {
   service: string;
   account?: string;
   platform: NodeJS.Platform;
@@ -1454,9 +1456,10 @@ function replacePushedLimit(
   const index = limits.findIndex(
     (limit) =>
       (limit.limitId ?? limit.scope) === (incoming.limitId ?? incoming.scope) &&
-      (limit.lane === lane ||
-        limit.windowKey === expectedWindowKey ||
-        (limit.windowKey === incoming.windowKey && limit.window === incoming.window)),
+      (limit.lane !== undefined
+        ? limit.lane === lane
+        : limit.windowKey === expectedWindowKey ||
+          (limit.windowKey === incoming.windowKey && limit.window === incoming.window)),
   );
   return index === -1
     ? [...limits, incoming]
@@ -1706,6 +1709,22 @@ function makeRateLimitPersistence(
   };
 }
 
+async function readCredentialIdentity(ctx: ProviderContext): Promise<string> {
+  const auth =
+    ctx.provider === "codex"
+      ? await resolveCodexAuth(ctx)
+      : ctx.provider === "claudeAgent"
+        ? await resolveClaudeAuth(ctx)
+        : await resolveCursorAuth(ctx);
+  // A stable account id survives routine token rotation. Other credential
+  // formats expose only tokens; hash those without retaining or publishing them.
+  const identity =
+    ctx.provider === "codex" && typeof auth === "object" && auth !== null && "accountId" in auth
+      ? auth.accountId
+      : auth;
+  return NodeCrypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+}
+
 export const getProviderUsage = Effect.fn("ProviderUsage.get")(function* (
   input: ServerGetProviderUsageInput,
 ): Effect.fn.Return<ServerProviderUsageSnapshot, ServerSettingsError, ServerSettingsService> {
@@ -1722,35 +1741,9 @@ export const getProviderUsage = Effect.fn("ProviderUsage.get")(function* (
       : null;
   const ctx = buildContext(settings, input, baseEnvironment, platform, rateLimitPersistence);
   const runPromise = Effect.runPromiseWith(yield* Effect.context<ServerSettingsService>());
-  // Watch credential-store replacement without reading or publishing its secrets.
-  const credentialPath =
-    ctx.provider === "cursor"
-      ? cursorStatePath(ctx)
-      : NodePath.join(
-          ctx.providerHomePath ?? ctx.homeDir,
-          ctx.provider === "codex" ? "auth.json" : ".credentials.json",
-        );
-  const credentialRevision = yield* Effect.promise(async () => {
-    if (ctx.provider === "cursor") {
-      // state.vscdb changes for unrelated editor activity. Only authentication
-      // fields may invalidate the quota cache and its independent retry gates.
-      const state = await readCursorState(credentialPath);
-      return NodeCrypto.createHash("sha256")
-        .update(
-          Object.entries(state)
-            .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
-            .sort()
-            .join("&"),
-        )
-        .digest("hex");
-    }
-    try {
-      const stat = await NodeFSP.stat(credentialPath);
-      return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
-    } catch {
-      return "missing";
-    }
-  });
+  // Resolve the same file/keychain fallbacks as the fetch path so an account
+  // switch invalidates the snapshot even when no credential file exists.
+  const credentialRevision = yield* Effect.promise(() => readCredentialIdentity(ctx));
   const nowMs = yield* Clock.currentTimeMillis;
   return yield* Effect.promise(() =>
     resolveProviderUsage(
@@ -1898,6 +1891,11 @@ function testingContext(input: {
 }
 
 export const providerUsageTestKit = {
+  credentialIdentity: (input: Parameters<typeof testingContext>[0]) =>
+    readCredentialIdentity({ ...testingContext(input), useDefaultCredentialStore: true }),
+  setKeychainReader: (reader: typeof defaultReadKeychainPassword) => {
+    readKeychainPassword = reader;
+  },
   cacheSizes: () => ({
     snapshots: snapshotCache.size,
     inFlight: inFlightFetches.size,
@@ -1932,6 +1930,7 @@ export const providerUsageTestKit = {
 /** Test-only cache reset. */
 export function resetProviderUsageCache(): void {
   for (const scheduled of scheduledRateLimitRefreshes.values()) scheduled.controller.abort();
+  readKeychainPassword = defaultReadKeychainPassword;
   contextIdentities.clear();
   snapshotCache.clear();
   inFlightFetches.clear();

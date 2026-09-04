@@ -109,6 +109,9 @@ export async function readTranscriptRecords(
   const records: UsageRecord[] = [];
   let malformedRecords = 0;
   const codexState = initialCodexScanState();
+  const onMalformed = () => {
+    malformedRecords += 1;
+  };
 
   try {
     const lines = NodeReadline.createInterface({
@@ -125,20 +128,14 @@ export async function readTranscriptRecords(
         )
       )
         continue;
-      try {
-        JSON.parse(line);
-      } catch {
-        malformedRecords += 1;
-        continue;
-      }
       if (provider === "codex") {
-        const record = parseCodexLine(line, codexState);
+        const record = parseCodexLine(line, codexState, onMalformed);
         if (record !== null) records.push(record);
         continue;
       }
 
       if (!mightCarryUsage(line, provider)) continue;
-      const record = parseClaudeLine(line);
+      const record = parseClaudeLine(line, onMalformed);
       if (record !== null) records.push(record);
     }
   } catch {

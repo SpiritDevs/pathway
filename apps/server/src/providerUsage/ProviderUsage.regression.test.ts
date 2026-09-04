@@ -240,3 +240,44 @@ it.effect("does not postpone a complete refresh when sparse Codex pushes keep ar
     expect(fetchUsage).toHaveBeenCalledTimes(2);
   }),
 );
+
+it.effect("updates the matching explicit lane when both Codex windows have the same duration", () =>
+  Effect.gen(function* () {
+    yield* ingestPushedSnapshot(
+      mapCodexRateLimitsUpdated({
+        instanceId,
+        rateLimits: {
+          primary: { usedPercent: 10, windowDurationMins: 1440 },
+          secondary: { usedPercent: 20, windowDurationMins: 1440 },
+        },
+      }),
+      nowMs,
+    );
+    const result = yield* ingestPushedSnapshot(
+      mapCodexRateLimitsUpdated({
+        instanceId,
+        rateLimits: { secondary: { usedPercent: 90, windowDurationMins: 1440 } },
+      }),
+      nowMs + 1,
+    );
+    expect(result.limits.map((limit) => [limit.lane, limit.usedPercent])).toEqual([
+      ["primary", 10],
+      ["secondary", 90],
+    ]);
+  }),
+);
+
+it("detects a Keychain-only account change without credential files", async () => {
+  let account = "account-a";
+  providerUsageTestKit.setKeychainReader(async ({ service }) =>
+    service === "Codex Auth"
+      ? JSON.stringify({ tokens: { access_token: "synthetic-token", account_id: account } })
+      : null,
+  );
+  const input = { instanceId, provider: "codex" as const, nowMs, platform: "darwin" as const };
+  const first = await providerUsageTestKit.credentialIdentity(input);
+  account = "account-b";
+  const second = await providerUsageTestKit.credentialIdentity(input);
+  expect(second).not.toBe(first);
+  expect(second).not.toContain("account-b");
+});

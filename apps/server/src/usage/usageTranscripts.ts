@@ -71,6 +71,23 @@ export function mightCarryUsage(line: string, provider: UsageProviderKind): bool
   return provider === "claude" ? line.includes('"usage"') : line.includes('"token_count"');
 }
 
+function malformedUsage(onMalformed: (() => void) | undefined): null {
+  onMalformed?.();
+  return null;
+}
+
+function validTokenCounts(record: Record<string, unknown>, fields: readonly string[]): boolean {
+  return (
+    fields.some((field) => typeof record[field] === "number") &&
+    fields.every((field) => {
+      const value = record[field];
+      return (
+        value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0)
+      );
+    })
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Claude Code                                                                */
 /* -------------------------------------------------------------------------- */
@@ -83,11 +100,12 @@ export function mightCarryUsage(line: string, provider: UsageProviderKind): bool
  * message. Summing them overcounts by roughly 2.4x on a real workload, so the
  * caller must drop repeats by `dedupeKey` and keep the first.
  */
-export function parseClaudeLine(line: string): UsageRecord | null {
+export function parseClaudeLine(line: string, onMalformed?: () => void): UsageRecord | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
+    onMalformed?.();
     return null;
   }
   if (typeof parsed !== "object" || parsed === null) return null;
@@ -100,14 +118,24 @@ export function parseClaudeLine(line: string): UsageRecord | null {
   const messageRecord = message as Record<string, unknown>;
 
   const usage = messageRecord["usage"];
-  if (typeof usage !== "object" || usage === null) return null;
+  if (usage === undefined || usage === null) return null;
+  if (typeof usage !== "object") return malformedUsage(onMalformed);
   const usageRecord = usage as Record<string, unknown>;
+  if (
+    !validTokenCounts(usageRecord, [
+      "input_tokens",
+      "output_tokens",
+      "cache_read_input_tokens",
+      "cache_creation_input_tokens",
+    ])
+  )
+    return malformedUsage(onMalformed);
 
   const timestampMs = parseTimestampMs(record["timestamp"]);
-  if (timestampMs === null) return null;
+  if (timestampMs === null) return malformedUsage(onMalformed);
 
   const model = typeof messageRecord["model"] === "string" ? messageRecord["model"] : "";
-  if (model.length === 0) return null;
+  if (model.length === 0) return malformedUsage(onMalformed);
 
   const messageId = typeof messageRecord["id"] === "string" ? messageRecord["id"] : null;
   const requestId = typeof record["requestId"] === "string" ? record["requestId"] : null;
@@ -197,11 +225,16 @@ function isForkedSessionMeta(payload: Record<string, unknown>): boolean {
  * reconciles with the session's final `total_token_usage`, provided
  * consecutive duplicate events are dropped, which this does.
  */
-export function parseCodexLine(line: string, state: CodexScanState): UsageRecord | null {
+export function parseCodexLine(
+  line: string,
+  state: CodexScanState,
+  onMalformed?: () => void,
+): UsageRecord | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
   } catch {
+    onMalformed?.();
     return null;
   }
   if (typeof parsed !== "object" || parsed === null) return null;
@@ -240,13 +273,23 @@ export function parseCodexLine(line: string, state: CodexScanState): UsageRecord
   const last = (info as Record<string, unknown>)["last_token_usage"];
   if (typeof last !== "object" || last === null) return null;
   const lastRecord = last as Record<string, unknown>;
+  if (
+    !validTokenCounts(lastRecord, [
+      "input_tokens",
+      "output_tokens",
+      "cached_input_tokens",
+      "cache_write_input_tokens",
+      "reasoning_output_tokens",
+    ])
+  )
+    return malformedUsage(onMalformed);
 
   // Only an event that is otherwise eligible may consume the duplicate
   // signature. A token_count arriving before its turn_context (no model yet)
   // must not poison it, or the re-emitted copy after the model is known would
   // be skipped as a duplicate and those tokens never counted.
   const timestampMs = parseTimestampMs(record["timestamp"]);
-  if (timestampMs === null) return null;
+  if (timestampMs === null) return malformedUsage(onMalformed);
   if (state.model.length === 0) return null;
 
   // Codex re-emits an unchanged token_count on some stream boundaries. Summing

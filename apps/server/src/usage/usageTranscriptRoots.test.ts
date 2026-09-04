@@ -6,6 +6,7 @@ import {
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
+import { expandHomePath } from "../pathExpansion.ts";
 import { usageTranscriptRoots } from "./usageTranscriptRoots.ts";
 
 describe("configured transcript roots", () => {
@@ -22,6 +23,11 @@ describe("configured transcript roots", () => {
           [ProviderInstanceId.make("claudeAgent")]: {
             driver: ProviderDriverKind.make("claudeAgent"),
             enabled: false,
+          },
+          [ProviderInstanceId.make("tilde")]: {
+            driver: ProviderDriverKind.make("codex"),
+            config: { homePath: "~/usage-root-test" },
+            environment: [{ name: "HOME", value: "/override", sensitive: false }],
           },
           [ProviderInstanceId.make("work")]: {
             driver: ProviderDriverKind.make("codex"),
@@ -42,6 +48,8 @@ describe("configured transcript roots", () => {
         },
       };
       expect(usageTranscriptRoots(settings, { HOME: "/home/test" }, path)).toEqual([
+        { provider: "codex", dir: expandHomePath("~/usage-root-test/sessions") },
+        { provider: "codex", dir: expandHomePath("~/usage-root-test/archived_sessions") },
         { provider: "codex", dir: "/work/sessions" },
         { provider: "codex", dir: "/work/archived_sessions" },
         { provider: "codex", dir: "/personal/sessions" },
