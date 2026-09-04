@@ -86,7 +86,7 @@ interface ProviderContext {
 
 interface CachedSnapshot {
   readonly snapshot: ServerProviderUsageSnapshot;
-  readonly fetchedAtMs: number;
+  readonly fetchedAtMs: number | null;
 }
 
 interface ProviderFetchResult {
@@ -1424,7 +1424,10 @@ function cacheKeyFor(input: Pick<ServerProviderUsageSnapshot, "instanceId" | "pr
   return `${input.instanceId}:${input.provider}`;
 }
 
-function storeSnapshot(input: { snapshot: ServerProviderUsageSnapshot; fetchedAtMs: number }): {
+function storeSnapshot(input: {
+  snapshot: ServerProviderUsageSnapshot;
+  fetchedAtMs: number | null;
+}): {
   readonly snapshot: ServerProviderUsageSnapshot;
   readonly changed: boolean;
 } {
@@ -1434,7 +1437,7 @@ function storeSnapshot(input: { snapshot: ServerProviderUsageSnapshot; fetchedAt
   const incomingIsPush = input.snapshot.source === "codex-app-server-push";
   if (
     current &&
-    (current.fetchedAtMs > input.fetchedAtMs ||
+    ((current.fetchedAtMs ?? -Infinity) > (input.fetchedAtMs ?? -Infinity) ||
       (current.fetchedAtMs === input.fetchedAtMs && currentIsPush && !incomingIsPush))
   ) {
     return { snapshot: current.snapshot, changed: false };
@@ -1509,10 +1512,10 @@ export const ingestPushedSnapshot = Effect.fn("ProviderUsage.ingestPushedSnapsho
       ...merged,
       source: "codex-app-server-push",
       updatedAt: now,
-      fetchedAt: cached?.snapshot.fetchedAt ?? now,
+      ...(cached?.snapshot.fetchedAt ? { fetchedAt: cached.snapshot.fetchedAt } : {}),
     },
     // Sparse pushes must not postpone the complete account refresh.
-    fetchedAtMs: cached?.fetchedAtMs ?? nowMs,
+    fetchedAtMs: cached?.fetchedAtMs ?? null,
   });
   if (stored.changed) {
     yield* PubSub.publish(snapshotChanges, undefined);
@@ -1617,7 +1620,12 @@ async function resolveProviderUsage(
   }
   const pending = getLru(inFlightFetches, cacheKey);
   if (pending && (!forceRefresh || pending.forced)) return pending.promise;
-  if (!forceRefresh && cached && ctx.nowMs - cached.fetchedAtMs < cacheTtl(cached.snapshot)) {
+  if (
+    !forceRefresh &&
+    cached &&
+    cached.fetchedAtMs !== null &&
+    ctx.nowMs - cached.fetchedAtMs < cacheTtl(cached.snapshot)
+  ) {
     return cached.snapshot;
   }
   let entry: InFlightFetch;
@@ -1795,7 +1803,9 @@ const readCachedProviderUsageList = Effect.fn("ProviderUsage.readCachedList")(fu
       ? [
           {
             ...cached.snapshot,
-            ...(nowMs - cached.fetchedAtMs >= CACHE_TTL_MS ? { stale: true } : {}),
+            ...(cached.fetchedAtMs === null || nowMs - cached.fetchedAtMs >= CACHE_TTL_MS
+              ? { stale: true }
+              : {}),
           },
         ]
       : [];
@@ -1841,8 +1851,8 @@ export const subscribeProviderUsage = () =>
       const cacheUpdates = Stream.fromSubscription(subscription).pipe(
         Stream.mapEffect(() => readCachedProviderUsageList()),
       );
-      // Each stream owns its timer lifetime. The shared resolver owns TTL and
-      // in-flight deduplication, so extra clients do not multiply HTTP requests.
+      // The server route shares this whole subscription across clients, including
+      // its timer, settings reloads and credential resolution during bootstrap.
       const refreshes = periodicProviderUsageRefresh();
       return Stream.concat(
         Stream.make(current),
@@ -1850,6 +1860,10 @@ export const subscribeProviderUsage = () =>
       );
     }),
   );
+
+/** Allocate once in the server route scope; stop refreshing when the last client leaves. */
+export const makeSharedProviderUsageSubscription = () =>
+  subscribeProviderUsage().pipe(Stream.share({ capacity: 1, strategy: "sliding", replay: 1 }));
 
 function testingContext(input: {
   instanceId: ServerGetProviderUsageInput["instanceId"];

@@ -281,3 +281,34 @@ it("detects a Keychain-only account change without credential files", async () =
   expect(second).not.toBe(first);
   expect(second).not.toContain("account-b");
 });
+
+it.effect("fetches a complete account immediately after a cold sparse push", () =>
+  Effect.gen(function* () {
+    const pushed = yield* ingestPushedSnapshot(
+      mapCodexRateLimitsUpdated({ instanceId, rateLimits: { primary: { usedPercent: 10 } } }),
+      nowMs,
+    );
+    expect(pushed.fetchedAt).toBeUndefined();
+    const fetchUsage = vi.fn(async () => ({
+      snapshot: parseCodexUsage({
+        instanceId,
+        nowMs: nowMs + 1,
+        json: {
+          plan_type: "pro",
+          rate_limit: {
+            primary_window: { used_percent: 11 },
+            secondary_window: { used_percent: 30 },
+          },
+          credits: { has_credits: true, balance: 25 },
+        },
+      }),
+    }));
+    const result = yield* Effect.promise(() =>
+      providerUsageTestKit.resolve({ instanceId, provider: "codex", nowMs: nowMs + 1 }, fetchUsage),
+    );
+    expect(fetchUsage).toHaveBeenCalledOnce();
+    expect(result.limits).toHaveLength(2);
+    expect(result.planName).toBe("ChatGPT Pro");
+    expect(result.usageLines).toHaveLength(1);
+  }),
+);

@@ -9,6 +9,13 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ServerConfig } from "../config.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { make } from "./UsageService.ts";
+import { vi } from "vite-plus/test";
+import { readTranscriptRecords } from "./usageTranscriptReader.ts";
+
+vi.mock("./usageTranscriptReader.ts", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./usageTranscriptReader.ts")>();
+  return { ...original, readTranscriptRecords: vi.fn(original.readTranscriptRecords) };
+});
 
 const encodeTranscript = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -63,7 +70,8 @@ it.effect("reports partial scans on cold and warm reads and includes archived us
           message: { model: "claude-fable-5", usage: { input_tokens: 10, output_tokens: 5 } },
         }),
       );
-      const service = yield* make.pipe(
+      vi.mocked(readTranscriptRecords).mockClear();
+      const makeService = make.pipe(
         Effect.provide(
           Layer.merge(
             ServerConfig.layerTest(root, root),
@@ -88,12 +96,14 @@ it.effect("reports partial scans on cold and warm reads and includes archived us
           ),
         ),
       );
+      let service = yield* makeService;
       const input = {
         sinceDay: UsageDay.make("2026-09-05"),
         untilDay: UsageDay.make("2026-09-05"),
         timeZone: "UTC",
       };
-      for (let scan = 0; scan < 2; scan += 1) {
+      for (let scan = 0; scan < 3; scan += 1) {
+        if (scan === 2) service = yield* makeService;
         const result = yield* service.readSummary(input);
         expect(result.buckets).toHaveLength(2);
         expect(result.buckets.every((bucket) => Boolean(bucket.sourceId))).toBe(true);
@@ -101,7 +111,26 @@ it.effect("reports partial scans on cold and warm reads and includes archived us
           result.sources.find((source) => source.fingerprint.provider === "claude"),
         ).toMatchObject({ status: "partial", malformedRecords: 2, scannedFiles: 1 });
         expect(result.projects.every((project) => project.provider === "claude")).toBe(true);
+        expect(readTranscriptRecords).toHaveBeenCalledTimes(4);
       }
+      yield* fs.writeFileString(
+        `${claude}/broken.jsonl`,
+        encodeTranscript({
+          type: "assistant",
+          timestamp: "2026-09-05T02:00:00Z",
+          sessionId: "claude-session",
+          message: {
+            id: "repaired",
+            model: "claude-fable-5",
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        }),
+      );
+      const repaired = yield* service.readSummary(input);
+      expect(readTranscriptRecords).toHaveBeenCalledTimes(5);
+      expect(
+        repaired.sources.find((source) => source.fingerprint.provider === "claude"),
+      ).toMatchObject({ status: "partial", malformedRecords: 1 });
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );

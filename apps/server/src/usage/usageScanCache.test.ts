@@ -31,7 +31,13 @@ function record(overrides: Partial<UsageRecord> = {}): UsageRecord {
 function cacheWith(entries: readonly [string, number, readonly UsageRecord[]][]): ScanCache {
   const cache: ScanCache = new Map();
   for (const [path, mtimeMs, records] of entries) {
-    cache.set(path, { size: records.length * 10, mtimeMs, provider: "claude", records });
+    cache.set(path, {
+      size: records.length * 10,
+      mtimeMs,
+      provider: "claude",
+      records,
+      malformedRecords: 0,
+    });
   }
   return cache;
 }
@@ -48,6 +54,22 @@ describe("scan cache round trip", () => {
     expect(restored.size).toBe(2);
     expect(restored.get("/a.jsonl")).toEqual(original.get("/a.jsonl"));
     expect(restored.get("/b.jsonl")).toEqual(original.get("/b.jsonl"));
+  });
+
+  it("preserves malformed counts and rejects invalid coverage metadata", () => {
+    const original = cacheWith([["/partial.jsonl", 100, [record()]]]);
+    const entry = original.get("/partial.jsonl")!;
+    original.set("/partial.jsonl", { ...entry, malformedRecords: 2 });
+    const encoded = encodeScanCache(original);
+    expect(decodeScanCache(encoded).get("/partial.jsonl")).toEqual({
+      ...entry,
+      malformedRecords: 2,
+    });
+    const invalid = {
+      ...encoded,
+      files: { "/partial.jsonl": { ...encoded.files["/partial.jsonl"], n: -1 } },
+    };
+    expect(decodeScanCache(invalid).size).toBe(0);
   });
 
   it("interns repeated model and session strings", () => {

@@ -265,18 +265,28 @@ export const make = Effect.gen(function* () {
         cached.mtimeMs === mtimeMs &&
         cached.provider === provider
       ) {
-        return { records: cached.records, malformedRecords: 0, failed: false };
+        return {
+          records: cached.records,
+          malformedRecords: cached.malformedRecords,
+          failed: false,
+        };
       }
 
       const parsed = yield* Effect.promise(() => readTranscriptRecords(filePath, provider));
       // A read failure is not an empty transcript: caching it under this
       // (size, mtime) would silently drop the file's usage until it changes.
-      if (parsed.failed || parsed.malformedRecords > 0) return parsed;
+      if (parsed.failed) return parsed;
       // Stored already de-duplicated within the file, which is 99% of all
       // duplicates. The aggregator still runs the cross-file dedupe pass.
       const records = dedupeWithinFile(parsed.records);
 
-      fileCache.set(filePath, { size, mtimeMs, provider, records });
+      fileCache.set(filePath, {
+        size,
+        mtimeMs,
+        provider,
+        records,
+        malformedRecords: parsed.malformedRecords,
+      });
       cacheDirty = true;
       return { ...parsed, records };
     });

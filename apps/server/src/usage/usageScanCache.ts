@@ -18,14 +18,15 @@ import type { UsageProviderKind } from "@spiritdevs/contracts";
 
 import type { UsageRecord } from "./usageTranscripts.ts";
 
-// v3: cumulative Codex identity preserves consecutive equal-sized requests.
-export const USAGE_SCAN_CACHE_VERSION = 3 as const;
+// v4: model-independent Codex dedupe and persisted malformed-record counts.
+export const USAGE_SCAN_CACHE_VERSION = 4 as const;
 
 export interface CachedFile {
   readonly size: number;
   readonly mtimeMs: number;
   readonly provider: UsageProviderKind;
   readonly records: readonly UsageRecord[];
+  readonly malformedRecords: number;
 }
 
 export type ScanCache = Map<string, CachedFile>;
@@ -53,6 +54,7 @@ interface SerializedFile {
   readonly m: number;
   readonly p: UsageProviderKind;
   readonly r: readonly SerializedRecord[];
+  readonly n: number;
 }
 
 interface SerializedCache {
@@ -84,6 +86,7 @@ export function encodeScanCache(cache: ScanCache): SerializedCache {
       s: entry.size,
       m: entry.mtimeMs,
       p: entry.provider,
+      n: entry.malformedRecords,
       r: entry.records.map((record) => [
         record.timestampMs,
         intern(models, modelIndex, record.model),
@@ -135,6 +138,7 @@ export function decodeScanCache(document: unknown): ScanCache {
     if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
     if (entry.p !== "claude" && entry.p !== "codex") continue;
     if (!isRecordArray(entry.r)) continue;
+    if (typeof entry.n !== "number" || !Number.isSafeInteger(entry.n) || entry.n < 0) continue;
 
     const provider: UsageProviderKind = entry.p;
     const records: UsageRecord[] = [];
@@ -193,7 +197,13 @@ export function decodeScanCache(document: unknown): ScanCache {
     }
 
     if (corrupt) continue;
-    cache.set(path, { size: entry.s, mtimeMs: entry.m, provider, records });
+    cache.set(path, {
+      size: entry.s,
+      mtimeMs: entry.m,
+      provider,
+      records,
+      malformedRecords: entry.n,
+    });
   }
 
   return cache;

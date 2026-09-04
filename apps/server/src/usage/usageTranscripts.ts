@@ -295,7 +295,7 @@ export function parseCodexLine(
   // Codex re-emits an unchanged token_count on some stream boundaries. Summing
   // those would double count, so identical consecutive payloads are skipped.
   const cumulative = (info as Record<string, unknown>)["total_token_usage"];
-  const signature = JSON.stringify([state.model, cumulative ?? lastRecord]);
+  const signature = JSON.stringify(cumulative ?? lastRecord);
   if (signature === state.lastUsageSignature) return null;
   state.lastUsageSignature = signature;
 

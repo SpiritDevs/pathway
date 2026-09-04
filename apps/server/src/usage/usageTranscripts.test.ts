@@ -121,6 +121,30 @@ describe("parseCodexLine", () => {
     expect(repeat).toBeNull();
   });
 
+  it("does not recount unchanged cumulative usage after a model switch", () => {
+    const state = initialCodexScanState();
+    const usage = (total: number) =>
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-01T05:17:49.919Z",
+        payload: {
+          type: "token_count",
+          info: {
+            last_token_usage: { input_tokens: 100, output_tokens: 10 },
+            total_token_usage: { input_tokens: total, output_tokens: total / 10 },
+          },
+        },
+      });
+    parseCodexLine(turnContext, state);
+    expect(parseCodexLine(usage(100), state)?.model).toBe("gpt-5.6-sol");
+    parseCodexLine(
+      JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-luna" } }),
+      state,
+    );
+    expect(parseCodexLine(usage(100), state)).toBeNull();
+    expect(parseCodexLine(usage(200), state)?.model).toBe("gpt-5.6-luna");
+  });
+
   it("drops usage that arrives before any model is known", () => {
     const state = initialCodexScanState();
     expect(parseCodexLine(tokenCount(100, 0, 10, 0), state)).toBeNull();

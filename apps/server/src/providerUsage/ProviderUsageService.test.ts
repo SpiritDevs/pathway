@@ -6,6 +6,8 @@ import * as NodePath from "node:path";
 import { describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceId, type ServerProviderUsageSnapshot } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Fiber from "effect/Fiber";
+import { HostProcessEnvironment } from "@spiritdevs/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as Queue from "effect/Queue";
@@ -15,6 +17,8 @@ import { vi } from "vite-plus/test";
 import { ServerSettingsService } from "../serverSettings.ts";
 import {
   ingestPushedSnapshot,
+  getProviderUsage,
+  makeSharedProviderUsageSubscription,
   mapCodexRateLimitsUpdated,
   parseClaudeUsage,
   parseCodexUsage,
@@ -869,9 +873,6 @@ describe("provider usage snapshots", () => {
     }
   });
 
-  // it.live, not it.effect: the cache TTL compares against wall-clock time, so
-  // TestClock timestamps would make the pushed snapshot look expired and
-  // trigger a live bootstrap fetch.
   it.live("merges sparse pushed usage into the full cached and subscribed snapshot", () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -879,6 +880,9 @@ describe("provider usage snapshots", () => {
     return Effect.scoped(
       Effect.gen(function* () {
         resetProviderUsageCache();
+        providerUsageTestKit.setKeychainReader(async () =>
+          JSON.stringify({ tokens: { access_token: "synthetic", account_id: "synthetic" } }),
+        );
         const pushedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
         yield* ingestPushedSnapshot(
           mapCodexRateLimitsUpdated({
@@ -924,7 +928,7 @@ describe("provider usage snapshots", () => {
             usageLines: [{ label: "Credits", value: "$12.50 remaining" }],
           },
         ]);
-        expect(fetchMock).not.toHaveBeenCalled();
+        expect(fetchMock.mock.calls.length).toBe(1);
       }).pipe(
         Effect.ensuring(
           Effect.sync(() => {
@@ -932,6 +936,7 @@ describe("provider usage snapshots", () => {
             resetProviderUsageCache();
           }),
         ),
+        Effect.provideService(HostProcessEnvironment, { HOME: "/__pathway_synthetic_no_home__" }),
         Effect.provide(
           ServerSettingsService.layerTest({
             providerInstances: {
@@ -1036,5 +1041,60 @@ it.effect("refreshes a subscribed idle account after TTL without a user action",
       expect(refreshed).toHaveLength(1);
       expect(calls).toBe(2);
     }),
+  ),
+);
+
+it.effect("shares credential refreshes and stops after the last subscriber leaves", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      resetProviderUsageCache();
+      const credentialReads = vi.fn(async () => '{"claudeAiOauth":{"accessToken":"synthetic"}}');
+      providerUsageTestKit.setKeychainReader(credentialReads);
+      providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
+      let calls = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ five_hour: { utilization: calls === 1 ? 10 : 20 } }));
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          fetchMock.mockRestore();
+          resetProviderUsageCache();
+        }),
+      );
+      const shared = yield* makeSharedProviderUsageSubscription();
+      const firstUpdates = yield* Queue.unbounded<ReadonlyArray<ServerProviderUsageSnapshot>>();
+      const secondUpdates = yield* Queue.unbounded<ReadonlyArray<ServerProviderUsageSnapshot>>();
+      const first = yield* shared.pipe(
+        Stream.runForEach((value) => Queue.offer(firstUpdates, value)),
+        Effect.forkScoped,
+      );
+      expect((yield* Queue.take(firstUpdates))[0]?.limits[0]?.usedPercent).toBe(10);
+      const second = yield* shared.pipe(
+        Stream.runForEach((value) => Queue.offer(secondUpdates, value)),
+        Effect.forkScoped,
+      );
+      expect((yield* Queue.take(secondUpdates))[0]?.limits[0]?.usedPercent).toBe(10);
+      expect(credentialReads.mock.calls.length).toBeLessThanOrEqual(3);
+      yield* Fiber.interrupt(first);
+      yield* getProviderUsage({ instanceId, provider: "claudeAgent", forceRefresh: true });
+      yield* Stream.fromQueue(secondUpdates).pipe(
+        Stream.filter((snapshots) => snapshots[0]?.limits[0]?.usedPercent === 20),
+        Stream.take(1),
+        Stream.runCollect,
+      );
+      expect(calls).toBe(2);
+      yield* Fiber.interrupt(second);
+      const readsAfterDisconnect = credentialReads.mock.calls.length;
+      yield* TestClock.adjust("10 minutes");
+      expect(credentialReads.mock.calls.length).toBe(readsAfterDisconnect);
+    }),
+  ).pipe(
+    Effect.provideService(HostProcessEnvironment, { HOME: "/__pathway_synthetic_no_home__" }),
+    Effect.provide(
+      ServerSettingsService.layerTest({
+        providerInstances: { ...disabledLegacySlots, [instanceId]: { driver: "claudeAgent" } },
+      }),
+    ),
   ),
 );
