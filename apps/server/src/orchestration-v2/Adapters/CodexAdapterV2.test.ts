@@ -58,6 +58,7 @@ import {
   makeCodexAppServerSpawnCommand,
   mapCodexCollabAgentStatus,
   projectCodexDynamicToolItem,
+  resolveCodexRevertBeforeTurnId,
   resolveCodexRollbackTurnCount,
 } from "./CodexAdapterV2.ts";
 import { makeReplayServerConfig } from "./CodexAdapterV2.testkit.ts";
@@ -770,6 +771,29 @@ describe("CodexAdapterV2 rollback mapping", () => {
       });
 
       assert.equal(numTurns, 2);
+
+      const providerTurnBoundary = yield* resolveCodexRevertBeforeTurnId({
+        providerThread,
+        target: {
+          type: "provider_turn",
+          checkpointId: CheckpointId.make("checkpoint-first"),
+          appRunOrdinal: 1,
+          providerTurn: firstTurn,
+        },
+        providerThreadTurns: [interruptedTurn, runningTurn, secondTurn, firstTurn],
+      });
+      assert.equal(providerTurnBoundary, "native-provider-turn-second");
+
+      const threadStartBoundary = yield* resolveCodexRevertBeforeTurnId({
+        providerThread,
+        target: {
+          type: "thread_start",
+          checkpointId: CheckpointId.make("checkpoint-start"),
+          appRunOrdinal: 0,
+        },
+        providerThreadTurns: [interruptedTurn, runningTurn, secondTurn, firstTurn],
+      });
+      assert.equal(threadStartBoundary, "native-provider-turn-first");
     }),
   );
 });
@@ -906,7 +930,9 @@ function codexReplayPreamble(input: {
   readonly nativeThreadId: string;
   readonly nativeTurnId: string;
   readonly prompt: string;
+  readonly serverVersion?: string;
 }): Array<CodexReplay.CodexAppServerReplayEntry> {
+  const serverVersion = input.serverVersion ?? "0.144.0";
   return [
     {
       type: "expect_outbound",
@@ -926,7 +952,7 @@ function codexReplayPreamble(input: {
       frame: {
         id: 1,
         result: {
-          userAgent: "pathway_desktop/0.144.0",
+          userAgent: `pathway_desktop/${serverVersion}`,
           codexHome: "/tmp/codex-home",
           platformFamily: "unix",
           platformOs: "macos",
@@ -957,7 +983,7 @@ function codexReplayPreamble(input: {
             status: { type: "idle" },
             path: `/tmp/${input.nativeThreadId}.jsonl`,
             cwd: "/workspace",
-            cliVersion: "0.144.0",
+            cliVersion: serverVersion,
             source: "vscode",
             threadSource: null,
             agentNickname: null,
@@ -1041,7 +1067,7 @@ const awaitUntil = (predicate: () => boolean, label: string): Effect.Effect<void
     return yield* Effect.die(`Timed out waiting for ${label}.`);
   });
 
-const makeCodexReplayHarness = (transcript: CodexReplay.CodexAppServerReplayTranscript) =>
+const makeCodexReplayRuntime = (transcript: CodexReplay.CodexAppServerReplayTranscript) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const idAllocator = yield* IdAllocatorV2;
@@ -1085,6 +1111,12 @@ const makeCodexReplayHarness = (transcript: CodexReplay.CodexAppServerReplayTran
       modelSelection: CODEX_TEST_MODEL_SELECTION,
       runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
     });
+    return { runtime, threadId, continuationRequests };
+  });
+
+const makeCodexReplayHarness = (transcript: CodexReplay.CodexAppServerReplayTranscript) =>
+  Effect.gen(function* () {
+    const { runtime, threadId, continuationRequests } = yield* makeCodexReplayRuntime(transcript);
     const providerThread = yield* runtime.ensureThread({
       threadId,
       modelSelection: CODEX_TEST_MODEL_SELECTION,
@@ -1124,6 +1156,278 @@ const makeCodexReplayHarness = (transcript: CodexReplay.CodexAppServerReplayTran
       hasPendingBackgroundWork,
     };
   });
+
+describe("CodexAdapterV2 paginated thread rollback", () => {
+  for (const testCase of [
+    { status: { type: "notLoaded" }, shouldResume: true },
+    { status: { type: "active", activeFlags: [] }, shouldResume: false },
+  ] as const) {
+    it.effect(`reverts a ${testCase.status.type} thread without blocking on resume`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scenario = `codex-paginated-thread-revert-${testCase.status.type}`;
+          const nativeThreadId = `native-${scenario}-thread`;
+          const nativeThread = {
+            id: nativeThreadId,
+            sessionId: nativeThreadId,
+            forkedFromId: null,
+            preview: "",
+            ephemeral: false,
+            modelProvider: "openai",
+            createdAt: 1782622440,
+            updatedAt: 1782622450,
+            status: { type: "idle" as const },
+            path: `/tmp/${nativeThreadId}.jsonl`,
+            cwd: "/workspace",
+            cliVersion: "0.152.1",
+            source: "vscode" as const,
+            threadSource: null,
+            agentNickname: null,
+            agentRole: null,
+            gitInfo: null,
+            name: null,
+            historyMode: "paginated" as const,
+            turns: [],
+          };
+          const transcript = makeCodexReplayTranscript({
+            scenario,
+            entries: [
+              ...codexReplayPreamble({
+                nativeThreadId,
+                nativeTurnId: "unused-native-turn",
+                prompt: "unused",
+              }).slice(0, 3),
+              {
+                type: "expect_outbound",
+                label: "thread/read",
+                frame: {
+                  id: 2,
+                  method: "thread/read",
+                  params: { threadId: nativeThreadId, includeTurns: false },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "thread/read",
+                frame: {
+                  id: 2,
+                  result: { thread: { ...nativeThread, status: testCase.status } },
+                },
+              },
+              ...(testCase.shouldResume
+                ? [
+                    {
+                      type: "expect_outbound" as const,
+                      label: "thread/resume",
+                      frame: {
+                        id: 3,
+                        method: "thread/resume",
+                        params: { threadId: nativeThreadId, excludeTurns: true },
+                      },
+                    },
+                    {
+                      type: "emit_inbound" as const,
+                      label: "thread/resume",
+                      frame: {
+                        id: 3,
+                        result: {
+                          thread: nativeThread,
+                          model: "gpt-5.4",
+                          modelProvider: "openai",
+                          serviceTier: null,
+                          cwd: "/workspace",
+                          instructionSources: [],
+                          approvalPolicy: "on-request",
+                          approvalsReviewer: "user",
+                          sandbox: {
+                            type: "workspaceWrite",
+                            writableRoots: [],
+                            networkAccess: false,
+                          },
+                          reasoningEffort: "medium",
+                        },
+                      },
+                    },
+                  ]
+                : []),
+              {
+                type: "expect_outbound",
+                label: "thread/revert",
+                frame: {
+                  id: testCase.shouldResume ? 4 : 3,
+                  method: "thread/revert",
+                  params: {
+                    threadId: nativeThreadId,
+                    beforeTurnId: "native-provider-turn-second",
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "thread/revert",
+                frame: {
+                  id: testCase.shouldResume ? 4 : 3,
+                  result: { thread: nativeThread },
+                },
+              },
+            ],
+          });
+          const { runtime, threadId } = yield* makeCodexReplayRuntime(transcript);
+          const now = yield* DateTime.now;
+          const providerThread: OrchestrationV2ProviderThread = {
+            id: ProviderThreadId.make(`provider-thread-${scenario}`),
+            driver: CODEX_DRIVER_KIND,
+            providerInstanceId: CODEX_DEFAULT_INSTANCE_ID,
+            providerSessionId: ProviderSessionId.make(`provider-session-${scenario}`),
+            appThreadId: threadId,
+            ownerNodeId: null,
+            nativeThreadRef: {
+              driver: CODEX_DRIVER_KIND,
+              nativeId: nativeThreadId,
+              strength: "strong",
+            },
+            nativeConversationHeadRef: null,
+            status: "idle",
+            firstRunOrdinal: 1,
+            lastRunOrdinal: 2,
+            handoffIds: [],
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+          };
+          const providerTurn = (id: string, ordinal: number): OrchestrationV2ProviderTurn => ({
+            id: ProviderTurnId.make(id),
+            providerThreadId: providerThread.id,
+            nodeId: NodeId.make(`node-${id}`),
+            runAttemptId: RunAttemptId.make(`attempt-${id}`),
+            nativeTurnRef: {
+              driver: CODEX_DRIVER_KIND,
+              nativeId: `native-${id}`,
+              strength: "strong",
+            },
+            ordinal,
+            status: "completed",
+            startedAt: now,
+            completedAt: now,
+          });
+          const firstTurn = providerTurn("provider-turn-first", 1);
+          const secondTurn = providerTurn("provider-turn-second", 2);
+
+          const result = yield* runtime.rollbackThread({
+            providerThread,
+            target: {
+              type: "provider_turn",
+              checkpointId: CheckpointId.make("checkpoint-first"),
+              appRunOrdinal: 1,
+              providerTurn: firstTurn,
+            },
+            providerThreadTurns: [secondTurn, firstTurn],
+          });
+
+          assert.equal(result.providerThread.status, "idle");
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+    );
+  }
+});
+
+describe("CodexAdapterV2 approval compatibility", () => {
+  for (const testCase of [
+    { serverVersion: "0.144.0", expectedDecision: "denied" },
+    { serverVersion: "0.145.0-alpha.23", expectedDecision: "denied" },
+    {
+      serverVersion: "0.145.0",
+      expectedDecision: { denied: { rejection: "User denied the request." } },
+    },
+  ] as const) {
+    it.effect(`sends the supported denial shape to Codex ${testCase.serverVersion}`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scenario = `codex-${testCase.serverVersion}-approval-denial`;
+          const nativeThreadId = `native-${scenario}-thread`;
+          const nativeTurnId = `native-${scenario}-turn`;
+          const transcript = makeCodexReplayTranscript({
+            scenario,
+            entries: [
+              ...codexReplayPreamble({
+                nativeThreadId,
+                nativeTurnId,
+                prompt: "Run the command.",
+                serverVersion: testCase.serverVersion,
+              }),
+              {
+                type: "emit_inbound",
+                label: "execCommandApproval",
+                frame: {
+                  id: 100,
+                  method: "execCommandApproval",
+                  params: {
+                    conversationId: nativeThreadId,
+                    callId: "approval-command",
+                    command: ["touch", "blocked.txt"],
+                    cwd: "/workspace",
+                    parsedCmd: [],
+                    reason: "Needs approval",
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                label: "execCommandApproval response",
+                frame: { id: 100, result: { decision: testCase.expectedDecision } },
+              },
+              {
+                type: "emit_inbound",
+                label: "turn/completed",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                  },
+                },
+              },
+            ],
+          });
+          const harness = yield* makeCodexReplayHarness(transcript);
+          const now = yield* DateTime.now;
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make(`attempt-${scenario}`),
+              text: "Run the command.",
+            }),
+          );
+          yield* awaitUntil(
+            () => harness.events.some((event) => event.type === "runtime_request.updated"),
+            `Codex ${testCase.serverVersion} approval request`,
+          );
+          const request = harness.events.find(
+            (
+              event,
+            ): event is Extract<ProviderAdapterV2Event, { type: "runtime_request.updated" }> =>
+              event.type === "runtime_request.updated",
+          )?.runtimeRequest;
+          if (request === undefined) {
+            return yield* Effect.die("Codex approval request was not projected.");
+          }
+          yield* harness.runtime.respondToRuntimeRequest({
+            requestId: request.id,
+            decision: "decline",
+          });
+          yield* awaitUntil(
+            () => harness.terminalEvents().length === 1,
+            `Codex ${testCase.serverVersion} denial completion`,
+          );
+
+          assert.equal(harness.terminalEvents()[0]?.status, "completed");
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+    );
+  }
+});
 
 describe("CodexAdapterV2 post-settle continuation", () => {
   const assistantMessages = (events: ReadonlyArray<ProviderAdapterV2Event>) =>

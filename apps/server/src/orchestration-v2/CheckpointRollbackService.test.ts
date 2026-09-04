@@ -8,6 +8,8 @@ import {
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
+  ProviderTurnId,
+  RunAttemptId,
   RunId,
   ThreadId,
 } from "@spiritdevs/contracts";
@@ -23,6 +25,7 @@ import {
 import { EventSinkV2 } from "./EventSink.ts";
 import { layer as idAllocatorLayer } from "./IdAllocator.ts";
 import { ProjectionStoreReadError, ProjectionStoreV2 } from "./ProjectionStore.ts";
+import type { ProviderAdapterV2RollbackThreadInput } from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
 
@@ -443,6 +446,187 @@ it.effect("terminalizes every node in a stopped run being rolled back", () => {
         : [],
     );
     assert.deepEqual(rolledBackNodeIds, [rootNodeId, childNodeId]);
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("excludes stale turns but retains cancelled turns on a repeated rollback", () => {
+  const threadId = ThreadId.make("thread:rollback-repeated");
+  const providerThreadId = ProviderThreadId.make("provider-thread:rollback-repeated");
+  const providerSessionId = ProviderSessionId.make("provider-session:rollback-repeated");
+  const checkpointId = CheckpointId.make("checkpoint:rollback-repeated");
+  const scopeId = CheckpointScopeId.make("checkpoint-scope:rollback-repeated");
+  const providerInstanceId = ProviderInstanceId.make("provider_rollback_repeated");
+  const targetRunId = RunId.make("run:rollback-repeated:target");
+  const staleRunId = RunId.make("run:rollback-repeated:stale");
+  const cancelledRunId = RunId.make("run:rollback-repeated:cancelled");
+  const currentRunId = RunId.make("run:rollback-repeated:current");
+  const targetAttemptId = RunAttemptId.make("attempt:rollback-repeated:target");
+  const staleAttemptId = RunAttemptId.make("attempt:rollback-repeated:stale");
+  const cancelledAttemptId = RunAttemptId.make("attempt:rollback-repeated:cancelled");
+  const currentAttemptId = RunAttemptId.make("attempt:rollback-repeated:current");
+  const targetTurnId = ProviderTurnId.make("provider-turn:rollback-repeated:target");
+  const staleTurnId = ProviderTurnId.make("provider-turn:rollback-repeated:stale");
+  const cancelledTurnId = ProviderTurnId.make("provider-turn:rollback-repeated:cancelled");
+  const currentTurnId = ProviderTurnId.make("provider-turn:rollback-repeated:current");
+  const targetNodeId = NodeId.make("node:rollback-repeated:target");
+  const staleNodeId = NodeId.make("node:rollback-repeated:stale");
+  const cancelledNodeId = NodeId.make("node:rollback-repeated:cancelled");
+  const currentNodeId = NodeId.make("node:rollback-repeated:current");
+  const providerThread = {
+    id: providerThreadId,
+    providerSessionId,
+    providerInstanceId,
+    driver: "codex",
+  };
+  const providerTurn = (
+    id: ProviderTurnId,
+    runAttemptId: RunAttemptId,
+    nodeId: NodeId,
+    ordinal: number,
+  ) => ({
+    id,
+    providerThreadId,
+    runAttemptId,
+    nodeId,
+    ordinal,
+    status: "completed",
+  });
+  const projection = {
+    thread: {
+      activeProviderThreadId: providerThreadId,
+      modelSelection: { instanceId: providerInstanceId, model: "test-model" },
+    },
+    providerThreads: [providerThread],
+    providerSessions: [],
+    checkpoints: [
+      {
+        id: checkpointId,
+        scopeId,
+        status: "ready",
+        appRunOrdinal: 1,
+        runId: targetRunId,
+        nodeId: targetNodeId,
+      },
+    ],
+    checkpointScopes: [{ id: scopeId }],
+    runs: [
+      {
+        id: targetRunId,
+        ordinal: 1,
+        activeAttemptId: targetAttemptId,
+        providerInstanceId,
+        rootNodeId: targetNodeId,
+        status: "completed",
+      },
+      {
+        id: staleRunId,
+        ordinal: 2,
+        activeAttemptId: staleAttemptId,
+        providerInstanceId,
+        rootNodeId: staleNodeId,
+        status: "rolled_back",
+      },
+      {
+        id: cancelledRunId,
+        ordinal: 3,
+        activeAttemptId: cancelledAttemptId,
+        providerInstanceId,
+        rootNodeId: cancelledNodeId,
+        status: "cancelled",
+      },
+      {
+        id: currentRunId,
+        ordinal: 4,
+        activeAttemptId: currentAttemptId,
+        providerInstanceId,
+        rootNodeId: currentNodeId,
+        status: "completed",
+      },
+    ],
+    attempts: [
+      { id: targetAttemptId, runId: targetRunId, providerTurnId: targetTurnId },
+      { id: staleAttemptId, runId: staleRunId, providerTurnId: staleTurnId },
+      {
+        id: cancelledAttemptId,
+        runId: cancelledRunId,
+        providerTurnId: cancelledTurnId,
+      },
+      { id: currentAttemptId, runId: currentRunId, providerTurnId: currentTurnId },
+    ],
+    nodes: [
+      { id: targetNodeId, runId: targetRunId },
+      { id: staleNodeId, runId: staleRunId },
+      { id: cancelledNodeId, runId: cancelledRunId },
+      { id: currentNodeId, runId: currentRunId },
+    ],
+    providerTurns: [
+      providerTurn(targetTurnId, targetAttemptId, targetNodeId, 1),
+      providerTurn(staleTurnId, staleAttemptId, staleNodeId, 2),
+      providerTurn(cancelledTurnId, cancelledAttemptId, cancelledNodeId, 3),
+      providerTurn(currentTurnId, currentAttemptId, currentNodeId, 4),
+    ],
+  } as unknown as OrchestrationV2ThreadProjection;
+  const repeatedProjection = {
+    ...projection,
+    runs: projection.runs.map((run) =>
+      run.id === cancelledRunId || run.id === currentRunId
+        ? { ...run, status: "rolled_back" as const }
+        : run,
+    ),
+  };
+  const rollbackInputs: Array<ProviderAdapterV2RollbackThreadInput> = [];
+  let writtenEvents: ReadonlyArray<OrchestrationV2DomainEvent> = [];
+  let projectionReadCount = 0;
+  const testLayer = checkpointRollbackServiceLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(CheckpointServiceV2)({
+          restore: () => Effect.void,
+          deleteStaleRefs: () => Effect.void,
+        }),
+        Layer.mock(EventSinkV2)({
+          write: ({ events }) => {
+            writtenEvents = [...writtenEvents, ...events];
+            return Effect.succeed([]);
+          },
+        }),
+        idAllocatorLayer,
+        Layer.mock(ProjectionStoreV2)({
+          getThreadProjection: () =>
+            Effect.succeed(projectionReadCount++ === 0 ? projection : repeatedProjection),
+        }),
+        Layer.mock(ProviderSessionManagerV2)({
+          open: () =>
+            Effect.succeed({
+              rollbackThread: (input: ProviderAdapterV2RollbackThreadInput) => {
+                rollbackInputs.push(input);
+                return Effect.succeed({ providerThread });
+              },
+            } as never),
+        }),
+        Layer.mock(RuntimePolicyV2)({ resolve: () => Effect.succeed({} as never) }),
+      ),
+    ),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* CheckpointRollbackServiceV2;
+    yield* service.execute({ threadId, providerThreadId, checkpointId, scopeId });
+    yield* service.execute({ threadId, providerThreadId, checkpointId, scopeId });
+
+    assert.deepEqual(
+      rollbackInputs[0]?.providerThreadTurns.map((turn) => turn.id),
+      [targetTurnId, cancelledTurnId, currentTurnId],
+    );
+    assert.lengthOf(rollbackInputs, 1);
+    assert.deepEqual(
+      writtenEvents.flatMap((event) =>
+        event.type === "run.updated" && event.payload.status === "rolled_back"
+          ? [event.payload.id]
+          : [],
+      ),
+      [cancelledRunId, currentRunId],
+    );
   }).pipe(Effect.provide(testLayer));
 });
 

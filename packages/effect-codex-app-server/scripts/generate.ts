@@ -17,7 +17,7 @@ import {
 } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-const UPSTREAM_REF = "678157acaa819d5510adfe359abb5d0392cfe461";
+const UPSTREAM_REF = "5adb68a49933ae446bf11935662c83dba55a0804";
 const USER_AGENT = "effect-codex-app-server-generator";
 const GITHUB_API_BASE =
   "https://api.github.com/repos/openai/codex/contents/codex-rs/app-server-protocol";
@@ -281,6 +281,73 @@ function stripNullDefaults(value: Schema.Json): Schema.Json {
   ) as Schema.Json;
 }
 
+function preserveProtocolCompatibility(value: Schema.Json): Schema.Json {
+  if (Array.isArray(value)) {
+    return value.map(preserveProtocolCompatibility);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  const next = Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [key, preserveProtocolCompatibility(child)]),
+  ) as Record<string, Schema.Json>;
+  const properties = next.properties;
+  const required = next.required;
+  if (
+    properties !== null &&
+    typeof properties === "object" &&
+    !Array.isArray(properties) &&
+    "cliVersion" in properties &&
+    "turns" in properties &&
+    "sessionId" in properties &&
+    "projectId" in properties &&
+    Array.isArray(required)
+  ) {
+    next.required = required.filter((field) => field !== "projectId" && field !== "sessionId");
+  }
+  if (
+    properties !== null &&
+    typeof properties === "object" &&
+    !Array.isArray(properties) &&
+    "autoResolutionMs" in properties &&
+    "isBlocking" in properties &&
+    "questions" in properties &&
+    Array.isArray(required)
+  ) {
+    next.required = required.filter((field) => field !== "isBlocking");
+  }
+  const oneOf = next.oneOf;
+  if (
+    Array.isArray(oneOf) &&
+    oneOf.some(
+      (variant) =>
+        variant !== null &&
+        typeof variant === "object" &&
+        !Array.isArray(variant) &&
+        variant.title === "DeniedReviewDecision",
+    ) &&
+    !oneOf.some(
+      (variant) =>
+        variant !== null &&
+        typeof variant === "object" &&
+        !Array.isArray(variant) &&
+        Array.isArray(variant.enum) &&
+        variant.enum.includes("denied"),
+    )
+  ) {
+    next.oneOf = [
+      ...oneOf,
+      {
+        type: "string",
+        enum: ["denied"],
+        description: "Legacy Codex app-server denial response.",
+      },
+    ];
+  }
+  return next;
+}
+
 function toPascalCaseMethod(method: string) {
   return method
     .split("/")
@@ -348,7 +415,6 @@ function resolveResponseTypeName(
   const overrides: Record<string, string> = {
     "account/logout": "LogoutAccountResponse",
     "account/rateLimits/read": "GetAccountRateLimitsResponse",
-    "account/usage/read": "GetAccountTokenUsageResponse",
     "account/workspaceMessages/read": "GetWorkspaceMessagesResponse",
     "config/batchWrite": "ConfigWriteResponse",
     "config/mcpServer/reload": "McpServerRefreshResponse",
@@ -556,13 +622,15 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
     );
 
     for (const [definitionName, definitionSchema] of Object.entries(parsed.definitions ?? {})) {
-      aggregateSchemas[localDefinitionNames.get(definitionName)!] = stripNullDefaults(
-        normalizeNullableTypes(
-          rewriteExternalRefs(
-            definitionSchema,
-            localDefinitionNames,
-            file.namespace,
-            exportNameByQualifiedName,
+      aggregateSchemas[localDefinitionNames.get(definitionName)!] = preserveProtocolCompatibility(
+        stripNullDefaults(
+          normalizeNullableTypes(
+            rewriteExternalRefs(
+              definitionSchema,
+              localDefinitionNames,
+              file.namespace,
+              exportNameByQualifiedName,
+            ),
           ),
         ),
       );
@@ -575,13 +643,15 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
       }
     }
 
-    aggregateSchemas[file.exportName] = stripNullDefaults(
-      normalizeNullableTypes(
-        rewriteExternalRefs(
-          topLevelSchema,
-          localDefinitionNames,
-          file.namespace,
-          exportNameByQualifiedName,
+    aggregateSchemas[file.exportName] = preserveProtocolCompatibility(
+      stripNullDefaults(
+        normalizeNullableTypes(
+          rewriteExternalRefs(
+            topLevelSchema,
+            localDefinitionNames,
+            file.namespace,
+            exportNameByQualifiedName,
+          ),
         ),
       ),
     );
@@ -589,7 +659,9 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
 
   for (const [name, schema] of Object.entries(ManualSchemas)) {
     if (!(name in aggregateSchemas)) {
-      aggregateSchemas[name] = stripNullDefaults(normalizeNullableTypes(schema));
+      aggregateSchemas[name] = preserveProtocolCompatibility(
+        stripNullDefaults(normalizeNullableTypes(schema)),
+      );
     }
   }
 
