@@ -707,7 +707,6 @@ jobs:
           deployment_url="$(
             vp dlx vercel@59.11.2 deploy \
               --archive=tgz \
-              --prod \
               --skip-domain \
               --yes \
               --scope "$vercel_scope" \
