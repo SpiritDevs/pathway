@@ -203,10 +203,10 @@ export class IconExportAssetsStaleError extends Schema.TaggedErrorClass<IconExpo
   }
 }
 
-const ICON_VARIANTS = [
+const ICON_VARIANTS: ReadonlyArray<IconVariant> = [
   {
     label: "development",
-    source: { type: "icon-composer", path: BRAND_ASSET_PATHS.developmentIconComposerProject },
+    source: { type: "png", path: BRAND_ASSET_PATHS.pathwayIconSourcePng },
     outputs: {
       macos: BRAND_ASSET_PATHS.developmentDesktopIconPng,
       universal: BRAND_ASSET_PATHS.developmentUniversalIconPng,
@@ -219,7 +219,7 @@ const ICON_VARIANTS = [
   },
   {
     label: "preview",
-    source: { type: "icon-composer", path: BRAND_ASSET_PATHS.nightlyIconComposerProject },
+    source: { type: "png", path: BRAND_ASSET_PATHS.pathwayIconSourcePng },
     outputs: {
       macos: BRAND_ASSET_PATHS.nightlyMacIconPng,
       universal: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
@@ -232,7 +232,7 @@ const ICON_VARIANTS = [
   },
   {
     label: "production",
-    source: { type: "png", path: BRAND_ASSET_PATHS.productionIconSourcePng },
+    source: { type: "png", path: BRAND_ASSET_PATHS.pathwayIconSourcePng },
     outputs: {
       macos: BRAND_ASSET_PATHS.productionMacIconPng,
       universal: BRAND_ASSET_PATHS.productionLinuxIconPng,
@@ -243,7 +243,7 @@ const ICON_VARIANTS = [
       windowsIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
     },
   },
-] as const satisfies ReadonlyArray<IconVariant>;
+];
 
 const MACOS_EXPORT_CODEX_PROMPT = [
   "Use [@Computer](plugin://computer-use@openai-bundled) and the Icon Composer app to export the Icon Composer-based macOS app icons in this repository.",
@@ -778,7 +778,13 @@ const isCurrent = Effect.fn("iconExport.isCurrent")(function* (
 export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOnly: boolean) {
   const fs = yield* FileSystem.FileSystem;
   const repositoryRoot = yield* RepositoryRoot;
-  const tool = yield* resolveIconComposerTool();
+  const composerVariants = ICON_VARIANTS.filter(
+    (variant) => variant.source.type === "icon-composer",
+  );
+  const tool =
+    composerVariants.length > 0
+      ? yield* resolveIconComposerTool()
+      : { path: "", version: "unused" };
   const temporaryDirectory = yield* fs
     .makeTempDirectoryScoped({
       prefix: "pathway-icon-export-",
@@ -793,9 +799,7 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
           }),
       ),
     );
-  yield* Console.log(
-    `Exporting icons with Icon Composer ${tool.version}, design generation ${DESIGN_GENERATION}.`,
-  );
+  yield* Console.log(`Exporting icons from ${BRAND_ASSET_PATHS.pathwayIconSourcePng}.`);
 
   const generated = new Map<string, Buffer>();
   for (const variant of ICON_VARIANTS) {
@@ -834,7 +838,9 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
       });
     }
     yield* Console.log(`All ${generated.size} generated icon assets are current.`);
-    yield* logManualMacOsExportInstructions();
+    if (composerVariants.length > 0) {
+      yield* logManualMacOsExportInstructions();
+    }
     return;
   }
 
@@ -844,7 +850,9 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
     { concurrency: 1, discard: true },
   );
   yield* Console.log(`Updated ${generated.size} generated icon assets.`);
-  yield* logManualMacOsExportInstructions();
+  if (composerVariants.length > 0) {
+    yield* logManualMacOsExportInstructions();
+  }
 });
 
 export const exportBrandIconsCommand = Command.make(
@@ -856,11 +864,7 @@ export const exportBrandIconsCommand = Command.make(
     ),
   },
   ({ check }) => exportBrandIcons(check).pipe(Effect.scoped),
-).pipe(
-  Command.withDescription(
-    "Export development and preview assets from Icon Composer plus production assets from the selected Pathway PNG.",
-  ),
-);
+).pipe(Command.withDescription("Export every app icon variant from the canonical Pathway PNG."));
 
 if (import.meta.main) {
   Command.run(exportBrandIconsCommand, { version: "0.0.0" }).pipe(

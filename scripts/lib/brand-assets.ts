@@ -1,8 +1,7 @@
 export const BRAND_ASSET_PATHS = {
-  developmentIconComposerProject: "assets/dev/app-icon.icon",
+  pathwayIconSourcePng: "assets/prod/pathway-macos-1024.png",
   developmentUniversalIconPng: "assets/dev/blueprint-universal-1024.png",
 
-  productionIconSourcePng: "assets/pathway-concepts/pathway-blueprint-forward-simple.png",
   productionMacIconPng: "assets/prod/pathway-macos-1024.png",
   productionLinuxIconPng: "assets/prod/pathway-universal-1024.png",
   productionWindowsIconIco: "assets/prod/pathway-windows.ico",
@@ -11,7 +10,6 @@ export const BRAND_ASSET_PATHS = {
   productionWebFavicon32Png: "assets/prod/pathway-web-favicon-32x32.png",
   productionWebAppleTouchIconPng: "assets/prod/pathway-web-apple-touch-180.png",
 
-  nightlyIconComposerProject: "assets/nightly/app-icon.icon",
   nightlyMacIconPng: "assets/nightly/nightly-macos-1024.png",
   nightlyLinuxIconPng: "assets/nightly/nightly-universal-1024.png",
   nightlyWindowsIconIco: "assets/nightly/nightly-windows.ico",
