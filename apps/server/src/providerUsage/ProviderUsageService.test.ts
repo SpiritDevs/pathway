@@ -774,58 +774,70 @@ describe("provider usage snapshots", () => {
     }
   });
 
-  it("refreshes an expired cached snapshot while loading the subscription list", async () => {
-    resetProviderUsageCache();
-    const providerHomePath = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "pathway-provider-usage-list-"),
-    );
-    await NodeFSP.writeFile(
-      NodePath.join(providerHomePath, ".credentials.json"),
-      JSON.stringify({ claudeAiOauth: { accessToken: "test-token" } }),
-    );
-    providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(JSON.stringify({ five_hour: { utilization: 20 } })));
-    try {
-      const currentNowMs = DateTime.toEpochMillis(DateTime.nowUnsafe());
-      const cachedAtMs = currentNowMs - 6 * 60_000;
-      await providerUsageTestKit.resolve(
-        { instanceId, provider: "claudeAgent", nowMs: cachedAtMs },
-        async () =>
-          fetchResult(
-            parseClaudeUsage({
-              instanceId,
-              nowMs: cachedAtMs,
-              json: { five_hour: { utilization: 10 } },
-            }),
-          ),
-      );
+  it.effect("refreshes an expired cached snapshot while loading the subscription list", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "pathway-provider-usage-list-")),
+      ),
+      (providerHomePath) =>
+        Effect.gen(function* () {
+          resetProviderUsageCache();
+          yield* Effect.promise(() =>
+            NodeFSP.writeFile(
+              NodePath.join(providerHomePath, ".credentials.json"),
+              '{"claudeAiOauth":{"accessToken":"test-token"}}',
+            ),
+          );
+          providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
+          const fetchMock = vi
+            .spyOn(globalThis, "fetch")
+            .mockResolvedValue(new Response('{"five_hour":{"utilization":20}}'));
+          yield* Effect.gen(function* () {
+            const currentNowMs = DateTime.toEpochMillis(DateTime.nowUnsafe());
+            const cachedAtMs = currentNowMs - 6 * 60_000;
+            yield* Effect.promise(() =>
+              providerUsageTestKit.resolve(
+                { instanceId, provider: "claudeAgent", nowMs: cachedAtMs },
+                async () =>
+                  fetchResult(
+                    parseClaudeUsage({
+                      instanceId,
+                      nowMs: cachedAtMs,
+                      json: { five_hour: { utilization: 10 } },
+                    }),
+                  ),
+              ),
+            );
 
-      const snapshots = await Effect.runPromise(
-        providerUsageTestKit.loadList().pipe(
-          Effect.provide(
-            ServerSettingsService.layerTest({
-              providerInstances: {
-                ...disabledLegacySlots,
-                [ProviderInstanceId.make("usage_test")]: {
-                  driver: "claudeAgent",
-                  config: { homePath: providerHomePath },
-                },
-              },
-            }),
-          ),
-        ),
-      );
+            const snapshots = yield* providerUsageTestKit.loadList().pipe(
+              Effect.provide(
+                ServerSettingsService.layerTest({
+                  providerInstances: {
+                    ...disabledLegacySlots,
+                    [ProviderInstanceId.make("usage_test")]: {
+                      driver: "claudeAgent",
+                      config: { homePath: providerHomePath },
+                    },
+                  },
+                }),
+              ),
+            );
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(snapshots[0]?.limits[0]?.usedPercent).toBe(20);
-    } finally {
-      fetchMock.mockRestore();
-      resetProviderUsageCache();
-      await NodeFSP.rm(providerHomePath, { recursive: true, force: true });
-    }
-  });
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(snapshots[0]?.limits[0]?.usedPercent).toBe(20);
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                fetchMock.mockRestore();
+                resetProviderUsageCache();
+              }),
+            ),
+          );
+        }),
+      (providerHomePath) =>
+        Effect.promise(() => NodeFSP.rm(providerHomePath, { recursive: true, force: true })),
+    ),
+  );
 
   it("explains that an expired Codex token will be refreshed by the CLI", async () => {
     const providerHomePath = await NodeFSP.mkdtemp(

@@ -67,14 +67,14 @@ const desktopUpdatesLayer = Layer.succeed(DesktopUpdates.DesktopUpdates, {
   install: Effect.die("unexpected install"),
 } satisfies DesktopUpdates.DesktopUpdates["Service"]);
 
-const makeDesktopWindowLayer = (selectedAction: Deferred.Deferred<string>) =>
+const makeDesktopWindowLayer = (selectedActions: Array<string>) =>
   Layer.succeed(DesktopWindow.DesktopWindow, {
     createMain: Effect.die("unexpected createMain"),
     ensureMain: Effect.succeed({
       isDestroyed: () => false,
       webContents: {
         reload: () => {
-          Effect.runSync(Deferred.succeed(selectedAction, "reload-app"));
+          selectedActions.push("reload-app");
         },
       },
     } as Electron.BrowserWindow),
@@ -85,9 +85,14 @@ const makeDesktopWindowLayer = (selectedAction: Deferred.Deferred<string>) =>
     handleBackendReady: () => Effect.void,
     handleBackendNotReady: Effect.void,
     flushMainWindowBounds: Effect.void,
-    dispatchMenuAction: (action) => Deferred.succeed(selectedAction, action).pipe(Effect.asVoid),
+    dispatchMenuAction: (action) =>
+      Effect.sync(() => {
+        selectedActions.push(action);
+      }),
     zoomMain: (direction) =>
-      Deferred.succeed(selectedAction, `zoom-${direction}`).pipe(Effect.asVoid),
+      Effect.sync(() => {
+        selectedActions.push(`zoom-${direction}`);
+      }),
     syncAppearance: Effect.void,
   } satisfies DesktopWindow.DesktopWindow["Service"]);
 
@@ -102,7 +107,7 @@ const makeElectronMenuLayer = (
   } satisfies ElectronMenu.ElectronMenu["Service"]);
 
 const configureMenu = (
-  selectedAction: Deferred.Deferred<string>,
+  selectedActions: Array<string>,
   applicationMenuTemplate: Deferred.Deferred<readonly Electron.MenuItemConstructorOptions[]>,
   options: { readonly devServerUrl?: string } = {},
 ) =>
@@ -113,7 +118,7 @@ const configureMenu = (
     Effect.provide(
       DesktopApplicationMenu.layer.pipe(
         Layer.provideMerge(makeElectronMenuLayer(applicationMenuTemplate)),
-        Layer.provideMerge(makeDesktopWindowLayer(selectedAction)),
+        Layer.provideMerge(makeDesktopWindowLayer(selectedActions)),
         Layer.provideMerge(desktopUpdatesLayer),
         Layer.provideMerge(electronDialogLayer),
         Layer.provideMerge(electronAppLayer),
@@ -136,11 +141,11 @@ const configureMenu = (
 describe("DesktopApplicationMenu", () => {
   it.effect("installs the native menu and routes Settings through DesktopWindow", () =>
     Effect.gen(function* () {
-      const selectedAction = yield* Deferred.make<string>();
+      const selectedActions: Array<string> = [];
       const applicationMenuTemplate =
         yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
 
-      yield* configureMenu(selectedAction, applicationMenuTemplate);
+      yield* configureMenu(selectedActions, applicationMenuTemplate);
 
       const template = yield* Deferred.await(applicationMenuTemplate);
       const fileMenu = template.find((item) => item.label === "File");
@@ -156,7 +161,7 @@ describe("DesktopApplicationMenu", () => {
       }
 
       settingsClick({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
-      assert.equal(yield* Deferred.await(selectedAction), "open-settings");
+      assert.deepEqual(selectedActions, ["open-settings"]);
     }),
   );
 
@@ -165,11 +170,11 @@ describe("DesktopApplicationMenu", () => {
   // app zoom while an embedded preview WebContentsView holds focus.
   it.effect("routes View menu zoom to the main window instead of zoom roles", () =>
     Effect.gen(function* () {
-      const selectedAction = yield* Deferred.make<string>();
+      const selectedActions: Array<string> = [];
       const applicationMenuTemplate =
         yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
 
-      yield* configureMenu(selectedAction, applicationMenuTemplate);
+      yield* configureMenu(selectedActions, applicationMenuTemplate);
 
       const template = yield* Deferred.await(applicationMenuTemplate);
       const viewMenu = template.find((item) => item.label === "View");
@@ -190,17 +195,17 @@ describe("DesktopApplicationMenu", () => {
       }
 
       zoomIn.click({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
-      assert.equal(yield* Deferred.await(selectedAction), "zoom-in");
+      assert.deepEqual(selectedActions, ["zoom-in"]);
     }),
   );
 
   it.effect("does not register native app reload accelerators", () =>
     Effect.gen(function* () {
-      const selectedAction = yield* Deferred.make<string>();
+      const selectedActions: Array<string> = [];
       const applicationMenuTemplate =
         yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
 
-      yield* configureMenu(selectedAction, applicationMenuTemplate);
+      yield* configureMenu(selectedActions, applicationMenuTemplate);
 
       const template = yield* Deferred.await(applicationMenuTemplate);
       const viewMenu = template.find((item) => item.label === "View");
@@ -224,11 +229,11 @@ describe("DesktopApplicationMenu", () => {
 
   it.effect("offers a click-only app reload in development", () =>
     Effect.gen(function* () {
-      const selectedAction = yield* Deferred.make<string>();
+      const selectedActions: Array<string> = [];
       const applicationMenuTemplate =
         yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
 
-      yield* configureMenu(selectedAction, applicationMenuTemplate, {
+      yield* configureMenu(selectedActions, applicationMenuTemplate, {
         devServerUrl: "http://127.0.0.1:5733",
       });
 
@@ -248,7 +253,7 @@ describe("DesktopApplicationMenu", () => {
 
       reloadItem.click({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
 
-      assert.equal(yield* Deferred.await(selectedAction), "reload-app");
+      assert.deepEqual(selectedActions, ["reload-app"]);
     }),
   );
 });

@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { randomUUID } from "node:crypto";
-import type { AddressInfo } from "node:net";
+import * as NodeCrypto from "node:crypto";
+import type * as NodeNet from "node:net";
 
 import {
   CapturedEmailMessage as CapturedEmailMessageSchema,
@@ -342,10 +342,10 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
       recipients,
       projects: settings.projects,
     });
-    const messageId = EmailMessageId.make(randomUUID());
+    const messageId = EmailMessageId.make(NodeCrypto.randomUUID());
     const attachmentFiles: EmailAttachmentFile[] = mail.attachments.map((attachment) => {
       const metadata = {
-        id: EmailAttachmentId.make(randomUUID()),
+        id: EmailAttachmentId.make(NodeCrypto.randomUUID()),
         filename: attachment.filename ?? null,
         contentType: attachment.contentType || "application/octet-stream",
         contentDisposition: attachment.contentDisposition || null,
@@ -529,7 +529,7 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
         );
       });
       smtp.listen(settings.listener.port, settings.listener.bindAddress, () => {
-        const address = smtp.server.address() as AddressInfo | null;
+        const address = smtp.server.address() as NodeNet.AddressInfo | null;
         finish(
           publishStatus({
             state: "listening",

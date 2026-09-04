@@ -192,6 +192,7 @@ const ENTITY_PAYLOADS: Record<CompanySyncEntityKind, Record<string, unknown>> = 
       pendingRuntimeRequest: null,
       latestVisibleMessage: null,
       latestUserMessageAt: null,
+      attachedPullRequest: null,
       hasActionableProposedPlan: false,
       pendingBackgroundTasks: [],
       itemCount: 0,

@@ -23,8 +23,8 @@
  * integrator wires them to `npx convex run` against the target deployment.
  */
 import * as NodeCrypto from "node:crypto";
-import * as NodeFs from "node:fs";
-import * as NodeOs from "node:os";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { EnvironmentId, type ExecutionEnvironmentDescriptor } from "@spiritdevs/contracts";
@@ -554,7 +554,7 @@ export interface SmokeRunStateFile {
 }
 
 export function defaultSmokeStateDir(): string {
-  return NodePath.join(NodeOs.tmpdir(), "pathway-convex-smoke");
+  return NodePath.join(NodeOS.tmpdir(), "pathway-convex-smoke");
 }
 
 export function smokeStateFilePath(stateDir: string, environmentId: string): string {
@@ -593,8 +593,8 @@ export function parseSmokeRunStateFile(content: string): SmokeRunStateFile | nul
 }
 
 export function writeSmokeRunStateFile(stateDir: string, state: SmokeRunStateFile): void {
-  NodeFs.mkdirSync(stateDir, { recursive: true });
-  NodeFs.writeFileSync(
+  NodeFS.mkdirSync(stateDir, { recursive: true });
+  NodeFS.writeFileSync(
     smokeStateFilePath(stateDir, state.environmentId),
     JSON.stringify(state, null, 2),
     "utf8",
@@ -602,7 +602,7 @@ export function writeSmokeRunStateFile(stateDir: string, state: SmokeRunStateFil
 }
 
 export function removeSmokeRunStateFile(stateDir: string, environmentId: string): void {
-  NodeFs.rmSync(smokeStateFilePath(stateDir, environmentId), { force: true });
+  NodeFS.rmSync(smokeStateFilePath(stateDir, environmentId), { force: true });
 }
 
 /**
@@ -613,7 +613,7 @@ export function removeSmokeRunStateFile(stateDir: string, environmentId: string)
 export function listSmokeStateFiles(stateDir: string): ReadonlyArray<SmokeRunStateFile> {
   let entries: ReadonlyArray<string>;
   try {
-    entries = NodeFs.readdirSync(stateDir);
+    entries = NodeFS.readdirSync(stateDir);
   } catch {
     return [];
   }
@@ -624,7 +624,7 @@ export function listSmokeStateFiles(stateDir: string): ReadonlyArray<SmokeRunSta
     }
     try {
       const parsed = parseSmokeRunStateFile(
-        NodeFs.readFileSync(NodePath.join(stateDir, entry), "utf8"),
+        NodeFS.readFileSync(NodePath.join(stateDir, entry), "utf8"),
       );
       if (parsed !== null) {
         states.push(parsed);
