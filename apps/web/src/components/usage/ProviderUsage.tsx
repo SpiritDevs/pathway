@@ -711,6 +711,8 @@ function ConnectedProviderUsageRow({ account }: { account: ConnectedProviderUsag
     enabled: true,
   });
 
+  if (usageProvider === "claudeAgent" && usage.data?.status === "needs-auth") return null;
+
   return (
     <div className="rounded-md bg-muted/45 px-2.5 py-2.5">
       <div className="mb-2 flex min-w-0 items-center gap-2">
@@ -768,7 +770,15 @@ function useConnectedProviderUsageAccounts() {
 }
 
 export function ConnectedProviderUsageMenu() {
-  const { accounts, connectedCount, loading } = useConnectedProviderUsageAccounts();
+  const {
+    accounts: connectedAccounts,
+    connectedCount,
+    loading,
+  } = useConnectedProviderUsageAccounts();
+  const accounts = connectedAccounts.filter(
+    (account) =>
+      account.provider.driver !== "claudeAgent" || account.provider.auth.status === "authenticated",
+  );
 
   return (
     <div className="min-w-0">
