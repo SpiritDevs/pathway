@@ -34,21 +34,22 @@ export interface TranscriptFile {
 /**
  * Lists `.jsonl` transcripts under `root` last modified at or after `sinceMs`.
  *
- * Errors on individual entries are swallowed: session files rotate and get
- * removed while the walk is in flight, and a partial listing is far better than
- * failing the page.
+ * Preserve readable files while counting failed entries so callers can report
+ * partial coverage and avoid pruning an incompletely walked cache.
  */
 export async function listTranscriptFiles(
   root: string,
   sinceMs: number,
-): Promise<readonly TranscriptFile[]> {
+): Promise<{ files: readonly TranscriptFile[]; failedEntries: number }> {
   const found: TranscriptFile[] = [];
+  let failedEntries = 0;
 
   const walk = async (dir: string): Promise<void> => {
     let entries;
     try {
       entries = await NodeFSP.readdir(dir, { withFileTypes: true });
     } catch {
+      failedEntries += 1;
       return;
     }
     for (const entry of entries) {
@@ -64,13 +65,13 @@ export async function listTranscriptFiles(
           found.push({ path: child, size: stats.size, mtimeMs: stats.mtimeMs });
         }
       } catch {
-        // Vanished between readdir and stat.
+        failedEntries += 1;
       }
     }
   };
 
   await walk(root);
-  return found;
+  return { files: found, failedEntries };
 }
 
 /**
@@ -90,8 +91,7 @@ export async function readDirectoryVolumeId(path: string): Promise<string> {
 }
 
 /**
- * Streams one transcript and returns the usage records it contains, or `null`
- * when the file could not be read.
+ * Streams one transcript, retaining parsed records alongside coverage failures.
  *
  * The distinction matters to the caller's cache: a genuinely empty transcript
  * is a stable fact worth memoising, while a transient read failure memoised
@@ -105,8 +105,9 @@ export async function readDirectoryVolumeId(path: string): Promise<string> {
 export async function readTranscriptRecords(
   filePath: string,
   provider: UsageProviderKind,
-): Promise<readonly UsageRecord[] | null> {
+): Promise<{ records: readonly UsageRecord[]; malformedRecords: number; failed: boolean }> {
   const records: UsageRecord[] = [];
+  let malformedRecords = 0;
   const codexState = initialCodexScanState();
 
   try {
@@ -116,14 +117,21 @@ export async function readTranscriptRecords(
     });
 
     for await (const line of lines) {
+      if (
+        !mightCarryUsage(line, provider) &&
+        !(
+          provider === "codex" &&
+          (line.includes('"turn_context"') || line.includes('"session_meta"'))
+        )
+      )
+        continue;
+      try {
+        JSON.parse(line);
+      } catch {
+        malformedRecords += 1;
+        continue;
+      }
       if (provider === "codex") {
-        if (
-          !mightCarryUsage(line, provider) &&
-          !line.includes('"turn_context"') &&
-          !line.includes('"session_meta"')
-        ) {
-          continue;
-        }
         const record = parseCodexLine(line, codexState);
         if (record !== null) records.push(record);
         continue;
@@ -134,8 +142,8 @@ export async function readTranscriptRecords(
       if (record !== null) records.push(record);
     }
   } catch {
-    return null;
+    return { records, malformedRecords, failed: true };
   }
 
-  return records;
+  return { records, malformedRecords, failed: false };
 }

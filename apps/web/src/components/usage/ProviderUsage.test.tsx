@@ -442,7 +442,7 @@ describe("provider usage panel refresh", () => {
     expect(findSpinningRefreshIcon(settledSettings)).toBeNull();
   });
 
-  it("shows one row per provider account instead of grouping rows by environment", () => {
+  it("shows each configured account even when emails match", () => {
     const laptopId = EnvironmentId.make("usage-laptop");
     const laptopClaudeId = ProviderInstanceId.make("laptop-claude");
     const laptopCodexId = ProviderInstanceId.make("laptop-codex");
@@ -482,6 +482,8 @@ describe("provider usage panel refresh", () => {
       "Claude",
       "Codex",
       "Work",
+      "Laptop Claude",
+      "Laptop Codex",
     ]);
     expect(visitElements(menu, (element) => element.props.children === "Studio")).toBeNull();
     expect(visitElements(menu, (element) => element.props.children === "Laptop")).toBeNull();

@@ -8,6 +8,8 @@ import { ProviderInstanceId, type ServerProviderUsageSnapshot } from "@spiritdev
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
+import * as Queue from "effect/Queue";
+import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vite-plus/test";
 
 import { ServerSettingsService } from "../serverSettings.ts";
@@ -984,3 +986,55 @@ describe("provider usage snapshots", () => {
     );
   });
 });
+
+it.effect("refreshes a subscribed idle account after TTL without a user action", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const dir = yield* Effect.acquireRelease(
+        Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "usage-refresh-"))),
+        (dir) => Effect.promise(() => NodeFSP.rm(dir, { recursive: true, force: true })),
+      );
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(
+          NodePath.join(dir, ".credentials.json"),
+          '{"claudeAiOauth":{"accessToken":"synthetic"}}',
+        ),
+      );
+      resetProviderUsageCache();
+      providerUsageTestKit.setClaudeVersionRunner(async () => "claude 2.1.222");
+      let calls = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ five_hour: { utilization: calls === 1 ? 10 : 20 } }));
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          fetchMock.mockRestore();
+          resetProviderUsageCache();
+        }),
+      );
+      const updates = yield* Queue.unbounded<ReadonlyArray<ServerProviderUsageSnapshot>>();
+      yield* providerUsageTestKit.refreshStream().pipe(
+        Stream.runForEach((value) => Queue.offer(updates, value)),
+        Effect.provide(
+          ServerSettingsService.layerTest({
+            providerInstances: {
+              ...disabledLegacySlots,
+              [instanceId]: { driver: "claudeAgent", config: { homePath: dir } },
+            },
+          }),
+        ),
+        Effect.forkScoped,
+      );
+      expect((yield* Queue.take(updates))[0]?.limits[0]?.usedPercent).toBe(10);
+      yield* TestClock.adjust("5 minutes");
+      const refreshed = yield* Stream.fromQueue(updates).pipe(
+        Stream.filter((snapshots) => snapshots[0]?.limits[0]?.usedPercent === 20),
+        Stream.take(1),
+        Stream.runCollect,
+      );
+      expect(refreshed).toHaveLength(1);
+      expect(calls).toBe(2);
+    }),
+  ),
+);

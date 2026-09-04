@@ -10,29 +10,26 @@ function isProviderUsageDriver(driver: string): driver is ProviderUsageDriver {
 
 export interface ConnectedProviderUsageEnvironment {
   readonly environmentId: EnvironmentId;
+  readonly environmentLabel?: string;
   readonly providers: ReadonlyArray<ServerProvider> | null;
 }
 
 export interface ConnectedProviderUsageAccount {
   readonly key: string;
   readonly environmentId: EnvironmentId;
+  readonly environmentLabel: string;
   readonly provider: ServerProvider;
   readonly displayName: string;
 }
 
 function providerUsageAccountKey(environmentId: EnvironmentId, provider: ServerProvider): string {
-  const email = provider.auth.email?.trim().toLowerCase();
-  return email
-    ? `${provider.driver}:email:${email}`
-    : `${environmentId}:instance:${provider.instanceId}`;
+  // Email does not identify a subscription: personal and team accounts can
+  // share it. Keep routing identities separate until providers expose a stable
+  // subscription/account id in the auth contract.
+  return `${environmentId}:instance:${provider.instanceId}`;
 }
 
-/**
- * Project environment-scoped provider snapshots into subscription accounts.
- * Authenticated email is the cross-environment identity providers expose; when
- * it is unavailable, keep the instance separate rather than risking a false
- * merge between two accounts with similar labels or limits.
- */
+/** Preserve every configured account and its environment-owned live stream. */
 export function deriveConnectedProviderUsageAccounts(
   environments: ReadonlyArray<ConnectedProviderUsageEnvironment>,
 ): ReadonlyArray<ConnectedProviderUsageAccount> {
@@ -47,6 +44,7 @@ export function deriveConnectedProviderUsageAccounts(
       accounts.set(key, {
         key,
         environmentId: environment.environmentId,
+        environmentLabel: environment.environmentLabel ?? environment.environmentId,
         provider: entry.snapshot,
         displayName: entry.displayName,
       });

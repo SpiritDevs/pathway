@@ -21,7 +21,7 @@ import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
  * client renders partial coverage when an environment reports an older version
  * rather than failing the whole page.
  */
-export const USAGE_CONTRACT_VERSION = 4 as const;
+export const USAGE_CONTRACT_VERSION = 5 as const;
 
 export const UsageProviderKind = Schema.Literals(["claude", "codex"]);
 export type UsageProviderKind = typeof UsageProviderKind.Type;
@@ -80,6 +80,7 @@ export type UsageTokenTotals = typeof UsageTokenTotals.Type;
  * to `costUsd`.
  */
 export const UsageBucket = Schema.Struct({
+  sourceId: Schema.optional(TrimmedNonEmptyString),
   day: UsageDay,
   hourStart: Schema.optional(TrimmedNonEmptyString),
   provider: UsageProviderKind,
@@ -192,6 +193,7 @@ export type UsageSummaryInput = typeof UsageSummaryInput.Type;
  * {@link transcriptWorkspaceSlug}.
  */
 export const UsageProjectTotals = Schema.Struct({
+  sourceId: Schema.optional(TrimmedNonEmptyString),
   workspaceSlug: TrimmedNonEmptyString,
   provider: UsageProviderKind,
   totals: UsageTokenTotals,

@@ -8,6 +8,7 @@
  * that provider's first-party usage endpoint. Credentials never cross the RPC
  * boundary and this service never mutates their stores.
  */
+import * as NodeCrypto from "node:crypto";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -19,6 +20,7 @@ import type {
   ProviderUsageDriver,
   ServerGetProviderUsageInput,
   ServerSettings,
+  ServerSettingsError,
   ServerProviderUsageLimit,
   ServerProviderUsageLine,
   ServerProviderUsageSnapshot,
@@ -78,6 +80,8 @@ interface ProviderContext {
   readonly useDefaultCredentialStore: boolean;
   readonly nowMs: number;
   readonly rateLimitPersistence: RateLimitPersistence | null;
+  readonly credentialRevision?: string;
+  readonly refresh?: () => Promise<ServerProviderUsageSnapshot>;
 }
 
 interface CachedSnapshot {
@@ -100,6 +104,7 @@ interface ScheduledRateLimitRefresh {
   readonly controller: AbortController;
 }
 
+const contextIdentities = new Map<string, string>();
 const snapshotCache = new Map<string, CachedSnapshot>();
 const inFlightFetches = new Map<string, InFlightFetch>();
 const retryAfterGates = new Map<string, number>();
@@ -109,6 +114,7 @@ const scheduledRateLimitRefreshes = new Map<string, ScheduledRateLimitRefresh>()
 const cursorCreditsGates = new Map<string, number>();
 const PersistedRateLimitState = Schema.Struct({
   version: Schema.Literal(1),
+  identities: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   providerGates: Schema.Record(Schema.String, Schema.Number),
   cursorCreditsGates: Schema.Record(Schema.String, Schema.Number),
 });
@@ -145,6 +151,7 @@ function persistRateLimitState(): Promise<void> {
   if (persistence === null) return Promise.resolve();
   const contents = `${JSON.stringify({
     version: 1,
+    identities: Object.fromEntries(contextIdentities),
     providerGates: Object.fromEntries(retryAfterGates),
     cursorCreditsGates: Object.fromEntries(cursorCreditsGates),
   })}\n`;
@@ -188,6 +195,9 @@ async function ensureRateLimitPersistenceLoaded(
       const raw = await persistence.read();
       if (raw === undefined) return;
       const persisted = await decodePersistedRateLimitState(raw);
+      for (const [key, identity] of Object.entries(persisted.identities ?? {})) {
+        setBounded(contextIdentities, key, identity);
+      }
       const droppedProviderGate = restorePersistedGates({
         persisted: persisted.providerGates,
         gates: retryAfterGates,
@@ -377,6 +387,8 @@ function isoFromString(value: unknown): string | undefined {
 export function mapCodexRateLimitsUpdated(input: {
   instanceId: ServerGetProviderUsageInput["instanceId"];
   rateLimits: {
+    readonly limitId?: string | null;
+    readonly limitName?: string | null;
     readonly primary?: {
       readonly usedPercent: number;
       readonly windowDurationMins?: number | null;
@@ -404,6 +416,13 @@ export function mapCodexRateLimitsUpdated(input: {
     const resetsAt = isoFromUnixSeconds(value.resetsAt);
     const limit = {
       ...describeWindow(windowDurationMins, lane),
+      lane,
+      ...(input.rateLimits.limitId && input.rateLimits.limitId !== "codex"
+        ? {
+            limitId: input.rateLimits.limitId,
+            scope: input.rateLimits.limitName ?? input.rateLimits.limitId,
+          }
+        : {}),
       usedPercent: Math.min(100, Math.max(0, value.usedPercent)),
       ...(windowDurationMins === undefined ? {} : { windowDurationMins }),
       ...(resetsAt ? { resetsAt } : {}),
@@ -673,7 +692,7 @@ function buildContext(
 ): ProviderContext {
   const { config, environment } = providerConfigForInput(settings, input);
   const env = mergeInstanceEnvironment(environment, baseEnvironment);
-  const homeDir = NodeOS.homedir();
+  const homeDir = asString(env.HOME) ?? NodeOS.homedir();
   if (input.provider === "codex") {
     const configured = asString(config.shadowHomePath) ?? asString(config.homePath);
     const environmentHome = asString(env.CODEX_HOME);
@@ -761,6 +780,7 @@ export function parseCodexUsage(input: {
     lane: "primary" | "secondary";
     headerPrefix: string;
     scope?: string;
+    limitId?: string;
   }) => {
     const { headerPrefix, lane, scope, value } = options;
     const record = asRecord(value) ?? {};
@@ -780,6 +800,9 @@ export function parseCodexUsage(input: {
     const descriptor = describeWindow(durationMins, lane);
     limits.push({
       ...descriptor,
+      lane,
+      fetchedAt: new Date(input.nowMs).toISOString(),
+      ...(options.limitId ? { limitId: options.limitId } : {}),
       ...(scope ? { scope } : {}),
       ...(usedPercent === undefined ? {} : { usedPercent }),
       ...(resetsAt ? { resetsAt } : {}),
@@ -802,20 +825,23 @@ export function parseCodexUsage(input: {
   for (const additional of additionalRateLimits) {
     const entry = asRecord(additional);
     const scopedRateLimit = asRecord(entry?.rate_limit);
-    const identifier = asString(entry?.limit_name) ?? asString(entry?.metered_feature);
+    const identifier = asString(entry?.metered_feature) ?? asString(entry?.limit_name);
+    const scope = asString(entry?.limit_name) ?? identifier;
     if (!scopedRateLimit || !identifier) continue;
     const headerPrefix = `x-${identifier.toLowerCase().replace(/_/gu, "-")}`;
     pushWindow({
       value: scopedRateLimit.primary_window,
       lane: "primary",
       headerPrefix,
-      scope: identifier,
+      scope: scope ?? identifier,
+      limitId: identifier,
     });
     pushWindow({
       value: scopedRateLimit.secondary_window,
       lane: "secondary",
       headerPrefix,
-      scope: identifier,
+      scope: scope ?? identifier,
+      limitId: identifier,
     });
   }
 
@@ -1427,8 +1453,9 @@ function replacePushedLimit(
   const expectedWindowKey = lane === "primary" ? "session" : "weekly";
   const index = limits.findIndex(
     (limit) =>
-      limit.scope === undefined &&
-      (limit.windowKey === expectedWindowKey ||
+      (limit.limitId ?? limit.scope) === (incoming.limitId ?? incoming.scope) &&
+      (limit.lane === lane ||
+        limit.windowKey === expectedWindowKey ||
         (limit.windowKey === incoming.windowKey && limit.window === incoming.window)),
   );
   return index === -1
@@ -1462,15 +1489,27 @@ export const ingestPushedSnapshot = Effect.fn("ProviderUsage.ingestPushedSnapsho
 ) {
   const now = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
   const cacheKey = cacheKeyFor(input);
-  const merged = mergePushedSnapshot(input, snapshotCache.get(cacheKey)?.snapshot);
+  const cached = snapshotCache.get(cacheKey);
+  const stamp = (limit: ServerProviderUsageLimit | undefined) =>
+    limit && { ...limit, fetchedAt: now };
+  const merged = mergePushedSnapshot(
+    {
+      ...input,
+      limits: input.limits.map((limit) => stamp(limit)!),
+      ...(input.primaryLimit ? { primaryLimit: stamp(input.primaryLimit)! } : {}),
+      ...(input.secondaryLimit ? { secondaryLimit: stamp(input.secondaryLimit)! } : {}),
+    },
+    cached?.snapshot,
+  );
   const stored = storeSnapshot({
     snapshot: {
       ...merged,
       source: "codex-app-server-push",
       updatedAt: now,
-      fetchedAt: now,
+      fetchedAt: cached?.snapshot.fetchedAt ?? now,
     },
-    fetchedAtMs: nowMs,
+    // Sparse pushes must not postpone the complete account refresh.
+    fetchedAtMs: cached?.fetchedAtMs ?? nowMs,
   });
   if (stored.changed) {
     yield* PubSub.publish(snapshotChanges, undefined);
@@ -1503,7 +1542,9 @@ function scheduleRateLimitRefresh(
       scheduledRateLimitRefreshes.delete(cacheKey);
       const nowMs = yield* Clock.currentTimeMillis;
       yield* Effect.promise(() =>
-        resolveProviderUsage({ ...ctx, nowMs: Math.max(nowMs, untilMs) }, true, fetchUsage),
+        ctx.refresh
+          ? ctx.refresh()
+          : resolveProviderUsage({ ...ctx, nowMs: Math.max(nowMs, untilMs) }, true, fetchUsage),
       );
     }),
     { signal: controller.signal },
@@ -1519,6 +1560,27 @@ async function resolveProviderUsage(
     await ensureRateLimitPersistenceLoaded(ctx.rateLimitPersistence, ctx.nowMs);
   }
   const cacheKey = cacheKeyFor(ctx);
+  const identity = NodeCrypto.createHash("sha256")
+    .update(
+      JSON.stringify([
+        ctx.providerHomePath,
+        ctx.homeDir,
+        ctx.providerBinaryPath,
+        ctx.platform,
+        ctx.credentialRevision ?? null,
+        Object.entries(ctx.env).sort(([a], [b]) => a.localeCompare(b)),
+      ]),
+    )
+    .digest("hex");
+  const previousIdentity = contextIdentities.get(cacheKey);
+  if (previousIdentity !== undefined && previousIdentity !== identity) {
+    snapshotCache.delete(cacheKey);
+    inFlightFetches.delete(cacheKey);
+    retryAfterGates.delete(cacheKey);
+    cursorCreditsGates.delete(cacheKey);
+    cancelScheduledRateLimitRefresh(cacheKey);
+  }
+  setBounded(contextIdentities, cacheKey, identity);
   const blockedUntil = getLru(retryAfterGates, cacheKey);
   const cached = getLru(snapshotCache, cacheKey);
   if (blockedUntil !== undefined) {
@@ -1570,7 +1632,29 @@ async function resolveProviderUsage(
           : { rateLimitedUntil: result.rateLimitedUntil }),
       };
     } else {
-      resolved = result;
+      const newerLimits =
+        result.status === "ok" && ctx.provider === "codex"
+          ? (snapshotCache.get(cacheKey)?.snapshot.limits ?? []).filter(
+              (limit) => Date.parse(limit.fetchedAt ?? "") > ctx.nowMs,
+            )
+          : [];
+      resolved =
+        newerLimits.length === 0
+          ? result
+          : {
+              ...result,
+              limits: [
+                ...result.limits.filter(
+                  (limit) =>
+                    !newerLimits.some(
+                      (newer) =>
+                        (newer.limitId ?? newer.scope) === (limit.limitId ?? limit.scope) &&
+                        newer.lane === limit.lane,
+                    ),
+                ),
+                ...newerLimits,
+              ],
+            };
     }
     if (inFlightFetches.get(cacheKey) !== entry) return resolved;
     if (outcome.retryAfterUntilMs !== undefined) {
@@ -1624,7 +1708,7 @@ function makeRateLimitPersistence(
 
 export const getProviderUsage = Effect.fn("ProviderUsage.get")(function* (
   input: ServerGetProviderUsageInput,
-) {
+): Effect.fn.Return<ServerProviderUsageSnapshot, ServerSettingsError, ServerSettingsService> {
   const serverSettings = yield* ServerSettingsService;
   const settings = yield* serverSettings.getSettings;
   const baseEnvironment = yield* HostProcessEnvironment;
@@ -1637,7 +1721,48 @@ export const getProviderUsage = Effect.fn("ProviderUsage.get")(function* (
       ? makeRateLimitPersistence(config.value.providerUsageRateLimitsPath, fs.value, path.value)
       : null;
   const ctx = buildContext(settings, input, baseEnvironment, platform, rateLimitPersistence);
-  return yield* Effect.promise(() => resolveProviderUsage(ctx, input.forceRefresh === true));
+  const runPromise = Effect.runPromiseWith(yield* Effect.context<ServerSettingsService>());
+  // Watch credential-store replacement without reading or publishing its secrets.
+  const credentialPath =
+    ctx.provider === "cursor"
+      ? cursorStatePath(ctx)
+      : NodePath.join(
+          ctx.providerHomePath ?? ctx.homeDir,
+          ctx.provider === "codex" ? "auth.json" : ".credentials.json",
+        );
+  const credentialRevision = yield* Effect.promise(async () => {
+    if (ctx.provider === "cursor") {
+      // state.vscdb changes for unrelated editor activity. Only authentication
+      // fields may invalidate the quota cache and its independent retry gates.
+      const state = await readCursorState(credentialPath);
+      return NodeCrypto.createHash("sha256")
+        .update(
+          Object.entries(state)
+            .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+            .sort()
+            .join("&"),
+        )
+        .digest("hex");
+    }
+    try {
+      const stat = await NodeFSP.stat(credentialPath);
+      return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+    } catch {
+      return "missing";
+    }
+  });
+  const nowMs = yield* Clock.currentTimeMillis;
+  return yield* Effect.promise(() =>
+    resolveProviderUsage(
+      {
+        ...ctx,
+        nowMs,
+        credentialRevision,
+        refresh: () => runPromise(getProviderUsage({ ...input, forceRefresh: true })),
+      },
+      input.forceRefresh === true,
+    ),
+  );
 });
 
 function isProviderUsageDriver(driver: string): driver is ProviderUsageDriver {
@@ -1670,9 +1795,17 @@ const configuredProviderUsageInputs = Effect.fn("ProviderUsage.configuredInputs"
 
 const readCachedProviderUsageList = Effect.fn("ProviderUsage.readCachedList")(function* () {
   const inputs = yield* configuredProviderUsageInputs();
+  const nowMs = yield* Clock.currentTimeMillis;
   return inputs.flatMap((input) => {
     const cached = snapshotCache.get(cacheKeyFor(input));
-    return cached ? [cached.snapshot] : [];
+    return cached
+      ? [
+          {
+            ...cached.snapshot,
+            ...(nowMs - cached.fetchedAtMs >= CACHE_TTL_MS ? { stale: true } : {}),
+          },
+        ]
+      : [];
   });
 });
 
@@ -1695,6 +1828,9 @@ const loadProviderUsageList = Effect.fn("ProviderUsage.loadList")(function* () {
   return yield* readCachedProviderUsageList();
 });
 
+const periodicProviderUsageRefresh = () =>
+  Stream.tick(DEGRADED_CACHE_TTL_MS).pipe(Stream.mapEffect(() => loadProviderUsageList()));
+
 export const subscribeProviderUsage = () =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -1712,7 +1848,13 @@ export const subscribeProviderUsage = () =>
       const cacheUpdates = Stream.fromSubscription(subscription).pipe(
         Stream.mapEffect(() => readCachedProviderUsageList()),
       );
-      return Stream.concat(Stream.make(current), Stream.merge(cacheUpdates, membershipUpdates));
+      // Each stream owns its timer lifetime. The shared resolver owns TTL and
+      // in-flight deduplication, so extra clients do not multiply HTTP requests.
+      const refreshes = periodicProviderUsageRefresh();
+      return Stream.concat(
+        Stream.make(current),
+        Stream.merge(Stream.merge(cacheUpdates, membershipUpdates), refreshes),
+      );
     }),
   );
 
@@ -1774,6 +1916,7 @@ export const providerUsageTestKit = {
   fetchCodex: (input: Parameters<typeof testingContext>[0]) =>
     fetchCodexUsage(testingContext(input)),
   loadList: loadProviderUsageList,
+  refreshStream: periodicProviderUsageRefresh,
   resolve: (
     input: Parameters<typeof testingContext>[0] & { forceRefresh?: boolean },
     fetchUsage: (ctx: ProviderContext) => Promise<ProviderFetchResult>,
@@ -1789,6 +1932,7 @@ export const providerUsageTestKit = {
 /** Test-only cache reset. */
 export function resetProviderUsageCache(): void {
   for (const scheduled of scheduledRateLimitRefreshes.values()) scheduled.controller.abort();
+  contextIdentities.clear();
   snapshotCache.clear();
   inFlightFetches.clear();
   retryAfterGates.clear();

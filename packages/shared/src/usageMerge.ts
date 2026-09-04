@@ -102,13 +102,15 @@ export interface MergedUsage {
  * home path, which is every Mac in a fleet, from collapsing into one source and
  * having one of them silently dropped.
  */
-function fingerprintKey(fingerprint: UsageSourceFingerprint): string {
+export function usageSourceId(fingerprint: UsageSourceFingerprint): string {
   return [
     fingerprint.hostId,
     fingerprint.provider,
     fingerprint.resolvedHomePath,
     fingerprint.volumeId,
-  ].join(" ");
+  ]
+    .map((part) => encodeURIComponent(part))
+    .join(":");
 }
 
 /**
@@ -116,9 +118,8 @@ function fingerprintKey(fingerprint: UsageSourceFingerprint): string {
  *
  * Several environments on one machine (worktree servers, for instance) resolve
  * the same provider home and would otherwise double count every token. The
- * first environment in a stable order claims a fingerprint; the rest have that
- * provider's buckets dropped. Environments are sorted by id so the winner does
- * not change between renders.
+ * healthiest, most recent source claims its fingerprint. Only duplicate source
+ * buckets are dropped; other homes on the same provider remain included.
  */
 function claimSources(environments: readonly EnvironmentUsage[]): {
   readonly ownerByFingerprint: ReadonlyMap<string, EnvironmentId>;
@@ -127,18 +128,25 @@ function claimSources(environments: readonly EnvironmentUsage[]): {
   const ownerByFingerprint = new Map<string, EnvironmentId>();
   const duplicates: string[] = [];
 
-  const ordered = [...environments].sort((a, b) => a.environmentId.localeCompare(b.environmentId));
-
-  for (const environment of ordered) {
-    for (const source of environment.summary.sources) {
-      if (source.status === "missing") continue;
-      const key = fingerprintKey(source.fingerprint);
-      if (ownerByFingerprint.has(key)) {
-        duplicates.push(`${environment.label}: ${source.fingerprint.resolvedHomePath}`);
-        continue;
-      }
-      ownerByFingerprint.set(key, environment.environmentId);
+  const quality = { ok: 0, partial: 1, failed: 2, missing: 3 };
+  const ordered = environments
+    .flatMap((environment) =>
+      environment.summary.sources.map((source) => ({ environment, source })),
+    )
+    .sort(
+      (a, b) =>
+        quality[a.source.status] - quality[b.source.status] ||
+        b.environment.summary.readAt.localeCompare(a.environment.summary.readAt) ||
+        a.environment.environmentId.localeCompare(b.environment.environmentId),
+    );
+  for (const { environment, source } of ordered) {
+    if (source.status === "missing") continue;
+    const key = usageSourceId(source.fingerprint);
+    if (ownerByFingerprint.has(key)) {
+      duplicates.push(`${environment.label}: ${source.fingerprint.resolvedHomePath}`);
+      continue;
     }
+    ownerByFingerprint.set(key, environment.environmentId);
   }
 
   return { ownerByFingerprint, duplicates };
@@ -154,24 +162,28 @@ function ownedContribution(
   readonly projects: readonly UsageProjectTotals[];
 } {
   const ownedProviders = new Set<UsageProviderKind>();
+  const ownedSources = new Set<string>();
   let sessions = 0;
   for (const source of environment.summary.sources) {
     if (source.status === "missing") continue;
-    const key = fingerprintKey(source.fingerprint);
+    const key = usageSourceId(source.fingerprint);
     if (ownerByFingerprint.get(key) === environment.environmentId) {
       ownedProviders.add(source.fingerprint.provider);
+      ownedSources.add(key);
       // Distinct within a directory. Summing per-bucket session counts instead
       // would count a session once per day and model it spans.
       sessions += source.distinctSessions;
     }
   }
   return {
-    buckets: environment.summary.buckets.filter((bucket) => ownedProviders.has(bucket.provider)),
+    buckets: environment.summary.buckets.filter((bucket) =>
+      bucket.sourceId ? ownedSources.has(bucket.sourceId) : ownedProviders.has(bucket.provider),
+    ),
     sessions,
     // Same claim rule as the buckets: a directory two worktree servers both scan must contribute
     // its tokens once, not once per server.
     projects: environment.summary.projects.filter((project) =>
-      ownedProviders.has(project.provider),
+      project.sourceId ? ownedSources.has(project.sourceId) : ownedProviders.has(project.provider),
     ),
   };
 }

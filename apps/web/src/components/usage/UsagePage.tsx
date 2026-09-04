@@ -199,6 +199,11 @@ export function UsagePage({ embedded = false }: { embedded?: boolean }) {
                 staleEnvironments={merged.staleEnvironments}
               />
 
+              <p className="text-xs text-muted-foreground">
+                Cost estimates cover local Claude and Codex transcripts, including Codex archives.
+                Cursor, Grok and OpenCode costs are not included.
+              </p>
+
               {/* Cost first: the financial answer, then the provider split. */}
               <section className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
                 {/* The summary follows the chart toggle, so the headline and the
@@ -525,12 +530,32 @@ function UsageCoverageNotice({
   const stale = environments.filter((environment) =>
     staleEnvironments.includes(environment.environmentId),
   );
-  if (failed.length === 0 && stale.length === 0 && duplicateSources.length === 0) {
+  const incomplete = environments.flatMap((environment) =>
+    (environment.summary?.sources ?? [])
+      .filter((source) => source.status === "partial" || source.status === "failed")
+      .map((source) => ({
+        key: `${environment.environmentId}:${source.fingerprint.resolvedHomePath}`,
+        label: environment.label,
+        source,
+      })),
+  );
+  if (
+    failed.length === 0 &&
+    stale.length === 0 &&
+    duplicateSources.length === 0 &&
+    incomplete.length === 0
+  ) {
     return null;
   }
 
   return (
     <div className="flex flex-col gap-1 border border-border px-3 py-2 text-xs text-muted-foreground">
+      {incomplete.map(({ key, label, source }) => (
+        <span key={key}>
+          {label} · {source.fingerprint.provider}:{" "}
+          {source.message ?? "Transcript coverage is incomplete."}
+        </span>
+      ))}
       {failed.map((environment) => (
         <span key={environment.label}>{environment.label} could not report usage.</span>
       ))}

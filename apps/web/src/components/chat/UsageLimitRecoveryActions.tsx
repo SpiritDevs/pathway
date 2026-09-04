@@ -96,6 +96,7 @@ export function UsageLimitRecoveryActions(props: {
   );
   const resetAt = resolveUsageLimitResetAt({
     failureMessage: props.item.failure.message,
+    ...(run === undefined ? {} : { model: run.modelSelection.model }),
     snapshot: usageSnapshot ?? null,
     nowMs: Date.now(),
   });

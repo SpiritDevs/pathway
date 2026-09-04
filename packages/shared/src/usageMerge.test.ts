@@ -8,7 +8,7 @@ import {
 } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { mergeUsage, type EnvironmentUsage } from "./usageMerge.ts";
+import { usageSourceId, mergeUsage, type EnvironmentUsage } from "./usageMerge.ts";
 
 function bucket(overrides: Partial<UsageBucket> = {}): UsageBucket {
   return {
@@ -282,5 +282,42 @@ describe("mergeUsage", () => {
     ]);
     expect(merged.daily).toHaveLength(1);
     expect(merged.daily[0]?.costUsd).toBe(10);
+  });
+});
+
+describe("multiple transcript homes", () => {
+  it("drops only the shared source when another home belongs to the same provider", () => {
+    const shared = { provider: "claude" as const, hostId: "host", homePath: "/shared" };
+    const privateHome = { provider: "claude" as const, hostId: "host", homePath: "/private" };
+    const sourceId = (homePath: string) =>
+      usageSourceId({
+        provider: "claude",
+        hostId: "host",
+        resolvedHomePath: homePath,
+        volumeId: "vol-host",
+      });
+    const result = mergeUsage(
+      [
+        {
+          environmentId: "a" as EnvironmentId,
+          label: "A",
+          summary: summary([bucket({ sourceId: sourceId("/shared"), costUsd: 10 })], [shared]),
+        },
+        {
+          environmentId: "b" as EnvironmentId,
+          label: "B",
+          summary: summary(
+            [
+              bucket({ sourceId: sourceId("/shared"), costUsd: 10 }),
+              bucket({ sourceId: sourceId("/private"), costUsd: 20 }),
+            ],
+            [shared, privateHome],
+          ),
+        },
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+    expect(result.costUsd).toBe(30);
+    expect(result.sessions).toBe(2);
   });
 });

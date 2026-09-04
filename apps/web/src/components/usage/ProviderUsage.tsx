@@ -264,18 +264,11 @@ function ProviderUsageDetails({
   const [nowMs, setNowMs] = useState(() => Date.now());
   const rateLimitedUntil = snapshot?.rateLimitedUntil;
   useEffect(() => {
-    if (rateLimitedUntil === undefined) return;
-    const untilMs = Date.parse(rateLimitedUntil);
-    const initialNowMs = Date.now();
-    setNowMs(initialNowMs);
-    if (!Number.isFinite(untilMs) || untilMs <= initialNowMs) return;
-    const timer = globalThis.setInterval(() => {
-      const nextNowMs = Date.now();
-      setNowMs(nextNowMs);
-      if (nextNowMs >= untilMs) globalThis.clearInterval(timer);
-    }, 60_000);
+    if (snapshot === null) return;
+    setNowMs(Date.now());
+    const timer = globalThis.setInterval(() => setNowMs(Date.now()), 60_000);
     return () => globalThis.clearInterval(timer);
-  }, [rateLimitedUntil]);
+  }, [snapshot !== null]);
   if (loading && snapshot === null) {
     return <p className="text-xs text-muted-foreground">Loading provider usage…</p>;
   }
@@ -297,7 +290,9 @@ function ProviderUsageDetails({
   const hasUsage = limits.length > 0 || snapshot.usageLines.length > 0;
   return (
     <div className={cn("space-y-3", compact && "space-y-2.5")}>
-      {snapshot.stale && (detail || captureAge) ? (
+      {(snapshot.stale ||
+        nowMs - Date.parse(snapshot.fetchedAt ?? snapshot.updatedAt) >= 300_000) &&
+      (detail || captureAge) ? (
         <p className="text-xs leading-relaxed text-warning-foreground">
           {[detail, captureAge].filter(Boolean).join(" · ")}
         </p>
@@ -640,6 +635,7 @@ function ProviderUsageCard({ account }: { account: ConnectedProviderUsageAccount
           </span>
           <div className="min-w-0">
             <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
+            <p className="truncate text-[11px] text-muted-foreground">{account.environmentLabel}</p>
             {displayName !== providerName(usageProvider) ? (
               <p className="text-[11px] text-muted-foreground">{providerName(usageProvider)}</p>
             ) : null}
@@ -709,6 +705,9 @@ function ConnectedProviderUsageRow({ account }: { account: ConnectedProviderUsag
         />
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
           {displayName}
+          <span className="ml-1 font-normal text-muted-foreground">
+            · {account.environmentLabel}
+          </span>
         </span>
         {usage.data?.status === "ok" && usage.data.planName ? (
           <span className="shrink-0 text-[10px] text-muted-foreground">{usage.data.planName}</span>
@@ -736,6 +735,7 @@ function useConnectedProviderUsageAccounts() {
       deriveConnectedProviderUsageAccounts(
         connected.map((environment) => ({
           environmentId: environment.environmentId,
+          environmentLabel: environment.label,
           providers: serverConfigs.get(environment.environmentId)?.providers ?? null,
         })),
       ),
