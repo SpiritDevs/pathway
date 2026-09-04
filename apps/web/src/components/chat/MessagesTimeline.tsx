@@ -1,3 +1,5 @@
+import { turnItemIsWorkspacePreparation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
+import { WorkspacePreparationCard } from "./WorkspacePreparationCard";
 import {
   type EnvironmentId,
   type MessageId,
@@ -2019,6 +2021,9 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
   const [inspectorVisible, setInspectorVisible] = useState(false);
   const [errorDetailsOpen, setErrorDetailsOpen] = useState(false);
   const { item, visibility, sourceThreadId } = row.projectedItem;
+  if (turnItemIsWorkspacePreparation(item)) {
+    return <WorkspacePreparationCard item={item} environmentId={ctx.activeThreadEnvironmentId} />;
+  }
   if (isV2LifecycleItem(item)) {
     return (
       <V2LifecycleRow

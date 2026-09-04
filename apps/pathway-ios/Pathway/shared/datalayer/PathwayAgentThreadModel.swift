@@ -29,6 +29,29 @@ struct PathwayMessageAttachment: Codable, Equatable, Identifiable, Sendable {
     let sizeBytes: Int
 }
 
+struct PathwayWorkspacePreparation: Codable, Equatable, Sendable {
+    let phase: String
+    let workspaceKind: String
+    let baseRef: String?
+    let cwd: String?
+    let branch: String?
+    let terminalId: String?
+    let scriptName: String?
+
+    init?(json: JSONValue?) {
+        guard let object = json?.objectValue,
+              let phase = object["phase"]?.stringValue,
+              let workspaceKind = object["workspaceKind"]?.stringValue else { return nil }
+        self.phase = phase
+        self.workspaceKind = workspaceKind
+        baseRef = object["baseRef"]?.stringValue
+        cwd = object["cwd"]?.stringValue
+        branch = object["branch"]?.stringValue
+        terminalId = object["terminalId"]?.stringValue
+        scriptName = object["scriptName"]?.stringValue
+    }
+}
+
 struct PathwayTimelineItem: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let ordinal: Int
@@ -43,6 +66,7 @@ struct PathwayTimelineItem: Codable, Equatable, Identifiable, Sendable {
     let additions: Int?
     let deletions: Int?
     let exitCode: Int?
+    let workspacePreparation: PathwayWorkspacePreparation?
     let attachments: [PathwayMessageAttachment]
     let questions: [PathwayThreadQuestion]
 
@@ -73,7 +97,12 @@ struct PathwayTimelineItem: Codable, Equatable, Identifiable, Sendable {
         additions = object["additions"]?.intValue
         deletions = object["deletions"]?.intValue
         exitCode = object["exitCode"]?.intValue
-        text = Self.text(from: object)
+        workspacePreparation = PathwayWorkspacePreparation(json: object["workspacePreparation"])
+        if workspacePreparation != nil {
+            text = object["output"]?.stringValue ?? object["title"]?.stringValue
+        } else {
+            text = Self.text(from: object)
+        }
         attachments = (object["attachments"]?.arrayValue ?? []).compactMap(Self.attachment)
         questions = (object["questions"]?.arrayValue ?? []).compactMap(Self.question)
     }

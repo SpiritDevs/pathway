@@ -533,6 +533,8 @@ private struct AgentTimelineItemView: View {
     var body: some View {
         if item.isConversation {
             conversation
+        } else if let preparation = item.workspacePreparation {
+            WorkspacePreparationCard(item: item, preparation: preparation)
         } else if item.type == "approval_request" {
             ApprovalCard(item: item, model: model)
         } else if item.type == "user_input_request" {
@@ -586,6 +588,82 @@ private struct PathwayMarkdownText: View {
         } else {
             Text(markdown)
         }
+    }
+}
+
+private struct WorkspacePreparationCard: View {
+    let item: PathwayTimelineItem
+    let preparation: PathwayWorkspacePreparation
+    @State private var isExpanded = false
+
+    private var currentStep: Int {
+        preparation.phase == "setup" ? 2 : preparation.phase == "worktree" ? 1 : 0
+    }
+
+    private var label: String {
+        if item.status == "failed" { return "Workspace setup failed" }
+        if item.status == "interrupted" || item.status == "cancelled" { return "Workspace setup stopped" }
+        if item.status == "completed" {
+            return preparation.workspaceKind == "worktree" ? "Worktree created" : "Workspace ready"
+        }
+        return preparation.workspaceKind == "worktree" ? "Creating a worktree" : "Preparing workspace"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(label, systemImage: "arrow.triangle.branch")
+                .foregroundStyle(.secondary)
+            step("Preparing workspace", index: 0)
+            if preparation.workspaceKind == "worktree" {
+                step("Checking out files", index: 1)
+            }
+            step(item.status == "completed" && preparation.terminalId == nil
+                 ? "No setup script configured" : "Starting setup script", index: 2)
+            if item.status == "failed" || item.status == "interrupted" || item.status == "cancelled" {
+                Text(item.text ?? "Workspace preparation stopped before it finished.")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            if item.status == "completed" && preparation.terminalId != nil {
+                Text("The setup script runs in its terminal while the agent starts.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            DisclosureGroup(isExpanded: $isExpanded) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if let baseRef = preparation.baseRef { Text("Base branch: \(baseRef)") }
+                    if let branch = preparation.branch { Text("Branch at creation: \(branch)") }
+                    if let cwd = preparation.cwd { Text(cwd).font(.caption.monospaced()) }
+                    if let script = preparation.scriptName { Text("Setup script: \(script)") }
+                    if let text = item.text { Text(text) }
+                }
+                .font(.caption)
+                .textSelection(.enabled)
+                .padding(.top, 8)
+            } label: {
+                Text(isExpanded ? "Less details" : "More details")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.callout)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(.quaternary)
+        }
+    }
+
+    private func step(_ title: String, index: Int) -> some View {
+        let completed = item.status == "completed" || index < currentStep
+        let current = index == currentStep
+        let stopped = current && ["failed", "interrupted", "cancelled"].contains(item.status)
+        let symbol = completed ? "checkmark.circle" : stopped ? "xmark.circle" : current ? "circle.inset.filled" : "circle"
+        let status = completed ? "Completed" : stopped ? "Stopped" : current ? "In progress" : "Pending"
+        return Label(title, systemImage: symbol)
+            .foregroundStyle(stopped ? Color.red : completed || current ? Color.accentColor : Color.secondary)
+            .accessibilityElement(children: .combine)
+            .accessibilityValue(status)
     }
 }
 

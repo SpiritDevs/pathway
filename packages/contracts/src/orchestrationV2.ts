@@ -1016,6 +1016,18 @@ export const OrchestrationV2WebSearchResult = Schema.Struct({
 });
 export type OrchestrationV2WebSearchResult = typeof OrchestrationV2WebSearchResult.Type;
 
+/** Durable workspace milestones; the setup phase tracks script launch, not script exit. */
+export const OrchestrationV2WorkspacePreparation = Schema.Struct({
+  phase: Schema.Literals(["preparing", "worktree", "setup"]),
+  workspaceKind: Schema.Literals(["root", "existing_worktree", "worktree"]),
+  baseRef: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
+  branch: Schema.optional(Schema.String),
+  terminalId: Schema.optional(Schema.String),
+  scriptName: Schema.optional(Schema.String),
+});
+export type OrchestrationV2WorkspacePreparation = typeof OrchestrationV2WorkspacePreparation.Type;
+
 export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1075,6 +1087,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     input: Schema.String,
     output: Schema.optional(Schema.String),
     exitCode: Schema.optional(Schema.Int),
+    workspacePreparation: Schema.optional(OrchestrationV2WorkspacePreparation),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1827,6 +1840,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     input: Schema.String,
     output: Schema.optional(Schema.String),
     exitCode: Schema.optional(Schema.Int),
+    workspacePreparation: Schema.optional(OrchestrationV2WorkspacePreparation),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -2453,7 +2467,8 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     runId: RunId,
-    phase: Schema.Literals(["worktree", "setup"]),
+    phase: Schema.Literals(["preparing", "worktree", "setup"]),
+    workspacePreparation: Schema.optional(OrchestrationV2WorkspacePreparation),
   }),
   Schema.Struct({
     type: Schema.Literal("prepared-run.fail"),

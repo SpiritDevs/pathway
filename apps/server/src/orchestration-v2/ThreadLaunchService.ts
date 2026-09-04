@@ -6,6 +6,7 @@ import {
   type OrchestrationV2Actor,
   type OrchestrationV2CreationSource,
   type OrchestrationV2ThreadProjection,
+  type OrchestrationV2WorkspacePreparation,
   type ProviderInteractionMode,
   ProjectId,
   type RunId,
@@ -196,6 +197,32 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+    const reportProgress = (
+      phase: OrchestrationV2WorkspacePreparation["phase"],
+      details: Partial<OrchestrationV2WorkspacePreparation> = {},
+      suffix: string = phase,
+    ) =>
+      runId === null
+        ? Effect.void
+        : threads
+            .dispatch({
+              type: "prepared-run.progress",
+              commandId: CommandId.make(`${input.commandId}:progress:${suffix}`),
+              threadId,
+              runId,
+              phase,
+              workspacePreparation: {
+                ...details,
+                phase,
+                workspaceKind: input.workspaceStrategy.type,
+                ...(input.workspaceStrategy.type === "worktree"
+                  ? { baseRef: input.workspaceStrategy.baseRef }
+                  : {}),
+              },
+            })
+            .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+    yield* reportProgress("preparing");
+
     const initialMessage = input.initialMessage;
     if (project.workspaceRoot === null) {
       return yield* mapError(
@@ -241,17 +268,6 @@ export const make = Effect.gen(function* () {
         ? input.workspaceStrategy.worktreePath
         : null;
     if (input.workspaceStrategy.type === "worktree") {
-      if (runId !== null) {
-        yield* threads
-          .dispatch({
-            type: "prepared-run.progress",
-            commandId: CommandId.make(`${input.commandId}:progress:worktree`),
-            threadId,
-            runId,
-            phase: "worktree",
-          })
-          .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
-      }
       let startRef = input.workspaceStrategy.baseRef;
       if (input.workspaceStrategy.startFromOrigin === true) {
         const primaryRemoteName = yield* git
@@ -278,6 +294,7 @@ export const make = Effect.gen(function* () {
             Effect.mapError(mapError(input, "provision-worktree", threadId)),
           );
       }
+      yield* reportProgress("worktree", { branch: branch!, cwd: projectWorkspaceRoot });
       const worktree = yield* git
         .createWorktree({
           cwd: projectWorkspaceRoot,
@@ -337,18 +354,8 @@ export const make = Effect.gen(function* () {
     }
 
     const cwd = worktreePath ?? projectWorkspaceRoot;
-    if (runId !== null) {
-      yield* threads
-        .dispatch({
-          type: "prepared-run.progress",
-          commandId: CommandId.make(`${input.commandId}:progress:setup`),
-          threadId,
-          runId,
-          phase: "setup",
-        })
-        .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
-    }
-    yield* setupScripts
+    yield* reportProgress("setup", { cwd, ...(branch === null ? {} : { branch }) });
+    const setup = yield* setupScripts
       .runForThread({
         threadId,
         projectId: input.projectId,
@@ -360,6 +367,19 @@ export const make = Effect.gen(function* () {
         },
       })
       .pipe(Effect.mapError(mapError(input, "run-setup-script", threadId)));
+
+    if (setup.status === "started") {
+      yield* reportProgress(
+        "setup",
+        {
+          cwd,
+          ...(branch === null ? {} : { branch }),
+          terminalId: setup.terminalId,
+          scriptName: setup.scriptName,
+        },
+        "setup-started",
+      );
+    }
 
     if (runId !== null) {
       yield* threads

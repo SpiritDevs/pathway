@@ -99,6 +99,27 @@ struct PathwayTests {
         #expect(item?.attachments.first?.name == "notes.md")
     }
 
+    @Test func timelineDecodesWorkspaceMilestones() {
+        let item = PathwayTimelineItem(json: .object([
+            "id": .string("setup-1"),
+            "type": .string("command_execution"),
+            "input": .string("Preparing workspace"),
+            "output": .string("Could not start setup script"),
+            "status": .string("running"),
+            "workspacePreparation": .object([
+                "phase": .string("setup"),
+                "workspaceKind": .string("worktree"),
+                "cwd": .string("/worktrees/feature"),
+                "terminalId": .string("setup-install")
+            ])
+        ]))
+        #expect(item?.text == "Could not start setup script")
+        #expect(item?.workspacePreparation?.phase == "setup")
+        #expect(item?.workspacePreparation?.workspaceKind == "worktree")
+        #expect(item?.workspacePreparation?.cwd == "/worktrees/feature")
+        #expect(item?.workspacePreparation?.terminalId == "setup-install")
+    }
+
     @Test func timelineDecodesApprovalAsActionable() {
         let item = PathwayTimelineItem(json: .object([
             "id": .string("approval-1"),

@@ -1,0 +1,81 @@
+import {
+  EnvironmentId,
+  ThreadId,
+  TurnItemId,
+  type OrchestrationV2TurnItem,
+} from "@spiritdevs/contracts";
+import * as DateTime from "effect/DateTime";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { WorkspacePreparationCard } from "./WorkspacePreparationCard";
+
+vi.mock("~/state/terminalSessions", () => ({
+  useAttachedTerminalSession: () => {
+    throw new Error("Collapsed setup must not attach to a terminal");
+  },
+}));
+
+const now = DateTime.makeUnsafe("2026-09-05T00:00:00Z");
+const item: Extract<OrchestrationV2TurnItem, { type: "command_execution" }> = {
+  id: TurnItemId.make("setup"),
+  threadId: ThreadId.make("thread"),
+  runId: null,
+  nodeId: null,
+  providerThreadId: null,
+  providerTurnId: null,
+  nativeItemRef: null,
+  parentItemId: null,
+  ordinal: 1,
+  status: "running",
+  title: "Checking out files",
+  startedAt: now,
+  completedAt: null,
+  updatedAt: now,
+  type: "command_execution",
+  input: "Preparing workspace",
+  workspacePreparation: { phase: "worktree", workspaceKind: "worktree", baseRef: "main" },
+};
+
+describe("WorkspacePreparationCard", () => {
+  it("renders the current stage, pending stages and a details disclosure", () => {
+    const html = renderToStaticMarkup(
+      <WorkspacePreparationCard item={item} environmentId={EnvironmentId.make("env")} />,
+    );
+    expect(html).toContain("Creating a worktree");
+    expect(html).toContain('aria-current="step"');
+    expect(html).toContain("Checking out files");
+    expect(html).toContain("Starting setup script");
+    expect(html).toContain("More details");
+    expect(html).toContain("main");
+  });
+  it("keeps failures visible with details collapsed", () => {
+    const html = renderToStaticMarkup(
+      <WorkspacePreparationCard
+        item={{ ...item, status: "failed", output: "Base branch could not be fetched" }}
+        environmentId={EnvironmentId.make("env")}
+      />,
+    );
+    expect(html).toContain("Workspace setup failed");
+    expect(html).toContain("Base branch could not be fetched");
+    expect(html).not.toContain('aria-current="step"');
+  });
+  it("does not subscribe to a completed setup terminal until details are opened", () => {
+    const html = renderToStaticMarkup(
+      <WorkspacePreparationCard
+        item={{
+          ...item,
+          status: "completed",
+          workspacePreparation: {
+            phase: "setup",
+            workspaceKind: "worktree",
+            terminalId: "setup-install",
+          },
+        }}
+        environmentId={EnvironmentId.make("env")}
+      />,
+    );
+    expect(html).toContain("Worktree created");
+    expect(html).toContain("The setup script runs in its terminal while the agent starts.");
+    expect(html).not.toContain('aria-label="Setup script output"');
+  });
+});

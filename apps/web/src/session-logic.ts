@@ -575,7 +575,6 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
 
   for (const row of input.visibleTurnItems) {
     const { item } = row;
-    if (turnItemIsWorkspacePreparation(item)) continue;
     const createdAt = projectedItemCreatedAt(row);
     const attempt = resolveAttempt(item);
     const attemptMetadata = attempt === undefined ? {} : { attempt };
@@ -642,7 +641,7 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
       continue;
     }
 
-    if (STANDALONE_V2_ITEM_TYPES.has(item.type)) {
+    if (turnItemIsWorkspacePreparation(item) || STANDALONE_V2_ITEM_TYPES.has(item.type)) {
       entries.push({
         id: item.id,
         kind: "event",

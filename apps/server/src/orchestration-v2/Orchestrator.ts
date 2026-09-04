@@ -6151,7 +6151,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         occurredAt: now,
         payload: {
           ...state.preparationItem,
-          title: command.phase === "worktree" ? "Preparing worktree" : "Starting setup script",
+          title:
+            command.phase === "worktree"
+              ? "Checking out files"
+              : command.phase === "setup"
+                ? "Starting setup script"
+                : "Preparing workspace",
+          ...(command.workspacePreparation === undefined
+            ? {}
+            : { workspacePreparation: command.workspacePreparation }),
           updatedAt: now,
         },
       });
@@ -6216,7 +6224,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...state.preparationItem,
           status: "completed",
           title: "Workspace ready",
-          output: "Workspace preparation completed.",
+          output:
+            state.preparationItem.workspacePreparation === undefined
+              ? "Workspace preparation completed."
+              : state.preparationItem.workspacePreparation.terminalId
+                ? "Workspace created. Setup script started in its terminal; the agent can begin while it runs."
+                : "Workspace preparation completed. No setup script to run.",
           exitCode: 0,
           completedAt: now,
           updatedAt: now,

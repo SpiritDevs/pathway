@@ -18,6 +18,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
@@ -291,8 +292,12 @@ it.effect("returns a visible preparing message while provisioning is still block
       let current = yield* threads.getThreadProjection(launched.threadId);
       assert.equal(
         current.turnItems.find((item) => item.type === "command_execution")?.title,
-        "Preparing worktree",
+        "Checking out files",
       );
+      const checkout = current.turnItems.find((item) => item.type === "command_execution");
+      assert.equal(checkout?.workspacePreparation?.phase, "worktree");
+      assert.equal(checkout?.workspacePreparation?.workspaceKind, "worktree");
+      assert.equal(checkout?.workspacePreparation?.baseRef, "main");
       yield* Deferred.succeed(allowWorktree, undefined);
       const entered = yield* Deferred.await(setupEntered).pipe(
         Effect.timeoutOption(Duration.seconds(2)),
@@ -440,6 +445,11 @@ it.effect("enqueues provider work only after setup has been initiated", () =>
       const projection = yield* threads.getThreadProjection(launched.threadId);
       assert.equal(projection.runs[0]?.status, "starting");
       assert.equal(projection.checkpointScopes[0]?.cwd, "/repo-worktrees/feature");
+      const preparation = projection.turnItems.find((item) => item.type === "command_execution");
+      assert.equal(preparation?.workspacePreparation?.terminalId, "setup");
+      assert.equal(preparation?.workspacePreparation?.scriptName, "Setup");
+      assert.equal(preparation?.workspacePreparation?.cwd, "/repo-worktrees/feature");
+      assert.include(preparation?.output ?? "", "Setup script started");
       assert.equal(
         projection.turnItems.find((item) => item.type === "command_execution")?.status,
         "completed",
@@ -544,6 +554,14 @@ it.effect("arms durable title generation after accepting the first message", () 
       };
       const launched = yield* launches.launch(input);
       const generationCommandId = CommandId.make("command:launch:title-generation:initial-message");
+      yield* threads.streamStoredEventsFrom({ threadId: launched.threadId }).pipe(
+        Stream.filter(
+          (stored) =>
+            stored.event.type === "run.updated" && stored.event.payload.status === "starting",
+        ),
+        Stream.take(1),
+        Stream.runDrain,
+      );
 
       const projection = yield* threads.getThreadProjection(launched.threadId);
       assert.equal(projection.thread.title, "Generate my title");
@@ -999,6 +1017,11 @@ for (const failurePoint of ["worktree", "setup"] as const) {
           const projection = yield* threads.getThreadProjection(launched.threadId);
           assert.equal(projection.messages[0]?.text, `Fail during ${failurePoint}`);
           assert.equal(projection.runs[0]?.status, "failed");
+          const preparation = projection.turnItems.find(
+            (item) => item.type === "command_execution",
+          );
+          assert.equal(preparation?.workspacePreparation?.phase, failurePoint);
+          assert.equal(preparation?.workspacePreparation?.workspaceKind, "worktree");
           assert.equal(
             projection.turnItems.find((item) => item.type === "command_execution")?.status,
             "failed",
