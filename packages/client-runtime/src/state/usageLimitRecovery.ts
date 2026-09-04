@@ -168,7 +168,8 @@ export function resolveUsageLimitResetAt(input: {
   if (snapshot?.status !== "ok" || snapshot.stale) return null;
   const model = input.model?.toLowerCase();
   const blocking = snapshot.limits.filter((limit) => {
-    if ((limit.usedPercent ?? 0) < 100) return false;
+    // Providers can round an exhausted quota just below 100%.
+    if ((limit.usedPercent ?? 0) < 99) return false;
     if (!limit.scope) return true;
     // Scope labels are provider supplied. Only match known model families;
     // an unknown scope cannot safely schedule automatic recovery.

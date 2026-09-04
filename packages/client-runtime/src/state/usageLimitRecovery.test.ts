@@ -131,3 +131,21 @@ it("ignores a different model's quota and never schedules from unexhausted or st
     }),
   ).toBeNull();
 });
+
+it.each([99, 99.9, 100])("uses rounded exhausted quota %s for recovery", (usedPercent) => {
+  expect(
+    resolveUsageLimitResetAt({
+      nowMs: Date.parse("2026-09-05T00:00:00Z"),
+      failureMessage: "Quota exceeded",
+      snapshot: {
+        instanceId: ProviderInstanceId.make("codex"),
+        provider: "codex",
+        status: "ok",
+        source: "test",
+        updatedAt: "2026-09-05T00:00:00Z",
+        usageLines: [],
+        limits: [{ window: "Session", usedPercent, resetsAt: "2026-09-05T01:00:00Z" }],
+      },
+    }),
+  ).toBe("2026-09-05T01:00:00.000Z");
+});

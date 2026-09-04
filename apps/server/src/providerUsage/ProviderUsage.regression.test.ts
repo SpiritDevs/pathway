@@ -312,3 +312,74 @@ it.effect("fetches a complete account immediately after a cold sparse push", () 
     expect(result.usageLines).toHaveLength(1);
   }),
 );
+
+it.effect("preserves only metadata pushed after an HTTP refresh started", () =>
+  Effect.gen(function* () {
+    for (const field of ["credits", "plan", "limits"] as const) {
+      resetProviderUsageCache();
+      const initial = parseCodexUsage({
+        instanceId,
+        nowMs,
+        json: {
+          plan_type: "plus",
+          credits: { has_credits: true, balance: 1 },
+          rate_limit: { primary_window: { used_percent: 10 } },
+        },
+      });
+      yield* Effect.promise(() =>
+        providerUsageTestKit.resolve({ instanceId, provider: "codex", nowMs }, async () => ({
+          snapshot: initial,
+        })),
+      );
+      const started = Promise.withResolvers<void>();
+      const response = Promise.withResolvers<{ snapshot: ReturnType<typeof parseCodexUsage> }>();
+      const pending = providerUsageTestKit.resolve(
+        { instanceId, provider: "codex", nowMs: nowMs + 1000, forceRefresh: true },
+        () => {
+          started.resolve();
+          return response.promise;
+        },
+      );
+      yield* Effect.promise(() => started.promise);
+      yield* ingestPushedSnapshot(
+        mapCodexRateLimitsUpdated({
+          instanceId,
+          rateLimits:
+            field === "credits"
+              ? { credits: { hasCredits: true, unlimited: false, balance: "50" } }
+              : field === "plan"
+                ? { planType: "pro" }
+                : { primary: { usedPercent: 25 } },
+        }),
+        nowMs + 2000,
+      );
+      // A later sparse push must not lose the earlier metadata timestamp.
+      yield* ingestPushedSnapshot(
+        mapCodexRateLimitsUpdated({
+          instanceId,
+          rateLimits: {
+            primary: { usedPercent: 30 },
+          },
+        }),
+        nowMs + 3000,
+      );
+      response.resolve({
+        snapshot: parseCodexUsage({
+          instanceId,
+          nowMs: nowMs + 1000,
+          json: {
+            plan_type: "plus",
+            credits: { has_credits: true, balance: 10 },
+            rate_limit: { primary_window: { used_percent: 20 } },
+          },
+        }),
+      });
+      const result = yield* Effect.promise(() => pending);
+      expect(result.limits[0]?.usedPercent).toBe(30);
+      expect(result.planName).toBe(field === "plan" ? "ChatGPT Pro" : "ChatGPT Plus");
+      expect(result.usageLines[0]?.value).toBe(
+        field === "credits" ? "$50.00 remaining" : "$10.00 remaining",
+      );
+    }
+  }),
+);

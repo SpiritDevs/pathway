@@ -87,6 +87,7 @@ interface ProviderContext {
 interface CachedSnapshot {
   readonly snapshot: ServerProviderUsageSnapshot;
   readonly fetchedAtMs: number | null;
+  readonly pushedMetadataAt?: { readonly usageLines?: number; readonly planName?: number };
 }
 
 interface ProviderFetchResult {
@@ -1424,10 +1425,7 @@ function cacheKeyFor(input: Pick<ServerProviderUsageSnapshot, "instanceId" | "pr
   return `${input.instanceId}:${input.provider}`;
 }
 
-function storeSnapshot(input: {
-  snapshot: ServerProviderUsageSnapshot;
-  fetchedAtMs: number | null;
-}): {
+function storeSnapshot(input: CachedSnapshot): {
   readonly snapshot: ServerProviderUsageSnapshot;
   readonly changed: boolean;
 } {
@@ -1445,6 +1443,7 @@ function storeSnapshot(input: {
   setBounded(snapshotCache, cacheKey, {
     snapshot: input.snapshot,
     fetchedAtMs: input.fetchedAtMs,
+    ...(input.pushedMetadataAt ? { pushedMetadataAt: input.pushedMetadataAt } : {}),
   });
   return { snapshot: input.snapshot, changed: true };
 }
@@ -1516,6 +1515,11 @@ export const ingestPushedSnapshot = Effect.fn("ProviderUsage.ingestPushedSnapsho
     },
     // Sparse pushes must not postpone the complete account refresh.
     fetchedAtMs: cached?.fetchedAtMs ?? null,
+    pushedMetadataAt: {
+      ...cached?.pushedMetadataAt,
+      ...(input.updatesUsageLines ? { usageLines: nowMs } : {}),
+      ...(input.planName !== undefined ? { planName: nowMs } : {}),
+    },
   });
   if (stored.changed) {
     yield* PubSub.publish(snapshotChanges, undefined);
@@ -1631,9 +1635,11 @@ async function resolveProviderUsage(
   let entry: InFlightFetch;
   const request = fetchUsage(ctx).then(async (outcome) => {
     const result = outcome.snapshot;
+    const latest = snapshotCache.get(cacheKey);
+    const fallback = latest?.snapshot.status === "ok" ? latest : cached;
     let resolved: ServerProviderUsageSnapshot;
-    if (result.status === "error" && cached?.snapshot.status === "ok") {
-      const { rateLimitedUntil: _previousRateLimit, ...cachedWithoutRateLimit } = cached.snapshot;
+    if (result.status === "error" && fallback?.snapshot.status === "ok") {
+      const { rateLimitedUntil: _previousRateLimit, ...cachedWithoutRateLimit } = fallback.snapshot;
       resolved = {
         ...cachedWithoutRateLimit,
         stale: true,
@@ -1645,7 +1651,7 @@ async function resolveProviderUsage(
     } else {
       const newerLimits =
         result.status === "ok" && ctx.provider === "codex"
-          ? (snapshotCache.get(cacheKey)?.snapshot.limits ?? []).filter(
+          ? (latest?.snapshot.limits ?? []).filter(
               (limit) => Date.parse(limit.fetchedAt ?? "") > ctx.nowMs,
             )
           : [];
@@ -1667,6 +1673,20 @@ async function resolveProviderUsage(
               ],
             };
     }
+    if (result.status === "ok" && ctx.provider === "codex" && latest) {
+      // Credits and plan type arrive independently of limit lanes. Only fields
+      // actually pushed after this request began may override its HTTP result.
+      resolved = {
+        ...resolved,
+        ...((latest.pushedMetadataAt?.usageLines ?? -Infinity) > ctx.nowMs
+          ? { usageLines: latest.snapshot.usageLines }
+          : {}),
+        ...((latest.pushedMetadataAt?.planName ?? -Infinity) > ctx.nowMs &&
+        latest.snapshot.planName !== undefined
+          ? { planName: latest.snapshot.planName }
+          : {}),
+      };
+    }
     if (inFlightFetches.get(cacheKey) !== entry) return resolved;
     if (outcome.retryAfterUntilMs !== undefined) {
       setBounded(retryAfterGates, cacheKey, outcome.retryAfterUntilMs);
@@ -1680,9 +1700,12 @@ async function resolveProviderUsage(
     const stored = storeSnapshot({
       snapshot: resolved,
       fetchedAtMs:
-        result.status === "error" && cached?.snapshot.status === "ok"
-          ? cached.fetchedAtMs
+        result.status === "error" && fallback?.snapshot.status === "ok"
+          ? fallback.fetchedAtMs
           : ctx.nowMs,
+      ...(result.status === "error" && fallback?.pushedMetadataAt
+        ? { pushedMetadataAt: fallback.pushedMetadataAt }
+        : {}),
     });
     if (stored.changed) {
       await Effect.runPromise(PubSub.publish(snapshotChanges, undefined));

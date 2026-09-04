@@ -442,6 +442,26 @@ describe("provider usage panel refresh", () => {
     expect(findSpinningRefreshIcon(settledSettings)).toBeNull();
   });
 
+  it("shows unknown-auth Claude only when live usage confirms credentials", () => {
+    const claude = { ...provider("claudeAgent", claudeId), auth: { status: "unknown" as const } };
+    setConnectedProviders([{ environmentId, label: "Studio", providers: [claude] }]);
+    hooks.beginRender();
+    const menu = ConnectedProviderUsageMenu() as ReactElement<Record<string, unknown>>;
+    const row = visitElements(menu, (element) => Boolean(element.props.account))!;
+    const renderRow = row.type as (props: Record<string, unknown>) => ReactElement | null;
+    hooks.beginRender();
+    expect(renderRow(row.props)).toBeNull();
+    testState.queries.set(String(claudeId), snapshot(claudeId, "claudeAgent", 20));
+    hooks.beginRender();
+    expect(renderRow(row.props)).not.toBeNull();
+    testState.queries.set(String(claudeId), {
+      ...snapshot(claudeId, "claudeAgent", 20),
+      status: "needs-auth",
+    });
+    hooks.beginRender();
+    expect(renderRow(row.props)).toBeNull();
+  });
+
   it("shows each configured account even when emails match", () => {
     const laptopId = EnvironmentId.make("usage-laptop");
     const laptopClaudeId = ProviderInstanceId.make("laptop-claude");

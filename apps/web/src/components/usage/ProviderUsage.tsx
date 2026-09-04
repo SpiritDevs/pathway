@@ -711,7 +711,12 @@ function ConnectedProviderUsageRow({ account }: { account: ConnectedProviderUsag
     enabled: true,
   });
 
-  if (usageProvider === "claudeAgent" && usage.data?.status === "needs-auth") return null;
+  if (
+    usageProvider === "claudeAgent" &&
+    (usage.data?.status === "needs-auth" ||
+      (provider.auth.status !== "authenticated" && usage.data?.status !== "ok"))
+  )
+    return null;
 
   return (
     <div className="rounded-md bg-muted/45 px-2.5 py-2.5">
@@ -777,7 +782,8 @@ export function ConnectedProviderUsageMenu() {
   } = useConnectedProviderUsageAccounts();
   const accounts = connectedAccounts.filter(
     (account) =>
-      account.provider.driver !== "claudeAgent" || account.provider.auth.status === "authenticated",
+      account.provider.driver !== "claudeAgent" ||
+      account.provider.auth.status !== "unauthenticated",
   );
 
   return (
