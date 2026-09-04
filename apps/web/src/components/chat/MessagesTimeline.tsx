@@ -1,3 +1,5 @@
+import { turnItemIsWorkspacePreparation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
+import { WorkspacePreparationCard } from "./WorkspacePreparationCard";
 import {
   type EnvironmentId,
   type MessageId,
@@ -209,6 +211,9 @@ interface TimelineRowSharedState {
   onResumeConnecting: () => void;
   onRemoveMissingThread: () => void;
   removingMissingThread: boolean;
+  onControlWorkspacePreparation?:
+    | ((runId: RunId, action: "cancel" | "work_locally") => Promise<void>)
+    | undefined;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   onDetachPullRequest: (pullRequest: { readonly number: number; readonly url: string }) => void;
   activeAttachedPullRequestItemId: string | null;
@@ -288,6 +293,9 @@ interface MessagesTimelineProps {
   onResumeConnecting?: () => void;
   onRemoveMissingThread?: () => void;
   removingMissingThread?: boolean;
+  onControlWorkspacePreparation?:
+    | ((runId: RunId, action: "cancel" | "work_locally") => Promise<void>)
+    | undefined;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   parentThreadLink?: {
     readonly threadId: ThreadId;
@@ -369,6 +377,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onResumeConnecting = NOOP_PANEL_SURFACE_OPEN,
   onRemoveMissingThread = NOOP_PANEL_SURFACE_OPEN,
   removingMissingThread = false,
+  onControlWorkspacePreparation,
   onOpenThread,
   parentThreadLink = null,
   onContinueFromRun,
@@ -812,6 +821,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onResumeConnecting,
       onRemoveMissingThread,
       removingMissingThread,
+      onControlWorkspacePreparation,
       onOpenThread,
       onDetachPullRequest,
       activeAttachedPullRequestItemId,
@@ -858,6 +868,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onResumeConnecting,
       onRemoveMissingThread,
       removingMissingThread,
+      onControlWorkspacePreparation,
       onOpenThread,
       onDetachPullRequest,
       activeAttachedPullRequestItemId,
@@ -2019,6 +2030,17 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
   const [inspectorVisible, setInspectorVisible] = useState(false);
   const [errorDetailsOpen, setErrorDetailsOpen] = useState(false);
   const { item, visibility, sourceThreadId } = row.projectedItem;
+  if (turnItemIsWorkspacePreparation(item)) {
+    return (
+      <WorkspacePreparationCard
+        item={item}
+        environmentId={ctx.activeThreadEnvironmentId}
+        {...(item.runId && ctx.onControlWorkspacePreparation
+          ? { onControl: (action) => ctx.onControlWorkspacePreparation!(item.runId!, action) }
+          : {})}
+      />
+    );
+  }
   if (isV2LifecycleItem(item)) {
     return (
       <V2LifecycleRow

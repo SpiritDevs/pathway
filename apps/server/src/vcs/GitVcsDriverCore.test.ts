@@ -1439,6 +1439,34 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("streams bounded checkout progress from carriage-return output", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const progress: number[] = [];
+        const spawner = ChildProcessSpawner.make(() =>
+          Effect.succeed({
+            ...makeSuccessfulHandle(""),
+            stderr: Stream.encodeText(
+              Stream.make(
+                "Preparing worktree\nUpdating files:  10% (1/10)\rUpdating fi",
+                "les:  11% (1/10)\rUpdating files:  65% (6/10)\r",
+                "Updating files:  50% (5/10)\rUpdating files: 101% (10/10)\rUpdating files: 100% (10/10), done.\n",
+              ),
+            ),
+          }),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+        yield* driver.createWorktree({ cwd, path: "/unused", refName: "HEAD" }, (percent) =>
+          Effect.sync(() => {
+            progress.push(percent);
+          }),
+        );
+        assert.deepEqual(progress, [10, 65, 100]);
+      }).pipe(Effect.provide(ServerConfigLayer)),
+    );
+
     it.effect("creates and removes a worktree and its new local branch", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -1450,12 +1478,20 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         );
         const driver = yield* GitVcsDriver.GitVcsDriver;
 
-        const created = yield* driver.createWorktree({
-          cwd,
-          path: worktreePath,
-          refName: initialBranch,
-          newRefName: "feature/worktree",
-        });
+        const progress: number[] = [];
+        const created = yield* driver.createWorktree(
+          {
+            cwd,
+            path: worktreePath,
+            refName: initialBranch,
+            newRefName: "feature/worktree",
+          },
+          (percent) =>
+            Effect.sync(() => {
+              progress.push(percent);
+            }),
+        );
+        assert.equal(progress.at(-1), 100);
 
         assert.equal(created.worktree.path, worktreePath);
         assert.equal(created.worktree.refName, "feature/worktree");
@@ -1936,3 +1972,41 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
     );
   });
 });
+
+it.effect("removes a newly created worktree if configuring its base ref fails", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const target = (yield* Path.Path).join(yield* makeTmpDir(), "partial");
+    const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const failingConfig = ChildProcessSpawner.make((command) =>
+      ChildProcess.isStandardCommand(command) &&
+      command.args.some((arg) => arg.endsWith(".gh-merge-base"))
+        ? Effect.succeed(makeNonRepositoryHandle())
+        : delegate.spawn(command),
+    );
+    const driver = yield* makeGitVcsDriverCore().pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, failingConfig),
+    );
+    const result = yield* driver
+      .createWorktree({
+        cwd,
+        path: target,
+        newRefName: "pathway/partial",
+        refName: "HEAD",
+        baseRefName: "main",
+      })
+      .pipe(Effect.result);
+    assert.equal(result._tag, "Failure");
+    assert.isFalse(yield* (yield* FileSystem.FileSystem).exists(target));
+    assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), target);
+  }).pipe(
+    Effect.provide(
+      GitVcsDriver.layer.pipe(
+        Layer.provideMerge(ServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+    Effect.scoped,
+  ),
+);

@@ -1177,6 +1177,15 @@ export const WsOrchestrationV2GetWorkflowScriptRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationV2ControlWorkspacePreparationRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.controlWorkspacePreparation,
+  {
+    payload: OrchestrationV2RpcSchemas.controlWorkspacePreparation.input,
+    success: OrchestrationV2RpcSchemas.controlWorkspacePreparation.output,
+    error: Schema.Union([OrchestrationV2DispatchCommandError, EnvironmentAuthorizationError]),
+  },
+);
+
 export const WsOrchestrationV2LaunchThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.launchThread, {
   payload: OrchestrationV2RpcSchemas.launchThread.input,
   success: OrchestrationV2RpcSchemas.launchThread.output,
@@ -1962,6 +1971,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2PreviewWorkspaceMoveRpc,
   WsOrchestrationV2LaunchContinuationRpc,
   WsOrchestrationV2LaunchThreadRpc,
+  WsOrchestrationV2ControlWorkspacePreparationRpc,
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,

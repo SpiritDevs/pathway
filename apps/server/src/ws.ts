@@ -1378,6 +1378,25 @@ const makeWsRpcLayer = (
               "orchestration_v2.target_thread_id": input.targetThreadId,
             },
           ),
+        [ORCHESTRATION_V2_WS_METHODS.controlWorkspacePreparation]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.controlWorkspacePreparation,
+            threadLaunch.controlPreparation(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2DispatchCommandError({
+                    commandId: input.commandId,
+                    commandType: "workspace-preparation.control",
+                    message:
+                      cause instanceof Error
+                        ? cause.message
+                        : "Could not change workspace preparation.",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestrationV2", "orchestration_v2.thread_id": input.threadId },
+          ),
         [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.launchThread,

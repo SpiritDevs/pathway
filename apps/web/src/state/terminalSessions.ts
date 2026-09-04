@@ -15,10 +15,11 @@ import { terminalEnvironment } from "./terminal";
 export function useAttachedTerminalSession(input: {
   readonly environmentId: EnvironmentId | null;
   readonly terminal: TerminalAttachInput | null;
+  readonly preview?: boolean;
 }): TerminalSessionState {
   const attach = useEnvironmentQuery(
     input.environmentId !== null && input.terminal !== null
-      ? terminalEnvironment.attach({
+      ? (input.preview ? terminalEnvironment.previewAttach : terminalEnvironment.attach)({
           environmentId: input.environmentId,
           input: input.terminal,
         })

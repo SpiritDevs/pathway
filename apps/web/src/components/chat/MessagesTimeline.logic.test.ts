@@ -857,6 +857,15 @@ describe("deriveMessagesTimelineRows", () => {
         } as never,
       },
       {
+        id: "workspace-preparation-entry",
+        kind: "event" as const,
+        createdAt: "2026-01-01T00:00:04.600Z",
+        attempt: supersededAttempt,
+        projectedItem: {
+          item: { type: "command_execution", input: "Preparing workspace" },
+        } as never,
+      },
+      {
         id: "steer-user-entry",
         kind: "message" as const,
         createdAt: "2026-01-01T00:00:05Z",
@@ -907,6 +916,7 @@ describe("deriveMessagesTimelineRows", () => {
       "initial-user-entry",
       `attempt-fold:${supersededAttemptId}`,
       "superseded-thread-created-entry",
+      "workspace-preparation-entry",
       "steer-user-entry",
       "active-assistant-entry",
     ]);
@@ -927,6 +937,7 @@ describe("deriveMessagesTimelineRows", () => {
       "superseded-assistant-entry",
       "superseded-work-entry",
       "superseded-thread-created-entry",
+      "workspace-preparation-entry",
       "steer-user-entry",
       "active-assistant-entry",
     ]);

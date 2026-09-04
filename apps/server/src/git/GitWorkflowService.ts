@@ -64,6 +64,7 @@ export class GitWorkflowService extends Context.Service<
     ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
+      onCheckoutProgress?: (percent: number) => Effect.Effect<void, never>,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
     readonly createTransferStash: (
       input: GitVcsDriver.GitTransferStashInput,
@@ -319,9 +320,9 @@ export const make = Effect.gen(function* () {
           isGitRepository ? git.listRefs(input) : Effect.succeed(nonRepositoryListRefs()),
         ),
       ),
-    createWorktree: (input) =>
+    createWorktree: (input, onCheckoutProgress) =>
       ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
-        Effect.andThen(git.createWorktree(input)),
+        Effect.andThen(git.createWorktree(input, onCheckoutProgress)),
       ),
     createTransferStash: (input) =>
       ensureGitCommand("GitWorkflowService.createTransferStash", input.cwd).pipe(

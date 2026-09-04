@@ -96,6 +96,7 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
+import { restoreWorkspacePreparationDraft } from "../workspacePreparationDraft";
 import { onOpenThreadWorkspaceMove } from "../threadWorkspaceMoveBus";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
@@ -1441,6 +1442,10 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const controlWorkspacePreparation = useAtomCommand(
+    threadEnvironment.controlWorkspacePreparation,
+    { reportFailure: false },
+  );
   const cancelQueuedRun = useAtomCommand(threadEnvironment.cancelQueuedRun, {
     reportFailure: false,
   });
@@ -3184,6 +3189,69 @@ function ChatViewContent(props: ChatViewProps) {
       scheduleComposerFocus,
       setComposerDraftPrompt,
       threadId,
+    ],
+  );
+  const onControlWorkspacePreparation = useCallback(
+    async (runId: RunId, action: "cancel" | "work_locally") => {
+      if (!activeProject || !serverProjection) throw new Error("This thread is unavailable.");
+      const message = serverProjection.messages.find(
+        (message) => message.runId === runId && message.role === "user",
+      );
+      if (!message) throw new Error("The original message is unavailable. Nothing was cancelled.");
+      const images =
+        action === "cancel"
+          ? await loadQueuedComposerImages(
+              message.attachments.map((attachment) => {
+                const url = serverAttachmentUrlById.get(attachment.id);
+                if (!url) throw new Error("An attachment is unavailable. Nothing was cancelled.");
+                return { attachment, url };
+              }),
+            )
+          : [];
+      try {
+        const result = await controlWorkspacePreparation({
+          environmentId,
+          input: { threadId, runId, action },
+        });
+        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      } catch (error) {
+        for (const image of images) revokeBlobPreviewUrl(image.previewUrl);
+        throw error;
+      }
+      if (action !== "cancel") return;
+      const preparation = serverProjection.turnItems.find(
+        (item) =>
+          item.runId === runId && item.type === "command_execution" && item.workspacePreparation,
+      );
+      const nextDraftId = restoreWorkspacePreparationDraft({
+        source: composerDraftTarget,
+        projectRef: scopeProjectRef(activeProject.environmentId, activeProject.id),
+        logicalProjectKey: deriveLogicalProjectKeyFromSettings(
+          activeProject,
+          projectGroupingSettings,
+        ),
+        thread: serverProjection.thread,
+        preparation:
+          preparation?.type === "command_execution" ? preparation.workspacePreparation : undefined,
+        text: message.text,
+        attachments: images,
+      });
+      await navigate({
+        to: "/threads/draft/$draftId",
+        params: buildDraftThreadRouteParams(nextDraftId),
+        replace: true,
+      });
+    },
+    [
+      activeProject,
+      serverProjection,
+      serverAttachmentUrlById,
+      controlWorkspacePreparation,
+      environmentId,
+      threadId,
+      projectGroupingSettings,
+      composerDraftTarget,
+      navigate,
     ],
   );
   const serverTimelineEntries = useMemo(
@@ -8897,6 +8965,7 @@ function ChatViewContent(props: ChatViewProps) {
                 onResumeConnecting={resumeThreadLoading}
                 onRemoveMissingThread={handleRemoveMissingThread}
                 removingMissingThread={isRemovingMissingThread}
+                onControlWorkspacePreparation={onControlWorkspacePreparation}
                 onOpenThread={onOpenRelatedThread}
                 parentThreadLink={parentThreadLink}
                 onContinueFromRun={onContinueFromRun}

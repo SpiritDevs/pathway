@@ -337,6 +337,7 @@ describe("V2 session presentation", () => {
       ["work", todoItem.id],
       ["event", errorItem.id],
       ["event", threadCreatedItem.id],
+      ["event", workspacePreparationItem.id],
     ]);
     const commandEntry = entries[2];
     const userEntry = entries[0];

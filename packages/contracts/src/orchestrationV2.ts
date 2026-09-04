@@ -1016,6 +1016,23 @@ export const OrchestrationV2WebSearchResult = Schema.Struct({
 });
 export type OrchestrationV2WebSearchResult = typeof OrchestrationV2WebSearchResult.Type;
 
+/** Durable workspace milestones; the setup phase tracks script launch, not script exit. */
+export const OrchestrationV2WorkspacePreparation = Schema.Struct({
+  phase: Schema.Literals(["preparing", "worktree", "setup"]),
+  workspaceKind: Schema.Literals(["root", "existing_worktree", "worktree"]),
+  controlAction: Schema.optional(Schema.Literals(["cancel", "work_locally"])),
+  checkoutPercent: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
+  ),
+  startFromOrigin: Schema.optional(Schema.Boolean),
+  baseRef: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
+  branch: Schema.optional(Schema.String),
+  terminalId: Schema.optional(Schema.String),
+  scriptName: Schema.optional(Schema.String),
+});
+export type OrchestrationV2WorkspacePreparation = typeof OrchestrationV2WorkspacePreparation.Type;
+
 export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1075,6 +1092,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     input: Schema.String,
     output: Schema.optional(Schema.String),
     exitCode: Schema.optional(Schema.Int),
+    workspacePreparation: Schema.optional(OrchestrationV2WorkspacePreparation),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
@@ -1827,6 +1845,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     input: Schema.String,
     output: Schema.optional(Schema.String),
     exitCode: Schema.optional(Schema.Int),
+    workspacePreparation: Schema.optional(OrchestrationV2WorkspacePreparation),
   }),
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
@@ -2218,6 +2237,7 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.delete"),
     commandId: CommandId,
     threadId: ThreadId,
+    preparingRunId: Schema.optional(RunId),
     replaceableInitialThread: Schema.optional(
       Schema.Struct({ messageId: MessageId, runId: RunId }),
     ),
@@ -2453,7 +2473,8 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     runId: RunId,
-    phase: Schema.Literals(["worktree", "setup"]),
+    phase: Schema.Literals(["preparing", "worktree", "setup"]),
+    workspacePreparation: Schema.optional(OrchestrationV2WorkspacePreparation),
   }),
   Schema.Struct({
     type: Schema.Literal("prepared-run.fail"),
@@ -2597,6 +2618,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getWorkflowScript: "orchestration.getWorkflowScript",
   launchContinuation: "orchestration.launchContinuation",
   launchThread: "orchestration.launchThread",
+  controlWorkspacePreparation: "orchestration.controlWorkspacePreparation",
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
@@ -2707,6 +2729,15 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   ),
 });
 export type OrchestrationV2ThreadLaunchInput = typeof OrchestrationV2ThreadLaunchInput.Type;
+
+export const OrchestrationV2WorkspacePreparationControlInput = Schema.Struct({
+  commandId: CommandId,
+  threadId: ThreadId,
+  runId: RunId,
+  action: Schema.Literals(["cancel", "work_locally"]),
+});
+export type OrchestrationV2WorkspacePreparationControlInput =
+  typeof OrchestrationV2WorkspacePreparationControlInput.Type;
 
 export const OrchestrationV2ThreadLaunchResult = Schema.Struct({
   threadId: ThreadId,
@@ -2942,6 +2973,10 @@ export const OrchestrationV2RpcSchemas = {
   launchContinuation: {
     input: OrchestrationV2ContinuationLaunchInput,
     output: OrchestrationV2ContinuationLaunchResult,
+  },
+  controlWorkspacePreparation: {
+    input: OrchestrationV2WorkspacePreparationControlInput,
+    output: Schema.Struct({ threadId: ThreadId }),
   },
   launchThread: {
     input: OrchestrationV2ThreadLaunchInput,

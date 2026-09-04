@@ -298,6 +298,7 @@ export class GitVcsDriver extends Context.Service<
     readonly pullCurrentBranch: (cwd: string) => Effect.Effect<VcsPullResult, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
+      onCheckoutProgress?: (percent: number) => Effect.Effect<void, never>,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
     readonly createTransferStash: (
       input: GitTransferStashInput,
