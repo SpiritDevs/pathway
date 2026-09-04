@@ -239,8 +239,19 @@ export const makeIssueReplicaReader = (
         cloudProjectId,
       ]),
     );
-    const translate = (readModel: SyncedIssueDomainReadModel) =>
-      translateProjectIds(readModel, route.projectBindings, invocation.value.projectId);
+    let translatedSource: SyncedIssueDomainReadModel | undefined;
+    let translatedReadModel: SyncedIssueDomainReadModel | undefined;
+    const translate = (readModel: SyncedIssueDomainReadModel) => {
+      if (translatedReadModel === undefined || translatedSource !== readModel) {
+        translatedSource = readModel;
+        translatedReadModel = translateProjectIds(
+          readModel,
+          route.projectBindings,
+          invocation.value.projectId,
+        );
+      }
+      return translatedReadModel;
+    };
     const read = route.engine.readIssueSnapshot.pipe(
       Effect.flatMap((snapshot) =>
         !snapshot.bootstrapped || snapshot.quarantined > 0

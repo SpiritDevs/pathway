@@ -3,6 +3,7 @@ import {
   OrchestrationV2DomainEvent,
   OrchestrationV2ProviderSession,
   OrchestrationV2RuntimeRequest,
+  type ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
   ThreadId,
@@ -315,6 +316,7 @@ export const layerWithOptions = (
       const prepareMcpSession = (
         threadId: ThreadId,
         providerInstanceId: ProviderInstanceId,
+        providerDriverKind: ProviderDriverKind,
       ): Effect.Effect<PreparedMcpCredential> =>
         options.configureMcp === false
           ? Effect.sync((): PreparedMcpCredential => {
@@ -340,7 +342,8 @@ export const layerWithOptions = (
                   if (
                     resolved !== undefined &&
                     resolved.threadId === threadId &&
-                    resolved.providerInstanceId === providerInstanceId
+                    resolved.providerInstanceId === providerInstanceId &&
+                    resolved.providerDriverKind === providerDriverKind
                   ) {
                     return { mcpCredentialId: existing.providerSessionId, issued: false };
                   }
@@ -354,6 +357,7 @@ export const layerWithOptions = (
                   threadId,
                   projectId: projection.thread.projectId,
                   providerInstanceId,
+                  providerDriverKind,
                 });
                 McpProviderSession.setMcpProviderSession(credential.config);
                 reserveMcpCredential(threadId, credential.config.providerSessionId);
@@ -965,6 +969,7 @@ export const layerWithOptions = (
         readonly providerSessionId: ProviderSessionId;
         readonly threadId: ThreadId;
         readonly providerInstanceId: ProviderInstanceId;
+        readonly providerDriverKind: ProviderDriverKind;
       }) =>
         Effect.suspend(() => {
           let preparedForCleanup: PreparedMcpCredential | undefined;
@@ -978,7 +983,11 @@ export const layerWithOptions = (
           return Effect.gen(function* () {
             const attached = yield* attachThread(input);
             if (attached) {
-              const prepared = yield* prepareMcpSession(input.threadId, input.providerInstanceId);
+              const prepared = yield* prepareMcpSession(
+                input.threadId,
+                input.providerInstanceId,
+                input.providerDriverKind,
+              );
               preparedForCleanup = prepared;
               if (prepared.mcpCredentialId !== undefined) {
                 const mcpCredentialId = prepared.mcpCredentialId;
@@ -1150,6 +1159,7 @@ export const layerWithOptions = (
                 providerSessionId,
                 threadId: input.threadId,
                 providerInstanceId: runtime.instanceId,
+                providerDriverKind: runtime.driver,
               }),
             ).pipe(
               Effect.andThen(runtime.ensureThread(input)),
@@ -1183,6 +1193,7 @@ export const layerWithOptions = (
                 providerSessionId,
                 threadId,
                 providerInstanceId: runtime.instanceId,
+                providerDriverKind: runtime.driver,
               }),
             ).pipe(
               Effect.andThen(
@@ -1215,6 +1226,7 @@ export const layerWithOptions = (
                 providerSessionId,
                 threadId: input.targetThreadId,
                 providerInstanceId: runtime.instanceId,
+                providerDriverKind: runtime.driver,
               }),
             ).pipe(
               Effect.andThen(runtime.forkThread(input)),
@@ -1241,6 +1253,7 @@ export const layerWithOptions = (
                 providerSessionId,
                 threadId: input.threadId,
                 providerInstanceId: runtime.instanceId,
+                providerDriverKind: runtime.driver,
               }),
             ).pipe(
               Effect.andThen(observeActivity(providerSessionId, markBusy(providerSessionId))),
@@ -1388,6 +1401,7 @@ export const layerWithOptions = (
                   providerSessionId: input.providerSessionId,
                   threadId: input.threadId,
                   providerInstanceId: existing.runtime.instanceId,
+                  providerDriverKind: existing.runtime.driver,
                 });
                 yield* touchActivity(input.providerSessionId);
                 return existing.exposedRuntime;
@@ -1406,6 +1420,7 @@ export const layerWithOptions = (
               const prepared = yield* prepareMcpSession(
                 input.threadId,
                 input.modelSelection.instanceId,
+                adapter.driver,
               );
               const mcpCredentialId = prepared.mcpCredentialId;
               // The reservation from prepare protects the credential (which

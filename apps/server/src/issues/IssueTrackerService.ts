@@ -473,6 +473,10 @@ export interface IssueTrackerServiceShape {
   readonly memberActorForCloudUserId: (
     cloudUserId: string,
   ) => Effect.Effect<Extract<IssueActor, { readonly kind: "member" }> | null, IssueTrackerError>;
+  /** Resolves an active membership in the routed company; null in legacy mode or for stale ids. */
+  readonly activeMemberActor: (
+    membershipId: Extract<IssueActor, { readonly kind: "member" }>["membershipId"],
+  ) => Effect.Effect<Extract<IssueActor, { readonly kind: "member" }> | null, IssueTrackerError>;
   /** The environment owner's membership, used by local MCP aliases and local cloud sessions. */
   readonly linkedMemberActor: Effect.Effect<Extract<
     IssueActor,
@@ -5133,6 +5137,21 @@ export const makeIssueTrackerService = Effect.fn(function* (
         return route.memberActorForCloudUserId(cloudUserId);
       }),
     );
+  const activeMemberActor: IssueTrackerServiceShape["activeMemberActor"] = (membershipId) =>
+    resolveReplicaRoute.pipe(
+      Effect.flatMap((route) =>
+        route === null
+          ? Effect.succeed(null)
+          : route.read.pipe(
+              Effect.map((readModel) => {
+                const membership = readModel.memberships.find(
+                  (candidate) => candidate.id === membershipId && candidate.state === "active",
+                );
+                return membership === undefined ? null : { kind: "member" as const, membershipId };
+              }),
+            ),
+      ),
+    );
   const linkedMemberActor: IssueTrackerServiceShape["linkedMemberActor"] = secretStore
     .get(CLOUD_LINKED_USER_ID)
     .pipe(
@@ -6117,6 +6136,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     withPinnedRoute,
     replicaRoutable,
     memberActorForCloudUserId,
+    activeMemberActor,
     linkedMemberActor,
     readLocalIssueSnapshot: localIssueSnapshot,
     getSnapshot,

@@ -227,18 +227,48 @@ describe("issues MCP toolkit", () => {
         });
         assert.deepEqual(
           yield* resolveIssueAssignee(
-            { replicaRoutable: Effect.succeed(true), linkedMemberActor: Effect.succeed(member) },
+            {
+              replicaRoutable: Effect.succeed(true),
+              linkedMemberActor: Effect.succeed(member),
+              activeMemberActor: () => Effect.succeed(null),
+            },
             "me",
             AGENT_DRIVER,
           ),
           member,
         );
+        assert.deepEqual(
+          yield* resolveIssueAssignee(
+            {
+              replicaRoutable: Effect.succeed(true),
+              linkedMemberActor: Effect.succeed(null),
+              activeMemberActor: (membershipId) => Effect.succeed({ kind: "member", membershipId }),
+            },
+            "member:membership-explicit",
+            AGENT_DRIVER,
+          ),
+          { kind: "member", membershipId: MembershipId.make("membership-explicit") },
+        );
         const error = yield* resolveIssueAssignee(
-          { replicaRoutable: Effect.succeed(true), linkedMemberActor: Effect.succeed(null) },
+          {
+            replicaRoutable: Effect.succeed(true),
+            linkedMemberActor: Effect.succeed(null),
+            activeMemberActor: () => Effect.succeed(null),
+          },
           "user",
           AGENT_DRIVER,
         ).pipe(Effect.flip);
         assert.include(error.message, "explicit");
+        const staleMember = yield* resolveIssueAssignee(
+          {
+            replicaRoutable: Effect.succeed(true),
+            linkedMemberActor: Effect.succeed(null),
+            activeMemberActor: () => Effect.succeed(null),
+          },
+          "member:membership-departed",
+          AGENT_DRIVER,
+        ).pipe(Effect.flip);
+        assert.include(staleMember.message, "No active company member");
       }),
   );
 

@@ -447,6 +447,17 @@ describe("IssueTrackerService", () => {
           bootstrapped: true,
         },
         entities: [
+          routedStoredEntity("membership", {
+            id: "membership-active",
+            userId: "cloud-user-active",
+            state: "active",
+            displayNameSnapshot: "Active Member",
+            emailSnapshot: "active@example.test",
+            invitedByMembershipId: null,
+            joinedAt: 1_700_000_000_000,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
           routedStoredEntity("cloudProject", {
             id: "cloud-project-alpha",
             name: "Pathway",
@@ -1051,6 +1062,11 @@ describe("IssueTrackerService", () => {
         4,
       );
       assert.strictEqual(yield* Ref.get(routeResolutions), 1);
+      assert.deepStrictEqual(
+        yield* tracker.activeMemberActor(MembershipId.make("membership-active")),
+        { kind: "member", membershipId: MembershipId.make("membership-active") },
+      );
+      assert.isNull(yield* tracker.activeMemberActor(MembershipId.make("membership-departed")));
       const workflowStatuses = yield* tracker.statusesForIssue({
         issueId: IssueId.make("issue-cycle-carry"),
       });

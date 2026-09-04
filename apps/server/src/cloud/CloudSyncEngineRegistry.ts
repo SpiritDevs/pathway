@@ -149,8 +149,23 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
   const expectIssueRouting: CloudSyncEngineRegistryShape["expectIssueRouting"] = (environmentId) =>
     Ref.update(expectedEnvironments, (expected) => new Set(expected).add(environmentId));
 
-  const registerIssueEngine: CloudSyncEngineRegistryShape["registerIssueEngine"] = (input) =>
-    Ref.update(current, (registered) => {
+  const registerIssueEngine: CloudSyncEngineRegistryShape["registerIssueEngine"] = (input) => {
+    let cachedView: unknown;
+    let cachedReadModel: SyncedIssueDomainReadModel | undefined;
+    const readIssueSnapshot = SubscriptionRef.get(input.engine.state).pipe(
+      Effect.map((state) => {
+        if (cachedReadModel === undefined || cachedView !== state.view) {
+          cachedView = state.view;
+          cachedReadModel = syncedIssueDomainFromEntities(state.view.values());
+        }
+        return {
+          readModel: cachedReadModel,
+          bootstrapped: state.bootstrapped,
+          quarantined: state.quarantined.length,
+        };
+      }),
+    );
+    return Ref.update(current, (registered) => {
       const handle: CloudSyncIssueEngineHandle = {
         companyId: input.engine.companyId,
         environmentId: input.environmentId,
@@ -174,19 +189,14 @@ export const makeCloudSyncEngineRegistry = Effect.gen(function* () {
                 : { _tag: "Settled" };
             }),
           ),
-        readIssueSnapshot: SubscriptionRef.get(input.engine.state).pipe(
-          Effect.map((state) => ({
-            readModel: syncedIssueDomainFromEntities(state.view.values()),
-            bootstrapped: state.bootstrapped,
-            quarantined: state.quarantined.length,
-          })),
-        ),
+        readIssueSnapshot,
         ...(input.resolveIssueAttachmentUrls === undefined
           ? {}
           : { resolveIssueAttachmentUrls: input.resolveIssueAttachmentUrls }),
       };
       return new Map(registered).set(input.engine.companyId, { engine: input.engine, handle });
     });
+  };
 
   const unregisterIssueEngine: CloudSyncEngineRegistryShape["unregisterIssueEngine"] = (input) =>
     Ref.update(current, (registered) => {

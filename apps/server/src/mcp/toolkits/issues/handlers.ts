@@ -384,7 +384,10 @@ const resolveCycle = (
 };
 
 export const resolveIssueAssignee = (
-  tracker: Pick<IssueTrackerServiceShape, "replicaRoutable" | "linkedMemberActor">,
+  tracker: Pick<
+    IssueTrackerServiceShape,
+    "replicaRoutable" | "linkedMemberActor" | "activeMemberActor"
+  >,
   value: string,
   self: ProviderDriverKind,
 ): Effect.Effect<IssueAssignee | null, IssueTrackerError> =>
@@ -396,8 +399,18 @@ export const resolveIssueAssignee = (
         value.trim(),
       );
     }
-    if (parsed?.kind !== "user") return parsed;
+    if (parsed?.kind !== "user" && parsed?.kind !== "member") return parsed;
     if (!(yield* tracker.replicaRoutable)) return parsed;
+    if (parsed.kind === "member") {
+      const active = yield* tracker.activeMemberActor(parsed.membershipId);
+      return (
+        active ??
+        (yield* invalid(
+          `No active company member has membership id "${parsed.membershipId}".`,
+          value.trim(),
+        ))
+      );
+    }
     const member = yield* tracker.linkedMemberActor;
     return (
       member ??

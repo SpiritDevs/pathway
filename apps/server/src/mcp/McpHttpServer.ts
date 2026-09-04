@@ -536,36 +536,37 @@ const invokeIssueTool = (
   runtimeContext: Context.Context<never>,
 ): Promise<CallToolResult> =>
   Effect.runPromiseWith(runtimeContext)(
-    built.handle(name, payload).pipe(
-      Stream.unwrap,
-      Stream.run(Sink.last()),
-      Effect.flatMap(Effect.fromOption),
-      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-      Effect.tapCause(Effect.logError),
-      Effect.matchCauseEffect({
-        onFailure: (cause) => Effect.succeed(toolFailure(cause)),
-        onSuccess: ({ encodedResult }) =>
-          Effect.gen(function* () {
-            const tracker = yield* IssueTrackerService;
-            const resolveCloud: ResolveIssueCloudAttachments = (key, attachmentIds) =>
-              tracker
-                .withPinnedRoute(
-                  tracker.cloudAttachmentSources({ key: IssueKey.make(key), attachmentIds }),
-                )
-                .pipe(
-                  Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-                  Effect.orElseSucceed(() => []),
-                );
-            return yield* (
-              name === "issues_get"
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      return yield* tracker
+        .withPinnedRoute(
+          built.handle(name, payload).pipe(
+            Stream.unwrap,
+            Stream.run(Sink.last()),
+            Effect.flatMap(Effect.fromOption),
+            Effect.flatMap(({ encodedResult }) => {
+              const resolveCloud: ResolveIssueCloudAttachments = (key, attachmentIds) =>
+                tracker
+                  .cloudAttachmentSources({ key: IssueKey.make(key), attachmentIds })
+                  .pipe(Effect.orElseSucceed(() => []));
+              return name === "issues_get"
                 ? issueDetailCallToolResult(encodedResult as IssuesMcpDetail, resolveCloud)
                 : issueAttachmentCallToolResult(
                     encodedResult as IssuesMcpGetAttachmentResult,
                     resolveCloud,
-                  )
-            ).pipe(Effect.provide(attachmentContext));
+                  );
+            }),
+          ),
+        )
+        .pipe(
+          Effect.tapCause(Effect.logError),
+          Effect.matchCauseEffect({
+            onFailure: (cause) => Effect.succeed(toolFailure(cause)),
+            onSuccess: Effect.succeed,
           }),
-      }),
+        );
+    }).pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
       Effect.provide(attachmentContext),
     ),
   );

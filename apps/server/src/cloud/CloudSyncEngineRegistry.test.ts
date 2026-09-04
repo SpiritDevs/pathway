@@ -173,6 +173,9 @@ describe("CloudSyncEngineRegistry", () => {
             cloudProjectId: `cloud-project-${COMPANY_A}`,
           },
         ]);
+        const firstSnapshot = yield* resolved.engine.readIssueSnapshot;
+        const secondSnapshot = yield* resolved.engine.readIssueSnapshot;
+        expect(secondSnapshot.readModel).toBe(firstSnapshot.readModel);
       }
 
       const second = yield* projectEngine(COMPANY_B, PROJECT_ID);

@@ -362,6 +362,9 @@ describe("routeReplicaIssueRead", () => {
       expect(routed?.cloudProjectIdForLocal("sibling-checkout")).toBe(
         "cloud-project-server-issue-reads",
       );
+      const firstRead = yield* routed!.read;
+      const secondRead = yield* routed!.read;
+      expect(secondRead).toBe(firstRead);
       expect(routed?.actor).toEqual({
         kind: "agent",
         provider: "codex",
