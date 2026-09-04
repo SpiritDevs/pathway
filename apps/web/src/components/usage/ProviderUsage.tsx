@@ -33,6 +33,7 @@ import {
 import { THREAD_DETAILS_PANEL_DISCLOSURE_ROW_CLASS } from "../chat/threadDetailsPanelStyles";
 import {
   deriveProviderUsageLimits,
+  filterProviderUsageForDisplay,
   formatProviderUsageCaptureAge,
   formatProviderUsageRateLimit,
   selectPrimaryProviderUsageLimit,
@@ -331,6 +332,7 @@ export function EnvironmentProviderUsage({
   displayMode = "card",
   grouped = false,
   parentRefreshing = false,
+  showSpark = false,
   iconDisplayName,
   showIconBadge = false,
 }: {
@@ -340,6 +342,7 @@ export function EnvironmentProviderUsage({
   displayMode?: "card" | "panel";
   grouped?: boolean;
   parentRefreshing?: boolean;
+  showSpark?: boolean;
   iconDisplayName?: string;
   showIconBadge?: boolean;
 }) {
@@ -365,7 +368,7 @@ export function EnvironmentProviderUsage({
     [displayName, environmentId, provider.instanceId, usageProvider],
   );
   const singleRefresh = useForcedProviderUsageRefresh(refreshTargets);
-  const snapshot = usage.data;
+  const snapshot = filterProviderUsageForDisplay(usage.data, showSpark);
   const refreshing = grouped ? parentRefreshing : singleRefresh.isRefreshing;
   const primary = selectPrimaryProviderUsageLimit(snapshot);
   const limits = snapshot?.status === "ok" ? deriveProviderUsageLimits(snapshot.limits) : [];
@@ -542,9 +545,11 @@ export function EnvironmentProviderUsage({
 export function EnvironmentProviderUsageList({
   environmentId,
   enabled,
+  showSpark = false,
 }: {
   environmentId: EnvironmentId;
   enabled: boolean;
+  showSpark?: boolean;
 }) {
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
   const supported = useMemo(
@@ -598,6 +603,7 @@ export function EnvironmentProviderUsageList({
               iconDisplayName={entry.displayName}
               showIconBadge={shouldShowProviderInstanceBadge(entry, supported)}
               parentRefreshing={usageRefresh.isRefreshing}
+              showSpark={showSpark}
             />
           ))}
         </div>
@@ -726,7 +732,7 @@ function ConnectedProviderUsageRow({ account }: { account: ConnectedProviderUsag
         ) : null}
       </div>
       <ProviderUsageDetails
-        snapshot={usage.data}
+        snapshot={filterProviderUsageForDisplay(usage.data)}
         loading={usage.isPending}
         error={usage.error}
         compact

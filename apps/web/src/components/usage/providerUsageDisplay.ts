@@ -63,6 +63,22 @@ export function formatProviderUsageRateLimit(
   return `${providerName} usage is rate limited by the provider. Refreshes resume in about ${hours} ${hours === 1 ? "hour" : "hours"}.`;
 }
 
+export function isSparkUsageModel(model: string | null | undefined): boolean {
+  return /(?:^|[^a-z0-9])spark(?:$|[^a-z0-9])/i.test(model ?? "");
+}
+
+/** Keep model-specific Spark quotas out of general usage summaries. */
+export function filterProviderUsageForDisplay(
+  snapshot: ServerProviderUsageSnapshot | null,
+  showSpark = false,
+): ServerProviderUsageSnapshot | null {
+  if (snapshot === null || snapshot.provider !== "codex" || showSpark) return snapshot;
+  const limits = snapshot.limits.filter(
+    (limit) => !isSparkUsageModel(limit.limitId) && !isSparkUsageModel(limit.scope),
+  );
+  return limits.length === snapshot.limits.length ? snapshot : { ...snapshot, limits };
+}
+
 export function deriveProviderUsageLimits(
   limits: ReadonlyArray<ServerProviderUsageLimit>,
   nowMs = Date.now(),

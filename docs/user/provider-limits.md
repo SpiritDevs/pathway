@@ -15,3 +15,5 @@ Configured accounts remain separate across environments, even when their emails 
 When offering to wait after a usage-limit failure, Pathway prefers the reset time in the provider's failure message. Otherwise it uses the latest reset among the exhausted windows that apply to the selected model. Unknown or stale reset information does not schedule automatic recovery.
 
 Thread details hide Claude usage when that account is not signed in. Check Settings → Providers to see its sign-in status.
+
+Spark quotas remain visible in Settings → Providers. Thread details show them only while a Spark model is selected; the profile usage menu hides them.

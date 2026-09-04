@@ -35,6 +35,7 @@ import {
   ThreadLineagePanel,
   ThreadRelationshipsProvider,
 } from "./ThreadRelationshipsControl";
+import { isSparkUsageModel } from "../usage/providerUsageDisplay";
 import {
   EnvironmentProviderUsage,
   EnvironmentProviderUsageList,
@@ -53,6 +54,7 @@ export interface ThreadDetailsPanelProps {
   activeProjectName: string | undefined;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
   activeProvider: ServerProvider | null;
+  selectedModel?: string;
   activeProviderEntry?: ProviderInstanceEntry | null;
   activeProviderIconBadge?: boolean;
   resourcesEnabled: boolean;
@@ -279,12 +281,14 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             key={sectionId}
             environmentId={props.environmentId}
             enabled={props.resourcesEnabled}
+            showSpark={isSparkUsageModel(props.selectedModel)}
           />
         ) : usageProvider ? (
           <EnvironmentProviderUsage
             key={sectionId}
             environmentId={props.environmentId}
             provider={usageProvider}
+            showSpark={isSparkUsageModel(props.selectedModel)}
             enabled={props.resourcesEnabled}
             displayMode="panel"
             {...(props.activeProviderEntry
