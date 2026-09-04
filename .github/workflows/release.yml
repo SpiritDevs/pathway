@@ -682,7 +682,7 @@ jobs:
       - name: Refresh release lockfile
         run: vp install --lockfile-only --ignore-scripts
 
-      - name: Deploy and alias channel
+      - name: Deploy nightly to Vercel beta
         shell: bash
         run: |
           set -euo pipefail
@@ -692,8 +692,9 @@ jobs:
             exit 1
           fi
 
-          channel_domain="${PATHWAY_WEB_NIGHTLY_DOMAIN:-app.pathway.dev}"
+          channel_domain="${PATHWAY_WEB_NIGHTLY_DOMAIN:-app.pathwayos.dev}"
           channel_name="nightly"
+          vercel_target="beta"
           vercel_scope="${VERCEL_TEAM_SLUG:-$VERCEL_ORG_ID}"
 
           echo "Linking the Vercel project for this runner."
@@ -703,26 +704,20 @@ jobs:
             --project "$VERCEL_PROJECT_ID" \
             --token "$VERCEL_TOKEN"
 
-          echo "Deploying hosted web app for $channel_name channel."
-          deployment_url="$(
-            vp dlx vercel@59.11.2 deploy \
-              --archive=tgz \
-              --yes \
-              --scope "$vercel_scope" \
-              --token "$VERCEL_TOKEN" \
-              --build-env "APP_VERSION=${{ needs.preflight.outputs.version }}" \
-              --build-env "PATHWAY_CLERK_PUBLISHABLE_KEY=${PATHWAY_CLERK_PUBLISHABLE_KEY:-}" \
-              --build-env "PATHWAY_CLERK_JWT_TEMPLATE=${PATHWAY_CLERK_JWT_TEMPLATE:-}" \
-              --build-env "PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID=${PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID:-}" \
-              --build-env "PATHWAY_RELAY_URL=${PATHWAY_RELAY_URL:-}" \
-              --build-env "VITE_HOSTED_APP_URL=https://$channel_domain" \
-              --build-env "VITE_HOSTED_APP_CHANNEL=$channel_name"
-          )"
-
-          echo "Aliasing $deployment_url to $channel_domain."
-          vp dlx vercel@59.11.2 alias set "$deployment_url" "$channel_domain" \
+          echo "Deploying hosted web app for $channel_name channel to Vercel $vercel_target."
+          vp dlx vercel@59.11.2 deploy \
+            --archive=tgz \
+            --target "$vercel_target" \
+            --yes \
             --scope "$vercel_scope" \
-            --token "$VERCEL_TOKEN"
+            --token "$VERCEL_TOKEN" \
+            --build-env "APP_VERSION=${{ needs.preflight.outputs.version }}" \
+            --build-env "PATHWAY_CLERK_PUBLISHABLE_KEY=${PATHWAY_CLERK_PUBLISHABLE_KEY:-}" \
+            --build-env "PATHWAY_CLERK_JWT_TEMPLATE=${PATHWAY_CLERK_JWT_TEMPLATE:-}" \
+            --build-env "PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID=${PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID:-}" \
+            --build-env "PATHWAY_RELAY_URL=${PATHWAY_RELAY_URL:-}" \
+            --build-env "VITE_HOSTED_APP_URL=https://$channel_domain" \
+            --build-env "VITE_HOSTED_APP_CHANNEL=$channel_name"
 
   finalize:
     name: Finalize release
