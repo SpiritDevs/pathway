@@ -8,8 +8,8 @@
  * hard `table already exists` error, and durability across a real close-and-reopen of a database
  * file.
  */
-import * as NodeFs from "node:fs";
-import * as NodeOs from "node:os";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it } from "@effect/vitest";
@@ -265,7 +265,7 @@ describe("syncSqliteExecutor durability", () => {
     Effect.gen(function* () {
       const companyId = CompanyId.make("company-durable");
       const directory = yield* Effect.sync(() =>
-        NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "cloud-sync-store-")),
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "cloud-sync-store-")),
       );
       const filename = NodePath.join(directory, "sync.sqlite");
       const stuck = envelope({ companyId, id: "op-stuck", sequence: 6 });
@@ -313,7 +313,7 @@ describe("syncSqliteExecutor durability", () => {
         yield* reopenAndCheck.pipe(Effect.provide(NodeSqliteClient.layer({ filename })));
       }).pipe(
         Effect.ensuring(
-          Effect.sync(() => NodeFs.rmSync(directory, { recursive: true, force: true })),
+          Effect.sync(() => NodeFS.rmSync(directory, { recursive: true, force: true })),
         ),
       );
     }),

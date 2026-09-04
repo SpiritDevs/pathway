@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 import {
   CapturedEmailMessage as CapturedEmailMessageSchema,
@@ -396,13 +396,13 @@ const queryAnalytics = (
 export const makeEmailStore = Effect.fn("makeEmailStore")(function* (
   databasePath: string,
 ): Effect.fn.Return<EmailStoreShape, EmailCaptureError, Scope.Scope> {
-  const rootDir = join(dirname(databasePath), "mail");
+  const rootDir = NodePath.join(NodePath.dirname(databasePath), "mail");
   const database = yield* Effect.acquireRelease(
     Effect.tryPromise({
       try: async () => {
-        mkdirSync(dirname(databasePath), { recursive: true });
-        mkdirSync(join(rootDir, "raw"), { recursive: true });
-        mkdirSync(join(rootDir, "attachments"), { recursive: true });
+        NodeFS.mkdirSync(NodePath.dirname(databasePath), { recursive: true });
+        NodeFS.mkdirSync(NodePath.join(rootDir, "raw"), { recursive: true });
+        NodeFS.mkdirSync(NodePath.join(rootDir, "attachments"), { recursive: true });
         const opened = await openRuntimeDatabase(databasePath);
         initializeDatabase(opened);
         return opened;
@@ -473,15 +473,15 @@ export const makeEmailStore = Effect.fn("makeEmailStore")(function* (
     function* (messageId, raw, attachments) {
       return yield* Effect.try({
         try: () => {
-          const rawRelativePath = join("raw", `${messageId}.eml`);
-          writeFileSync(join(rootDir, rawRelativePath), raw);
-          const messageAttachmentDir = join("attachments", messageId);
-          mkdirSync(join(rootDir, messageAttachmentDir), { recursive: true });
+          const rawRelativePath = NodePath.join("raw", `${messageId}.eml`);
+          NodeFS.writeFileSync(NodePath.join(rootDir, rawRelativePath), raw);
+          const messageAttachmentDir = NodePath.join("attachments", messageId);
+          NodeFS.mkdirSync(NodePath.join(rootDir, messageAttachmentDir), { recursive: true });
           return {
             rawRelativePath,
             attachments: attachments.map(({ attachment, content }) => {
-              const relativePath = join(messageAttachmentDir, attachment.id);
-              writeFileSync(join(rootDir, relativePath), content);
+              const relativePath = NodePath.join(messageAttachmentDir, attachment.id);
+              NodeFS.writeFileSync(NodePath.join(rootDir, relativePath), content);
               return { attachment, relativePath };
             }),
           };
@@ -578,9 +578,13 @@ export const makeEmailStore = Effect.fn("makeEmailStore")(function* (
           database.exec("ROLLBACK");
           throw cause;
         }
-        for (const relativePath of paths) rmSync(join(rootDir, relativePath), { force: true });
+        for (const relativePath of paths)
+          NodeFS.rmSync(NodePath.join(rootDir, relativePath), { force: true });
         for (const id of ids)
-          rmSync(join(rootDir, "attachments", id), { recursive: true, force: true });
+          NodeFS.rmSync(NodePath.join(rootDir, "attachments", id), {
+            recursive: true,
+            force: true,
+          });
         return ids;
       },
       catch: (cause) => storageError("Could not delete captured emails", cause),
@@ -700,6 +704,6 @@ export const layerAtPath = (databasePath: string) =>
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig;
-    return layerAtPath(join(config.stateDir, "mail.sqlite"));
+    return layerAtPath(NodePath.join(config.stateDir, "mail.sqlite"));
   }),
 );

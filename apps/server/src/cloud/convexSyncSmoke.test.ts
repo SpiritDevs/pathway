@@ -6,8 +6,8 @@
  * deployed relay would accept modulo nonces and clocks.
  */
 import * as NodeCrypto from "node:crypto";
-import * as NodeFs from "node:fs";
-import * as NodeOs from "node:os";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
@@ -383,7 +383,7 @@ describe("smoke run state files", () => {
   });
 
   it("round-trips through write, list, and remove", () => {
-    const dir = NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "pathway-smoke-state-"));
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pathway-smoke-state-"));
     try {
       writeSmokeRunStateFile(dir, state("env-smoke-aaa"));
       writeSmokeRunStateFile(dir, state("env-smoke-bbb"));
@@ -396,12 +396,12 @@ describe("smoke run state files", () => {
       // Removing something already gone converges silently.
       removeSmokeRunStateFile(dir, "env-smoke-aaa");
     } finally {
-      NodeFs.rmSync(dir, { recursive: true, force: true });
+      NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it("creates the directory on write and lists a missing one as empty", () => {
-    const parent = NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "pathway-smoke-state-"));
+    const parent = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pathway-smoke-state-"));
     const dir = NodePath.join(parent, "nested", "state");
     try {
       assert.deepEqual([...listSmokeStateFiles(dir)], []);
@@ -412,24 +412,24 @@ describe("smoke run state files", () => {
         NodePath.join(dir, "env-smoke-ccc.json"),
       );
     } finally {
-      NodeFs.rmSync(parent, { recursive: true, force: true });
+      NodeFS.rmSync(parent, { recursive: true, force: true });
     }
   });
 
   it("skips foreign and unparseable files instead of failing the listing", () => {
-    const dir = NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "pathway-smoke-state-"));
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pathway-smoke-state-"));
     try {
       writeSmokeRunStateFile(dir, state("env-smoke-ddd"));
-      NodeFs.writeFileSync(NodePath.join(dir, "notes.txt"), "not a state file", "utf8");
-      NodeFs.writeFileSync(NodePath.join(dir, "env-smoke-broken.json"), "{nope", "utf8");
-      NodeFs.writeFileSync(
+      NodeFS.writeFileSync(NodePath.join(dir, "notes.txt"), "not a state file", "utf8");
+      NodeFS.writeFileSync(NodePath.join(dir, "env-smoke-broken.json"), "{nope", "utf8");
+      NodeFS.writeFileSync(
         NodePath.join(dir, "env-smoke-partial.json"),
         JSON.stringify({ environmentId: "env-smoke-partial" }),
         "utf8",
       );
       assert.deepEqual([...listSmokeStateFiles(dir)], [state("env-smoke-ddd")]);
     } finally {
-      NodeFs.rmSync(dir, { recursive: true, force: true });
+      NodeFS.rmSync(dir, { recursive: true, force: true });
     }
   });
 
