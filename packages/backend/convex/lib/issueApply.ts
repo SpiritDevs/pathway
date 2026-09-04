@@ -21,7 +21,9 @@ import type { BootstrapEntityKind } from "../../src/sync/bootstrap.ts";
 import {
   auditEventDomainId,
   defaultIssueSortOrder,
+  derivedDomainId,
   issueKeyNumber,
+  isCycleFinalizationActor,
   orderKeyAfter,
   parseIssueCommentCreateArgs,
   parseIssueCommentPatchArgs,
@@ -198,8 +200,9 @@ async function membershipDomainId(
 // ---------------------------------------------------------------------------
 
 // Payloads carry domain identifiers only: the Convex `_id`, `_creationTime`, storage references,
-// and the row `version` (which rides the envelope) stay server-side. `deletedAt` is omitted
-// because an upsert is by construction live and a tombstone carries no payload at all.
+// and the row `version` (which rides the envelope) stay server-side. Live issue payloads include
+// `deletedAt` for forward compatibility; soft deletes still use tombstones so pre-upgrade clients
+// cannot mistake a deleted row for a live issue. The retained audit event carries the bin snapshot.
 
 export function encodeIssue(company: Doc<"companies">, doc: Doc<"issues">): unknown {
   return {
@@ -230,6 +233,7 @@ export function encodeIssue(company: Doc<"companies">, doc: Doc<"issues">): unkn
     pullRequest: doc.pullRequest ?? null,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
+    deletedAt: doc.deletedAt,
   };
 }
 
@@ -469,7 +473,13 @@ async function appendAuditEvent(
   operation: SyncOperationEnvelope,
   eventIndex: number,
   issue: { readonly id: string; readonly teamIds: readonly string[] },
-  kind: "created" | "field_changed" | "deleted" | "restored" | "triage_rejected",
+  kind:
+    | "created"
+    | "field_changed"
+    | "deleted"
+    | "deleted_snapshot"
+    | "restored"
+    | "triage_rejected",
   payload: unknown,
   now: number,
 ): Promise<DomainChange> {
@@ -485,6 +495,48 @@ async function appendAuditEvent(
     createdAt: now,
     version: 0,
   });
+  const doc = await mustGet(ctx, docId);
+  return upsert("issueAuditEvent", id, issue.teamIds, docId, encodeIssueAuditEvent(company, doc));
+}
+
+/**
+ * The deleted-issue bin is state, not history: one current snapshot per issue is enough. Reusing a
+ * stable audit-envelope id keeps repeated delete/restore cycles from multiplying large issue
+ * payloads in retained storage or every future bootstrap.
+ */
+async function upsertDeletedSnapshot(
+  ctx: MutationCtx,
+  company: Doc<"companies">,
+  feedActor: FeedActor,
+  operation: SyncOperationEnvelope,
+  issue: Doc<"issues">,
+  now: number,
+): Promise<DomainChange> {
+  const id = derivedDomainId(`${issue.id}:deleted_snapshot`);
+  const payload = { deletedIssue: encodeIssue(company, issue) };
+  const existing = await byDomain(ctx, "issueAuditEvents", company._id, id);
+  const docId =
+    existing === null
+      ? await ctx.db.insert("issueAuditEvents", {
+          id,
+          companyId: company._id,
+          issueId: issue.id,
+          kind: "deleted_snapshot",
+          actor: feedActor,
+          payload,
+          operationId: operation.operationId,
+          createdAt: now,
+          version: 0,
+        })
+      : existing._id;
+  if (existing !== null) {
+    await ctx.db.patch(existing._id, {
+      actor: feedActor,
+      payload,
+      operationId: operation.operationId,
+      createdAt: now,
+    });
+  }
   const doc = await mustGet(ctx, docId);
   return upsert("issueAuditEvent", id, issue.teamIds, docId, encodeIssueAuditEvent(company, doc));
 }
@@ -1132,9 +1184,21 @@ const issueDelete: EnvApply = async ({ ctx, actor, company, feedActor, operation
   if (issue.deletedAt !== null) return applied();
 
   await ctx.db.patch(issue._id, { deletedAt: now, updatedAt: now });
+  const doc = await mustGet(ctx, issue._id);
   return applied(
-    tombstone("issue", issue.id, issue.teamIds, issue._id),
-    await appendAuditEvent(ctx, company, feedActor, operation, 0, issue, "deleted", {}, now),
+    tombstone("issue", doc.id, doc.teamIds, issue._id),
+    await appendAuditEvent(
+      ctx,
+      company,
+      feedActor,
+      operation,
+      0,
+      issue,
+      "deleted",
+      { key: issue.key },
+      now,
+    ),
+    await upsertDeletedSnapshot(ctx, company, feedActor, operation, doc, now),
   );
 };
 
@@ -1149,8 +1213,9 @@ const issueTriageReject: EnvApply = async ({ ctx, actor, company, feedActor, ope
   if (!issue.triage) return rejected("invalid-arguments", "Only a triage item can be rejected.");
 
   await ctx.db.patch(issue._id, { deletedAt: now, updatedAt: now });
+  const doc = await mustGet(ctx, issue._id);
   return applied(
-    tombstone("issue", issue.id, issue.teamIds, issue._id),
+    tombstone("issue", doc.id, doc.teamIds, issue._id),
     await appendAuditEvent(
       ctx,
       company,
@@ -1159,9 +1224,10 @@ const issueTriageReject: EnvApply = async ({ ctx, actor, company, feedActor, ope
       0,
       issue,
       "triage_rejected",
-      {},
+      { key: issue.key },
       now,
     ),
+    await upsertDeletedSnapshot(ctx, company, feedActor, operation, doc, now),
   );
 };
 
@@ -2318,6 +2384,32 @@ const issueCycleUpdate: EnvApply = async ({ ctx, actor, company, operation, now 
   if (cycle === null) return rejected("entity-not-found", `No cycle ${operation.entityId}.`);
   if (cycle.deletedAt !== null) return rejected("entity-deleted", "This cycle is deleted.");
   if (!can(actor, "workflow.manage", teamScope(cycle.teamId))) return denied("workflow.manage");
+
+  if (args.finalize === true) {
+    const isCycleAutomation = isCycleFinalizationActor({
+      authenticatedEnvironmentId:
+        actor.kind === "environment" ? actor.registration.environmentId : null,
+      operationEnvironmentId: operation.environmentId,
+      assertedActorKind: operation.actor.kind,
+      assertedSystemSource: operation.actor.kind === "system" ? operation.actor.source : null,
+    });
+    if (!isCycleAutomation) return denied("workflow.manage");
+    if (args.name !== undefined || args.startDate !== undefined || args.endDate !== undefined) {
+      return rejected("invalid-arguments", "Cycle finalisation cannot edit cycle fields.");
+    }
+    if (cycle.completedAt !== null) return applied();
+    await ctx.db.patch(cycle._id, { completedAt: now, updatedAt: now });
+    const finalized = await mustGet(ctx, cycle._id);
+    return applied(
+      upsert(
+        "issueCycle",
+        finalized.id,
+        teamScope(finalized.teamId),
+        cycle._id,
+        encodeIssueCycle(company, finalized),
+      ),
+    );
+  }
 
   const startDate = args.startDate ?? cycle.startDate;
   const endDate = args.endDate ?? cycle.endDate;

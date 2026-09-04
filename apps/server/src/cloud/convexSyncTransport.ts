@@ -427,6 +427,15 @@ export const makeConvexSyncTransport = Effect.fn("cloud.convex_sync_transport.ma
           ...(input.blockSize === undefined ? {} : { blockSize: input.blockSize }),
         }),
       ).pipe(Effect.map(asContract<SyncReserveIssueKeysResponse>)),
+
+    issueAttachmentUrls: (input) =>
+      authorized((convex) =>
+        convex.query(api.issueAttachments.urls, {
+          companyId: input.companyId,
+          issueId: input.issueId,
+          attachmentIds: [...input.attachmentIds],
+        }),
+      ),
   });
 });
 

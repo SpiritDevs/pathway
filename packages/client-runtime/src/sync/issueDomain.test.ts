@@ -53,6 +53,7 @@ import {
   issueSyncOperationTarget,
   makeIssueSyncAdapter,
   type CloudSyncEntity,
+  type IssueEntity,
   type IssueSyncEntity,
   type IssueSyncEntityKind,
   type IssueSyncEntityOf,
@@ -625,13 +626,17 @@ const applyCases: ReadonlyArray<ApplyCase> = [
     kind: "issue.delete",
     current: ISSUE,
     operation: issueSyncOperation({ kind: "issue.delete", entityId: ISSUE_ID, args: {} }),
-    check: (outcome) => expect(outcome._tag).toBe("Deleted"),
+    check: (outcome) => {
+      const issue = appliedOf(outcome, "issue");
+      expect(issue.deletedAt).toBe(1_000);
+      expect(issue.updatedAt).toBe(1_000);
+    },
   },
   {
     kind: "issue.triageReject",
     current: ISSUE,
     operation: issueSyncOperation({ kind: "issue.triageReject", entityId: ISSUE_ID, args: {} }),
-    check: (outcome) => expect(outcome._tag).toBe("Deleted"),
+    check: (outcome) => expect(appliedOf(outcome, "issue").deletedAt).toBe(1_000),
   },
   {
     kind: "issue.restore",
@@ -1036,6 +1041,14 @@ describe("issue apply", () => {
     },
   );
 
+  it("restores a soft-deleted issue optimistically", () => {
+    const outcome = applyTo(
+      { ...ISSUE, deletedAt: 500 },
+      issueSyncOperation({ kind: "issue.restore", entityId: ISSUE_ID, args: {} }),
+    );
+    expect(appliedOf(outcome, "issue").deletedAt).toBeNull();
+  });
+
   const updateOperations = OPERATIONS.filter(
     (operation) =>
       operation.kind.endsWith(".update") ||
@@ -1121,6 +1134,21 @@ describe("issue apply", () => {
     expect(issue.keyNumber).toBe(0);
     expect(issueKeyNumber(ISSUE_KEY_DRAFT_PLACEHOLDER)).toBe(0);
     expect(issueKeyNumber("PAT-221")).toBe(221);
+  });
+
+  it("optimistically marks a server-finalized cycle complete", () => {
+    const cycle = appliedOf(
+      applyTo(
+        CYCLE,
+        issueSyncOperation({
+          kind: "issueCycle.update",
+          entityId: CYCLE_ID,
+          args: { finalize: true },
+        }),
+      ),
+      "issueCycle",
+    );
+    expect(cycle.completedAt).toBe(1_000);
   });
 
   it("places an unpositioned milestone where the server's append will place it", () => {
@@ -1514,7 +1542,7 @@ describe("issue domain on the sync engine", () => {
     }),
   );
 
-  it.effect("never sends an edit whose row a local delete already took away", () =>
+  it.effect("keeps a deleted issue readable while blocking a later edit", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
 
@@ -1545,7 +1573,7 @@ describe("issue domain on the sync engine", () => {
         });
 
         const staged = yield* SubscriptionRef.get(engine.state);
-        expect(staged.view.has(issueKey)).toBe(false);
+        expect((staged.view.get(issueKey) as IssueEntity | undefined)?.deletedAt).toBe(1_000);
         expect(
           staged.pending.find((entry) => entry.operation.operationId === updateId)?.status,
         ).toMatchObject({ _tag: "Blocked" });
@@ -1555,10 +1583,12 @@ describe("issue domain on the sync engine", () => {
         expect(receipt.rejectedOperations).toBe(0);
         // The blocked edit never left the client, so the server never had to refuse it.
         expect(yield* harness.server.receipt(updateId)).toBeNull();
-        expect(yield* harness.server.entity("issue", ISSUE_ID)).toBeNull();
+        expect(
+          ((yield* harness.server.entity("issue", ISSUE_ID)) as IssueEntity | null)?.deletedAt,
+        ).toBe(5_000);
 
         const settled = yield* SubscriptionRef.get(engine.state);
-        expect(settled.confirmed.has(issueKey)).toBe(false);
+        expect((settled.confirmed.get(issueKey) as IssueEntity | undefined)?.deletedAt).toBe(5_000);
         expect(settled.pending).toHaveLength(1);
         expect(settled.pending[0]?.status).toMatchObject({ _tag: "Blocked" });
       }).pipe(Effect.provide(harness.layer), Effect.provideService(CloudSyncCapability, ENABLED));

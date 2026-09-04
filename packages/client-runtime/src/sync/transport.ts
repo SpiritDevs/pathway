@@ -66,5 +66,22 @@ export class SyncTransport extends Context.Service<
     readonly reserveIssueKeys: (
       input: SyncReserveIssueKeysRequest,
     ) => Effect.Effect<SyncReserveIssueKeysResponse, SyncTransportError>;
+    /** Optional server capability for resolving authorized cloud issue-attachment URLs. */
+    readonly issueAttachmentUrls?:
+      | ((input: {
+          readonly companyId: string;
+          readonly issueId: string;
+          readonly attachmentIds: ReadonlyArray<string>;
+        }) => Effect.Effect<
+          ReadonlyArray<{
+            readonly attachmentId: string;
+            readonly fileName: string;
+            readonly mimeType: string;
+            readonly byteSize: number;
+            readonly url: string;
+          }>,
+          SyncTransportError
+        >)
+      | undefined;
   }
 >()("@spiritdevs/client-runtime/sync/transport/SyncTransport") {}

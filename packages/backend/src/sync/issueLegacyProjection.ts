@@ -72,8 +72,10 @@ export function issueFromReplica(entity: IssueEntity): Issue {
     slackSource: entity.slackSource,
     createdAt: isoTimestampFromReplica(entity.createdAt),
     updatedAt: isoTimestampFromReplica(entity.updatedAt),
-    // Live replica maps contain upserts only; a synced delete removes/tombstones the entity.
-    deletedAt: null,
+    deletedAt:
+      entity.deletedAt === undefined || entity.deletedAt === null
+        ? null
+        : isoTimestampFromReplica(entity.deletedAt),
   };
 }
 
@@ -112,13 +114,33 @@ export function effectiveIssueStatusesFromReplica(
     teamRows.set(status.teamId, rows);
   }
 
-  const sourceById = new Map(stored.map((status) => [status.id, status]));
   const effective = [
     ...mergeEffectiveWorkflow(companyBases, []),
     ...[...teamRows.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
       .flatMap(([, rows]) => mergeEffectiveWorkflow(companyBases, rows)),
   ];
+  return projectEffectiveStatuses(stored, effective);
+}
+
+/** The one effective workflow an issue may move within, preserving team overrides and own rows. */
+export function effectiveIssueStatusesForOwnerFromReplica(
+  stored: ReadonlyArray<IssueStatusEntity>,
+  owner: IssueEntity["workflowOwner"],
+): ReadonlyArray<IssueStatus> {
+  const companyBases = stored.filter((status) => status.scope === "company");
+  const teamRows =
+    owner.kind === "team"
+      ? stored.filter((status) => status.scope === "team" && status.teamId === owner.teamId)
+      : [];
+  return projectEffectiveStatuses(stored, mergeEffectiveWorkflow(companyBases, teamRows));
+}
+
+function projectEffectiveStatuses(
+  stored: ReadonlyArray<IssueStatusEntity>,
+  effective: ReadonlyArray<EffectiveStatus>,
+): ReadonlyArray<IssueStatus> {
+  const sourceById = new Map(stored.map((status) => [status.id, status]));
   const flattened = new Map<IssueStatus["id"], IssueStatus>();
 
   for (const status of effective) {

@@ -116,13 +116,14 @@ const runtimePolicy = {
 
 function makeProviderSession(input: {
   readonly providerSessionId: ProviderSessionId;
+  readonly providerInstanceId: ProviderInstanceId;
   readonly now: DateTime.Utc;
   readonly capabilities?: OrchestrationV2ProviderCapabilities;
 }): OrchestrationV2ProviderSession {
   return {
     id: input.providerSessionId,
     driver: CODEX_DRIVER,
-    providerInstanceId: modelSelection.instanceId,
+    providerInstanceId: input.providerInstanceId,
     status: "ready",
     cwd: process.cwd(),
     model: "gpt-5.4",
@@ -237,10 +238,12 @@ function makeProviderAdapter(
     }) => Effect.Effect<void>;
     readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
     readonly hangSessionScopeClose?: boolean;
+    readonly providerInstanceId?: ProviderInstanceId;
   } = {},
 ): ProviderAdapterV2Shape {
+  const providerInstanceId = options.providerInstanceId ?? ProviderInstanceId.make("codex");
   return {
-    instanceId: ProviderInstanceId.make("codex"),
+    instanceId: providerInstanceId,
     driver: CODEX_DRIVER,
     getCapabilities: () => Effect.succeed(options.capabilities ?? CodexCapabilities),
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
@@ -259,6 +262,7 @@ function makeProviderAdapter(
         const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
         const session = makeProviderSession({
           providerSessionId: input.providerSessionId,
+          providerInstanceId,
           now,
           ...(options.capabilities === undefined ? {} : { capabilities: options.capabilities }),
         });
@@ -285,7 +289,7 @@ function makeProviderAdapter(
         }
 
         return {
-          instanceId: ProviderInstanceId.make("codex"),
+          instanceId: providerInstanceId,
           driver: CODEX_DRIVER,
           providerSessionId: input.providerSessionId,
           providerSession: session,
@@ -338,6 +342,7 @@ function makeTestLayer(input: {
   readonly failReleaseEventWrites?: boolean;
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
   readonly hangSessionScopeClose?: boolean;
+  readonly providerInstanceId?: ProviderInstanceId;
 }) {
   const configuredEventSinkLayer = input.failReleaseEventWrites
     ? FailingReleaseEventSinkLayer
@@ -354,6 +359,9 @@ function makeTestLayer(input: {
       ...(input.hangSessionScopeClose === undefined
         ? {}
         : { hangSessionScopeClose: input.hangSessionScopeClose }),
+      ...(input.providerInstanceId === undefined
+        ? {}
+        : { providerInstanceId: input.providerInstanceId }),
     }),
   );
   return Layer.mergeAll(
@@ -731,6 +739,8 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const state = yield* Ref.make(emptyState);
+      const aliasedInstanceId = ProviderInstanceId.make("codex_work");
+      const aliasedSelection = { ...modelSelection, instanceId: aliasedInstanceId };
       const mcpConfigs = yield* Ref.make<
         ReadonlyArray<McpProviderSession.McpProviderSessionConfig | undefined>
       >([]);
@@ -742,7 +752,7 @@ it.effect(
         const now = yield* DateTime.now;
         const threadId = ThreadId.make("thread-provider-session-manager-mcp");
         const providerSessionId = yield* idAllocator.allocate.providerSession({
-          providerInstanceId: modelSelection.instanceId,
+          providerInstanceId: aliasedInstanceId,
           threadId,
         });
 
@@ -752,19 +762,20 @@ it.effect(
         yield* manager.open({
           threadId,
           providerSessionId,
-          modelSelection,
+          modelSelection: aliasedSelection,
           runtimePolicy,
         });
 
         const captured = (yield* Ref.get(mcpConfigs))[0];
         assert.isDefined(captured);
         assert.equal(captured?.threadId, threadId);
-        assert.equal(captured?.providerInstanceId, modelSelection.instanceId);
+        assert.equal(captured?.providerInstanceId, aliasedInstanceId);
         assert.equal(captured?.endpoint, "http://127.0.0.1:43123/mcp");
         const token = captured?.authorizationHeader.replace(/^Bearer\s+/, "");
         assert.isDefined(token);
         const resolved = yield* registry.resolve(token!);
         assert.equal(resolved?.threadId, threadId);
+        assert.equal(resolved?.providerDriverKind, CODEX_DRIVER);
         assert.deepEqual(
           resolved?.capabilities,
           new Set(["preview", "orchestration", "worktree", "email"]),
@@ -781,6 +792,7 @@ it.effect(
             state,
             idleTimeoutMs: 1_000,
             mcpConfigs,
+            providerInstanceId: aliasedInstanceId,
           }),
         ),
       );

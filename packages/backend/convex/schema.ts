@@ -1400,6 +1400,8 @@ export default defineSchema({
      * it. Absent (the default) means the ordinary gate applies.
      */
     departure: v.optional(v.boolean()),
+    /** Lets issue-only readers receive a deleted-bin audit tombstone without exposing audit rows. */
+    deletedIssueSnapshot: v.optional(v.boolean()),
     /** The encoded entity for `upsert`, `null` for `tombstone`; the schema is chosen by `entityKind`. */
     payload: v.any(),
     operationId: v.union(v.string(), v.null()),
@@ -1849,7 +1851,7 @@ export default defineSchema({
     id: domainId,
     companyId: v.id("companies"),
     issueId: domainId,
-    /** An `IssueEventKind` value. */
+    /** An `IssueEventKind` value, or an internal open-envelope carrier such as a bin snapshot. */
     kind: v.string(),
     actor,
     /** Includes before/after values, which is how a stale-base overwrite stays recoverable. */

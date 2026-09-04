@@ -100,13 +100,13 @@ export function issueRpcRequiresCurrentClient(method: string, input: unknown): b
 const upgradeRequired = () =>
   new IssueTrackerError({ reason: "invalid", message: ISSUE_CLIENT_UPGRADE_REQUIRED_MESSAGE });
 
-export function enforceIssueClientCutover<A, E, R>(input: {
+export function enforceIssueClientCutover<A, E, R, ReplicaR>(input: {
   readonly method: string;
   readonly payload: unknown;
-  readonly replicaRoutable: Effect.Effect<boolean>;
+  readonly replicaRoutable: Effect.Effect<boolean, IssueTrackerError, ReplicaR>;
   readonly currentClient: Effect.Effect<boolean>;
   readonly effect: Effect.Effect<A, E, R>;
-}): Effect.Effect<A, E | IssueTrackerError, R> {
+}): Effect.Effect<A, E | IssueTrackerError, R | ReplicaR> {
   return Effect.flatMap(
     input.replicaRoutable,
     (routable): Effect.Effect<A, E | IssueTrackerError, R> => {

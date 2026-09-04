@@ -1152,7 +1152,6 @@ export function planIssueImport(
     };
     entities.push(entity);
   }
-
   const counts = emptyCounts();
   counts.issue = snapshot.issues.length;
   counts.issueStatus = snapshot.statuses.length;

@@ -1,9 +1,9 @@
 /**
- * Pure decoders for one company's durable issue replica plus the legacy RPC's fail-closed reader.
+ * Pure decoders for one company's durable issue replica plus the MCP company-route reader.
  *
- * The sync daemon may own several company replicas. Decoding a caller-selected snapshot remains
- * useful, but the process-wide legacy issue RPC has no company dimension and therefore never
- * chooses one implicitly.
+ * The sync daemon may own several company replicas. An MCP credential carries the calling thread's
+ * environment and local project, which identifies its company through an active environment
+ * binding. Callers without that scope keep the legacy behavior; scoped callers never guess.
  *
  * @module issues/IssueReplicaReader
  */
@@ -14,22 +14,60 @@ import {
   overlay,
   syncedIssueDomainFromEntities,
   SYNC_BOOTSTRAP_GENERATION,
+  type CloudSyncEntity,
   type StoredSyncState,
   type SyncedIssueDomainReadModel,
 } from "@spiritdevs/client-runtime/sync";
-import type { IssueMemberActor } from "@spiritdevs/contracts";
+import { IssueTrackerError, type IssueMemberActor, type ProjectId } from "@spiritdevs/contracts";
+import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
 import { MembershipId, type CompanyId } from "@spiritdevs/contracts/company";
+import type { SyncActor } from "@spiritdevs/contracts/cloudSync";
 import * as Effect from "effect/Effect";
 
+import type {
+  CloudSyncEngineRegistryShape,
+  CloudSyncIssueEngineHandle,
+  CloudSyncIssueProjectBinding,
+} from "../cloud/CloudSyncEngineRegistry.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+
+export interface IssueReplicaRoute {
+  readonly companyId: CompanyId;
+  readonly engine: CloudSyncIssueEngineHandle;
+  readonly actor: SyncActor;
+  readonly readModel: SyncedIssueDomainReadModel;
+  readonly read: Effect.Effect<SyncedIssueDomainReadModel, IssueTrackerError>;
+  readonly memberActorForCloudUserId: (cloudUserId: string) => IssueMemberActor | null;
+  readonly cloudProjectIdForLocal: (localProjectId: string) => CloudProjectId | null;
+}
+
 export interface IssueReplicaReader {
+  /** Resolves one stable company route for the full lifetime of a write. */
+  readonly resolve: Effect.Effect<IssueReplicaRoute | null, IssueTrackerError>;
   /** Null when this environment has no configured company route. */
-  readonly companyId: CompanyId | null;
+  readonly companyId: Effect.Effect<CompanyId | null, IssueTrackerError>;
   /** Null means legacy fallback; a ready replica may legitimately project to an empty domain. */
-  readonly read: Effect.Effect<SyncedIssueDomainReadModel | null>;
+  readonly read: Effect.Effect<SyncedIssueDomainReadModel | null, IssueTrackerError>;
   /** Resolves an active cloud user without guessing when the replica is absent or incomplete. */
   readonly memberActorForCloudUserId: (
     cloudUserId: string,
-  ) => Effect.Effect<IssueMemberActor | null>;
+  ) => Effect.Effect<IssueMemberActor | null, IssueTrackerError>;
+}
+
+function issueMemberActorFromEntities(
+  entities: Iterable<CloudSyncEntity>,
+  cloudUserId: string,
+): IssueMemberActor | null {
+  for (const entity of entities) {
+    if (
+      entity.entityKind === "membership" &&
+      entity.userId === cloudUserId &&
+      entity.state === "active"
+    ) {
+      return { kind: "member", membershipId: MembershipId.make(entity.id) };
+    }
+  }
+  return null;
 }
 
 export function issueMemberActorFromStoredReplica(
@@ -52,17 +90,10 @@ export function issueMemberActorFromStoredReplica(
     authorizationEpoch: checkpoint.authorizationEpoch,
   });
   if (decoded.quarantined !== 0) return null;
-  for (const confirmed of decoded.replica.entities.values()) {
-    const entity = confirmed.entity;
-    if (
-      entity.entityKind === "membership" &&
-      entity.userId === cloudUserId &&
-      entity.state === "active"
-    ) {
-      return { kind: "member", membershipId: MembershipId.make(entity.id) };
-    }
-  }
-  return null;
+  return issueMemberActorFromEntities(
+    [...decoded.replica.entities.values()].map(({ entity }) => entity),
+    cloudUserId,
+  );
 }
 
 /**
@@ -108,7 +139,7 @@ export function issueReadModelFromStoredReplica(
 
 /** Chooses one source once; entity absence inside a ready replica never falls through to legacy. */
 export function routeReplicaIssueRead<A, E, R>(input: {
-  readonly replica: Effect.Effect<SyncedIssueDomainReadModel | null>;
+  readonly replica: Effect.Effect<SyncedIssueDomainReadModel | null, E, R>;
   readonly fromReplica: (readModel: SyncedIssueDomainReadModel) => Effect.Effect<A, E, R>;
   readonly fromLegacy: Effect.Effect<A, E, R>;
 }): Effect.Effect<A, E, R> {
@@ -120,15 +151,145 @@ export function routeReplicaIssueRead<A, E, R>(input: {
 }
 
 const unavailableReader: IssueReplicaReader = {
-  companyId: null,
+  resolve: Effect.succeed(null),
+  companyId: Effect.succeed(null),
   read: Effect.succeed(null),
   memberActorForCloudUserId: () => Effect.succeed(null),
 };
 
+const routingFailure = (message: string) =>
+  new IssueTrackerError({
+    reason: "storage",
+    message: `Cloud issue routing failed: ${message}`,
+  });
+
+function translateProjectIds(
+  readModel: SyncedIssueDomainReadModel,
+  projectBindings: ReadonlyArray<CloudSyncIssueProjectBinding>,
+  preferredLocalProjectId: string | undefined,
+): SyncedIssueDomainReadModel {
+  const localByCloud = new Map<CloudProjectId, ProjectId>();
+  for (const { cloudProjectId, localProjectId } of projectBindings) {
+    if (!localByCloud.has(cloudProjectId)) localByCloud.set(cloudProjectId, localProjectId);
+  }
+  const preferred = projectBindings.find(
+    ({ localProjectId }) => localProjectId === preferredLocalProjectId,
+  );
+  if (preferred !== undefined) {
+    localByCloud.set(preferred.cloudProjectId, preferred.localProjectId);
+  }
+  const localProjectId = (cloudProjectId: CloudProjectId) => {
+    const local = localByCloud.get(cloudProjectId);
+    return local === undefined ? cloudProjectId : CloudProjectId.make(local);
+  };
+  return {
+    ...readModel,
+    cloudProjects: readModel.cloudProjects.map((project) => ({
+      ...project,
+      id: localProjectId(project.id),
+    })),
+    issues: readModel.issues.map((issue) => ({
+      ...issue,
+      projectId: issue.projectId === null ? null : localProjectId(issue.projectId),
+    })),
+    issueMilestones: readModel.issueMilestones.map((milestone) => ({
+      ...milestone,
+      cloudProjectId: localProjectId(milestone.cloudProjectId),
+    })),
+  };
+}
+
 /**
- * The legacy issue RPC has no company scope, so it must not guess among the environment's current
- * company replicas. Cloud issue reads and writes are routed explicitly by the client; this
- * process-wide service remains on the environment-local repository until its RPC boundary carries
- * a company id.
+ * Builds a reader whose route is resolved when the operation runs, after MCP authentication has
+ * installed the invocation scope. Non-MCP server automation keeps its existing legacy route.
  */
-export const makeIssueReplicaReader = Effect.succeed(unavailableReader);
+export const makeIssueReplicaReader = (
+  registry: CloudSyncEngineRegistryShape | null = null,
+): Effect.Effect<IssueReplicaReader> => {
+  if (registry === null) return Effect.succeed(unavailableReader);
+
+  const resolve: IssueReplicaReader["resolve"] = Effect.gen(function* () {
+    const invocation = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+    if (invocation._tag === "None") return null;
+    const route = yield* registry.issueEngineForProject({
+      environmentId: invocation.value.environmentId,
+      ...(invocation.value.projectId === undefined
+        ? {}
+        : { localProjectId: invocation.value.projectId }),
+    });
+    if (route._tag === "Legacy") return null;
+    if (route._tag === "Unavailable") {
+      return yield* routingFailure(
+        `cloud sync is configured for environment ${invocation.value.environmentId}, but no complete company replica is available${route.companyIds.length === 0 ? "" : ` (${route.companyIds.join(", ")})`}; refusing to use the legacy tracker`,
+      );
+    }
+    if (route._tag === "Unbound") {
+      return yield* routingFailure(
+        `project ${invocation.value.projectId ?? "(missing)"} is not bound to a ready company replica on environment ${invocation.value.environmentId}; refusing to use the legacy tracker`,
+      );
+    }
+    if (route._tag === "Ambiguous") {
+      return yield* routingFailure(
+        `project ${invocation.value.projectId ?? "(missing)"} is bound to more than one company replica (${route.companyIds.join(", ")}); refusing to guess`,
+      );
+    }
+    const cloudByLocal = new Map<string, CloudProjectId>(
+      route.projectBindings.map(({ localProjectId, cloudProjectId }) => [
+        localProjectId,
+        cloudProjectId,
+      ]),
+    );
+    let translatedSource: SyncedIssueDomainReadModel | undefined;
+    let translatedReadModel: SyncedIssueDomainReadModel | undefined;
+    const translate = (readModel: SyncedIssueDomainReadModel) => {
+      if (translatedReadModel === undefined || translatedSource !== readModel) {
+        translatedSource = readModel;
+        translatedReadModel = translateProjectIds(
+          readModel,
+          route.projectBindings,
+          invocation.value.projectId,
+        );
+      }
+      return translatedReadModel;
+    };
+    const read = route.engine.readIssueSnapshot.pipe(
+      Effect.flatMap((snapshot) =>
+        !snapshot.bootstrapped || snapshot.quarantined > 0
+          ? Effect.fail(
+              routingFailure(
+                `company replica ${route.engine.companyId} became incomplete during the operation`,
+              ),
+            )
+          : Effect.succeed(translate(snapshot.readModel)),
+      ),
+    );
+    return {
+      companyId: route.engine.companyId,
+      engine: route.engine,
+      actor: {
+        kind: "agent",
+        provider: invocation.value.providerDriverKind,
+        onBehalfOfMembershipId: null,
+      },
+      readModel: translate(route.readModel),
+      read,
+      memberActorForCloudUserId: (cloudUserId) =>
+        issueMemberActorFromEntities(route.readModel.memberships, cloudUserId),
+      cloudProjectIdForLocal: (localProjectId) => cloudByLocal.get(localProjectId) ?? null,
+    };
+  });
+
+  return Effect.succeed({
+    resolve,
+    companyId: resolve.pipe(Effect.map((route) => route?.companyId ?? null)),
+    read: resolve.pipe(Effect.map((route) => route?.readModel ?? null)),
+    memberActorForCloudUserId: (cloudUserId) =>
+      resolve.pipe(
+        Effect.map((route) =>
+          route === null
+            ? null
+            : issueMemberActorFromEntities(route.readModel.memberships, cloudUserId),
+        ),
+      ),
+  });
+};

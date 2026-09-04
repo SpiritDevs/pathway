@@ -3,8 +3,10 @@ import {
   EnvironmentId,
   ISSUE_COMMENT_ATTACHMENT_MAX_BYTES,
   IssueCommentAgentRunId,
+  IssueCycleId,
   IssueEnrichmentRunId,
   IssueId,
+  IssueKey,
   IssueMilestoneId,
   IssueStatusId,
   ProjectId,
@@ -26,10 +28,12 @@ import {
   SYNC_BOOTSTRAP_GENERATION,
   SYNC_DOCUMENT_SCHEMA_VERSION,
   type CloudSyncEntity,
+  type IssueSyncOperation,
   type StoredSyncEntity,
   type StoredSyncState,
 } from "@spiritdevs/client-runtime/sync";
-import { CompanyId, MembershipId } from "@spiritdevs/contracts/company";
+import { CompanyId, MembershipId, TeamId } from "@spiritdevs/contracts/company";
+import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
 import {
   AuthorizationEpoch,
   CompanyVersion,
@@ -37,6 +41,8 @@ import {
   SYNC_PROTOCOL_VERSION,
   SyncClientId,
   SyncEntityId,
+  SyncOperationId,
+  type SyncActor,
   type SyncEntityKind,
 } from "@spiritdevs/contracts/cloudSync";
 import { assert, describe, it } from "@effect/vitest";
@@ -118,8 +124,30 @@ function readyReplicaReader(entities: ReadonlyArray<StoredSyncEntity> = []): Iss
     localSequenceHighWater: LocalSequence.make(0),
   });
   if (readModel === null) throw new Error("The ready replica fixture did not decode.");
-  return {
+  const handle: CloudSyncIssueEngineHandle = {
     companyId: ROUTED_COMPANY_ID,
+    environmentId: ROUTED_ENVIRONMENT_ID,
+    enqueue: () => Effect.die("unused"),
+    sync: Effect.die("unused"),
+    operationDisposition: () => Effect.die("unused"),
+    readIssueSnapshot: Effect.succeed({ readModel, bootstrapped: true, quarantined: 0 }),
+  };
+  const route = {
+    companyId: ROUTED_COMPANY_ID,
+    engine: handle,
+    actor: {
+      kind: "agent" as const,
+      provider: ProviderDriverKind.make("codex"),
+      onBehalfOfMembershipId: null,
+    },
+    readModel,
+    read: Effect.succeed(readModel),
+    memberActorForCloudUserId: () => null,
+    cloudProjectIdForLocal: (localProjectId: string) => CloudProjectId.make(localProjectId),
+  };
+  return {
+    resolve: Effect.succeed(route),
+    companyId: Effect.succeed(ROUTED_COMPANY_ID),
     read: Effect.succeed(readModel),
     memberActorForCloudUserId: () => Effect.succeed(null),
   };
@@ -338,6 +366,17 @@ describe("IssueTrackerService", () => {
       const tracker = yield* makeIssueTrackerService({
         replicaReader: {
           ...replicaReader,
+          resolve: replicaReader.resolve.pipe(
+            Effect.map((route) =>
+              route === null
+                ? null
+                : {
+                    ...route,
+                    memberActorForCloudUserId: (userId: string) =>
+                      userId === "user-a" ? MEMBER_A : null,
+                  },
+            ),
+          ),
           memberActorForCloudUserId: (userId) =>
             Effect.succeed(userId === "user-a" ? MEMBER_A : null),
         },
@@ -408,6 +447,39 @@ describe("IssueTrackerService", () => {
           bootstrapped: true,
         },
         entities: [
+          routedStoredEntity("membership", {
+            id: "membership-active",
+            userId: "cloud-user-active",
+            state: "active",
+            displayNameSnapshot: "Active Member",
+            emailSnapshot: "active@example.test",
+            invitedByMembershipId: null,
+            joinedAt: 1_700_000_000_000,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("cloudProject", {
+            id: "cloud-project-alpha",
+            name: "Pathway",
+            description: "Team B project",
+            teamIds: ["team-b"],
+            defaultWorkflowOwner: { kind: "team", teamId: "team-b" },
+            preferredBindingId: null,
+            archivedAt: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("cloudProject", {
+            id: "cloud-project-team-a",
+            name: "Team A",
+            description: "Team A only project",
+            teamIds: ["team-a"],
+            defaultWorkflowOwner: { kind: "team", teamId: "team-a" },
+            preferredBindingId: null,
+            archivedAt: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
           routedStoredEntity("issueStatus", {
             id: "status-routed",
             scope: "company",
@@ -421,6 +493,178 @@ describe("IssueTrackerService", () => {
             createdAt: 1_700_000_000_000,
             updatedAt: 1_700_000_000_000,
           }),
+          routedStoredEntity("issueStatus", {
+            id: "status-team-a-qa",
+            scope: "team",
+            teamId: "team-a",
+            baseStatusId: null,
+            name: "QA",
+            color: "#aaaaaa",
+            category: "review",
+            position: 1,
+            hidden: false,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueStatus", {
+            id: "status-team-b-qa",
+            scope: "team",
+            teamId: "team-b",
+            baseStatusId: null,
+            name: "QA",
+            color: "#bbbbbb",
+            category: "review",
+            position: 1,
+            hidden: false,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueLabel", {
+            id: "label-team-a-ops",
+            teamId: "team-a",
+            name: "Ops",
+            color: "#aaaaaa",
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueLabel", {
+            id: "label-team-b-ops",
+            teamId: "team-b",
+            name: "Ops",
+            color: "#bbbbbb",
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueCycle", {
+            id: "cycle-team-a-current",
+            teamId: "team-a",
+            name: "Current",
+            startDate: "2998-01-01",
+            endDate: "2998-01-31",
+            completedAt: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueCycle", {
+            id: "cycle-team-b-current",
+            teamId: "team-b",
+            name: "Current",
+            startDate: "2998-01-01",
+            endDate: "2998-01-31",
+            completedAt: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueCycle", {
+            id: "cycle-ended",
+            teamId: null,
+            name: "Ended",
+            startDate: "1900-01-01",
+            endDate: "1900-01-31",
+            completedAt: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueCycle", {
+            id: "cycle-next",
+            teamId: null,
+            name: "Next",
+            startDate: "2999-01-01",
+            endDate: "2999-01-31",
+            completedAt: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueCycle", {
+            id: "cycle-requested",
+            teamId: null,
+            name: "Requested",
+            startDate: "3000-01-01",
+            endDate: "3000-01-31",
+            completedAt: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issue", {
+            id: "issue-cycle-carry",
+            key: "SYNC-50",
+            keyNumber: 50,
+            title: "Carry me",
+            description: "",
+            statusId: "status-routed",
+            priority: "none",
+            assignee: null,
+            projectId: null,
+            milestoneId: null,
+            cycleId: "cycle-ended",
+            parentId: null,
+            sortOrder: "m",
+            labelIds: [],
+            dueDate: null,
+            triage: false,
+            slackSource: null,
+            teamIds: ["team-b"],
+            workflowOwner: { kind: "team", teamId: "team-b" },
+            workModelSelection: null,
+            automationAssignment: null,
+            pullRequest: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issue", {
+            id: "issue-cycle-deleted",
+            key: "SYNC-49",
+            keyNumber: 49,
+            title: "Leave deleted in its old cycle",
+            description: "",
+            statusId: "status-routed",
+            priority: "none",
+            assignee: null,
+            projectId: null,
+            milestoneId: null,
+            cycleId: "cycle-ended",
+            parentId: null,
+            sortOrder: "l",
+            labelIds: [],
+            dueDate: null,
+            triage: false,
+            slackSource: null,
+            teamIds: [],
+            workflowOwner: { kind: "company" },
+            workModelSelection: null,
+            automationAssignment: null,
+            pullRequest: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_100,
+            deletedAt: 1_700_000_000_100,
+          }),
+          routedStoredEntity("issueAuditEvent", {
+            id: "audit-cycle-carry-created",
+            issueId: "issue-cycle-carry",
+            kind: "imported",
+            actor: { kind: "environment", environmentId: ROUTED_ENVIRONMENT_ID },
+            payload: { key: "SYNC-50" },
+            operationId: null,
+            createdAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueThreadLink", {
+            id: "thread-link-local",
+            issueId: "issue-cycle-carry",
+            environmentId: ROUTED_ENVIRONMENT_ID,
+            threadId: "thread-shared",
+            origin: "manual",
+            createdByMembershipId: null,
+            createdAt: 1_700_000_000_000,
+          }),
+          routedStoredEntity("issueThreadLink", {
+            id: "thread-link-remote",
+            issueId: "issue-cycle-carry",
+            environmentId: EnvironmentId.make("environment-remote"),
+            threadId: "thread-shared",
+            origin: "manual",
+            createdByMembershipId: null,
+            createdAt: 1_700_000_000_001,
+          }),
         ],
         outbox: [],
         rejected: [],
@@ -428,11 +672,59 @@ describe("IssueTrackerService", () => {
         localSequenceHighWater: LocalSequence.make(0),
       });
       const sequence = yield* Ref.make(0);
+      const routeResolutions = yield* Ref.make(0);
+      const seenOperationIds = yield* Ref.make<ReadonlySet<SyncOperationId>>(new Set());
+      const pendingOperationIds = yield* Ref.make<ReadonlySet<SyncOperationId>>(new Set());
+      const holdQueuedCreate = yield* Ref.make(false);
+      const rejectCycleFinalization = yield* Ref.make(false);
+      const rejectedOperationIds = yield* Ref.make<ReadonlySet<SyncOperationId>>(new Set());
+      const failNextRouteRead = yield* Ref.make(false);
+      const attachmentUrlCalls = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
+      const enqueued = yield* Ref.make<
+        ReadonlyArray<{
+          readonly operationId: SyncOperationId;
+          readonly operation: IssueSyncOperation;
+          readonly actor: SyncActor;
+        }>
+      >([]);
       const handle: CloudSyncIssueEngineHandle = {
         companyId: ROUTED_COMPANY_ID,
         environmentId: ROUTED_ENVIRONMENT_ID,
         enqueue: ({ operationId, operation, actor }) =>
           Effect.gen(function* () {
+            if (actor === undefined) throw new Error("A routed write must carry its actor.");
+            const duplicate = yield* Ref.modify(seenOperationIds, (seen) => [
+              seen.has(operationId),
+              new Set(seen).add(operationId),
+            ]);
+            if (duplicate) {
+              return {
+                accepted: false,
+                operationId,
+                localSequence: LocalSequence.make(0),
+                status: { _tag: "Pending" as const },
+              };
+            }
+            if (
+              operation.kind === "issue.create" &&
+              (operation.args.title === "Queued create" ||
+                operation.args.title === "Max key create") &&
+              (yield* Ref.get(holdQueuedCreate))
+            ) {
+              yield* Ref.update(pendingOperationIds, (pending) =>
+                new Set(pending).add(operationId),
+              );
+            }
+            if (
+              operation.kind === "issueCycle.update" &&
+              operation.args.finalize === true &&
+              (yield* Ref.get(rejectCycleFinalization))
+            ) {
+              yield* Ref.update(rejectedOperationIds, (rejected) =>
+                new Set(rejected).add(operationId),
+              );
+            }
+            yield* Ref.update(enqueued, (items) => [...items, { operationId, operation, actor }]);
             const localSequence = LocalSequence.make(
               yield* Ref.updateAndGet(sequence, (n) => n + 1),
             );
@@ -468,18 +760,167 @@ describe("IssueTrackerService", () => {
               status: { _tag: "Pending" as const },
             };
           }),
-        sync: Effect.die(new Error("restore is not used by this test")),
-        operationDisposition: () => Effect.succeed({ _tag: "Pending" }),
+        sync: Effect.gen(function* () {
+          const pending = yield* Ref.get(pendingOperationIds);
+          const failReadBack = (yield* Ref.get(stored)).outbox.some(
+            (entry) =>
+              entry.envelope.kind === "issue.create" &&
+              (entry.envelope.args as { readonly title?: unknown }).title === "Read-back failure",
+          );
+          yield* Ref.update(stored, (current) => {
+            const optimistic = issueReadModelFromStoredReplica(current);
+            const created = current.outbox.find((entry) => entry.envelope.kind === "issue.create");
+            if (created !== undefined && pending.has(created.envelope.operationId)) return current;
+            const createdIssue =
+              created === undefined
+                ? undefined
+                : (optimistic?.issues.find(
+                    (issue) => issue.id === IssueId.make(created.envelope.entityId),
+                  ) ?? undefined);
+            const keyNumber =
+              createdIssue?.title === "Queued create"
+                ? 52
+                : createdIssue?.title === "Read-back failure"
+                  ? 53
+                  : createdIssue?.title === "Max key create"
+                    ? 54
+                    : 51;
+            const confirmed =
+              createdIssue === undefined
+                ? []
+                : [
+                    routedStoredEntity("issue", {
+                      ...createdIssue,
+                      key: `SYNC-${keyNumber}`,
+                      keyNumber,
+                    }),
+                  ];
+            return {
+              ...current,
+              entities: [
+                ...current.entities.filter(
+                  (entity) =>
+                    !confirmed.some(
+                      (candidate) =>
+                        candidate.entityKind === entity.entityKind &&
+                        candidate.entityId === entity.entityId,
+                    ),
+                ),
+                ...confirmed,
+              ],
+              outbox: [],
+            };
+          });
+          if (failReadBack) yield* Ref.set(failNextRouteRead, true);
+          return {
+            outcome: "synced" as const,
+            cursor: CompanyVersion.make(2),
+            authorizationEpoch: AuthorizationEpoch.make(1),
+            appliedChanges: 1,
+            acceptedOperations: 1,
+            rejectedOperations: 0,
+            error: null,
+          };
+        }),
+        operationDisposition: (operationId) =>
+          Effect.gen(function* () {
+            if ((yield* Ref.get(rejectedOperationIds)).has(operationId)) {
+              return {
+                _tag: "Rejected" as const,
+                code: "forbidden",
+                message: "Cycle finalization is not permitted",
+              };
+            }
+            return (yield* Ref.get(pendingOperationIds)).has(operationId)
+              ? ({ _tag: "Pending" } as const)
+              : ({ _tag: "Settled" } as const);
+          }),
+        readIssueSnapshot: Ref.get(stored).pipe(
+          Effect.map(issueReadModelFromStoredReplica),
+          Effect.map((readModel) => ({
+            readModel: readModel!,
+            bootstrapped: true,
+            quarantined: 0,
+          })),
+        ),
+        resolveIssueAttachmentUrls: (input) =>
+          Ref.update(attachmentUrlCalls, (calls) => [...calls, input.attachmentIds]).pipe(
+            Effect.as(
+              input.attachmentIds.map((attachmentId) => ({
+                attachmentId,
+                fileName: "evidence.png",
+                mimeType: "image/png",
+                byteSize: 3,
+                url: "https://files.example.test/evidence.png",
+              })),
+            ),
+          ),
       };
       const registry = CloudSyncEngineRegistry.of({
+        expectIssueRouting: () => Effect.void,
         registerIssueEngine: () => Effect.void,
         unregisterIssueEngine: () => Effect.void,
         withIssueEngine: (_input, use) => use,
         issueEngine: () => Effect.succeed(handle),
+        issueEngineForProject: () =>
+          Ref.get(stored).pipe(
+            Effect.map(issueReadModelFromStoredReplica),
+            Effect.map((readModel) => ({
+              _tag: "Ready" as const,
+              engine: handle,
+              readModel: readModel!,
+              projectBindings: [],
+            })),
+          ),
       } satisfies CloudSyncEngineRegistryShape);
+      const read = Effect.gen(function* () {
+        if (yield* Ref.get(failNextRouteRead)) {
+          yield* Ref.set(failNextRouteRead, false);
+          return yield* new IssueTrackerError({
+            reason: "storage",
+            message: "Replica became unavailable during read-back",
+          });
+        }
+        const readModel = issueReadModelFromStoredReplica(yield* Ref.get(stored))!;
+        return {
+          ...readModel,
+          cloudProjects: readModel.cloudProjects.map((project) => ({
+            ...project,
+            id: project.id === "cloud-project-alpha" ? CloudProjectId.make(PROJECT) : project.id,
+          })),
+        };
+      });
       const replicaReader: IssueReplicaReader = {
-        companyId: ROUTED_COMPANY_ID,
-        read: Ref.get(stored).pipe(Effect.map(issueReadModelFromStoredReplica)),
+        resolve: Effect.gen(function* () {
+          yield* Ref.update(routeResolutions, (count) => count + 1);
+          const readModel = yield* read;
+          return {
+            companyId: ROUTED_COMPANY_ID,
+            engine: handle,
+            actor: {
+              kind: "agent" as const,
+              provider: ProviderDriverKind.make("codex"),
+              onBehalfOfMembershipId: null,
+            },
+            readModel: {
+              ...readModel,
+              cloudProjects: readModel.cloudProjects.map((project) => ({
+                ...project,
+                teamIds: [TeamId.make("team-a"), TeamId.make("team-b")],
+              })),
+            },
+            read,
+            memberActorForCloudUserId: () => null,
+            cloudProjectIdForLocal: (localProjectId: string) =>
+              localProjectId === PROJECT || localProjectId === "sibling-checkout"
+                ? CloudProjectId.make("cloud-project-alpha")
+                : localProjectId === "team-a-checkout"
+                  ? CloudProjectId.make("cloud-project-team-a")
+                  : null,
+          };
+        }),
+        companyId: Effect.succeed(ROUTED_COMPANY_ID),
+        read,
         memberActorForCloudUserId: () => Effect.succeed(null),
       };
 
@@ -487,20 +928,279 @@ describe("IssueTrackerService", () => {
         replicaReader,
         syncEngineRegistry: registry,
       });
-      const created = yield* tracker.create(
-        { title: "Server-routed", statusId: IssueStatusId.make("status-routed") },
-        AGENT,
+      const [
+        created,
+        retried,
+        queuedError,
+        resumed,
+        readError,
+        readRecovered,
+        maxKeyError,
+        maxKey,
+      ] = yield* tracker.withPinnedRoute(
+        Effect.gen(function* () {
+          const first = yield* tracker.create(
+            {
+              title: "Server-routed",
+              statusId: IssueStatusId.make("status-routed"),
+              projectId: PROJECT,
+            },
+            AGENT,
+            "create-request-1",
+          );
+          const retry = yield* tracker.create(
+            {
+              title: "Server-routed",
+              statusId: IssueStatusId.make("status-routed"),
+              projectId: PROJECT,
+            },
+            AGENT,
+            "create-request-1",
+          );
+          yield* Ref.set(holdQueuedCreate, true);
+          const pendingError = yield* tracker
+            .create(
+              {
+                title: "Queued create",
+                statusId: IssueStatusId.make("status-routed"),
+              },
+              AGENT,
+              "queued-request",
+            )
+            .pipe(Effect.flip);
+          yield* Ref.set(holdQueuedCreate, false);
+          yield* Ref.set(pendingOperationIds, new Set());
+          const resumedCreate = yield* tracker.create(
+            {
+              title: "Queued create",
+              statusId: IssueStatusId.make("status-routed"),
+            },
+            AGENT,
+            pendingError.subject,
+          );
+          const failedReadBack = yield* tracker
+            .create(
+              {
+                title: "Read-back failure",
+                statusId: IssueStatusId.make("status-routed"),
+              },
+              AGENT,
+              "read-failure",
+            )
+            .pipe(Effect.flip);
+          const recoveredReadBack = yield* tracker.create(
+            {
+              title: "Read-back failure",
+              statusId: IssueStatusId.make("status-routed"),
+            },
+            AGENT,
+            failedReadBack.subject,
+          );
+          yield* Ref.set(holdQueuedCreate, true);
+          const failedMaxKey = yield* tracker
+            .create(
+              {
+                title: "Max key create",
+                statusId: IssueStatusId.make("status-routed"),
+              },
+              AGENT,
+              "x".repeat(512),
+            )
+            .pipe(Effect.flip);
+          yield* Ref.set(holdQueuedCreate, false);
+          yield* Ref.set(pendingOperationIds, new Set());
+          const recoveredMaxKey = yield* tracker.create(
+            {
+              title: "Max key create",
+              statusId: IssueStatusId.make("status-routed"),
+            },
+            AGENT,
+            failedMaxKey.subject,
+          );
+          return [
+            first,
+            retry,
+            pendingError,
+            resumedCreate,
+            failedReadBack,
+            recoveredReadBack,
+            failedMaxKey,
+            recoveredMaxKey,
+          ] as const;
+        }),
       );
-      assert.strictEqual(created.issue.key, "Draft");
+      assert.match(created.issue.id, /^[0-9a-f-]{36}$/u);
+      assert.strictEqual(created.issue.key, "SYNC-51");
       assert.strictEqual(created.issue.title, "Server-routed");
+      const firstWrite = (yield* Ref.get(enqueued))[0]!;
+      assert.strictEqual(firstWrite.operation.kind, "issue.create");
+      if (firstWrite.operation.kind !== "issue.create") throw new Error("Expected issue.create");
+      assert.strictEqual(firstWrite.operation.args.projectId, "cloud-project-alpha");
+      assert.deepStrictEqual(firstWrite.operation.args.teamIds, [TeamId.make("team-b")]);
+      assert.deepStrictEqual(firstWrite.actor, {
+        kind: "agent",
+        provider: ProviderDriverKind.make("codex"),
+        onBehalfOfMembershipId: null,
+      });
+      assert.strictEqual(retried.issue.id, created.issue.id);
+      assert.strictEqual(queuedError.reason, "conflict");
+      assert.match(queuedError.subject ?? "", /^issue-retry:v1:/u);
+      assert.isAtMost(queuedError.subject?.length ?? Infinity, 512);
+      assert.include(queuedError.message, `idempotencyKey "${queuedError.subject}"`);
+      assert.match(resumed.issue.id, /^[0-9a-f-]{36}$/u);
+      assert.strictEqual(resumed.issue.key, "SYNC-52");
+      assert.strictEqual(readError.reason, "conflict");
+      assert.match(readError.subject ?? "", /^issue-retry:v1:/u);
+      assert.isAtMost(readError.subject?.length ?? Infinity, 512);
+      assert.include(readError.message, `idempotencyKey "${readError.subject}"`);
+      assert.strictEqual(readRecovered.issue.key, "SYNC-53");
+      assert.isAtMost(maxKeyError.subject?.length ?? Infinity, 512);
+      assert.strictEqual(maxKey.issue.key, "SYNC-54");
+      assert.strictEqual(
+        (yield* Ref.get(enqueued)).filter(({ operation }) => operation.kind === "issue.create")
+          .length,
+        4,
+      );
+      assert.strictEqual(yield* Ref.get(routeResolutions), 1);
+      assert.deepStrictEqual(
+        yield* tracker.activeMemberActor(MembershipId.make("membership-active")),
+        { kind: "member", membershipId: MembershipId.make("membership-active") },
+      );
+      assert.isNull(yield* tracker.activeMemberActor(MembershipId.make("membership-departed")));
+      const workflowStatuses = yield* tracker.statusesForIssue({
+        issueId: IssueId.make("issue-cycle-carry"),
+      });
+      assert.deepStrictEqual(
+        workflowStatuses.map((status) => status.id),
+        [IssueStatusId.make("status-routed"), IssueStatusId.make("status-team-b-qa")],
+      );
+      const projectStatuses = yield* tracker.statusesForProject({ projectId: PROJECT });
+      assert.deepStrictEqual(
+        projectStatuses.map((status) => status.id),
+        [IssueStatusId.make("status-routed"), IssueStatusId.make("status-team-b-qa")],
+      );
+      const aliasStatuses = yield* tracker.statusesForProject({
+        projectId: ProjectId.make("sibling-checkout"),
+      });
+      assert.deepStrictEqual(
+        aliasStatuses.map((status) => status.id),
+        [IssueStatusId.make("status-routed"), IssueStatusId.make("status-team-b-qa")],
+      );
+      const issueCatalog = yield* tracker.scopedCatalogForIssue({
+        issueId: IssueId.make("issue-cycle-carry"),
+      });
+      assert.deepStrictEqual(
+        issueCatalog.labels.map((label) => label.id),
+        ["label-team-b-ops"],
+      );
+      assert.isTrue(issueCatalog.cycles.some((cycle) => cycle.id === "cycle-team-b-current"));
+      assert.isFalse(issueCatalog.cycles.some((cycle) => cycle.id === "cycle-team-a-current"));
+      const attachmentIds = Array.from({ length: 17 }, (_, index) => `attachment-${index + 1}`);
+      const cloudSources = yield* tracker.cloudAttachmentSources({
+        key: IssueKey.make("SYNC-50"),
+        attachmentIds,
+      });
+      assert.deepStrictEqual(
+        cloudSources?.map((source) => source.attachmentId),
+        attachmentIds,
+      );
+      assert.deepStrictEqual(
+        (yield* Ref.get(attachmentUrlCalls)).map((batch) => batch.length),
+        [8, 8, 1],
+      );
+      const invalidProjectMove = yield* tracker
+        .update(
+          {
+            issueId: IssueId.make("issue-cycle-carry"),
+            patch: { projectId: ProjectId.make("team-a-checkout") },
+          },
+          AGENT,
+        )
+        .pipe(Effect.flip);
+      assert.strictEqual(invalidProjectMove.reason, "invalid");
+      assert.include(invalidProjectMove.message, "team scopes do not overlap");
+      yield* Ref.set(rejectCycleFinalization, true);
+      const cycleError = yield* tracker.getSnapshot().pipe(Effect.flip);
+      assert.strictEqual(cycleError.reason, "invalid");
+      assert.strictEqual(cycleError.message, "Cycle finalization is not permitted");
+      yield* Ref.set(rejectCycleFinalization, false);
       const snapshot = yield* tracker.getSnapshot();
-      assert.strictEqual(snapshot.issues[0]?.id, created.issue.id);
+      assert.isTrue(snapshot.issues.some((issue) => issue.id === created.issue.id));
+      assert.strictEqual(
+        snapshot.issues.find((issue) => issue.id === "issue-cycle-carry")?.cycleId,
+        "cycle-next",
+      );
+      assert.strictEqual(
+        snapshot.issues.find((issue) => issue.id === "issue-cycle-deleted")?.cycleId,
+        "cycle-ended",
+      );
+      assert.isFalse(
+        (yield* Ref.get(enqueued)).some(
+          ({ operation }) =>
+            operation.kind === "issue.update" && operation.entityId === "issue-cycle-deleted",
+        ),
+      );
+      assert.isNotNull(snapshot.cycles.find((cycle) => cycle.id === "cycle-ended")?.completedAt);
+      const requestedSnapshot = yield* tracker.withPinnedRoute(
+        Effect.gen(function* () {
+          yield* tracker.update(
+            {
+              issueId: IssueId.make("issue-cycle-carry"),
+              patch: { cycleId: IssueCycleId.make("cycle-requested") },
+            },
+            AGENT,
+          );
+          return yield* tracker.getSnapshot();
+        }),
+      );
+      assert.strictEqual(
+        requestedSnapshot.issues.find((issue) => issue.id === "issue-cycle-carry")?.cycleId,
+        "cycle-requested",
+      );
+      const threadLinks = yield* tracker.getThreadLinks({
+        issueId: IssueId.make("issue-cycle-carry"),
+      });
+      assert.deepStrictEqual(
+        threadLinks.links.map((link) => link.threadId),
+        [ThreadId.make("thread-shared")],
+      );
+      const reverseThreadLinks = yield* tracker.getIssueLinksForThread({
+        threadId: ThreadId.make("thread-shared"),
+      });
+      assert.deepStrictEqual(
+        reverseThreadLinks.links.map((link) => link.issueId),
+        [IssueId.make("issue-cycle-carry")],
+      );
+      const cycleWrites = yield* Ref.get(enqueued);
+      assert.isTrue(
+        cycleWrites.some(
+          ({ operation, actor }) =>
+            operation.kind === "issue.update" &&
+            operation.entityId === "issue-cycle-carry" &&
+            operation.args.cycleId === "cycle-next" &&
+            actor.kind === "system" &&
+            actor.source === "cycles",
+        ),
+      );
+      assert.isTrue(
+        cycleWrites.some(
+          ({ operation, actor }) =>
+            operation.kind === "issueCycle.update" &&
+            operation.entityId === "cycle-ended" &&
+            operation.args.finalize === true &&
+            actor.kind === "system" &&
+            actor.source === "cycles",
+        ),
+      );
 
       const comment = yield* tracker.commentCreate(
         { issueId: created.issue.id, body: "Written by MCP" },
         AGENT,
       );
-      assert.deepStrictEqual(comment.comment.author, { kind: "system", source: "automation" });
+      assert.deepStrictEqual(comment.comment.author, {
+        kind: "agent",
+        provider: ProviderDriverKind.make("codex"),
+      });
       assert.strictEqual(
         (yield* tracker.commentsList({ issueId: created.issue.id })).comments.length,
         1,
@@ -547,8 +1247,8 @@ describe("IssueTrackerService", () => {
       const rejected = yield* tracker.triageReject({ issueId: rejectable.issue.id }, AGENT);
       assert.isNotNull(rejected.issue.deletedAt);
 
-      // An overlapping poll re-seeing the rejected message must not resurrect it: the ledger
-      // decision stands even though the replica keeps no row for the tombstoned issue.
+      // An overlapping poll re-seeing the rejected message must not resurrect it. The ledger
+      // decision stands even though the replica keeps the soft-deleted issue for the bin.
       const refused = yield* tracker.intakeCreateIssue({
         channelId: "C123",
         messageTs: "1723459201.001901",
@@ -574,6 +1274,23 @@ describe("IssueTrackerService", () => {
       assert.isTrue(
         routedState.outbox.some((entry) => entry.envelope.kind === "issue.triageReject"),
       );
+
+      const deletedCycleIssue = yield* tracker.remove(
+        { issueId: IssueId.make("issue-cycle-carry") },
+        AGENT,
+      );
+      assert.isNotNull(deletedCycleIssue.issue.deletedAt);
+      const deletedSnapshot = yield* tracker.getSnapshot();
+      assert.isNotNull(
+        deletedSnapshot.issues.find((issue) => issue.id === "issue-cycle-carry")?.deletedAt,
+      );
+      const deletedDetail = yield* tracker.getDetail({
+        issueId: IssueId.make("issue-cycle-carry"),
+      });
+      assert.deepStrictEqual(deletedDetail.comments, []);
+      const restoredCycleIssue = yield* tracker.restoreByKey(IssueKey.make("SYNC-50"), AGENT);
+      assert.strictEqual(restoredCycleIssue.issue.id, "issue-cycle-carry");
+      assert.isNull(restoredCycleIssue.issue.deletedAt);
     }).pipe(
       Effect.provide(
         Layer.mergeAll(

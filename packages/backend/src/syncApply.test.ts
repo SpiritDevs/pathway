@@ -385,7 +385,8 @@ describe("sync.applyOperations", () => {
       payload: { title: "Fix the crash for good" },
     });
 
-    // Delete: a tombstone with no payload, and a soft-deleted row stamped at the tombstone version.
+    // Soft delete keeps the established tombstone for rolling clients; a separate open audit row
+    // carries the bin snapshot for clients that understand it.
     const deleted = await asWriter(t).mutation(api.sync.applyOperations, {
       companyId: COMPANY_ID,
       operations: [op("issue.delete", ISSUE_A, {})],
@@ -397,13 +398,52 @@ describe("sync.applyOperations", () => {
       cursor: afterUpdate.cursor,
     });
     if (afterDelete._tag !== "Changes") throw new Error("expected Changes");
-    const tombstone = afterDelete.changes.find((c) => c.changeKind === "tombstone");
-    expect(tombstone).toMatchObject({ entityKind: "issue", entityId: ISSUE_A, payload: null });
+    const deletedChange = afterDelete.changes.find((c) => c.entityKind === "issue");
+    expect(deletedChange).toMatchObject({
+      changeKind: "tombstone",
+      entityKind: "issue",
+      entityId: ISSUE_A,
+      payload: null,
+    });
+    expect(afterDelete.changes).toContainEqual(
+      expect.objectContaining({
+        entityKind: "issueAuditEvent",
+        changeKind: "upsert",
+        payload: expect.objectContaining({
+          kind: "deleted_snapshot",
+          payload: { deletedIssue: expect.objectContaining({ id: ISSUE_A }) },
+        }),
+      }),
+    );
 
     await t.run(async (ctx) => {
       const issue = (await ctx.db.query("issues").collect()).find((row) => row.id === ISSUE_A);
       expect(issue?.deletedAt).not.toBeNull();
-      expect(issue?.version).toBe(tombstone?.version);
+      expect(issue?.version).toBe(deletedChange?.version);
+    });
+
+    const firstSnapshotId = afterDelete.changes.find(
+      (change) =>
+        change.entityKind === "issueAuditEvent" &&
+        (change.payload as { readonly kind?: unknown } | null)?.kind === "deleted_snapshot",
+    )?.entityId;
+    await asWriter(t).mutation(api.sync.applyOperations, {
+      companyId: COMPANY_ID,
+      operations: [
+        op("issue.restore", ISSUE_A, {}),
+        op("issue.update", ISSUE_A, { title: "Revised before another delete" }),
+        op("issue.delete", ISSUE_A, {}),
+      ],
+    });
+    await t.run(async (ctx) => {
+      const snapshots = (await ctx.db.query("issueAuditEvents").collect()).filter(
+        (event) => event.issueId === ISSUE_A && event.kind === "deleted_snapshot",
+      );
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]?.id).toBe(firstSnapshotId);
+      expect(snapshots[0]?.payload).toMatchObject({
+        deletedIssue: { title: "Revised before another delete" },
+      });
     });
   });
 
@@ -491,8 +531,12 @@ describe("sync.applyOperations", () => {
       const events = (await ctx.db.query("issueAuditEvents").collect()).filter(
         (event) => event.issueId === ISSUE_A,
       );
-      expect(events.map((event) => event.kind)).toEqual(["created", "triage_rejected"]);
-      expect(events.map((event) => event.actor)).toEqual([slackActor, slackActor]);
+      expect(events.map((event) => event.kind)).toEqual([
+        "created",
+        "triage_rejected",
+        "deleted_snapshot",
+      ]);
+      expect(events.map((event) => event.actor)).toEqual([slackActor, slackActor, slackActor]);
     });
   });
 
@@ -543,8 +587,8 @@ describe("sync.applyOperations", () => {
   });
 });
 
-describe("tombstones in the change feed", () => {
-  it("a reader drains the upsert and then the tombstone, but never the audit events", async () => {
+describe("soft deletes in the change feed", () => {
+  it("keeps issue tombstones for old clients and exposes only the bin snapshot to readers", async () => {
     const t = harness();
     await seed(t);
     const op = makeOps(WRITER_MEMBERSHIP_ID);
@@ -562,14 +606,25 @@ describe("tombstones in the change feed", () => {
       cursor: 0,
     });
     if (page._tag !== "Changes") throw new Error("expected Changes");
-    // The reader holds `issues.read` but not `audit.read`, so the two audit events are filtered
-    // while the cursor still advances over them to the head.
+    // The reader holds `issues.read` but not `audit.read`: ordinary audit rows stay filtered, while
+    // the open snapshot row is harmless to old clients and lets new clients rebuild the bin.
     expect(page.changes.map((c) => [c.entityKind, c.changeKind])).toEqual([
       ["issue", "upsert"],
       ["issue", "tombstone"],
+      ["issueAuditEvent", "upsert"],
     ]);
+    expect(page.changes.at(-1)?.payload).toMatchObject({
+      kind: "deleted_snapshot",
+      payload: { deletedIssue: { id: ISSUE_A, deletedAt: expect.any(Number) } },
+    });
     expect(page.cursor).toBe(page.latestVersion);
     expect(page.hasMore).toBe(false);
+    await t.run(async (ctx) => {
+      const deleted = (await ctx.db.query("issueAuditEvents").collect()).find(
+        (event) => event.issueId === ISSUE_A && event.kind === "deleted",
+      );
+      expect(deleted?.payload).toEqual({ key: "PAT-1" });
+    });
   });
 });
 
@@ -637,16 +692,31 @@ describe("sync.bootstrap", () => {
     }
     expect(cursor).toBeNull();
 
-    // The reader sees the status and the two live issues — not the deleted issue, and not the
-    // audit events its missing `audit.read` gates.
-    const issueRows = entities.filter((e) => e.entityKind.startsWith("issue"));
+    // The issue table still seeds only live rows. The deleted issue is carried in an open audit
+    // snapshot that old clients ignore and new clients project into the bin.
+    const issueRows = entities.filter((e) => e.entityKind === "issue");
     expect(issueRows.map((e) => [e.entityKind, e.entityId]).sort()).toEqual(
       [
-        ["issueStatus", STATUS_ID],
         ["issue", ISSUE_A],
         ["issue", ISSUE_C],
       ].sort(),
     );
+    expect(entities).toContainEqual(
+      expect.objectContaining({
+        entityKind: "issueStatus",
+        entityId: STATUS_ID,
+      }),
+    );
+    const binSnapshot = entities.find(
+      (entity) =>
+        entity.entityKind === "issueAuditEvent" &&
+        typeof entity.payload === "object" &&
+        entity.payload !== null &&
+        (entity.payload as { readonly kind?: unknown }).kind === "deleted_snapshot",
+    );
+    expect(binSnapshot?.payload).toMatchObject({
+      payload: { deletedIssue: { id: ISSUE_B, deletedAt: expect.any(Number) } },
+    });
     // The walk continues into the company domain (`BOOTSTRAP_ENTITY_ORDER`). The reader holds no
     // administration switch, so it receives exactly its self rows: the company it is a member of,
     // and its own membership, role assignment, and the role definition that assignment references.
@@ -2598,6 +2668,29 @@ describe("issueComment attachments", () => {
       });
       expect(created.receipts[0]).toMatchObject({ status: "accepted" });
       expect(calls.delete).toBe(0);
+
+      const softDeleted = await asWriter(t).mutation(api.sync.applyOperations, {
+        companyId: COMPANY_ID,
+        operations: [op("issue.delete", ISSUE_A, {})],
+      });
+      expect(softDeleted.receipts[0]).toMatchObject({ status: "accepted" });
+      expect(
+        await asWriter(t).query(api.issueAttachments.urls, {
+          companyId: COMPANY_ID,
+          issueId: ISSUE_A,
+          attachmentIds: [attachmentId],
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          attachmentId,
+          url: `https://utfs.io/f/ut-${attachmentId}`,
+        }),
+      ]);
+      const restored = await asWriter(t).mutation(api.sync.applyOperations, {
+        companyId: COMPANY_ID,
+        operations: [op("issue.restore", ISSUE_A, {})],
+      });
+      expect(restored.receipts[0]).toMatchObject({ status: "accepted" });
 
       const deleted = await asWriter(t).mutation(api.sync.applyOperations, {
         companyId: COMPANY_ID,

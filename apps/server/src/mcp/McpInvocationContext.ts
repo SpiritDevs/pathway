@@ -1,6 +1,7 @@
 import {
   type EnvironmentId,
   PreviewAutomationUnavailableError,
+  type ProjectId,
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ThreadId,
@@ -14,7 +15,11 @@ export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number];
 export interface McpInvocationScope {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  /** Local project owning the calling thread, used to resolve its company-scoped data. */
+  readonly projectId?: ProjectId | undefined;
   readonly providerSessionId: string;
+  /** Stable for one JSON-RPC tool request, including transport retries of that request. */
+  readonly requestIdempotencyKey?: string | undefined;
   readonly providerInstanceId: ProviderInstanceId;
   /**
    * Which driver implements {@link providerInstanceId}. Carried alongside the routing key rather

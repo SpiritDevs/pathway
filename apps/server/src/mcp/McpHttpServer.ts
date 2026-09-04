@@ -15,11 +15,13 @@ import {
   type McpHttpHandler,
   type ServerEvent,
 } from "@modelcontextprotocol/server";
+import * as NodeCrypto from "node:crypto";
 import Mime from "@effect/platform-node/Mime";
 import { rpcSessionLayer } from "@spiritdevs/client-runtime/rpc";
 import {
   EmailMcpTaskState,
   EmailMcpWaitForInput,
+  IssueKey,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type EmailProjectSettings,
 } from "@spiritdevs/contracts";
@@ -36,7 +38,13 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import type * as Types from "effect/Types";
 import { AiError, Tool } from "effect/unstable/ai";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import {
+  HttpClient,
+  HttpClientRequest,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http";
 
 import packageJson from "../../package.json" with { type: "json" };
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
@@ -173,7 +181,8 @@ interface LoadedIssueAttachment {
   readonly data?: string;
   readonly kind: "image" | "video" | "file";
   readonly mimeType: string;
-  readonly path: string;
+  readonly path?: string;
+  readonly url?: string;
   readonly sizeBytes: number;
 }
 
@@ -266,11 +275,32 @@ const invokeBuiltTool = (
 
 const inspectIssueAttachment = Effect.fn("McpHttpServer.inspectIssueAttachment")(function* (
   attachmentId: string,
+  cloudSource:
+    | {
+        readonly mimeType: string;
+        readonly sizeBytes: number;
+        readonly url: string;
+      }
+    | null
+    | undefined = undefined,
 ): Effect.fn.Return<
   LoadedIssueAttachment | null,
   never,
   ServerConfig.ServerConfig | FileSystem.FileSystem
 > {
+  if (cloudSource === null) return null;
+  if (cloudSource !== undefined) {
+    return {
+      kind: cloudSource.mimeType.startsWith("image/")
+        ? "image"
+        : cloudSource.mimeType.startsWith("video/")
+          ? "video"
+          : "file",
+      mimeType: cloudSource.mimeType,
+      sizeBytes: cloudSource.sizeBytes,
+      url: cloudSource.url,
+    };
+  }
   const config = yield* ServerConfig.ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = resolveAttachmentPathById({
@@ -297,12 +327,49 @@ const inspectIssueAttachment = Effect.fn("McpHttpServer.inspectIssueAttachment")
 
 const loadIssueAttachmentImage = Effect.fn("McpHttpServer.loadIssueAttachmentImage")(function* (
   attachment: LoadedIssueAttachment | null,
-): Effect.fn.Return<LoadedIssueAttachment | null, never, FileSystem.FileSystem> {
+): Effect.fn.Return<
+  LoadedIssueAttachment | null,
+  never,
+  FileSystem.FileSystem | HttpClient.HttpClient
+> {
   if (attachment === null || attachment.kind !== "image") return attachment;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const bytes = yield* fileSystem.readFile(attachment.path).pipe(Effect.orElseSucceed(() => null));
+  const bytes =
+    attachment.path !== undefined
+      ? yield* Effect.flatMap(FileSystem.FileSystem, (fileSystem) =>
+          fileSystem.readFile(attachment.path!).pipe(Effect.orElseSucceed(() => null)),
+        )
+      : attachment.url === undefined
+        ? null
+        : yield* Effect.flatMap(HttpClient.HttpClient, (client) =>
+            client.execute(HttpClientRequest.get(attachment.url!)).pipe(
+              Effect.flatMap((response) =>
+                response.status >= 400 ? Effect.succeed(null) : response.arrayBuffer,
+              ),
+              Effect.map((buffer) => {
+                if (buffer === null || buffer.byteLength > ISSUES_MCP_INLINE_ATTACHMENT_MAX_BYTES) {
+                  return null;
+                }
+                return new Uint8Array(buffer);
+              }),
+              Effect.orElseSucceed(() => null),
+            ),
+          );
   return bytes === null ? null : { ...attachment, data: Encoding.encodeBase64(bytes) };
 });
+
+type ResolvedIssueCloudAttachment = {
+  readonly attachmentId: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly url: string;
+};
+
+type ResolveIssueCloudAttachments = (
+  key: string,
+  attachmentIds: ReadonlyArray<string>,
+) => Effect.Effect<ReadonlyArray<ResolvedIssueCloudAttachment> | undefined>;
+
+const noCloudIssueAttachments: ResolveIssueCloudAttachments = () => Effect.succeed(undefined);
 
 const withIssueAttachmentMetadata = (
   attachment: IssuesMcpAttachment,
@@ -333,10 +400,28 @@ const issueAttachmentLabel = (
 export const issueDetailCallToolResult = Effect.fn("McpHttpServer.issueDetailCallToolResult")(
   function* (
     detail: IssuesMcpDetail,
-  ): Effect.fn.Return<CallToolResult, never, ServerConfig.ServerConfig | FileSystem.FileSystem> {
+    resolveCloud: ResolveIssueCloudAttachments = noCloudIssueAttachments,
+  ): Effect.fn.Return<
+    CallToolResult,
+    never,
+    ServerConfig.ServerConfig | FileSystem.FileSystem | HttpClient.HttpClient
+  > {
     const loadedById = new Map<string, LoadedIssueAttachment | null>();
+    const cloudSources = yield* resolveCloud(
+      detail.key,
+      detail.attachments.map((attachment) => attachment.attachmentId),
+    );
+    const cloudSourceById =
+      cloudSources === undefined
+        ? undefined
+        : new Map(cloudSources.map((source) => [source.attachmentId, source]));
     const attachments = yield* Effect.forEach(detail.attachments, (attachment) =>
-      inspectIssueAttachment(attachment.attachmentId).pipe(
+      inspectIssueAttachment(
+        attachment.attachmentId,
+        cloudSourceById === undefined
+          ? undefined
+          : (cloudSourceById.get(attachment.attachmentId) ?? null),
+      ).pipe(
         Effect.tap((loaded) => Effect.sync(() => loadedById.set(attachment.attachmentId, loaded))),
         Effect.map((loaded) => withIssueAttachmentMetadata(attachment, loaded)),
       ),
@@ -384,8 +469,20 @@ export const issueAttachmentCallToolResult = Effect.fn(
   "McpHttpServer.issueAttachmentCallToolResult",
 )(function* (
   result: IssuesMcpGetAttachmentResult,
-): Effect.fn.Return<CallToolResult, never, ServerConfig.ServerConfig | FileSystem.FileSystem> {
-  const inspected = yield* inspectIssueAttachment(result.attachment.attachmentId);
+  resolveCloud: ResolveIssueCloudAttachments = noCloudIssueAttachments,
+): Effect.fn.Return<
+  CallToolResult,
+  never,
+  ServerConfig.ServerConfig | FileSystem.FileSystem | HttpClient.HttpClient
+> {
+  const cloudSources = yield* resolveCloud(result.key, [result.attachment.attachmentId]);
+  const inspected = yield* inspectIssueAttachment(
+    result.attachment.attachmentId,
+    cloudSources === undefined
+      ? undefined
+      : (cloudSources.find((source) => source.attachmentId === result.attachment.attachmentId) ??
+          null),
+  );
   const image = yield* loadIssueAttachmentImage(inspected);
   const enrichedResult = {
     ...result,
@@ -433,24 +530,44 @@ const invokeIssueTool = (
   name: "issues_get" | "issues_get_attachment",
   payload: object,
   invocation: McpInvocationContext.McpInvocationScope,
-  attachmentContext: Context.Context<ServerConfig.ServerConfig | FileSystem.FileSystem>,
+  attachmentContext: Context.Context<
+    ServerConfig.ServerConfig | FileSystem.FileSystem | HttpClient.HttpClient | IssueTrackerService
+  >,
   runtimeContext: Context.Context<never>,
 ): Promise<CallToolResult> =>
   Effect.runPromiseWith(runtimeContext)(
-    built.handle(name, payload).pipe(
-      Stream.unwrap,
-      Stream.run(Sink.last()),
-      Effect.flatMap(Effect.fromOption),
+    Effect.gen(function* () {
+      const tracker = yield* IssueTrackerService;
+      return yield* tracker
+        .withPinnedRoute(
+          built.handle(name, payload).pipe(
+            Stream.unwrap,
+            Stream.run(Sink.last()),
+            Effect.flatMap(Effect.fromOption),
+            Effect.flatMap(({ encodedResult }) => {
+              const resolveCloud: ResolveIssueCloudAttachments = (key, attachmentIds) =>
+                tracker
+                  .cloudAttachmentSources({ key: IssueKey.make(key), attachmentIds })
+                  .pipe(Effect.orElseSucceed(() => []));
+              return name === "issues_get"
+                ? issueDetailCallToolResult(encodedResult as IssuesMcpDetail, resolveCloud)
+                : issueAttachmentCallToolResult(
+                    encodedResult as IssuesMcpGetAttachmentResult,
+                    resolveCloud,
+                  );
+            }),
+          ),
+        )
+        .pipe(
+          Effect.tapCause(Effect.logError),
+          Effect.matchCauseEffect({
+            onFailure: (cause) => Effect.succeed(toolFailure(cause)),
+            onSuccess: Effect.succeed,
+          }),
+        );
+    }).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-      Effect.tapCause(Effect.logError),
-      Effect.matchCauseEffect({
-        onFailure: (cause) => Effect.succeed(toolFailure(cause)),
-        onSuccess: ({ encodedResult }) =>
-          (name === "issues_get"
-            ? issueDetailCallToolResult(encodedResult as IssuesMcpDetail)
-            : issueAttachmentCallToolResult(encodedResult as IssuesMcpGetAttachmentResult)
-          ).pipe(Effect.provide(attachmentContext)),
-      }),
+      Effect.provide(attachmentContext),
     ),
   );
 
@@ -547,6 +664,20 @@ const invocationSubscriptionKey = (
   requestId: JSONRPCRequest["id"],
 ) => `${invocation.providerSessionId}:${String(requestId)}`;
 
+/** Adds the stable JSON-RPC identity that a retried tool request keeps within one MCP session. */
+export const invocationForToolRequest = (
+  invocation: McpInvocationContext.McpInvocationScope,
+  requestId: JSONRPCRequest["id"],
+  callIdentity?: unknown,
+): McpInvocationContext.McpInvocationScope => ({
+  ...invocation,
+  requestIdempotencyKey: `mcp-request:v1:${NodeCrypto.createHash("sha256")
+    .update(invocation.providerSessionId)
+    .update("\0")
+    .update(JSON.stringify([typeof requestId, requestId, callIdentity ?? null]))
+    .digest("base64url")}`,
+});
+
 const notificationForServerEvent = (
   event: ServerEvent,
   subscriptionId: JSONRPCRequest["id"],
@@ -599,7 +730,7 @@ interface HandlerBuildOptions {
   readonly toolkits: ReadonlyArray<BuiltToolkit>;
   readonly snapshot?: BuiltToolkit;
   readonly issueAttachmentContext?: Context.Context<
-    ServerConfig.ServerConfig | FileSystem.FileSystem
+    ServerConfig.ServerConfig | FileSystem.FileSystem | HttpClient.HttpClient | IssueTrackerService
   >;
   readonly email?: EmailMcpService.EmailMcpService["Service"];
   readonly projects?: ReadonlyArray<EmailProjectSettings>;
@@ -940,13 +1071,19 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
           }
         }
       }
+      const requestInvocation =
+        classified.kind === "modern" &&
+        classified.messageKind === "request" &&
+        classified.message.method === "tools/call"
+          ? invocationForToolRequest(invocation, classified.message.id, classified.message.params)
+          : invocation;
       return sdk.fetch(request, {
         parsedBody,
         authInfo: {
           token: "pathway-mcp-credential",
           clientId: invocation.providerInstanceId,
           scopes: [],
-          extra: { invocation },
+          extra: { invocation: requestInvocation },
         },
       });
     },
@@ -1119,12 +1256,16 @@ const McpV2HttpHandlerLive = Layer.effect(
     const settings = yield* settingsService.getSettings;
     const serverConfig = yield* ServerConfig.ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
+    const httpClient = yield* HttpClient.HttpClient;
+    const issueTracker = yield* IssueTrackerService;
     const runtimeContext = yield* Effect.context<never>();
     const handler = makePathwayMcpHandler({
       toolkits,
       snapshot,
       issueAttachmentContext: Context.make(ServerConfig.ServerConfig, serverConfig).pipe(
         Context.add(FileSystem.FileSystem, fileSystem),
+        Context.add(HttpClient.HttpClient, httpClient),
+        Context.add(IssueTrackerService, issueTracker),
       ),
       email: emailService,
       projects: settings.emailCapture.projects,

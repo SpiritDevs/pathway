@@ -2,6 +2,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  IssueLabelId,
+  type IssueStatus,
   IssueStatusId,
   PREVIEW_AUTOMATION_OPERATIONS,
   PreviewTabId,
@@ -47,9 +49,16 @@ import { SlackChannelWatchRepositoryLive } from "../../../persistence/Layers/Sla
 import { SlackIntakeLedgerRepositoryLive } from "../../../persistence/Layers/SlackIntakeLedger.ts";
 import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepository } from "../../../persistence/Services/ProjectionProjects.ts";
+import { IssueLabelRepository } from "../../../persistence/Services/IssueLabels.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
-import { IssuesToolkitHandlersLive, parseIssueAssignee, resolveIssueAssignee } from "./handlers.ts";
+import {
+  IssuesToolkitHandlersLive,
+  issueCreateContinuationFailure,
+  matchingStatuses,
+  parseIssueAssignee,
+  resolveIssueAssignee,
+} from "./handlers.ts";
 import {
   IssuesToolkit,
   type IssuesMcpGetAttachmentResult,
@@ -79,6 +88,45 @@ const invocation: McpInvocationContext.McpInvocationScope = {
   capabilities: new Set(["preview"] as const),
   issuedAt: 1,
 };
+
+it("returns the same create identity when work after the durable create fails", () => {
+  const error = issueCreateContinuationFailure(
+    "mcp:provider-session-1:request-9",
+    new IssueTrackerError({ reason: "storage", message: "Assignee update failed." }),
+  );
+  assert.strictEqual(error.reason, "conflict");
+  assert.strictEqual(error.subject, "mcp:provider-session-1:request-9");
+  assert.include(error.message, 'idempotencyKey "mcp:provider-session-1:request-9"');
+});
+
+it("matches every workflow-specific status sharing a name or category", () => {
+  const status = (id: string, name: string, category: IssueStatus["category"]): IssueStatus => ({
+    id: IssueStatusId.make(id),
+    name,
+    color: "#123456",
+    category,
+    position: 0,
+    createdAt: "2026-09-04T00:00:00.000Z",
+    updatedAt: "2026-09-04T00:00:00.000Z",
+  });
+  const statuses = [
+    status("team-a-qa", "QA", "review"),
+    status("team-b-qa", "QA", "review"),
+    status("company-review", "Review", "review"),
+  ];
+  assert.deepStrictEqual(
+    matchingStatuses(statuses, "qa").map((candidate) => candidate.id),
+    [IssueStatusId.make("team-a-qa"), IssueStatusId.make("team-b-qa")],
+  );
+  assert.deepStrictEqual(
+    matchingStatuses(statuses, "review").map((candidate) => candidate.id),
+    [
+      IssueStatusId.make("team-a-qa"),
+      IssueStatusId.make("team-b-qa"),
+      IssueStatusId.make("company-review"),
+    ],
+  );
+});
 
 /**
  * A real tracker over an in-memory database, with the toolkit's handlers on top. Nothing is
@@ -179,18 +227,48 @@ describe("issues MCP toolkit", () => {
         });
         assert.deepEqual(
           yield* resolveIssueAssignee(
-            { replicaRoutable: Effect.succeed(true), linkedMemberActor: Effect.succeed(member) },
+            {
+              replicaRoutable: Effect.succeed(true),
+              linkedMemberActor: Effect.succeed(member),
+              activeMemberActor: () => Effect.succeed(null),
+            },
             "me",
             AGENT_DRIVER,
           ),
           member,
         );
+        assert.deepEqual(
+          yield* resolveIssueAssignee(
+            {
+              replicaRoutable: Effect.succeed(true),
+              linkedMemberActor: Effect.succeed(null),
+              activeMemberActor: (membershipId) => Effect.succeed({ kind: "member", membershipId }),
+            },
+            "member:membership-explicit",
+            AGENT_DRIVER,
+          ),
+          { kind: "member", membershipId: MembershipId.make("membership-explicit") },
+        );
         const error = yield* resolveIssueAssignee(
-          { replicaRoutable: Effect.succeed(true), linkedMemberActor: Effect.succeed(null) },
+          {
+            replicaRoutable: Effect.succeed(true),
+            linkedMemberActor: Effect.succeed(null),
+            activeMemberActor: () => Effect.succeed(null),
+          },
           "user",
           AGENT_DRIVER,
         ).pipe(Effect.flip);
         assert.include(error.message, "explicit");
+        const staleMember = yield* resolveIssueAssignee(
+          {
+            replicaRoutable: Effect.succeed(true),
+            linkedMemberActor: Effect.succeed(null),
+            activeMemberActor: () => Effect.succeed(null),
+          },
+          "member:membership-departed",
+          AGENT_DRIVER,
+        ).pipe(Effect.flip);
+        assert.include(staleMember.message, "No active company member");
       }),
   );
 
@@ -211,7 +289,7 @@ describe("issues MCP toolkit", () => {
         },
         { kind: "user" },
       );
-      yield* tracker.create(
+      const relayIssue = yield* tracker.create(
         {
           title: "Relay reconnect storm",
           statusId: IssueStatusId.make("done"),
@@ -219,6 +297,15 @@ describe("issues MCP toolkit", () => {
         },
         { kind: "user" },
       );
+      const labels = yield* IssueLabelRepository;
+      const relayBugId = IssueLabelId.make("label-relay-bug");
+      yield* labels.upsert({
+        id: relayBugId,
+        name: "Bug",
+        color: "#f2994a",
+        createdAt: "2026-08-12T00:00:01.000Z",
+      });
+      yield* labels.setAssignments({ issueId: relayIssue.issue.id, labelIds: [relayBugId] });
       yield* tracker.create({ title: "Untriaged idea", triage: true }, { kind: "user" });
 
       const all = yield* callTool<IssuesMcpListResult>("issues_list", {});
@@ -248,7 +335,13 @@ describe("issues MCP toolkit", () => {
       assert.strictEqual(byProject.issues[0]?.project, "Relay");
 
       const byLabel = yield* callTool<IssuesMcpListResult>("issues_list", { label: "bug" });
-      assert.strictEqual(byLabel.matched, 1);
+      assert.strictEqual(byLabel.matched, 2);
+      const relayBug = yield* callTool<IssuesMcpListResult>("issues_list", {
+        project: "relay",
+        label: "bug",
+      });
+      assert.strictEqual(relayBug.matched, 1);
+      assert.strictEqual(relayBug.issues[0]?.title, "Relay reconnect storm");
 
       const byPriority = yield* callTool<IssuesMcpListResult>("issues_list", { priority: "high" });
       assert.strictEqual(byPriority.matched, 1);

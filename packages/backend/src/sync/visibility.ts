@@ -162,6 +162,8 @@ export interface VisibilityCandidate {
    * to a permission decision beyond that. A tombstone has none; see {@link isSelfCompanyRow}.
    */
   readonly payload?: unknown;
+  /** Storage-only marker for a payloadless deletion-snapshot tombstone. */
+  readonly deletedIssueSnapshot?: boolean;
   /**
    * Set only for a row whose audience is exactly one member — a private saved view. Team scope is
    * then irrelevant in both directions: nobody else receives it however broad their grants, and the
@@ -291,6 +293,19 @@ export function isChangeVisible(viewer: ChangeViewer, change: VisibilityCandidat
   const permission = READ_PERMISSION[change.entityKind as SyncEntityKind];
   // An entity kind this build does not know is withheld rather than leaked.
   if (permission === undefined) return false;
+
+  // A deletion snapshot reuses the open audit envelope so old clients can ignore it while the
+  // issue itself keeps its established tombstone semantics. It is bin data, not audit history,
+  // and therefore follows the deleted issue's ordinary read scope.
+  if (
+    change.entityKind === "issueAuditEvent" &&
+    (change.deletedIssueSnapshot === true ||
+      (typeof change.payload === "object" &&
+        change.payload !== null &&
+        (change.payload as { readonly kind?: unknown }).kind === "deleted_snapshot"))
+  ) {
+    return hasRecordPermission(viewer.permissions, "issues.read", change.teamIds);
+  }
 
   if (change.entityKind === "calendarAccount") {
     return (

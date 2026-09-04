@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@spiritdevs/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import { HttpServer } from "effect/unstable/http";
 
@@ -8,6 +8,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
+const projectId = ProjectId.make("project-1");
 const makeFakeHttpServer = (hostname: string, port = 43123) =>
   HttpServer.HttpServer.of({
     address: { _tag: "TcpAddress", hostname, port },
@@ -38,6 +39,7 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
     const threadId = ThreadId.make("thread-1");
     const issued = yield* registry.issue({
       threadId,
+      projectId,
       providerInstanceId: ProviderInstanceId.make("codex"),
     });
     expect(issued.config.endpoint).toBe("http://127.0.0.1:43123/mcp");
@@ -46,6 +48,7 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
 
     const resolved = yield* registry.resolve(token);
     expect(resolved?.threadId).toBe(threadId);
+    expect(resolved?.projectId).toBe(projectId);
     expect(resolved?.capabilities).toEqual(
       new Set(["preview", "orchestration", "worktree", "email"]),
     );
@@ -70,6 +73,7 @@ it.effect("builds MCP endpoints from the bound server host", () =>
       const registry = yield* makeRegistry(() => 1_000, makeFakeHttpServer(hostname));
       const issued = yield* registry.issue({
         threadId: ThreadId.make(`thread-${hostname}`),
+        projectId,
         providerInstanceId: ProviderInstanceId.make("codex"),
       });
       expect(issued.config.endpoint).toBe(expectedEndpoint);
@@ -83,6 +87,7 @@ it.effect("expires credentials once their session stops showing signs of life", 
     const registry = yield* makeRegistry(() => timestamp);
     const issued = yield* registry.issue({
       threadId: ThreadId.make("thread-2"),
+      projectId,
       providerInstanceId: ProviderInstanceId.make("claude"),
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
@@ -98,6 +103,7 @@ it.effect("keeps a credential alive across turns that never touch an MCP tool", 
     const threadId = ThreadId.make("thread-3");
     const issued = yield* registry.issue({
       threadId,
+      projectId,
       providerInstanceId: ProviderInstanceId.make("claude"),
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
@@ -119,6 +125,7 @@ it.effect("does not keep credentials of other threads alive", () =>
     const registry = yield* makeRegistry(() => timestamp);
     const issued = yield* registry.issue({
       threadId: ThreadId.make("thread-4"),
+      projectId,
       providerInstanceId: ProviderInstanceId.make("codex"),
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");

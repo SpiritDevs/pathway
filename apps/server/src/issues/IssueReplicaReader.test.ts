@@ -12,7 +12,15 @@ import {
   type StoredOutboxEntry,
   type StoredSyncState,
 } from "@spiritdevs/client-runtime/sync";
-import { CompanyId } from "@spiritdevs/contracts/company";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
+} from "@spiritdevs/contracts";
+import { CloudProjectId } from "@spiritdevs/contracts/cloudProject";
+import { CloudUserId, CompanyId, MembershipId } from "@spiritdevs/contracts/company";
 import {
   AuthorizationEpoch,
   CompanyVersion,
@@ -27,6 +35,12 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import {
+  CloudSyncEngineRegistry,
+  type CloudSyncEngineRegistryShape,
+  type CloudSyncIssueEngineHandle,
+} from "../cloud/CloudSyncEngineRegistry.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import {
   issueMemberActorFromStoredReplica,
   issueReadModelFromStoredReplica,
   makeIssueReplicaReader,
@@ -34,6 +48,19 @@ import {
 } from "./IssueReplicaReader.ts";
 
 const COMPANY_ID = CompanyId.make("company-server-issue-reads");
+const ENVIRONMENT_ID = EnvironmentId.make("environment-server-issue-reads");
+const PROJECT_ID = ProjectId.make("project-server-issue-reads");
+
+const invocation: McpInvocationContext.McpInvocationScope = {
+  environmentId: ENVIRONMENT_ID,
+  threadId: ThreadId.make("thread-server-issue-reads"),
+  projectId: PROJECT_ID,
+  providerSessionId: "provider-session-server-issue-reads",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  providerDriverKind: ProviderDriverKind.make("codex"),
+  capabilities: new Set(McpInvocationContext.ALL_MCP_CAPABILITIES),
+  issuedAt: 1,
+};
 
 function realCodecEntity(
   entityKind: SyncEntityKind,
@@ -222,8 +249,8 @@ describe("issueMemberActorFromStoredReplica", () => {
 describe("routeReplicaIssueRead", () => {
   it.effect("keeps the company-less legacy RPC on local storage", () =>
     Effect.gen(function* () {
-      const reader = yield* makeIssueReplicaReader;
-      expect(reader.companyId).toBeNull();
+      const reader = yield* makeIssueReplicaReader();
+      expect(yield* reader.companyId).toBeNull();
       expect(yield* reader.read).toBeNull();
       expect(yield* reader.memberActorForCloudUserId("cloud-user")).toBeNull();
     }),
@@ -254,6 +281,121 @@ describe("routeReplicaIssueRead", () => {
         fromLegacy: Effect.succeed("legacy"),
       });
       expect(value).toBe("legacy");
+    }),
+  );
+
+  it.effect("routes an MCP invocation through its project-bound company engine", () =>
+    Effect.gen(function* () {
+      const readModel = issueReadModelFromStoredReplica(replica())!;
+      const routedReadModel = {
+        ...readModel,
+        issues: readModel.issues.map((issue) => ({
+          ...issue,
+          projectId: CloudProjectId.make("cloud-project-server-issue-reads"),
+        })),
+        memberships: [
+          {
+            entityKind: "membership" as const,
+            id: MembershipId.make("membership-active"),
+            userId: CloudUserId.make("cloud-user"),
+            state: "active" as const,
+            displayNameSnapshot: "Corey",
+            emailSnapshot: "corey@example.com",
+            invitedByMembershipId: null,
+            joinedAt: 1,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
+      };
+      const handle = {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        enqueue: () => Effect.die("unused"),
+        sync: Effect.die("unused"),
+        operationDisposition: () => Effect.die("unused"),
+        readIssueSnapshot: Effect.succeed({
+          readModel: routedReadModel,
+          bootstrapped: true,
+          quarantined: 0,
+        }),
+      } satisfies CloudSyncIssueEngineHandle;
+      const registry = CloudSyncEngineRegistry.of({
+        expectIssueRouting: () => Effect.void,
+        registerIssueEngine: () => Effect.void,
+        unregisterIssueEngine: () => Effect.void,
+        withIssueEngine: (_input, use) => use,
+        issueEngine: () => Effect.succeed(handle),
+        issueEngineForProject: (input) => {
+          expect(input).toEqual({
+            environmentId: ENVIRONMENT_ID,
+            localProjectId: PROJECT_ID,
+          });
+          return Effect.succeed({
+            _tag: "Ready",
+            engine: handle,
+            readModel: routedReadModel,
+            projectBindings: [
+              {
+                localProjectId: PROJECT_ID,
+                cloudProjectId: CloudProjectId.make("cloud-project-server-issue-reads"),
+              },
+              {
+                localProjectId: ProjectId.make("sibling-checkout"),
+                cloudProjectId: CloudProjectId.make("cloud-project-server-issue-reads"),
+              },
+            ],
+          });
+        },
+      } satisfies CloudSyncEngineRegistryShape);
+      const reader = yield* makeIssueReplicaReader(registry);
+      const provideInvocation = Effect.provideService(
+        McpInvocationContext.McpInvocationContext,
+        invocation,
+      );
+
+      expect(yield* reader.companyId.pipe(provideInvocation)).toBe(COMPANY_ID);
+      const routed = yield* reader.resolve.pipe(provideInvocation);
+      expect(routed?.readModel.issues[0]?.key).toBe("SYNC-7");
+      expect(routed?.readModel.issues[0]?.projectId).toBe(PROJECT_ID);
+      expect(routed?.cloudProjectIdForLocal(PROJECT_ID)).toBe("cloud-project-server-issue-reads");
+      expect(routed?.cloudProjectIdForLocal("sibling-checkout")).toBe(
+        "cloud-project-server-issue-reads",
+      );
+      const firstRead = yield* routed!.read;
+      const secondRead = yield* routed!.read;
+      expect(secondRead).toBe(firstRead);
+      expect(routed?.actor).toEqual({
+        kind: "agent",
+        provider: "codex",
+        onBehalfOfMembershipId: null,
+      });
+      expect(yield* reader.memberActorForCloudUserId("cloud-user").pipe(provideInvocation)).toEqual(
+        {
+          kind: "member",
+          membershipId: "membership-active",
+        },
+      );
+    }),
+  );
+
+  it.effect("fails closed when cloud sync is active but the project has no company binding", () =>
+    Effect.gen(function* () {
+      const registry = CloudSyncEngineRegistry.of({
+        expectIssueRouting: () => Effect.void,
+        registerIssueEngine: () => Effect.void,
+        unregisterIssueEngine: () => Effect.void,
+        withIssueEngine: (_input, use) => use,
+        issueEngine: () => Effect.succeed(null),
+        issueEngineForProject: () => Effect.succeed({ _tag: "Unbound", companyIds: [COMPANY_ID] }),
+      } satisfies CloudSyncEngineRegistryShape);
+      const reader = yield* makeIssueReplicaReader(registry);
+      const error = yield* reader.read.pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.flip,
+      );
+      expect(error.reason).toBe("storage");
+      expect(error.message).toContain("not bound to a ready company replica");
     }),
   );
 });

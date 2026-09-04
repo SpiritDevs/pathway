@@ -219,6 +219,8 @@ describe("planIssueImport", () => {
     assert.ok(create?.operation.kind === "issue.create");
     assert.equal(create.operation.args.key, "PAT-2");
     assert.equal(create.sourceEntity.createdAt, Date.parse(CREATED));
+
+    assert.equal(plan.preview.counts.issueAuditEvent, snapshot().auditEvents.length);
   });
 
   it("maps anonymous human assignees and historical actors to the importing membership", () => {

@@ -19,6 +19,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import { HttpServerResponse } from "effect/unstable/http";
 
 import * as ServerConfig from "../config.ts";
@@ -41,6 +42,24 @@ const invocation: McpInvocationScope = {
   capabilities: new Set(["preview"]),
   issuedAt: 1,
 };
+
+it("derives a stable per-request idempotency identity inside the MCP session", () => {
+  const call = { name: "issues_create", arguments: { title: "First" } };
+  const first = McpHttpServer.invocationForToolRequest(invocation, "7", call);
+  const retry = McpHttpServer.invocationForToolRequest(invocation, "7", call);
+  const numeric = McpHttpServer.invocationForToolRequest(invocation, 7, call);
+  const other = McpHttpServer.invocationForToolRequest(invocation, "8", call);
+  const differentCall = McpHttpServer.invocationForToolRequest(invocation, "7", {
+    name: "issues_create",
+    arguments: { title: "Second" },
+  });
+  expect(first.providerSessionId).toBe(invocation.providerSessionId);
+  expect(first.requestIdempotencyKey).toMatch(/^mcp-request:v1:[A-Za-z0-9_-]{43}$/u);
+  expect(first).toEqual(retry);
+  expect(numeric.requestIdempotencyKey).not.toBe(first.requestIdempotencyKey);
+  expect(other.requestIdempotencyKey).not.toBe(first.requestIdempotencyKey);
+  expect(differentCall.requestIdempotencyKey).not.toBe(first.requestIdempotencyKey);
+});
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const ErrorResponse = Schema.Struct({
   error: Schema.Struct({
@@ -275,10 +294,48 @@ it.effect(
       });
       expect(missing.isError).toBe(true);
       expect(missing.content.some((content) => content.type === "image")).toBe(false);
+
+      const detailResolutionCalls: Array<ReadonlyArray<string>> = [];
+      yield* McpHttpServer.issueDetailCallToolResult(detail, (_key, attachmentIds) =>
+        Effect.sync(() => {
+          detailResolutionCalls.push([...attachmentIds]);
+          return [];
+        }),
+      );
+      expect(detailResolutionCalls).toEqual([
+        detail.attachments.map((attachment) => attachment.attachmentId),
+      ]);
+
+      const cloudAttachmentId = "cloud-attachment-image";
+      const cloud = yield* McpHttpServer.issueAttachmentCallToolResult(
+        {
+          key: detail.key,
+          attachment: { ...attachments[0]!, attachmentId: cloudAttachmentId },
+        },
+        (_key, attachmentIds) =>
+          Effect.succeed([
+            {
+              attachmentId: attachmentIds[0]!,
+              mimeType: "image/png",
+              sizeBytes: imageBytes.byteLength,
+              url: `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}`,
+            },
+          ]),
+      );
+      expect(cloud.isError).toBe(false);
+      expect(cloud.structuredContent).toMatchObject({
+        attachment: { attachmentId: cloudAttachmentId, mimeType: "image/png" },
+      });
+      expect(cloud.content.at(-1)).toEqual({
+        type: "image",
+        data: Buffer.from(imageBytes).toString("base64"),
+        mimeType: "image/png",
+      });
     }).pipe(
       Effect.provide(
         ServerConfig.layerTest(process.cwd(), { prefix: "pathway-mcp-issue-images-test-" }).pipe(
           Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(FetchHttpClient.layer),
         ),
       ),
     ),

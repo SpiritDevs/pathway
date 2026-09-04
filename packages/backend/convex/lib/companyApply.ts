@@ -575,6 +575,8 @@ export interface CompanyChange {
   readonly calendarDeleted?: boolean;
   /** Set for private events so the existing binary owner gate remains authoritative. */
   readonly calendarEventOwnerMembershipId?: Id<"memberships"> | null;
+  /** Storage-only marker granting a deleted-bin envelope the issue read policy. */
+  readonly deletedIssueSnapshot?: boolean;
 }
 
 export interface AppendCompanyChangesOptions {
@@ -683,6 +685,9 @@ export async function appendCompanyChanges(
       ...(change.calendarEventOwnerMembershipId === undefined
         ? {}
         : { calendarEventOwnerMembershipId: change.calendarEventOwnerMembershipId }),
+      ...(change.deletedIssueSnapshot === undefined
+        ? {}
+        : { deletedIssueSnapshot: change.deletedIssueSnapshot }),
       payload,
       // Company administration is online-only: there is no client operation behind these rows, so
       // there is nothing to receipt and nothing to dedupe against.

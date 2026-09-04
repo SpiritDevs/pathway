@@ -355,6 +355,12 @@ export const IssuesMcpMilestoneDeleteResult = Schema.Struct({
 export type IssuesMcpMilestoneDeleteResult = typeof IssuesMcpMilestoneDeleteResult.Type;
 
 export const IssuesMcpCreateInput = Schema.Struct({
+  idempotencyKey: Schema.optional(
+    Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(512)).annotate({
+      description:
+        "Stable retry token. Omit it on the first attempt. If a queued create tells you to retry, pass back the exact token from that error so the retry resumes the same issue.",
+    }),
+  ),
   title: Schema.String.check(Schema.isMaxLength(ISSUE_TITLE_MAX_CHARS)).annotate({
     description: "One-line summary. Required.",
   }),
@@ -589,7 +595,7 @@ export const IssuesMilestoneDeleteTool = writeTrackerTool(
 export const IssuesCreateTool = writeTrackerTool(
   Tool.make("issues_create", {
     description:
-      "File a new issue and return it, including the key it was given. This writes to the tracker and shows up immediately in everyone's list view, attributed to you in the issue's change log. Labels are created when missing. A missing milestone is also created when the project field names where it belongs; projects and cycles must already exist.",
+      "File a new issue and return it, including the key it was given. This writes to the tracker and shows up immediately in everyone's list view, attributed to you in the issue's change log. Labels are created when missing. A missing milestone is also created when the project field names where it belongs; projects and cycles must already exist. If an earlier attempt remains queued, reuse the idempotencyKey named in its error instead of filing another issue.",
     parameters: IssuesMcpCreateInput,
     success: IssuesMcpIssueResult,
     failure: IssueTrackerError,
