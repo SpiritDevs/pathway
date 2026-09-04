@@ -694,6 +694,12 @@ jobs:
           channel_domain="${PATHWAY_WEB_NIGHTLY_DOMAIN:-app.pathway.dev}"
           channel_name="nightly"
 
+          echo "Linking the Vercel project for this runner."
+          vp dlx vercel@53.1.1 link \
+            --yes \
+            --team "$VERCEL_ORG_ID" \
+            --project "$VERCEL_PROJECT_ID"
+
           echo "Deploying hosted web app for $channel_name channel."
           deployment_url="$(
             vp dlx vercel@53.1.1 deploy \
