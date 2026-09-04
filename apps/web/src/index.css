@@ -2858,18 +2858,20 @@ label:has(> select#reasoning-effort) select {
   --composer-settings-extension: calc(2.25rem + 1px);
 }
 
-.chat-composer-context-strip-top {
-  --chat-composer-outline: color-mix(in oklab, var(--border) 60%, transparent);
-}
-
 .chat-composer-context-strip-top::before {
-  border-color: var(--chat-composer-outline);
-  border-radius: 20px 20px 0 0;
-  border-bottom: 0;
+  border: 0;
+  border-radius: inherit;
   -webkit-mask-image: none;
   mask-image: none;
   background: color-mix(in srgb, var(--card) var(--glass-opacity), transparent);
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
   backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
   box-shadow: none;
+}
+
+.chat-composer-context-strip-top button {
+  height: 1.75rem;
+  padding-inline: 0.625rem;
+  font-size: 0.875rem;
+  border-radius: var(--control-radius);
 }
