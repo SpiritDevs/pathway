@@ -144,10 +144,10 @@ export const layer: Layer.Layer<
       const runsToRollback = projection.runs.filter(
         (run) =>
           run.ordinal > targetOrdinal &&
-          (run.status === "completed" || run.status === "interrupted" || run.status === "failed"),
-      );
-      const providerThreadTurns = projection.providerTurns.filter(
-        (turn) => turn.providerThreadId === providerThread.id,
+          (run.status === "completed" ||
+            run.status === "interrupted" ||
+            run.status === "failed" ||
+            run.status === "cancelled"),
       );
       const rollbackTarget: ProviderAdapterV2RollbackTarget =
         targetOrdinal === 0
@@ -181,6 +181,25 @@ export const layer: Layer.Layer<
                 providerTurn: targetTurn,
               };
             });
+      const rollbackRunIds = new Set(runsToRollback.map((run) => run.id));
+      const runIdByAttemptId = new Map(
+        projection.attempts.map((attempt) => [attempt.id, attempt.runId] as const),
+      );
+      const runIdByNodeId = new Map(projection.nodes.map((node) => [node.id, node.runId] as const));
+      const targetProviderTurnId =
+        rollbackTarget.type === "provider_turn" ? rollbackTarget.providerTurn.id : undefined;
+      const providerThreadTurns = projection.providerTurns.filter((turn) => {
+        if (turn.providerThreadId !== providerThread.id) {
+          return false;
+        }
+        if (turn.id === targetProviderTurnId) {
+          return true;
+        }
+        const runId =
+          (turn.runAttemptId === null ? undefined : runIdByAttemptId.get(turn.runAttemptId)) ??
+          runIdByNodeId.get(turn.nodeId);
+        return runId !== undefined && runId !== null && rollbackRunIds.has(runId);
+      });
 
       yield* checkpoints.restore({ scope, checkpoint });
       const snapshot =

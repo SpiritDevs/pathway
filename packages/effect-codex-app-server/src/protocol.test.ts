@@ -20,9 +20,6 @@ const encoder = new TextEncoder();
 const encodeJsonl = (value: unknown) => encoder.encode(`${encodeUnknownJsonString(value)}\n`);
 
 const decodeJson = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
-const decodeAccountTokenUsageResponse = Schema.decodeUnknownEffect(
-  CodexRpc.CLIENT_REQUEST_RESPONSES["account/usage/read"],
-);
 const decodeAccountRateLimitsResponse = Schema.decodeUnknownEffect(
   CodexRpc.CLIENT_REQUEST_RESPONSES["account/rateLimits/read"],
 );
@@ -32,22 +29,50 @@ const decodeConsumeRateLimitResetCreditParams = Schema.decodeUnknownEffect(
 const decodeConsumeRateLimitResetCreditResponse = Schema.decodeUnknownEffect(
   CodexRpc.CLIENT_REQUEST_RESPONSES["account/rateLimitResetCredit/consume"],
 );
+const decodeThreadRevertParams = Schema.decodeUnknownEffect(
+  CodexRpc.CLIENT_REQUEST_PARAMS["thread/revert"],
+);
+const decodeThreadStartThread = Schema.decodeUnknownEffect(
+  CodexSchema.V2ThreadStartResponse__Thread,
+);
 
 it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
-  it.effect("maps account usage responses to the upstream token usage schema", () =>
+  it.effect("maps paginated thread revert requests to the upstream schema", () =>
     Effect.gen(function* () {
       assert.strictEqual(
-        CodexRpc.CLIENT_REQUEST_RESPONSES["account/usage/read"],
-        CodexSchema.V2GetAccountTokenUsageResponse,
+        CodexRpc.CLIENT_REQUEST_RESPONSES["thread/revert"],
+        CodexSchema.V2ThreadRevertResponse,
       );
-      const decoded = yield* decodeAccountTokenUsageResponse({
-        dailyUsageBuckets: [{ startDate: "2026-06-10", tokens: 42 }],
-        summary: { lifetimeTokens: 42 },
-      });
-      assert.deepEqual(decoded, {
-        dailyUsageBuckets: [{ startDate: "2026-06-10", tokens: 42 }],
-        summary: { lifetimeTokens: 42 },
-      });
+      assert.deepEqual(
+        yield* decodeThreadRevertParams({
+          threadId: "thread-1",
+          beforeTurnId: "turn-2",
+        }),
+        {
+          threadId: "thread-1",
+          beforeTurnId: "turn-2",
+        },
+      );
+    }),
+  );
+
+  it.effect("decodes thread responses from Codex versions that omit sessionId", () =>
+    Effect.gen(function* () {
+      const thread = {
+        id: "thread-1",
+        preview: "",
+        ephemeral: false,
+        modelProvider: "openai",
+        createdAt: 1,
+        updatedAt: 1,
+        status: { type: "idle" },
+        cwd: "/workspace",
+        cliVersion: "0.124.0",
+        source: "vscode",
+        turns: [],
+      } as const;
+
+      assert.deepEqual(yield* decodeThreadStartThread(thread), thread);
     }),
   );
 

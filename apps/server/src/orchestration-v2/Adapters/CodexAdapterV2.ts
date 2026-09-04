@@ -450,8 +450,9 @@ function codexPlanStepStatus(
   }
 }
 
-function approvalDecisionToLegacyReviewDecision(
+function approvalDecisionToReviewDecision(
   decision: ProviderApprovalDecision,
+  structuredDenial: boolean,
 ): CodexSchema.ExecCommandApprovalResponse__ReviewDecision {
   switch (decision) {
     case "accept":
@@ -459,10 +460,26 @@ function approvalDecisionToLegacyReviewDecision(
     case "acceptForSession":
       return "approved_for_session";
     case "decline":
-      return "denied";
+      return structuredDenial ? { denied: { rejection: "User denied the request." } } : "denied";
     case "cancel":
       return "abort";
   }
+}
+
+function codexUsesStructuredApprovalDenial(userAgent: string): boolean {
+  const match = /\/(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:[+\s(]|$)/u.exec(userAgent);
+  if (match === null) {
+    return true;
+  }
+  const version = match.slice(1, 4).map(Number);
+  const minimum = [0, 145, 0];
+  for (let index = 0; index < minimum.length; index += 1) {
+    const difference = version[index]! - minimum[index]!;
+    if (difference !== 0) {
+      return difference > 0;
+    }
+  }
+  return match[4] === undefined;
 }
 
 function providerRequestKindFromPermissions(
@@ -769,31 +786,60 @@ const countTerminalTurnsAfterBoundary = (
   ).length;
 };
 
-const resolveCodexForkRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveForkRollbackTurnCount")(
-  function* (input: ProviderAdapterV2ForkThreadInput) {
-    if (input.providerTurnId === undefined || input.sourceProviderTurns === undefined) {
-      return 0;
-    }
+const resolveCodexForkLastTurnId = Effect.fn("CodexAdapterV2.resolveForkLastTurnId")(function* (
+  input: ProviderAdapterV2ForkThreadInput,
+) {
+  if (input.providerTurnId === undefined || input.sourceProviderTurns === undefined) {
+    return undefined;
+  }
 
-    const rollbackTurnCount = countTerminalTurnsAfterBoundary(
-      providerTurnsForThread(input.sourceProviderTurns, input.sourceProviderThread),
-      input.providerTurnId,
-    );
-    if (rollbackTurnCount === null) {
-      return yield* new ProviderAdapterForkThreadError({
-        driver: CODEX_PROVIDER,
-        providerThreadId: input.sourceProviderThread.id,
-        cause: `Cannot fork Codex thread from provider turn ${input.providerTurnId}: source turn was not found in provider thread ${input.sourceProviderThread.id}.`,
-      });
-    }
+  const sourceTurns = providerTurnsForThread(
+    input.sourceProviderTurns,
+    input.sourceProviderThread,
+  ).toSorted((left, right) => left.ordinal - right.ordinal);
+  const boundaryIndex = sourceTurns.findIndex((turn) => turn.id === input.providerTurnId);
+  if (boundaryIndex < 0) {
+    return yield* new ProviderAdapterForkThreadError({
+      driver: CODEX_PROVIDER,
+      providerThreadId: input.sourceProviderThread.id,
+      cause: `Cannot fork Codex thread from provider turn ${input.providerTurnId}: source turn was not found in provider thread ${input.sourceProviderThread.id}.`,
+    });
+  }
 
-    return rollbackTurnCount;
-  },
-);
+  const boundaryTurn = sourceTurns[boundaryIndex];
+  if (boundaryTurn === undefined) {
+    return yield* new ProviderAdapterForkThreadError({
+      driver: CODEX_PROVIDER,
+      providerThreadId: input.sourceProviderThread.id,
+      cause: `Cannot fork Codex thread from provider turn ${input.providerTurnId}: source turn was not found in provider thread ${input.sourceProviderThread.id}.`,
+    });
+  }
+  const nativeTurnRef = boundaryTurn.nativeTurnRef;
+  const terminalTurnsAfterBoundary = sourceTurns
+    .slice(boundaryIndex + 1)
+    .filter(isTerminalProviderTurn);
+  if (terminalTurnsAfterBoundary.length === 0) {
+    return undefined;
+  }
+  if (
+    nativeTurnRef !== null &&
+    nativeTurnRef.driver === CODEX_PROVIDER &&
+    nativeTurnRef.nativeId !== null &&
+    isTerminalProviderTurn(boundaryTurn)
+  ) {
+    return nativeTurnRef.nativeId;
+  }
+
+  return yield* new ProviderAdapterForkThreadError({
+    driver: CODEX_PROVIDER,
+    providerThreadId: input.sourceProviderThread.id,
+    cause: `Cannot fork Codex thread from prior provider turn ${input.providerTurnId}: no native Codex turn id was recorded for that turn.`,
+  });
+});
 
 export const resolveCodexRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveRollbackTurnCount")(
   function* (input: ProviderAdapterV2RollbackThreadInput) {
-    const providerTurns = input.providerThreadTurns;
+    const providerTurns = providerTurnsForThread(input.providerThreadTurns, input.providerThread);
     switch (input.target.type) {
       case "thread_start":
         return providerTurns.filter(isTerminalProviderTurn).length;
@@ -821,6 +867,40 @@ export const resolveCodexRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveRo
         return rollbackTurnCount;
       }
     }
+  },
+);
+
+export const resolveCodexRevertBeforeTurnId = Effect.fn("CodexAdapterV2.resolveRevertBeforeTurnId")(
+  function* (input: ProviderAdapterV2RollbackThreadInput) {
+    const providerTurns = providerTurnsForThread(
+      input.providerThreadTurns,
+      input.providerThread,
+    ).toSorted((left, right) => left.ordinal - right.ordinal);
+    const target = input.target;
+    const firstRemovedTurn =
+      target.type === "thread_start"
+        ? providerTurns.find(isTerminalProviderTurn)
+        : providerTurns.find(
+            (turn) => turn.ordinal > target.providerTurn.ordinal && isTerminalProviderTurn(turn),
+          );
+    if (firstRemovedTurn === undefined) {
+      return undefined;
+    }
+
+    const nativeTurnRef = firstRemovedTurn.nativeTurnRef;
+    if (
+      nativeTurnRef === null ||
+      nativeTurnRef.driver !== CODEX_PROVIDER ||
+      nativeTurnRef.nativeId === null
+    ) {
+      return yield* new ProviderAdapterRollbackThreadError({
+        driver: CODEX_PROVIDER,
+        providerThreadId: input.providerThread.id,
+        cause: `Cannot revert Codex thread ${input.providerThread.id} before provider turn ${firstRemovedTurn.id}: no native Codex turn id was recorded for that turn.`,
+      });
+    }
+
+    return nativeTurnRef.nativeId;
   },
 );
 
@@ -1176,7 +1256,7 @@ export function codexThreadRuntimeParams(input: {
 }): {
   readonly cwd?: string;
   readonly model?: string;
-  readonly config?: Readonly<Record<string, unknown>>;
+  readonly config?: Readonly<Record<string, Schema.Json>>;
 } {
   const mcpSession =
     input.threadId === null ? undefined : McpProviderSession.readMcpProviderSession(input.threadId);
@@ -1525,19 +1605,22 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           settings: adapterOptions.settings,
           environment: adapterOptions.environment,
         });
-        const initialized = yield* Ref.make(false);
+        const initialized = yield* Ref.make<CodexSchema.V1InitializeResponse | undefined>(
+          undefined,
+        );
         const ensureInitialized = Effect.gen(function* () {
-          const alreadyInitialized = yield* Ref.get(initialized);
-          if (alreadyInitialized) {
-            return;
+          const initialization = yield* Ref.get(initialized);
+          if (initialization !== undefined) {
+            return initialization;
           }
 
-          yield* client.request("initialize", {
+          const response = yield* client.request("initialize", {
             clientInfo: CODEX_CLIENT_INFO,
             capabilities: CODEX_CLIENT_CAPABILITIES,
           });
           yield* client.notify("initialized", undefined);
-          yield* Ref.set(initialized, true);
+          yield* Ref.set(initialized, response);
+          return response;
         });
         const now = yield* DateTime.now;
         const session = providerSession({
@@ -4123,7 +4206,10 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               ),
             );
             return {
-              decision: approvalDecisionToLegacyReviewDecision(resolved),
+              decision: approvalDecisionToReviewDecision(
+                resolved,
+                codexUsesStructuredApprovalDenial((yield* ensureInitialized).userAgent),
+              ),
             } satisfies CodexSchema.ExecCommandApprovalResponse;
           }).pipe(Effect.orDie),
         );
@@ -4183,7 +4269,10 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               ),
             );
             return {
-              decision: approvalDecisionToLegacyReviewDecision(resolved),
+              decision: approvalDecisionToReviewDecision(
+                resolved,
+                codexUsesStructuredApprovalDenial((yield* ensureInitialized).userAgent),
+              ),
             } satisfies CodexSchema.ApplyPatchApprovalResponse;
           }).pipe(Effect.orDie),
         );
@@ -5158,7 +5247,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             Effect.gen(function* () {
               const threadId = yield* getNativeThreadId(threadInput.providerThread);
               const response = yield* ensureInitialized.pipe(
-                Effect.andThen(client.request("thread/read", { threadId, includeTurns: true })),
+                Effect.andThen(client.request("thread/read", { threadId, includeTurns: false })),
               );
               return {
                 providerThread: {
@@ -5206,25 +5295,46 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   runtimeRequests: [],
                 };
               }
-              const response = yield* ensureInitialized.pipe(
-                Effect.andThen(client.request("thread/rollback", { threadId, numTurns })),
+              const snapshot = yield* ensureInitialized.pipe(
+                Effect.andThen(client.request("thread/read", { threadId, includeTurns: false })),
               );
+              const thread =
+                snapshot.thread.historyMode === "paginated"
+                  ? yield* Effect.gen(function* () {
+                      const beforeTurnId = yield* resolveCodexRevertBeforeTurnId(threadInput);
+                      if (beforeTurnId === undefined) {
+                        return yield* new ProviderAdapterRollbackThreadError({
+                          driver: CODEX_PROVIDER,
+                          providerThreadId: threadInput.providerThread.id,
+                          cause: `Cannot revert Codex thread ${threadInput.providerThread.id}: no removed native turn boundary was found.`,
+                        });
+                      }
+                      if (snapshot.thread.status.type === "notLoaded") {
+                        yield* client.request("thread/resume", {
+                          threadId,
+                          excludeTurns: true,
+                        });
+                      }
+                      return (yield* client.request("thread/revert", { threadId, beforeTurnId }))
+                        .thread;
+                    })
+                  : (yield* client.request("thread/rollback", { threadId, numTurns })).thread;
               return {
                 providerThread: {
                   ...threadInput.providerThread,
                   nativeThreadRef: {
                     driver: CODEX_PROVIDER,
-                    nativeId: response.thread.id,
+                    nativeId: thread.id,
                     strength: "strong" as const,
                   },
                   nativeConversationHeadRef,
                   status: "idle" as const,
-                  updatedAt: codexTimestamp(response.thread.updatedAt),
+                  updatedAt: codexTimestamp(thread.updatedAt),
                 },
                 providerTurns: [],
                 messages: [],
                 runtimeRequests: [],
-                providerPayload: response.thread,
+                providerPayload: thread,
               };
             }).pipe(
               Effect.mapError(
@@ -5239,10 +5349,12 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           forkThread: (threadInput) =>
             Effect.gen(function* () {
               const threadId = yield* getNativeThreadId(threadInput.sourceProviderThread);
+              const lastTurnId = yield* resolveCodexForkLastTurnId(threadInput);
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(
                   client.request("thread/fork", {
                     threadId,
+                    ...(lastTurnId === undefined ? {} : { lastTurnId }),
                     ...codexThreadRuntimeParams({
                       threadId: threadInput.targetThreadId,
                       ...(threadInput.modelSelection === undefined
@@ -5263,33 +5375,13 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     }),
                 ),
               );
-              const rollbackTurnCount = yield* resolveCodexForkRollbackTurnCount(threadInput);
-              const forkedThread =
-                rollbackTurnCount === 0
-                  ? response.thread
-                  : (yield* ensureInitialized.pipe(
-                      Effect.andThen(
-                        client.request("thread/rollback", {
-                          threadId: response.thread.id,
-                          numTurns: rollbackTurnCount,
-                        }),
-                      ),
-                      Effect.mapError(
-                        (cause) =>
-                          new ProviderAdapterForkThreadError({
-                            driver: CODEX_PROVIDER,
-                            providerThreadId: threadInput.sourceProviderThread.id,
-                            cause: normalizeCodexCause(cause),
-                          }),
-                      ),
-                    )).thread;
               return providerThreadFromCodexThread({
                 appThreadId: threadInput.targetThreadId,
                 idAllocator,
                 ownerNodeId: threadInput.ownerNodeId ?? null,
                 providerSessionId: input.providerSessionId,
                 providerInstanceId: adapterOptions.instanceId,
-                thread: forkedThread,
+                thread: response.thread,
                 forkedFrom: {
                   providerThreadId: threadInput.sourceProviderThread.id,
                   ...(threadInput.providerTurnId === undefined
