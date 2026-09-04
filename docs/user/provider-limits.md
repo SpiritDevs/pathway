@@ -17,3 +17,5 @@ When offering to wait after a usage-limit failure, Pathway prefers the reset tim
 Thread details hide Claude usage when that account is not signed in. Check Settings → Providers to see its sign-in status.
 
 Spark quotas remain visible in Settings → Providers. Thread details show them only while a Spark model is selected; the profile usage menu hides them.
+
+The Luna reserve quota appears only in Settings → Providers, labeled Luna. It is hidden from thread details and the profile usage menu.
