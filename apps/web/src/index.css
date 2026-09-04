@@ -2858,6 +2858,18 @@ label:has(> select#reasoning-effort) select {
   --composer-settings-extension: calc(2.25rem + 1px);
 }
 
+@supports not (clip-path: shape(from 0 0, line to 1px 1px)) {
+  .chat-composer-content-sized-shell [data-chat-composer-footer] {
+    background: color-mix(
+      in srgb,
+      var(--chat-composer-glass-surface) var(--glass-opacity),
+      transparent
+    );
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  }
+}
+
 .chat-composer-context-strip-top::before {
   border: 0;
   border-radius: inherit;
