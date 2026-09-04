@@ -157,7 +157,7 @@ jobs:
             --github-output
 
   relay_public_config:
-    name: Resolve Pathway Connect public config
+    name: Resolve Pathway public config
     # Consumes only the commit SHA, not preflight's resolved version, so it runs
     # alongside preflight instead of after it. The condition mirrors preflight's:
     # check_changes is skipped on non-schedule events (skipped is neither failure
@@ -175,14 +175,16 @@ jobs:
       clerk_jwt_template: ${{ steps.public_config.outputs.clerk_jwt_template }}
       clerk_cli_oauth_client_id: ${{ steps.public_config.outputs.clerk_cli_oauth_client_id }}
       relay_url: ${{ steps.public_config.outputs.relay_url }}
+      convex_url: ${{ steps.public_config.outputs.convex_url }}
     env:
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
       CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
       CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
       CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.CLERK_CLI_OAUTH_CLIENT_ID }}
+      PATHWAY_CONVEX_URL: ${{ vars.CONVEX_URL }}
     steps:
       - id: public_config
-        name: Resolve production relay public config
+        name: Resolve production public config
         shell: bash
         run: |
           set -euo pipefail
@@ -193,6 +195,7 @@ jobs:
             CLERK_PUBLISHABLE_KEY
             CLERK_JWT_TEMPLATE
             CLERK_CLI_OAUTH_CLIENT_ID
+            PATHWAY_CONVEX_URL
           )
           missing=()
           for name in "${required[@]}"; do
@@ -201,7 +204,7 @@ jobs:
             fi
           done
           if (( ${#missing[@]} > 0 )); then
-            printf 'Missing required relay deployment configuration: %s\n' "${missing[*]}" >&2
+            printf 'Missing required release configuration: %s\n' "${missing[*]}" >&2
             exit 1
           fi
 
@@ -209,6 +212,7 @@ jobs:
           echo "clerk_jwt_template=$CLERK_JWT_TEMPLATE" >> "$GITHUB_OUTPUT"
           echo "clerk_cli_oauth_client_id=$CLERK_CLI_OAUTH_CLIENT_ID" >> "$GITHUB_OUTPUT"
           echo "relay_url=https://$relay_domain" >> "$GITHUB_OUTPUT"
+          echo "convex_url=$PATHWAY_CONVEX_URL" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.label }}
@@ -216,11 +220,15 @@ jobs:
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    environment:
+      name: production
     env:
       PATHWAY_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
       PATHWAY_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
       PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       PATHWAY_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
+      PATHWAY_CONVEX_URL: ${{ needs.relay_public_config.outputs.convex_url }}
+      CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
     strategy:
       fail-fast: false
       matrix:
@@ -499,6 +507,7 @@ jobs:
       PATHWAY_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
       PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       PATHWAY_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
+      PATHWAY_CONVEX_URL: ${{ needs.relay_public_config.outputs.convex_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -651,6 +660,7 @@ jobs:
       PATHWAY_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
       PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       PATHWAY_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
+      PATHWAY_CONVEX_URL: ${{ needs.relay_public_config.outputs.convex_url }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -716,6 +726,7 @@ jobs:
             --build-env "PATHWAY_CLERK_JWT_TEMPLATE=${PATHWAY_CLERK_JWT_TEMPLATE:-}" \
             --build-env "PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID=${PATHWAY_CLERK_CLI_OAUTH_CLIENT_ID:-}" \
             --build-env "PATHWAY_RELAY_URL=${PATHWAY_RELAY_URL:-}" \
+            --build-env "PATHWAY_CONVEX_URL=${PATHWAY_CONVEX_URL:-}" \
             --build-env "VITE_HOSTED_APP_URL=https://$channel_domain" \
             --build-env "VITE_HOSTED_APP_CHANNEL=$channel_name"
 
