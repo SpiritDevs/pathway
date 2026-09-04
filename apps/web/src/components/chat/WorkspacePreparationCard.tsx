@@ -6,6 +6,8 @@ import {
   CircleDotIcon,
   GitBranchIcon,
   XCircleIcon,
+  LaptopIcon,
+  XIcon,
 } from "lucide-react";
 import type { EnvironmentId, OrchestrationV2TurnItem } from "@spiritdevs/contracts";
 import { workspacePreparationPresentation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
@@ -70,13 +72,33 @@ function SetupOutput({
 export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
   item,
   environmentId,
+  onControl,
 }: {
   item: PreparationItem;
   environmentId: EnvironmentId;
+  onControl?: (action: "cancel" | "work_locally") => Promise<void>;
 }) {
   const presentation = workspacePreparationPresentation(item);
   const preparation = item.workspacePreparation;
   const [expanded, setExpanded] = useState(false);
+  const [pending, setPending] = useState<"cancel" | "work_locally" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const pendingAction =
+    pending ?? (item.status === "running" ? (preparation?.controlAction ?? null) : null);
+  const canControl =
+    item.status === "running" && preparation?.workspaceKind === "worktree" && onControl;
+  async function control(action: "cancel" | "work_locally") {
+    if (pending || !onControl) return;
+    setPending(action);
+    setError(null);
+    try {
+      await onControl(action);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not change workspace preparation.");
+    } finally {
+      setPending(null);
+    }
+  }
   return (
     <section
       aria-label={presentation.title}
@@ -133,12 +155,44 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
             The setup script runs in its terminal while the agent starts.
           </p>
         ) : null}
+        {canControl ? (
+          <div className="float-right mt-3 ml-4 flex flex-wrap justify-end gap-4 text-muted-foreground">
+            <button
+              type="button"
+              disabled={pendingAction !== null}
+              onClick={() => void control("work_locally")}
+              className="flex items-center gap-2 rounded py-1 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            >
+              <LaptopIcon className="size-4" aria-hidden />
+              {pendingAction === "work_locally" ? "Switching to local…" : "Work locally"}
+            </button>
+            <button
+              type="button"
+              disabled={pendingAction !== null}
+              onClick={() => void control("cancel")}
+              className="flex items-center gap-2 rounded py-1 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            >
+              <XIcon className="size-4" aria-hidden />
+              {pendingAction === "cancel" ? "Cancelling…" : "Cancel"}
+            </button>
+          </div>
+        ) : null}
+        {pendingAction ? (
+          <p className="clear-both pt-2 text-xs text-muted-foreground" role="status">
+            Waiting for the current operation to stop safely and cleaning up the worktree…
+          </p>
+        ) : null}
+        {error ? (
+          <p className="clear-both pt-2 text-xs text-destructive" role="alert">
+            {error}
+          </p>
+        ) : null}
         <details className="group mt-3" onToggle={(event) => setExpanded(event.currentTarget.open)}>
           <summary className="flex w-fit cursor-pointer list-none items-center gap-2 rounded py-1 text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
             <ChevronDownIcon className="size-4 -rotate-90 group-open:rotate-0" aria-hidden />
             {expanded ? "Less details" : "More details"}
           </summary>
-          <div className="mt-3 space-y-3">
+          <div className="clear-both pt-3 space-y-3">
             <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
               {preparation?.baseRef ? (
                 <>

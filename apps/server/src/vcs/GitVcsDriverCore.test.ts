@@ -1936,3 +1936,38 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
     );
   });
 });
+
+it.effect("removes a newly created worktree if configuring its base ref fails", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const target = (yield* Path.Path).join(yield* makeTmpDir(), "partial");
+    const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const failingConfig = ChildProcessSpawner.make((command) =>
+      ChildProcess.isStandardCommand(command) &&
+      command.args.some((arg) => arg.endsWith(".gh-merge-base"))
+        ? Effect.succeed(makeNonRepositoryHandle())
+        : delegate.spawn(command),
+    );
+    const driver = yield* makeGitVcsDriverCore().pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, failingConfig),
+    );
+    const result = yield* driver
+      .createWorktree({
+        cwd,
+        path: target,
+        newRefName: "pathway/partial",
+        refName: "HEAD",
+        baseRefName: "main",
+      })
+      .pipe(Effect.result);
+    assert.equal(result._tag, "Failure");
+    assert.isFalse(yield* (yield* FileSystem.FileSystem).exists(target));
+    assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), target);
+  }).pipe(
+    Effect.provide(TestLayer),
+    Effect.provide(ServerConfigLayer),
+    Effect.provide(NodeServices.layer),
+    Effect.scoped,
+  ),
+);

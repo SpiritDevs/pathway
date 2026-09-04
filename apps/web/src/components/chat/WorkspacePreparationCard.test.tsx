@@ -79,3 +79,35 @@ describe("WorkspacePreparationCard", () => {
     expect(html).not.toContain('aria-label="Setup script output"');
   });
 });
+
+it("offers both controls only while a new worktree is running", () => {
+  for (const status of ["running", "completed", "failed", "interrupted"] as const) {
+    const html = renderToStaticMarkup(
+      <WorkspacePreparationCard
+        item={{ ...item, status }}
+        environmentId={EnvironmentId.make("env")}
+        onControl={async () => {}}
+      />,
+    );
+    expect(html.includes(">Cancel</button>")).toBe(status === "running");
+    expect(html.includes("Work locally")).toBe(status === "running");
+  }
+});
+it("disables both controls when another client has already requested cancellation", () => {
+  const html = renderToStaticMarkup(
+    <WorkspacePreparationCard
+      item={{
+        ...item,
+        workspacePreparation: {
+          phase: "worktree",
+          workspaceKind: "worktree",
+          controlAction: "cancel",
+        },
+      }}
+      environmentId={EnvironmentId.make("env")}
+      onControl={async () => {}}
+    />,
+  );
+  expect(html).toContain("Cancelling…");
+  expect(html.match(/disabled=""/g)).toHaveLength(2);
+});

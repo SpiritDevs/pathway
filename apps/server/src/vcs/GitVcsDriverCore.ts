@@ -2797,11 +2797,21 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         remoteNames.toSorted((left, right) => right.length - left.length),
       );
       const baseBranch = parsedBaseRef?.branchName ?? input.baseRefName;
-      yield* runGit("GitVcsDriver.createWorktree.configureBaseRef", input.cwd, [
-        "config",
-        `branch.${input.newRefName}.gh-merge-base`,
-        baseBranch,
-      ]);
+      yield* executeGit(
+        "GitVcsDriver.createWorktree.configureBaseRef",
+        input.cwd,
+        ["config", `branch.${input.newRefName}.gh-merge-base`, baseBranch],
+        { fallbackErrorDetail: "Could not configure the worktree base branch" },
+      ).pipe(
+        Effect.tapError(() =>
+          executeGit(
+            "GitVcsDriver.createWorktree.cleanup",
+            input.cwd,
+            ["worktree", "remove", "--force", worktreePath],
+            { fallbackErrorDetail: "Could not remove the partially prepared worktree" },
+          ),
+        ),
+      );
     }
 
     return {

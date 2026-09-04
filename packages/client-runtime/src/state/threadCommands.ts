@@ -42,6 +42,8 @@ import {
   archiveThread,
   attachPullRequest,
   cancelQueuedRun,
+  controlWorkspacePreparation,
+  type ControlWorkspacePreparationInput,
   createThread,
   deleteThread,
   detachPullRequest,
@@ -349,6 +351,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     promoteQueuedRun: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:promote-queued-run",
       execute: (input: PromoteQueuedRunInput) => promoteQueuedRun(input),
+      scheduler,
+      concurrency,
+    }),
+    controlWorkspacePreparation: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:control-workspace-preparation",
+      execute: (input: ControlWorkspacePreparationInput) => controlWorkspacePreparation(input),
       scheduler,
       concurrency,
     }),

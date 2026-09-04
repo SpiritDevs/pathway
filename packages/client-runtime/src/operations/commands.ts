@@ -258,6 +258,11 @@ export interface PromoteQueuedRunInput extends ThreadCommandInput {
   readonly targetRunId: RunId;
 }
 
+export interface ControlWorkspacePreparationInput extends ThreadCommandInput {
+  readonly runId: RunId;
+  readonly action: "cancel" | "work_locally";
+}
+
 export interface CancelQueuedRunInput extends ThreadCommandInput {
   readonly runId: RunId;
 }
@@ -982,6 +987,17 @@ export const promoteQueuedRun = Effect.fn("EnvironmentCommands.promoteQueuedRun"
     threadId: input.threadId,
     queuedRunId: input.queuedRunId,
     targetRunId: input.targetRunId,
+  });
+});
+
+export const controlWorkspacePreparation = Effect.fn(
+  "EnvironmentCommands.controlWorkspacePreparation",
+)(function* (input: ControlWorkspacePreparationInput) {
+  return yield* request(ORCHESTRATION_V2_WS_METHODS.controlWorkspacePreparation, {
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    runId: input.runId,
+    action: input.action,
   });
 });
 

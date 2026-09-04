@@ -1705,6 +1705,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     if (
       command.type === "thread.delete" &&
+      command.preparingRunId !== undefined &&
+      (projection.messages.length !== 1 ||
+        projection.runs.length !== 1 ||
+        projection.runs[0]?.id !== command.preparingRunId ||
+        projection.runs[0]?.status !== "preparing" ||
+        projection.attempts.some((attempt) => attempt.status !== "pending"))
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "This preparation changed. The thread and its messages were kept.",
+      });
+    }
+    if (
+      command.type === "thread.delete" &&
       command.replaceableInitialThread !== undefined &&
       !orchestrationV2ProjectionCanReplaceInitialProject(
         projection,
