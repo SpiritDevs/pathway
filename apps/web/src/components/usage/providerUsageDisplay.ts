@@ -92,7 +92,7 @@ export function deriveProviderUsageLimits(
   nowMs = Date.now(),
 ): ReadonlyArray<ProviderUsageDisplayLimit> {
   return limits.flatMap<ProviderUsageDisplayLimit>((limit) => {
-    const displayLimit = isLunaReserveLimit(limit) ? { ...limit, scope: "Luna" } : limit;
+    const displayLimit = isLunaReserveLimit(limit) ? { ...limit, scope: "Lunar Reserve" } : limit;
     if (limit.usedPercent === undefined) {
       if (limit.resetsAt === undefined) return [];
       return [

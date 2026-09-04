@@ -18,4 +18,4 @@ Thread details hide Claude usage when that account is not signed in. Check Setti
 
 Spark quotas remain visible in Settings → Providers. Thread details show them only while a Spark model is selected; the profile usage menu hides them.
 
-The Luna reserve quota appears only in Settings → Providers, labeled Luna. It is hidden from thread details and the profile usage menu.
+The Lunar Reserve quota appears only in Settings → Providers. It is hidden from thread details and the profile usage menu.
