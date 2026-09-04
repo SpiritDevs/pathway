@@ -221,6 +221,7 @@ describe("routeCodexChildNotification", () => {
           {
             window: "5h",
             windowKey: "session",
+            lane: "primary",
             usedPercent: 31,
             windowDurationMins: 300,
             resetsAt: "2026-08-13T00:00:00.000Z",
@@ -228,6 +229,7 @@ describe("routeCodexChildNotification", () => {
           {
             window: "Weekly",
             windowKey: "weekly",
+            lane: "secondary",
             usedPercent: 47,
             windowDurationMins: 10_080,
             resetsAt: "2026-08-20T00:00:00.000Z",
