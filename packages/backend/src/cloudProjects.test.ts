@@ -985,6 +985,17 @@ describe("company project deletion", () => {
         createdAt: NOW,
         version: 0,
       });
+      await ctx.db.insert("issueAuditEvents", {
+        id: "0198c0de-dddd-7ddd-8ddd-000000000099",
+        companyId: ids.companyId,
+        issueId,
+        kind: "deleted_snapshot",
+        actor: { kind: "member", membershipId: MEMBERSHIP_ID },
+        payload: { deletedIssue: { id: issueId } },
+        operationId: null,
+        createdAt: NOW,
+        version: 0,
+      });
       await ctx.db.insert("issueThreadLinks", {
         id: "0198c0de-dddd-7ddd-8ddd-000000000013",
         companyId: ids.companyId,
@@ -1319,6 +1330,13 @@ describe("company project deletion", () => {
           entityKind: "environmentCommand",
           entityId: commandId,
           changeKind: "tombstone",
+        }),
+        expect.objectContaining({
+          entityKind: "issueAuditEvent",
+          entityId: "0198c0de-dddd-7ddd-8ddd-000000000099",
+          changeKind: "tombstone",
+          payload: null,
+          deletedIssueSnapshot: true,
         }),
       ]),
     );

@@ -1400,6 +1400,8 @@ export default defineSchema({
      * it. Absent (the default) means the ordinary gate applies.
      */
     departure: v.optional(v.boolean()),
+    /** Lets issue-only readers receive a deleted-bin audit tombstone without exposing audit rows. */
+    deletedIssueSnapshot: v.optional(v.boolean()),
     /** The encoded entity for `upsert`, `null` for `tombstone`; the schema is chosen by `entityKind`. */
     payload: v.any(),
     operationId: v.union(v.string(), v.null()),

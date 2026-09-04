@@ -586,21 +586,23 @@ const handlers = {
         input.assignee === undefined
           ? undefined
           : yield* resolveIssueAssignee(tracker, input.assignee, invocation.providerDriverKind);
-      let labelId: IssueLabelId | null = null;
+      let labelIds: ReadonlySet<IssueLabelId> | null = null;
       if (input.label !== undefined) {
         const wanted = normalizeName(input.label);
-        const label = index.snapshot.labels.find(
-          (candidate) => normalizeName(candidate.name) === wanted,
-        );
-        if (!label) {
+        const candidates =
+          project === null
+            ? index.snapshot.labels
+            : (yield* tracker.scopedCatalogForProject({ projectId: project.projectId })).labels;
+        const labels = candidates.filter((candidate) => normalizeName(candidate.name) === wanted);
+        if (labels.length === 0) {
           return yield* notFound(
             `No label called "${input.label.trim()}". Valid labels: ${quoteOptions(
-              index.snapshot.labels.map((candidate) => candidate.name),
+              candidates.map((candidate) => candidate.name),
             )}.`,
             input.label.trim(),
           );
         }
-        labelId = label.id;
+        labelIds = new Set(labels.map((label) => label.id));
       }
       const query = input.query === undefined ? null : normalizeName(input.query);
       const includeDeleted = input.includeDeleted ?? false;
@@ -615,7 +617,8 @@ const handlers = {
             if (category !== input.statusCategory) return false;
           }
           if (project !== null && issue.projectId !== project.projectId) return false;
-          if (labelId !== null && !issue.labelIds.includes(labelId)) return false;
+          if (labelIds !== null && !issue.labelIds.some((labelId) => labelIds.has(labelId)))
+            return false;
           if (input.priority !== undefined && issue.priority !== input.priority) return false;
           if (assignee !== undefined) {
             if (assignee === null) {

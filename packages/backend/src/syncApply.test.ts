@@ -2669,6 +2669,29 @@ describe("issueComment attachments", () => {
       expect(created.receipts[0]).toMatchObject({ status: "accepted" });
       expect(calls.delete).toBe(0);
 
+      const softDeleted = await asWriter(t).mutation(api.sync.applyOperations, {
+        companyId: COMPANY_ID,
+        operations: [op("issue.delete", ISSUE_A, {})],
+      });
+      expect(softDeleted.receipts[0]).toMatchObject({ status: "accepted" });
+      expect(
+        await asWriter(t).query(api.issueAttachments.urls, {
+          companyId: COMPANY_ID,
+          issueId: ISSUE_A,
+          attachmentIds: [attachmentId],
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          attachmentId,
+          url: `https://utfs.io/f/ut-${attachmentId}`,
+        }),
+      ]);
+      const restored = await asWriter(t).mutation(api.sync.applyOperations, {
+        companyId: COMPANY_ID,
+        operations: [op("issue.restore", ISSUE_A, {})],
+      });
+      expect(restored.receipts[0]).toMatchObject({ status: "accepted" });
+
       const deleted = await asWriter(t).mutation(api.sync.applyOperations, {
         companyId: COMPANY_ID,
         operations: [op("issueComment.delete", COMMENT_ID, {})],

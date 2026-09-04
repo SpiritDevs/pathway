@@ -653,8 +653,9 @@ export const urls = query({
         q.eq("companyId", actor.company._id).eq("id", args.issueId),
       )
       .unique();
-    if (issue === null || issue.deletedAt !== null)
-      throw backendError("entity-not-found", `No issue ${args.issueId}.`);
+    // Soft deletion moves an issue into the recoverable bin; it does not revoke authorized access
+    // to evidence retained on that issue. Hard deletion removes both the issue and its attachments.
+    if (issue === null) throw backendError("entity-not-found", `No issue ${args.issueId}.`);
     requireRecordPermission(actor, "issues.read", issue.teamIds);
     if (args.attachmentIds.length > 8)
       throw backendError("invalid-arguments", "Resolve at most eight attachment URLs.");

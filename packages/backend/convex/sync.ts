@@ -224,6 +224,9 @@ export const listChanges = query({
           entityId: row.entityId,
           teamIds: row.teamIds,
           payload: row.payload,
+          ...(row.deletedIssueSnapshot === undefined
+            ? {}
+            : { deletedIssueSnapshot: row.deletedIssueSnapshot }),
           ownerMembershipId: feedRowOwnerBinding(row, ownerBindings),
           calendarId: row.calendarId,
           calendarOwnerMembershipId: row.calendarOwnerMembershipId,

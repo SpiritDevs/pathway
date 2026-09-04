@@ -458,6 +458,17 @@ describe("IssueTrackerService", () => {
             createdAt: 1_700_000_000_000,
             updatedAt: 1_700_000_000_000,
           }),
+          routedStoredEntity("cloudProject", {
+            id: "cloud-project-team-a",
+            name: "Team A",
+            description: "Team A only project",
+            teamIds: ["team-a"],
+            defaultWorkflowOwner: { kind: "team", teamId: "team-a" },
+            preferredBindingId: null,
+            archivedAt: null,
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_000_000,
+          }),
           routedStoredEntity("issueStatus", {
             id: "status-routed",
             scope: "company",
@@ -657,6 +668,7 @@ describe("IssueTrackerService", () => {
       const rejectCycleFinalization = yield* Ref.make(false);
       const rejectedOperationIds = yield* Ref.make<ReadonlySet<SyncOperationId>>(new Set());
       const failNextRouteRead = yield* Ref.make(false);
+      const attachmentUrlCalls = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
       const enqueued = yield* Ref.make<
         ReadonlyArray<{
           readonly operationId: SyncOperationId;
@@ -821,14 +833,16 @@ describe("IssueTrackerService", () => {
           })),
         ),
         resolveIssueAttachmentUrls: (input) =>
-          Effect.succeed(
-            input.attachmentIds.map((attachmentId) => ({
-              attachmentId,
-              fileName: "evidence.png",
-              mimeType: "image/png",
-              byteSize: 3,
-              url: "https://files.example.test/evidence.png",
-            })),
+          Ref.update(attachmentUrlCalls, (calls) => [...calls, input.attachmentIds]).pipe(
+            Effect.as(
+              input.attachmentIds.map((attachmentId) => ({
+                attachmentId,
+                fileName: "evidence.png",
+                mimeType: "image/png",
+                byteSize: 3,
+                url: "https://files.example.test/evidence.png",
+              })),
+            ),
           ),
       };
       const registry = CloudSyncEngineRegistry.of({
@@ -856,7 +870,14 @@ describe("IssueTrackerService", () => {
             message: "Replica became unavailable during read-back",
           });
         }
-        return issueReadModelFromStoredReplica(yield* Ref.get(stored))!;
+        const readModel = issueReadModelFromStoredReplica(yield* Ref.get(stored))!;
+        return {
+          ...readModel,
+          cloudProjects: readModel.cloudProjects.map((project) => ({
+            ...project,
+            id: project.id === "cloud-project-alpha" ? CloudProjectId.make(PROJECT) : project.id,
+          })),
+        };
       });
       const replicaReader: IssueReplicaReader = {
         resolve: Effect.gen(function* () {
@@ -880,7 +901,11 @@ describe("IssueTrackerService", () => {
             read,
             memberActorForCloudUserId: () => null,
             cloudProjectIdForLocal: (localProjectId: string) =>
-              localProjectId === PROJECT ? CloudProjectId.make("cloud-project-alpha") : null,
+              localProjectId === PROJECT || localProjectId === "sibling-checkout"
+                ? CloudProjectId.make("cloud-project-alpha")
+                : localProjectId === "team-a-checkout"
+                  ? CloudProjectId.make("cloud-project-team-a")
+                  : null,
           };
         }),
         companyId: Effect.succeed(ROUTED_COMPANY_ID),
@@ -1038,6 +1063,13 @@ describe("IssueTrackerService", () => {
         projectStatuses.map((status) => status.id),
         [IssueStatusId.make("status-routed"), IssueStatusId.make("status-team-b-qa")],
       );
+      const aliasStatuses = yield* tracker.statusesForProject({
+        projectId: ProjectId.make("sibling-checkout"),
+      });
+      assert.deepStrictEqual(
+        aliasStatuses.map((status) => status.id),
+        [IssueStatusId.make("status-routed"), IssueStatusId.make("status-team-b-qa")],
+      );
       const issueCatalog = yield* tracker.scopedCatalogForIssue({
         issueId: IssueId.make("issue-cycle-carry"),
       });
@@ -1047,17 +1079,30 @@ describe("IssueTrackerService", () => {
       );
       assert.isTrue(issueCatalog.cycles.some((cycle) => cycle.id === "cycle-team-b-current"));
       assert.isFalse(issueCatalog.cycles.some((cycle) => cycle.id === "cycle-team-a-current"));
+      const attachmentIds = Array.from({ length: 17 }, (_, index) => `attachment-${index + 1}`);
+      const cloudSources = yield* tracker.cloudAttachmentSources({
+        key: IssueKey.make("SYNC-50"),
+        attachmentIds,
+      });
       assert.deepStrictEqual(
-        yield* tracker.cloudAttachmentSource({
-          key: IssueKey.make("SYNC-50"),
-          attachmentId: "attachment-1",
-        }),
-        {
-          mimeType: "image/png",
-          sizeBytes: 3,
-          url: "https://files.example.test/evidence.png",
-        },
+        cloudSources?.map((source) => source.attachmentId),
+        attachmentIds,
       );
+      assert.deepStrictEqual(
+        (yield* Ref.get(attachmentUrlCalls)).map((batch) => batch.length),
+        [8, 8, 1],
+      );
+      const invalidProjectMove = yield* tracker
+        .update(
+          {
+            issueId: IssueId.make("issue-cycle-carry"),
+            patch: { projectId: ProjectId.make("team-a-checkout") },
+          },
+          AGENT,
+        )
+        .pipe(Effect.flip);
+      assert.strictEqual(invalidProjectMove.reason, "invalid");
+      assert.include(invalidProjectMove.message, "team scopes do not overlap");
       yield* Ref.set(rejectCycleFinalization, true);
       const cycleError = yield* tracker.getSnapshot().pipe(Effect.flip);
       assert.strictEqual(cycleError.reason, "invalid");

@@ -162,6 +162,8 @@ export interface VisibilityCandidate {
    * to a permission decision beyond that. A tombstone has none; see {@link isSelfCompanyRow}.
    */
   readonly payload?: unknown;
+  /** Storage-only marker for a payloadless deletion-snapshot tombstone. */
+  readonly deletedIssueSnapshot?: boolean;
   /**
    * Set only for a row whose audience is exactly one member — a private saved view. Team scope is
    * then irrelevant in both directions: nobody else receives it however broad their grants, and the
@@ -297,9 +299,10 @@ export function isChangeVisible(viewer: ChangeViewer, change: VisibilityCandidat
   // and therefore follows the deleted issue's ordinary read scope.
   if (
     change.entityKind === "issueAuditEvent" &&
-    typeof change.payload === "object" &&
-    change.payload !== null &&
-    (change.payload as { readonly kind?: unknown }).kind === "deleted_snapshot"
+    (change.deletedIssueSnapshot === true ||
+      (typeof change.payload === "object" &&
+        change.payload !== null &&
+        (change.payload as { readonly kind?: unknown }).kind === "deleted_snapshot"))
   ) {
     return hasRecordPermission(viewer.permissions, "issues.read", change.teamIds);
   }

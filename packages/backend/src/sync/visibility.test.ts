@@ -80,6 +80,12 @@ describe("isChangeVisible", () => {
         }),
       ),
     ).toBe(false);
+    expect(
+      isChangeVisible(
+        viewer(teamScoped),
+        row("issueAuditEvent", ["team-a"], { deletedIssueSnapshot: true }),
+      ),
+    ).toBe(true);
 
     const auditor = resolveEffectivePermissions({
       isOwner: false,

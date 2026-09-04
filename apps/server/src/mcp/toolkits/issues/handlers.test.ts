@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  IssueLabelId,
   type IssueStatus,
   IssueStatusId,
   PREVIEW_AUTOMATION_OPERATIONS,
@@ -48,6 +49,7 @@ import { SlackChannelWatchRepositoryLive } from "../../../persistence/Layers/Sla
 import { SlackIntakeLedgerRepositoryLive } from "../../../persistence/Layers/SlackIntakeLedger.ts";
 import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
 import { ProjectionProjectRepository } from "../../../persistence/Services/ProjectionProjects.ts";
+import { IssueLabelRepository } from "../../../persistence/Services/IssueLabels.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import {
@@ -257,7 +259,7 @@ describe("issues MCP toolkit", () => {
         },
         { kind: "user" },
       );
-      yield* tracker.create(
+      const relayIssue = yield* tracker.create(
         {
           title: "Relay reconnect storm",
           statusId: IssueStatusId.make("done"),
@@ -265,6 +267,15 @@ describe("issues MCP toolkit", () => {
         },
         { kind: "user" },
       );
+      const labels = yield* IssueLabelRepository;
+      const relayBugId = IssueLabelId.make("label-relay-bug");
+      yield* labels.upsert({
+        id: relayBugId,
+        name: "Bug",
+        color: "#f2994a",
+        createdAt: "2026-08-12T00:00:01.000Z",
+      });
+      yield* labels.setAssignments({ issueId: relayIssue.issue.id, labelIds: [relayBugId] });
       yield* tracker.create({ title: "Untriaged idea", triage: true }, { kind: "user" });
 
       const all = yield* callTool<IssuesMcpListResult>("issues_list", {});
@@ -294,7 +305,13 @@ describe("issues MCP toolkit", () => {
       assert.strictEqual(byProject.issues[0]?.project, "Relay");
 
       const byLabel = yield* callTool<IssuesMcpListResult>("issues_list", { label: "bug" });
-      assert.strictEqual(byLabel.matched, 1);
+      assert.strictEqual(byLabel.matched, 2);
+      const relayBug = yield* callTool<IssuesMcpListResult>("issues_list", {
+        project: "relay",
+        label: "bug",
+      });
+      assert.strictEqual(relayBug.matched, 1);
+      assert.strictEqual(relayBug.issues[0]?.title, "Relay reconnect storm");
 
       const byPriority = yield* callTool<IssuesMcpListResult>("issues_list", { priority: "high" });
       assert.strictEqual(byPriority.matched, 1);

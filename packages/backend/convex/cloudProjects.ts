@@ -1639,6 +1639,7 @@ export const deleteCompanyProject = mutation({
         readonly issueId: string;
       },
       teamIds: readonly string[] = issueTeams(row.issueId),
+      deletedIssueSnapshot = false,
     ) => {
       await ctx.db.delete(row._id);
       changes.push({
@@ -1648,6 +1649,7 @@ export const deleteCompanyProject = mutation({
         teamIds,
         versionDocId: null,
         payload: null,
+        ...(deletedIssueSnapshot ? { deletedIssueSnapshot: true } : {}),
       });
     };
 
@@ -1676,7 +1678,14 @@ export const deleteCompanyProject = mutation({
       attachmentTargets.push({ docId: row._id, key: row.uploadthingFileKey ?? null });
       await removeIssueRow("issueAttachment", row);
     }
-    for (const row of issueData.auditEvents) await removeIssueRow("issueAuditEvent", row);
+    for (const row of issueData.auditEvents) {
+      await removeIssueRow(
+        "issueAuditEvent",
+        row,
+        issueTeams(row.issueId),
+        row.kind === "deleted_snapshot",
+      );
+    }
     for (const row of issueData.threadLinks) await removeIssueRow("issueThreadLink", row);
     for (const row of issueData.relations) {
       const relatedTeams = issueTeams(row.relatedIssueId);

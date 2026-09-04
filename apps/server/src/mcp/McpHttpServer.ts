@@ -357,14 +357,19 @@ const loadIssueAttachmentImage = Effect.fn("McpHttpServer.loadIssueAttachmentIma
   return bytes === null ? null : { ...attachment, data: Encoding.encodeBase64(bytes) };
 });
 
-type ResolveIssueCloudAttachment = (
-  key: string,
-  attachmentId: string,
-) => Effect.Effect<
-  { readonly mimeType: string; readonly sizeBytes: number; readonly url: string } | null | undefined
->;
+type ResolvedIssueCloudAttachment = {
+  readonly attachmentId: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly url: string;
+};
 
-const noCloudIssueAttachment: ResolveIssueCloudAttachment = () => Effect.succeed(undefined);
+type ResolveIssueCloudAttachments = (
+  key: string,
+  attachmentIds: ReadonlyArray<string>,
+) => Effect.Effect<ReadonlyArray<ResolvedIssueCloudAttachment> | undefined>;
+
+const noCloudIssueAttachments: ResolveIssueCloudAttachments = () => Effect.succeed(undefined);
 
 const withIssueAttachmentMetadata = (
   attachment: IssuesMcpAttachment,
@@ -395,16 +400,28 @@ const issueAttachmentLabel = (
 export const issueDetailCallToolResult = Effect.fn("McpHttpServer.issueDetailCallToolResult")(
   function* (
     detail: IssuesMcpDetail,
-    resolveCloud: ResolveIssueCloudAttachment = noCloudIssueAttachment,
+    resolveCloud: ResolveIssueCloudAttachments = noCloudIssueAttachments,
   ): Effect.fn.Return<
     CallToolResult,
     never,
     ServerConfig.ServerConfig | FileSystem.FileSystem | HttpClient.HttpClient
   > {
     const loadedById = new Map<string, LoadedIssueAttachment | null>();
+    const cloudSources = yield* resolveCloud(
+      detail.key,
+      detail.attachments.map((attachment) => attachment.attachmentId),
+    );
+    const cloudSourceById =
+      cloudSources === undefined
+        ? undefined
+        : new Map(cloudSources.map((source) => [source.attachmentId, source]));
     const attachments = yield* Effect.forEach(detail.attachments, (attachment) =>
-      resolveCloud(detail.key, attachment.attachmentId).pipe(
-        Effect.flatMap((source) => inspectIssueAttachment(attachment.attachmentId, source)),
+      inspectIssueAttachment(
+        attachment.attachmentId,
+        cloudSourceById === undefined
+          ? undefined
+          : (cloudSourceById.get(attachment.attachmentId) ?? null),
+      ).pipe(
         Effect.tap((loaded) => Effect.sync(() => loadedById.set(attachment.attachmentId, loaded))),
         Effect.map((loaded) => withIssueAttachmentMetadata(attachment, loaded)),
       ),
@@ -452,14 +469,19 @@ export const issueAttachmentCallToolResult = Effect.fn(
   "McpHttpServer.issueAttachmentCallToolResult",
 )(function* (
   result: IssuesMcpGetAttachmentResult,
-  resolveCloud: ResolveIssueCloudAttachment = noCloudIssueAttachment,
+  resolveCloud: ResolveIssueCloudAttachments = noCloudIssueAttachments,
 ): Effect.fn.Return<
   CallToolResult,
   never,
   ServerConfig.ServerConfig | FileSystem.FileSystem | HttpClient.HttpClient
 > {
-  const inspected = yield* resolveCloud(result.key, result.attachment.attachmentId).pipe(
-    Effect.flatMap((source) => inspectIssueAttachment(result.attachment.attachmentId, source)),
+  const cloudSources = yield* resolveCloud(result.key, [result.attachment.attachmentId]);
+  const inspected = yield* inspectIssueAttachment(
+    result.attachment.attachmentId,
+    cloudSources === undefined
+      ? undefined
+      : (cloudSources.find((source) => source.attachmentId === result.attachment.attachmentId) ??
+          null),
   );
   const image = yield* loadIssueAttachmentImage(inspected);
   const enrichedResult = {
@@ -525,14 +547,14 @@ const invokeIssueTool = (
         onSuccess: ({ encodedResult }) =>
           Effect.gen(function* () {
             const tracker = yield* IssueTrackerService;
-            const resolveCloud: ResolveIssueCloudAttachment = (key, attachmentId) =>
+            const resolveCloud: ResolveIssueCloudAttachments = (key, attachmentIds) =>
               tracker
                 .withPinnedRoute(
-                  tracker.cloudAttachmentSource({ key: IssueKey.make(key), attachmentId }),
+                  tracker.cloudAttachmentSources({ key: IssueKey.make(key), attachmentIds }),
                 )
                 .pipe(
                   Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-                  Effect.orElseSucceed(() => null),
+                  Effect.orElseSucceed(() => []),
                 );
             return yield* (
               name === "issues_get"

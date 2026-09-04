@@ -456,6 +456,7 @@ export interface IssueIntakeCommentResult {
 }
 
 export interface IssueCloudAttachmentSource {
+  readonly attachmentId: string;
   readonly mimeType: string;
   readonly sizeBytes: number;
   readonly url: string;
@@ -506,11 +507,11 @@ export interface IssueTrackerServiceShape {
     { readonly labels: ReadonlyArray<IssueLabel>; readonly cycles: ReadonlyArray<IssueCycle> },
     IssueTrackerError
   >;
-  /** Undefined selects the local store; null means a routed cloud attachment has no available URL. */
-  readonly cloudAttachmentSource: (input: {
+  /** Undefined selects the local store; a routed lookup returns every attachment with a URL. */
+  readonly cloudAttachmentSources: (input: {
     readonly key: IssueKey;
-    readonly attachmentId: string;
-  }) => Effect.Effect<IssueCloudAttachmentSource | null | undefined, IssueTrackerError>;
+    readonly attachmentIds: ReadonlyArray<string>;
+  }) => Effect.Effect<ReadonlyArray<IssueCloudAttachmentSource> | undefined, IssueTrackerError>;
   /**
    * The per-issue tail — todos, relations, comments — read when a detail sheet opens. These are
    * the three sets that grow with usage rather than configuration, which is why they are not in
@@ -1463,6 +1464,21 @@ export const makeIssueTrackerService = Effect.fn(function* (
   const syncWriteFailure = (message: string) =>
     new IssueTrackerError({ reason: "storage", message: `Cloud issue write failed: ${message}` });
 
+  const projectForLocalId = (
+    route: IssueReplicaRoute,
+    readModel: SyncedIssueDomainReadModel,
+    localProjectId: string,
+  ) => {
+    const cloudProjectId = route.cloudProjectIdForLocal(localProjectId);
+    if (cloudProjectId === null) return undefined;
+    return readModel.cloudProjects.find(
+      (candidate) =>
+        String(candidate.id) === localProjectId ||
+        candidate.id === cloudProjectId ||
+        route.cloudProjectIdForLocal(String(candidate.id)) === cloudProjectId,
+    );
+  };
+
   const requireSyncEngine = Effect.map(ActiveIssueReplicaRoute, (route) => route.engine);
 
   const translateOperationProjectIds = Effect.fn(
@@ -1486,10 +1502,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       case "issue.create":
         if (operation.args.projectId === undefined) return operation;
         const cloudProjectId = yield* translate(operation.args.projectId);
-        const project = readModel.cloudProjects.find(
-          (candidate) =>
-            candidate.id === operation.args.projectId || candidate.id === cloudProjectId,
-        );
+        const project = projectForLocalId(route, readModel, operation.args.projectId);
         if (project === undefined) {
           return yield* syncWriteFailure(
             `local project ${operation.args.projectId} is absent from the company replica`,
@@ -1506,6 +1519,30 @@ export const makeIssueTrackerService = Effect.fn(function* (
       case "issue.update":
         if (operation.args.projectId === undefined || operation.args.projectId === null) {
           return operation;
+        }
+        const issue = readModel.issues.find(
+          (candidate) => String(candidate.id) === String(operation.entityId),
+        );
+        if (issue === undefined) {
+          return yield* notFound(operation.entityId, `No issue with id ${operation.entityId}.`);
+        }
+        const targetProject = projectForLocalId(route, readModel, operation.args.projectId);
+        if (targetProject === undefined) {
+          return yield* new IssueTrackerError({
+            reason: "invalid",
+            message: `Project ${operation.args.projectId} is absent from the company replica.`,
+            subject: operation.args.projectId,
+          });
+        }
+        if (
+          targetProject.teamIds.length > 0 &&
+          !targetProject.teamIds.some((teamId) => issue.teamIds.includes(teamId))
+        ) {
+          return yield* new IssueTrackerError({
+            reason: "invalid",
+            message: `Issue ${issue.key} cannot move to project ${operation.args.projectId} because their team scopes do not overlap.`,
+            subject: issue.key,
+          });
         }
         return {
           ...operation,
@@ -5928,12 +5965,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
             });
           }
           const route = yield* ActiveIssueReplicaRoute;
-          const cloudProjectId = route.cloudProjectIdForLocal(input.projectId);
-          const project = readModel.cloudProjects.find(
-            (candidate) =>
-              String(candidate.id) === input.projectId ||
-              (cloudProjectId !== null && candidate.id === cloudProjectId),
-          );
+          const project = projectForLocalId(route, readModel, input.projectId);
           if (project === undefined) {
             return yield* notFound(
               input.projectId,
@@ -5963,12 +5995,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         Effect.gen(function* () {
           if (input.projectId === null) return scopedCatalog(readModel, []);
           const route = yield* ActiveIssueReplicaRoute;
-          const cloudProjectId = route.cloudProjectIdForLocal(input.projectId);
-          const project = readModel.cloudProjects.find(
-            (candidate) =>
-              String(candidate.id) === input.projectId ||
-              (cloudProjectId !== null && candidate.id === cloudProjectId),
-          );
+          const project = projectForLocalId(route, readModel, input.projectId);
           if (project === undefined) {
             return yield* notFound(
               input.projectId,
@@ -5980,7 +6007,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       legacyScopedCatalog,
     );
 
-  const cloudAttachmentSource: IssueTrackerServiceShape["cloudAttachmentSource"] = (input) =>
+  const cloudAttachmentSources: IssueTrackerServiceShape["cloudAttachmentSources"] = (input) =>
     routeWrite(
       (readModel) =>
         Effect.gen(function* () {
@@ -5995,15 +6022,26 @@ export const makeIssueTrackerService = Effect.fn(function* (
               "the active cloud transport cannot resolve issue attachments",
             );
           }
-          const sources = yield* resolveUrls({
-            companyId: route.companyId,
-            issueId: issue.id,
-            attachmentIds: [input.attachmentId],
-          }).pipe(Effect.mapError((error) => syncWriteFailure(error.message)));
-          const source = sources.find((candidate) => candidate.attachmentId === input.attachmentId);
-          return source === undefined
-            ? null
-            : { mimeType: source.mimeType, sizeBytes: source.byteSize, url: source.url };
+          const batches: Array<ReadonlyArray<string>> = [];
+          for (let offset = 0; offset < input.attachmentIds.length; offset += 8) {
+            batches.push(input.attachmentIds.slice(offset, offset + 8));
+          }
+          const sources = yield* Effect.forEach(
+            batches,
+            (attachmentIds) =>
+              resolveUrls({
+                companyId: route.companyId,
+                issueId: issue.id,
+                attachmentIds,
+              }).pipe(Effect.mapError((error) => syncWriteFailure(error.message))),
+            { concurrency: 1 },
+          );
+          return sources.flat().map((source) => ({
+            attachmentId: source.attachmentId,
+            mimeType: source.mimeType,
+            sizeBytes: source.byteSize,
+            url: source.url,
+          }));
         }),
       Effect.succeed(undefined),
     );
@@ -6086,7 +6124,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     statusesForProject,
     scopedCatalogForIssue,
     scopedCatalogForProject,
-    cloudAttachmentSource,
+    cloudAttachmentSources,
     getDetail,
     create,
     update,

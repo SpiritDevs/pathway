@@ -295,18 +295,32 @@ it.effect(
       expect(missing.isError).toBe(true);
       expect(missing.content.some((content) => content.type === "image")).toBe(false);
 
+      const detailResolutionCalls: Array<ReadonlyArray<string>> = [];
+      yield* McpHttpServer.issueDetailCallToolResult(detail, (_key, attachmentIds) =>
+        Effect.sync(() => {
+          detailResolutionCalls.push([...attachmentIds]);
+          return [];
+        }),
+      );
+      expect(detailResolutionCalls).toEqual([
+        detail.attachments.map((attachment) => attachment.attachmentId),
+      ]);
+
       const cloudAttachmentId = "cloud-attachment-image";
       const cloud = yield* McpHttpServer.issueAttachmentCallToolResult(
         {
           key: detail.key,
           attachment: { ...attachments[0]!, attachmentId: cloudAttachmentId },
         },
-        () =>
-          Effect.succeed({
-            mimeType: "image/png",
-            sizeBytes: imageBytes.byteLength,
-            url: `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}`,
-          }),
+        (_key, attachmentIds) =>
+          Effect.succeed([
+            {
+              attachmentId: attachmentIds[0]!,
+              mimeType: "image/png",
+              sizeBytes: imageBytes.byteLength,
+              url: `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}`,
+            },
+          ]),
       );
       expect(cloud.isError).toBe(false);
       expect(cloud.structuredContent).toMatchObject({
