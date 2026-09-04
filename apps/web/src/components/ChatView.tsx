@@ -255,6 +255,7 @@ import {
   deriveComposerControlsLocked,
   deriveSubagentComposerModelSelection,
   useComposerDraftStore,
+  useEffectiveComposerModelState,
   type DraftId,
 } from "../composerDraftStore";
 import {
@@ -3304,6 +3305,16 @@ function ChatViewContent(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+  const { selectedModel: usageSelectedModel } = useEffectiveComposerModelState({
+    threadRef: composerDraftTarget,
+    providers: providerStatuses,
+    selectedProvider: activeProviderStatus?.driver ?? selectedProvider,
+    selectedInstanceId: activeProviderStatus?.instanceId,
+    subagentModelSelection: activeSubagentModelSelection,
+    threadModelSelection: activeThread?.modelSelection,
+    projectModelSelection: activeProject?.defaultModelSelection,
+    settings,
+  });
   const activeProviderThread = useMemo(() => {
     if (!serverProjection) return null;
     const activeId = serverProjection.thread.activeProviderThreadId;
@@ -8612,6 +8623,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeProjectName: activeProject?.title,
     activeProjectScripts: activeProject?.scripts,
     activeProvider: activeProviderStatus,
+    selectedModel: usageSelectedModel,
     activeProviderEntry,
     activeProviderIconBadge: activeProviderEntry
       ? shouldShowProviderInstanceBadge(activeProviderEntry, continuationProviderEntries)

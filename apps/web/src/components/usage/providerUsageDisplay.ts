@@ -63,16 +63,41 @@ export function formatProviderUsageRateLimit(
   return `${providerName} usage is rate limited by the provider. Refreshes resume in about ${hours} ${hours === 1 ? "hour" : "hours"}.`;
 }
 
+export function isSparkUsageModel(model: string | null | undefined): boolean {
+  return /(?:^|[^a-z0-9])spark(?:$|[^a-z0-9])/i.test(model ?? "");
+}
+
+function isLunaReserveLimit(limit: ServerProviderUsageLimit): boolean {
+  return [limit.limitId, limit.scope].some(
+    (value) => value?.toLowerCase().replaceAll("_", "-") === "gpt-reserve",
+  );
+}
+
+/** General summaries omit reserve quotas and show Spark only when selected. */
+export function filterProviderUsageForDisplay(
+  snapshot: ServerProviderUsageSnapshot | null,
+  showSpark = false,
+): ServerProviderUsageSnapshot | null {
+  if (snapshot === null || snapshot.provider !== "codex") return snapshot;
+  const limits = snapshot.limits.filter(
+    (limit) =>
+      !isLunaReserveLimit(limit) &&
+      (showSpark || (!isSparkUsageModel(limit.limitId) && !isSparkUsageModel(limit.scope))),
+  );
+  return limits.length === snapshot.limits.length ? snapshot : { ...snapshot, limits };
+}
+
 export function deriveProviderUsageLimits(
   limits: ReadonlyArray<ServerProviderUsageLimit>,
   nowMs = Date.now(),
 ): ReadonlyArray<ProviderUsageDisplayLimit> {
   return limits.flatMap<ProviderUsageDisplayLimit>((limit) => {
+    const displayLimit = isLunaReserveLimit(limit) ? { ...limit, scope: "Lunar Reserve" } : limit;
     if (limit.usedPercent === undefined) {
       if (limit.resetsAt === undefined) return [];
       return [
         {
-          ...limit,
+          ...displayLimit,
           remainingPercent: null,
           remainingLabel: "No % reported",
           resetLabel: formatProviderUsageReset(limit.resetsAt, nowMs),
@@ -83,7 +108,7 @@ export function deriveProviderUsageLimits(
     const remainingPercent = clampPercent(100 - limit.usedPercent);
     return [
       {
-        ...limit,
+        ...displayLimit,
         remainingPercent,
         remainingLabel: `${Math.round(remainingPercent)}% left`,
         resetLabel: limit.resetsAt ? formatProviderUsageReset(limit.resetsAt, nowMs) : null,

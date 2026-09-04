@@ -158,23 +158,32 @@ export function parseUsageLimitResetAt(message: string, nowMs: number): string |
 
 export function resolveUsageLimitResetAt(input: {
   readonly failureMessage: string;
+  readonly model?: string;
   readonly snapshot?: ServerProviderUsageSnapshot | null;
   readonly nowMs: number;
 }): string | null {
-  const nowMs = input.nowMs;
-  const futureLimits = (input.snapshot?.status === "ok" ? input.snapshot.limits : [])
-    .flatMap((limit) => {
-      if (!limit.resetsAt) return [];
-      const timestamp = Date.parse(limit.resetsAt);
-      return Number.isFinite(timestamp) && timestamp > nowMs ? [{ limit, timestamp }] : [];
-    })
-    .sort((left, right) => {
-      const leftExhausted = (left.limit.usedPercent ?? 0) >= 99 ? 0 : 1;
-      const rightExhausted = (right.limit.usedPercent ?? 0) >= 99 ? 0 : 1;
-      return leftExhausted - rightExhausted || left.timestamp - right.timestamp;
-    });
-  const quotaReset = futureLimits[0]?.timestamp;
-  return quotaReset === undefined
-    ? parseUsageLimitResetAt(input.failureMessage, nowMs)
-    : DateTime.formatIso(DateTime.makeUnsafe(quotaReset));
+  const explicit = parseUsageLimitResetAt(input.failureMessage, input.nowMs);
+  if (explicit !== null) return explicit;
+  const snapshot = input.snapshot;
+  if (snapshot?.status !== "ok" || snapshot.stale) return null;
+  const model = input.model?.toLowerCase();
+  const blocking = snapshot.limits.filter((limit) => {
+    // Providers can round an exhausted quota just below 100%.
+    if ((limit.usedPercent ?? 0) < 99) return false;
+    if (!limit.scope) return true;
+    // Scope labels are provider supplied. Only match known model families;
+    // an unknown scope cannot safely schedule automatic recovery.
+    const scope = limit.scope.toLowerCase();
+    return (
+      model !== undefined &&
+      ["spark", "sonnet", "opus", "haiku", "fable"].some(
+        (family) => scope.includes(family) && model.includes(family),
+      )
+    );
+  });
+  if (blocking.length === 0) return null;
+  const resets = blocking.map((limit) => Date.parse(limit.resetsAt ?? ""));
+  if (resets.some((timestamp) => !Number.isFinite(timestamp) || timestamp <= input.nowMs))
+    return null;
+  return DateTime.formatIso(DateTime.makeUnsafe(Math.max(...resets)));
 }

@@ -31,7 +31,7 @@ function provider(input: {
 }
 
 describe("connected provider usage accounts", () => {
-  it("dedupes the same provider account across environments", () => {
+  it("preserves accounts with the same email across environments", () => {
     const studioClaude = provider({
       driver: "claudeAgent",
       instanceId: "claudeAgent",
@@ -56,6 +56,7 @@ describe("connected provider usage accounts", () => {
         provider: studioClaude,
         displayName: "Claude",
       }),
+      expect.objectContaining({ environmentId: laptopId, provider: laptopClaude }),
     ]);
   });
 

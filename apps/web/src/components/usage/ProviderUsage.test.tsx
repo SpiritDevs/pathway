@@ -25,6 +25,8 @@ const atoms = vi.hoisted(() => ({
 const testState = vi.hoisted(() => ({
   queries: new Map<string, ServerProviderUsageSnapshot>(),
   pendingQueries: new Set<string>(),
+  // The live subscription reports no data until its first emission arrives.
+  listLoaded: true,
   refresh: vi.fn(),
   toast: vi.fn(),
   environments: [] as ReadonlyArray<{
@@ -74,7 +76,7 @@ vi.mock("~/state/server", () => ({
 
 vi.mock("~/state/query", () => ({
   useEnvironmentQuery: (target: unknown) => ({
-    data: target === null ? null : Array.from(testState.queries.values()),
+    data: target === null || !testState.listLoaded ? null : Array.from(testState.queries.values()),
     error: null,
     isPending: target !== null && testState.pendingQueries.size > 0,
     refresh: vi.fn(),
@@ -205,6 +207,7 @@ describe("provider usage panel refresh", () => {
     testState.environments = [];
     testState.queries.clear();
     testState.pendingQueries.clear();
+    testState.listLoaded = true;
     testState.refresh.mockReset();
     testState.toast.mockReset();
   });
@@ -230,7 +233,8 @@ describe("provider usage panel refresh", () => {
     expect(tooltip).not.toBeNull();
   });
 
-  it("keeps the refresh action calm while usage loads in the background", () => {
+  it("keeps the refresh action calm while the first usage list loads", () => {
+    testState.listLoaded = false;
     testState.pendingQueries.add(String(codexId));
 
     const panel = renderSingle();
@@ -246,6 +250,26 @@ describe("provider usage panel refresh", () => {
     expect(button?.props["aria-busy"]).toBe(false);
     expect(findSpinningRefreshIcon(panel)).toBeNull();
   });
+
+  it.each([false, true])(
+    "clears pending after a live list arrives (has snapshot: %s)",
+    (hasSnapshot) => {
+      // The subscription never completes, so its underlying `waiting` flag stays
+      // true forever; only the absence of data may present as loading.
+      testState.pendingQueries.add(String(codexId));
+      if (hasSnapshot) testState.queries.set(String(codexId), snapshot(codexId, "codex", 20));
+
+      const panel = renderSingle();
+      const pendingContent = visitElements(
+        panel,
+        (element) => element.props["data-provider-usage-pending"] === true,
+      );
+
+      expect(pendingContent).toBeNull();
+      expect(findRefreshButton(panel)?.props["aria-busy"]).toBe(false);
+      expect(findSpinningRefreshIcon(panel)).toBeNull();
+    },
+  );
 
   it("forces one refresh, stays busy, preserves disclosure state, and reads the broadcast", async () => {
     const initial = snapshot(codexId, "codex", 20);
@@ -418,7 +442,27 @@ describe("provider usage panel refresh", () => {
     expect(findSpinningRefreshIcon(settledSettings)).toBeNull();
   });
 
-  it("shows one row per provider account instead of grouping rows by environment", () => {
+  it("shows unknown-auth Claude only when live usage confirms credentials", () => {
+    const claude = { ...provider("claudeAgent", claudeId), auth: { status: "unknown" as const } };
+    setConnectedProviders([{ environmentId, label: "Studio", providers: [claude] }]);
+    hooks.beginRender();
+    const menu = ConnectedProviderUsageMenu() as ReactElement<Record<string, unknown>>;
+    const row = visitElements(menu, (element) => Boolean(element.props.account))!;
+    const renderRow = row.type as (props: Record<string, unknown>) => ReactElement | null;
+    hooks.beginRender();
+    expect(renderRow(row.props)).toBeNull();
+    testState.queries.set(String(claudeId), snapshot(claudeId, "claudeAgent", 20));
+    hooks.beginRender();
+    expect(renderRow(row.props)).not.toBeNull();
+    testState.queries.set(String(claudeId), {
+      ...snapshot(claudeId, "claudeAgent", 20),
+      status: "needs-auth",
+    });
+    hooks.beginRender();
+    expect(renderRow(row.props)).toBeNull();
+  });
+
+  it("shows each configured account even when emails match", () => {
     const laptopId = EnvironmentId.make("usage-laptop");
     const laptopClaudeId = ProviderInstanceId.make("laptop-claude");
     const laptopCodexId = ProviderInstanceId.make("laptop-codex");
@@ -458,6 +502,8 @@ describe("provider usage panel refresh", () => {
       "Claude",
       "Codex",
       "Work",
+      "Laptop Claude",
+      "Laptop Codex",
     ]);
     expect(visitElements(menu, (element) => element.props.children === "Studio")).toBeNull();
     expect(visitElements(menu, (element) => element.props.children === "Laptop")).toBeNull();

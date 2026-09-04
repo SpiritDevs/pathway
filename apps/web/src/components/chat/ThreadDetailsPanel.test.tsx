@@ -302,6 +302,7 @@ describe("ThreadDetailsPanel", () => {
       displayMode: "panel",
       iconDisplayName: "Work Codex",
       showIconBadge: true,
+      showSpark: false,
     });
     expect(testState.providerUsageList).not.toHaveBeenCalled();
   });
@@ -350,6 +351,7 @@ describe("ThreadDetailsPanel", () => {
     expect(testState.providerUsageList).toHaveBeenCalledWith({
       environmentId,
       enabled: true,
+      showSpark: false,
     });
     expect(testState.providerUsage).not.toHaveBeenCalled();
   });

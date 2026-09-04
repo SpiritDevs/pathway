@@ -33,6 +33,7 @@ import {
 import { THREAD_DETAILS_PANEL_DISCLOSURE_ROW_CLASS } from "../chat/threadDetailsPanelStyles";
 import {
   deriveProviderUsageLimits,
+  filterProviderUsageForDisplay,
   formatProviderUsageCaptureAge,
   formatProviderUsageRateLimit,
   selectPrimaryProviderUsageLimit,
@@ -190,6 +191,9 @@ function useProviderUsage(input: {
   const usage = useEnvironmentQuery(target);
   return {
     ...usage,
+    // The live subscription never completes, so its `waiting` flag stays true
+    // for the life of the stream. Only the first list arrival is loading.
+    isPending: usage.isPending && usage.data === null,
     data:
       usage.data?.find(
         (snapshot) =>
@@ -261,18 +265,11 @@ function ProviderUsageDetails({
   const [nowMs, setNowMs] = useState(() => Date.now());
   const rateLimitedUntil = snapshot?.rateLimitedUntil;
   useEffect(() => {
-    if (rateLimitedUntil === undefined) return;
-    const untilMs = Date.parse(rateLimitedUntil);
-    const initialNowMs = Date.now();
-    setNowMs(initialNowMs);
-    if (!Number.isFinite(untilMs) || untilMs <= initialNowMs) return;
-    const timer = globalThis.setInterval(() => {
-      const nextNowMs = Date.now();
-      setNowMs(nextNowMs);
-      if (nextNowMs >= untilMs) globalThis.clearInterval(timer);
-    }, 60_000);
+    if (snapshot === null) return;
+    setNowMs(Date.now());
+    const timer = globalThis.setInterval(() => setNowMs(Date.now()), 60_000);
     return () => globalThis.clearInterval(timer);
-  }, [rateLimitedUntil]);
+  }, [snapshot !== null]);
   if (loading && snapshot === null) {
     return <p className="text-xs text-muted-foreground">Loading provider usage…</p>;
   }
@@ -294,7 +291,9 @@ function ProviderUsageDetails({
   const hasUsage = limits.length > 0 || snapshot.usageLines.length > 0;
   return (
     <div className={cn("space-y-3", compact && "space-y-2.5")}>
-      {snapshot.stale && (detail || captureAge) ? (
+      {(snapshot.stale ||
+        nowMs - Date.parse(snapshot.fetchedAt ?? snapshot.updatedAt) >= 300_000) &&
+      (detail || captureAge) ? (
         <p className="text-xs leading-relaxed text-warning-foreground">
           {[detail, captureAge].filter(Boolean).join(" · ")}
         </p>
@@ -333,6 +332,7 @@ export function EnvironmentProviderUsage({
   displayMode = "card",
   grouped = false,
   parentRefreshing = false,
+  showSpark = false,
   iconDisplayName,
   showIconBadge = false,
 }: {
@@ -342,6 +342,7 @@ export function EnvironmentProviderUsage({
   displayMode?: "card" | "panel";
   grouped?: boolean;
   parentRefreshing?: boolean;
+  showSpark?: boolean;
   iconDisplayName?: string;
   showIconBadge?: boolean;
 }) {
@@ -367,7 +368,7 @@ export function EnvironmentProviderUsage({
     [displayName, environmentId, provider.instanceId, usageProvider],
   );
   const singleRefresh = useForcedProviderUsageRefresh(refreshTargets);
-  const snapshot = usage.data;
+  const snapshot = filterProviderUsageForDisplay(usage.data, showSpark);
   const refreshing = grouped ? parentRefreshing : singleRefresh.isRefreshing;
   const primary = selectPrimaryProviderUsageLimit(snapshot);
   const limits = snapshot?.status === "ok" ? deriveProviderUsageLimits(snapshot.limits) : [];
@@ -389,6 +390,14 @@ export function EnvironmentProviderUsage({
           onRefresh: singleRefresh.refresh,
         })
       : null;
+
+  if (
+    isPanel &&
+    usageProvider === "claudeAgent" &&
+    (provider.auth.status === "unauthenticated" || snapshot?.status === "needs-auth")
+  ) {
+    return null;
+  }
 
   if (!shouldCollapseProviderUsage(limits)) {
     return (
@@ -536,15 +545,21 @@ export function EnvironmentProviderUsage({
 export function EnvironmentProviderUsageList({
   environmentId,
   enabled,
+  showSpark = false,
 }: {
   environmentId: EnvironmentId;
   enabled: boolean;
+  showSpark?: boolean;
 }) {
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
   const supported = useMemo(
     () =>
       deriveProviderInstanceEntries(providers ?? []).filter(
-        (entry) => entry.enabled && entry.installed && isProviderUsageDriver(entry.driverKind),
+        (entry) =>
+          entry.enabled &&
+          entry.installed &&
+          isProviderUsageDriver(entry.driverKind) &&
+          !(entry.driverKind === "claudeAgent" && entry.snapshot.auth.status === "unauthenticated"),
       ),
     [providers],
   );
@@ -588,6 +603,7 @@ export function EnvironmentProviderUsageList({
               iconDisplayName={entry.displayName}
               showIconBadge={shouldShowProviderInstanceBadge(entry, supported)}
               parentRefreshing={usageRefresh.isRefreshing}
+              showSpark={showSpark}
             />
           ))}
         </div>
@@ -637,6 +653,7 @@ function ProviderUsageCard({ account }: { account: ConnectedProviderUsageAccount
           </span>
           <div className="min-w-0">
             <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
+            <p className="truncate text-[11px] text-muted-foreground">{account.environmentLabel}</p>
             {displayName !== providerName(usageProvider) ? (
               <p className="text-[11px] text-muted-foreground">{providerName(usageProvider)}</p>
             ) : null}
@@ -694,6 +711,13 @@ function ConnectedProviderUsageRow({ account }: { account: ConnectedProviderUsag
     enabled: true,
   });
 
+  if (
+    usageProvider === "claudeAgent" &&
+    (usage.data?.status === "needs-auth" ||
+      (provider.auth.status !== "authenticated" && usage.data?.status !== "ok"))
+  )
+    return null;
+
   return (
     <div className="rounded-md bg-muted/45 px-2.5 py-2.5">
       <div className="mb-2 flex min-w-0 items-center gap-2">
@@ -706,13 +730,16 @@ function ConnectedProviderUsageRow({ account }: { account: ConnectedProviderUsag
         />
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
           {displayName}
+          <span className="ml-1 font-normal text-muted-foreground">
+            · {account.environmentLabel}
+          </span>
         </span>
         {usage.data?.status === "ok" && usage.data.planName ? (
           <span className="shrink-0 text-[10px] text-muted-foreground">{usage.data.planName}</span>
         ) : null}
       </div>
       <ProviderUsageDetails
-        snapshot={usage.data}
+        snapshot={filterProviderUsageForDisplay(usage.data)}
         loading={usage.isPending}
         error={usage.error}
         compact
@@ -733,6 +760,7 @@ function useConnectedProviderUsageAccounts() {
       deriveConnectedProviderUsageAccounts(
         connected.map((environment) => ({
           environmentId: environment.environmentId,
+          environmentLabel: environment.label,
           providers: serverConfigs.get(environment.environmentId)?.providers ?? null,
         })),
       ),
@@ -747,7 +775,16 @@ function useConnectedProviderUsageAccounts() {
 }
 
 export function ConnectedProviderUsageMenu() {
-  const { accounts, connectedCount, loading } = useConnectedProviderUsageAccounts();
+  const {
+    accounts: connectedAccounts,
+    connectedCount,
+    loading,
+  } = useConnectedProviderUsageAccounts();
+  const accounts = connectedAccounts.filter(
+    (account) =>
+      account.provider.driver !== "claudeAgent" ||
+      account.provider.auth.status !== "unauthenticated",
+  );
 
   return (
     <div className="min-w-0">

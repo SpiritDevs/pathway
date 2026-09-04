@@ -35,8 +35,9 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
-import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
+import { HostProcessEnvironment } from "@spiritdevs/shared/hostProcess";
+import { usageSourceId } from "@spiritdevs/shared/usageMerge";
+import { usageTranscriptRoots } from "./usageTranscriptRoots.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
 import { parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
@@ -51,7 +52,6 @@ import {
   pruneScanCache,
   type ScanCache,
 } from "./usageScanCache.ts";
-import type { UsageRecord } from "./usageTranscripts.ts";
 
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -201,45 +201,19 @@ export const make = Effect.gen(function* () {
       : segment;
   };
 
-  /**
-   * Claude's config dir is the home itself when overridden, but a default
-   * install nests transcripts under `~/.claude/projects`. Probe both.
-   */
-  const resolveClaudeTranscriptDir = (homePath: string) =>
-    Effect.gen(function* () {
-      const nested = path.join(homePath, ".claude", "projects");
-      const nestedExists = yield* fileSystem
-        .exists(nested)
-        .pipe(Effect.catchCause(() => Effect.succeed(false)));
-      return nestedExists ? nested : path.join(homePath, "projects");
-    });
-
-  /** Resolves the transcript directory for each provider. */
   const resolveTranscriptDirs = Effect.fn("UsageService.resolveTranscriptDirs")(function* () {
-    // A settings failure must surface as an error: swallowing it here would
-    // present "zero usage from every provider" as a valid answer.
     const settings = yield* settingsService.getSettings.pipe(
       Effect.catchCause(
         (cause) =>
           new UsageReadError({
             reason: "scanFailed",
-            // Bounded description; the squashed failure travels as the cause.
-            // Squashed, not the Cause tree: a full tree in a Defect field is
-            // the unbounded wire payload the bounded detail exists to avoid.
             detail: "Server settings could not be read.",
             cause: Cause.squash(cause),
           }),
       ),
     );
-
-    const claudeHome = yield* resolveClaudeHomePath(settings.providers.claudeAgent);
-    const claudeDir = yield* resolveClaudeTranscriptDir(claudeHome);
-    const codexLayout = yield* resolveCodexHomeLayout(settings.providers.codex);
-
-    return [
-      { provider: "claude" as const, dir: claudeDir },
-      { provider: "codex" as const, dir: path.join(codexLayout.sharedHomePath, "sessions") },
-    ];
+    const env = yield* HostProcessEnvironment;
+    return usageTranscriptRoots(settings, env, path);
   });
 
   /**
@@ -280,7 +254,7 @@ export const make = Effect.gen(function* () {
     size: number,
     mtimeMs: number,
     provider: UsageProviderKind,
-  ): Effect.Effect<readonly UsageRecord[]> =>
+  ) =>
     Effect.gen(function* () {
       const cached = fileCache.get(filePath);
       // Provider is part of the identity: if both providers were ever pointed
@@ -291,20 +265,30 @@ export const make = Effect.gen(function* () {
         cached.mtimeMs === mtimeMs &&
         cached.provider === provider
       ) {
-        return cached.records;
+        return {
+          records: cached.records,
+          malformedRecords: cached.malformedRecords,
+          failed: false,
+        };
       }
 
       const parsed = yield* Effect.promise(() => readTranscriptRecords(filePath, provider));
       // A read failure is not an empty transcript: caching it under this
       // (size, mtime) would silently drop the file's usage until it changes.
-      if (parsed === null) return [];
+      if (parsed.failed) return parsed;
       // Stored already de-duplicated within the file, which is 99% of all
       // duplicates. The aggregator still runs the cross-file dedupe pass.
-      const records = dedupeWithinFile(parsed);
+      const records = dedupeWithinFile(parsed.records);
 
-      fileCache.set(filePath, { size, mtimeMs, provider, records });
+      fileCache.set(filePath, {
+        size,
+        mtimeMs,
+        provider,
+        records,
+        malformedRecords: parsed.malformedRecords,
+      });
       cacheDirty = true;
-      return records;
+      return { ...parsed, records };
     });
 
   const readSummary = Effect.fn("UsageService.readSummary")(function* (input: UsageSummaryInput) {
@@ -357,40 +341,52 @@ export const make = Effect.gen(function* () {
     const windowStartMs =
       (hourlyWindow?.sinceTimeMs ?? DateTime.toEpochMillis(windowStart.value)) - MTIME_SLACK_MS;
 
-    const aggregator = new UsageAggregator({
-      timeZone: input.timeZone,
-      sinceDay: input.sinceDay,
-      untilDay: input.untilDay,
-      resolution: input.resolution ?? "day",
-      ...hourlyWindow,
-      rates,
-    });
-
+    const buckets: UsageSummary["buckets"][number][] = [];
+    const projects: UsageSummary["projects"][number][] = [];
+    const seenRoots = new Set<string>();
     const sources: UsageSource[] = [];
     const livePaths = new Set<string>();
     const walkedRoots: string[] = [];
 
-    for (const { provider, dir } of dirs) {
+    for (const { provider, dir: configuredDir } of dirs) {
+      const dir = yield* fileSystem
+        .realPath(configuredDir)
+        .pipe(Effect.orElseSucceed(() => configuredDir));
+      if (seenRoots.has(`${provider}:${dir}`)) continue;
+      seenRoots.add(`${provider}:${dir}`);
+      const aggregator = new UsageAggregator({
+        timeZone: input.timeZone,
+        sinceDay: input.sinceDay,
+        untilDay: input.untilDay,
+        resolution: input.resolution ?? "day",
+        ...hourlyWindow,
+        rates,
+      });
+
       const volumeId = yield* Effect.promise(() => readDirectoryVolumeId(dir));
-      const exists = yield* fileSystem
-        .exists(dir)
-        .pipe(Effect.catchCause(() => Effect.succeed(false)));
+      const exists = yield* fileSystem.exists(dir).pipe(Effect.orElseSucceed(() => null));
 
       if (!exists) {
         sources.push({
           fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
-          status: "missing",
+          status: exists === null ? "failed" : "missing",
           scannedFiles: 0,
           skippedFiles: 0,
           malformedRecords: 0,
           distinctSessions: 0,
-          message: "No transcript directory on this environment.",
+          message:
+            exists === null
+              ? "The transcript directory could not be accessed."
+              : "No transcript directory on this environment.",
         });
         continue;
       }
 
-      walkedRoots.push(dir);
-      const files = yield* Effect.promise(() => listTranscriptFiles(dir, windowStartMs));
+      const listing = yield* Effect.promise(() => listTranscriptFiles(dir, windowStartMs));
+      if (listing.failedEntries === 0) walkedRoots.push(dir);
+      let failures = listing.failedEntries;
+      let malformedRecords = 0;
+      const files = listing.files;
       let scannedFiles = 0;
       let skippedFiles = 0;
       // Distinct per directory. Buckets carry per-cell session counts, but a
@@ -399,16 +395,19 @@ export const make = Effect.gen(function* () {
 
       for (const file of files) {
         livePaths.add(file.path);
-        const records = yield* readFileRecords(file.path, file.size, file.mtimeMs, provider);
+        const parsed = yield* readFileRecords(file.path, file.size, file.mtimeMs, provider);
+        failures += Number(parsed.failed);
+        malformedRecords += parsed.malformedRecords;
+        const records = parsed.records;
         if (records.length === 0) {
           skippedFiles += 1;
           continue;
         }
         scannedFiles += 1;
-        // Claude nests each session under a directory named for the working directory it ran in,
-        // which is the only per-project signal a transcript carries. Codex files sit directly
-        // under `sessions`, so they attribute to nothing and the slug comes back null.
-        const workspaceSlug = transcriptWorkspaceSlugForFile(dir, file.path);
+        // Claude directory names encode working directories. Codex folders encode
+        // dates, so they cannot provide project attribution.
+        const workspaceSlug =
+          provider === "claude" ? transcriptWorkspaceSlugForFile(dir, file.path) : null;
         for (const record of records) {
           // Only sessions that contributed in-window count: the mtime slack
           // admits boundary files whose records fall outside the range.
@@ -418,14 +417,23 @@ export const make = Effect.gen(function* () {
         }
       }
 
+      const fingerprint = { hostId, provider, resolvedHomePath: dir, volumeId };
+      const sourceId = usageSourceId(fingerprint);
+      const aggregated = aggregator.finish();
+      buckets.push(...aggregated.buckets.map((bucket) => ({ ...bucket, sourceId })));
+      projects.push(...aggregated.projects.map((project) => ({ ...project, sourceId })));
       sources.push({
-        fingerprint: { hostId, provider, resolvedHomePath: dir, volumeId },
-        status: "ok",
+        fingerprint,
+        status:
+          failures > 0 || malformedRecords > 0 ? (scannedFiles > 0 ? "partial" : "failed") : "ok",
         scannedFiles,
         skippedFiles,
-        malformedRecords: 0,
+        malformedRecords,
         distinctSessions: sessionIds.size,
-        message: null,
+        message:
+          failures > 0 || malformedRecords > 0
+            ? `${failures} file or directory reads failed; ${malformedRecords} usage records could not be parsed. Totals may be incomplete.`
+            : null,
       });
     }
 
@@ -438,7 +446,6 @@ export const make = Effect.gen(function* () {
     if (pruned > 0) cacheDirty = true;
     yield* persistScanCache();
 
-    const aggregated = aggregator.finish();
     const readAt = yield* DateTime.now;
     const finishedAtMs = yield* Clock.currentTimeMillis;
 
@@ -448,8 +455,8 @@ export const make = Effect.gen(function* () {
       timeZone: input.timeZone,
       sinceDay: input.sinceDay,
       untilDay: input.untilDay,
-      buckets: aggregated.buckets,
-      projects: aggregated.projects,
+      buckets,
+      projects,
       sources,
       pricing: {
         status: ratesStatus,

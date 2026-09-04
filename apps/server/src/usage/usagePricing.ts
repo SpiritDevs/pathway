@@ -56,7 +56,7 @@ export function parseRateTable(document: unknown): RateTable {
     const output = finiteNumber(entry.output_cost_per_token);
     if (input === null || output === null) continue;
 
-    table.set(normalizeModelName(name), {
+    table.set(name.trim().toLowerCase(), {
       inputCostPerToken: input,
       outputCostPerToken: output,
       // Anthropic bills cache reads at a discount and cache writes at a
@@ -101,7 +101,14 @@ const UNPRICEABLE_MODELS = new Set([
 export function lookupRate(table: RateTable, model: string): ModelRate | null {
   const normalized = normalizeModelName(model);
   if (normalized.length === 0 || UNPRICEABLE_MODELS.has(normalized)) return null;
-  return table.get(normalized) ?? null;
+  // Preserve qualified reseller/regional rates without allowing them to replace
+  // the native rate used by provider CLI transcripts.
+  const exact = table.get(model.trim().toLowerCase());
+  if (exact) return exact;
+  const nativePrefix = normalized.startsWith("claude-") ? "anthropic" : "openai";
+  const qualified = model.trim().toLowerCase();
+  if (qualified.includes("/") && qualified !== `${nativePrefix}/${normalized}`) return null;
+  return table.get(normalized) ?? table.get(`${nativePrefix}/${normalized}`) ?? null;
 }
 
 export interface PricedUsage {

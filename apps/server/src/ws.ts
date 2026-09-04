@@ -148,7 +148,11 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
-import { getProviderUsage, subscribeProviderUsage } from "./providerUsage/ProviderUsageService.ts";
+import {
+  getProviderUsage,
+  subscribeProviderUsage,
+  makeSharedProviderUsageSubscription,
+} from "./providerUsage/ProviderUsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
@@ -530,6 +534,7 @@ export const refreshLocalGitStatusAfterMutation = Effect.fn(
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  providerUsageUpdates: ReturnType<typeof subscribeProviderUsage>,
 ) =>
   ServerWsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -1688,7 +1693,7 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.serverSubscribeProviderUsage]: (_input) =>
-          observeRpcStream(WS_METHODS.serverSubscribeProviderUsage, subscribeProviderUsage(), {
+          observeRpcStream(WS_METHODS.serverSubscribeProviderUsage, providerUsageUpdates, {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) =>
@@ -2824,6 +2829,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const providerUsageUpdates = yield* makeSharedProviderUsageSubscription();
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -2843,7 +2849,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, previewAutomationBroker).pipe(
+            makeWsRpcLayer(session, previewAutomationBroker, providerUsageUpdates).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
