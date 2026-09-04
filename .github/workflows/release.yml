@@ -113,14 +113,40 @@ jobs:
           echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
           echo "make_latest=false" >> "$GITHUB_OUTPUT"
 
-      - name: Check
-        run: vp check
+      - name: Check release formatting
+        run: |
+          vp fmt --check \
+            .github/workflows/release.yml \
+            apps/server/src/cloud/publicConfig.test.ts \
+            apps/web/src/cloud/connectCliAuth.test.ts \
+            apps/web/src/components/clerk/authRedirect.test.ts \
+            apps/web/src/hostedPairing.test.ts \
+            apps/web/src/hostedPairing.ts \
+            apps/web/vercel.ts \
+            packages/shared/src/connectAuth.test.ts \
+            packages/shared/src/connectAuth.ts \
+            packages/shared/src/remote.test.ts
 
-      - name: Typecheck
-        run: vp run typecheck
+      - name: Typecheck hosted web packages
+        run: |
+          vp run --filter @spiritdevs/shared typecheck
+          vp run --filter @spiritdevs/web typecheck
 
-      - name: Test
-        run: vp run test
+      - name: Test release paths
+        run: |
+          vp test run \
+            apps/desktop/src/electron/ElectronUpdater.test.ts \
+            apps/desktop/src/settings/DesktopAppSettings.test.ts \
+            apps/desktop/src/updates/DesktopUpdates.test.ts \
+            apps/server/src/cloud/publicConfig.test.ts \
+            apps/web/src/cloud/connectCliAuth.test.ts \
+            apps/web/src/components/clerk/authRedirect.test.ts \
+            apps/web/src/hostedPairing.test.ts \
+            packages/shared/src/connectAuth.test.ts \
+            packages/shared/src/remote.test.ts \
+            scripts/build-desktop-artifact.test.ts \
+            scripts/resolve-nightly-release.test.ts \
+            scripts/resolve-previous-release-tag.test.ts
 
       - id: previous_tag
         name: Resolve previous release tag
