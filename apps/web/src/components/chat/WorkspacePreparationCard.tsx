@@ -147,19 +147,19 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
                   )}
                   aria-hidden
                 />
-                <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
                   <span>{step.label}</span>
                   {step.status === "running" &&
                   preparation?.phase === "worktree" &&
                   !pendingAction ? (
-                    <div className="mt-2 flex items-center gap-3">
+                    <div className="flex shrink-0 items-center gap-2">
                       <div
                         role="progressbar"
                         aria-label="Checking out files"
                         aria-valuemin={0}
                         aria-valuemax={100}
                         aria-valuenow={preparation.checkoutPercent}
-                        className="h-1.5 flex-1 overflow-hidden rounded-full bg-primary/15"
+                        className="h-1 w-16 overflow-hidden rounded-full bg-primary/15 sm:w-24"
                       >
                         <div
                           className={cn(
@@ -175,7 +175,9 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
                         />
                       </div>
                       {preparation.checkoutPercent !== undefined ? (
-                        <span className="text-xs tabular-nums">{preparation.checkoutPercent}%</span>
+                        <span className="w-7 text-right text-[10px] tabular-nums">
+                          {preparation.checkoutPercent}%
+                        </span>
                       ) : null}
                     </div>
                   ) : null}
