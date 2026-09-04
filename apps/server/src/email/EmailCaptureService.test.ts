@@ -1,8 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { createServer } from "node:net";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import * as NodeFS from "node:fs";
+import * as NodeNet from "node:net";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import {
   DEFAULT_EMAIL_CAPTURE_SETTINGS,
@@ -51,8 +51,8 @@ const projects = [
 ] as const;
 
 const freePort = Effect.acquireUseRelease(
-  Effect.callback<ReturnType<typeof createServer>, Error>((resume) => {
-    const server = createServer();
+  Effect.callback<ReturnType<typeof NodeNet.createServer>, Error>((resume) => {
+    const server = NodeNet.createServer();
     server.once("error", (cause) => resume(Effect.fail(cause)));
     server.listen(0, "127.0.0.1", () => resume(Effect.succeed(server)));
   }),
@@ -168,8 +168,10 @@ describe("EmailCaptureService SMTP listener", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const directory = yield* Effect.acquireRelease(
-          Effect.sync(() => mkdtempSync(join(tmpdir(), "pathway-smtp-capture-"))),
-          (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
+          Effect.sync(() =>
+            NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pathway-smtp-capture-")),
+          ),
+          (path) => Effect.sync(() => NodeFS.rmSync(path, { recursive: true, force: true })),
         );
         const port = yield* freePort;
         yield* Effect.gen(function* () {
@@ -251,13 +253,17 @@ describe("EmailCaptureService SMTP listener", () => {
           expect(
             messages[0]?.smtpTransactionLog.some(({ line }) => line.startsWith("AUTH PLAIN")),
           ).toBe(true);
-          expect(existsSync(join(directory, "mail", "raw", `${attachment.messageId}.eml`))).toBe(
-            true,
-          );
+          expect(
+            NodeFS.existsSync(
+              NodePath.join(directory, "mail", "raw", `${attachment.messageId}.eml`),
+            ),
+          ).toBe(true);
           const attachmentId = messages[6]?.attachments[0]?.id;
           assert(attachmentId !== undefined);
           expect(
-            existsSync(join(directory, "mail", "attachments", attachment.messageId, attachmentId)),
+            NodeFS.existsSync(
+              NodePath.join(directory, "mail", "attachments", attachment.messageId, attachmentId),
+            ),
           ).toBe(true);
 
           const markedRead = yield* capture.markRead(
@@ -272,11 +278,15 @@ describe("EmailCaptureService SMTP listener", () => {
           const deleted = yield* capture.deleteMessages([attachment.messageId]);
           expect(deleted.deletedMessageIds).toEqual([attachment.messageId]);
           expect(yield* store.getMessage(attachment.messageId)).toBeNull();
-          expect(existsSync(join(directory, "mail", "raw", `${attachment.messageId}.eml`))).toBe(
-            false,
-          );
           expect(
-            existsSync(join(directory, "mail", "attachments", attachment.messageId, attachmentId)),
+            NodeFS.existsSync(
+              NodePath.join(directory, "mail", "raw", `${attachment.messageId}.eml`),
+            ),
+          ).toBe(false);
+          expect(
+            NodeFS.existsSync(
+              NodePath.join(directory, "mail", "attachments", attachment.messageId, attachmentId),
+            ),
           ).toBe(false);
 
           const clearReceipts = yield* capture.subscribeReceipts;
@@ -289,12 +299,14 @@ describe("EmailCaptureService SMTP listener", () => {
           const clearReceipt = Option.getOrThrow(yield* Fiber.join(clearFiber));
           expect(clearReceipt._tag).toBe("EmailInboxClearCompleted");
           expect(cleared.clearedCount).toBe(3);
-          expect(existsSync(join(directory, "mail", "raw", `${attachment.messageId}.eml`))).toBe(
-            false,
-          );
+          expect(
+            NodeFS.existsSync(
+              NodePath.join(directory, "mail", "raw", `${attachment.messageId}.eml`),
+            ),
+          ).toBe(false);
         }).pipe(
           Effect.provide(
-            layerFor(join(directory, "mail.sqlite"), port).pipe(
+            layerFor(NodePath.join(directory, "mail.sqlite"), port).pipe(
               Layer.provideMerge(NodeCrypto.layer),
               Layer.provideMerge(NodeServices.layer),
             ),
@@ -308,8 +320,10 @@ describe("EmailCaptureService SMTP listener", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const directory = yield* Effect.acquireRelease(
-          Effect.sync(() => mkdtempSync(join(tmpdir(), "pathway-smtp-project-settings-"))),
-          (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
+          Effect.sync(() =>
+            NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pathway-smtp-project-settings-")),
+          ),
+          (path) => Effect.sync(() => NodeFS.rmSync(path, { recursive: true, force: true })),
         );
         const catalogProjects = yield* Ref.make<ReadonlyArray<EmailProjectCatalog.EmailProject>>([
           projects[0],
@@ -323,8 +337,8 @@ describe("EmailCaptureService SMTP listener", () => {
           }),
         );
         const dependencies = Layer.mergeAll(
-          emailStoreLayerAtPath(join(directory, "mail.sqlite")),
-          emailWaitStoreLayerAtPath(join(directory, "mail.sqlite")),
+          emailStoreLayerAtPath(NodePath.join(directory, "mail.sqlite")),
+          emailWaitStoreLayerAtPath(NodePath.join(directory, "mail.sqlite")),
           catalogLayer,
           ServerSettings.layerTest({
             emailCapture: {
@@ -371,12 +385,14 @@ describe("EmailCaptureService SMTP listener", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const directory = yield* Effect.acquireRelease(
-          Effect.sync(() => mkdtempSync(join(tmpdir(), "pathway-smtp-stale-project-"))),
-          (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
+          Effect.sync(() =>
+            NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pathway-smtp-stale-project-")),
+          ),
+          (path) => Effect.sync(() => NodeFS.rmSync(path, { recursive: true, force: true })),
         );
         const dependencies = Layer.mergeAll(
-          emailStoreLayerAtPath(join(directory, "mail.sqlite")),
-          emailWaitStoreLayerAtPath(join(directory, "mail.sqlite")),
+          emailStoreLayerAtPath(NodePath.join(directory, "mail.sqlite")),
+          emailWaitStoreLayerAtPath(NodePath.join(directory, "mail.sqlite")),
           EmailProjectCatalog.layerTest([projects[1]]),
           ServerSettings.layerTest({
             emailCapture: {

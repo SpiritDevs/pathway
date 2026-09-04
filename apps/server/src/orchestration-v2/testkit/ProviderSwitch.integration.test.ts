@@ -284,7 +284,7 @@ const waitForIdle = Effect.fn("ProviderSwitchTest.waitForIdle")(function* (
 });
 
 describe("orchestration v2 provider switching", () => {
-  it.live("uses portable fallback when native resume fails after a provider switch", () =>
+  it.live("starts a fresh native thread with portable context after each provider switch", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const cwd = yield* checkpointWorkspace("provider-switch");
@@ -300,7 +300,6 @@ describe("orchestration v2 provider switching", () => {
               3: "codex after return",
             },
             capturedTurns,
-            failResume: true,
           }),
           makeTestAdapter({
             instanceId: ProviderInstanceId.make("claudeAgent"),
@@ -402,12 +401,13 @@ describe("orchestration v2 provider switching", () => {
             ["codex", "completed"],
           ],
         );
-        assert.lengthOf(projection.providerThreads, 2);
-        assert.equal(projection.runs[0]?.providerThreadId, projection.runs[2]?.providerThreadId);
+        assert.lengthOf(projection.providerThreads, 3);
         assert.notEqual(projection.runs[0]?.providerThreadId, projection.runs[1]?.providerThreadId);
+        assert.notEqual(projection.runs[0]?.providerThreadId, projection.runs[2]?.providerThreadId);
+        assert.notEqual(projection.runs[1]?.providerThreadId, projection.runs[2]?.providerThreadId);
         assert.deepEqual(
           projection.contextHandoffs.map((handoff) => handoff.strategy),
-          ["full_thread_summary", "delta_since_target_last_seen"],
+          ["full_thread_summary", "full_thread_summary"],
         );
         assert.deepEqual(
           projection.contextTransfers.map((transfer) => [
@@ -417,7 +417,7 @@ describe("orchestration v2 provider switching", () => {
           ]),
           [
             ["provider_handoff", "consumed", "portable_context"],
-            ["provider_handoff", "consumed", "delta_context"],
+            ["provider_handoff", "consumed", "portable_context"],
           ],
         );
         assert.deepEqual(
@@ -433,19 +433,20 @@ describe("orchestration v2 provider switching", () => {
             providerThread.handoffIds.length,
           ]),
           [
-            ["codex", "idle", 1],
+            ["codex", "idle", 0],
             ["claudeAgent", "idle", 1],
+            ["codex", "idle", 1],
           ],
         );
         assert.equal(turns[0]?.text, firstPrompt);
         assert.include(turns[1]?.text ?? "", "Context handoff (full_thread_summary):");
         assert.include(turns[1]?.text ?? "", "codex before switch");
         assert.include(turns[1]?.text ?? "", claudePrompt);
-        assert.include(turns[2]?.text ?? "", "Context handoff (delta_since_target_last_seen):");
+        assert.include(turns[2]?.text ?? "", "Context handoff (full_thread_summary):");
         assert.include(turns[2]?.text ?? "", "claude switched response");
         assert.include(turns[2]?.text ?? "", returnPrompt);
-        assert.notInclude(turns[2]?.text ?? "", "codex before switch");
-        assert.equal(turns[0]?.providerThreadId, turns[2]?.providerThreadId);
+        assert.include(turns[2]?.text ?? "", "codex before switch");
+        assert.notEqual(turns[0]?.providerThreadId, turns[2]?.providerThreadId);
       }),
     ),
   );

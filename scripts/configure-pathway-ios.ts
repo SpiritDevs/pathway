@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Build bootstrap reads and writes native configuration before an Effect runtime exists.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
@@ -72,8 +73,10 @@ NodeFS.writeFileSync(outputPath, contents);
 
 const missing = requiredNames.filter((name) => !values[name]?.trim());
 
-console.log(
-  missing.length === 0
-    ? "Configured Pathway iOS public runtime identifiers."
-    : `Wrote Pathway iOS configuration; missing ${missing.join(", ")}.`,
+process.stdout.write(
+  `${
+    missing.length === 0
+      ? "Configured Pathway iOS public runtime identifiers."
+      : `Wrote Pathway iOS configuration; missing ${missing.join(", ")}.`
+  }\n`,
 );

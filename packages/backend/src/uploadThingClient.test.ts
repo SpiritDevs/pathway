@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -36,7 +36,7 @@ describe("UploadThing REST client", () => {
       key: "file-key",
       byteSize: bytes.byteLength,
       mimeType: "image/png",
-      checksum: createHash("sha256").update(bytes).digest("hex"),
+      checksum: NodeCrypto.createHash("sha256").update(bytes).digest("hex"),
     });
     await client.deleteFiles(["file-key"]);
 

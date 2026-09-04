@@ -12,7 +12,9 @@ import { setUploadThingClient, type UploadThingClient } from "../convex/issueAtt
 import schema from "../convex/schema.ts";
 import { encodeBootstrapCursor } from "./sync/bootstrap.ts";
 
-process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
+const RELAY_ISSUER = "https://relay.example.test";
+process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
+process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY_ISSUER}/.well-known/jwks.json`;
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),

@@ -20,6 +20,7 @@ import {
 
 const RELAY_ISSUER = "https://relay.example.test";
 process.env.PATHWAY_RELAY_JWT_ISSUER = RELAY_ISSUER;
+process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY_ISSUER}/.well-known/jwks.json`;
 // The sync surface gates on the capability switch; the smoke functions deliberately do not.
 
 const modules = {
