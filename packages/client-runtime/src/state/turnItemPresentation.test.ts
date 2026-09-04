@@ -93,6 +93,12 @@ describe("workspacePreparationPresentation", () => {
     expect(withScript.steps[2]?.label).toBe("Starting setup script");
     expect(withScript.steps.every((step) => step.status === "completed")).toBe(true);
   });
+  it("does not invent a script launch for completed legacy preparation", () => {
+    const result = workspacePreparationPresentation(
+      preparation({ workspacePreparation: undefined, status: "completed" }),
+    );
+    expect(result.steps.at(-1)).toEqual({ label: "Workspace setup", status: "completed" });
+  });
   it("still renders preparation history from older servers", () => {
     const result = workspacePreparationPresentation(
       preparation({ workspacePreparation: undefined, title: "Starting setup script" }),

@@ -24,6 +24,7 @@ function SetupOutput({
   environmentId: EnvironmentId;
 }) {
   const session = useAttachedTerminalSession({
+    preview: true,
     environmentId,
     terminal: item.workspacePreparation?.terminalId
       ? {

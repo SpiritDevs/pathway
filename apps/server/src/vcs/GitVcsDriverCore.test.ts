@@ -1965,9 +1965,12 @@ it.effect("removes a newly created worktree if configuring its base ref fails", 
     assert.isFalse(yield* (yield* FileSystem.FileSystem).exists(target));
     assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), target);
   }).pipe(
-    Effect.provide(TestLayer),
-    Effect.provide(ServerConfigLayer),
-    Effect.provide(NodeServices.layer),
+    Effect.provide(
+      GitVcsDriver.layer.pipe(
+        Layer.provideMerge(ServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
     Effect.scoped,
   ),
 );

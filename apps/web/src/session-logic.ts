@@ -345,7 +345,9 @@ const PERSISTENT_RESOURCE_V2_ITEM_TYPES = new Set<OrchestrationV2TurnItem["type"
 
 export function timelineEntryIsPersistentResourceCard(entry: TimelineEntry): boolean {
   return (
-    entry.kind === "event" && PERSISTENT_RESOURCE_V2_ITEM_TYPES.has(entry.projectedItem.item.type)
+    entry.kind === "event" &&
+    (PERSISTENT_RESOURCE_V2_ITEM_TYPES.has(entry.projectedItem.item.type) ||
+      turnItemIsWorkspacePreparation(entry.projectedItem.item))
   );
 }
 

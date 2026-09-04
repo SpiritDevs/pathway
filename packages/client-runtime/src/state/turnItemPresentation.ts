@@ -44,8 +44,12 @@ export function workspacePreparationPresentation(item: WorkspacePreparationItem)
               : "running";
     return {
       label:
-        completed && index === 2 && preparation !== undefined && !preparation.terminalId
-          ? "No setup script configured"
+        completed && index === 2
+          ? preparation === undefined
+            ? "Workspace setup"
+            : !preparation.terminalId
+              ? "No setup script configured"
+              : label
           : label,
       status,
     } as const;
