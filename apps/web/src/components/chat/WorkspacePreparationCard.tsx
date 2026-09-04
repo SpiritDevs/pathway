@@ -3,7 +3,7 @@ import {
   CheckCircle2Icon,
   ChevronDownIcon,
   CircleIcon,
-  CircleDotIcon,
+  LoaderCircleIcon,
   GitBranchIcon,
   XCircleIcon,
   LaptopIcon,
@@ -124,7 +124,7 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
                 : step.status === "failed" || step.status === "stopped"
                   ? XCircleIcon
                   : step.status === "running"
-                    ? CircleDotIcon
+                    ? LoaderCircleIcon
                     : CircleIcon;
             return (
               <li
@@ -139,7 +139,14 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
                       : "text-muted-foreground",
                 )}
               >
-                <Icon className="size-4 shrink-0" aria-hidden />
+                <Icon
+                  className={cn(
+                    "size-4 shrink-0",
+                    step.status === "running" &&
+                      "animate-spin [animation-timing-function:steps(12)] motion-reduce:animate-none",
+                  )}
+                  aria-hidden
+                />
                 <span>{step.label}</span>
                 <span className="sr-only">{step.status}</span>
               </li>

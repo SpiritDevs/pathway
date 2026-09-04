@@ -42,6 +42,8 @@ describe("WorkspacePreparationCard", () => {
       <WorkspacePreparationCard item={item} environmentId={EnvironmentId.make("env")} />,
     );
     expect(html).toContain("Creating a worktree");
+    expect(html).toContain("lucide-loader-circle");
+    expect(html).toContain("motion-reduce:animate-none");
     expect(html).toContain('aria-current="step"');
     expect(html).toContain("Checking out files");
     expect(html).toContain("Starting setup script");
@@ -58,6 +60,7 @@ describe("WorkspacePreparationCard", () => {
     expect(html).toContain("Workspace setup failed");
     expect(html).toContain("Base branch could not be fetched");
     expect(html).not.toContain('aria-current="step"');
+    expect(html).not.toContain("animate-spin");
   });
   it("does not subscribe to a completed setup terminal until details are opened", () => {
     const html = renderToStaticMarkup(
