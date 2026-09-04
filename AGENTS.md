@@ -105,6 +105,16 @@ An empty database is a bad test. Seed your worktree's `.pathway` with a copy of 
 - The server is event-sourced and its async flows emit typed receipts. Wait on receipts and worker drains, never on sleeps or polling. A test that needs a timeout to pass is wrong.
 - Upon request, user-visible frontend changes should get one integrated pass in a real client: `test-pathway-app` for web, `test-pathway-mobile` for mobile. The primary agent does this once after integrating. Subagents do not launch their own dev servers. Ask permission before doing computer use or spinning up browsers.
 
+## Clerk test logins
+
+- Use the Clerk **development** instance for unattended browser tests. Confirm the effective publishable key starts with `pk_test_`; a local URL alone does not prove the instance is development.
+- Clerk test email addresses contain `+clerk_test`, for example `corey+clerk_test@example.com`. In test mode their email verification code is always **`424242`**, and Clerk does not send an email. The address is an example, not a provisioned account or an alias for Corey's normal account.
+- The provisioned development test account is **`pathway-ui+clerk_test@example.com`**. On Corey's Mac, its email and password are stored in `~/.config/pathway/testing/clerk-development.json` with owner-only permissions. Read them locally without printing them. This file is outside the repository and must not be committed or attached to evidence.
+- Provision a dedicated test user if needed. Pathway's password sign-in still needs that test user's password before the test verification code. Keep actual test credentials in a gitignored local environment file, never in this document or PR evidence. Reuse the authenticated browser during an iteration.
+- Do not apply `424242` to ordinary email addresses or authenticator-app MFA. Do not disable Device Trust/MFA or enable production test mode just to run tests. Clerk Testing Tokens bypass bot detection, not authentication.
+- Local Pathway server pairing is separate from Clerk identity. Use the isolated server's one-time pairing URL as described above when required.
+- Reference: [Clerk test emails and phones](https://clerk.com/docs/guides/development/testing/test-emails-and-phones).
+
 ## Pull requests
 
 - Never make a PR unless the developer explicitly asks you to do so.

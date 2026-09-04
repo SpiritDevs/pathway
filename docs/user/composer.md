@@ -9,7 +9,7 @@ Use the paperclip beside Send to add attachments. Their previews appear above th
 separate scrollable area, so a long draft or several attachments cannot fill the conversation.
 You can still preview and remove attachments, inspect upload status, and retry failed uploads.
 
-Model, reasoning, and permission controls stay below the input. Narrow windows put additional
+Checkout and branch controls sit above the input. Model, reasoning, and permission controls stay below the input. Narrow windows put additional
 controls in the options menu. These menus do not expand the composer. The same layout applies
 to new threads and existing conversations, including phone-sized web windows.
 

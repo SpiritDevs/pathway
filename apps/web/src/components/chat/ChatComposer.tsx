@@ -3357,8 +3357,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             data-chat-composer-footer="true"
             data-chat-composer-footer-compact={isComposerFooterCompact ? "true" : "false"}
             className={cn(
-              "mx-4 flex min-w-0 flex-nowrap items-center justify-between gap-2 rounded-b-[20px] border border-t-0 border-border/60 px-2 py-1 text-xs sm:mx-6",
-              pendingUserInputs.length > 0 && "pt-2",
+              "mx-[1.375rem] flex min-w-0 flex-nowrap items-center justify-between gap-2 rounded-b-[20px] border border-t-0 border-border/60 px-2 py-1 text-xs",
               isComposerFooterCompact ? "gap-1.5" : "gap-2 sm:gap-0",
             )}
           >
