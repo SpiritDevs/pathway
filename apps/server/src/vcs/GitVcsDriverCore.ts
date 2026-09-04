@@ -652,14 +652,14 @@ const collectOutput = Effect.fnUntraced(function* (
   let truncated = false;
 
   const emitCompleteLines = Effect.fnUntraced(function* (flush: boolean) {
-    let newlineIndex = lineBuffer.indexOf("\n");
+    let newlineIndex = lineBuffer.search(/[\r\n]/g);
     while (newlineIndex >= 0) {
       const line = lineBuffer.slice(0, newlineIndex).replace(/\r$/, "");
       lineBuffer = lineBuffer.slice(newlineIndex + 1);
       if (line.length > 0 && onLine) {
         yield* onLine(line);
       }
-      newlineIndex = lineBuffer.indexOf("\n");
+      newlineIndex = lineBuffer.search(/[\r\n]/g);
     }
 
     if (flush) {
@@ -2776,7 +2776,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const createWorktree: GitVcsDriver.GitVcsDriver["Service"]["createWorktree"] = Effect.fn(
     "createWorktree",
-  )(function* (input) {
+  )(function* (input, onCheckoutProgress) {
     const targetBranch = input.newRefName ?? input.refName;
     const sanitizedBranch = targetBranch.replace(/\//g, "-");
     const repoName = path.basename(input.cwd);
@@ -2785,7 +2785,25 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
 
+    let lastPercent = -5;
     yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
+      env: { LC_ALL: "C", GIT_PROGRESS_DELAY: "0" },
+      progress: {
+        onStderrLine: (line) => {
+          const match = /^Updating files:\s+(\d+)%/.exec(line);
+          if (!match || !onCheckoutProgress) return Effect.void;
+          const percent = Number(match[1]);
+          if (
+            percent > 100 ||
+            percent <= lastPercent ||
+            (percent < 100 && percent - lastPercent < 5)
+          ) {
+            return Effect.void;
+          }
+          lastPercent = percent;
+          return onCheckoutProgress(percent);
+        },
+      },
       fallbackErrorDetail: "git worktree add failed",
       timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
     });
@@ -3364,7 +3382,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     getReviewDiffFileContents,
     readConfigValue,
     listRefs,
-    createWorktree: (input) => withListRefsInvalidation(input.cwd, createWorktree(input)),
+    createWorktree: (input, onCheckoutProgress) =>
+      withListRefsInvalidation(input.cwd, createWorktree(input, onCheckoutProgress)),
     createTransferStash: (input) => withListRefsInvalidation(input.cwd, createTransferStash(input)),
     applyTransferStash: (input) => withListRefsInvalidation(input.cwd, applyTransferStash(input)),
     dropTransferStash: (input) => withListRefsInvalidation(input.cwd, dropTransferStash(input)),

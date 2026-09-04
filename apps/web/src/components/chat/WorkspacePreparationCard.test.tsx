@@ -49,6 +49,29 @@ describe("WorkspacePreparationCard", () => {
     expect(html).toContain("Starting setup script");
     expect(html).toContain("More details");
     expect(html).toContain("main");
+    expect(html).toContain('role="progressbar"');
+    expect(html).not.toContain("aria-valuenow");
+  });
+  it("shows Git checkout progress and removes the bar during cleanup", () => {
+    const withProgress = {
+      ...item,
+      workspacePreparation: { ...item.workspacePreparation!, checkoutPercent: 65 },
+    };
+    const html = renderToStaticMarkup(
+      <WorkspacePreparationCard item={withProgress} environmentId={EnvironmentId.make("env")} />,
+    );
+    expect(html).toContain('aria-valuenow="65"');
+    expect(html).toContain("width:65%");
+    const cancelling = renderToStaticMarkup(
+      <WorkspacePreparationCard
+        item={{
+          ...withProgress,
+          workspacePreparation: { ...withProgress.workspacePreparation, controlAction: "cancel" },
+        }}
+        environmentId={EnvironmentId.make("env")}
+      />,
+    );
+    expect(cancelling).not.toContain('role="progressbar"');
   });
   it("keeps failures visible with details collapsed", () => {
     const html = renderToStaticMarkup(

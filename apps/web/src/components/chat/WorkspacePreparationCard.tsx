@@ -131,7 +131,7 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
                 key={step.label}
                 aria-current={step.status === "running" ? "step" : undefined}
                 className={cn(
-                  "flex items-center gap-2.5",
+                  "flex items-start gap-2.5",
                   step.status === "completed" || step.status === "running"
                     ? "text-primary"
                     : step.status === "failed"
@@ -141,13 +141,45 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
               >
                 <Icon
                   className={cn(
-                    "size-4 shrink-0",
+                    "mt-0.5 size-4 shrink-0",
                     step.status === "running" &&
                       "animate-spin [animation-timing-function:steps(12)] motion-reduce:animate-none",
                   )}
                   aria-hidden
                 />
-                <span>{step.label}</span>
+                <div className="min-w-0 flex-1">
+                  <span>{step.label}</span>
+                  {step.status === "running" &&
+                  preparation?.phase === "worktree" &&
+                  !pendingAction ? (
+                    <div className="mt-2 flex items-center gap-3">
+                      <div
+                        role="progressbar"
+                        aria-label="Checking out files"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={preparation.checkoutPercent}
+                        className="h-1.5 flex-1 overflow-hidden rounded-full bg-primary/15"
+                      >
+                        <div
+                          className={cn(
+                            "h-full rounded-full bg-primary",
+                            preparation.checkoutPercent === undefined && "opacity-60",
+                          )}
+                          style={{
+                            width:
+                              preparation.checkoutPercent === undefined
+                                ? "33%"
+                                : `${Math.min(100, Math.max(0, preparation.checkoutPercent))}%`,
+                          }}
+                        />
+                      </div>
+                      {preparation.checkoutPercent !== undefined ? (
+                        <span className="text-xs tabular-nums">{preparation.checkoutPercent}%</span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
                 <span className="sr-only">{step.status}</span>
               </li>
             );

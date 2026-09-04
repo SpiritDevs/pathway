@@ -1439,6 +1439,34 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("streams bounded checkout progress from carriage-return output", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const progress: number[] = [];
+        const spawner = ChildProcessSpawner.make(() =>
+          Effect.succeed({
+            ...makeSuccessfulHandle(""),
+            stderr: Stream.encodeText(
+              Stream.make(
+                "Preparing worktree\nUpdating files:  10% (1/10)\rUpdating fi",
+                "les:  11% (1/10)\rUpdating files:  65% (6/10)\r",
+                "Updating files:  50% (5/10)\rUpdating files: 101% (10/10)\rUpdating files: 100% (10/10), done.\n",
+              ),
+            ),
+          }),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+        yield* driver.createWorktree({ cwd, path: "/unused", refName: "HEAD" }, (percent) =>
+          Effect.sync(() => {
+            progress.push(percent);
+          }),
+        );
+        assert.deepEqual(progress, [10, 65, 100]);
+      }).pipe(Effect.provide(ServerConfigLayer)),
+    );
+
     it.effect("creates and removes a worktree and its new local branch", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -1450,12 +1478,20 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         );
         const driver = yield* GitVcsDriver.GitVcsDriver;
 
-        const created = yield* driver.createWorktree({
-          cwd,
-          path: worktreePath,
-          refName: initialBranch,
-          newRefName: "feature/worktree",
-        });
+        const progress: number[] = [];
+        const created = yield* driver.createWorktree(
+          {
+            cwd,
+            path: worktreePath,
+            refName: initialBranch,
+            newRefName: "feature/worktree",
+          },
+          (percent) =>
+            Effect.sync(() => {
+              progress.push(percent);
+            }),
+        );
+        assert.equal(progress.at(-1), 100);
 
         assert.equal(created.worktree.path, worktreePath);
         assert.equal(created.worktree.refName, "feature/worktree");

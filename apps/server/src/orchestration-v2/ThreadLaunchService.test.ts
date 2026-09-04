@@ -284,8 +284,9 @@ it.effect("returns a visible preparing message while provisioning is still block
     const setupEntered = yield* Deferred.make<void>();
     const allowSetup = yield* Deferred.make<void>();
     const harness = makeHarness({
-      createWorktree: () =>
-        Deferred.succeed(worktreeEntered, undefined).pipe(
+      createWorktree: (_input, onProgress) =>
+        (onProgress?.(65) ?? Effect.void).pipe(
+          Effect.andThen(Deferred.succeed(worktreeEntered, undefined)),
           Effect.andThen(Deferred.await(allowWorktree)),
           Effect.as({
             worktree: { path: "/repo-worktrees/feature", refName: "feature", headSha: "abc" },
@@ -324,6 +325,7 @@ it.effect("returns a visible preparing message while provisioning is still block
       assert.equal(checkout?.workspacePreparation?.phase, "worktree");
       assert.equal(checkout?.workspacePreparation?.workspaceKind, "worktree");
       assert.equal(checkout?.workspacePreparation?.baseRef, "main");
+      assert.equal(checkout?.workspacePreparation?.checkoutPercent, 65);
       yield* Deferred.succeed(allowWorktree, undefined);
       const entered = yield* Deferred.await(setupEntered).pipe(
         Effect.timeoutOption(Duration.seconds(2)),

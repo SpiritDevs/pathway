@@ -391,7 +391,7 @@ export const make = Effect.gen(function* () {
                   : {}),
               },
             })
-            .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+            .pipe(Effect.asVoid, Effect.mapError(mapError(input, "update-thread", threadId)));
     yield* reportProgress("preparing");
 
     const initialMessage = input.initialMessage;
@@ -472,13 +472,27 @@ export const make = Effect.gen(function* () {
       if (yield* applyControl()) return;
       yield* reportProgress("worktree", { branch: branch!, cwd: projectWorkspaceRoot });
       const worktree = yield* git
-        .createWorktree({
-          cwd: projectWorkspaceRoot,
-          refName: startRef,
-          newRefName: branch!,
-          baseRefName: input.workspaceStrategy.baseRef,
-          path: null,
-        })
+        .createWorktree(
+          {
+            cwd: projectWorkspaceRoot,
+            refName: startRef,
+            newRefName: branch!,
+            baseRefName: input.workspaceStrategy.baseRef,
+            path: null,
+          },
+          (checkoutPercent) =>
+            entry.control
+              ? Effect.void
+              : reportProgress(
+                  "worktree",
+                  { branch: branch!, cwd: projectWorkspaceRoot, checkoutPercent },
+                  `checkout:${checkoutPercent}`,
+                ).pipe(
+                  Effect.catch((cause) =>
+                    Effect.logWarning("Could not report checkout progress", cause),
+                  ),
+                ),
+        )
         .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
       worktreePath = worktree.worktree.path;
       branch = worktree.worktree.refName;

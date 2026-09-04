@@ -1021,6 +1021,9 @@ export const OrchestrationV2WorkspacePreparation = Schema.Struct({
   phase: Schema.Literals(["preparing", "worktree", "setup"]),
   workspaceKind: Schema.Literals(["root", "existing_worktree", "worktree"]),
   controlAction: Schema.optional(Schema.Literals(["cancel", "work_locally"])),
+  checkoutPercent: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
+  ),
   startFromOrigin: Schema.optional(Schema.Boolean),
   baseRef: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
