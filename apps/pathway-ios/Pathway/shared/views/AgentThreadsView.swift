@@ -13,6 +13,9 @@ struct AgentThreadsView: View {
     @State private var isSettledExpanded = false
     @State private var settledVisibleCount = 10
     @State private var routedThreadID: String?
+    @State private var threadProviders = PathwayThreadProviders()
+    @State private var threadActions = PathwayThreadActions()
+    @State private var sleepingThread: PathwayAgentThread?
 
     var body: some View {
         Group {
@@ -38,6 +41,10 @@ struct AgentThreadsView: View {
             guard let connect = appModel.connect else { return }
             await appModel.cloud.refreshLifecycleMetadata(using: connect)
         }
+        .task(id: providerEnvironments.map(\.id)) {
+            guard let connect = appModel.connect else { return }
+            await threadProviders.observe(environments: providerEnvironments, using: connect)
+        }
         .navigationDestination(item: $routedThreadID) { threadID in
             if let thread = appModel.cloud.threads.first(where: { $0.id == threadID }) {
                 AgentThreadDetailRoute(thread: thread)
@@ -52,6 +59,24 @@ struct AgentThreadsView: View {
             await openPendingThread()
         }
         .accessibilityIdentifier("agent-threads-list")
+        .confirmationDialog("Sleep thread", isPresented: Binding(
+            get: { sleepingThread != nil },
+            set: { if !$0 { sleepingThread = nil } }
+        ), titleVisibility: .visible, presenting: sleepingThread) { thread in
+            Button("For 1 hour") { sleep(thread, hours: 1) }
+            Button("For 3 hours") { sleep(thread, hours: 3) }
+            Button("For 1 day") { sleep(thread, hours: 24) }
+            Button("For 1 week") { sleep(thread, hours: 168) }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Couldn’t update thread", isPresented: Binding(
+            get: { threadActions.errorMessage != nil },
+            set: { if !$0 { threadActions.errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { threadActions.errorMessage = nil }
+        } message: {
+            Text(threadActions.errorMessage ?? "Please try again.")
+        }
     }
 
     @ViewBuilder
@@ -66,6 +91,10 @@ struct AgentThreadsView: View {
                     if isSnoozedExpanded {
                         ForEach(appModel.cloud.snoozedThreads) { thread in
                             compactThreadLink(thread, icon: "clock")
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button("Wake", systemImage: "sun.max") { perform(.wake, on: thread) }
+                                        .tint(.blue)
+                                }
                         }
                     }
                 } header: {
@@ -85,6 +114,10 @@ struct AgentThreadsView: View {
                     if isSettledExpanded {
                         ForEach(visibleSettledThreads) { thread in
                             compactThreadLink(thread, icon: "folder.fill")
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button("Reopen", systemImage: "arrow.uturn.backward") { perform(.reopen, on: thread) }
+                                        .tint(.blue)
+                                }
                         }
 
                         if hiddenSettledCount > 0 {
@@ -151,6 +184,11 @@ struct AgentThreadsView: View {
         }.joined(separator: "|")
     }
 
+    private var providerEnvironments: [PathwayCompanyEnvironment] {
+        let ids = Set(appModel.cloud.activeThreads.map { "\($0.companyId):\($0.environmentId)" })
+        return appModel.cloud.environments.filter { ids.contains($0.id) }
+    }
+
     private func openPendingThread() async {
         guard appModel.pendingThreadRoute != nil else { return }
         // The launched thread arrives through cloud sync moments after the composer
@@ -169,26 +207,6 @@ struct AgentThreadsView: View {
             try? await Task.sleep(for: .milliseconds(250))
         }
         appModel.pendingThreadRoute = nil
-    }
-
-    private func threadLink(_ thread: PathwayAgentThread) -> some View {
-        NavigationLink {
-            AgentThreadDetailRoute(thread: thread)
-        } label: {
-            AgentThreadRow(thread: thread)
-        }
-    }
-
-    private func compactThreadLink(
-        _ thread: PathwayAgentThread,
-        icon: String
-    ) -> some View {
-        NavigationLink {
-            AgentThreadDetailRoute(thread: thread)
-        } label: {
-            CompactAgentThreadRow(thread: thread, icon: icon)
-        }
-        .listRowSeparator(.hidden)
     }
 
     @ViewBuilder
@@ -216,6 +234,62 @@ struct AgentThreadsView: View {
                 Button("New thread", action: newThreadAction)
             }
         }
+    }
+}
+
+private extension AgentThreadsView {
+    private func threadLink(_ thread: PathwayAgentThread) -> some View {
+        Button {
+            routedThreadID = thread.id
+        } label: {
+            AgentThreadRow(thread: thread, provider: threadProviders.provider(for: thread))
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            Button(thread.shell.pinnedAt == nil ? "Pin" : "Unpin", systemImage: thread.shell.pinnedAt == nil ? "pin" : "pin.slash") {
+                perform(thread.shell.pinnedAt == nil ? .pin : .unpin, on: thread)
+            }
+            .tint(.orange)
+
+            Button("Sleep", systemImage: "moon.zzz") { sleepingThread = thread }
+                .tint(.indigo)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button("Settle", systemImage: "checkmark") { perform(.settle, on: thread) }
+                .tint(.green)
+        }
+        .disabled(threadActions.pendingThreadIDs.contains(thread.id))
+        .accessibilityValue(threadActions.pendingThreadIDs.contains(thread.id) ? "Updating" : "")
+    }
+
+    private func sleep(_ thread: PathwayAgentThread, hours: Double) {
+        perform(.sleep(until: Date().addingTimeInterval(hours * 3600)), on: thread)
+    }
+
+    private func perform(_ action: PathwayThreadAction, on thread: PathwayAgentThread) {
+        Task {
+            await threadActions.perform(
+                action,
+                thread: thread,
+                environments: appModel.cloud.environments,
+                connect: appModel.connect
+            )
+        }
+    }
+
+    private func compactThreadLink(
+        _ thread: PathwayAgentThread,
+        icon: String
+    ) -> some View {
+        NavigationLink {
+            AgentThreadDetailRoute(thread: thread)
+        } label: {
+            CompactAgentThreadRow(thread: thread, icon: icon)
+        }
+        .listRowSeparator(.hidden)
+        .disabled(threadActions.pendingThreadIDs.contains(thread.id))
     }
 }
 
@@ -282,79 +356,164 @@ private struct CompactAgentThreadRow: View {
 private struct AgentThreadRow: View {
     @Environment(PathwayAppModel.self) private var appModel
     let thread: PathwayAgentThread
+    let provider: PathwayThreadProvider?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                projectIcon
+
+                Text(projectName ?? "Project unavailable")
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
                 if thread.shell.pinnedAt != nil {
-                    Image(systemName: "pin.fill")
+                    Image(systemName: "pin")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Pinned")
                 }
 
-                Text(thread.shell.title)
-                    .font(.body.weight(.semibold))
-                    .lineLimit(2)
-
-                Spacer(minLength: 8)
-
-                Text(thread.sortDate, format: .relative(presentation: .named))
+                Text(activityAge)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .accessibilityLabel(Text(thread.sortDate, format: .relative(presentation: .named)))
             }
+            .foregroundStyle(.secondary)
+
+            Text(thread.shell.title)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 6) {
-                status
+                workspaceDetails
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                statusIndicator
 
                 if let pullRequest = thread.shell.attachedPullRequest {
                     AgentThreadPullRequestBadge(pullRequest: pullRequest)
+                        .labelStyle(.titleOnly)
+                        .foregroundStyle(.purple)
+                        .fixedSize()
                 }
 
-                if let projectName {
-                    Text(projectName)
-                        .lineLimit(1)
-                }
-
-                if let environmentName {
-                    Text("·")
-                    Text(environmentName)
-                        .lineLimit(1)
-                }
+                providerIcon
             }
-            .font(.caption)
+            .font(.subheadline)
             .foregroundStyle(.secondary)
-
-            HStack(spacing: 5) {
-                Text(thread.shell.modelSelection.model)
-                    .lineLimit(1)
-
-                if let companyName {
-                    Text("in \(companyName)")
-                        .lineLimit(1)
-                }
-            }
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
         .accessibilityElement(children: .combine)
+        .accessibilityHint("Open thread")
+        .accessibilityCustomContent("Model", thread.shell.modelSelection.model)
+        .accessibilityCustomContent("Company", companyName ?? "Unknown")
+        .task(id: projectIconContext?.key) {
+            guard let context = projectIconContext, let connect = appModel.connect else { return }
+            await appModel.projectIcons.load(context, using: connect)
+        }
+    }
+
+    private var projectIcon: some View {
+        Group {
+            if let context = projectIconContext, let image = appModel.projectIcons.images[context.key] {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: "folder.fill")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(width: 14, height: 14)
+        .clipShape(.rect(cornerRadius: 2))
+        .accessibilityHidden(true)
     }
 
     @ViewBuilder
-    private var status: some View {
+    private var providerIcon: some View {
+        if let provider {
+            Group {
+                if let asset = provider.iconAssetName {
+                    Image(asset)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    Text(String(provider.name.prefix(2)).uppercased())
+                        .font(.caption2.weight(.medium))
+                }
+            }
+            .frame(width: 16, height: 16)
+            .foregroundStyle(provider.driver == "claudeAgent" ? Color(red: 0.85, green: 0.47, blue: 0.34) : .secondary)
+            .accessibilityLabel("\(provider.name), \(thread.shell.modelSelection.model)")
+        }
+    }
+
+    private var projectIconContext: PathwayProjectIconContext? {
+        PathwayProjectIconContext(
+            thread: thread,
+            environments: appModel.cloud.environments,
+            bindings: appModel.cloud.environmentBindings
+        )
+    }
+
+    private var workspaceDetails: some View {
+        HStack(spacing: 5) {
+            if let branch = thread.shell.branch {
+                Text(branch)
+                    .fontDesign(.monospaced)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            if let environmentName {
+                if thread.shell.branch != nil {
+                    Text("·")
+                }
+
+                Text(environmentName)
+                    .lineLimit(1)
+
+                Image(systemName: "server.rack")
+                    .font(.caption2)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var statusIndicator: some View {
         if thread.needsAction {
-            Label("Needs you", systemImage: "person.crop.circle.badge.exclamationmark")
+            Image(systemName: "person.crop.circle.badge.exclamationmark")
                 .foregroundStyle(.orange)
+                .accessibilityLabel("Needs you")
         } else if thread.isRunning {
-            Label("Working", systemImage: "sparkles")
+            Image(systemName: "sparkles")
                 .foregroundStyle(.blue)
-        } else {
-            Text(thread.shell.status.capitalized)
+                .accessibilityLabel("Working")
+        } else if thread.shell.lastError != nil || thread.shell.status == "error" {
+            Image(systemName: "exclamationmark.circle")
+                .foregroundStyle(.red)
+                .accessibilityLabel("Thread error")
         }
     }
 
     private var companyName: String? {
         appModel.cloud.companyName(for: thread.companyId)
+    }
+
+    private var activityAge: String {
+        let seconds = max(0, Date().timeIntervalSince(thread.sortDate))
+        guard seconds >= 60 else { return "now" }
+        return Duration.seconds(seconds).formatted(
+            .units(allowed: [.days, .hours, .minutes], width: .narrow, maximumUnitCount: 1)
+        )
     }
 
     private var projectName: String? {

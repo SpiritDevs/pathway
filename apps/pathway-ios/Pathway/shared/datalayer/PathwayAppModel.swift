@@ -23,6 +23,7 @@ final class PathwayAppModel {
     private(set) var authenticationErrorMessage: String?
     var pendingThreadRoute: PathwayPendingThreadRoute?
     let cloud: PathwayCloudModel
+    let projectIcons = PathwayProjectIconCache()
     let connect: PathwayConnectClient?
 
     @ObservationIgnored private let authProvider: any PathwayAuthenticating
@@ -93,6 +94,7 @@ final class PathwayAppModel {
         do {
             try await authProvider.signOut()
             await cloud.stop()
+            projectIcons.clear()
             authenticationErrorMessage = nil
             authenticationState = .signedOut
         } catch {
@@ -101,6 +103,7 @@ final class PathwayAppModel {
     }
 
     func sessionDidEnd() {
+        projectIcons.clear()
         authenticationErrorMessage = "Your Pathway session ended. Sign in again to continue."
         authenticationState = .signedOut
     }
