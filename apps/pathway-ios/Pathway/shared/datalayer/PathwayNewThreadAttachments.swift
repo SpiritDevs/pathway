@@ -26,6 +26,7 @@ final class PathwayNewThreadAttachments {
     @ObservationIgnored private(set) var bytes: [String: Data] = [:]
     @ObservationIgnored private let store: PathwayConversationDraftStore?
     @ObservationIgnored private var restored = false
+    @ObservationIgnored private var transferredIDs: Set<String> = []
 
     init(directory: URL?, key: String) {
         store = directory.map { PathwayConversationDraftStore(directory: $0.appending(path: "InitialAttachments"), key: key) }
@@ -34,11 +35,48 @@ final class PathwayNewThreadAttachments {
     var uploads: [JSONValue] { drafts.compactMap { $0.state == .ready ? $0.attachment?.json : nil } }
     var isReady: Bool { drafts.allSatisfy { $0.state == .ready } }
 
-    func restore() async {
+    func restore(preservingPreparedUploadIDs: Set<String> = []) async {
         guard !restored, let store else { return }
         restored = true
-        guard let saved = await store.load(), drafts.isEmpty else { return }
+        guard let saved = await store.load(expirePendingUploads: true,
+            preservingPreparedUploadIDs: preservingPreparedUploadIDs), drafts.isEmpty else { return }
         drafts = saved.attachments; bytes = saved.data
+    }
+
+    func revalidatePendingUploads(preservingPreparedUploadIDs: Set<String> = []) async throws {
+        guard let store else { return }
+        try await persistChecked()
+        guard let saved = await store.load(expirePendingUploads: true,
+            preservingPreparedUploadIDs: preservingPreparedUploadIDs) else { return }
+        for savedDraft in saved.attachments {
+            guard let index = drafts.firstIndex(where: { $0.id == savedDraft.id && $0.attachment?.id == savedDraft.attachment?.id }),
+                  drafts[index].state == .ready else { continue }
+            drafts[index].state = savedDraft.state
+        }
+    }
+
+    func stageTransfer(drafts incoming: [PathwayThreadAttachmentDraft], bytes data: [String: Data]) async throws {
+        guard drafts.isEmpty else { throw PathwayThreadConversationError.message("This project already has an attachment draft.") }
+        guard incoming.allSatisfy({ data[$0.id] != nil }) else {
+            throw PathwayThreadConversationError.message("An attachment's local bytes are unavailable. Keep this draft in its current project.")
+        }
+        restored = true
+        drafts = incoming.map { draft in
+            var copy = draft
+            copy.attachment = nil
+            copy.state = .failed("This attachment needs a new upload in the selected environment. Tap retry.")
+            return copy
+        }
+        bytes = data
+        transferredIDs = Set(incoming.map(\.id))
+        try await persistChecked()
+    }
+
+    func prepareTransferredAttachments() async {
+        guard isConnected else { return }
+        let ids = transferredIDs
+        transferredIDs = []
+        for id in ids { await retry(id: id) }
     }
 
     func persist() async {

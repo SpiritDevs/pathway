@@ -119,7 +119,7 @@ struct PathwayAdministrationProjectEditor: View {
                 Button("Add script") { scripts.append(.init(id: UUID().uuidString, name: "", command: "", icon: "play", runOnWorktreeCreate: false)) }
             }
             Button(project == nil ? "Add project" : "Save project") { Task { await save() } }
-                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || root.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!instanceID.isEmpty && model.isEmpty) || scripts.contains { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || $0.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !PathwayAdministrationProjectDirectory.canSave(root: root, isNew: project == nil, existingRoot: project?.workspaceRoot) || (!instanceID.isEmpty && model.isEmpty) || scripts.contains { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || $0.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         }.navigationTitle(project == nil ? "Add project" : "Project settings").disabled(busy)
             .task {
                 guard !initialized else { return }; initialized = true
@@ -128,7 +128,7 @@ struct PathwayAdministrationProjectEditor: View {
                     instanceID = project.defaultModelSelection?.objectValue?["instanceId"]?.stringValue ?? ""
                     model = project.defaultModelSelection?.objectValue?["model"]?.stringValue ?? ""
                 }
-                do { let config: PathwayAdministrationConfig = try await client.call("server.getConfig"); providers = config.providers; if root.isEmpty { root = config.cwd } }
+                do { let config: PathwayAdministrationConfig = try await client.call("server.getConfig"); providers = config.providers; if project == nil && root.isEmpty { root = config.cwd } }
                 catch { self.error = error.localizedDescription }
             }
     }
@@ -145,7 +145,8 @@ struct PathwayAdministrationProjectEditor: View {
             if !instanceID.isEmpty {
                 selection = project?.defaultModelSelection?.objectValue?["instanceId"]?.stringValue == instanceID && project?.defaultModelSelection?.objectValue?["model"]?.stringValue == model ? (project?.defaultModelSelection ?? .null) : .object(["instanceId": .string(instanceID), "model": .string(model)])
             }
-            var payload: [String: JSONValue] = ["type": .string(project == nil ? "project.create" : "project.update"), "commandId": .string(commandID), "projectId": .string(project?.id ?? newProjectID), "title": .string(title), "workspaceRoot": .string(root), "createWorkspaceRootIfMissing": .bool(createDirectory), "defaultModelSelection": selection, "scripts": encodedScripts]
+            var payload: [String: JSONValue] = ["type": .string(project == nil ? "project.create" : "project.update"), "commandId": .string(commandID), "projectId": .string(project?.id ?? newProjectID), "title": .string(title), "defaultModelSelection": selection, "scripts": encodedScripts]
+            payload.merge(PathwayAdministrationProjectDirectory.fields(root: root, createDirectory: createDirectory)) { _, new in new }
             if project != nil { payload["defaultThreadEnvMode"] = mode.isEmpty ? .null : .string(mode) }
             _ = try await client.run("projects.mutate", payload)
             if project == nil && !mode.isEmpty {
@@ -153,5 +154,16 @@ struct PathwayAdministrationProjectEditor: View {
             }
             dismiss()
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+enum PathwayAdministrationProjectDirectory {
+    static func canSave(root: String, isNew: Bool, existingRoot: String?) -> Bool {
+        !root.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!isNew && existingRoot == nil)
+    }
+    static func fields(root: String, createDirectory: Bool) -> [String: JSONValue] {
+        let root = root.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !root.isEmpty else { return [:] }
+        return ["workspaceRoot": .string(root), "createWorkspaceRootIfMissing": .bool(createDirectory)]
     }
 }

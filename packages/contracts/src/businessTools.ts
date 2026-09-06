@@ -40,3 +40,11 @@ export const RecentTrackedTimeTotals = Schema.Struct({
   complete: Schema.Boolean,
 });
 export type RecentTrackedTimeTotals = typeof RecentTrackedTimeTotals.Type;
+
+export const BusinessContactPage = Schema.Struct({
+  contacts: Schema.Array(BusinessContact),
+  cursor: Schema.NullOr(Schema.String),
+  isDone: Schema.Boolean,
+});
+export type BusinessContactPage = typeof BusinessContactPage.Type;
+export type BusinessContactSearchField = "name" | "role" | "company" | "email" | "phone";

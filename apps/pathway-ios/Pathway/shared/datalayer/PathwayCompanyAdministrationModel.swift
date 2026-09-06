@@ -76,12 +76,23 @@ final class PathwayCompanyAdministrationModel {
     var errors: [String] = []
     var notice: String?
     var busy = false
-    private var rolesLoaded = false
 
     init(company: PathwayCompany, request: @escaping PathwayCompanyAdministrationRequest, entities: @escaping PathwayCompanyAdministrationEntities) {
         self.company = company; self.request = request; self.entities = entities
     }
     var isOrganization: Bool { company.workspaceKind == "organization" }
+    private var syncedRoles: [PathwayCompanyAdminRole] {
+        entities("role", company.id).compactMap { value in
+            guard let data = try? JSONEncoder().encode(value) else { return nil }
+            return try? JSONDecoder().decode(PathwayCompanyAdminRole.self, from: data)
+        }
+    }
+    var canLeave: Bool {
+        guard isOrganization else { return false }
+        guard company.isOwner else { return true }
+        guard let member = members.first(where: { $0.id == company.membershipId && $0.state == "active" }) else { return false }
+        return !PathwayCompanyAdministrationPermissions.isLastActiveOwner(member, members: members)
+    }
     var assignments: [PathwayCompanyAdminAssignment] {
         entities("roleAssignment", company.id).compactMap { value in
             guard let data = try? JSONEncoder().encode(value) else { return nil }
@@ -94,13 +105,13 @@ final class PathwayCompanyAdministrationModel {
     }
     func allows(_ permission: String) -> Bool {
         if company.isOwner { return true }
-        guard rolesLoaded, let permissions = PathwayCompanyAdministrationPermissions.companyPermissions(membershipID: company.membershipId, roles: roles, assignments: assignments) else { return false }
+        guard let permissions = PathwayCompanyAdministrationPermissions.companyPermissions(membershipID: company.membershipId, roles: syncedRoles, assignments: assignments) else { return false }
         return permissions.contains(permission)
     }
     func load() async {
         guard !busy else { return }; busy = true; defer { busy = false }
         errors = []
-        do { roles = try await query("roles:list"); rolesLoaded = true } catch { errors.append(error.localizedDescription) }
+        do { roles = try await query("roles:list") } catch { errors.append(error.localizedDescription) }
         do { members = try await query("memberships:list") } catch { errors.append(error.localizedDescription) }
         do { teams = try await query("teams:list") } catch { errors.append(error.localizedDescription) }
         do { invitations = try await query("invitations:list") } catch { errors.append(error.localizedDescription) }
@@ -110,6 +121,10 @@ final class PathwayCompanyAdministrationModel {
         } catch { errors.append(error.localizedDescription) }
     }
     func mutate(_ method: String, fields: [String: JSONValue] = [:], kind: String = "mutation", reload: Bool = true) async -> Bool {
+        if method == "memberships:leave" && !canLeave {
+            errors = ["Another active owner is required before you can leave this company."]
+            return false
+        }
         guard !busy else { return false }; busy = true; errors = []; notice = nil
         do {
             var payload = fields; payload["companyId"] = .string(company.id)

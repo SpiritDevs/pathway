@@ -28,7 +28,8 @@ actor PathwayConversationDraftStore {
         self.directory = directory.appending(path: Self.fileName(key), directoryHint: .isDirectory)
     }
 
-    func load(now: Date = Date(), expirePendingUploads: Bool = false) -> PathwayConversationDraftSnapshot? {
+    func load(now: Date = Date(), expirePendingUploads: Bool = false,
+              preservingPreparedUploadIDs: Set<String> = []) -> PathwayConversationDraftSnapshot? {
         guard let encoded = try? Data(contentsOf: directory.appending(path: "draft.json")),
               let manifest = try? JSONDecoder().decode(Manifest.self, from: encoded) else { return nil }
         var data: [String: Data] = [:]
@@ -50,7 +51,8 @@ actor PathwayConversationDraftStore {
             }
             if draft.state == .uploading {
                 draft.state = .failed("Upload interrupted. Tap retry to finish preparing this attachment.")
-            } else if expirePendingUploads, draft.state == .ready, !preparedIDs.contains(draft.id) {
+            } else if expirePendingUploads, draft.state == .ready, !preparedIDs.contains(draft.id),
+                      !preservingPreparedUploadIDs.contains(draft.attachment?.id ?? "") {
                 let uploadedAt = draft.attachment.flatMap { manifest.uploadedAt?[$0.id] }
                 // Older manifests have no upload date, so their pending uploads cannot be trusted.
                 if uploadedAt.map({ now.timeIntervalSince($0) >= 24 * 60 * 60 }) ?? true {

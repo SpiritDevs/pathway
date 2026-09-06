@@ -1,3 +1,8 @@
+import { makeFunctionReference } from "convex/server";
+import type {
+  BusinessContactPage,
+  BusinessContactSearchField,
+} from "@spiritdevs/contracts/businessTools";
 import { useAtomValue } from "@effect/atom-react";
 import { activeCompanyIdAtom, companyListAtom } from "../../cloud/activeCompany";
 import {
@@ -19,7 +24,7 @@ import {
   StarIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useIsMobile } from "~/hooks/useMediaQuery";
@@ -40,7 +45,7 @@ import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { Textarea } from "../ui/textarea";
 import { WorkspaceViewFrame } from "../workspace/WorkspaceViewFrame";
-import { contactInitials, filterContacts, type ContactRecord } from "./contacts.logic";
+import { contactInitials, type ContactRecord } from "./contacts.logic";
 
 const CONTACTS_STORAGE_KEY = "pathway:contacts";
 const ContactRecordSchema = Schema.Struct({
@@ -323,21 +328,94 @@ export function ContactsView() {
       canManageContactsFromReplica(replica?.view.values() ?? [], membershipID),
     [cloud.client, replica, membershipID],
   );
-  const result = useBusinessToolsQuery<readonly ContactRecord[]>(
+  const [query, setQuery] = useState("");
+  const [searchField, setSearchField] = useState<BusinessContactSearchField>("name");
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const result = useBusinessToolsQuery<BusinessContactPage>(
     cloud.client,
     cloud.accountID,
     "contacts:list",
-    companyID ? { companyId: companyID } : null,
+    companyID ? { companyId: companyID, search: query, searchField, favoritesOnly } : null,
   );
-  const contacts = result.value ?? EMPTY_CONTACTS;
+  const latestPage = useRef(result.value);
+  useEffect(() => {
+    latestPage.current = result.value;
+    return () => {
+      latestPage.current = undefined;
+    };
+  }, [result.value]);
+  const [history, setHistory] = useState<{
+    base: BusinessContactPage;
+    contacts: BusinessContactPage["contacts"];
+    cursor: string | null;
+    isDone: boolean;
+  } | null>(null);
+  const currentHistory = history?.base === result.value ? history : null;
+  const contacts = currentHistory?.contacts ?? result.value?.contacts ?? [];
+  const cursor = currentHistory ? currentHistory.cursor : result.value?.cursor;
+  const isDone = currentHistory?.isDone ?? result.value?.isDone ?? true;
+  const [pageRequest, setPageRequest] = useState<{
+    base: BusinessContactPage;
+    loading: boolean;
+    error?: string;
+  } | null>(null);
+  const loadingMore =
+    pageRequest !== null && pageRequest.base === result.value && pageRequest.loading;
+  const pageError =
+    pageRequest !== null && pageRequest.base === result.value ? pageRequest.error : undefined;
+  const loadMore = async () => {
+    if (!cloud.client || !companyID || !result.value || !cursor || loadingMore) return;
+    const base = result.value;
+    setPageRequest({ base, loading: true });
+    try {
+      const page = await cloud.client.query(
+        makeFunctionReference<
+          "query",
+          {
+            companyId: string;
+            search: string;
+            searchField: BusinessContactSearchField;
+            favoritesOnly: boolean;
+            cursor: string;
+          },
+          BusinessContactPage
+        >("contacts:list"),
+        { companyId: companyID, search: query, searchField, favoritesOnly, cursor },
+      );
+      if (latestPage.current !== base) return;
+      const ids = new Set(contacts.map((row) => row.id));
+      setHistory({
+        base,
+        contacts: [...contacts, ...page.contacts.filter((row) => !ids.has(row.id))],
+        cursor: page.cursor,
+        isDone: page.isDone,
+      });
+      setPageRequest({ base, loading: false });
+    } catch (error) {
+      if (latestPage.current !== base) return;
+      setPageRequest({
+        base,
+        loading: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [confirmImport, setConfirmImport] = useState(false);
-  const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const isMobile = useIsMobile();
-  const filteredContacts = useMemo(() => filterContacts(contacts, query), [contacts, query]);
-  const explicitlySelectedContact = contacts.find(({ id }) => id === selectedId) ?? null;
+  const filteredContacts = contacts;
+  const detail = useBusinessToolsQuery<ContactRecord | null>(
+    cloud.client,
+    cloud.accountID,
+    "contacts:get",
+    companyID && selectedId ? { companyId: companyID, id: selectedId } : null,
+  );
+  const explicitlySelectedContact =
+    detail.value === null || detail.error
+      ? null
+      : (detail.value ?? contacts.find(({ id }) => id === selectedId) ?? null);
   const selectedContact =
     explicitlySelectedContact ?? (isMobile ? null : (filteredContacts[0] ?? null));
 
@@ -394,9 +472,9 @@ export function ContactsView() {
           Select a workspace from the sidebar to view its shared contacts.
         </p>
       ) : null}
-      {result.error || error ? (
+      {result.error || error || pageError ? (
         <p role="alert" className="p-4 text-sm text-destructive">
-          {error ?? result.error}
+          {error ?? result.error ?? pageError}
         </p>
       ) : null}
       {canManage && legacyContacts.length > 0 ? (
@@ -452,26 +530,59 @@ export function ContactsView() {
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <aside className="flex w-full min-h-0 flex-col border-r border-border/70 sm:w-80 sm:shrink-0">
           <div className="border-b border-border/70 p-3">
+            <label className="mb-2 flex items-center gap-2 text-sm">
+              Search in
+              <select
+                aria-label="Contact search field"
+                value={searchField}
+                onChange={(event) =>
+                  setSearchField(event.target.value as BusinessContactSearchField)
+                }
+                className="min-w-0 flex-1 rounded border bg-background p-1"
+              >
+                <option value="name">Name</option>
+                <option value="role">Role</option>
+                <option value="company">Company</option>
+                <option value="email">Email</option>
+                <option value="phone">Phone</option>
+              </select>
+            </label>
             <div className="relative">
               <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 z-10 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 type="search"
                 aria-label="Search contacts"
-                placeholder="Search contacts"
+                placeholder="Search the full directory"
+                maxLength={240}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 className="pl-8"
               />
             </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Matches words or a word prefix in the selected field across the entire workspace.
+            </p>
+            <label className="mt-2 flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={favoritesOnly}
+                onChange={(event) => setFavoritesOnly(event.target.checked)}
+              />
+              Favorites only
+            </label>
           </div>
           <ScrollArea className="min-h-0 flex-1">
             {filteredContacts.length === 0 ? (
               <div className="px-5 py-12 text-center text-sm text-muted-foreground">
-                {contacts.length === 0
-                  ? canManage
-                    ? "Add your first contact to get started."
-                    : "This workspace has no contacts yet."
-                  : "No contacts match your search."}
+                {!result.value
+                  ? "Loading contacts…"
+                  : query.trim() || favoritesOnly
+                    ? "No contacts match your search."
+                    : contacts.length === 0
+                      ? canManage
+                        ? "Add your first contact to get started."
+                        : "This workspace has no contacts yet."
+                      : "No contacts match your search."}
               </div>
             ) : (
               <div className="p-2">
@@ -506,6 +617,21 @@ export function ContactsView() {
                 ))}
               </div>
             )}
+            {!isDone ? (
+              <Button
+                className="m-3"
+                variant="outline"
+                disabled={loadingMore}
+                onClick={() => void loadMore()}
+              >
+                {loadingMore ? "Loading…" : "Load more contacts"}
+              </Button>
+            ) : null}
+            {currentHistory ? (
+              <Button className="m-3" variant="ghost" onClick={() => setHistory(null)}>
+                Refresh directory
+              </Button>
+            ) : null}
           </ScrollArea>
         </aside>
         <main
@@ -538,6 +664,14 @@ export function ContactsView() {
                     id: selectedContact.id,
                     expectedRevision: selectedContact.revision ?? 0,
                   });
+                  setHistory((current) =>
+                    current !== null && current.base === result.value
+                      ? {
+                          ...current,
+                          contacts: current.contacts.filter((row) => row.id !== selectedContact.id),
+                        }
+                      : current,
+                  );
                   setSelectedId(null);
                 })
               }

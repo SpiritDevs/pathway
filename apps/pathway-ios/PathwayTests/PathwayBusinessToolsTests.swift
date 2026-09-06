@@ -8,7 +8,7 @@ import Testing
         let row: JSONValue = .object(["id": .string("contact"), "name": .string("Private"), "role": .string(""), "company": .string(""), "email": .string(""), "phone": .string(""), "notes": .string(""), "favorite": .bool(false), "createdAt": .string(""), "revision": .number(1)])
         let model = PathwayContactsModel(request: { _, _, _ in .null }, subscribe: { _, args in
             AsyncThrowingStream { continuation in
-                if args.objectValue?["companyId"] == .string("allowed") { continuation.yield(.array([row])); continuation.finish() }
+                if args.objectValue?["companyId"] == .string("allowed") { continuation.yield(.object(["contacts": .array([row]), "cursor": .null, "isDone": .bool(true)])); continuation.finish() }
                 else { continuation.finish(throwing: URLError(.userAuthenticationRequired)) }
             }
         })

@@ -113,8 +113,11 @@ final class PathwayEmailModel {
     }
     func remove(_ records: [PathwayEmailRecord]) async throws {
         for (companyID, records) in Dictionary(grouping: records, by: \.companyID) {
-            _ = try await cloud("capturedEmails:remove", companyID: companyID, fields: ["messages": .array(records.map { .object(["environmentId": .string($0.environmentID), "messageId": .string($0.messageID)]) })])
-            let ids = Set(records.map(\.id)); deleted.formUnion(ids); messages.removeAll { ids.contains($0.id) }
+            for offset in stride(from: 0, to: records.count, by: 100) {
+                let batch = records[offset..<min(offset + 100, records.count)]
+                _ = try await cloud("capturedEmails:remove", companyID: companyID, fields: ["messages": .array(batch.map { .object(["environmentId": .string($0.environmentID), "messageId": .string($0.messageID)]) })])
+                let ids = Set(batch.map(\.id)); deleted.formUnion(ids); messages.removeAll { ids.contains($0.id) }
+            }
         }
     }
 }

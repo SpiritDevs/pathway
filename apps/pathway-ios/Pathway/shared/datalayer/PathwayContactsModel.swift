@@ -15,6 +15,12 @@ struct PathwayContact: Codable, Identifiable, Equatable {
     static func draft() -> Self { .init(id: UUID().uuidString.lowercased(), name: "", role: "", company: "", email: "", phone: "", notes: "", favorite: false, createdAt: "", revision: 0) }
 }
 
+private struct PathwayContactPage: Decodable {
+    let contacts: [PathwayContact]
+    let cursor: String?
+    let isDone: Bool
+}
+
 @MainActor @Observable
 final class PathwayContactsModel {
     typealias Subscribe = @MainActor (String, JSONValue) -> AsyncThrowingStream<JSONValue, Error>
@@ -22,6 +28,13 @@ final class PathwayContactsModel {
     private(set) var companyID = ""
     private(set) var loading = false
     private(set) var writing = false
+    private(set) var loadingMore = false
+    private(set) var hasMore = false
+    @ObservationIgnored private var cursor: String?
+    @ObservationIgnored private var pageGeneration = 0
+    @ObservationIgnored private var search = ""
+    @ObservationIgnored private var searchField = "name"
+    @ObservationIgnored private var favoritesOnly = false
     var errorMessage: String?
     @ObservationIgnored private var observationGeneration = 0
     @ObservationIgnored private let request: PathwayIssuesModel.CloudRequest
@@ -44,21 +57,51 @@ final class PathwayContactsModel {
     }
 
     func clear() {
-        observationGeneration += 1; companyID = ""; contacts = []; loading = false; writing = false; errorMessage = nil
+        observationGeneration += 1; pageGeneration += 1; cursor = nil; hasMore = false; loadingMore = false; companyID = ""; contacts = []; loading = false; writing = false; errorMessage = nil
     }
-    func observe(companyID: String) async {
+    func observe(companyID: String, search: String = "", searchField: String = "name", favoritesOnly: Bool = false) async {
         observationGeneration += 1; let generation = observationGeneration
-        self.companyID = companyID; contacts = []; errorMessage = nil
+        self.companyID = companyID; self.search = search; self.searchField = searchField; self.favoritesOnly = favoritesOnly
+        contacts = []; errorMessage = nil; loading = false; pageGeneration += 1; cursor = nil; hasMore = false; loadingMore = false
         guard !companyID.isEmpty else { return }
         loading = true
         do {
-            for try await value in subscribe("contacts:list", .object(["companyId": .string(companyID)])) {
+            for try await value in subscribe("contacts:list", listArguments()) {
                 guard !Task.isCancelled, self.companyID == companyID, generation == observationGeneration else { return }
-                contacts = try decodePathwayPayload([PathwayContact].self, from: value); loading = false
+                let page = try decodePathwayPayload(PathwayContactPage.self, from: value)
+                contacts = page.contacts; cursor = page.cursor; hasMore = !page.isDone; loading = false; loadingMore = false; pageGeneration += 1
             }
         } catch {
             guard !Task.isCancelled, self.companyID == companyID, generation == observationGeneration else { return }
-            contacts = []; errorMessage = error.localizedDescription; loading = false
+            contacts = []; errorMessage = error.localizedDescription; loading = false; loadingMore = false; hasMore = false; cursor = nil; pageGeneration += 1
+        }
+    }
+    private func listArguments(cursor: String? = nil) -> JSONValue {
+        var args: [String: JSONValue] = ["companyId": .string(companyID), "search": .string(search), "searchField": .string(searchField), "favoritesOnly": .bool(favoritesOnly)]
+        if let cursor { args["cursor"] = .string(cursor) }
+        return .object(args)
+    }
+    func loadMore() async throws {
+        guard !loadingMore, hasMore, let cursor, !companyID.isEmpty else { return }
+        let generation = observationGeneration, pageVersion = pageGeneration
+        loadingMore = true
+        defer { if generation == observationGeneration, pageVersion == pageGeneration { loadingMore = false } }
+        let value: JSONValue
+        do { value = try await request("query", "contacts:list", listArguments(cursor: cursor)) }
+        catch {
+            guard !Task.isCancelled, generation == observationGeneration, pageVersion == pageGeneration else { return }
+            throw error
+        }
+        guard !Task.isCancelled, generation == observationGeneration, pageVersion == pageGeneration else { return }
+        let page = try decodePathwayPayload(PathwayContactPage.self, from: value)
+        let ids = Set(contacts.map(\.id))
+        contacts += page.contacts.filter { !ids.contains($0.id) }
+        self.cursor = page.cursor; hasMore = !page.isDone
+    }
+    func observeContact(companyID: String, contactID: String, receive: @MainActor (PathwayContact?) -> Void) async throws {
+        for try await value in subscribe("contacts:get", .object(["companyId": .string(companyID), "id": .string(contactID)])) {
+            guard !Task.isCancelled else { return }
+            receive(try decodePathwayPayload(PathwayContact?.self, from: value))
         }
     }
     func save(_ contact: PathwayContact, companyID: String, requestID: String) async throws {
@@ -67,7 +110,10 @@ final class PathwayContactsModel {
         _ = try await request("mutation", "contacts:upsert", .object(fields))
     }
     func remove(_ contact: PathwayContact, companyID: String) async throws {
+        let generation = observationGeneration
         _ = try await request("mutation", "contacts:remove", .object(["companyId": .string(companyID), "id": .string(contact.id), "expectedRevision": .number(Double(contact.revision))]))
+        guard generation == observationGeneration else { return }
+        contacts.removeAll { $0.id == contact.id }
     }
     @discardableResult func perform(_ operation: () async throws -> Void) async -> Bool {
         guard !writing else { return false }

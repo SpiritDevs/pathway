@@ -10,6 +10,8 @@ Agent Threads includes search, company/project/environment/provider filters, run
 
 Start a thread with a project, provider, model, workspace and branch. Add files or photos, insert file/skill/command references, or reuse a saved prompt. Unsent text and attachments stay with your account. A connection failure preserves the launch attempt so you can retry without intentionally starting a second thread.
 
+When you change the project for a shortcut or shared draft, your edited text and saved files move with it. Files upload again for the selected environment. If the destination already has a draft, or the current draft has a pending launch, Pathway keeps your current selection and explains what must be finished first. Expired pending uploads offer Retry using their saved files. Shared content stays in Shared Drafts until the thread launches.
+
 Conversations support streaming responses, approval and input requests, queued prompts, steering and stopping, edits, retries, forks and agent children where the provider supports them. After reconnecting, controls wait for current server state before accepting an action.
 
 Open a thread's Workspace for current changes, branches, commit/push/pull, pull requests, files, terminal sessions and project scripts. Review selected files before committing. A changed file revision requires you to reload before saving; servers without revision support allow reading. Terminal input runs on the environment.

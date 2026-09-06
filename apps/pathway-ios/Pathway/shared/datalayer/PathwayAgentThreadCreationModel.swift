@@ -40,6 +40,7 @@ final class PathwayAgentThreadCreationModel {
     private(set) var serverConfig: [String: JSONValue] = [:]
     let attachments: PathwayNewThreadAttachments
     var workspaceRoot: String { binding.binding.localWorkspaceRoot }
+    var bindingID: String { binding.id }
     private(set) var isLaunching = false
     private(set) var isImportingCapture = false
     private(set) var errorMessage: String?
@@ -225,6 +226,11 @@ final class PathwayAgentThreadCreationModel {
             var fingerprint = PathwayAgentThreadCommands.launchThread(draft, identifier: "draft").objectValue ?? [:]
             fingerprint["uploadsFingerprint"] = .object(["initial": .string(uploadsFingerprint), "files": .array(userUploads)])
             let signature = JSONValue.object(fingerprint)
+            try await attachments.revalidatePendingUploads(
+                preservingPreparedUploadIDs: launchAttempt?.fingerprint == signature ? claimedUploadIDs : [])
+            guard attachments.isReady else {
+                throw PathwayThreadConversationError.message("An attachment upload has expired. Tap retry to upload its saved bytes again.")
+            }
             if launchAttempt?.fingerprint != signature {
                 launchAttempt = PathwayThreadLaunchAttempt(fingerprint: signature)
             }
@@ -319,18 +325,61 @@ final class PathwayAgentThreadCreationModel {
     }
 
     func restoreDraft() async {
-        await attachments.restore()
-        guard !didRestoreDraft, let draftStore else { return }
+        guard !didRestoreDraft else { return }
         didRestoreDraft = true
-        guard let stored = await draftStore.load(), prompt.isEmpty, initialImageUploads.isEmpty else { return }
-        if let sent = stored.sentAttachmentIDs, !sent.isEmpty { await attachments.didSend(ids: Set(sent)) }
-        hasConfiguredDefaults = true
-        importedCaptureIDs = stored.importedCaptureIDs ?? []
-        prompt = stored.prompt; initialImageUploads = stored.initialImageUploads
-        selectedProviderID = stored.selectedProviderID; selectedModelID = stored.selectedModelID
-        optionValues = stored.optionValues; runtimeMode = stored.runtimeMode; interactionMode = stored.interactionMode
-        workspaceMode = stored.workspaceMode; baseReference = stored.baseReference
-        branch = stored.branch; startFromOrigin = stored.startFromOrigin; launchAttempt = stored.attempt
+        var sentIDs: [String] = []
+        if let draftStore, let stored = await draftStore.load(), prompt.isEmpty, initialImageUploads.isEmpty {
+            hasConfiguredDefaults = true
+            importedCaptureIDs = stored.importedCaptureIDs ?? []
+            prompt = stored.prompt; initialImageUploads = stored.initialImageUploads
+            selectedProviderID = stored.selectedProviderID; selectedModelID = stored.selectedModelID
+            optionValues = stored.optionValues; runtimeMode = stored.runtimeMode; interactionMode = stored.interactionMode
+            workspaceMode = stored.workspaceMode; baseReference = stored.baseReference
+            branch = stored.branch; startFromOrigin = stored.startFromOrigin; launchAttempt = stored.attempt
+            sentIDs = stored.sentAttachmentIDs ?? []
+        }
+        // The byte store needs the launch receipt before deciding whether an old upload is reusable.
+        await attachments.restore(preservingPreparedUploadIDs: claimedUploadIDs)
+        if !sentIDs.isEmpty { await attachments.didSend(ids: Set(sentIDs)) }
+    }
+
+    private var claimedUploadIDs: Set<String> {
+        guard let launchAttempt, launchAttempt.attachments != nil else { return [] }
+        return Set((launchAttempt.fingerprint.objectValue?["uploadsFingerprint"]?.objectValue?["files"]?.arrayValue ?? [])
+            .compactMap { $0.objectValue?["id"]?.stringValue })
+    }
+
+    /// Move editable incoming content only after the empty destination has durably accepted it.
+    /// Upload handles and launch receipts remain tied to their original environment.
+    func transferIncomingDraft(to destination: PathwayAgentThreadCreationModel) async throws {
+        guard !isLaunching, !isImportingCapture, launchAttempt?.attachments == nil else {
+            throw PathwayThreadConversationError.message("This draft has a pending launch or import. Finish it in the current project before switching.")
+        }
+        guard storageDirectory == destination.storageDirectory, initialImageUploads.isEmpty else {
+            throw PathwayThreadConversationError.message("This draft cannot be moved to that project. Keep it in the current project.")
+        }
+        await destination.restoreDraft()
+        guard destination.prompt.isEmpty, destination.initialImageUploads.isEmpty,
+              destination.attachments.drafts.isEmpty, destination.launchAttempt == nil else {
+            throw PathwayThreadConversationError.message("That project already has an unsent draft. Finish or clear it separately before moving this draft.")
+        }
+        try Task.checkCancellation()
+        let movingPrompt = prompt
+        let movingAttachments = attachments.drafts
+        try await destination.attachments.stageTransfer(drafts: movingAttachments, bytes: attachments.bytes)
+        destination.prompt = movingPrompt
+        destination.importedCaptureIDs = importedCaptureIDs
+        try await destination.persistDraftChecked()
+        try Task.checkCancellation()
+        guard prompt == movingPrompt, attachments.drafts == movingAttachments else {
+            throw PathwayThreadConversationError.message("The draft changed during the move. Your latest edits remain in the original project.")
+        }
+        // The destination is saved. Clearing local source bytes must not delete remote uploads.
+        prompt = ""
+        launchAttempt = nil
+        importedCaptureIDs = []
+        await persistDraftNow()
+        await attachments.didSend(ids: Set(attachments.drafts.map(\.id)))
     }
 
     private func draftSnapshot() -> PathwayThreadCreationDraft {

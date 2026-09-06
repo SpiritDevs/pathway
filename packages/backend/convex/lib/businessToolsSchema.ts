@@ -43,7 +43,29 @@ export const businessToolsTables = {
   })
     .index("by_company", ["companyId"])
     .index("by_company_and_deleted", ["companyId", "deletedAt"])
-    .index("by_company_and_id", ["companyId", "id"]),
+    .index("by_company_and_id", ["companyId", "id"])
+    .index("by_company_deleted_name", ["companyId", "deletedAt", "name"])
+    .index("by_company_deleted_favorite_name", ["companyId", "deletedAt", "favorite", "name"])
+    .searchIndex("search_name", {
+      searchField: "name",
+      filterFields: ["companyId", "deletedAt", "favorite"],
+    })
+    .searchIndex("search_role", {
+      searchField: "role",
+      filterFields: ["companyId", "deletedAt", "favorite"],
+    })
+    .searchIndex("search_company", {
+      searchField: "company",
+      filterFields: ["companyId", "deletedAt", "favorite"],
+    })
+    .searchIndex("search_email", {
+      searchField: "email",
+      filterFields: ["companyId", "deletedAt", "favorite"],
+    })
+    .searchIndex("search_phone", {
+      searchField: "phone",
+      filterFields: ["companyId", "deletedAt", "favorite"],
+    }),
   trackedSessions: defineTable({
     id: v.string(),
     userId: v.id("users"),

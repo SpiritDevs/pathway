@@ -239,7 +239,7 @@ final class PathwayIssuesUITests: XCTestCase {
         let second = app.buttons["issue-row-PW-249"]
         let third = app.buttons["issue-row-PW-250"]
         XCTAssertTrue(row.waitForExistence(timeout: 10))
-        row.press(forDuration: 0.5, thenDragTo: third, withVelocity: .slow, thenHoldForDuration: 0.3)
+        drag(row, to: third, in: app)
         let reordered = NSPredicate { _, _ in
             guard row.exists, second.exists else { return false }
             return row.frame.minY > second.frame.minY
@@ -248,7 +248,7 @@ final class PathwayIssuesUITests: XCTestCase {
         waitForExpectations(timeout: 5)
         XCTAssertTrue((row.value as? String)?.contains("In review") == true)
 
-        row.press(forDuration: 0.5, thenDragTo: app.buttons["issue-row-PW-255"], withVelocity: .slow, thenHoldForDuration: 0.3)
+        drag(row, to: app.buttons["issue-row-PW-255"], in: app)
         let moved = NSPredicate(format: "value CONTAINS %@", "In progress")
         expectation(for: moved, evaluatedWith: row)
         waitForExpectations(timeout: 5)
@@ -271,7 +271,7 @@ final class PathwayIssuesUITests: XCTestCase {
         let row = app.buttons["issue-row-PW-248"]
         let second = app.buttons["issue-row-PW-249"]
         XCTAssertTrue(row.waitForExistence(timeout: 5))
-        row.press(forDuration: 0.5, thenDragTo: app.buttons["issue-row-PW-250"], withVelocity: .slow, thenHoldForDuration: 0.3)
+        drag(row, to: app.buttons["issue-row-PW-250"], in: app)
         let reordered = NSPredicate { _, _ in
             guard row.exists, second.exists else { return false }
             return row.frame.minY > second.frame.minY
@@ -279,21 +279,35 @@ final class PathwayIssuesUITests: XCTestCase {
         expectation(for: reordered, evaluatedWith: row)
         waitForExpectations(timeout: 5)
         capture(app, name: "Board issue reordered")
-        let target = app.buttons["issue-row-PW-255"]
-        XCTAssertTrue(target.exists)
-        let board = app.scrollViews["issues-board"]
-        let visibleTarget = target.frame.intersection(board.frame).intersection(app.frame)
-        XCTAssertGreaterThan(visibleTarget.width, 16)
-        XCTAssertGreaterThan(visibleTarget.height, 16)
-        // Stay away from a fully visible row's edge: horizontal drag autoscroll
-        // can move that edge out from under a coordinate chosen before the drag.
-        let destination = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
-            dx: visibleTarget.midX - app.frame.minX, dy: visibleTarget.midY - app.frame.minY
-        ))
-        row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 0.5, thenDragTo: destination, withVelocity: .slow, thenHoldForDuration: 0.3)
+        drag(row, to: app.buttons["issue-row-PW-255"], in: app, within: app.scrollViews["issues-board"])
         expectation(for: NSPredicate(format: "value CONTAINS %@", "In progress"), evaluatedWith: row)
         waitForExpectations(timeout: 5)
+    }
+
+    @MainActor private func drag(_ source: XCUIElement, to target: XCUIElement, in app: XCUIApplication, within container: XCUIElement? = nil) {
+        var previous: [CGRect] = []
+        var stableSince = Date()
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard source.exists, target.exists, source.isHittable, target.isHittable else { return false }
+            let frames = [source.frame, target.frame]
+            if frames != previous { previous = frames; stableSince = Date(); return false }
+            return Date().timeIntervalSince(stableSince) >= 0.5
+        }, object: source)
+        guard XCTWaiter.wait(for: [ready], timeout: 5) == .completed else {
+            XCTFail("Both drag endpoints must be visible and settled")
+            return
+        }
+        let bounds = (container?.frame ?? app.frame).intersection(app.frame)
+        let sourceFrame = source.frame.intersection(bounds)
+        let targetFrame = target.frame.intersection(bounds)
+        XCTAssertGreaterThan(sourceFrame.width, 16)
+        XCTAssertGreaterThan(targetFrame.width, 16)
+        XCTAssertGreaterThan(targetFrame.height, 16)
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: sourceFrame.midX - app.frame.minX, dy: sourceFrame.midY - app.frame.minY))
+        let end = origin.withOffset(CGVector(dx: targetFrame.midX - app.frame.minX, dy: targetFrame.midY - app.frame.minY))
+        // Move before the competing long-press menu opens, then dwell over the drop target.
+        start.press(forDuration: 0.6, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.5)
     }
 
     @MainActor

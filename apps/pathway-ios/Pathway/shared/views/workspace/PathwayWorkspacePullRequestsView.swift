@@ -1,23 +1,20 @@
 import SwiftUI
+import Observation
 
 struct PathwayWorkspacePullRequestsView: View {
     let client: PathwayWorkspaceClient
     var postHTTP: PathwayWorkspacePostHTTP?
-    @State private var rows: [PathwayWorkspacePullRequestRow] = []
-    @State private var cursors: [String: String] = [:]
+    @State private var listing = PathwayWorkspacePullRequestListModel()
     @State private var query = ""
     @State private var state = "open"
-    @State private var error: String?
-    @State private var busy = false
-    @State private var truncated = false
     var body: some View {
         List {
             Picker("State", selection: $state) {
                 Text("Open").tag("open"); Text("Closed").tag("closed"); Text("Merged").tag("merged"); Text("All").tag("all")
             }
-            if let error { Text(error).foregroundStyle(.red) }
-            if rows.isEmpty && !busy { Text("No pull requests found") }
-            ForEach(rows) { row in
+            if let error = listing.error { Text(error).foregroundStyle(.red) }
+            if listing.rows.isEmpty && !listing.busy { Text("No pull requests found") }
+            ForEach(listing.rows) { row in
                 NavigationLink {
                     PathwayWorkspacePullRequestView(client: client, row: row, postHTTP: postHTTP)
                 } label: {
@@ -27,28 +24,55 @@ struct PathwayWorkspacePullRequestsView: View {
                     }
                 }
             }
-            if !cursors.isEmpty { Button("Load more") { Task { await load(more: true) } }.disabled(busy) }
-            else if truncated { Text("The provider limited this list. Narrow your search.").font(.caption).foregroundStyle(.secondary) }
-            if busy { ProgressView("Loading pull requests…") }
+            if !listing.cursors.isEmpty { Button("Load more") { Task { await load(more: true) } }.disabled(listing.busy) }
+            else if listing.truncated { Text("The provider limited this list. Narrow your search.").font(.caption).foregroundStyle(.secondary) }
+            if listing.busy { ProgressView("Loading pull requests…") }
         }.navigationTitle("Pull requests").searchable(text: $query)
             .onSubmit(of: .search) { Task { await load(more: false) } }
-            .task(id: state) { await load(more: false) }
+            .task(id: [client.context.projectID, client.context.cwd, state]) { await load(more: false) }
             .refreshable { await load(more: false) }
     }
     private func load(more: Bool) async {
-        guard client.context.supportsPullRequests, !busy else { return }
-        busy = true; defer { busy = false }
+        await listing.load(client: client, state: state, query: query, more: more)
+    }
+}
+
+@MainActor @Observable
+final class PathwayWorkspacePullRequestListModel {
+    private(set) var rows: [PathwayWorkspacePullRequestRow] = []
+    private(set) var cursors: [String: String] = [:]
+    private(set) var error: String?
+    private(set) var busy = false
+    private(set) var truncated = false
+    private var generation = 0
+    private var scope: [String] = []
+
+    func load(client: PathwayWorkspaceClient, state: String, query: String, more: Bool) async {
+        guard client.context.supportsPullRequests else { return }
+        let query = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
+        let requestedScope = [client.context.projectID, client.context.cwd, state, query]
+        if more && (busy || scope != requestedScope || cursors.isEmpty) { return }
+        generation += 1
+        let requestGeneration = generation
+        scope = requestedScope
+        if !more { rows = []; cursors = [:]; truncated = false }
+        busy = true; error = nil
+        defer { if generation == requestGeneration { busy = false } }
         do {
             var payload: [String: JSONValue] = ["projectId": .string(client.context.projectID), "state": .string(state), "limit": .number(50)]
-            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { payload["query"] = .string(String(query.prefix(200))) }
+            if !query.isEmpty { payload["query"] = .string(query) }
             if more { payload["cursors"] = .object(cursors.mapValues(JSONValue.string)) }
             let result: PathwayWorkspacePullRequestList = try await client.call("pullRequests.list", payload)
+            guard !Task.isCancelled, generation == requestGeneration else { return }
             let existing = more ? rows : []
             let ids = Set(existing.map(\.id))
             rows = existing + result.entries.filter { !ids.contains($0.id) }
             cursors = result.nextCursors; truncated = result.truncated
             error = result.errors.isEmpty ? nil : result.errors.map { "\($0.projectTitle): \($0.message)" }.joined(separator: "\n")
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            guard !Task.isCancelled, generation == requestGeneration else { return }
+            self.error = error.localizedDescription
+        }
     }
 }
 

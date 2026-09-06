@@ -76,6 +76,10 @@ struct PathwayCompanyDetailView: View {
                     NavigationLink { PathwayCompanyRolesView(model: model) } label: { Label("Roles & permissions", systemImage: "key") }
                     NavigationLink { PathwayCompanyInvitationsView(model: model) } label: { Label("Invitations", systemImage: "envelope") }
                     Button("Leave company", role: .destructive) { confirmation = "leave" }
+                        .disabled(!model.canLeave)
+                    if model.company.isOwner && !model.canLeave {
+                        Text("Another active owner is required before you can leave.").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 if model.company.isOwner { Button("Schedule company deletion", role: .destructive) { confirmation = "delete" } }
             }
@@ -87,6 +91,7 @@ struct PathwayCompanyDetailView: View {
                 Button(confirmation == "leave" ? "Leave company" : "Schedule deletion", role: .destructive) {
                     if let confirmation { self.confirmation = nil; Task { _ = await model.mutate(confirmation == "leave" ? "memberships:leave" : "companies:scheduleDeletion", reload: false) } }
                 }
+                .disabled(confirmation == "leave" && !model.canLeave)
                 Button("Cancel", role: .cancel) { confirmation = nil }
             } message: { Text("Access to this company's work will change. The server protects the last active owner. Scheduled deletion can be restored only within its recovery window.") }
     }

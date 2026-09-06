@@ -155,11 +155,22 @@ final class PathwayParityUITests: XCTestCase {
         XCTAssertTrue(maximum.waitForExistence(timeout: 5))
         replace(maximum, with: "321")
         XCTAssertEqual(maximum.value as? String, "321")
+        let hideKeyboard = app.buttons["Hide keyboard"].firstMatch
+        if hideKeyboard.exists && hideKeyboard.isHittable {
+            hideKeyboard.tap()
+            let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                !app.keyboards.allElementsBoundByIndex.contains { keyboard in
+                    keyboard.exists && !keyboard.frame.intersection(app.frame).isEmpty
+                }
+            }, object: app)
+            XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+        }
         let save = app.buttons["Save capture settings"]
         reveal(save, in: app, within: form)
         waitForSettledFrame(save)
         capture(app, "Capture retention before Save")
-        save.tap()
+        // Avoid XCTest scroll-to-visible dismissing the keyboard and moving the sheet mid-tap.
+        save.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(app.staticTexts["Capture settings saved."].waitForExistence(timeout: 5))
         capture(app, "Capture retention after Save")
         back(from: "Parity server", in: app)

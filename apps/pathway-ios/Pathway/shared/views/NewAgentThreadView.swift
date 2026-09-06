@@ -12,6 +12,7 @@ struct NewAgentThreadView: View {
     @State private var model: PathwayAgentThreadCreationModel?
     @State private var appliedInitialPrompt = false
     @State private var appliedCapture = false
+    @State private var selectionError: String?
 
     var body: some View {
         NavigationStack {
@@ -65,6 +66,9 @@ struct NewAgentThreadView: View {
             let departing = model
             Task { await departing?.stop() }
         }
+        .alert("Couldn't change project", isPresented: Binding(get: { selectionError != nil }, set: { if !$0 { selectionError = nil } })) {
+            Button("OK", role: .cancel) { selectionError = nil }
+        } message: { Text(selectionError ?? "") }
     }
 
     private var bindingOptions: [PathwayNewThreadBindingOption] {
@@ -120,9 +124,9 @@ struct NewAgentThreadView: View {
     }
 
     private func configureSelection() async {
-        await model?.stop()
-        guard !Task.isCancelled else { return }
-        model = nil
+        guard model?.bindingID != selectedBindingID else { return }
+        let requestedBindingID = selectedBindingID
+        let departing = model
         guard
             let option = bindingOptions.first(where: { $0.id == selectedBindingID }),
             let connect = appModel.connect
@@ -133,6 +137,20 @@ struct NewAgentThreadView: View {
             connect: connect,
             storageDirectory: appModel.localStorageDirectory
         )
+        if let departing, appliedInitialPrompt || appliedCapture {
+            do { try await departing.transferIncomingDraft(to: nextModel) }
+            catch {
+                guard !Task.isCancelled, selectedBindingID == requestedBindingID else { return }
+                selectionError = error.localizedDescription
+                selectedBindingID = departing.bindingID
+                if let previous = projectOptions.first(where: { $0.bindings.contains { $0.id == departing.bindingID } }) {
+                    selectedProjectID = previous.id
+                }
+                return
+            }
+        }
+        await departing?.stop()
+        guard !Task.isCancelled, selectedBindingID == requestedBindingID else { return }
         model = nextModel
         nextModel.start()
     }
@@ -140,6 +158,8 @@ struct NewAgentThreadView: View {
     private func applyIncomingDraft() async {
         guard let model, model.connectionState == .live else { return }
         await model.restoreDraft()
+        guard !Task.isCancelled else { return }
+        await model.attachments.prepareTransferredAttachments()
         guard !Task.isCancelled else { return }
         if !appliedInitialPrompt, !initialPrompt.isEmpty {
             let combined = [model.prompt, initialPrompt].filter { !$0.isEmpty }.joined(separator: "\n\n")
@@ -152,7 +172,6 @@ struct NewAgentThreadView: View {
         if !appliedCapture, let capturedDraft, let store = PathwayCaptureInbox.shared.store {
             if await model.importCapturedDraft(capturedDraft, store: store) {
                 appliedCapture = true
-                await PathwayCaptureInbox.shared.remove(capturedDraft)
             }
         }
     }
@@ -162,6 +181,9 @@ struct NewAgentThreadView: View {
     }
 
     private func didLaunch(threadID: String) {
+        if appliedCapture, let capturedDraft {
+            Task { await PathwayCaptureInbox.shared.remove(capturedDraft) }
+        }
         if let option = bindingOptions.first(where: { $0.id == selectedBindingID }) {
             appModel.pendingThreadRoute = PathwayPendingThreadRoute(
                 companyId: option.binding.companyId,

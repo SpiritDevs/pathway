@@ -42,22 +42,73 @@ function validate(fields: {
   return result;
 }
 export const list = query({
-  args: { companyId: v.string() },
-  returns: v.array(contactWire),
+  args: {
+    companyId: v.string(),
+    cursor: v.optional(v.union(v.string(), v.null())),
+    search: v.optional(v.string()),
+    searchField: v.optional(
+      v.union(
+        v.literal("name"),
+        v.literal("role"),
+        v.literal("company"),
+        v.literal("email"),
+        v.literal("phone"),
+      ),
+    ),
+    favoritesOnly: v.optional(v.boolean()),
+  },
+  returns: v.object({
+    contacts: v.array(contactWire),
+    cursor: v.union(v.string(), v.null()),
+    isDone: v.boolean(),
+  }),
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
     if (actor.kind !== "member")
       throw backendError("permission-denied", "Contacts require a company member.");
-    const rows = await ctx.db
+    const search = args.search?.trim() ?? "";
+    if (search.length > 240)
+      throw backendError("invalid-arguments", "Search with no more than 240 characters.");
+    const field = args.searchField ?? "name";
+    const rows = search
+      ? ctx.db.query("businessContacts").withSearchIndex(`search_${field}`, (q) => {
+          const filter = q
+            .search(field, search)
+            .eq("companyId", actor.company._id)
+            .eq("deletedAt", null);
+          return args.favoritesOnly ? filter.eq("favorite", true) : filter;
+        })
+      : args.favoritesOnly
+        ? ctx.db
+            .query("businessContacts")
+            .withIndex("by_company_deleted_favorite_name", (q) =>
+              q.eq("companyId", actor.company._id).eq("deletedAt", null).eq("favorite", true),
+            )
+        : ctx.db
+            .query("businessContacts")
+            .withIndex("by_company_deleted_name", (q) =>
+              q.eq("companyId", actor.company._id).eq("deletedAt", null),
+            );
+    const page = await rows.paginate({ cursor: args.cursor ?? null, numItems: 50 });
+    return {
+      contacts: page.page.map(encode),
+      cursor: page.isDone ? null : page.continueCursor,
+      isDone: page.isDone,
+    };
+  },
+});
+export const get = query({
+  args: { companyId: v.string(), id: v.string() },
+  returns: v.union(contactWire, v.null()),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    if (actor.kind !== "member")
+      throw backendError("permission-denied", "Contacts require a company member.");
+    const row = await ctx.db
       .query("businessContacts")
-      .withIndex("by_company_and_deleted", (q) =>
-        q.eq("companyId", actor.company._id).eq("deletedAt", null),
-      )
-      .collect();
-    return rows
-      .filter((row) => row.deletedAt === null)
-      .map(encode)
-      .sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.name.localeCompare(b.name));
+      .withIndex("by_company_and_id", (q) => q.eq("companyId", actor.company._id).eq("id", args.id))
+      .unique();
+    return row && row.deletedAt === null ? encode(row) : null;
   },
 });
 export const upsert = mutation({

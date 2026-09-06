@@ -7,13 +7,20 @@ struct PathwayContactsView: View {
     var initialFilter = "people"
     @State private var companyID = ""
     @State private var query = ""
+    @State private var searchField = "name"
     @State private var editing: PathwayContact?
     @State private var retry = 0
-    private var filtered: [PathwayContact] { model.contacts.filter { (initialFilter != "favorites" || $0.favorite) && (query.isEmpty || [$0.name, $0.role, $0.company, $0.email, $0.phone].contains { $0.localizedCaseInsensitiveContains(query) }) } }
+    private var filtered: [PathwayContact] { model.contacts }
     private var canManage: Bool { PathwayContactsModel.canManage(companyID: companyID, companies: appModel.cloud.companies, entities: appModel.cloud.issues.entities) }
     var body: some View {
         List {
             Section { Picker("Workspace", selection: $companyID) { ForEach(companies) { Text($0.name).tag($0.id) } } }
+            Section {
+                Picker("Search in", selection: $searchField) {
+                    Text("Name").tag("name"); Text("Role").tag("role"); Text("Company").tag("company"); Text("Email").tag("email"); Text("Phone").tag("phone")
+                }
+                Text("Search covers the entire workspace directory. Enter words or a word prefix in the selected field.").font(.caption).foregroundStyle(.secondary)
+            }
             if model.loading { ProgressView("Loading contacts…") }
             ForEach(filtered) { contact in
                 NavigationLink { PathwayContactDetail(model: model, companyID: companyID, contactID: contact.id) } label: {
@@ -24,13 +31,15 @@ struct PathwayContactsView: View {
                 }
             }
             if !model.loading && filtered.isEmpty { ContentUnavailableView("No contacts", systemImage: "person.crop.rectangle.stack", description: Text(canManage ? "Add a contact to this workspace, or change your search." : "No contacts match your search in this workspace.")) }
+            if model.hasMore { Button(model.loadingMore ? "Loading…" : "Load more contacts") { Task { _ = await model.perform { try await model.loadMore() } } }.disabled(model.loadingMore) }
             if let error = model.errorMessage { Section { Text(error).foregroundStyle(.red); Button("Reconnect") { retry += 1 } } }
         }
         .navigationTitle("Contacts")
         .searchable(text: $query)
         .toolbar { if canManage { ToolbarItem(placement: .topBarTrailing) { Button("Add contact", systemImage: "plus") { editing = .draft() } } } }
         .onChange(of: companies, initial: true) { if !companies.contains(where: { $0.id == companyID }) { companyID = companies.first?.id ?? "" } }
-        .task(id: "\(companyID):\(retry)") { await model.observe(companyID: companyID) }
+        .task(id: "\(companyID):\(query):\(searchField):\(initialFilter):\(retry)") { await model.observe(companyID: companyID, search: query, searchField: searchField, favoritesOnly: initialFilter == "favorites") }
+        .refreshable { retry += 1 }
         .sheet(item: $editing) { contact in PathwayContactEditor(model: model, companyID: companyID, contact: contact) }
         .onChange(of: canManage) { if !canManage { editing = nil } }
     }
@@ -43,10 +52,14 @@ private struct PathwayContactDetail: View {
     let contactID: String
     @State private var editing: PathwayContact?
     @State private var deleting = false
+    @State private var contact: PathwayContact?
+    @State private var loadError: String?
+    @State private var loading = true
+    @State private var loadedIdentity = ""
     private var canManage: Bool { PathwayContactsModel.canManage(companyID: companyID, companies: appModel.cloud.companies, entities: appModel.cloud.issues.entities) }
     var body: some View {
         Group {
-            if let contact = model.contacts.first(where: { $0.id == contactID }), model.companyID == companyID {
+            if let contact, loadedIdentity == "\(companyID):\(contactID)" {
                 Form {
                     Section { Text(contact.name).font(.title2); LabeledContent("Role", value: contact.role); LabeledContent("Company", value: contact.company) }
                     Section("Contact") {
@@ -58,9 +71,15 @@ private struct PathwayContactDetail: View {
                     if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
                 }
                 .confirmationDialog("Delete this contact from the workspace?", isPresented: $deleting, titleVisibility: .visible) { Button("Delete contact", role: .destructive) { Task { guard canManage else { return }; if await model.perform({ try await model.remove(contact, companyID: companyID) }) { dismiss() } } } }
-            } else { ContentUnavailableView("Contact unavailable", systemImage: "person.crop.rectangle") }
+            } else if loading { ProgressView("Loading contact…") }
+            else { ContentUnavailableView("Contact unavailable", systemImage: "person.crop.rectangle", description: Text(loadError ?? "The contact may have been removed or its workspace may no longer be available.")) }
         }
         .navigationTitle("Contact")
+        .task(id: "\(companyID):\(contactID)") {
+            contact = nil; loadedIdentity = ""; loadError = nil; loading = true
+            do { try await model.observeContact(companyID: companyID, contactID: contactID) { contact = $0; loadedIdentity = "\(companyID):\(contactID)"; loading = false } }
+            catch { guard !Task.isCancelled else { return }; contact = nil; loading = false; loadError = error.localizedDescription }
+        }
         .sheet(item: $editing) { contact in PathwayContactEditor(model: model, companyID: companyID, contact: contact) }
         .onChange(of: canManage) { if !canManage { editing = nil } }
     }

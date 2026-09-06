@@ -97,9 +97,9 @@ describe("Shared business tools", () => {
     };
     await expect(as("reader").mutation(mutation("contacts:upsert"), create)).rejects.toThrow();
     await as("owner").mutation(mutation("contacts:upsert"), create);
-    expect(await as("reader").query(query("contacts:list"), { companyId: "company" })).toHaveLength(
-      1,
-    );
+    expect(
+      (await as("reader").query(query("contacts:list"), { companyId: "company" })).contacts,
+    ).toHaveLength(1);
   });
   it("retries contact writes once and refuses stale edits", async () => {
     const { as } = await setup();
@@ -125,7 +125,9 @@ describe("Shared business tools", () => {
         expectedRevision: 1,
       }),
     ).rejects.toThrow(/changed/);
-    const rows = await as("owner").query(query("contacts:list"), { companyId: "company" });
+    const { contacts: rows } = await as("owner").query(query("contacts:list"), {
+      companyId: "company",
+    });
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe("Updated");
   });
@@ -139,14 +141,18 @@ describe("Shared business tools", () => {
     expect(await as("owner").mutation(mutation("contacts:importLocal"), args)).toEqual({
       imported: 0,
     });
-    const rows = await as("owner").query(query("contacts:list"), { companyId: "company" });
+    const { contacts: rows } = await as("owner").query(query("contacts:list"), {
+      companyId: "company",
+    });
     await as("owner").mutation(mutation("contacts:remove"), {
       companyId: "company",
       id: rows[0].id,
       expectedRevision: 1,
     });
     await as("owner").mutation(mutation("contacts:importLocal"), args);
-    expect(await as("owner").query(query("contacts:list"), { companyId: "company" })).toEqual([]);
+    expect(
+      (await as("owner").query(query("contacts:list"), { companyId: "company" })).contacts,
+    ).toEqual([]);
   });
   it("allows one running timer per user and retries do not restart it", async () => {
     const { as } = await setup();
