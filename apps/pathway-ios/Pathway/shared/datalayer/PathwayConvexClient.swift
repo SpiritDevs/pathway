@@ -91,8 +91,8 @@
             await client.logout()
         }
 
-        func companiesPublisher() -> AnyPublisher<[PathwayCompany], ClientError> {
-            client.subscribe(to: "companies:listMine", yielding: [PathwayCompany].self)
+        func companiesPublisher() -> AnyPublisher<[PathwayCompany], Error> {
+            client.subscribe(to: "companies:listMine", yielding: [PathwayCompany].self).mapError { $0 as Error }.eraseToAnyPublisher()
         }
 
         func provisionCurrentUser() async throws -> PathwayCompany {
@@ -109,12 +109,12 @@
             )
         }
 
-        func syncHeadPublisher(companyId: String) -> AnyPublisher<PathwaySyncHead, ClientError> {
+        func syncHeadPublisher(companyId: String) -> AnyPublisher<PathwaySyncHead, Error> {
             client.subscribe(
                 to: "sync:latestVersion",
                 with: ["companyId": companyId],
                 yielding: PathwaySyncHead.self
-            )
+            ).mapError { $0 as Error }.eraseToAnyPublisher()
         }
 
         func listChanges(
@@ -140,6 +140,11 @@
             case "mutation": return try await client.mutation(name, with: PathwayConvexJSON.arguments(arguments))
             default: return try await query(name, with: PathwayConvexJSON.arguments(arguments))
             }
+        }
+
+        func publisher(name: String, arguments: JSONValue) -> AnyPublisher<JSONValue, Error> {
+            client.subscribe(to: name, with: PathwayConvexJSON.arguments(arguments), yielding: JSONValue.self)
+                .mapError { $0 as Error }.eraseToAnyPublisher()
         }
 
         private func query<Value: Decodable>(

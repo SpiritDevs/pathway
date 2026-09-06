@@ -87,7 +87,7 @@ struct PathwayIssueBulkAgentView: View {
               let environment = appModel.cloud.environments.first(where: {
                   $0.companyId == binding.companyId && $0.environment.environmentId == binding.binding.environmentId
               }) else { return }
-        let model = PathwayAgentThreadCreationModel(binding: binding, environment: environment, connect: connect)
+        let model = PathwayAgentThreadCreationModel(binding: binding, environment: environment, connect: connect, storageDirectory: appModel.localStorageDirectory)
         model.prompt = "Discuss the following issues and help me decide the next steps.\n\n" + issues.map {
             "\($0.key): \($0.title)\n\($0.description)"
         }.joined(separator: "\n\n")

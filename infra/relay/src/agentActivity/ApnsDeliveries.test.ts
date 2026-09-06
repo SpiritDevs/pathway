@@ -258,6 +258,62 @@ function makeLayer(input: {
 }
 
 describe("ApnsDeliveries", () => {
+  it.effect(
+    "delivers visionOS attention as notifications even with a stale Live Activity token",
+    () => {
+      const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+      const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+      return Effect.gen(function* () {
+        const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+        yield* deliveries.sendForTarget({
+          target: {
+            ...target,
+            platform: "visionos",
+            ios_major_version: 26,
+            push_token: "vision-push",
+          },
+          aggregate: {
+            ...aggregate,
+            activities: aggregate.activities.map((activity) => ({
+              ...activity,
+              phase: "waiting_for_approval" as const,
+            })),
+          },
+          nowMs: 10_000,
+        });
+        expect(queuedJobs).toMatchObject([
+          { payload: { kind: "push_notification", target: { token: "vision-push" } } },
+        ]);
+        expect(attempts).toEqual([]);
+      }).pipe(Effect.provide(makeLayer({ attempts, queuedJobs })));
+    },
+  );
+
+  it.effect("drops queued Live Activity updates after a device becomes visionOS", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const payload = makeApnsDeliveryJobPayload({
+      kind: "live_activity_update",
+      userId: target.user_id,
+      deviceId: target.device_id,
+      token: "activity-token",
+      aggregate,
+      createdAt: "1970-01-01T00:00:00.000Z",
+      expiresAt: "1970-01-01T00:10:00.000Z",
+      jobId: "vision-unsupported-job",
+    });
+    const signed = signApnsDeliveryJob({ secret: config.apnsDeliveryJobSigningSecret, payload });
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.processSignedJob(signed);
+      expect(result).toMatchObject({ ok: true, apnsStatus: null });
+      expect(attempts).toMatchObject([{ apnsReason: "Stale APNs delivery job skipped." }]);
+    }).pipe(
+      Effect.provide(
+        makeLayer({ attempts, currentTargets: [{ ...target, platform: "visionos" }] }),
+      ),
+    );
+  });
+
   it.effect("does not queue or send deliveries when APNs is disabled", () => {
     const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
     const queuedJobs: Array<SignedApnsDeliveryJob> = [];

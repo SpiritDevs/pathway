@@ -8,7 +8,7 @@ enum PathwayCloudConnectionState: Equatable, Sendable {
     case failed(String)
 }
 
-struct PathwayCompany: Decodable, Equatable, Identifiable, Sendable {
+struct PathwayCompany: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let membershipId: String
     let name: String
@@ -215,7 +215,7 @@ enum JSONValue: Codable, Equatable, Sendable {
     }
 }
 
-struct PathwaySyncChange: Decodable, Equatable, Sendable {
+struct PathwaySyncChange: Codable, Equatable, Sendable {
     let version: Int
     let entityKind: String
     let entityId: String

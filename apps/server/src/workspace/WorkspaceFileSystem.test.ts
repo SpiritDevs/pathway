@@ -69,6 +69,7 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           contents: "export const answer = 42;\n",
           byteLength: 26,
           truncated: false,
+          revision: expect.stringMatching(/^[a-f0-9]{64}$/),
         });
       }),
     );
@@ -207,8 +208,73 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           .readFileString(path.join(cwd, "plans/effect-rpc.md"))
           .pipe(Effect.orDie);
 
-        expect(result).toEqual({ relativePath: "plans/effect-rpc.md" });
+        expect(result).toEqual({
+          relativePath: "plans/effect-rpc.md",
+          revision: expect.stringMatching(/^[a-f0-9]{64}$/),
+        });
         expect(saved).toBe("# Plan\n");
+      }),
+    );
+
+    it.effect("accepts only one concurrent write for a shared revision", () =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "shared.txt", "original");
+        const original = yield* service.readFile({ cwd, relativePath: "shared.txt" });
+        const writes = yield* Effect.all(
+          ["first", "second"].map((contents) =>
+            service
+              .writeFile({
+                cwd,
+                relativePath: "shared.txt",
+                contents,
+                expectedRevision: original.revision,
+              })
+              .pipe(Effect.result),
+          ),
+          { concurrency: "unbounded" },
+        );
+        expect(writes.filter((result) => result._tag === "Success")).toHaveLength(1);
+        const failure = writes.find((result) => result._tag === "Failure");
+        expect(failure?._tag === "Failure" && failure.failure._tag).toBe(
+          "WorkspaceFileRevisionConflictError",
+        );
+        const saved = yield* service.readFile({ cwd, relativePath: "shared.txt" });
+        expect(saved.contents).toBe(writes[0]?._tag === "Success" ? "first" : "second");
+      }),
+    );
+
+    it.effect("rejects a revision after an external edit without replacing it", () =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "shared.txt", "original");
+        const original = yield* service.readFile({ cwd, relativePath: "shared.txt" });
+        yield* writeTextFile(cwd, "shared.txt", "external edit");
+        const error = yield* service
+          .writeFile({
+            cwd,
+            relativePath: "shared.txt",
+            contents: "stale edit",
+            expectedRevision: original.revision,
+          })
+          .pipe(Effect.flip);
+        expect(error._tag).toBe("WorkspaceFileRevisionConflictError");
+        expect((yield* service.readFile({ cwd, relativePath: "shared.txt" })).contents).toBe(
+          "external edit",
+        );
+      }),
+    );
+
+    it.effect("omits a usable revision for a truncated file", () =>
+      Effect.gen(function* () {
+        const service = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "large.txt", "a".repeat(1024 * 1024 + 1));
+        const preview = yield* service.readFile({ cwd, relativePath: "large.txt" });
+        expect(preview.truncated).toBe(true);
+        expect(preview.revision).toBeUndefined();
       }),
     );
 

@@ -11,8 +11,8 @@ struct PathwayIssueDragPayload: Codable, Equatable, Sendable {
     func itemProvider() -> NSItemProvider {
         let provider = NSItemProvider()
         let data = try? JSONEncoder().encode(self)
-        provider.registerDataRepresentation(forTypeIdentifier: Self.contentType.identifier, visibility: .ownProcess) { completion in
-            completion(data, nil)
+        provider.registerDataRepresentation(forTypeIdentifier: Self.contentType.identifier, visibility: .ownProcess) { @Sendable completion in
+            Task { @MainActor in completion(data, nil) }
             return nil
         }
         return provider
@@ -24,7 +24,7 @@ struct PathwayIssueDragPayload: Codable, Equatable, Sendable {
               provider.hasItemConformingToTypeIdentifier(contentType.identifier) else {
             return false
         }
-        provider.loadDataRepresentation(forTypeIdentifier: contentType.identifier) { data, _ in
+        provider.loadDataRepresentation(forTypeIdentifier: contentType.identifier) { @Sendable data, _ in
             guard let data, let payload = try? JSONDecoder().decode(Self.self, from: data) else {
                 return
             }

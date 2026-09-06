@@ -6,12 +6,14 @@ import Foundation
 
 enum PathwayRPCError: LocalizedError, Sendable {
     case disconnected
+    case timedOut
     case protocolViolation(String)
     case remote(String)
 
     var errorDescription: String? {
         switch self {
         case .disconnected: "The Pathway environment disconnected."
+        case .timedOut: "The environment did not respond in time. Check the latest state before retrying."
         case let .protocolViolation(message): message
         case let .remote(message): message
         }
@@ -53,6 +55,7 @@ private struct PathwayRPCPendingRequest {
     let envelope: PathwayRPCRequest
     var sent = false
     var requiresSubscription = false
+    var deadlineTask: Task<Void, Never>?
     let resume: @Sendable (Result<JSONValue, Error>) -> Void
 }
 
@@ -98,6 +101,7 @@ actor PathwayRPCClient {
     private var desired = false
     private var nextRequestID = 1
     private var pending: [Int: PathwayRPCPendingRequest] = [:]
+    private var subscriptionID: UUID?
     private var subscriptionTag: String?
     private var subscriptionPayload: JSONValue?
     private var subscriptionRequestID: Int?
@@ -133,14 +137,17 @@ actor PathwayRPCClient {
         payload: JSONValue
     ) -> AsyncThrowingStream<JSONValue, Error> {
         subscriptionContinuation?.finish()
+        let subscriptionID = UUID()
+        self.subscriptionID = subscriptionID
         subscriptionTag = tag
         subscriptionPayload = payload
         let stream = AsyncThrowingStream<JSONValue, Error>(bufferingPolicy: .bufferingOldest(256)) { continuation in
             subscriptionContinuation = continuation
             continuation.onTermination = { @Sendable _ in
-                Task { await self.removeSubscription() }
+                Task { await self.removeSubscription(id: subscriptionID) }
             }
         }
+        yieldTransportState("connecting")
         start()
         if socket != nil {
             Task { await self.sendSubscription() }
@@ -148,7 +155,11 @@ actor PathwayRPCClient {
         return stream
     }
 
-    func request(_ tag: String, payload: JSONValue, requiresSubscription: Bool = false) async throws -> JSONValue {
+    func request(_ tag: String, payload: JSONValue, requiresSubscription: Bool = false, waitForSubscription: Bool = true, timeout: Duration = .seconds(30)) async throws -> JSONValue {
+        // Never retain a stale approval or mutation until a later connection becomes ready.
+        if requiresSubscription, !waitForSubscription, !subscriptionGate.allowsRequest(requiresSubscription: true) {
+            throw PathwayRPCError.disconnected
+        }
         start()
         let id = allocateRequestID()
         let envelope = PathwayRPCRequest(id: id, tag: tag, payload: payload)
@@ -161,6 +172,10 @@ actor PathwayRPCClient {
                 pending[id] = PathwayRPCPendingRequest(
                     envelope: envelope,
                     requiresSubscription: requiresSubscription,
+                    deadlineTask: Task { [weak self] in
+                        do { try await Task.sleep(for: timeout) } catch { return }
+                        await self?.expirePending(id)
+                    },
                     resume: { continuation.resume(with: $0) }
                 )
                 if socket != nil {
@@ -184,9 +199,14 @@ actor PathwayRPCClient {
         connectionID = nil
         subscriptionRequestID = nil
         subscriptionGate.reset()
+        yieldTransportState("disconnected")
         subscriptionContinuation?.finish()
         subscriptionContinuation = nil
+        subscriptionID = nil
+        subscriptionTag = nil
+        subscriptionPayload = nil
         for request in pending.values {
+            request.deadlineTask?.cancel()
             request.resume(.failure(PathwayRPCError.disconnected))
         }
         pending.removeAll()
@@ -236,6 +256,7 @@ actor PathwayRPCClient {
         }
         subscriptionRequestID = nil
         subscriptionGate.reset()
+        yieldTransportState("connecting")
         for pendingID in pending.keys {
             pending[pendingID]?.sent = false
             Task { await self.sendPending(pendingID) }
@@ -271,10 +292,13 @@ actor PathwayRPCClient {
             return
         case "Chunk":
             guard response.requestId == subscriptionRequestID else { return }
-            if subscriptionGate.receiveChunk(requestID: response.requestId) {
+            let values = response.values ?? []
+            let acknowledged = subscriptionTag != "orchestration.subscribeThread"
+                || values.contains { $0.objectValue?["kind"]?.stringValue == "synchronized" }
+            if acknowledged, subscriptionGate.receiveChunk(requestID: response.requestId) {
                 for id in pending.keys { Task { await self.sendPending(id) } }
             }
-            for value in response.values ?? [] {
+            for value in values {
                 if case .dropped = subscriptionContinuation?.yield(value) {
                     throw PathwayRPCError.protocolViolation(
                         "The live thread produced events faster than the app could display them."
@@ -294,6 +318,7 @@ actor PathwayRPCClient {
             } else if requestID == subscriptionRequestID {
                 subscriptionRequestID = nil
                 subscriptionGate.reset()
+                yieldTransportState("disconnected")
                 if exit.envelopeTag != "Success" {
                     let error = PathwayRPCError.remote(Self.remoteMessage(exit))
                     let waiting = pending.filter { $0.value.requiresSubscription }.map(\.key)
@@ -318,8 +343,8 @@ actor PathwayRPCClient {
         awaitingKeepaliveResponse = false
         subscriptionRequestID = nil
         subscriptionGate.reset()
-        let sentIDs = pending.compactMap { $0.value.sent ? $0.key : nil }
-        for id in sentIDs {
+        yieldTransportState("disconnected")
+        for id in Array(pending.keys) {
             complete(id, result: .failure(PathwayRPCError.disconnected))
         }
     }
@@ -402,19 +427,22 @@ actor PathwayRPCClient {
         }
     }
 
-    private func removeSubscription() async {
-        if let subscriptionRequestID {
-            try? await sendControl("Interrupt", requestID: subscriptionRequestID)
-        }
+    private func removeSubscription(id: UUID) async {
+        guard subscriptionID == id else { return }
+        let previousRequestID = subscriptionRequestID
+        subscriptionID = nil
         subscriptionRequestID = nil
         subscriptionGate.reset()
+        yieldTransportState("disconnected")
         subscriptionContinuation = nil
         subscriptionTag = nil
         subscriptionPayload = nil
+        if let previousRequestID { try? await sendControl("Interrupt", requestID: previousRequestID) }
     }
 
     private func cancelPending(_ id: Int) {
         guard let request = pending.removeValue(forKey: id) else { return }
+        request.deadlineTask?.cancel()
         if request.sent {
             Task { try? await self.sendControl("Interrupt", requestID: id) }
         }
@@ -422,7 +450,24 @@ actor PathwayRPCClient {
     }
 
     private func complete(_ id: Int, result: Result<JSONValue, Error>) {
-        pending.removeValue(forKey: id)?.resume(result)
+        guard let request = pending.removeValue(forKey: id) else { return }
+        request.deadlineTask?.cancel()
+        request.resume(result)
+    }
+
+    private func expirePending(_ id: Int) {
+        guard let request = pending[id] else { return }
+        if request.sent { Task { try? await self.sendControl("Interrupt", requestID: id) } }
+        complete(id, result: .failure(PathwayRPCError.timedOut))
+    }
+
+    /// Transport changes share the subscription queue so an old snapshot cannot overwrite
+    /// a newer disconnect notification in the consumer.
+    private func yieldTransportState(_ state: String) {
+        let result = subscriptionContinuation?.yield(.object(["_pathwayTransport": .string(state)]))
+        if case .dropped = result {
+            subscriptionContinuation?.finish(throwing: PathwayRPCError.disconnected)
+        }
     }
 
     private func allocateRequestID() -> Int {

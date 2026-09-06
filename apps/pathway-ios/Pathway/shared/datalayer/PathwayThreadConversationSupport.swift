@@ -40,26 +40,32 @@ struct PathwayThreadCachePendingWrite: Sendable {
     let revision: UInt64
 }
 
-struct PathwayThreadPreparedSend {
+struct PathwayThreadPreparedSend: Codable, Sendable {
     let ids: [String]
     let messageID: String
     let text: String
     let requestedMode: String
-    let attachments: [JSONValue]
+    var attachments: [JSONValue]
+    var attachmentsPrepared = false
     let dispatchMode: JSONValue
 }
 
-struct PathwayThreadPreparedNewSend {
+struct PathwayThreadPreparedNewSend: Codable, Sendable {
     let target: String
     let messageID: String
     let sideChat: Bool
     let ids: [String]
-    let attachments: [JSONValue]
+    let text: String
+    let modelSelection: PathwayModelSelection
+    let runtimeMode: String
+    let interactionMode: String
+    var attachments: [JSONValue]
+    var attachmentsPrepared = false
     var forkCreated = false
 }
 
-struct PathwayThreadAttachmentDraft: Identifiable, Equatable, Sendable {
-    enum State: Equatable, Sendable { case uploading, ready, failed(String) }
+struct PathwayThreadAttachmentDraft: Codable, Identifiable, Equatable, Sendable {
+    enum State: Codable, Equatable, Sendable { case uploading, ready, failed(String) }
     let id: String
     let name: String
     let mimeType: String
@@ -123,7 +129,7 @@ extension PathwayAgentThreadModel {
         let child = PathwayAgentThread(companyId: thread.companyId, environmentId: thread.environmentId,
                                        cloudProjectId: thread.cloudProjectId, shell: shell, cloudUpdatedAt: thread.cloudUpdatedAt)
         let model: PathwayAgentThreadModel
-        if let connect { model = PathwayAgentThreadModel(thread: child, environment: environment, connect: connect, cache: cache) }
+        if let connect { model = PathwayAgentThreadModel(thread: child, environment: environment, connect: connect, cache: cache, storageDirectory: storageDirectory) }
         else if let injectedRequest { model = PathwayAgentThreadModel(thread: child, environment: environment, request: injectedRequest) }
         else { throw PathwayThreadConversationError.message("Connect to the environment to open this thread.") }
         model.installSnapshot(projection)
@@ -179,6 +185,7 @@ extension PathwayAgentThreadModel {
         draftAttachments.append(PathwayThreadAttachmentDraft(id: id, name: String(name.prefix(255)), mimeType: mimeType,
             type: type, sizeBytes: data.count, state: .uploading, previewData: type == "image" ? data : nil))
         attachmentData[id] = data
+        await persistDraftNow()
         await retryAttachment(id: id)
     }
 
@@ -194,8 +201,9 @@ extension PathwayAgentThreadModel {
             guard let object = value.objectValue, let attachmentID = object["attachmentId"]?.stringValue,
                   let relative = object["relativeUrl"]?.stringValue else { throw PathwayThreadConversationError.message("The upload URL was unavailable.") }
             uploadedID = attachmentID
-            let url = try await resolveAssetURL(relative)
-            var request = URLRequest(url: url); request.httpMethod = "PUT"; request.setValue(draft.mimeType, forHTTPHeaderField: "Content-Type")
+            guard let connect else { throw PathwayRPCError.disconnected }
+            var request = try await connect.authenticatedRequest(environment: environment, method: "PUT", path: relative)
+            request.setValue(draft.mimeType, forHTTPHeaderField: "Content-Type")
             let (_, response) = try await URLSession.shared.upload(for: request, from: data)
             guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
                 throw PathwayThreadConversationError.message("The file could not be uploaded. Try again.")
@@ -210,11 +218,13 @@ extension PathwayAgentThreadModel {
             if let index = draftAttachments.firstIndex(where: { $0.id == id }) { draftAttachments[index].state = .failed(error.localizedDescription) }
             actionError = error.localizedDescription
         }
+        await persistDraftNow()
     }
 
     func removeAttachment(id: String) async {
         let attachmentID = draftAttachments.first(where: { $0.id == id })?.attachment?.id
         draftAttachments.removeAll { $0.id == id }; attachmentData.removeValue(forKey: id)
+        await persistDraftNow()
         if let attachmentID { _ = try? await request("attachments.delete", payload: .object(["attachmentId": .string(attachmentID)])) }
     }
 
@@ -287,7 +297,7 @@ extension PathwayAgentThreadModel {
     func controlWorkspacePreparation(action: String) async throws {
         guard let activeRunID, ["cancel", "work_locally"].contains(action) else { return }
         _ = try await request("orchestration.controlWorkspacePreparation", payload: .object([
-            "commandId": .string(UUID().uuidString), "threadId": .string(threadID), "runId": .string(activeRunID), "action": .string(action)]))
+            "commandId": .string(UUID().uuidString), "threadId": .string(threadID), "runId": .string(activeRunID), "action": .string(action)]), requiresSubscription: true)
     }
 }
 
@@ -307,31 +317,34 @@ extension PathwayAgentThreadModel {
         isSending = true
         defer { isSending = false }
         let ids = selected.map(\.id)
-        var transaction = preparedNewSend
-        if transaction?.ids != ids || transaction?.sideChat != sideChat {
-            let target = UUID().uuidString
-            let messageID = UUID().uuidString
+        let sameAttempt = preparedNewSend?.ids == ids && preparedNewSend?.sideChat == sideChat
+            && preparedNewSend?.text == text && preparedNewSend?.modelSelection == currentModelSelection
+            && preparedNewSend?.runtimeMode == runtimeMode && preparedNewSend?.interactionMode == interactionMode
+        if !sameAttempt {
+            preparedNewSend = PathwayThreadPreparedNewSend(target: UUID().uuidString, messageID: UUID().uuidString,
+                sideChat: sideChat, ids: ids, text: text, modelSelection: currentModelSelection,
+                runtimeMode: runtimeMode, interactionMode: interactionMode, attachments: [])
+        }
+        guard let transaction = preparedNewSend else { throw PathwayThreadConversationError.message("The message could not be prepared.") }
+        await persistDraftNow()
+        if !transaction.attachmentsPrepared {
             var attachments: [JSONValue] = []
             if !selected.isEmpty {
-                // Upload through signed HTTP URLs; websocket messages carry metadata only.
-                // Retry may follow a failed dispatch whose original pending objects were consumed.
-                if preparedSend != nil || preparedNewSend != nil {
-                    for id in ids { await retryAttachment(id: id) }
-                }
                 let pending = draftAttachments.filter { ids.contains($0.id) }
                 guard pending.count == ids.count, pending.allSatisfy({ $0.state == .ready }) else {
                     throw PathwayThreadConversationError.message("Finish uploading the attachments before starting a chat.")
                 }
                 let result = try await request("assets.persistChatAttachments", payload: .object([
-                    "threadId": .string(target), "messageId": .string(messageID),
+                    "threadId": .string(transaction.target), "messageId": .string(transaction.messageID),
                     "attachments": .array(pending.compactMap { $0.attachment?.json })]))
                 attachments = result.objectValue?["attachments"]?.arrayValue ?? []
                 guard attachments.count == selected.count else { throw PathwayThreadConversationError.message("The attachments could not be prepared.") }
             }
-            transaction = PathwayThreadPreparedNewSend(target: target, messageID: messageID, sideChat: sideChat, ids: ids, attachments: attachments)
-            preparedNewSend = transaction
+            preparedNewSend?.attachments = attachments
+            preparedNewSend?.attachmentsPrepared = true
+            await persistDraftNow()
         }
-        guard let prepared = transaction else { throw PathwayThreadConversationError.message("The message could not be prepared.") }
+        guard let prepared = preparedNewSend else { throw PathwayThreadConversationError.message("The message could not be prepared.") }
         let target = prepared.target
         let messageID = prepared.messageID
         let attachments = prepared.attachments
@@ -344,6 +357,7 @@ extension PathwayAgentThreadModel {
                 "sourcePoint": .object(["type": .string("run"), "runId": .string(run.id)]), "forkKind": .string("side_chat"),
                 "title": .string(threadTitle + " side chat"), "createdBy": .string("user"), "creationSource": .string("mobile")])
                 preparedNewSend?.forkCreated = true
+                await persistDraftNow()
             }
             try await dispatch("thread.model-selection.set", fields: ["threadId": .string(target), "modelSelection": try Self.json(currentModelSelection)])
             try await dispatch("message.dispatch", fields: ["commandId": .string(messageID), "threadId": .string(target), "createdBy": .string("user"), "creationSource": .string("mobile"),
@@ -357,13 +371,14 @@ extension PathwayAgentThreadModel {
                 "title": .string(String(text.prefix(100)).isEmpty ? "New chat" : String(text.prefix(100))), "generateTitle": .bool(true),
                 "modelSelection": try Self.json(currentModelSelection), "runtimeMode": .string(runtimeMode), "interactionMode": .string(interactionMode),
                 "locations": .array([.string("agents")]), "workspaceStrategy": .object(workspace),
-                "initialMessage": .object(["messageId": .string(messageID), "text": .string(text), "attachments": .array(attachments)])]))
+                "initialMessage": .object(["messageId": .string(messageID), "text": .string(text), "attachments": .array(attachments)])]), requiresSubscription: true)
         }
         if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
         preparedNewSend = nil
         let sentIDs = Set(selected.map(\.id))
         draftAttachments.removeAll { sentIDs.contains($0.id) }
         for id in sentIDs { attachmentData.removeValue(forKey: id) }
+        await persistDraftNow()
         return target
     }
 }

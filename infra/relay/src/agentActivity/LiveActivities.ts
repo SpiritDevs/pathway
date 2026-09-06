@@ -1,5 +1,6 @@
 import type {
   RelayAgentActivityAggregateState,
+  RelayAgentAwarenessPlatform,
   RelayDeliveryKind,
   RelayLiveActivityRegistrationRequest,
 } from "@spiritdevs/contracts/relay";
@@ -61,7 +62,7 @@ export class LiveActivityDeliveryMarkPersistenceError extends Schema.TaggedError
 export interface DeviceRow {
   readonly user_id: string;
   readonly device_id: string;
-  readonly platform: "ios";
+  readonly platform: RelayAgentAwarenessPlatform;
   readonly ios_major_version: number;
   readonly app_version: string | null;
   readonly bundle_id: string | null;

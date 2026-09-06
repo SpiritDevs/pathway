@@ -22,7 +22,8 @@ struct PathwayThreadLifecyclePartition {
     init(
         threads: [PathwayAgentThread],
         now: Date,
-        changeRequestStates: [String: PathwayChangeRequestState] = [:]
+        changeRequestStates: [String: PathwayChangeRequestState] = [:],
+        autoSettleAfterDays: Int? = 3
     ) {
         all = threads
             .filter { $0.shell.deletedAt == nil }
@@ -34,6 +35,7 @@ struct PathwayThreadLifecyclePartition {
         for thread in all {
             switch thread.lifecycleSection(
                 at: now,
+                autoSettleAfterDays: autoSettleAfterDays,
                 changeRequestState: changeRequestStates[thread.id]
             ) {
             case .active:

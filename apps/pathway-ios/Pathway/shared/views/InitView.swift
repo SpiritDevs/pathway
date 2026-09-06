@@ -27,7 +27,17 @@ struct InitView: View {
                         .scaleEffect(1.5)
                         .accessibilityLabel("Loading Pathway")
                 case .signedIn:
-                    MainTabView()
+                    if appModel.isAccountReady {
+                        MainTabView().id(appModel.localStorageDirectory)
+                    } else if let message = appModel.authenticationErrorMessage {
+                        ContentUnavailableView {
+                            Label("Account unavailable", systemImage: "person.crop.circle.badge.exclamationmark")
+                        } description: { Text(message) } actions: {
+                            Button("Sign out") { Task { await appModel.signOut() } }
+                        }
+                    } else {
+                        ProgressView("Preparing your workspace")
+                    }
                 case .signedOut, .signingIn:
                     LoginView()
                 }

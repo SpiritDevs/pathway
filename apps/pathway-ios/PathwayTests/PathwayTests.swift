@@ -417,7 +417,8 @@ private final class TestAuthProvider: PathwayAuthenticating {
     }
 
     func token(template _: String?) async throws -> String {
-        "test-token"
+        let payload = try JSONSerialization.data(withJSONObject: ["iss": "https://pathway-tests.invalid", "sub": "test-user"])
+        return "header.\(payload.base64EncodedString().replacingOccurrences(of: "=", with: "")).signature"
     }
 }
 

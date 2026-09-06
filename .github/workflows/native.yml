@@ -1,0 +1,44 @@
+name: Native Apple clients
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: ${{ matrix.surface }}
+    runs-on: macos-26
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        surface: [iphone, ipad, visionos]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify bundled terminal
+        run: node scripts/ios/build-terminal.mjs --check
+      - name: Verify toolchain
+        run: |
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          xcodebuild -showsdks
+      - name: Install visionOS platform
+        if: matrix.surface == 'visionos'
+        run: xcodebuild -downloadPlatform visionOS
+      - name: Build and test native client
+        run: scripts/ios/ci-check.sh '${{ matrix.surface }}'
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.surface != 'visionos'
+        with:
+          name: native-${{ matrix.surface }}-results
+          path: ${{ runner.temp }}/native-ci-${{ matrix.surface }}/Tests.xcresult
+          if-no-files-found: ignore

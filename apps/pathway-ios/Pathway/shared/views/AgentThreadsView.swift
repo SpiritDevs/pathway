@@ -16,6 +16,24 @@ struct AgentThreadsView: View {
     @State private var threadProviders = PathwayThreadProviders()
     @State private var threadActions = PathwayThreadActions()
     @State private var sleepingThread: PathwayAgentThread?
+    @State private var query = ""
+    @State private var listFilter: PathwayThreadListFilter
+    @State private var companyFilter = ""
+    @State private var environmentFilter = ""
+    @State private var projectFilter = ""
+    @State private var providerFilter = ""
+    @State private var renamingThread: PathwayAgentThread?
+    @State private var renameText = ""
+    @State private var deletingThread: PathwayAgentThread?
+    @State private var focuses = PathwayFocusModel()
+    @State private var creatingFocus = false
+    @State private var editingFocus: PathwayFocus?
+    @State private var showingNotifications = false
+
+    init(newThreadAction: @escaping () -> Void, initialFilter: PathwayThreadListFilter = .all) {
+        self.newThreadAction = newThreadAction
+        _listFilter = State(initialValue: initialFilter)
+    }
 
     var body: some View {
         Group {
@@ -26,7 +44,15 @@ struct AgentThreadsView: View {
             }
         }
         .navigationTitle("Agent Threads")
+        .searchable(text: $query, prompt: "Search threads")
         .toolbar {
+            ToolbarItem(placement: .primaryAction) { focusMenu }
+            ToolbarItem(placement: .primaryAction) {
+                Button { showingNotifications = true } label: {
+                    Image(systemName: focuses.unreadCount > 0 ? "bell.badge" : "bell").frame(minWidth: 44, minHeight: 44)
+                }.accessibilityLabel("Notifications, \(focuses.unreadCount) unread")
+            }
+            ToolbarItem(placement: .primaryAction) { filtersMenu }
             ToolbarItem(placement: .primaryAction) {
                 Button("New thread", systemImage: "square.and.pencil", action: newThreadAction)
             }
@@ -58,10 +84,30 @@ struct AgentThreadsView: View {
         .task(id: appModel.pendingThreadRoute) {
             await openPendingThread()
         }
+        .task(id: appModel.cloud.threads.map(\.id)) { await openPendingThread() }
+        .task(id: appModel.localStorageDirectory) { await focuses.observe(cloud: appModel.cloud, storageDirectory: appModel.localStorageDirectory) }
+        .sheet(isPresented: $creatingFocus) { PathwayFocusEditorView(model: focuses) }
+        .sheet(item: $editingFocus) { PathwayFocusEditorView(model: focuses, focus: $0) }
+        .sheet(isPresented: $showingNotifications) { PathwayFocusNotificationsView(model: focuses) }
         .accessibilityIdentifier("agent-threads-list")
         .sheet(item: $sleepingThread) { thread in
             sleepSheet(for: thread)
         }
+        .alert("Rename thread", isPresented: Binding(get: { renamingThread != nil }, set: { if !$0 { renamingThread = nil } })) {
+            TextField("Thread title", text: $renameText)
+            Button("Cancel", role: .cancel) { renamingThread = nil }
+            Button("Save") {
+                if let thread = renamingThread { perform(.rename(renameText), on: thread) }
+                renamingThread = nil
+            }.disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .confirmationDialog("Delete thread?", isPresented: Binding(get: { deletingThread != nil }, set: { if !$0 { deletingThread = nil } }), titleVisibility: .visible) {
+            Button("Delete thread", role: .destructive) {
+                if let thread = deletingThread { perform(.delete, on: thread) }
+                deletingThread = nil
+            }
+            Button("Cancel", role: .cancel) { deletingThread = nil }
+        } message: { Text("This permanently deletes the conversation. Archive it instead if you may need it later.") }
         .alert("Couldn’t update thread", isPresented: Binding(
             get: { threadActions.errorMessage != nil },
             set: { if !$0 { threadActions.errorMessage = nil } }
@@ -75,14 +121,29 @@ struct AgentThreadsView: View {
     @ViewBuilder
     private var threadList: some View {
         List {
-            ForEach(appModel.cloud.activeThreads) { thread in
+            if let cachedAt = appModel.cloud.cachedAt, !appModel.cloud.isConnected {
+                Label("Saved \(cachedAt.formatted(date: .abbreviated, time: .shortened))", systemImage: "wifi.slash")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if appModel.pendingThreadRoute != nil || appModel.pendingProductLink != nil {
+                HStack {
+                    ProgressView()
+                    Text("Waiting for the thread to sync…")
+                    Spacer()
+                    Button("Cancel") { appModel.pendingThreadRoute = nil; appModel.pendingProductLink = nil }
+                }.font(.footnote)
+            }
+            if listFilter == .archived {
+                ForEach(archivedThreads) { thread in compactThreadLink(thread, icon: "archivebox") }
+            } else {
+            ForEach(activeThreads) { thread in
                 threadLink(thread)
             }
 
-            if !appModel.cloud.snoozedThreads.isEmpty {
+            if !snoozedThreads.isEmpty {
                 Section {
                     if isSnoozedExpanded {
-                        ForEach(appModel.cloud.snoozedThreads) { thread in
+                        ForEach(snoozedThreads) { thread in
                             compactThreadLink(thread, icon: "clock")
                                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                     Button("Wake", systemImage: "sun.max") { perform(.wake, on: thread) }
@@ -93,7 +154,7 @@ struct AgentThreadsView: View {
                 } header: {
                     ThreadLifecycleShelfHeader(
                         title: "Snoozed",
-                        count: appModel.cloud.snoozedThreads.count,
+                        count: snoozedThreads.count,
                         isExpanded: isSnoozedExpanded,
                         tint: .blue
                     ) {
@@ -102,7 +163,7 @@ struct AgentThreadsView: View {
                 }
             }
 
-            if !appModel.cloud.settledThreads.isEmpty {
+            if !settledThreads.isEmpty {
                 Section {
                     if isSettledExpanded {
                         ForEach(visibleSettledThreads) { thread in
@@ -130,13 +191,14 @@ struct AgentThreadsView: View {
                 } header: {
                     ThreadLifecycleShelfHeader(
                         title: "Settled",
-                        count: appModel.cloud.settledThreads.count,
+                        count: settledThreads.count,
                         isExpanded: isSettledExpanded,
                         tint: .secondary
                     ) {
                         isSettledExpanded.toggle()
                     }
                 }
+            }
             }
         }
         .listStyle(.plain)
@@ -158,22 +220,21 @@ struct AgentThreadsView: View {
     }
 
     private var lifecycleThreadCount: Int {
-        appModel.cloud.activeThreads.count
-            + appModel.cloud.snoozedThreads.count
-            + appModel.cloud.settledThreads.count
+        if appModel.pendingThreadRoute != nil || appModel.pendingProductLink != nil { return 1 }
+        return listFilter == .archived ? archivedThreads.count : activeThreads.count + snoozedThreads.count + settledThreads.count
     }
 
     private var visibleSettledThreads: [PathwayAgentThread] {
-        Array(appModel.cloud.settledThreads.prefix(settledVisibleCount))
+        Array(settledThreads.prefix(settledVisibleCount))
     }
 
     private var hiddenSettledCount: Int {
-        max(0, appModel.cloud.settledThreads.count - visibleSettledThreads.count)
+        max(0, settledThreads.count - visibleSettledThreads.count)
     }
 
     private var lifecycleRefreshKey: String {
         appModel.cloud.threads.map { thread in
-            "\(thread.id):\(thread.shell.updatedAt):\(thread.shell.branch ?? "")"
+            "\(thread.id):\(thread.shell.branch ?? ""):\(thread.shell.worktreePath ?? ""):\(thread.isRunning):\(thread.shell.latestRunCompletedAt ?? "")"
         }.joined(separator: "|")
     }
 
@@ -182,12 +243,108 @@ struct AgentThreadsView: View {
         return appModel.cloud.environments.filter { ids.contains($0.id) }
     }
 
+    private var activeThreads: [PathwayAgentThread] { appModel.cloud.activeThreads.filter(matches) }
+    private var snoozedThreads: [PathwayAgentThread] { appModel.cloud.snoozedThreads.filter(matches) }
+    private var settledThreads: [PathwayAgentThread] { appModel.cloud.settledThreads.filter(matches) }
+    private var archivedThreads: [PathwayAgentThread] { appModel.cloud.threads.filter { $0.shell.archivedAt != nil && matches($0) } }
+
+    private func matches(_ thread: PathwayAgentThread) -> Bool {
+        if !focuses.includes(thread) { return false }
+        if !companyFilter.isEmpty && thread.companyId != companyFilter { return false }
+        if !environmentFilter.isEmpty && "\(thread.companyId):\(thread.environmentId)" != environmentFilter { return false }
+        if !projectFilter.isEmpty && "\(thread.companyId):\(thread.cloudProjectId)" != projectFilter { return false }
+        if !providerFilter.isEmpty && thread.shell.providerInstanceId != providerFilter { return false }
+        if listFilter == .running && !thread.isRunning { return false }
+        if listFilter == .needsAttention && !thread.needsAction { return false }
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty {
+            let searchable = [thread.shell.title, thread.shell.branch ?? "", thread.shell.providerInstanceId,
+                appModel.cloud.projectName(companyId: thread.companyId, projectId: thread.cloudProjectId) ?? "",
+                appModel.cloud.environmentLabel(companyId: thread.companyId, environmentId: thread.environmentId) ?? ""].joined(separator: " ")
+            if !searchable.localizedStandardContains(text) { return false }
+        }
+        return true
+    }
+
+    private var focusMenu: some View {
+        Menu {
+            Picker("Focus", selection: $focuses.selectedID) {
+                Text("All threads").tag("all")
+                ForEach(focuses.focuses) { Text($0.name).tag($0.id) }
+                if focuses.selectedID != "all" && !focuses.focuses.contains(where: { $0.id == focuses.selectedID }) {
+                    Text("Unavailable Focus").tag(focuses.selectedID)
+                }
+            }
+            Button("New Focus", systemImage: "plus") { creatingFocus = true }
+            ForEach(focuses.focuses) { focus in
+                Menu(focus.name) {
+                    Button("Edit") { editingFocus = focus }
+                    Button("Move up") { Task { await focuses.move(focus, offset: -1, cloud: appModel.cloud) } }
+                    Button("Move down") { Task { await focuses.move(focus, offset: 1, cloud: appModel.cloud) } }
+                }
+            }
+            if let error = focuses.errorMessage { Text(error) }
+        } label: { Image(systemName: "target").frame(minWidth: 44, minHeight: 44) }
+        .accessibilityLabel("Choose or manage Focus")
+    }
+
+    private var filtersMenu: some View {
+        Menu {
+            Picker("Status", selection: $listFilter) { ForEach(PathwayThreadListFilter.allCases) { Text($0.title).tag($0) } }
+            Picker("Workspace", selection: $companyFilter) {
+                Text("All workspaces").tag("")
+                ForEach(appModel.cloud.companies) { Text($0.name).tag($0.id) }
+            }
+            Picker("Environment", selection: $environmentFilter) {
+                Text("All environments").tag("")
+                ForEach(appModel.cloud.environments) { Text($0.environment.label).tag($0.id) }
+            }
+            Picker("Project", selection: $projectFilter) {
+                Text("All projects").tag("")
+                ForEach(appModel.cloud.projects) { Text($0.project.name).tag($0.id) }
+            }
+            Picker("Provider", selection: $providerFilter) {
+                Text("All providers").tag("")
+                ForEach(Array(Set(appModel.cloud.threads.map(\.shell.providerInstanceId))).sorted(), id: \.self) { Text($0).tag($0) }
+            }
+            Button("Clear filters") {
+                query = ""; listFilter = .all; companyFilter = ""; environmentFilter = ""; projectFilter = ""; providerFilter = ""
+            }
+        } label: { Image(systemName: "line.3.horizontal.decrease").frame(minWidth: 44, minHeight: 44) }
+        .accessibilityLabel("Filter threads")
+    }
+
+    @ViewBuilder private func threadMenu(_ thread: PathwayAgentThread) -> some View {
+        Button("Rename", systemImage: "pencil") { renameText = thread.shell.title; renamingThread = thread }
+        if thread.shell.archivedAt != nil {
+            Button("Restore", systemImage: "tray.and.arrow.up") { perform(.restore, on: thread) }
+        } else {
+            Button(thread.shell.pinnedAt == nil ? "Pin" : "Unpin", systemImage: "pin") { perform(thread.shell.pinnedAt == nil ? .pin : .unpin, on: thread) }
+            if thread.shell.pinnedAt != nil {
+                Button("Move up", systemImage: "arrow.up") { movePinned(thread, offset: -1) }
+                Button("Move down", systemImage: "arrow.down") { movePinned(thread, offset: 1) }
+            }
+            Button("Archive", systemImage: "archivebox") { perform(.archive, on: thread) }.disabled(thread.isRunning)
+        }
+        Button("Delete", systemImage: "trash", role: .destructive) { deletingThread = thread }.disabled(thread.isRunning)
+    }
+
+    private func movePinned(_ thread: PathwayAgentThread, offset: Int) {
+        var ordered = appModel.cloud.activeThreads.filter { $0.shell.pinnedAt != nil }
+        guard let index = ordered.firstIndex(where: { $0.id == thread.id }), ordered.indices.contains(index + offset) else { return }
+        ordered.swapAt(index, index + offset)
+        let writes = PathwayThreadOrder.plan(ordered: ordered, movedID: thread.id)
+        Task {
+            threadActions.errorMessage = nil
+            for (target, key) in writes {
+                await threadActions.perform(.reorder(key), thread: target, environments: appModel.cloud.environments, connect: appModel.connect)
+                if threadActions.errorMessage != nil { return }
+            }
+        }
+    }
+
     private func openPendingThread() async {
-        guard appModel.pendingThreadRoute != nil else { return }
-        // The launched thread arrives through cloud sync moments after the composer
-        // dismisses, so wait for it briefly instead of dropping the navigation.
-        for _ in 0 ..< 40 {
-            guard !Task.isCancelled, let route = appModel.pendingThreadRoute else { return }
+        guard !Task.isCancelled, let route = appModel.pendingThreadRoute else { return }
             if let thread = appModel.cloud.threads.first(where: {
                 $0.companyId == route.companyId
                     && $0.environmentId == route.environmentId
@@ -195,11 +352,7 @@ struct AgentThreadsView: View {
             }) {
                 appModel.pendingThreadRoute = nil
                 routedThreadID = thread.id
-                return
             }
-            try? await Task.sleep(for: .milliseconds(250))
-        }
-        appModel.pendingThreadRoute = nil
     }
 
     @ViewBuilder
@@ -255,6 +408,7 @@ private extension AgentThreadsView {
         }
         .disabled(threadActions.pendingThreadIDs.contains(thread.id))
         .accessibilityValue(threadActions.pendingThreadIDs.contains(thread.id) ? "Updating" : "")
+        .contextMenu { threadMenu(thread) }
     }
 
     private func sleepSheet(for thread: PathwayAgentThread) -> some View {
@@ -307,6 +461,7 @@ private extension AgentThreadsView {
             CompactAgentThreadRow(thread: thread, icon: icon)
         }
         .listRowSeparator(.hidden)
+        .contextMenu { threadMenu(thread) }
         .disabled(threadActions.pendingThreadIDs.contains(thread.id))
     }
 }
@@ -360,7 +515,7 @@ private struct CompactAgentThreadRow: View {
                 AgentThreadPullRequestBadge(pullRequest: pullRequest)
             }
 
-            Text(thread.lifecycleSortDate, format: .relative(presentation: .named))
+            Text(PathwayGeneralPreferences.shared.absoluteTimestamps ? thread.lifecycleSortDate.formatted(date: .abbreviated, time: .shortened) : thread.lifecycleSortDate.formatted(.relative(presentation: .named)))
                 .font(.caption)
                 .lineLimit(1)
         }
@@ -556,7 +711,7 @@ private struct AgentThreadPullRequestBadge: View {
     }
 }
 
-private struct AgentThreadDetailRoute: View {
+struct AgentThreadDetailRoute: View {
     @Environment(PathwayAppModel.self) private var appModel
     let thread: PathwayAgentThread
 
@@ -569,7 +724,8 @@ private struct AgentThreadDetailRoute: View {
                 workspaceRoot: appModel.cloud.environmentBindings.first {
                     $0.companyId == thread.companyId && $0.binding.environmentId == thread.environmentId
                         && $0.binding.localProjectId == thread.shell.projectId
-                }?.binding.localWorkspaceRoot
+                }?.binding.localWorkspaceRoot,
+                storageDirectory: appModel.localStorageDirectory
             )
         } else {
             ContentUnavailableView {
@@ -605,9 +761,9 @@ struct AgentThreadConversationView: View {
     @State private var isForking = false
     @FocusState private var isComposerFocused: Bool
 
-    init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient, workspaceRoot: String? = nil) {
+    init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient, workspaceRoot: String? = nil, storageDirectory: URL? = nil) {
         self.workspaceRoot = workspaceRoot
-        _model = State(initialValue: PathwayAgentThreadModel(thread: thread, environment: environment, connect: connect))
+        _model = State(initialValue: PathwayAgentThreadModel(thread: thread, environment: environment, connect: connect, storageDirectory: storageDirectory))
     }
 
     init(model: PathwayAgentThreadModel, workspaceRoot: String? = nil) {
@@ -628,7 +784,9 @@ struct AgentThreadConversationView: View {
                 .padding(.vertical, 16)
             }
             .defaultScrollAnchor(.bottom)
+            #if !os(visionOS)
             .scrollDismissesKeyboard(.interactively)
+            #endif
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentSize.height <= geometry.visibleRect.height
                     || geometry.visibleRect.maxY >= geometry.contentSize.height - 100
@@ -662,7 +820,13 @@ struct AgentThreadConversationView: View {
                                 proxy.scrollTo("agent-transcript-bottom", anchor: .bottom)
                             }
                         }
-                        .labelStyle(.iconOnly).buttonStyle(.glass).buttonBorderShape(.circle)
+                        .labelStyle(.iconOnly)
+                        #if os(visionOS)
+                        .buttonStyle(.bordered)
+                        #else
+                        .buttonStyle(.glass)
+                        #endif
+                        .buttonBorderShape(.circle)
                         .accessibilityIdentifier("agent-thread-jump-bottom")
                     }
             }
@@ -677,7 +841,12 @@ struct AgentThreadConversationView: View {
                                 Text("−\(changedItems.reduce(0) { $0 + ($1.deletions ?? 0) })").foregroundStyle(.red)
                             }.font(.caption).monospacedDigit()
                         }
-                        .buttonStyle(.glass).buttonBorderShape(.capsule)
+                        #if os(visionOS)
+                        .buttonStyle(.bordered)
+                        #else
+                        .buttonStyle(.glass)
+                        #endif
+                        .buttonBorderShape(.capsule)
                         .accessibilityIdentifier("agent-thread-changes")
                     }
                         AgentThreadSubagentPicker(model: model, openThread: openChild)
@@ -703,6 +872,12 @@ struct AgentThreadConversationView: View {
                     isComposerExpanded = true; isComposerFocused = true
                 }
                 Menu {
+                    if let workspaceRoot, let connect = model.connect {
+                        NavigationLink {
+                            PathwayWorkspaceDestination(thread: model.thread, environment: model.environment,
+                                projectRoot: workspaceRoot, connect: connect, storageDirectory: model.storageDirectory)
+                        } label: { Label("Workspace", systemImage: "folder") }
+                    }
                     Button("Fork thread", systemImage: "arrow.triangle.branch") { fork() }.disabled(isForking)
                     Button("Copy conversation", systemImage: "doc.on.doc") {
                         UIPasteboard.general.string = model.items.filter(\.isConversation).compactMap(\.text).joined(separator: "\n\n")

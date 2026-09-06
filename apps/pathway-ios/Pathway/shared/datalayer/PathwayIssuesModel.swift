@@ -18,7 +18,7 @@ final class PathwayIssuesModel {
     private(set) var isWriting = false
     private(set) var errorMessage: String?
     private(set) var pendingChangeCount = 0
-    private var entities: [PathwayIssueEntity] = []
+    private(set) var entities: [PathwayIssueEntity] = []
     private var liveComments: [String: PathwayIssueEntity] = [:]
     private var liveRuns: [String: PathwayIssueEntity] = [:]
     private var liveEnvironmentSettings: [String: [String: JSONValue]] = [:]

@@ -8,6 +8,8 @@ enum MainTabSheet: String, Identifiable {
     case agentOrchestrator
     case newAgentThread
     case settings
+    case systemRequest
+    case sharedDrafts
 
     var id: Self { self }
 }
@@ -15,10 +17,11 @@ enum MainTabSheet: String, Identifiable {
 struct MainTabView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(PathwayAppModel.self) private var appModel
-    @State private var selectedDestination: AppDestination? = .dashboard
+    @State private var selectedDestination: AppDestination? = .agentThreads
     @State private var presentedSheet: MainTabSheet?
+    @State private var systemRequest: PathwaySystemRequest?
 
-    init(initialDestination: AppDestination = .dashboard) {
+    init(initialDestination: AppDestination = .agentThreads) {
         _selectedDestination = State(initialValue: initialDestination)
     }
 
@@ -73,21 +76,62 @@ struct MainTabView: View {
                     .presentationDetents([.large])
                     .presentationDragIndicator(.hidden)
                     .presentationCornerRadius(36)
+            case .sharedDrafts:
+                PathwaySharedDraftsDestination()
+            case .systemRequest:
+                if let request = systemRequest {
+                    if request.destination == .compose {
+                        NewAgentThreadView(onClose: { presentedSheet = nil }, initialPrompt: request.prompt).id(request.id)
+                    } else {
+                        NavigationStack {
+                            AgentThreadsView(newThreadAction: { presentedSheet = .newAgentThread },
+                                initialFilter: request.destination == .running ? .running : .needsAttention)
+                                .id(request.id)
+                                .toolbar { ToolbarItem(placement: .cancellationAction) {
+                                    Button("Done") { presentedSheet = nil }
+                                } }
+                        }
+                    }
+                }
             case .settings:
                 NavigationStack {
                     PathwaySettingsView()
                 }
             }
         }
+        .onChange(of: PathwayGeneralPreferences.shared.autoSettleDays) { _, _ in appModel.cloud.refreshThreadPartition() }
+        .onChange(of: PathwayKeyboardPreferences.shared.pendingAction, initial: true) { _, request in
+            guard let request else { return }
+            PathwayKeyboardPreferences.shared.pendingAction = nil
+            switch request.action {
+            case .newThread: presentedSheet = .newAgentThread
+            case .running, .attention:
+                systemRequest = .init(destination: request.action == .running ? .running : .attention, prompt: "")
+                presentedSheet = .systemRequest
+            case .sharedDrafts: presentedSheet = .sharedDrafts
+            case .settings: presentedSheet = .settings
+            }
+        }
+        .onChange(of: PathwaySystemEntry.shared.request, initial: true) { _, request in
+            guard let request else { return }
+            systemRequest = request
+            PathwaySystemEntry.shared.request = nil
+            presentedSheet = .systemRequest
+        }
         .onChange(of: appModel.pendingThreadRoute) { _, route in
             guard route != nil else { return }
+            presentedSheet = nil
             selectedDestination = .agentThreads
+        }
+        .onChange(of: appModel.pendingProductLink) { _, link in
+            if link != nil { presentedSheet = nil; selectedDestination = .agentThreads }
         }
     }
 }
 
 private struct FloatingAppShell: View {
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Binding var selectedDestination: AppDestination?
     @Binding var presentedSheet: MainTabSheet?
     let layout: AppShellLayout
@@ -109,7 +153,11 @@ private struct FloatingAppShell: View {
                     destination: activeDestination,
                     selectedContextDestination: $selectedContextDestination
                 )
-                .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 310)
+                .navigationSplitViewColumnWidth(
+                    min: dynamicTypeSize.isAccessibilitySize ? 300 : 210,
+                    ideal: dynamicTypeSize.isAccessibilitySize ? 340 : 250,
+                    max: dynamicTypeSize.isAccessibilitySize ? 400 : 310
+                )
             } detail: {
                 NavigationStack {
                     PathwayContextDestinationView(
@@ -130,6 +178,7 @@ private struct FloatingAppShell: View {
                         }
                     }
                 }
+                .id(activeDestination)
             }
             .navigationSplitViewStyle(.balanced)
         }
@@ -285,6 +334,7 @@ private struct PathwayNavigationRail: View {
 }
 
 private struct PathwayContextSidebar: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let destination: AppDestination
     @Binding var selectedContextDestination: AppContextDestination?
 
@@ -292,8 +342,14 @@ private struct PathwayContextSidebar: View {
         List(selection: $selectedContextDestination) {
             Section {
                 ForEach(destination.contextDestinations) { contextDestination in
-                    Label(contextDestination.title, systemImage: contextDestination.systemImage)
-                        .tag(contextDestination)
+                    Group {
+                        if dynamicTypeSize.isAccessibilitySize {
+                            Text(contextDestination.title)
+                        } else {
+                            Label(contextDestination.title, systemImage: contextDestination.systemImage)
+                        }
+                    }
+                    .tag(contextDestination)
                 }
             } footer: {
                 Text(destination.description)
@@ -306,6 +362,7 @@ private struct PathwayContextSidebar: View {
 }
 
 private struct PathwayContextDestinationView: View {
+    @Environment(PathwayAppModel.self) private var appModel
     let destination: AppDestination
     let contextDestination: AppContextDestination
     let newThreadAction: () -> Void
@@ -315,27 +372,26 @@ private struct PathwayContextDestinationView: View {
         if destination == .issues {
             PathwayIssuesDestinationView(initialTab: contextDestination.id)
                 .id(contextDestination.id)
-        } else if contextDestination == destination.defaultContextDestination {
-            PathwayFeatureDestinationView(
-                destination: destination,
-                newThreadAction: newThreadAction
-            )
+        } else if destination == .agentThreads {
+            AgentThreadsView(newThreadAction: newThreadAction,
+                initialFilter: contextDestination.id == "running" ? .running : contextDestination.id == "needs-attention" ? .needsAttention : .all)
+                .id(contextDestination.id)
+        } else if destination == .dashboard {
+            PathwayDashboardView(newThreadAction: newThreadAction, activityOnly: contextDestination.id == "activity")
+        } else if destination == .calendar {
+            PathwayCalendarView(model: appModel.cloud.calendar, companies: appModel.cloud.companies, initialMode: contextDestination.id).id(contextDestination.id)
+        } else if destination == .email {
+            PathwayEmailView(model: appModel.cloud.email, companies: appModel.cloud.companies, environments: appModel.cloud.environments, initialFilter: contextDestination.id).id(contextDestination.id)
+        } else if destination == .contacts {
+            PathwayContactsView(model: appModel.cloud.contacts, companies: appModel.cloud.companies, initialFilter: contextDestination.id).id(contextDestination.id)
+        } else if destination == .timeTracker {
+            PathwayTimeView(model: appModel.cloud.time, accountID: appModel.accountID ?? "", projects: appModel.cloud.projects, initialFilter: contextDestination.id).id(contextDestination.id)
+        } else if destination == .sourceControl {
+            PathwaySourceControlDestination(initialSection: contextDestination.id).id(contextDestination.id)
+        } else if destination == .projects {
+            PathwayProjectsDestination(initialFilter: contextDestination.id).id(contextDestination.id)
         } else {
-            ScrollView {
-                ContentUnavailableView {
-                    Label(contextDestination.title, systemImage: contextDestination.systemImage)
-                } description: {
-                    Text("This \(destination.title.lowercased()) view is ready for its content.")
-                }
-                .frame(maxWidth: 720, minHeight: 420)
-                .frame(maxWidth: .infinity)
-                .padding(24)
-            }
-            .navigationTitle(contextDestination.title)
-            .navigationBarTitleDisplayMode(.large)
-            .accessibilityIdentifier(
-                "context-destination-\(destination.rawValue)-\(contextDestination.id)"
-            )
+            PathwayFeatureDestinationView(destination: destination, newThreadAction: newThreadAction)
         }
     }
 }
@@ -361,6 +417,7 @@ struct PathwayFeaturePlaceholder: View {
 }
 
 struct PathwayFeatureDestinationView: View {
+    @Environment(PathwayAppModel.self) private var appModel
     let destination: AppDestination
     let newThreadAction: () -> Void
 
@@ -370,6 +427,20 @@ struct PathwayFeatureDestinationView: View {
             AgentThreadsView(newThreadAction: newThreadAction)
         } else if destination == .issues {
             PathwayIssuesDestinationView()
+        } else if destination == .calendar {
+            PathwayCalendarView(model: appModel.cloud.calendar, companies: appModel.cloud.companies)
+        } else if destination == .email {
+            PathwayEmailView(model: appModel.cloud.email, companies: appModel.cloud.companies, environments: appModel.cloud.environments)
+        } else if destination == .sourceControl {
+            PathwaySourceControlDestination()
+        } else if destination == .projects {
+            PathwayProjectsDestination()
+        } else if destination == .dashboard {
+            PathwayDashboardView(newThreadAction: newThreadAction)
+        } else if destination == .contacts {
+            PathwayContactsView(model: appModel.cloud.contacts, companies: appModel.cloud.companies)
+        } else if destination == .timeTracker {
+            PathwayTimeView(model: appModel.cloud.time, accountID: appModel.accountID ?? "", projects: appModel.cloud.projects)
         } else {
             PathwayFeaturePlaceholder(destination: destination)
         }
@@ -377,16 +448,52 @@ struct PathwayFeatureDestinationView: View {
 }
 
 struct PathwaySettingsView: View {
+    var isSeparateWindow = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(PathwayAppModel.self) private var appModel
 
     var body: some View {
         Form {
+            Section("Workspaces") {
+                NavigationLink("Connect a server") { PathwayConnectionsDestination() }
+                NavigationLink("Companies, people & roles") {
+                    PathwayCompanyAdministrationView(companies: appModel.cloud.companies,
+                        request: { kind, name, arguments in try await appModel.cloud.request(kind: kind, name: name, arguments: .object(arguments)) },
+                        entities: { kind, companyID in appModel.cloud.entities(kind: kind, companyID: companyID) })
+                }
+                NavigationLink("Environments, projects & providers") {
+                    PathwayAdministrationView(
+                        environments: appModel.cloud.environments,
+                        request: { environment, method, payload in
+                            try await appModel.cloud.environmentRequest(environment: environment, method: method, payload: payload)
+                        },
+                        http: { environment, method, path, payload in
+                            guard let connect = appModel.connect else { throw URLError(.notConnectedToInternet) }
+                            return try await PathwayEnvironmentHTTP.request(environment: environment, connect: connect, method: method, path: path, payload: payload)
+                        },
+                        cloudMutation: { name, arguments in
+                            try await appModel.cloud.request(kind: "mutation", name: name, arguments: .object(arguments))
+                        }
+                    )
+                }
+            }
+            Section("Capture") {
+                NavigationLink("Shared Drafts") { PathwaySharedDraftsDestination() }
+            }
             Section("Models") {
                 NavigationLink("Favourite models") {
                     PathwayModelFavouritesEnvironments()
                 }
+            }
+            Section("Notifications") {
+                NavigationLink("Agent notifications") { PathwayNotificationsSettingsView() }
+            }
+            Section("Appearance") {
+                NavigationLink("General") { PathwayGeneralSettingsView() }
+                NavigationLink("Appearance") { PathwayAppearanceSettingsView() }
+                NavigationLink("Storage") { PathwayStorageSettingsView() }
+                NavigationLink("Keyboard Shortcuts") { PathwayKeyboardSettingsView() }
             }
             Section("Account") {
                 Button("Sign out", role: .destructive) {
@@ -418,7 +525,7 @@ struct PathwaySettingsView: View {
 
     private func close() {
         #if os(visionOS)
-            dismissWindow(id: PathwayWindow.settings.rawValue)
+            if isSeparateWindow { dismissWindow(id: PathwayWindow.settings.rawValue) } else { dismiss() }
         #else
             dismiss()
         #endif

@@ -44,14 +44,14 @@ private struct AgentThreadComposerAttachmentChip: View {
             case .uploading:
                 ProgressView().controlSize(.small).accessibilityLabel("Uploading")
             case .failed(let message):
-                Button(action: retry) { Image(systemName: "arrow.clockwise.circle.fill").foregroundStyle(.orange) }
+                Button(action: retry) { Image(systemName: "arrow.clockwise.circle.fill").foregroundStyle(.orange).frame(width: 44, height: 44).contentShape(Rectangle()) }
                     .accessibilityLabel("Retry \(attachment.name)")
                     .accessibilityHint(message)
             case .ready: EmptyView()
             }
             Button(action: remove) {
                 Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    .frame(width: 28, height: 36)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .accessibilityLabel("Remove \(attachment.name)")

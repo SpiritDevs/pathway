@@ -72,7 +72,7 @@ const deliveryKind = v.union(
 const deviceResult = v.object({
   deviceId: v.string(),
   label: v.string(),
-  platform: v.literal("ios"),
+  platform: v.union(v.literal("ios"), v.literal("visionos")),
   iosMajorVersion: v.number(),
   appVersion: nullableString,
   notifications: v.object({
@@ -88,7 +88,7 @@ const deviceResult = v.object({
 const liveActivityTargetResult = v.object({
   userId: v.string(),
   deviceId: v.string(),
-  platform: v.literal("ios"),
+  platform: v.union(v.literal("ios"), v.literal("visionos")),
   iosMajorVersion: v.number(),
   appVersion: nullableString,
   bundleId: nullableString,
@@ -213,7 +213,7 @@ export const registerDevice = mutation({
     registration: v.object({
       deviceId: v.string(),
       label: v.string(),
-      platform: v.literal("ios"),
+      platform: v.union(v.literal("ios"), v.literal("visionos")),
       iosMajorVersion: v.number(),
       appVersion: v.optional(v.string()),
       bundleId: v.optional(v.string()),
@@ -226,6 +226,13 @@ export const registerDevice = mutation({
   returns: v.null(),
   handler: async (ctx, { userId, registration, now }) => {
     await requireRelayControlPlane(ctx);
+    if (
+      registration.platform === "visionos" &&
+      (registration.preferences.liveActivitiesEnabled ||
+        registration.pushToStartToken !== undefined)
+    ) {
+      throw backendError("invalid-arguments", "Live Activities are not supported on visionOS.");
+    }
     if (registration.pushToken !== undefined) {
       const owners = await ctx.db
         .query("relayMobileDevices")
@@ -275,7 +282,10 @@ export const registerDevice = mutation({
         bundleId: registration.bundleId ?? existing.bundleId,
         apsEnvironment: registration.apsEnvironment ?? existing.apsEnvironment,
         pushToken: registration.pushToken ?? existing.pushToken,
-        pushToStartToken: registration.pushToStartToken ?? existing.pushToStartToken,
+        pushToStartToken:
+          registration.platform === "visionos"
+            ? null
+            : (registration.pushToStartToken ?? existing.pushToStartToken),
       });
     }
     return null;
@@ -347,6 +357,15 @@ export const registerLiveActivity = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     await requireRelayControlPlane(ctx);
+    const device = await ctx.db
+      .query("relayMobileDevices")
+      .withIndex("by_user_and_device", (q) =>
+        q.eq("userId", args.userId).eq("deviceId", args.deviceId),
+      )
+      .unique();
+    if (device?.platform === "visionos") {
+      throw backendError("invalid-arguments", "Live Activities are not supported on visionOS.");
+    }
     const owners = await ctx.db
       .query("relayLiveActivities")
       .withIndex("by_activity_push_token", (q) => q.eq("activityPushToken", args.activityPushToken))

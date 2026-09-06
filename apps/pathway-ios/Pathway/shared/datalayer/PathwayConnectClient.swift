@@ -120,7 +120,7 @@ actor PathwayConnectClient {
     private let clerkTokenProvider: ClerkTokenProvider
     private let signer: PathwayDPoPSigner
     private let session: URLSession
-    private var relayToken: PathwayCachedRelayToken?
+    private var relayTokens: [String: PathwayCachedRelayToken] = [:]
 
     init(
         relayURL: URL,
@@ -139,6 +139,10 @@ actor PathwayConnectClient {
         -> PathwayPreparedEnvironmentConnection
     {
         let clerkToken = try await clerkTokenProvider()
+        if let accountKey = PathwayAccountStorage.identity(fromToken: clerkToken),
+           let direct = try await PathwayDirectConnections.shared.prepare(environmentID: environment.environment.environmentId, accountKey: accountKey) {
+            return direct
+        }
         let thumbprint = try await signer.thumbprint()
         let relayAccessToken = try await relayAccessToken(
             clerkToken: clerkToken,
@@ -186,19 +190,73 @@ actor PathwayConnectClient {
 
     // swiftlint:enable opening_brace
 
+    func authenticatedRequest(environment: PathwayCompanyEnvironment, method: String, path: String) async throws -> URLRequest {
+        let connection = try await prepare(environment: environment)
+        guard let url = URL(string: path, relativeTo: connection.httpBaseURL)?.absoluteURL,
+              url.scheme == connection.httpBaseURL.scheme,
+              url.host == connection.httpBaseURL.host,
+              url.port == connection.httpBaseURL.port,
+              url.user == nil, url.password == nil else { throw URLError(.badURL) }
+        let proof = try await signer.proof(method: method, url: url, accessToken: connection.accessToken)
+        guard proof.thumbprint == connection.proofKeyThumbprint else { throw PathwayConnectError.invalidProofKey }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = 30
+        request.setValue("DPoP \(connection.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(proof.value, forHTTPHeaderField: "DPoP")
+        return request
+    }
+
     func clearTokenCache() {
-        relayToken = nil
+        relayTokens = [:]
+    }
+
+    func relayRequest(method: String, path: String, payload: JSONValue? = nil) async throws -> JSONValue {
+        let clerkToken = try await clerkTokenProvider()
+        let thumbprint = try await signer.thumbprint()
+        let token = try await relayAccessToken(clerkToken: clerkToken, thumbprint: thumbprint, scopes: "mobile:registration")
+        guard let url = URL(string: path, relativeTo: relayURL)?.absoluteURL,
+              url.scheme == relayURL.scheme, url.host == relayURL.host, url.port == relayURL.port,
+              url.user == nil, url.password == nil else { throw URLError(.badURL) }
+        let proof = try await signer.proof(method: method, url: url, accessToken: token)
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = 30
+        request.setValue("DPoP \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(proof.value, forHTTPHeaderField: "DPoP")
+        if let payload {
+            request.httpBody = try JSONEncoder().encode(payload)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        return try await send(request, as: JSONValue.self)
+    }
+
+    func relayAccountRequest(method: String, path: String, payload: JSONValue? = nil) async throws -> JSONValue {
+        let token = try await clerkTokenProvider()
+        guard let url = URL(string: path, relativeTo: relayURL)?.absoluteURL,
+              url.scheme == relayURL.scheme, url.host == relayURL.host, url.port == relayURL.port,
+              url.user == nil, url.password == nil else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let payload {
+            request.httpBody = try JSONEncoder().encode(payload)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        return try await send(request, as: JSONValue.self)
     }
 }
 
 private extension PathwayConnectClient {
     private func relayAccessToken(
         clerkToken: String,
-        thumbprint: String
+        thumbprint: String,
+        scopes: String = "environment:connect"
     ) async throws -> String {
-        let subject = clerkSubject(clerkToken) ?? PathwayDPoPSigner.accessTokenHash(clerkToken)
+        let subject = PathwayAccountStorage.identity(fromToken: clerkToken) ?? PathwayDPoPSigner.accessTokenHash(clerkToken)
         // swiftlint:disable opening_brace
-        if let relayToken,
+        if let relayToken = relayTokens[scopes],
            relayToken.clerkSubject == subject,
            relayToken.thumbprint == thumbprint,
            relayToken.expiresAt.timeIntervalSinceNow > 5
@@ -209,7 +267,6 @@ private extension PathwayConnectClient {
 
         let target = relayEndpoint(["v1", "client", "dpop-token"])
         let proof = try await signer.proof(method: "POST", url: target)
-        let scopes = "environment:connect"
         var request = URLRequest(url: target)
         request.httpMethod = "POST"
         request.httpBody = formEncoded([
@@ -236,7 +293,7 @@ private extension PathwayConnectClient {
         else {
             throw PathwayConnectError.scopeMismatch
         }
-        relayToken = PathwayCachedRelayToken(
+        relayTokens[scopes] = PathwayCachedRelayToken(
             accessToken: response.accessToken,
             expiresAt: Date().addingTimeInterval(response.expiresIn),
             clerkSubject: subject,
