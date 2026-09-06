@@ -9,6 +9,7 @@ import {
   companyRegistryMembershipIdsAtom,
   companyRegistryReplicasAtom,
 } from "../../cloud/companyRegistryReplica";
+import { contactPaginationReducer, initialContactPagination } from "./contactPagination";
 import { canManageContactsFromReplica } from "./contactPermissions";
 import { useBusinessToolsCloud, useBusinessToolsQuery } from "./businessToolsCloud";
 import * as Schema from "effect/Schema";
@@ -24,7 +25,7 @@ import {
   StarIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState, type FormEvent } from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useIsMobile } from "~/hooks/useMediaQuery";
@@ -338,27 +339,24 @@ export function ContactsView() {
     companyID ? { companyId: companyID, search: query, searchField, favoritesOnly } : null,
   );
   const latestPage = useRef(result.value);
+  const latestScope = useRef(result.key);
   useEffect(() => {
     latestPage.current = result.value;
+    latestScope.current = result.key;
     return () => {
       latestPage.current = undefined;
+      latestScope.current = "";
     };
-  }, [result.value]);
-  const [history, setHistory] = useState<{
-    base: BusinessContactPage;
-    contacts: BusinessContactPage["contacts"];
-    cursor: string | null;
-    isDone: boolean;
-  } | null>(null);
+  }, [result.value, result.key]);
+  const [pagination, dispatchPages] = useReducer(
+    contactPaginationReducer,
+    initialContactPagination,
+  );
+  const { history, request: pageRequest } = pagination;
   const currentHistory = history?.base === result.value ? history : null;
   const contacts = currentHistory?.contacts ?? result.value?.contacts ?? [];
   const cursor = currentHistory ? currentHistory.cursor : result.value?.cursor;
   const isDone = currentHistory?.isDone ?? result.value?.isDone ?? true;
-  const [pageRequest, setPageRequest] = useState<{
-    base: BusinessContactPage;
-    loading: boolean;
-    error?: string;
-  } | null>(null);
   const loadingMore =
     pageRequest !== null && pageRequest.base === result.value && pageRequest.loading;
   const pageError =
@@ -366,7 +364,8 @@ export function ContactsView() {
   const loadMore = async () => {
     if (!cloud.client || !companyID || !result.value || !cursor || loadingMore) return;
     const base = result.value;
-    setPageRequest({ base, loading: true });
+    const generation = pagination.generation;
+    dispatchPages({ type: "request", generation, base });
     try {
       const page = await cloud.client.query(
         makeFunctionReference<
@@ -384,18 +383,22 @@ export function ContactsView() {
       );
       if (latestPage.current !== base) return;
       const ids = new Set(contacts.map((row) => row.id));
-      setHistory({
-        base,
-        contacts: [...contacts, ...page.contacts.filter((row) => !ids.has(row.id))],
-        cursor: page.cursor,
-        isDone: page.isDone,
+      dispatchPages({
+        type: "loaded",
+        generation,
+        history: {
+          base,
+          contacts: [...contacts, ...page.contacts.filter((row) => !ids.has(row.id))],
+          cursor: page.cursor,
+          isDone: page.isDone,
+        },
       });
-      setPageRequest({ base, loading: false });
     } catch (error) {
       if (latestPage.current !== base) return;
-      setPageRequest({
+      dispatchPages({
+        type: "failed",
+        generation,
         base,
-        loading: false,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -427,6 +430,7 @@ export function ContactsView() {
     if (!companyID || !canManage)
       throw new Error("You need projects.manage permission to change contacts in this workspace.");
     const { id, name, role, company, email, phone, notes, favorite } = contact;
+    const scope = result.key;
     await cloud.request("contacts:upsert", {
       companyId: companyID,
       id,
@@ -440,6 +444,8 @@ export function ContactsView() {
       notes,
       favorite,
     });
+    if (latestScope.current !== scope) return;
+    dispatchPages({ type: "invalidate" });
     setSelectedId(contact.id);
   };
   const run = (operation: () => Promise<unknown>) => {
@@ -628,7 +634,11 @@ export function ContactsView() {
               </Button>
             ) : null}
             {currentHistory ? (
-              <Button className="m-3" variant="ghost" onClick={() => setHistory(null)}>
+              <Button
+                className="m-3"
+                variant="ghost"
+                onClick={() => dispatchPages({ type: "invalidate" })}
+              >
                 Refresh directory
               </Button>
             ) : null}
@@ -664,14 +674,7 @@ export function ContactsView() {
                     id: selectedContact.id,
                     expectedRevision: selectedContact.revision ?? 0,
                   });
-                  setHistory((current) =>
-                    current !== null && current.base === result.value
-                      ? {
-                          ...current,
-                          contacts: current.contacts.filter((row) => row.id !== selectedContact.id),
-                        }
-                      : current,
-                  );
+                  dispatchPages({ type: "remove", base: result.value, id: selectedContact.id });
                   setSelectedId(null);
                 })
               }

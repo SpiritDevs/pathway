@@ -51,6 +51,59 @@ import Testing
         #expect(model.contacts.isEmpty)
         #expect(!model.hasMore)
     }
+    @Test(arguments: [false, true]) func upsertInvalidatesAppendedFavoritesOnlyAfterSuccess(fails: Bool) async throws {
+        var pageCalls = 0
+        let model = PathwayContactsModel(request: { kind, _, args in
+            if kind == "mutation" {
+                if fails { throw URLError(.notConnectedToInternet) }
+                return .null
+            }
+            pageCalls += 1
+            #expect(args.objectValue?["cursor"] == .string("second"))
+            return page(pageCalls == 1 ? ["older favorite"] : [], cursor: nil)
+        }, subscribe: { _, _ in AsyncThrowingStream { $0.yield(page(["first"], cursor: "second")); $0.finish() } })
+        await model.observe(companyID: "company", search: "Example", searchField: "company", favoritesOnly: true)
+        try await model.loadMore()
+        var edited = try #require(model.contacts.last)
+        edited.favorite = false; edited.company = "No longer matches"
+        do { try await model.save(edited, companyID: "company", requestID: "edit") }
+        catch { #expect(fails) }
+        #expect(model.contacts.map(\.id) == (fails ? ["first", "older favorite"] : ["first"]))
+        #expect(model.hasMore == !fails)
+        if !fails {
+            try await model.loadMore()
+            #expect(pageCalls == 2)
+            #expect(model.contacts.map(\.id) == ["first"])
+        }
+    }
+    @Test func anAcceptedEditPreventsAnInFlightPageFromRestoringOldMatches() async throws {
+        let (started, signal) = AsyncStream<Void>.makeStream()
+        var completion: CheckedContinuation<JSONValue, Error>?
+        let model = PathwayContactsModel(request: { kind, _, _ in
+            if kind == "mutation" { return .null }
+            signal.yield(())
+            return try await withCheckedThrowingContinuation { completion = $0 }
+        }, subscribe: { _, _ in AsyncThrowingStream { $0.yield(page(["first"], cursor: "next")); $0.finish() } })
+        await model.observe(companyID: "company", favoritesOnly: true)
+        let load = Task { try await model.loadMore() }
+        for await _ in started { break }
+        let edited = try #require(model.contacts.first)
+        try await model.save(edited, companyID: "company", requestID: "edit")
+        completion?.resume(returning: page(["stale match"]))
+        try await load.value
+        #expect(model.contacts.map(\.id) == ["first"])
+        #expect(model.hasMore)
+        #expect(!model.loadingMore)
+    }
+    @Test func savingDoesNotRestoreADeletedFirstPageContactBeforeTheSubscriptionRefreshes() async throws {
+        let model = PathwayContactsModel(request: { _, _, _ in .null }, subscribe: { _, _ in AsyncThrowingStream { $0.yield(page(["deleted", "remaining"])); $0.finish() } })
+        await model.observe(companyID: "company")
+        let deleted = try #require(model.contacts.first)
+        try await model.remove(deleted, companyID: "company")
+        let edited = try #require(model.contacts.first)
+        try await model.save(edited, companyID: "company", requestID: "edit")
+        #expect(model.contacts.map(\.id) == ["remaining"])
+    }
     @Test func contactDetailKeepsItsOwnSubscriptionOutsideTheLoadedDirectoryPage() async throws {
         var received: [String?] = []
         let model = PathwayContactsModel(request: { _, _, _ in .null }, subscribe: { name, args in

@@ -43,6 +43,7 @@ final class PathwayAgentThreadCreationModel {
     var bindingID: String { binding.id }
     private(set) var isLaunching = false
     private(set) var isImportingCapture = false
+    private(set) var isTransferringDraft = false
     private(set) var errorMessage: String?
 
     /// Images are persisted in the launch namespace before the initial turn references them.
@@ -88,6 +89,7 @@ final class PathwayAgentThreadCreationModel {
     @ObservationIgnored private let binding: PathwayCompanyEnvironmentBinding
     @ObservationIgnored private let environment: PathwayCompanyEnvironment
     typealias Request = @MainActor (String, JSONValue) async throws -> JSONValue
+    typealias DraftSave = @MainActor (PathwayThreadCreationDraft, UInt64) async throws -> Void
     @ObservationIgnored let storageDirectory: URL?
     @ObservationIgnored private let draftStore: PathwayThreadCreationDraftStore?
     @ObservationIgnored private var draftWriteTask: Task<Void, Never>?
@@ -99,6 +101,7 @@ final class PathwayAgentThreadCreationModel {
     @ObservationIgnored private var didRestoreDraft = false
     @ObservationIgnored private var hasConfiguredDefaults = false
     @ObservationIgnored private let injectedRequest: Request?
+    @ObservationIgnored private let injectedDraftSave: DraftSave?
     @ObservationIgnored private let connect: PathwayConnectClient?
     @ObservationIgnored private var rpc: PathwayRPCClient?
     @ObservationIgnored private var streamTask: Task<Void, Never>?
@@ -108,7 +111,8 @@ final class PathwayAgentThreadCreationModel {
         environment: PathwayCompanyEnvironment,
         connect: PathwayConnectClient? = nil,
         storageDirectory: URL? = nil,
-        request: Request? = nil
+        request: Request? = nil,
+        saveDraft: DraftSave? = nil
     ) {
         attachments = PathwayNewThreadAttachments(directory: storageDirectory, key: binding.id)
         self.binding = binding
@@ -116,6 +120,7 @@ final class PathwayAgentThreadCreationModel {
         self.connect = connect
         self.storageDirectory = storageDirectory
         injectedRequest = request
+        injectedDraftSave = saveDraft
         draftStore = storageDirectory.map { PathwayThreadCreationDraftStore(directory: $0, key: binding.id) }
         attachments.request = { [weak self] method, payload in
             guard let self else { throw PathwayRPCError.disconnected }
@@ -153,7 +158,7 @@ final class PathwayAgentThreadCreationModel {
             && selectedProvider != nil
             && selectedModel != nil
             && connectionState == .live
-            && !isLaunching && !isImportingCapture
+            && !isLaunching && !isImportingCapture && !isTransferringDraft
             && (workspaceMode != "worktree"
                 || !baseReference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
@@ -352,12 +357,14 @@ final class PathwayAgentThreadCreationModel {
     /// Move editable incoming content only after the empty destination has durably accepted it.
     /// Upload handles and launch receipts remain tied to their original environment.
     func transferIncomingDraft(to destination: PathwayAgentThreadCreationModel) async throws {
-        guard !isLaunching, !isImportingCapture, launchAttempt?.attachments == nil else {
+        guard !isLaunching, !isImportingCapture, !isTransferringDraft, launchAttempt?.attachments == nil else {
             throw PathwayThreadConversationError.message("This draft has a pending launch or import. Finish it in the current project before switching.")
         }
         guard storageDirectory == destination.storageDirectory, initialImageUploads.isEmpty else {
             throw PathwayThreadConversationError.message("This draft cannot be moved to that project. Keep it in the current project.")
         }
+        isTransferringDraft = true
+        defer { isTransferringDraft = false }
         await destination.restoreDraft()
         guard destination.prompt.isEmpty, destination.initialImageUploads.isEmpty,
               destination.attachments.drafts.isEmpty, destination.launchAttempt == nil else {
@@ -371,7 +378,8 @@ final class PathwayAgentThreadCreationModel {
         destination.importedCaptureIDs = importedCaptureIDs
         try await destination.persistDraftChecked()
         try Task.checkCancellation()
-        guard prompt == movingPrompt, attachments.drafts == movingAttachments else {
+        guard !isLaunching, !isImportingCapture, launchAttempt?.attachments == nil,
+              prompt == movingPrompt, attachments.drafts == movingAttachments else {
             throw PathwayThreadConversationError.message("The draft changed during the move. Your latest edits remain in the original project.")
         }
         // The destination is saved. Clearing local source bytes must not delete remote uploads.
@@ -379,7 +387,7 @@ final class PathwayAgentThreadCreationModel {
         launchAttempt = nil
         importedCaptureIDs = []
         await persistDraftNow()
-        await attachments.didSend(ids: Set(attachments.drafts.map(\.id)))
+        await attachments.didSend(ids: Set(movingAttachments.map(\.id)))
     }
 
     private func draftSnapshot() -> PathwayThreadCreationDraft {
@@ -406,13 +414,15 @@ final class PathwayAgentThreadCreationModel {
 
     private func persistDraftChecked() async throws {
         draftWriteTask?.cancel(); draftWriteTask = nil
-        guard let draftStore, didRestoreDraft || pendingDraft != nil else { return }
+        guard didRestoreDraft || pendingDraft != nil else { return }
         pendingDraft = nil
-        try await draftStore.save(draftSnapshot(), revision: DispatchTime.now().uptimeNanoseconds)
+        let revision = DispatchTime.now().uptimeNanoseconds
+        if let injectedDraftSave { try await injectedDraftSave(draftSnapshot(), revision) }
+        else if let draftStore { try await draftStore.save(draftSnapshot(), revision: revision) }
     }
 
     func importCapturedDraft(_ draft: PathwayCapturedDraft, store: PathwayCaptureStore) async -> Bool {
-        guard !isLaunching, !isImportingCapture, storageDirectory?.lastPathComponent == draft.accountKey else { return false }
+        guard !isLaunching, !isImportingCapture, !isTransferringDraft, storageDirectory?.lastPathComponent == draft.accountKey else { return false }
         isImportingCapture = true
         defer { isImportingCapture = false }
         do {

@@ -35,6 +35,7 @@ struct NewAgentThreadView: View {
                         chooseProject: { selectedProjectID = nil },
                         didLaunch: didLaunch
                     )
+                    .disabled(isChangingBinding)
                 } else {
                     PathwayNewThreadProjectPicker(
                         projects: projectOptions,
@@ -47,15 +48,17 @@ struct NewAgentThreadView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: close)
+                        .disabled(isChangingBinding)
                 }
                 if capturedDraft != nil, !appliedCapture, let model, model.errorMessage != nil {
                     ToolbarItem(placement: .primaryAction) {
                         Button("Retry Import") { Task { await applyIncomingDraft() } }
-                            .disabled(model.connectionState != .live || model.isImportingCapture)
+                            .disabled(model.connectionState != .live || model.isImportingCapture || isChangingBinding)
                     }
                 }
             }
         }
+        .interactiveDismissDisabled(isChangingBinding)
         .task(id: selectedBindingID) {
             await configureSelection()
         }
@@ -69,6 +72,11 @@ struct NewAgentThreadView: View {
         .alert("Couldn't change project", isPresented: Binding(get: { selectionError != nil }, set: { if !$0 { selectionError = nil } })) {
             Button("OK", role: .cancel) { selectionError = nil }
         } message: { Text(selectionError ?? "") }
+    }
+
+    private var isChangingBinding: Bool {
+        guard let model else { return false }
+        return model.isTransferringDraft || model.bindingID != selectedBindingID
     }
 
     private var bindingOptions: [PathwayNewThreadBindingOption] {

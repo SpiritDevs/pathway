@@ -30,6 +30,7 @@ final class PathwayContactsModel {
     private(set) var writing = false
     private(set) var loadingMore = false
     private(set) var hasMore = false
+    @ObservationIgnored private var firstPage: PathwayContactPage?
     @ObservationIgnored private var cursor: String?
     @ObservationIgnored private var pageGeneration = 0
     @ObservationIgnored private var search = ""
@@ -57,23 +58,23 @@ final class PathwayContactsModel {
     }
 
     func clear() {
-        observationGeneration += 1; pageGeneration += 1; cursor = nil; hasMore = false; loadingMore = false; companyID = ""; contacts = []; loading = false; writing = false; errorMessage = nil
+        observationGeneration += 1; firstPage = nil; pageGeneration += 1; cursor = nil; hasMore = false; loadingMore = false; companyID = ""; contacts = []; loading = false; writing = false; errorMessage = nil
     }
     func observe(companyID: String, search: String = "", searchField: String = "name", favoritesOnly: Bool = false) async {
         observationGeneration += 1; let generation = observationGeneration
         self.companyID = companyID; self.search = search; self.searchField = searchField; self.favoritesOnly = favoritesOnly
-        contacts = []; errorMessage = nil; loading = false; pageGeneration += 1; cursor = nil; hasMore = false; loadingMore = false
+        contacts = []; firstPage = nil; errorMessage = nil; loading = false; pageGeneration += 1; cursor = nil; hasMore = false; loadingMore = false
         guard !companyID.isEmpty else { return }
         loading = true
         do {
             for try await value in subscribe("contacts:list", listArguments()) {
                 guard !Task.isCancelled, self.companyID == companyID, generation == observationGeneration else { return }
                 let page = try decodePathwayPayload(PathwayContactPage.self, from: value)
-                contacts = page.contacts; cursor = page.cursor; hasMore = !page.isDone; loading = false; loadingMore = false; pageGeneration += 1
+                firstPage = page; contacts = page.contacts; cursor = page.cursor; hasMore = !page.isDone; loading = false; loadingMore = false; pageGeneration += 1
             }
         } catch {
             guard !Task.isCancelled, self.companyID == companyID, generation == observationGeneration else { return }
-            contacts = []; errorMessage = error.localizedDescription; loading = false; loadingMore = false; hasMore = false; cursor = nil; pageGeneration += 1
+            contacts = []; firstPage = nil; errorMessage = error.localizedDescription; loading = false; loadingMore = false; hasMore = false; cursor = nil; pageGeneration += 1
         }
     }
     private func listArguments(cursor: String? = nil) -> JSONValue {
@@ -107,13 +108,20 @@ final class PathwayContactsModel {
     func save(_ contact: PathwayContact, companyID: String, requestID: String) async throws {
         var fields: [String: JSONValue] = ["companyId": .string(companyID), "id": .string(contact.id), "requestId": .string(requestID), "expectedRevision": contact.revision == 0 ? .null : .number(Double(contact.revision))]
         fields.merge(["name": .string(contact.name), "role": .string(contact.role), "company": .string(contact.company), "email": .string(contact.email), "phone": .string(contact.phone), "notes": .string(contact.notes), "favorite": .bool(contact.favorite)]) { _, new in new }
+        let generation = observationGeneration
         _ = try await request("mutation", "contacts:upsert", .object(fields))
+        guard generation == observationGeneration, self.companyID == companyID, let firstPage else { return }
+        pageGeneration += 1; loadingMore = false
+        contacts = firstPage.contacts; cursor = firstPage.cursor; hasMore = !firstPage.isDone
     }
     func remove(_ contact: PathwayContact, companyID: String) async throws {
         let generation = observationGeneration
         _ = try await request("mutation", "contacts:remove", .object(["companyId": .string(companyID), "id": .string(contact.id), "expectedRevision": .number(Double(contact.revision))]))
         guard generation == observationGeneration else { return }
         contacts.removeAll { $0.id == contact.id }
+        if let firstPage {
+            self.firstPage = .init(contacts: firstPage.contacts.filter { $0.id != contact.id }, cursor: firstPage.cursor, isDone: firstPage.isDone)
+        }
     }
     @discardableResult func perform(_ operation: () async throws -> Void) async -> Bool {
         guard !writing else { return false }
