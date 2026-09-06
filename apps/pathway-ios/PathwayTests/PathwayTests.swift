@@ -185,6 +185,46 @@ struct PathwayTests {
         )
     }
 
+    @Test func issueThreadLaunchKeepsPersistedImageNamespace() {
+        let attachment: JSONValue = .object([
+            "type": .string("image"), "id": .string("thread-image"),
+            "name": .string("screenshot.png"), "mimeType": .string("image/png"),
+            "sizeBytes": .number(1024)
+        ])
+        let command = PathwayAgentThreadCommands.launchThread(
+            PathwayThreadLaunchDraft(
+                projectID: "local-project", prompt: "Fix ISSUE-1",
+                modelSelection: PathwayModelSelection(instanceId: "codex", model: "model", options: nil),
+                runtimeMode: "approval-required", interactionMode: "default", workspaceMode: "local",
+                baseReference: "main", branch: "", startFromOrigin: false, attachments: [attachment]
+            ), identifier: "persisted-message", threadID: "persisted-thread"
+        ).objectValue
+        #expect(command?["threadId"]?.stringValue == "persisted-thread")
+        #expect(command?["initialMessage"]?.objectValue?["messageId"]?.stringValue == "persisted-message")
+        #expect(command?["initialMessage"]?.objectValue?["attachments"]?.arrayValue == [attachment])
+    }
+
+    @Test func issueTaskOrderStaysBetweenNeighborsAndRejectsCorruptKeys() {
+        #expect(PathwayIssueOrder.between(nil, nil) == "n")
+        #expect(PathwayIssueOrder.between("n", nil) == "u")
+        #expect(PathwayIssueOrder.between(nil, "n") == "h")
+        #expect(PathwayIssueOrder.between("a", nil) == nil)
+        #expect(PathwayIssueOrder.between("z", "n") == nil)
+        var keys: [String] = []
+        for index in 0..<100 {
+            let target = index * 17 % (keys.count + 1)
+            let before = target > 0 ? keys[target - 1] : nil
+            let after = target < keys.count ? keys[target] : nil
+            guard let next = PathwayIssueOrder.between(before, after) else {
+                Issue.record("Valid neighbors should always admit a task order key")
+                return
+            }
+            #expect(before.map { $0 < next } ?? true)
+            #expect(after.map { next < $0 } ?? true)
+            keys.insert(next, at: target)
+        }
+    }
+
     @Test func dpopProofURLDropsQueryAndDefaultPort() throws {
         let input = try #require(URL(string: "https://relay.example:443/v1/connect?token=secret#part"))
         let normalized = try #require(PathwayDPoPSigner.normalizedHTU(input))

@@ -15,6 +15,12 @@ struct PathwayApp: App {
 
     init() {
         missingConfigurationKeys = AppConfiguration.missingRequiredKeys
+        #if DEBUG && !os(visionOS)
+        if ProcessInfo.processInfo.arguments.contains("--uitest-issues") {
+            _appModel = State(initialValue: nil)
+            return
+        }
+        #endif
         guard
             missingConfigurationKeys.isEmpty,
             let publishableKey = AppConfiguration.clerkPublishableKey,
@@ -81,6 +87,19 @@ struct PathwayApp: App {
 
     @ViewBuilder
     private var mainContent: some View {
+        #if DEBUG && !os(visionOS)
+        if ProcessInfo.processInfo.arguments.contains("--uitest-issues") {
+            PathwayIssuesSimulatorScene()
+        } else {
+            authenticatedContent
+        }
+        #else
+        authenticatedContent
+        #endif
+    }
+
+    @ViewBuilder
+    private var authenticatedContent: some View {
         if let appModel {
             InitView()
                 .environment(Clerk.shared)

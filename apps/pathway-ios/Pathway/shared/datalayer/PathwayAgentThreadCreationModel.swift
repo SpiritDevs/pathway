@@ -38,6 +38,8 @@ final class PathwayAgentThreadCreationModel {
     private(set) var isLaunching = false
     private(set) var errorMessage: String?
 
+    /// Images are persisted in the launch namespace before the initial turn references them.
+    var initialImageUploads: [JSONValue] = []
     var prompt = ""
     var selectedProviderID = "" {
         didSet {
@@ -154,6 +156,20 @@ final class PathwayAgentThreadCreationModel {
             options: options.isEmpty ? nil : options
         )
         do {
+            let launchIdentifier = UUID().uuidString.lowercased()
+            let launchThreadID = initialImageUploads.isEmpty ? nil : UUID().uuidString.lowercased()
+            var attachments: [JSONValue] = []
+            if let launchThreadID {
+                let persisted = try await rpc.request("assets.persistChatAttachments", payload: .object([
+                    "threadId": .string(launchThreadID), "messageId": .string(launchIdentifier),
+                    "attachments": .array(initialImageUploads)
+                ]))
+                guard let result = persisted.objectValue?["attachments"]?.arrayValue,
+                      result.count == initialImageUploads.count else {
+                    throw PathwayRPCError.protocolViolation("The issue images could not be prepared for this thread.")
+                }
+                attachments = result
+            }
             let result = try await rpc.request(
                 "orchestration.launchThread",
                 payload: PathwayAgentThreadCommands.launchThread(
@@ -166,8 +182,11 @@ final class PathwayAgentThreadCreationModel {
                         workspaceMode: workspaceMode,
                         baseReference: baseReference,
                         branch: branch,
-                        startFromOrigin: startFromOrigin
-                    )
+                        startFromOrigin: startFromOrigin,
+                        attachments: attachments
+                    ),
+                    identifier: launchIdentifier,
+                    threadID: launchThreadID
                 )
             )
             guard let threadID = result.objectValue?["threadId"]?.stringValue else {
@@ -176,6 +195,7 @@ final class PathwayAgentThreadCreationModel {
                 )
             }
             prompt = ""
+            initialImageUploads = []
             return threadID
         } catch {
             errorMessage = error.localizedDescription

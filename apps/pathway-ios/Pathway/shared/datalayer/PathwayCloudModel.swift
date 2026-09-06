@@ -25,7 +25,26 @@
         private(set) var snoozedThreads: [PathwayAgentThread] = []
         private(set) var settledThreads: [PathwayAgentThread] = []
 
+        @ObservationIgnored lazy var issues = PathwayIssuesModel(
+            sendOperations: { [weak self] companyID, operations in
+                guard let client = self?.client else { throw URLError(.notConnectedToInternet) }
+                return try await client.applyIssueOperations(companyID: companyID, operations: operations)
+            },
+            environmentRequest: { [weak self] companyID, projectID, method, payload in
+                guard let self else { throw CancellationError() }
+                return try await requestIssueEnvironment(
+                    companyID: companyID, projectID: projectID, method: method, payload: payload
+                )
+            },
+            cloudRequest: { [weak self] kind, name, arguments in
+                guard let client = self?.client else { throw URLError(.notConnectedToInternet) }
+                return try await client.issueRequest(kind: kind, name: name, arguments: arguments)
+            }
+        )
+
         @ObservationIgnored private let client: PathwayConvexClient?
+        @ObservationIgnored private let connect: PathwayConnectClient?
+        @ObservationIgnored private let issueEnvironmentClient = PathwayIssueEnvironmentClient()
         @ObservationIgnored private var companiesSubscription: AnyCancellable?
         @ObservationIgnored private var headSubscriptions: [String: AnyCancellable] = [:]
         @ObservationIgnored private var bootstrapTasks: [String: Task<Void, Never>] = [:]
@@ -37,13 +56,27 @@
         @ObservationIgnored private var isRefreshingLifecycleMetadata = false
         @ObservationIgnored private var isProvisioning = false
 
-        init(client: PathwayConvexClient? = nil) {
+        init(client: PathwayConvexClient? = nil, connect: PathwayConnectClient? = nil) {
             self.client = client
+            self.connect = connect
         }
 
         var isConnected: Bool {
             connectionState == .connected
         }
+
+        #if DEBUG
+        func installIssueSimulatorSnapshot(company: PathwayCompany, changes: [PathwaySyncChange], version: Int) {
+            guard client == nil else { return }
+            companies = [company]
+            entitiesByCompany = [company.id: Dictionary(uniqueKeysWithValues: changes.map {
+                (PathwaySyncEntityKey(kind: $0.entityKind, id: $0.entityId), $0)
+            })]
+            cursorByCompany = [company.id: version]
+            rebuildDiscoveryModels()
+            connectionState = .connected
+        }
+        #endif
 
         var errorMessage: String? {
             guard case let .failed(message) = connectionState else { return nil }
@@ -72,6 +105,7 @@
 
         func stop(clearContent: Bool = true) async {
             cancelWork()
+            await issueEnvironmentClient.stop()
             if let client {
                 await client.disconnect()
             }
@@ -89,7 +123,39 @@
                 cursorByCompany = [:]
                 latestVersionByCompany = [:]
                 changeRequestStates = [:]
+                issues.replaceReplica([:])
             }
+        }
+
+        func requestIssueEnvironment(
+            companyID: String, projectID: String?, method: String, payload: JSONValue
+        ) async throws -> JSONValue {
+            guard let connect else { throw URLError(.notConnectedToInternet) }
+            issueEnvironmentClient.onEvent = { [weak self] companyID, environmentID, event in
+                self?.issues.receiveEnvironmentEvent(companyID: companyID, environmentID: environmentID, event: event)
+            }
+            var fields = payload.objectValue ?? [:]
+            let requestedEnvironment = fields.removeValue(forKey: "_environmentId")?.stringValue
+            let bindings = environmentBindings.filter {
+                $0.companyId == companyID && $0.binding.status == "active"
+                    && (projectID == nil || $0.binding.cloudProjectId == projectID)
+            }
+            let available = environments.filter { candidate in
+                candidate.companyId == companyID && candidate.environment.state == "active"
+                    && (requestedEnvironment == nil || candidate.environment.environmentId == requestedEnvironment)
+                    && (projectID == nil || bindings.contains { binding in
+                        binding.binding.environmentId == candidate.environment.environmentId
+                    })
+            }
+            guard let environment = available.first(where: { $0.environment.relayLinkState == "linked" })
+                ?? available.first else {
+                throw NSError(domain: "PathwayIssues", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "Connect an environment for this project to use this action."
+                ])
+            }
+            return try await issueEnvironmentClient.request(
+                environment: environment, connect: connect, method: method, payload: .object(fields)
+            )
         }
 
         func companyName(for companyId: String) -> String? {
@@ -309,6 +375,11 @@
             }
             environmentBindings = snapshot.bindings
             threads = snapshot.threads
+            issues.replaceReplica(
+                entitiesByCompany.mapValues { Array($0.values) },
+                companies: companies,
+                versions: cursorByCompany
+            )
             rebuildThreadPartition()
         }
 
@@ -348,7 +419,7 @@
         private func fail(_ error: any Error) {
             pathwayCloudLogger.error("Convex sync failed: \(error.localizedDescription, privacy: .public)")
             connectionState = .failed(
-                "Pathway couldn’t sync Agent Threads. Check your connection and try again."
+                "Pathway couldn’t sync your workspace. Check your connection and try again."
             )
         }
 

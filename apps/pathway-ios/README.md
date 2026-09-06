@@ -50,9 +50,11 @@ Apple App ID prefix before hosted authentication can complete on a signed build.
 
 ## Current product boundary
 
-The SwiftUI foundation now contains only Pathway-native placeholders for Dashboard, Issues, Agent
-Threads, Email, Source Control, Calendar, Projects, Contacts, Time Tracker, and Settings. Copied
-product-domain screens and backend contracts are intentionally excluded.
+The native app includes Agent Threads and Issues. Issues reads the company replica, submits
+company-domain operations through cloud sync, and connects to environments for investigation,
+agent work, and intake. See `docs/user/issues-ios.md` and `docs/internals/issues-ios.md` at the
+repository root. Dashboard, Email, Source Control, Calendar, Projects, Contacts, and Time Tracker
+remain placeholders.
 
 The compact shell uses the floating navigation bar on iPhone and narrow iPad windows. Regular iPad
 windows use a system `NavigationSplitView`, including automatic collapse in narrow multitasking

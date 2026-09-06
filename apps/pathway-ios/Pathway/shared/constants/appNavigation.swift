@@ -89,7 +89,8 @@ enum AppDestination: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .issues:
             [
                 .init(id: "all", title: "All issues", systemImage: "checklist"),
-                .init(id: "assigned", title: "Assigned to me", systemImage: "person.crop.circle")
+                .init(id: "assigned", title: "Assigned to me", systemImage: "person.crop.circle"),
+                .init(id: "triage", title: "Triage", systemImage: "tray")
             ]
         case .agentThreads:
             [

@@ -18,6 +18,10 @@ struct MainTabView: View {
     @State private var selectedDestination: AppDestination? = .dashboard
     @State private var presentedSheet: MainTabSheet?
 
+    init(initialDestination: AppDestination = .dashboard) {
+        _selectedDestination = State(initialValue: initialDestination)
+    }
+
     private var layout: AppShellLayout {
         AppShellLayout.resolve(
             usesRegularWidth: horizontalSizeClass == .regular,
@@ -115,12 +119,14 @@ private struct FloatingAppShell: View {
                     )
                     .toolbar {
                         ToolbarItemGroup(placement: .primaryAction) {
-                            Button(
-                                "New agent thread",
-                                systemImage: "bubble.left.and.bubble.right",
-                                action: presentNewAgentThread
-                            )
-                            Button("Settings", systemImage: "gearshape", action: presentSettings)
+                            if activeDestination != .issues {
+                                Button(
+                                    "New agent thread",
+                                    systemImage: "bubble.left.and.bubble.right",
+                                    action: presentNewAgentThread
+                                )
+                                Button("Settings", systemImage: "gearshape", action: presentSettings)
+                            }
                         }
                     }
                 }
@@ -306,7 +312,10 @@ private struct PathwayContextDestinationView: View {
 
     @ViewBuilder
     var body: some View {
-        if contextDestination == destination.defaultContextDestination {
+        if destination == .issues {
+            PathwayIssuesDestinationView(initialTab: contextDestination.id)
+                .id(contextDestination.id)
+        } else if contextDestination == destination.defaultContextDestination {
             PathwayFeatureDestinationView(
                 destination: destination,
                 newThreadAction: newThreadAction
@@ -359,6 +368,8 @@ struct PathwayFeatureDestinationView: View {
     var body: some View {
         if destination == .agentThreads {
             AgentThreadsView(newThreadAction: newThreadAction)
+        } else if destination == .issues {
+            PathwayIssuesDestinationView()
         } else {
             PathwayFeaturePlaceholder(destination: destination)
         }

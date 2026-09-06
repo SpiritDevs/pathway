@@ -10,12 +10,14 @@ struct PathwayThreadLaunchDraft: Sendable {
     let baseReference: String
     let branch: String
     let startFromOrigin: Bool
+    var attachments: [JSONValue] = []
 }
 
 enum PathwayAgentThreadCommands {
     static func launchThread(
         _ draft: PathwayThreadLaunchDraft,
-        identifier: String = UUID().uuidString.lowercased()
+        identifier: String = UUID().uuidString.lowercased(),
+        threadID: String? = nil
     ) -> JSONValue {
         let trimmedBranch = draft.branch.trimmingCharacters(in: .whitespacesAndNewlines)
         let workspaceStrategy: JSONValue
@@ -45,7 +47,7 @@ enum PathwayAgentThreadCommands {
             })
         }
 
-        return .object([
+        var payload: [String: JSONValue] = [
             "commandId": .string(identifier),
             "creationSource": .string("mobile"),
             "projectId": .string(draft.projectID),
@@ -59,9 +61,11 @@ enum PathwayAgentThreadCommands {
             "initialMessage": .object([
                 "messageId": .string(identifier),
                 "text": .string(draft.prompt),
-                "attachments": .array([])
+                "attachments": .array(draft.attachments)
             ])
-        ])
+        ]
+        if let threadID { payload["threadId"] = .string(threadID) }
+        return .object(payload)
     }
 
     static func dispatchMessage(

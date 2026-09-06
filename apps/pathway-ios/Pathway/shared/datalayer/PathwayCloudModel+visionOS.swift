@@ -14,6 +14,7 @@
         private(set) var activeThreads: [PathwayAgentThread] = []
         private(set) var snoozedThreads: [PathwayAgentThread] = []
         private(set) var settledThreads: [PathwayAgentThread] = []
+        let issues = PathwayIssuesModel()
 
         init() {}
 

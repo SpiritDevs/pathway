@@ -127,6 +127,21 @@
             )
         }
 
+        func applyIssueOperations(companyID: String, operations: JSONValue) async throws -> JSONValue {
+            try await client.mutation("sync:applyOperations", with: [
+                "companyId": companyID,
+                "operations": PathwayConvexJSON(value: operations)
+            ])
+        }
+
+        func issueRequest(kind: String, name: String, arguments: JSONValue) async throws -> JSONValue {
+            switch kind {
+            case "action": return try await client.action(name, with: PathwayConvexJSON.arguments(arguments))
+            case "mutation": return try await client.mutation(name, with: PathwayConvexJSON.arguments(arguments))
+            default: return try await query(name, with: PathwayConvexJSON.arguments(arguments))
+            }
+        }
+
         private func query<Value: Decodable>(
             _ name: String,
             with args: [String: ConvexEncodable?]
@@ -136,6 +151,20 @@
                 return value
             }
             throw CancellationError()
+        }
+    }
+
+    /// The issue protocol uses JSON numbers, including its versions and sequences.
+    /// Encoding the complete value preserves null fields and avoids Swift Int's Convex bigint encoding.
+    private struct PathwayConvexJSON: ConvexEncodable, Sendable {
+        let value: JSONValue
+
+        func convexEncode() throws -> String {
+            String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+        }
+
+        nonisolated static func arguments(_ value: JSONValue) -> [String: ConvexEncodable?] {
+            (value.objectValue ?? [:]).mapValues { PathwayConvexJSON(value: $0) }
         }
     }
 #endif

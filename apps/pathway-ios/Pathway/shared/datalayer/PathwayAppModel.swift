@@ -55,7 +55,8 @@ final class PathwayAppModel {
                     client: PathwayConvexClient(
                         deploymentURL: convexDeploymentURL,
                         credentials: provider
-                    )
+                    ),
+                    connect: connect
                 )
             } else {
                 cloud = PathwayCloudModel()

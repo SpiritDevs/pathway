@@ -21,6 +21,7 @@ enum CompactAppShellMetrics {
         @Binding var selectedDestination: AppDestination?
         @Binding var presentedSheet: MainTabSheet?
         @State private var isMoreMenuPresented = false
+        @State private var isIssueDetailActive = false
         @State private var threadChrome = CompactThreadChromeState()
 
         var body: some View {
@@ -31,12 +32,15 @@ enum CompactAppShellMetrics {
                         newThreadAction: presentNewAgentThread
                     )
                     .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("Settings", systemImage: "gearshape", action: presentSettings)
+                        if activeDestination != .issues {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Settings", systemImage: "gearshape", action: presentSettings)
+                            }
                         }
                     }
                 }
                 .environment(\.compactThreadChrome, threadChrome)
+                .onPreferenceChange(IssueDetailNavigationActiveKey.self) { isIssueDetailActive = $0 }
                 if isNavigationBackdropPresented {
                     Button(action: dismissMoreMenu) {
                         Color.clear
@@ -47,7 +51,7 @@ enum CompactAppShellMetrics {
                     .accessibilityLabel("Dismiss navigation menu")
                 }
 
-                if !threadChrome.isComposerExpanded {
+                if !threadChrome.isComposerExpanded && !isIssueDetailActive {
                     PathwayTabBar(
                         selectedDestination: $selectedDestination,
                         isMoreMenuPresented: $isMoreMenuPresented,

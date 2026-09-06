@@ -52,6 +52,7 @@ private struct PathwayRPCCause: Decodable, Sendable {
 private struct PathwayRPCPendingRequest {
     let envelope: PathwayRPCRequest
     var sent = false
+    var requiresSubscription = false
     let resume: @Sendable (Result<JSONValue, Error>) -> Void
 }
 
@@ -100,6 +101,7 @@ actor PathwayRPCClient {
     private var subscriptionTag: String?
     private var subscriptionPayload: JSONValue?
     private var subscriptionRequestID: Int?
+    private var subscriptionGate = PathwayRPCSubscriptionGate()
     private var subscriptionContinuation: AsyncThrowingStream<JSONValue, Error>.Continuation?
 
     init(
@@ -146,7 +148,7 @@ actor PathwayRPCClient {
         return stream
     }
 
-    func request(_ tag: String, payload: JSONValue) async throws -> JSONValue {
+    func request(_ tag: String, payload: JSONValue, requiresSubscription: Bool = false) async throws -> JSONValue {
         start()
         let id = allocateRequestID()
         let envelope = PathwayRPCRequest(id: id, tag: tag, payload: payload)
@@ -158,6 +160,7 @@ actor PathwayRPCClient {
                 }
                 pending[id] = PathwayRPCPendingRequest(
                     envelope: envelope,
+                    requiresSubscription: requiresSubscription,
                     resume: { continuation.resume(with: $0) }
                 )
                 if socket != nil {
@@ -180,6 +183,7 @@ actor PathwayRPCClient {
         socket = nil
         connectionID = nil
         subscriptionRequestID = nil
+        subscriptionGate.reset()
         subscriptionContinuation?.finish()
         subscriptionContinuation = nil
         for request in pending.values {
@@ -231,6 +235,7 @@ actor PathwayRPCClient {
             await self?.keepaliveLoop(connectionID: id)
         }
         subscriptionRequestID = nil
+        subscriptionGate.reset()
         for pendingID in pending.keys {
             pending[pendingID]?.sent = false
             Task { await self.sendPending(pendingID) }
@@ -266,6 +271,9 @@ actor PathwayRPCClient {
             return
         case "Chunk":
             guard response.requestId == subscriptionRequestID else { return }
+            if subscriptionGate.receiveChunk(requestID: response.requestId) {
+                for id in pending.keys { Task { await self.sendPending(id) } }
+            }
             for value in response.values ?? [] {
                 if case .dropped = subscriptionContinuation?.yield(value) {
                     throw PathwayRPCError.protocolViolation(
@@ -285,8 +293,12 @@ actor PathwayRPCClient {
                 )
             } else if requestID == subscriptionRequestID {
                 subscriptionRequestID = nil
+                subscriptionGate.reset()
                 if exit.envelopeTag != "Success" {
-                    throw PathwayRPCError.remote(Self.remoteMessage(exit))
+                    let error = PathwayRPCError.remote(Self.remoteMessage(exit))
+                    let waiting = pending.filter { $0.value.requiresSubscription }.map(\.key)
+                    for id in waiting { complete(id, result: .failure(error)) }
+                    throw error
                 }
             }
         case "Defect", "ClientProtocolError":
@@ -305,6 +317,7 @@ actor PathwayRPCClient {
         keepaliveTask = nil
         awaitingKeepaliveResponse = false
         subscriptionRequestID = nil
+        subscriptionGate.reset()
         let sentIDs = pending.compactMap { $0.value.sent ? $0.key : nil }
         for id in sentIDs {
             complete(id, result: .failure(PathwayRPCError.disconnected))
@@ -316,7 +329,8 @@ actor PathwayRPCClient {
             let socket,
             let connectionID,
             var request = pending[id],
-            !request.sent
+            !request.sent,
+            subscriptionGate.allowsRequest(requiresSubscription: request.requiresSubscription)
         else { return }
         request.sent = true
         pending[id] = request
@@ -338,6 +352,7 @@ actor PathwayRPCClient {
         else { return }
         let requestID = allocateRequestID()
         subscriptionRequestID = requestID
+        subscriptionGate.open(requestID: requestID)
         let request = PathwayRPCRequest(
             id: requestID,
             tag: subscriptionTag,
@@ -347,6 +362,7 @@ actor PathwayRPCClient {
             try await socket.send(.data(JSONEncoder.pathwayRPC.encode(request)))
         } catch {
             subscriptionRequestID = nil
+            subscriptionGate.reset()
             disconnect(id: connectionID)
         }
     }
@@ -391,6 +407,7 @@ actor PathwayRPCClient {
             try? await sendControl("Interrupt", requestID: subscriptionRequestID)
         }
         subscriptionRequestID = nil
+        subscriptionGate.reset()
         subscriptionContinuation = nil
         subscriptionTag = nil
         subscriptionPayload = nil
@@ -430,3 +447,30 @@ private extension JSONEncoder {
 }
 
 // swiftlint:enable file_length
+
+/// An issue RPC can run only after this socket has acknowledged the current subscription.
+struct PathwayRPCSubscriptionGate {
+    private var requestID: Int?
+    private var ready = false
+
+    mutating func open(requestID: Int) {
+        self.requestID = requestID
+        ready = false
+    }
+
+    mutating func reset() {
+        requestID = nil
+        ready = false
+    }
+
+    /// Returns true once, so stream chunks do not repeatedly reschedule pending requests.
+    mutating func receiveChunk(requestID: Int?) -> Bool {
+        guard let requestID, requestID == self.requestID, !ready else { return false }
+        ready = true
+        return true
+    }
+
+    func allowsRequest(requiresSubscription: Bool) -> Bool {
+        !requiresSubscription || ready
+    }
+}
