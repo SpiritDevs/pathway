@@ -348,6 +348,44 @@ describe("teams.archive", () => {
   });
 });
 
+describe("teams.restore", () => {
+  it("restores the replica flag, preserves membership and is idempotent without changing authorization", async () => {
+    const t = harness();
+    const seeded = await seed(t);
+    await createTeam(t);
+    await asManager(t).mutation(api.teams.addMember, {
+      companyId: COMPANY_ID,
+      teamId: TEAM_ID,
+      membershipId: READER_MEMBERSHIP_ID,
+    });
+    await asManager(t).mutation(api.teams.archive, { companyId: COMPANY_ID, teamId: TEAM_ID });
+    const epoch = await epochOf(t, seeded.companyDocId);
+    await asManager(t).mutation(api.teams.restore, { companyId: COMPANY_ID, teamId: TEAM_ID });
+    const rows = await feedRows(t);
+    expect(rows.at(-1)).toMatchObject({
+      entityKind: "team",
+      changeKind: "upsert",
+      payload: { archivedAt: null },
+    });
+    expect(await epochOf(t, seeded.companyDocId)).toBe(epoch);
+    await asManager(t).mutation(api.teams.restore, { companyId: COMPANY_ID, teamId: TEAM_ID });
+    expect(await feedRows(t)).toEqual(rows);
+    const teams = await asManager(t).query(api.teams.list, { companyId: COMPANY_ID });
+    expect(teams[0]).toMatchObject({ id: TEAM_ID, archivedAt: null, memberCount: 1 });
+  });
+
+  it("requires team administration permission", async () => {
+    const t = harness();
+    await seed(t);
+    await createTeam(t);
+    await asManager(t).mutation(api.teams.archive, { companyId: COMPANY_ID, teamId: TEAM_ID });
+    await expect(
+      asMember(t, "reader").mutation(api.teams.restore, { companyId: COMPANY_ID, teamId: TEAM_ID }),
+    ).rejects.toThrow();
+    expect((await feedRows(t)).at(-1)?.payload?.archivedAt).not.toBeNull();
+  });
+});
+
 describe("teams.addMember", () => {
   it("joins the pair under the composite id, emits the upsert, and bumps the epoch", async () => {
     const t = harness();

@@ -14,7 +14,7 @@ export function OrchestratorSidebar() {
             AI Orchestrator
           </SidebarGroupLabel>
           <p className="px-2 py-3 text-xs leading-relaxed text-sidebar-muted-foreground/70">
-            Your orchestrator agents and workflows will appear here.
+            Review agent requests, follow running work, and start a thread in a connected project.
           </p>
         </SidebarGroup>
       </SidebarContent>

@@ -64,6 +64,7 @@ describe("company admin function references", () => {
       createTeam: "teams:create",
       updateTeam: "teams:update",
       archiveTeam: "teams:archive",
+      restoreTeam: "teams:restore",
       addTeamMember: "teams:addMember",
       removeTeamMember: "teams:removeMember",
       createRole: "roles:create",

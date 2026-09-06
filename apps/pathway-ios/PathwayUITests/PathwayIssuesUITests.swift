@@ -71,6 +71,8 @@ final class PathwayIssuesUITests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["issue-save"].isEnabled)
         title.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5),
+                      "This workflow requires the software keyboard. Turn off Simulator > I/O > Keyboard > Connect Hardware Keyboard.")
         title.typeText("Composer property selections")
         capture(app, name: "New issue composer with keyboard")
 
@@ -101,11 +103,11 @@ final class PathwayIssuesUITests: XCTestCase {
             expectation(for: NSPredicate(format: "selected == true"), evaluatedWith: selected)
         }
         waitForExpectations(timeout: 5)
-        expectation(for: NSPredicate { _, _ in app.keyboards.keys["space"].isHittable }, evaluatedWith: app)
-        waitForExpectations(timeout: 5)
         capture(app, name: "Labels card with multiple selections")
-        search.tap()
+        // Type without re-focusing: iPad keyboard layouts need not expose a key
+        // named "space", but selection must preserve a usable search field.
         search.typeText("Backend")
+        XCTAssertEqual(search.value as? String, "Backend")
         XCTAssertFalse(app.buttons["issue-picker-option-sim-ai"].exists)
         app.buttons["issue-picker-option-sim-backend"].tap()
         app.buttons["issue-picker-close"].tap()
@@ -182,7 +184,9 @@ final class PathwayIssuesUITests: XCTestCase {
         XCTAssertEqual(comment.value as? String, "Keep this parent draft")
         app.navigationBars["PW-248"].buttons.element(boundBy: 0).tap()
         XCTAssertTrue(first.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["agent-orchestrator-button"].isHittable)
+        let orchestrator = app.buttons["Open agent orchestrator"]
+        XCTAssertTrue(orchestrator.waitForExistence(timeout: 5))
+        XCTAssertTrue(orchestrator.isHittable)
     }
 
     @MainActor
@@ -277,9 +281,15 @@ final class PathwayIssuesUITests: XCTestCase {
         capture(app, name: "Board issue reordered")
         let target = app.buttons["issue-row-PW-255"]
         XCTAssertTrue(target.exists)
-        let visibleTargetX = min(target.frame.maxX, app.frame.maxX) - 16
-        XCTAssertGreaterThan(visibleTargetX, target.frame.minX)
-        let destination = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: visibleTargetX, dy: target.frame.midY))
+        let board = app.scrollViews["issues-board"]
+        let visibleTarget = target.frame.intersection(board.frame).intersection(app.frame)
+        XCTAssertGreaterThan(visibleTarget.width, 16)
+        XCTAssertGreaterThan(visibleTarget.height, 16)
+        // Stay away from a fully visible row's edge: horizontal drag autoscroll
+        // can move that edge out from under a coordinate chosen before the drag.
+        let destination = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(
+            dx: visibleTarget.midX - app.frame.minX, dy: visibleTarget.midY - app.frame.minY
+        ))
         row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .press(forDuration: 0.5, thenDragTo: destination, withVelocity: .slow, thenHoldForDuration: 0.3)
         expectation(for: NSPredicate(format: "value CONTAINS %@", "In progress"), evaluatedWith: row)

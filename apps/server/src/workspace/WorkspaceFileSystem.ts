@@ -7,6 +7,7 @@
  *
  * @module WorkspaceFileSystem
  */
+import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 
 import type {
@@ -21,6 +22,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
@@ -92,11 +94,21 @@ export class WorkspaceBinaryFileError extends Schema.TaggedErrorClass<WorkspaceB
   }
 }
 
+export class WorkspaceFileRevisionConflictError extends Schema.TaggedErrorClass<WorkspaceFileRevisionConflictError>()(
+  "WorkspaceFileRevisionConflictError",
+  { workspaceRoot: Schema.String, relativePath: Schema.String, resolvedPath: Schema.String },
+) {
+  override get message(): string {
+    return `Workspace file '${this.relativePath}' changed. Reload it before saving your edits.`;
+  }
+}
+
 export const WorkspaceFileSystemError = Schema.Union([
   WorkspaceFileSystemOperationError,
   WorkspaceFilePathEscapeError,
   WorkspacePathNotFileError,
   WorkspaceBinaryFileError,
+  WorkspaceFileRevisionConflictError,
 ]);
 export type WorkspaceFileSystemError = typeof WorkspaceFileSystemError.Type;
 
@@ -132,7 +144,7 @@ export const make = Effect.gen(function* () {
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
 
-  const readFile: WorkspaceFileSystem["Service"]["readFile"] = Effect.fn(
+  const readFileUnlocked: WorkspaceFileSystem["Service"]["readFile"] = Effect.fn(
     "WorkspaceFileSystem.readFile",
   )(function* (input) {
     const target = yield* workspacePaths.resolveRelativePathWithinRoot({
@@ -240,7 +252,10 @@ export const make = Effect.gen(function* () {
             relativePath: target.relativePath,
             contents: new TextDecoder("utf-8").decode(fileBytes),
             byteLength: stat.size,
-            truncated: stat.size > PROJECT_READ_FILE_MAX_BYTES,
+            truncated: stat.size > PROJECT_READ_FILE_MAX_BYTES || bytesRead !== stat.size,
+            ...(bytesRead === stat.size
+              ? { revision: NodeCrypto.createHash("sha256").update(fileBytes).digest("hex") }
+              : {}),
           };
         }),
       (handle) =>
@@ -259,13 +274,24 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const writeFile: WorkspaceFileSystem["Service"]["writeFile"] = Effect.fn(
+  const writeFileUnlocked: WorkspaceFileSystem["Service"]["writeFile"] = Effect.fn(
     "WorkspaceFileSystem.writeFile",
   )(function* (input) {
     const target = yield* workspacePaths.resolveRelativePathWithinRoot({
       workspaceRoot: input.cwd,
       relativePath: input.relativePath,
     });
+
+    if (input.expectedRevision !== undefined) {
+      const current = yield* readFileUnlocked(input);
+      if (current.truncated || current.revision !== input.expectedRevision) {
+        return yield* new WorkspaceFileRevisionConflictError({
+          workspaceRoot: input.cwd,
+          relativePath: input.relativePath,
+          resolvedPath: target.absolutePath,
+        });
+      }
+    }
 
     yield* fileSystem.makeDirectory(path.dirname(target.absolutePath), { recursive: true }).pipe(
       Effect.mapError(
@@ -294,9 +320,42 @@ export const make = Effect.gen(function* () {
       ),
     );
     yield* workspaceEntries.refresh(input.cwd);
-    return { relativePath: target.relativePath };
+    return {
+      relativePath: target.relativePath,
+      revision: NodeCrypto.createHash("sha256").update(input.contents, "utf8").digest("hex"),
+    };
   });
 
+  // Serializes compare-and-write across this environment's API clients. External
+  // editor/provider processes do not participate in these locks.
+  const fileLocks = new Map<string, { semaphore: Semaphore.Semaphore; users: number }>();
+  const withFileLock = <A, E>(input: ProjectReadFileInput, operation: Effect.Effect<A, E>) =>
+    Effect.gen(function* () {
+      const target = yield* workspacePaths.resolveRelativePathWithinRoot({
+        workspaceRoot: input.cwd,
+        relativePath: input.relativePath,
+      });
+      const key = yield* Effect.promise(() =>
+        NodeFSP.realpath(target.absolutePath).catch(() => target.absolutePath),
+      );
+      return yield* Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const lock = fileLocks.get(key) ?? { semaphore: Semaphore.makeUnsafe(1), users: 0 };
+          lock.users += 1;
+          fileLocks.set(key, lock);
+          return lock;
+        }),
+        (lock) => lock.semaphore.withPermits(1)(operation),
+        (lock) =>
+          Effect.sync(() => {
+            if (--lock.users === 0) fileLocks.delete(key);
+          }),
+      );
+    });
+  const readFile: WorkspaceFileSystem["Service"]["readFile"] = (input) =>
+    withFileLock(input, readFileUnlocked(input));
+  const writeFile: WorkspaceFileSystem["Service"]["writeFile"] = (input) =>
+    withFileLock(input, writeFileUnlocked(input));
   return WorkspaceFileSystem.of({ readFile, writeFile });
 });
 

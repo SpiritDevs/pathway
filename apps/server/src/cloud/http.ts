@@ -273,7 +273,8 @@ function requestAbsoluteUrl(request: HttpServerRequest.HttpServerRequest): strin
 function hasForwardedAuthorityHeaders(request: HttpServerRequest.HttpServerRequest): boolean {
   return (
     firstForwardedHeaderValue(request.headers["x-forwarded-host"]) !== undefined ||
-    firstForwardedHeaderValue(request.headers["x-forwarded-proto"]) !== undefined
+    firstForwardedHeaderValue(request.headers["x-forwarded-proto"]) !== undefined ||
+    firstForwardedHeaderValue(request.headers["forwarded"]) !== undefined
   );
 }
 
@@ -289,6 +290,59 @@ export function managedTunnelLocalPortFromRequest(
   const url = new URL(requestUrl);
   return isLoopbackHostname(url.hostname) ? endpointRequestPort(url) : null;
 }
+
+/** Remote pairing may configure only this listener, authenticated with an admin DPoP session. */
+export const authorizeCloudLinkOrigin = Effect.fn("environment.cloud.authorizeLinkOrigin")(
+  function* (
+    currentLocalHttpPort: number | undefined,
+    requestedOrigin?: RelayManagedEndpointOrigin,
+  ) {
+    const principal = yield* requireEnvironmentScope(AuthRelayWriteScope);
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const requestUrl = requestAbsoluteUrl(request);
+    if (requestUrl === null || hasForwardedAuthorityHeaders(request)) {
+      return yield* new EnvironmentHttpBadRequestError({
+        message: "Invalid managed endpoint origin.",
+      });
+    }
+    const url = new URL(requestUrl);
+    const localBrowser =
+      principal.method !== "dpop-access-token" &&
+      isLoopbackHostname(url.hostname) &&
+      (Option.isNone(request.remoteAddress) || isLoopbackHostname(request.remoteAddress.value));
+    if (
+      !localBrowser &&
+      (principal.method !== "dpop-access-token" || !principal.proofKeyThumbprint)
+    ) {
+      return yield* new EnvironmentHttpUnauthorizedError({
+        message: "Remote account linking requires an administrator DPoP pairing session.",
+      });
+    }
+    // Legacy desktop browser sessions retain their direct loopback flow. DPoP clients always
+    // target the configured listener, even when the request Host claims to be loopback.
+    const localHttpPort = localBrowser ? endpointRequestPort(url) : currentLocalHttpPort;
+    if (
+      localHttpPort === undefined ||
+      !Number.isInteger(localHttpPort) ||
+      localHttpPort < 1 ||
+      localHttpPort > 65_535
+    ) {
+      return yield* new EnvironmentHttpBadRequestError({
+        message: "The server has no configured local listener for remote account linking.",
+      });
+    }
+    if (
+      requestedOrigin !== undefined &&
+      (!isLoopbackHostname(requestedOrigin.localHttpHost) ||
+        requestedOrigin.localHttpPort !== localHttpPort)
+    ) {
+      return yield* new EnvironmentHttpBadRequestError({
+        message: "Invalid managed endpoint origin.",
+      });
+    }
+    return { localHttpHost: "127.0.0.1", localHttpPort };
+  },
+);
 
 function isAllowedEndpointOrigin(input: {
   readonly origin: RelayManagedEndpointOrigin;
@@ -464,15 +518,15 @@ const makeCloudLinkProof = Effect.fn("environment.cloud.makeLinkProof")(function
 
 const cloudLinkProofHandler = Effect.fn("environment.cloud.linkProof")(
   function* (dependencies: CloudHttpDependencies, request: RelayLinkProofRequest) {
-    yield* requireEnvironmentScope(AuthRelayWriteScope);
-    const httpRequest = yield* HttpServerRequest.HttpServerRequest;
-    const requestUrl = requestAbsoluteUrl(httpRequest);
-    if (requestUrl === null || hasForwardedAuthorityHeaders(httpRequest)) {
-      return yield* new EnvironmentHttpBadRequestError({
-        message: "Invalid managed endpoint origin.",
-      });
-    }
-    const proof = yield* makeCloudLinkProof(dependencies, request, requestUrl);
+    const origin = yield* authorizeCloudLinkOrigin(
+      dependencies.currentLocalHttpPort,
+      request.origin,
+    );
+    const proof = yield* makeCloudLinkProof(
+      dependencies,
+      { ...request, origin },
+      `http://127.0.0.1:${origin.localHttpPort}`,
+    );
     yield* appendCloudCredentialResponseHeaders;
     return proof satisfies RelayEnvironmentLinkProof;
   },
@@ -544,14 +598,8 @@ const cloudRelayConfigHandler = Effect.fn("environment.cloud.relayConfig")(
     if (!payload.endpointRuntime) {
       return yield* applyCloudRelayConfig(dependencies, payload);
     }
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const managedTunnelLocalPort = managedTunnelLocalPortFromRequest(request);
-    if (managedTunnelLocalPort === null) {
-      return yield* new EnvironmentHttpBadRequestError({
-        message: "Invalid managed endpoint origin.",
-      });
-    }
-    return yield* applyCloudRelayConfig(dependencies, payload, managedTunnelLocalPort);
+    const origin = yield* authorizeCloudLinkOrigin(dependencies.currentLocalHttpPort);
+    return yield* applyCloudRelayConfig(dependencies, payload, origin.localHttpPort);
   },
   Effect.catchIf(
     ServerSecretStore.isSecretStoreError,
@@ -1210,7 +1258,12 @@ export const connectHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "connect",
   Effect.fnUntraced(function* (handlers) {
-    const dependencies = yield* cloudHttpDependencies;
+    const baseDependencies = yield* cloudHttpDependencies;
+    const serverConfig = yield* ServerConfig.ServerConfig;
+    const dependencies = {
+      ...baseDependencies,
+      ...(serverConfig.port > 0 ? { currentLocalHttpPort: serverConfig.port } : {}),
+    };
     return handlers
       .handle("linkProof", ({ payload }) => cloudLinkProofHandler(dependencies, payload))
       .handle("relayConfig", ({ payload }) => cloudRelayConfigHandler(dependencies, payload))

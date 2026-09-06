@@ -10,13 +10,15 @@ import SwiftUI
 
 @main
 struct PathwayApp: App {
+    @Environment(\.scenePhase) private var scenePhase
+    @UIApplicationDelegateAdaptor(PathwayNotificationDelegate.self) private var notificationDelegate
     @State private var appModel: PathwayAppModel?
     private let missingConfigurationKeys: [String]
 
     init() {
         missingConfigurationKeys = AppConfiguration.missingRequiredKeys
         #if DEBUG && !os(visionOS)
-        if ProcessInfo.processInfo.arguments.contains("--uitest-issues") || ProcessInfo.processInfo.arguments.contains("--uitest-conversation") {
+        if ProcessInfo.processInfo.arguments.contains("--uitest-issues") || ProcessInfo.processInfo.arguments.contains("--uitest-conversation") || ProcessInfo.processInfo.arguments.contains("--uitest-parity") {
             _appModel = State(initialValue: nil)
             return
         }
@@ -56,12 +58,13 @@ struct PathwayApp: App {
             WindowGroup {
                 mainContent
             }
+            .commands { PathwayKeyboardCommands(isAvailable: appModel?.isAccountReady == true) }
             .defaultSize(width: 1180, height: 820)
             .windowResizability(.contentMinSize)
 
             WindowGroup("Pathway Agent", id: PathwayWindow.agentOrchestrator.rawValue) {
                 configuredContent {
-                    AgentOrchestratorView()
+                    AgentOrchestratorView(isSeparateWindow: true)
                         .frame(minWidth: 560, minHeight: 620)
                 }
             }
@@ -71,7 +74,7 @@ struct PathwayApp: App {
             WindowGroup("Pathway Settings", id: PathwayWindow.settings.rawValue) {
                 configuredContent {
                     NavigationStack {
-                        PathwaySettingsView()
+                        PathwaySettingsView(isSeparateWindow: true)
                     }
                     .frame(minWidth: 420, minHeight: 480)
                 }
@@ -82,6 +85,7 @@ struct PathwayApp: App {
             WindowGroup {
                 mainContent
             }
+            .commands { PathwayKeyboardCommands(isAvailable: appModel?.isAccountReady == true) }
         #endif
     }
 
@@ -92,6 +96,8 @@ struct PathwayApp: App {
             PathwayIssuesSimulatorScene()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-conversation") {
             PathwayConversationSimulatorScene()
+        } else if ProcessInfo.processInfo.arguments.contains("--uitest-parity") {
+            PathwayParitySimulatorScene()
         } else {
             authenticatedContent
         }
@@ -104,9 +110,29 @@ struct PathwayApp: App {
     private var authenticatedContent: some View {
         if let appModel {
             InitView()
+                .modifier(PathwayAppearanceModifier())
                 .environment(Clerk.shared)
                 .environment(appModel)
                 .onOpenURL(perform: handleOpenURL)
+                .task {
+                    notificationDelegate.onOpenThread = { appModel.openProductLink($0) }
+                    if let link = notificationDelegate.pendingLink {
+                        appModel.openProductLink(link)
+                        notificationDelegate.pendingLink = nil
+                    }
+                }
+                .onChange(of: appModel.workWidgetCounts) { _, _ in appModel.updateWorkWidget() }
+                .onChange(of: appModel.cloud.isConnected) { _, _ in appModel.updateWorkWidget() }
+                .onChange(of: appModel.cloud.cachedAt) { _, _ in appModel.updateWorkWidget() }
+                .onChange(of: appModel.isAccountReady) { _, ready in if ready { appModel.resolveProductLink() } }
+                .onChange(of: appModel.cloud.threads.map(\.id)) { _, _ in appModel.resolveProductLink() }
+                .onChange(of: scenePhase) { _, phase in
+                    if phase == .active { Task {
+                        await PathwayNotifications.shared.foreground()
+                        await PathwayCaptureInbox.shared.refresh()
+                        appModel.updateWorkWidget()
+                    } }
+                }
         } else {
             MissingConfigurationView(keys: missingConfigurationKeys)
         }
@@ -117,7 +143,18 @@ struct PathwayApp: App {
         @ViewBuilder content: () -> some View
     ) -> some View {
         if let appModel {
-            content()
+            Group {
+                if appModel.authenticationState == .signedIn && appModel.isAccountReady {
+                    content().id(appModel.localStorageDirectory)
+                } else if appModel.authenticationState == .signedOut {
+                    ContentUnavailableView {
+                        Label("Sign in to Pathway", systemImage: "person.crop.circle")
+                    } description: { Text("Sign in to open your workspace in this window.") } actions: {
+                        Button("Sign in") { Task { await appModel.signIn() } }
+                    }
+                } else { ProgressView("Preparing your workspace") }
+            }
+                .modifier(PathwayAppearanceModifier())
                 .environment(Clerk.shared)
                 .environment(appModel)
         } else {
@@ -126,6 +163,14 @@ struct PathwayApp: App {
     }
 
     private func handleOpenURL(_ url: URL) {
+        if let request = PathwaySystemRequest(workURL: url) {
+            PathwaySystemEntry.shared.request = request
+            return
+        }
+        if let link = PathwayProductLink(url: url, allowedWebHost: "app.spiritdevs.com") {
+            appModel?.openProductLink(link)
+            return
+        }
         Task {
             try? await Clerk.shared.handle(url)
         }

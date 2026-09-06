@@ -35,16 +35,21 @@ final class PathwayAuthProvider: PathwayAuthenticating {
     var onSessionChanged: ((Bool) -> Void)?
 
     private var sessionObservationTask: Task<Void, Never>?
+    private var observedSessionID: String?
 
     var hasActiveSession: Bool {
         Clerk.shared.session?.status == .active
     }
 
     init() {
+        observedSessionID = hasActiveSession ? Clerk.shared.session?.id : nil
         sessionObservationTask = Task { @MainActor [weak self] in
             for await _ in Clerk.shared.auth.events {
                 guard let self, !Task.isCancelled else { return }
-                onSessionChanged?(hasActiveSession)
+                let sessionID = hasActiveSession ? Clerk.shared.session?.id : nil
+                guard sessionID != observedSessionID else { continue }
+                observedSessionID = sessionID
+                onSessionChanged?(sessionID != nil)
             }
         }
     }

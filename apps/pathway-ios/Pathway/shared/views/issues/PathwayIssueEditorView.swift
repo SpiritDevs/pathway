@@ -158,7 +158,9 @@ struct PathwayIssueEditorView: View {
                     if let errorMessage { Text(errorMessage).font(.subheadline).foregroundStyle(.red) }
                 }.padding(.horizontal, 20).padding(.bottom, 20)
             }
+            #if !os(visionOS)
             .scrollDismissesKeyboard(.interactively)
+            #endif
         }
     }
 

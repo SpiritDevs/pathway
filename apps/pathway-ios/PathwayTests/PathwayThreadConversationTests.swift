@@ -4,6 +4,36 @@ import Testing
 
 @MainActor
 struct PathwayThreadConversationTests {
+    @Test func streamingUpdatesPreserveOrderingAndReorderedItemsMove() throws {
+        let model = makeModel { _, _ in .object([:]) }
+        func item(_ id: String, _ ordinal: Int, _ text: String) -> JSONValue {
+            .object(["id": .string(id), "ordinal": .number(Double(ordinal)), "type": .string("assistant_message"), "text": .string(text)])
+        }
+        for (index, value) in [item("b", 2, "second"), item("a", 1, "first"), item("c", 2, "third"), item("b", 2, "streamed")].enumerated() {
+            model.applySubscriptionValue(event(sequence: index + 1, type: "turn-item.updated", payload: value))
+        }
+        #expect(model.items.map(\.id) == ["a", "b", "c"])
+        #expect(model.items[1].text == "streamed")
+        model.applySubscriptionValue(event(sequence: 5, type: "turn-item.updated", payload: item("a", 3, "moved")))
+        #expect(model.items.map(\.id) == ["b", "c", "a"])
+    }
+
+    @Test func conversationCacheRejectsOversizedSnapshotsAndBoundsTotalBytes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = PathwayThreadCache(directory: directory, maximumFileBytes: 2_048, maximumTotalBytes: 1_800)
+        let item = try #require(PathwayTimelineItem(json: .object(["id": .string("item"), "ordinal": .number(1), "type": .string("assistant_message"), "text": .string(String(repeating: "a", count: 400))])))
+        await cache.save(items: [item], threadID: "first", revision: 1)
+        #expect(await cache.load(threadID: "first") != nil)
+        await cache.save(items: [item], threadID: "second", revision: 2)
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey])
+        let bytes = try files.reduce(0) { try $0 + ($1.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) }
+        #expect(bytes <= 1_800)
+        let oversized = try #require(PathwayTimelineItem(json: .object(["id": .string("item"), "ordinal": .number(1), "type": .string("assistant_message"), "text": .string(String(repeating: "b", count: 2_000))])))
+        await cache.save(items: [oversized], threadID: "second", revision: 3)
+        #expect(await cache.load(threadID: "second") == nil)
+    }
+
     @Test func modelCatalogKeepsUnconfiguredProvidersWithoutMakingThemSelectable() {
         let model = makeModel { _, _ in .object([:]) }
         func provider(_ id: String, installed: Bool, auth: String = "authenticated") -> JSONValue {

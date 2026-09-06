@@ -67,7 +67,7 @@ enum AppDestination: String, CaseIterable, Identifiable, Hashable, Sendable {
 
     var description: String {
         switch self {
-        case .dashboard: "Your Pathway workspace overview will appear here."
+        case .dashboard: "Review work that needs attention and continue recent threads."
         case .issues: "Track work that needs attention across your environments."
         case .agentThreads: "Continue conversations with your Pathway agents."
         case .email: "Read and work through your email with Pathway."
@@ -109,8 +109,7 @@ enum AppDestination: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .email:
             [
                 .init(id: "inbox", title: "Inbox", systemImage: "tray"),
-                .init(id: "starred", title: "Starred", systemImage: "star"),
-                .init(id: "sent", title: "Sent", systemImage: "paperplane")
+                .init(id: "unread", title: "Unread", systemImage: "envelope.badge")
             ]
         case .sourceControl:
             [
@@ -121,24 +120,26 @@ enum AppDestination: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .calendar:
             [
                 .init(id: "schedule", title: "Schedule", systemImage: "calendar"),
-                .init(id: "upcoming", title: "Upcoming", systemImage: "calendar.badge.clock")
+                .init(id: "day", title: "Day", systemImage: "calendar.day.timeline.left"),
+                .init(id: "week", title: "Week", systemImage: "calendar"),
+                .init(id: "month", title: "Month", systemImage: "calendar"),
+                .init(id: "timeline", title: "Work timeline", systemImage: "chart.bar.xaxis")
             ]
         case .projects:
             [
                 .init(id: "all", title: "All projects", systemImage: "folder"),
-                .init(id: "recent", title: "Recent", systemImage: "clock.arrow.circlepath"),
-                .init(id: "archived", title: "Archived", systemImage: "archivebox")
+                .init(id: "recent", title: "Recent", systemImage: "clock.arrow.circlepath")
             ]
         case .contacts:
             [
                 .init(id: "people", title: "People", systemImage: "person.2"),
-                .init(id: "teams", title: "Teams", systemImage: "person.3")
+                .init(id: "favorites", title: "Favorites", systemImage: "star")
             ]
         case .timeTracker:
             [
                 .init(id: "today", title: "Today", systemImage: "clock"),
                 .init(id: "this-week", title: "This week", systemImage: "calendar.day.timeline.left"),
-                .init(id: "reports", title: "Reports", systemImage: "chart.bar")
+                .init(id: "all", title: "All sessions", systemImage: "list.bullet")
             ]
         }
     }

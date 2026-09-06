@@ -142,6 +142,9 @@ export const COMPANY_ADMIN_FUNCTION_REFERENCES = {
   archiveTeam: mutationReference<{ readonly companyId: CompanyId; readonly teamId: TeamId }, null>(
     "teams:archive",
   ),
+  restoreTeam: mutationReference<{ readonly companyId: CompanyId; readonly teamId: TeamId }, null>(
+    "teams:restore",
+  ),
   addTeamMember: mutationReference<
     {
       readonly companyId: CompanyId;
@@ -262,6 +265,10 @@ export interface CompanyAdminClient {
     readonly companyId: CompanyId;
     readonly teamId: TeamId;
   }) => Promise<void>;
+  readonly restoreTeam: (args: {
+    readonly companyId: CompanyId;
+    readonly teamId: TeamId;
+  }) => Promise<void>;
   readonly addTeamMember: (args: {
     readonly companyId: CompanyId;
     readonly teamId: TeamId;
@@ -333,6 +340,7 @@ export function makeCompanyAdminClient(options: {
     createTeam: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.createTeam, args),
     updateTeam: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.updateTeam, args),
     archiveTeam: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.archiveTeam, args),
+    restoreTeam: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.restoreTeam, args),
     addTeamMember: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.addTeamMember, args),
     removeTeamMember: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.removeTeamMember, args),
     createRole: (args) => mutation(COMPANY_ADMIN_FUNCTION_REFERENCES.createRole, args),

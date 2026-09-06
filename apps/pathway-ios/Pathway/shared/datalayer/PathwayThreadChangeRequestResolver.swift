@@ -51,7 +51,8 @@ enum PathwayThreadChangeRequestResolver {
         environments: [PathwayCompanyEnvironment],
         bindings: [PathwayCompanyEnvironmentBinding]
     ) -> Candidate? {
-        guard let branch = thread.shell.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard !thread.isRunning,
+              let branch = thread.shell.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
               !branch.isEmpty,
               let environment = environments.first(where: {
                   $0.companyId == thread.companyId
@@ -89,14 +90,17 @@ enum PathwayThreadChangeRequestResolver {
             try await connect.prepare(environment: environment).webSocketURL
         }
         var resolutions: [PathwayThreadChangeRequestResolution] = []
+        var statusesByDirectory: [String: JSONValue] = [:]
 
         for candidate in candidates {
             guard !Task.isCancelled else { break }
             do {
-                let value = try await rpc.request(
-                    "vcs.refreshStatus",
-                    payload: .object(["cwd": .string(candidate.cwd)])
-                )
+                let value: JSONValue
+                if let cached = statusesByDirectory[candidate.cwd] { value = cached }
+                else {
+                    value = try await rpc.request("vcs.refreshStatus", payload: .object(["cwd": .string(candidate.cwd)]))
+                    statusesByDirectory[candidate.cwd] = value
+                }
                 guard value.objectValue?["refName"]?.stringValue == candidate.branch else {
                     resolutions.append(
                         PathwayThreadChangeRequestResolution(

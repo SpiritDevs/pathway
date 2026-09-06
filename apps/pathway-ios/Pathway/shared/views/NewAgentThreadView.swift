@@ -1,12 +1,17 @@
 import SwiftUI
 
 struct NewAgentThreadView: View {
+    var onClose: (() -> Void)? = nil
+    var initialPrompt: String = ""
+    var capturedDraft: PathwayCapturedDraft? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(PathwayAppModel.self) private var appModel
 
     @State private var selectedProjectID: String?
     @State private var selectedBindingID = ""
     @State private var model: PathwayAgentThreadCreationModel?
+    @State private var appliedInitialPrompt = false
+    @State private var appliedCapture = false
 
     var body: some View {
         NavigationStack {
@@ -42,13 +47,23 @@ struct NewAgentThreadView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: close)
                 }
+                if capturedDraft != nil, !appliedCapture, let model, model.errorMessage != nil {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Retry Import") { Task { await applyIncomingDraft() } }
+                            .disabled(model.connectionState != .live || model.isImportingCapture)
+                    }
+                }
             }
         }
         .task(id: selectedBindingID) {
             await configureSelection()
         }
+        .task(id: model?.connectionState) {
+            await applyIncomingDraft()
+        }
         .onDisappear {
-            Task { await model?.stop() }
+            let departing = model
+            Task { await departing?.stop() }
         }
     }
 
@@ -105,8 +120,8 @@ struct NewAgentThreadView: View {
     }
 
     private func configureSelection() async {
-        let previous = model.map(PathwayNewThreadDraft.init(model:))
         await model?.stop()
+        guard !Task.isCancelled else { return }
         model = nil
         guard
             let option = bindingOptions.first(where: { $0.id == selectedBindingID }),
@@ -115,15 +130,35 @@ struct NewAgentThreadView: View {
         let nextModel = PathwayAgentThreadCreationModel(
             binding: option.binding,
             environment: option.environment,
-            connect: connect
+            connect: connect,
+            storageDirectory: appModel.localStorageDirectory
         )
-        previous?.apply(to: nextModel)
         model = nextModel
         nextModel.start()
     }
 
+    private func applyIncomingDraft() async {
+        guard let model, model.connectionState == .live else { return }
+        await model.restoreDraft()
+        guard !Task.isCancelled else { return }
+        if !appliedInitialPrompt, !initialPrompt.isEmpty {
+            let combined = [model.prompt, initialPrompt].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            if combined.count <= 120_000 {
+                model.prompt = combined
+                await model.persistDraftNow()
+                appliedInitialPrompt = true
+            }
+        }
+        if !appliedCapture, let capturedDraft, let store = PathwayCaptureInbox.shared.store {
+            if await model.importCapturedDraft(capturedDraft, store: store) {
+                appliedCapture = true
+                await PathwayCaptureInbox.shared.remove(capturedDraft)
+            }
+        }
+    }
+
     private func close() {
-        dismiss()
+        if let onClose { onClose() } else { dismiss() }
     }
 
     private func didLaunch(threadID: String) {
@@ -134,7 +169,7 @@ struct NewAgentThreadView: View {
                 threadId: threadID
             )
         }
-        dismiss()
+        close()
     }
 
     private func unavailable(title: String, message: String) -> some View {
@@ -159,6 +194,7 @@ private struct NewAgentThreadComposer: View {
 
     @FocusState private var promptFocused: Bool
     @State private var showsSettings = false
+    @State private var showsBranches = false
 
     var body: some View {
         ZStack {
@@ -196,7 +232,7 @@ private struct NewAgentThreadComposer: View {
             VStack(spacing: 4) {
                 if let model {
                     workspaceSummary(model)
-                    composer(model)
+                    composer(model).disabled(model.isImportingCapture)
                 } else {
                     HStack(spacing: 10) {
                         ProgressView()
@@ -209,6 +245,9 @@ private struct NewAgentThreadComposer: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 12)
             .background(.background)
+        }
+        .sheet(isPresented: $showsBranches) {
+            if let model { NewAgentThreadBranchPicker(model: model).presentationDetents([.medium, .large]) }
         }
         .sheet(isPresented: $showsSettings) {
             if let model {
@@ -272,7 +311,7 @@ private struct NewAgentThreadComposer: View {
 
             if model.workspaceMode == "worktree" {
                 Button {
-                    showsSettings = true
+                    showsBranches = true
                 } label: {
                     Label(model.baseReference, systemImage: "arrow.triangle.branch")
                 }
@@ -283,17 +322,13 @@ private struct NewAgentThreadComposer: View {
         .buttonStyle(.plain)
         .font(.subheadline)
         .foregroundStyle(.secondary)
-        .frame(minHeight: 40)
+        .frame(minHeight: 44)
         .padding(.horizontal, 8)
     }
 
     private func composer(_ model: PathwayAgentThreadCreationModel) -> some View {
-        @Bindable var model = model
         return VStack(spacing: 12) {
-            TextField("Ask anything…", text: $model.prompt, axis: .vertical)
-                .lineLimit(3 ... 8)
-                .focused($promptFocused)
-                .textFieldStyle(.plain)
+            NewAgentThreadMessageEditor(model: model, isFocused: $promptFocused)
 
             HStack(spacing: 10) {
                 Button("Thread settings", systemImage: "slider.horizontal.3") {
@@ -324,6 +359,7 @@ private struct NewAgentThreadComposer: View {
                 .accessibilityLabel("Start agent thread")
             }
 
+            if model.isImportingCapture { ProgressView("Importing shared draft…").font(.caption) }
             if let statusMessage = statusMessage(model) {
                 Text(statusMessage)
                     .font(.caption)

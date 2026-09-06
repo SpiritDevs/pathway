@@ -26,6 +26,8 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+import { businessToolsTables } from "./lib/businessToolsSchema.ts";
+
 import { repositoryIdentityArg } from "./lib/validators.ts";
 
 /** Client-generated domain id (UUIDv7). Distinct from a Convex `_id`. */
@@ -172,6 +174,7 @@ const relayActivityAggregateState = v.object({
 });
 
 export default defineSchema({
+  ...businessToolsTables,
   // ---------------------------------------------------------------------------
   // Identity, companies, and authorization
   // ---------------------------------------------------------------------------
@@ -1210,7 +1213,7 @@ export default defineSchema({
     userId: v.string(),
     deviceId: v.string(),
     label: v.string(),
-    platform: v.literal("ios"),
+    platform: v.union(v.literal("ios"), v.literal("visionos")),
     iosMajorVersion: v.number(),
     appVersion: v.union(v.string(), v.null()),
     bundleId: v.union(v.string(), v.null()),

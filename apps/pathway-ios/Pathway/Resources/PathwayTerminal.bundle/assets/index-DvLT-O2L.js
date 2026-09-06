@@ -1,0 +1,2622 @@
+(function () {
+  let e = document.createElement(`link`).relList;
+  if (e && e.supports && e.supports(`modulepreload`)) return;
+  for (let e of document.querySelectorAll(`link[rel="modulepreload"]`)) n(e);
+  new MutationObserver((e) => {
+    for (let t of e)
+      if (t.type === `childList`)
+        for (let e of t.addedNodes) e.tagName === `LINK` && e.rel === `modulepreload` && n(e);
+  }).observe(document, { childList: !0, subtree: !0 });
+  function t(e) {
+    let t = {};
+    return (
+      e.integrity && (t.integrity = e.integrity),
+      e.referrerPolicy && (t.referrerPolicy = e.referrerPolicy),
+      e.crossOrigin === `use-credentials`
+        ? (t.credentials = `include`)
+        : e.crossOrigin === `anonymous`
+          ? (t.credentials = `omit`)
+          : (t.credentials = `same-origin`),
+      t
+    );
+  }
+  function n(e) {
+    if (e.ep) return;
+    e.ep = !0;
+    let n = t(e);
+    fetch(e.href, n);
+  }
+})();
+function e(e) {
+  return /mac|iphone|ipad|ipod/i.test(e);
+}
+var t = /https?:\/\/[^\s"'`<>]+/giu,
+  n =
+    /(?:~\/|\.{1,2}\/|\/|[A-Za-z]:[\\/]|\\\\)[^\s"'`<>]+|[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+(?::\d+){0,2}/g,
+  r = /[.,;!?]+$/;
+function i(e) {
+  let t = e.replace(r, ``);
+  if (t.length === 0) return t;
+  let n = (e, n) => {
+    for (; t.endsWith(n); ) {
+      if (t.split(e).length - 1 >= t.split(n).length - 1) return;
+      t = t.slice(0, -1);
+    }
+  };
+  return (n(`(`, `)`), n(`[`, `]`), n(`{`, `}`), t);
+}
+function a(e, t) {
+  return e.start < t.end && t.start < e.end;
+}
+function o(e, t, n, r) {
+  let o = [];
+  n.lastIndex = 0;
+  for (let s of e.matchAll(n)) {
+    let e = s[0],
+      n = s.index ?? -1;
+    if (n < 0 || e.length === 0) continue;
+    let l = i(e);
+    if (l.length === 0 || (t === `path` && c(l))) continue;
+    let u = { kind: t, text: l, start: n, end: n + l.length };
+    [...r, ...o].some((e) => a(u, e)) || o.push(u);
+  }
+  return o;
+}
+function s(e) {
+  let r = o(e, `url`, t, []),
+    i = o(e, `path`, n, r);
+  return [...r, ...i].toSorted((e, t) => e.start - t.start);
+}
+function c(e) {
+  return /^https?:\/\//iu.test(e);
+}
+function l(e, t) {
+  let n = t(e - 1);
+  if (!n) return null;
+  let r = e,
+    i = n;
+  for (; r > 1 && i.isWrapped; ) {
+    let e = t(r - 2);
+    if (!e) return null;
+    (--r, (i = e));
+  }
+  let a = [],
+    o = 0,
+    s = r;
+  for (;;) {
+    let e = t(s - 1);
+    if (!e) break;
+    let n = t(s)?.isWrapped === !0,
+      r = e.translateToString(!n);
+    if (
+      (a.push({ bufferLineNumber: s, text: r, startIndex: o, endIndex: o + r.length }),
+      (o += r.length),
+      !n)
+    )
+      break;
+    s += 1;
+  }
+  return { text: a.map((e) => e.text).join(``), segments: a };
+}
+var u = new Map(
+  `Unidentified.Backquote.Backslash.BracketLeft.BracketRight.Comma.Digit0.Digit1.Digit2.Digit3.Digit4.Digit5.Digit6.Digit7.Digit8.Digit9.Equal.IntlBackslash.IntlRo.IntlYen.KeyA.KeyB.KeyC.KeyD.KeyE.KeyF.KeyG.KeyH.KeyI.KeyJ.KeyK.KeyL.KeyM.KeyN.KeyO.KeyP.KeyQ.KeyR.KeyS.KeyT.KeyU.KeyV.KeyW.KeyX.KeyY.KeyZ.Minus.Period.Quote.Semicolon.Slash.AltLeft.AltRight.Backspace.CapsLock.ContextMenu.ControlLeft.ControlRight.Enter.MetaLeft.MetaRight.ShiftLeft.ShiftRight.Space.Tab.Convert.KanaMode.NonConvert.Delete.End.Help.Home.Insert.PageDown.PageUp.ArrowDown.ArrowLeft.ArrowRight.ArrowUp.NumLock.Numpad0.Numpad1.Numpad2.Numpad3.Numpad4.Numpad5.Numpad6.Numpad7.Numpad8.Numpad9.NumpadAdd.NumpadBackspace.NumpadClear.NumpadClearEntry.NumpadComma.NumpadDecimal.NumpadDivide.NumpadEnter.NumpadEqual.NumpadMemoryAdd.NumpadMemoryClear.NumpadMemoryRecall.NumpadMemoryStore.NumpadMemorySubtract.NumpadMultiply.NumpadParenLeft.NumpadParenRight.NumpadSubtract.NumpadSeparator.NumpadArrowUp.NumpadArrowDown.NumpadArrowRight.NumpadArrowLeft.NumpadBegin.NumpadHome.NumpadEnd.NumpadInsert.NumpadDelete.NumpadPageUp.NumpadPageDown.Escape.F1.F2.F3.F4.F5.F6.F7.F8.F9.F10.F11.F12.F13.F14.F15.F16.F17.F18.F19.F20.F21.F22.F23.F24.F25.Fn.FnLock.PrintScreen.ScrollLock.Pause.BrowserBack.BrowserFavorites.BrowserForward.BrowserHome.BrowserRefresh.BrowserSearch.BrowserStop.Eject.LaunchApp1.LaunchApp2.LaunchMail.MediaPlayPause.MediaSelect.MediaStop.MediaTrackNext.MediaTrackPrevious.Power.Sleep.AudioVolumeDown.AudioVolumeMute.AudioVolumeUp.WakeUp.Copy.Cut.Paste`
+    .split(`.`)
+    .map((e, t) => [e, t]),
+);
+function d(e) {
+  return u.get(e) ?? 0;
+}
+var f = new Map([
+    [`!`, `1`],
+    [`@`, `2`],
+    [`#`, `3`],
+    [`$`, `4`],
+    [`%`, `5`],
+    [`^`, `6`],
+    [`&`, `7`],
+    [`*`, `8`],
+    [`(`, `9`],
+    [`)`, `0`],
+    [`~`, "`"],
+    [`_`, `-`],
+    [`+`, `=`],
+    [`{`, `[`],
+    [`}`, `]`],
+    [`|`, `\\`],
+    [`:`, `;`],
+    [`"`, `'`],
+    [`<`, `,`],
+    [`>`, `.`],
+    [`?`, `/`],
+  ]),
+  p;
+function m() {
+  if (p) return p;
+  let e =
+    globalThis.navigator?.keyboard?.getLayoutMap().catch(() => void 0) ?? Promise.resolve(void 0);
+  return ((p = e), e);
+}
+function ee(e) {
+  return !e.shiftKey || e.ctrlKey || e.altKey || e.metaKey ? 0 : +([...e.key].length === 1);
+}
+function te(e, t) {
+  if ([...e.key].length !== 1) return 0;
+  let n = t?.get(e.code);
+  if (n && [...n].length === 1) return n.codePointAt(0) ?? 0;
+  if (/^[A-Z]$/u.test(e.key)) return e.key.charCodeAt(0) + 32;
+  if (e.shiftKey) {
+    let t = f.get(e.key);
+    if (t) return t.codePointAt(0) ?? 0;
+    let n = e.key.toLowerCase();
+    return n !== e.key && [...n].length === 1 ? (n.codePointAt(0) ?? 0) : 0;
+  }
+  return e.key.codePointAt(0) ?? 0;
+}
+var ne = `` + new URL(`ghostty-vt-DdA0Zryv.wasm`, import.meta.url).href,
+  re = `` + new URL(`ghostty-write-pty-BtvRgxrn.wasm`, import.meta.url).href,
+  h = new TextDecoder(),
+  ie = class e {
+    memory;
+    layouts;
+    exports;
+    ptyWriters = new Map();
+    nextPtyWriterId = 1;
+    writePtyFunctionIndex = 0;
+    constructor(e) {
+      this.exports = e.exports;
+      let t = e.exports.memory;
+      if (!(t instanceof WebAssembly.Memory))
+        throw Error(`libghostty-vt did not export WebAssembly memory`);
+      this.memory = t;
+      let n = this.call(`ghostty_type_json`),
+        r = new Uint8Array(t.buffer),
+        i = n;
+      for (; i < r.length && r[i] !== 0; ) i += 1;
+      this.layouts = JSON.parse(h.decode(r.subarray(n, i)));
+    }
+    static async load() {
+      let t = await fetch(ne);
+      if (!t.ok) throw Error(`Unable to load libghostty-vt (${t.status})`);
+      let n,
+        r = await WebAssembly.instantiate(await t.arrayBuffer(), {
+          env: {
+            log: (e, t) => {
+              if (!n) return;
+              let r = n.exports.memory;
+              if (!(r instanceof WebAssembly.Memory)) return;
+              let i = h.decode(new Uint8Array(r.buffer, e, t));
+              console.debug(`[libghostty-vt]`, i);
+            },
+          },
+        });
+      n = r.instance;
+      let i = new e(r.instance);
+      return (await i.installWritePtyTrampoline(), i);
+    }
+    call(e, ...t) {
+      let n = this.exports[e];
+      if (typeof n != `function`) throw Error(`libghostty-vt export is unavailable: ${e}`);
+      return n(...t);
+    }
+    layout(e) {
+      let t = this.layouts[e];
+      if (!t) throw Error(`libghostty-vt type layout is unavailable: ${e}`);
+      return t;
+    }
+    alloc(e) {
+      let t = this.call(`ghostty_wasm_alloc_u8_array`, e);
+      if (t === 0) throw Error(`libghostty-vt failed to allocate ${e} bytes`);
+      return (new Uint8Array(this.memory.buffer, t, e).fill(0), t);
+    }
+    free(e, t) {
+      e !== 0 && this.call(`ghostty_wasm_free_u8_array`, e, t);
+    }
+    allocOpaque() {
+      let e = this.call(`ghostty_wasm_alloc_opaque`);
+      if (e === 0) throw Error(`libghostty-vt failed to allocate an opaque pointer`);
+      return (new DataView(this.memory.buffer).setUint32(e, 0, !0), e);
+    }
+    freeOpaque(e) {
+      e !== 0 && this.call(`ghostty_wasm_free_opaque`, e);
+    }
+    readPointer(e) {
+      return new DataView(this.memory.buffer).getUint32(e, !0);
+    }
+    attachPtyWriter(e, t) {
+      if (this.writePtyFunctionIndex === 0)
+        throw Error(`libghostty-vt PTY callback trampoline is unavailable`);
+      let n = this.nextPtyWriterId++;
+      return (
+        this.ptyWriters.set(n, t),
+        this.call(`ghostty_terminal_set`, e, 0, n),
+        this.call(`ghostty_terminal_set`, e, 1, this.writePtyFunctionIndex),
+        n
+      );
+    }
+    detachPtyWriter(e, t) {
+      (this.call(`ghostty_terminal_set`, e, 1, 0),
+        this.call(`ghostty_terminal_set`, e, 0, 0),
+        this.ptyWriters.delete(t));
+    }
+    view(e, t) {
+      return new DataView(this.memory.buffer, e, t);
+    }
+    bytes(e, t) {
+      return new Uint8Array(this.memory.buffer, e, t);
+    }
+    setField(e, t, n, r) {
+      let i = this.layout(t).fields[n];
+      if (!i) throw Error(`libghostty-vt field is unavailable: ${t}.${n}`);
+      let a = this.view(e + i.offset, i.size);
+      switch (i.type) {
+        case `bool`:
+        case `u8`:
+          a.setUint8(0, r);
+          return;
+        case `u16`:
+          a.setUint16(0, r, !0);
+          return;
+        case `i32`:
+          a.setInt32(0, r, !0);
+          return;
+        case `u32`:
+        case `enum`:
+          a.setUint32(0, r, !0);
+          return;
+        case `u64`:
+          a.setBigUint64(0, BigInt(r), !0);
+          return;
+        default:
+          throw Error(`Unsupported libghostty-vt field type: ${i.type}`);
+      }
+    }
+    readField(e, t, n) {
+      let r = this.layout(t).fields[n];
+      if (!r) throw Error(`libghostty-vt field is unavailable: ${t}.${n}`);
+      let i = this.view(e + r.offset, r.size);
+      switch (r.type) {
+        case `bool`:
+        case `u8`:
+          return i.getUint8(0);
+        case `u16`:
+          return i.getUint16(0, !0);
+        case `i32`:
+          return i.getInt32(0, !0);
+        case `u32`:
+        case `enum`:
+          return i.getUint32(0, !0);
+        case `u64`:
+          return Number(i.getBigUint64(0, !0));
+        default:
+          throw Error(`Unsupported libghostty-vt field type: ${r.type}`);
+      }
+    }
+    async installWritePtyTrampoline() {
+      let e = await fetch(re);
+      if (!e.ok) throw Error(`Unable to load the libghostty-vt PTY trampoline (${e.status})`);
+      let t = (
+          await WebAssembly.instantiate(await e.arrayBuffer(), {
+            env: {
+              pathway_write_pty: (e, t, n, r) => {
+                let i = this.ptyWriters.get(t);
+                !i || r === 0 || i(h.decode(new Uint8Array(this.memory.buffer, n, r)));
+              },
+            },
+          })
+        ).instance.exports.ghostty_write_pty,
+        n = this.exports.__indirect_function_table;
+      if (typeof t != `function` || !(n instanceof WebAssembly.Table))
+        throw Error(`libghostty-vt did not expose its callback table`);
+      let r = n.length;
+      (n.grow(1), n.set(r, t), (this.writePtyFunctionIndex = r));
+    }
+  },
+  g = null;
+function ae() {
+  return (
+    (g ??= ie.load().catch((e) => {
+      throw ((g = null), e);
+    })),
+    g
+  );
+}
+var _ = 0,
+  v = -3,
+  oe = 1e4,
+  y = 16,
+  b = {
+    cols: 1,
+    rows: 2,
+    dirty: 3,
+    rowIterator: 4,
+    background: 5,
+    foreground: 6,
+    cursor: 7,
+    cursorHasValue: 8,
+    cursorStyle: 10,
+    cursorVisible: 11,
+    cursorBlinking: 12,
+    cursorInViewport: 14,
+    cursorX: 15,
+    cursorY: 16,
+  },
+  x = { dirty: 1, raw: 2, cells: 3 },
+  S = {
+    raw: 1,
+    style: 2,
+    graphemesLength: 3,
+    graphemes: 4,
+    background: 5,
+    foreground: 6,
+    selected: 7,
+  },
+  se = { wide: 3 },
+  ce = { narrow: 0, wide: 1, spacerTail: 2, spacerHead: 3 },
+  C = new TextDecoder(),
+  w = new TextEncoder();
+function le(e, t) {
+  let n = (e, t) => Math.floor((e * 155 + t * 100) / 255);
+  return { r: n(e.r, t.r), g: n(e.g, t.g), b: n(e.b, t.b) };
+}
+function ue(e, t) {
+  return e.r === t.r && e.g === t.g && e.b === t.b;
+}
+function de(e, t) {
+  let n = 4096,
+    r = ``;
+  for (let i = 0; i < t; i += n) {
+    let a = Math.min(n, t - i),
+      o = Array.from({ length: a }, () => 0);
+    for (let t = 0; t < a; t += 1) o[t] = e.getUint32((i + t) * 4, !0);
+    r += String.fromCodePoint(...o);
+  }
+  return r;
+}
+var fe = class e {
+  runtime;
+  terminalSlot = 0;
+  terminal = 0;
+  renderStateSlot = 0;
+  renderState = 0;
+  rowIteratorSlot = 0;
+  rowCellsSlot = 0;
+  keyEncoderSlot = 0;
+  keyEncoder = 0;
+  keyEventSlot = 0;
+  keyEvent = 0;
+  mouseEncoderSlot = 0;
+  mouseEncoder = 0;
+  mouseEventSlot = 0;
+  mouseEvent = 0;
+  ptyWriterId = 0;
+  ptyWriter = null;
+  scratch = 0;
+  style = 0;
+  scrollbar = 0;
+  rows = [];
+  disposed = !1;
+  keyboardLayoutMap;
+  constructor(e) {
+    ((this.runtime = e),
+      m().then((e) => {
+        this.disposed || (this.keyboardLayoutMap = e);
+      }));
+  }
+  static async create(t, n, r, i, a, o) {
+    let s = new e(await ae());
+    try {
+      return (s.initialize(t, n, r, i, a, o), s);
+    } catch (e) {
+      throw (s.dispose(), e);
+    }
+  }
+  initialize(e, t, n, r, i, a) {
+    let o = this.runtime.layout(`GhosttyTerminalOptions`).size,
+      s = this.runtime.alloc(o);
+    (this.runtime.setField(s, `GhosttyTerminalOptions`, `cols`, e),
+      this.runtime.setField(s, `GhosttyTerminalOptions`, `rows`, t),
+      this.runtime.setField(s, `GhosttyTerminalOptions`, `max_scrollback`, oe),
+      (this.terminalSlot = this.runtime.allocOpaque()));
+    let c = this.runtime.call(`ghostty_terminal_new`, 0, this.terminalSlot, s);
+    (this.runtime.free(s, o),
+      this.assertSuccess(`ghostty_terminal_new`, c),
+      (this.terminal = this.runtime.readPointer(this.terminalSlot)),
+      this.applyDefaultCursorBlink(),
+      (this.ptyWriter = a),
+      (this.ptyWriterId = this.runtime.attachPtyWriter(this.terminal, a)),
+      (this.renderStateSlot = this.runtime.allocOpaque()),
+      this.assertSuccess(
+        `ghostty_render_state_new`,
+        this.runtime.call(`ghostty_render_state_new`, 0, this.renderStateSlot),
+      ),
+      (this.renderState = this.runtime.readPointer(this.renderStateSlot)),
+      (this.rowIteratorSlot = this.runtime.allocOpaque()),
+      this.assertSuccess(
+        `ghostty_render_state_row_iterator_new`,
+        this.runtime.call(`ghostty_render_state_row_iterator_new`, 0, this.rowIteratorSlot),
+      ),
+      (this.rowCellsSlot = this.runtime.allocOpaque()),
+      this.assertSuccess(
+        `ghostty_render_state_row_cells_new`,
+        this.runtime.call(`ghostty_render_state_row_cells_new`, 0, this.rowCellsSlot),
+      ),
+      (this.keyEncoderSlot = this.runtime.allocOpaque()),
+      this.assertSuccess(
+        `ghostty_key_encoder_new`,
+        this.runtime.call(`ghostty_key_encoder_new`, 0, this.keyEncoderSlot),
+      ),
+      (this.keyEncoder = this.runtime.readPointer(this.keyEncoderSlot)),
+      (this.keyEventSlot = this.runtime.allocOpaque()),
+      this.assertSuccess(
+        `ghostty_key_event_new`,
+        this.runtime.call(`ghostty_key_event_new`, 0, this.keyEventSlot),
+      ),
+      (this.keyEvent = this.runtime.readPointer(this.keyEventSlot)),
+      (this.mouseEncoderSlot = this.runtime.allocOpaque()),
+      this.assertSuccess(
+        `ghostty_mouse_encoder_new`,
+        this.runtime.call(`ghostty_mouse_encoder_new`, 0, this.mouseEncoderSlot),
+      ),
+      (this.mouseEncoder = this.runtime.readPointer(this.mouseEncoderSlot)),
+      (this.mouseEventSlot = this.runtime.allocOpaque()),
+      this.assertSuccess(
+        `ghostty_mouse_event_new`,
+        this.runtime.call(`ghostty_mouse_event_new`, 0, this.mouseEventSlot),
+      ),
+      (this.mouseEvent = this.runtime.readPointer(this.mouseEventSlot)),
+      (this.scratch = this.runtime.alloc(16)));
+    let l = this.runtime.layout(`GhosttyStyle`).size;
+    ((this.style = this.runtime.alloc(l)),
+      this.runtime.setField(this.style, `GhosttyStyle`, `size`, l),
+      (this.scrollbar = this.runtime.alloc(this.runtime.layout(`GhosttyTerminalScrollbar`).size)),
+      this.setTheme(i),
+      this.resize(e, t, n, r));
+  }
+  write(e) {
+    this.ensureActive();
+    let t = typeof e == `string` ? w.encode(e) : e;
+    if (t.length === 0) return;
+    let n = this.runtime.alloc(t.length);
+    (this.runtime.bytes(n, t.length).set(t),
+      this.runtime.call(`ghostty_terminal_vt_write`, this.terminal, n, t.length),
+      this.runtime.free(n, t.length));
+  }
+  resetAndWrite(e) {
+    if (
+      (this.ensureActive(),
+      this.runtime.call(`ghostty_terminal_reset`, this.terminal),
+      this.applyDefaultCursorBlink(),
+      (this.rows = []),
+      e.length === 0)
+    )
+      return;
+    let t = this.ptyWriter;
+    this.ptyWriterId !== 0 &&
+      (this.runtime.detachPtyWriter(this.terminal, this.ptyWriterId), (this.ptyWriterId = 0));
+    try {
+      this.write(e);
+    } finally {
+      t !== null &&
+        !this.disposed &&
+        (this.ptyWriterId = this.runtime.attachPtyWriter(this.terminal, t));
+    }
+  }
+  resize(e, t, n, r) {
+    (this.ensureActive(),
+      this.assertSuccess(
+        `ghostty_terminal_resize`,
+        this.runtime.call(
+          `ghostty_terminal_resize`,
+          this.terminal,
+          Math.max(1, Math.min(65535, e)),
+          Math.max(1, Math.min(65535, t)),
+          Math.max(1, Math.round(n)),
+          Math.max(1, Math.round(r)),
+        ),
+      ));
+  }
+  applyDefaultCursorBlink() {
+    let e = this.runtime.alloc(1);
+    ((this.runtime.bytes(e, 1)[0] = 1),
+      this.runtime.call(`ghostty_terminal_set`, this.terminal, 23, e),
+      this.runtime.free(e, 1));
+  }
+  setTheme(e) {
+    this.ensureActive();
+    let t = this.runtime.alloc(3);
+    for (let [n, r] of [
+      [11, e.foreground],
+      [12, e.background],
+      [13, e.cursor],
+    ])
+      (this.runtime.bytes(t, 3).set([r.r, r.g, r.b]),
+        this.runtime.call(`ghostty_terminal_set`, this.terminal, n, t));
+    this.runtime.free(t, 3);
+  }
+  scroll(e) {
+    this.ensureActive();
+    let t = this.runtime.layout(`GhosttyTerminalScrollViewport`),
+      n = this.runtime.alloc(t.size);
+    this.runtime.setField(n, `GhosttyTerminalScrollViewport`, `tag`, 2);
+    let r = t.fields.value;
+    (this.runtime.view(n + r.offset, r.size).setInt32(0, e, !0),
+      this.runtime.call(`ghostty_terminal_scroll_viewport`, this.terminal, n),
+      this.runtime.free(n, t.size));
+  }
+  scrollToBottom() {
+    this.ensureActive();
+    let e = this.runtime.layout(`GhosttyTerminalScrollViewport`),
+      t = this.runtime.alloc(e.size);
+    (this.runtime.setField(t, `GhosttyTerminalScrollViewport`, `tag`, 1),
+      this.runtime.call(`ghostty_terminal_scroll_viewport`, this.terminal, t),
+      this.runtime.free(t, e.size));
+  }
+  isViewportActive() {
+    return (
+      this.ensureActive(),
+      (this.runtime.bytes(this.scratch, 1)[0] = 0),
+      this.runtime.call(`ghostty_terminal_get`, this.terminal, 32, this.scratch) === _ &&
+        this.runtime.bytes(this.scratch, 1)[0] !== 0
+    );
+  }
+  scrollbarState() {
+    this.ensureActive();
+    let e = this.runtime.layout(`GhosttyTerminalScrollbar`);
+    return (
+      this.runtime.bytes(this.scrollbar, e.size).fill(0),
+      this.runtime.call(`ghostty_terminal_get`, this.terminal, 9, this.scrollbar) === _
+        ? {
+            total: this.runtime.readField(this.scrollbar, `GhosttyTerminalScrollbar`, `total`),
+            offset: this.runtime.readField(this.scrollbar, `GhosttyTerminalScrollbar`, `offset`),
+            len: this.runtime.readField(this.scrollbar, `GhosttyTerminalScrollbar`, `len`),
+          }
+        : null
+    );
+  }
+  isMouseTracking() {
+    return (
+      this.ensureActive(),
+      (this.runtime.bytes(this.scratch, 1)[0] = 0),
+      this.runtime.call(`ghostty_terminal_get`, this.terminal, 11, this.scratch) === _ &&
+        this.runtime.bytes(this.scratch, 1)[0] !== 0
+    );
+  }
+  isMouseAnyEventTracking() {
+    return (
+      this.ensureActive(),
+      (this.runtime.bytes(this.scratch, 1)[0] = 0),
+      this.runtime.call(`ghostty_terminal_mode_get`, this.terminal, 1003, this.scratch) === _ &&
+        this.runtime.bytes(this.scratch, 1)[0] !== 0
+    );
+  }
+  isAlternateScreen() {
+    return (
+      this.ensureActive(),
+      this.runtime.bytes(this.scratch, 4).fill(0),
+      this.runtime.call(`ghostty_terminal_get`, this.terminal, 6, this.scratch) === _ &&
+        this.runtime.view(this.scratch, 4).getUint32(0, !0) === 1
+    );
+  }
+  isApplicationCursorKeys() {
+    return (
+      this.ensureActive(),
+      (this.runtime.bytes(this.scratch, 1)[0] = 0),
+      this.runtime.call(`ghostty_terminal_mode_get`, this.terminal, 1, this.scratch) === _ &&
+        this.runtime.bytes(this.scratch, 1)[0] !== 0
+    );
+  }
+  encodeKey(e, t = `press`) {
+    (this.ensureActive(),
+      this.runtime.call(`ghostty_key_encoder_setopt_from_terminal`, this.keyEncoder, this.terminal),
+      this.runtime.call(
+        `ghostty_key_event_set_action`,
+        this.keyEvent,
+        t === `release` ? 0 : e.repeat ? 2 : 1,
+      ),
+      this.runtime.call(`ghostty_key_event_set_key`, this.keyEvent, d(e.code)));
+    let n =
+      !!e.shiftKey |
+      (e.ctrlKey ? 2 : 0) |
+      (e.altKey ? 4 : 0) |
+      (e.metaKey ? 8 : 0) |
+      (e.getModifierState(`CapsLock`) ? 16 : 0) |
+      (e.getModifierState(`NumLock`) ? 32 : 0);
+    (this.runtime.call(`ghostty_key_event_set_mods`, this.keyEvent, n),
+      this.runtime.call(`ghostty_key_event_set_consumed_mods`, this.keyEvent, ee(e)),
+      this.runtime.call(`ghostty_key_event_set_composing`, this.keyEvent, +!!e.isComposing),
+      this.runtime.call(
+        `ghostty_key_event_set_unshifted_codepoint`,
+        this.keyEvent,
+        te(e, this.keyboardLayoutMap),
+      ));
+    let r = e.key.length === 1 ? e.key : ``,
+      i = w.encode(r),
+      a = i.length === 0 ? 0 : this.runtime.alloc(i.length);
+    (a !== 0 && this.runtime.bytes(a, i.length).set(i),
+      this.runtime.call(`ghostty_key_event_set_utf8`, this.keyEvent, a, i.length));
+    let o = this.runtime.call(`ghostty_wasm_alloc_usize`),
+      s = this.encodeOutput(o, (e, t) =>
+        this.runtime.call(`ghostty_key_encoder_encode`, this.keyEncoder, this.keyEvent, e, t, o),
+      );
+    return (
+      this.runtime.call(`ghostty_wasm_free_usize`, o), a !== 0 && this.runtime.free(a, i.length), s
+    );
+  }
+  encodePaste(e) {
+    this.ensureActive();
+    let t = w.encode(e);
+    if (t.length === 0) return ``;
+    let n = this.runtime.alloc(t.length);
+    (this.runtime.bytes(n, t.length).set(t), (this.runtime.bytes(this.scratch, 1)[0] = 0));
+    let r =
+        this.runtime.call(`ghostty_terminal_mode_get`, this.terminal, 2004, this.scratch) === _ &&
+        this.runtime.bytes(this.scratch, 1)[0] !== 0,
+      i = this.runtime.call(`ghostty_wasm_alloc_usize`),
+      a = ``,
+      o = this.runtime.call(`ghostty_paste_encode`, n, t.length, +!!r, 0, 0, i),
+      s = this.runtime.view(i, 4).getUint32(0, !0);
+    if (o === v && s > 0) {
+      let e = this.runtime.alloc(s),
+        o = this.runtime.call(`ghostty_paste_encode`, n, t.length, +!!r, e, s, i),
+        c = this.runtime.view(i, 4).getUint32(0, !0);
+      ((a = o === _ ? C.decode(this.runtime.bytes(e, c)) : ``), this.runtime.free(e, s));
+    }
+    return (this.runtime.call(`ghostty_wasm_free_usize`, i), this.runtime.free(n, t.length), a);
+  }
+  encodeMouse(e) {
+    (this.ensureActive(),
+      this.runtime.call(
+        `ghostty_mouse_encoder_setopt_from_terminal`,
+        this.mouseEncoder,
+        this.terminal,
+      ));
+    let t = this.runtime.layout(`GhosttyMouseEncoderSize`),
+      n = this.runtime.alloc(t.size);
+    for (let [r, i] of [
+      [`size`, t.size],
+      [`screen_width`, e.screenWidth],
+      [`screen_height`, e.screenHeight],
+      [`cell_width`, e.cellWidth],
+      [`cell_height`, e.cellHeight],
+      [`padding_top`, e.paddingTop],
+      [`padding_bottom`, e.paddingBottom],
+      [`padding_right`, e.paddingRight],
+      [`padding_left`, e.paddingLeft],
+    ])
+      this.runtime.setField(n, `GhosttyMouseEncoderSize`, r, Math.max(0, Math.round(i)));
+    (this.runtime.call(`ghostty_mouse_encoder_setopt`, this.mouseEncoder, 2, n),
+      this.runtime.free(n, t.size),
+      (this.runtime.bytes(this.scratch, 1)[0] = +!!e.anyButtonPressed),
+      this.runtime.call(`ghostty_mouse_encoder_setopt`, this.mouseEncoder, 3, this.scratch),
+      (this.runtime.bytes(this.scratch, 1)[0] = 1),
+      this.runtime.call(`ghostty_mouse_encoder_setopt`, this.mouseEncoder, 4, this.scratch),
+      this.runtime.call(
+        `ghostty_mouse_event_set_action`,
+        this.mouseEvent,
+        e.action === `press` ? 0 : e.action === `release` ? 1 : 2,
+      ),
+      e.button === null
+        ? this.runtime.call(`ghostty_mouse_event_clear_button`, this.mouseEvent)
+        : this.runtime.call(`ghostty_mouse_event_set_button`, this.mouseEvent, e.button),
+      this.runtime.call(`ghostty_mouse_event_set_mods`, this.mouseEvent, e.mods));
+    let r = this.runtime.layout(`GhosttyMousePosition`),
+      i = this.runtime.alloc(r.size),
+      a = this.runtime.view(i, r.size);
+    (a.setFloat32(r.fields.x.offset, e.x, !0),
+      a.setFloat32(r.fields.y.offset, e.y, !0),
+      this.runtime.call(`ghostty_mouse_event_set_position`, this.mouseEvent, i),
+      this.runtime.free(i, r.size));
+    let o = this.runtime.call(`ghostty_wasm_alloc_usize`),
+      s = this.encodeOutput(o, (e, t) =>
+        this.runtime.call(
+          `ghostty_mouse_encoder_encode`,
+          this.mouseEncoder,
+          this.mouseEvent,
+          e,
+          t,
+          o,
+        ),
+      );
+    return (this.runtime.call(`ghostty_wasm_free_usize`, o), s);
+  }
+  setSelection(e, t) {
+    this.ensureActive();
+    let n = this.runtime.layout(`GhosttySelection`),
+      r = this.runtime.layout(`GhosttyGridRef`).size,
+      i = this.runtime.alloc(n.size),
+      a = 0,
+      o = 0;
+    try {
+      (this.runtime.setField(i, `GhosttySelection`, `size`, n.size),
+        (a = this.gridRef(e.x, e.y, e.tag ?? 1)),
+        (o = this.gridRef(t.x, t.y, t.tag ?? 1)));
+      let r = n.fields.start,
+        s = n.fields.end;
+      (this.runtime.bytes(i + r.offset, r.size).set(this.runtime.bytes(a, r.size)),
+        this.runtime.bytes(i + s.offset, s.size).set(this.runtime.bytes(o, s.size)),
+        this.runtime.call(`ghostty_terminal_set`, this.terminal, 21, i));
+    } finally {
+      (this.runtime.free(a, r), this.runtime.free(o, r), this.runtime.free(i, n.size));
+    }
+  }
+  selectAll() {
+    this.ensureActive();
+    let e = this.runtime.layout(`GhosttySelection`),
+      t = this.runtime.alloc(e.size);
+    (this.runtime.setField(t, `GhosttySelection`, `size`, e.size),
+      this.runtime.call(`ghostty_terminal_select_all`, this.terminal, t) === _ &&
+        this.runtime.call(`ghostty_terminal_set`, this.terminal, 21, t),
+      this.runtime.free(t, e.size));
+  }
+  selectWord(e, t) {
+    return this.selectAt(`GhosttyTerminalSelectWordOptions`, `ghostty_terminal_select_word`, e, t);
+  }
+  selectLine(e, t) {
+    return this.selectAt(`GhosttyTerminalSelectLineOptions`, `ghostty_terminal_select_line`, e, t);
+  }
+  hyperlinkAt(e, t) {
+    this.ensureActive();
+    let n = this.gridRef(e, t),
+      r = this.runtime.call(`ghostty_wasm_alloc_usize`),
+      i = this.runtime.call(`ghostty_grid_ref_hyperlink_uri`, n, 0, 0, r),
+      a = this.runtime.view(r, 4).getUint32(0, !0),
+      o = null;
+    if (i === v && a > 0) {
+      let e = this.runtime.alloc(a),
+        t = this.runtime.call(`ghostty_grid_ref_hyperlink_uri`, n, e, a, r),
+        i = this.runtime.view(r, 4).getUint32(0, !0);
+      (t === _ && i > 0 && (o = C.decode(this.runtime.bytes(e, i))), this.runtime.free(e, a));
+    }
+    return (
+      this.runtime.call(`ghostty_wasm_free_usize`, r),
+      this.runtime.free(n, this.runtime.layout(`GhosttyGridRef`).size),
+      o
+    );
+  }
+  clearSelection() {
+    (this.ensureActive(), this.runtime.call(`ghostty_terminal_set`, this.terminal, 21, 0));
+  }
+  snapshot() {
+    (this.ensureActive(),
+      this.assertSuccess(
+        `ghostty_render_state_update`,
+        this.runtime.call(`ghostty_render_state_update`, this.renderState, this.terminal),
+      ));
+    let e = this.getU16(b.cols),
+      t = this.getU16(b.rows),
+      n = this.getU32(b.dirty),
+      r = this.getColor(b.foreground, { r: 229, g: 231, b: 235 }),
+      i = this.getColor(b.background, { r: 0, g: 0, b: 0 }),
+      a = this.getBool(b.cursorHasValue) ? this.getColor(b.cursor, r) : r,
+      o = this.getBool(b.cursorInViewport),
+      s = this.getBool(b.cursorVisible) && o,
+      c = o ? this.getU16(b.cursorX) : -1,
+      l = o ? this.getU16(b.cursorY) : -1;
+    (this.rows.length !== t || this.rows.some((t) => t.cells.length !== e)) &&
+      (this.rows = Array.from({ length: t }, () => ({
+        cells: Array.from({ length: e }, () => this.emptyCell(r, i)),
+        text: ``,
+        isWrapContinuation: !1,
+        wrapsToNext: !1,
+      })));
+    let u = new Set();
+    if (n !== 0) {
+      this.assertSuccess(
+        `ghostty_render_state_get(row iterator)`,
+        this.runtime.call(
+          `ghostty_render_state_get`,
+          this.renderState,
+          b.rowIterator,
+          this.rowIteratorSlot,
+        ),
+      );
+      let a = this.runtime.readPointer(this.rowIteratorSlot),
+        o = 0;
+      for (; o < t && this.runtime.call(`ghostty_render_state_row_iterator_next`, a) !== 0; )
+        ((n === 2 || this.getRowBool(a, x.dirty)) &&
+          ((this.rows[o] = this.readRow(a, e, r, i)),
+          u.add(o),
+          (this.runtime.bytes(this.scratch, 1)[0] = 0),
+          this.runtime.call(`ghostty_render_state_row_set`, a, 0, this.scratch)),
+          (o += 1));
+      (this.runtime.view(this.scratch, 4).setUint32(0, 0, !0),
+        this.runtime.call(`ghostty_render_state_set`, this.renderState, 0, this.scratch));
+    }
+    return {
+      cols: e,
+      rows: t,
+      foreground: r,
+      background: i,
+      cursor: a,
+      cursorX: c,
+      cursorY: l,
+      cursorVisible: s,
+      cursorBlinking: this.getBool(b.cursorBlinking),
+      cursorStyle: this.getU32(b.cursorStyle),
+      dirtyRows: u,
+      rowData: this.rows,
+    };
+  }
+  selectionText() {
+    this.ensureActive();
+    let e = this.runtime.alloc(y),
+      t = this.runtime.view(e, y);
+    (t.setUint32(0, y, !0),
+      t.setUint32(4, 0, !0),
+      t.setUint8(8, 1),
+      t.setUint8(9, 1),
+      t.setUint32(12, 0, !0));
+    let n = this.runtime.call(`ghostty_wasm_alloc_usize`),
+      r = this.runtime.call(`ghostty_terminal_selection_format_buf`, this.terminal, e, 0, 0, n),
+      i = this.runtime.view(n, 4).getUint32(0, !0),
+      a = ``;
+    if (r === v && i > 0) {
+      let t = this.runtime.alloc(i),
+        r = this.runtime.call(`ghostty_terminal_selection_format_buf`, this.terminal, e, t, i, n),
+        o = this.runtime.view(n, 4).getUint32(0, !0);
+      (r === _ && (a = C.decode(this.runtime.bytes(t, o))), this.runtime.free(t, i));
+    }
+    return (this.runtime.call(`ghostty_wasm_free_usize`, n), this.runtime.free(e, y), a);
+  }
+  viewportPointToScreen(e, t) {
+    return this.convertPoint(e, t, 1, 2);
+  }
+  screenPointToViewport(e, t) {
+    return this.convertPoint(e, t, 2, 1);
+  }
+  convertPoint(e, t, n, r) {
+    this.ensureActive();
+    let i = this.gridRef(e, t, n),
+      a = this.pointFromGridRef(i, r);
+    return (this.runtime.free(i, this.runtime.layout(`GhosttyGridRef`).size), a);
+  }
+  dispose() {
+    if (!this.disposed) {
+      if (
+        ((this.disposed = !0),
+        this.mouseEvent && this.runtime.call(`ghostty_mouse_event_free`, this.mouseEvent),
+        this.mouseEncoder && this.runtime.call(`ghostty_mouse_encoder_free`, this.mouseEncoder),
+        this.keyEvent && this.runtime.call(`ghostty_key_event_free`, this.keyEvent),
+        this.keyEncoder && this.runtime.call(`ghostty_key_encoder_free`, this.keyEncoder),
+        this.rowCellsSlot)
+      ) {
+        let e = this.runtime.readPointer(this.rowCellsSlot);
+        e && this.runtime.call(`ghostty_render_state_row_cells_free`, e);
+      }
+      if (this.rowIteratorSlot) {
+        let e = this.runtime.readPointer(this.rowIteratorSlot);
+        e && this.runtime.call(`ghostty_render_state_row_iterator_free`, e);
+      }
+      (this.renderState && this.runtime.call(`ghostty_render_state_free`, this.renderState),
+        this.terminal &&
+          (this.ptyWriterId && this.runtime.detachPtyWriter(this.terminal, this.ptyWriterId),
+          this.runtime.call(`ghostty_terminal_free`, this.terminal)),
+        this.style && this.runtime.free(this.style, this.runtime.layout(`GhosttyStyle`).size),
+        this.scrollbar &&
+          this.runtime.free(this.scrollbar, this.runtime.layout(`GhosttyTerminalScrollbar`).size),
+        this.scratch && this.runtime.free(this.scratch, 16));
+      for (let e of [
+        this.mouseEventSlot,
+        this.mouseEncoderSlot,
+        this.keyEventSlot,
+        this.keyEncoderSlot,
+        this.rowCellsSlot,
+        this.rowIteratorSlot,
+        this.renderStateSlot,
+        this.terminalSlot,
+      ])
+        this.runtime.freeOpaque(e);
+    }
+  }
+  encodeOutput(e, t) {
+    let n = t(0, 0),
+      r = this.runtime.view(e, 4).getUint32(0, !0);
+    if ((n === _ && r === 0) || n !== v || r === 0) return ``;
+    let i = this.runtime.alloc(r),
+      a = t(i, r),
+      o = this.runtime.view(e, 4).getUint32(0, !0),
+      s = a === _ ? C.decode(this.runtime.bytes(i, o)) : ``;
+    return (this.runtime.free(i, r), s);
+  }
+  readRow(e, t, n, r) {
+    this.assertSuccess(
+      `ghostty_render_state_row_get(raw)`,
+      this.runtime.call(`ghostty_render_state_row_get`, e, x.raw, this.scratch),
+    );
+    let i = this.runtime.view(this.scratch, 8).getBigUint64(0, !0);
+    ((this.runtime.bytes(this.scratch + 8, 1)[0] = 0),
+      this.assertSuccess(
+        `ghostty_row_get(wrap continuation)`,
+        this.runtime.call(`ghostty_row_get`, i, 2, this.scratch + 8),
+      ));
+    let a = this.runtime.bytes(this.scratch + 8, 1)[0] !== 0;
+    ((this.runtime.bytes(this.scratch + 8, 1)[0] = 0),
+      this.assertSuccess(
+        `ghostty_row_get(wrap)`,
+        this.runtime.call(`ghostty_row_get`, i, 1, this.scratch + 8),
+      ));
+    let o = this.runtime.bytes(this.scratch + 8, 1)[0] !== 0;
+    this.assertSuccess(
+      `ghostty_render_state_row_get(cells)`,
+      this.runtime.call(`ghostty_render_state_row_get`, e, x.cells, this.rowCellsSlot),
+    );
+    let s = this.runtime.readPointer(this.rowCellsSlot),
+      c = [];
+    for (; c.length < t && this.runtime.call(`ghostty_render_state_row_cells_next`, s) !== 0; ) {
+      let e = this.getCellColor(s, S.foreground, n),
+        t = this.getCellColor(s, S.background, r),
+        i = this.runtime.layout(`GhosttyStyle`).size;
+      (this.runtime.bytes(this.style, i).fill(0),
+        this.runtime.setField(this.style, `GhosttyStyle`, `size`, i),
+        this.runtime.call(`ghostty_render_state_row_cells_get`, s, S.style, this.style),
+        this.runtime.readField(this.style, `GhosttyStyle`, `inverse`) !== 0 && ([e, t] = [t, e]),
+        this.runtime.readField(this.style, `GhosttyStyle`, `faint`) !== 0 && (e = le(e, t)));
+      let a = this.getCellU32(s, S.graphemesLength),
+        o = ``;
+      if (a > 0) {
+        let e = a * 4,
+          t = this.runtime.alloc(e);
+        (this.runtime.call(`ghostty_render_state_row_cells_get`, s, S.graphemes, t) === _ &&
+          (o = de(this.runtime.view(t, e), a)),
+          this.runtime.free(t, e));
+      }
+      let l = 0;
+      if (o.length === 0 && c.at(-1)?.text.length) {
+        this.assertSuccess(
+          `ghostty_render_state_row_cells_get(raw)`,
+          this.runtime.call(`ghostty_render_state_row_cells_get`, s, S.raw, this.scratch),
+        );
+        let e = this.runtime.view(this.scratch, 8).getBigUint64(0, !0);
+        (this.runtime.view(this.scratch + 8, 4).setUint32(0, 0, !0),
+          this.assertSuccess(
+            `ghostty_cell_get(wide)`,
+            this.runtime.call(`ghostty_cell_get`, e, se.wide, this.scratch + 8),
+          ),
+          (l = this.runtime.view(this.scratch + 8, 4).getUint32(0, !0)));
+      }
+      c.push({
+        text: o,
+        wide: l,
+        foreground: e,
+        background: t,
+        bold: this.runtime.readField(this.style, `GhosttyStyle`, `bold`) !== 0,
+        italic: this.runtime.readField(this.style, `GhosttyStyle`, `italic`) !== 0,
+        invisible: this.runtime.readField(this.style, `GhosttyStyle`, `invisible`) !== 0,
+        strikethrough: this.runtime.readField(this.style, `GhosttyStyle`, `strikethrough`) !== 0,
+        overline: this.runtime.readField(this.style, `GhosttyStyle`, `overline`) !== 0,
+        underline: this.runtime.readField(this.style, `GhosttyStyle`, `underline`) !== 0,
+        selected: this.getCellBool(s, S.selected),
+      });
+    }
+    for (; c.length < t; ) c.push(this.emptyCell(n, r));
+    return {
+      cells: c,
+      text: c
+        .map((e) => e.text || ` `)
+        .join(``)
+        .trimEnd(),
+      isWrapContinuation: a,
+      wrapsToNext: o,
+    };
+  }
+  gridRef(e, t, n = 1) {
+    let r = this.runtime.layout(`GhosttyPoint`),
+      i = this.runtime.alloc(r.size);
+    this.runtime.setField(i, `GhosttyPoint`, `tag`, n);
+    let a = r.fields.value,
+      o = a.offset,
+      s = this.runtime.view(i + o, a.size);
+    (s.setUint16(0, Math.max(0, e), !0), s.setUint32(4, Math.max(0, t), !0));
+    let c = this.runtime.layout(`GhosttyGridRef`).size,
+      l = this.runtime.alloc(c);
+    this.runtime.setField(l, `GhosttyGridRef`, `size`, c);
+    let u = this.runtime.call(`ghostty_terminal_grid_ref`, this.terminal, i, l);
+    return (
+      this.runtime.free(i, r.size),
+      u !== _ && (this.runtime.free(l, c), this.assertSuccess(`ghostty_terminal_grid_ref`, u)),
+      l
+    );
+  }
+  selectAt(e, t, n, r) {
+    this.ensureActive();
+    let i = this.runtime.layout(e),
+      a = this.runtime.layout(`GhosttySelection`),
+      o = this.runtime.alloc(i.size),
+      s = 0,
+      c = 0,
+      l = null;
+    try {
+      (this.runtime.setField(o, e, `size`, i.size), (s = this.gridRef(n, r)));
+      let u = i.fields.ref;
+      if (
+        (this.runtime.bytes(o + u.offset, u.size).set(this.runtime.bytes(s, u.size)),
+        (c = this.runtime.alloc(a.size)),
+        this.runtime.setField(c, `GhosttySelection`, `size`, a.size),
+        this.runtime.call(t, this.terminal, o, c) === _)
+      ) {
+        let e = c + a.fields.start.offset,
+          t = c + a.fields.end.offset,
+          n = this.pointFromGridRef(e, 1),
+          r = this.pointFromGridRef(t, 1),
+          i = this.pointFromGridRef(e, 2),
+          o = this.pointFromGridRef(t, 2);
+        (n && r && i && o && (l = { viewport: { start: n, end: r }, screen: { start: i, end: o } }),
+          this.runtime.call(`ghostty_terminal_set`, this.terminal, 21, c));
+      }
+    } finally {
+      (this.runtime.free(c, a.size),
+        this.runtime.free(s, this.runtime.layout(`GhosttyGridRef`).size),
+        this.runtime.free(o, i.size));
+    }
+    return l;
+  }
+  pointFromGridRef(e, t) {
+    let n = this.runtime.layout(`GhosttyPointCoordinate`),
+      r = this.runtime.alloc(n.size),
+      i =
+        this.runtime.call(`ghostty_terminal_point_from_grid_ref`, this.terminal, e, t, r) === _
+          ? {
+              x: this.runtime.readField(r, `GhosttyPointCoordinate`, `x`),
+              y: this.runtime.readField(r, `GhosttyPointCoordinate`, `y`),
+            }
+          : null;
+    return (this.runtime.free(r, n.size), i);
+  }
+  getU16(e) {
+    return (
+      this.runtime.bytes(this.scratch, 2).fill(0),
+      this.assertSuccess(
+        `ghostty_render_state_get`,
+        this.runtime.call(`ghostty_render_state_get`, this.renderState, e, this.scratch),
+      ),
+      this.runtime.view(this.scratch, 2).getUint16(0, !0)
+    );
+  }
+  getU32(e) {
+    return (
+      this.runtime.bytes(this.scratch, 4).fill(0),
+      this.assertSuccess(
+        `ghostty_render_state_get`,
+        this.runtime.call(`ghostty_render_state_get`, this.renderState, e, this.scratch),
+      ),
+      this.runtime.view(this.scratch, 4).getUint32(0, !0)
+    );
+  }
+  getBool(e) {
+    return (
+      (this.runtime.bytes(this.scratch, 1)[0] = 0),
+      this.assertSuccess(
+        `ghostty_render_state_get`,
+        this.runtime.call(`ghostty_render_state_get`, this.renderState, e, this.scratch),
+      ),
+      this.runtime.bytes(this.scratch, 1)[0] !== 0
+    );
+  }
+  getColor(e, t) {
+    return (
+      this.runtime.bytes(this.scratch, 3).fill(0),
+      this.runtime.call(`ghostty_render_state_get`, this.renderState, e, this.scratch) === _
+        ? this.readColor(this.scratch)
+        : t
+    );
+  }
+  getRowBool(e, t) {
+    return (
+      (this.runtime.bytes(this.scratch, 1)[0] = 0),
+      this.runtime.call(`ghostty_render_state_row_get`, e, t, this.scratch) === _ &&
+        this.runtime.bytes(this.scratch, 1)[0] !== 0
+    );
+  }
+  getCellU32(e, t) {
+    return (
+      this.runtime.bytes(this.scratch, 4).fill(0),
+      this.runtime.call(`ghostty_render_state_row_cells_get`, e, t, this.scratch) === _
+        ? this.runtime.view(this.scratch, 4).getUint32(0, !0)
+        : 0
+    );
+  }
+  getCellBool(e, t) {
+    return (
+      (this.runtime.bytes(this.scratch, 1)[0] = 0),
+      this.runtime.call(`ghostty_render_state_row_cells_get`, e, t, this.scratch) === _ &&
+        this.runtime.bytes(this.scratch, 1)[0] !== 0
+    );
+  }
+  getCellColor(e, t, n) {
+    return (
+      this.runtime.bytes(this.scratch, 3).fill(0),
+      this.runtime.call(`ghostty_render_state_row_cells_get`, e, t, this.scratch) === _
+        ? this.readColor(this.scratch)
+        : n
+    );
+  }
+  readColor(e) {
+    let t = this.runtime.bytes(e, 3);
+    return { r: t[0] ?? 0, g: t[1] ?? 0, b: t[2] ?? 0 };
+  }
+  emptyCell(e, t) {
+    return {
+      text: ``,
+      wide: 0,
+      foreground: e,
+      background: t,
+      bold: !1,
+      italic: !1,
+      invisible: !1,
+      strikethrough: !1,
+      overline: !1,
+      underline: !1,
+      selected: !1,
+    };
+  }
+  assertSuccess(e, t) {
+    if (t !== _) throw Error(`${e} failed with result ${t}`);
+  }
+  ensureActive() {
+    if (this.disposed) throw Error(`libghostty-vt terminal has been disposed`);
+  }
+};
+function T(e, t) {
+  return ue(e, t);
+}
+var pe = `rgba(72, 122, 191, 0.35)`;
+function E(e) {
+  return `rgb(${e.r}, ${e.g}, ${e.b})`;
+}
+function me(e, t) {
+  return (
+    T(e.foreground, t.foreground) &&
+    e.bold === t.bold &&
+    e.italic === t.italic &&
+    e.invisible === t.invisible
+  );
+}
+function he(e, t, n) {
+  let r = t + 1;
+  for (; r < e.length; ) {
+    let t = e[r];
+    if (!t) break;
+    if (t.wide === ce.spacerTail) {
+      r += 1;
+      continue;
+    }
+    if (t.text.length === 0 || !n(t)) break;
+    r += 1;
+  }
+  return r;
+}
+function D(e, t, n) {
+  return `${e.italic ? `italic` : `normal`} ${e.bold ? `700` : `400`} ${t}px ${n}`;
+}
+function O(e, t, n) {
+  e.font = `normal 400 ${t}px ${n}`;
+  let r = e.measureText(`M`),
+    i = e.measureText(`Mg`),
+    a = i.actualBoundingBoxAscent || t,
+    o = a + i.actualBoundingBoxDescent,
+    s = Math.max(1, Math.round(t * 1.35), Math.ceil(o));
+  return { width: Math.max(1, r.width), height: s, baseline: Math.round((s - o) / 2 + a) };
+}
+function k(e, t, n, r) {
+  return {
+    cols: Math.max(1, Math.floor((e - r * 2) / n.width)),
+    rows: Math.max(1, Math.floor((t - r * 2) / n.height)),
+  };
+}
+function ge(e) {
+  let {
+      context: t,
+      snapshot: n,
+      metrics: r,
+      fontSize: i,
+      fontFamily: a,
+      padding: o,
+      forceFull: s,
+      cursorOn: c,
+      previousCursorY: l,
+    } = e,
+    u = e.focused ?? !0,
+    d = e.selectionBackground ?? pe,
+    f = e.hoveredLinkRange ?? null,
+    p = e.originY ?? o,
+    m = s ? Array.from({ length: n.rows }, (e, t) => t) : [...n.dirtyRows];
+  (l != null && l >= 0 && !m.includes(l) && m.push(l),
+    n.cursorVisible && n.cursorY >= 0 && !m.includes(n.cursorY) && m.push(n.cursorY),
+    s &&
+      (t.save(),
+      t.resetTransform(),
+      (t.fillStyle = E(n.background)),
+      t.fillRect(0, 0, t.canvas.width, t.canvas.height),
+      t.restore()),
+    (t.textBaseline = `alphabetic`));
+  for (let e of m) {
+    let s = n.rowData[e];
+    if (!s) continue;
+    let c = p + e * r.height;
+    ((t.fillStyle = E(n.background)), t.fillRect(o, c, n.cols * r.width, r.height));
+    let l = 0;
+    for (; l < s.cells.length; ) {
+      let e = s.cells[l];
+      if (!e) break;
+      let i = l + 1;
+      for (; i < s.cells.length; ) {
+        let t = s.cells[i];
+        if (!t || t.selected !== e.selected || !T(t.background, e.background)) break;
+        i += 1;
+      }
+      if (e.selected || !T(e.background, n.background)) {
+        let a = o + l * r.width,
+          s = (i - l) * r.width;
+        (T(e.background, n.background) ||
+          ((t.fillStyle = E(e.background)), t.fillRect(a, c, s, r.height)),
+          e.selected && ((t.fillStyle = d), t.fillRect(a, c, s, r.height)));
+      }
+      l = i;
+    }
+    let u = 0;
+    for (; u < s.cells.length; ) {
+      let e = s.cells[u];
+      if (!e) break;
+      if (e.text.length === 0) {
+        u += 1;
+        continue;
+      }
+      let n = he(s.cells, u, (t) => me(t, e)),
+        l = s.cells
+          .slice(u, n)
+          .map((e) => e.text)
+          .join(``);
+      (!e.invisible &&
+        l.trim().length > 0 &&
+        (t.save(),
+        t.beginPath(),
+        t.rect(o + u * r.width, c, (n - u) * r.width, r.height),
+        t.clip(),
+        (t.font = D(e, i, a)),
+        (t.fillStyle = E(e.foreground)),
+        t.fillText(l, o + u * r.width, c + r.baseline, (n - u) * r.width),
+        t.restore()),
+        (u = n));
+    }
+    for (let n = 0; n < s.cells.length; n += 1) {
+      let i = s.cells[n],
+        a =
+          f !== null &&
+          e >= f.start.y &&
+          e <= f.end.y &&
+          (e > f.start.y || n >= f.start.x) &&
+          (e < f.end.y || n <= f.end.x);
+      if (!i || (!i.underline && !i.strikethrough && !i.overline && !a)) continue;
+      t.fillStyle = E(i.foreground);
+      let l = o + n * r.width;
+      ((i.underline || a) && t.fillRect(l, c + r.height - 2, r.width, 1),
+        i.strikethrough && t.fillRect(l, c + Math.floor(r.height * 0.55), r.width, 1),
+        i.overline && t.fillRect(l, c + 1, r.width, 1));
+    }
+  }
+  if (c && n.cursorVisible && n.cursorX >= 0 && n.cursorY >= 0) {
+    let e = o + n.cursorX * r.width,
+      s = p + n.cursorY * r.height;
+    if (((t.fillStyle = E(n.cursor)), !u))
+      ((t.strokeStyle = E(n.cursor)), t.strokeRect(e + 0.5, s + 0.5, r.width - 1, r.height - 1));
+    else if (n.cursorStyle === 0) t.fillRect(e, s, 2, r.height);
+    else if (n.cursorStyle === 2) t.fillRect(e, s + r.height - 2, r.width, 2);
+    else if (n.cursorStyle === 3)
+      ((t.strokeStyle = E(n.cursor)), t.strokeRect(e + 0.5, s + 0.5, r.width - 1, r.height - 1));
+    else {
+      t.fillRect(e, s, r.width, r.height);
+      let o = n.rowData[n.cursorY]?.cells[n.cursorX];
+      o?.text &&
+        ((t.font = D(o, i, a)),
+        (t.fillStyle = E(n.background)),
+        t.fillText(o.text, e, s + r.baseline, r.width));
+    }
+  }
+}
+var _e = `` + new URL(`SymbolsNerdFontMono-Regular-aK5vsLov.woff2`, import.meta.url).href;
+function ve(e) {
+  let t = e.trim();
+  return t.length === 0
+    ? ``
+    : /^(['"]).*\1$/.test(t) || /^[a-zA-Z][a-zA-Z0-9-]*$/.test(t)
+      ? t
+      : `"${t.replaceAll(`"`, ``)}"`;
+}
+function ye(e) {
+  let t = e
+    .split(`,`)
+    .map(ve)
+    .filter((e) => e.length > 0);
+  return t.length > 0 ? t.join(`, `) : null;
+}
+var A,
+  be = [`normal 400`, `normal 700`, `italic 400`, `italic 700`],
+  j = [`i`, `M`, `W`, `0`, `@`, `#`, `.`, ` `],
+  M = 0.01;
+function N(e) {
+  let t = e[0];
+  return t === void 0 || t <= 0 || e.some((e) => !Number.isFinite(e) || e <= 0)
+    ? !0
+    : e.every((e) => Math.abs(e - t) < M);
+}
+function xe(e) {
+  let t = ye(e);
+  if (t === null) return !0;
+  try {
+    if ((A === void 0 && (A = document.createElement(`canvas`).getContext(`2d`)), A === null))
+      return !0;
+    let e = A;
+    for (let n of be)
+      if (((e.font = `${n} 32px ${t}, monospace`), !N(j.map((t) => e.measureText(t).width))))
+        return !1;
+    return !0;
+  } catch {
+    return !0;
+  }
+}
+var Se = 6,
+  Ce = 32,
+  we = `"Symbols Nerd Font Mono", "Symbols Nerd Font", "JetBrainsMono Nerd Font", "JetBrainsMono NF", "FiraCode Nerd Font", "Hack Nerd Font", "MesloLGS NF", "CaskaydiaCove Nerd Font", "PowerlineSymbols", monospace`,
+  P = `"SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", "Symbols Nerd Font Mono", "Symbols Nerd Font", "JetBrainsMono Nerd Font", "JetBrainsMono NF", "FiraCode Nerd Font", "Hack Nerd Font", "MesloLGS NF", "CaskaydiaCove Nerd Font", "PowerlineSymbols", monospace`,
+  F = 4,
+  Te = 18,
+  Ee = 500,
+  De = `iMW0@# .`,
+  Oe = [`normal 400`, `normal 700`, `italic 400`, `italic 700`],
+  I = null;
+function ke() {
+  return (
+    I === null &&
+      (I = (async () => {
+        try {
+          let e = new FontFace(`Symbols Nerd Font Mono`, `url(${_e})`);
+          document.fonts.add(await e.load());
+        } catch {}
+      })()),
+    I
+  );
+}
+function L(e) {
+  return e
+    .split(`,`)
+    .map((e) => {
+      let t = e.trim();
+      return t.length === 0
+        ? ``
+        : /^(['"]).*\1$/.test(t) || /^[a-zA-Z][a-zA-Z0-9-]*$/.test(t)
+          ? t
+          : `"${t.replaceAll(`"`, ``)}"`;
+    })
+    .filter((e) => e.length > 0)
+    .join(`, `);
+}
+function R(e) {
+  let t = e === void 0 ? `` : L(e);
+  return t.length === 0 ? P : `${t}, ${we}`;
+}
+function z(e) {
+  let t = e === void 0 ? `` : L(e);
+  return t.length === 0 || !xe(t) ? P : R(t);
+}
+async function B(e, t, n) {
+  let r = R(e),
+    i = n?.load ?? ((e, t) => document.fonts.load(e, t));
+  try {
+    await Promise.all(Oe.map((e) => i(`${e} ${t}px ${r}`, De)));
+  } catch {}
+  return (n?.resolve ?? z)(e);
+}
+function V(e) {
+  return e === void 0 || !Number.isFinite(e) ? 12 : Math.max(Se, Math.min(Ce, Math.round(e)));
+}
+function Ae(e) {
+  return e.focused && e.cursorBlinking && e.cursorVisible && !e.reducedMotion;
+}
+function je(e, t, n, r, i) {
+  if (!i) return t;
+  let a = e - t * 2 - n * r;
+  return t + Math.max(0, a);
+}
+function H(e, t) {
+  let n = Math.max(0, e.total),
+    r = Math.max(0, Math.min(e.len, n)),
+    i = Math.max(0, n - r);
+  if (t <= 0 || r <= 0 || i === 0) return null;
+  let a = Math.min(t, Math.max(Te, (t * r) / n));
+  return {
+    thumbHeight: a,
+    thumbTop: Math.max(0, t - a) * (Math.max(0, Math.min(e.offset, i)) / i),
+    maxOffset: i,
+  };
+}
+function Me(e, t, n, r) {
+  let i = H(e, t);
+  if (i === null) return 0;
+  let a = Math.max(0, t - i.thumbHeight);
+  if (a === 0) return 0;
+  let o = Math.max(0, Math.min(n - r, a));
+  return Math.round((o / a) * i.maxOffset);
+}
+function Ne(e) {
+  let {
+      bounds: t,
+      clientX: n,
+      clientY: r,
+      cols: i,
+      rows: a,
+      metrics: o,
+      padding: s,
+      originY: c,
+    } = e,
+    l = n - t.left - s,
+    u = r - t.top - c;
+  return l < 0 || u < 0 || l >= i * o.width || u >= a * o.height
+    ? null
+    : { x: Math.floor(l / o.width), y: Math.floor(u / o.height) };
+}
+function Pe(e, t) {
+  let n = e.cells.map((e) => e.text || ` `).join(``);
+  return t ? n.trimEnd() : n;
+}
+function U(e, t) {
+  let n = 0;
+  for (let r = 0; r < t; r += 1) n += e.cells[r]?.text.length || 1;
+  return n;
+}
+function W(e, t) {
+  for (let n = 0; n < e.cells.length; n += 1) if (t < U(e, n + 1)) return n;
+  return Math.max(0, e.cells.length - 1);
+}
+function Fe(e, t, n) {
+  let r = l(t + 1, (t) => {
+    let n = e[t];
+    return n ? { isWrapped: n.isWrapContinuation, translateToString: (e = !1) => Pe(n, e) } : null;
+  });
+  if (!r) return null;
+  let i = r.segments[0];
+  if (i && e[i.bufferLineNumber - 1]?.isWrapContinuation) return null;
+  let a = r.segments.find((e) => e.bufferLineNumber === t + 1),
+    o = e[t];
+  if (!a || !o) return null;
+  let c = r.segments.at(-1),
+    u = c ? e[c.bufferLineNumber - 1] : void 0,
+    d = u !== void 0 && u.wrapsToNext,
+    f = a.startIndex + U(o, n);
+  for (let t of s(r.text))
+    if (f >= t.start && f < t.end) {
+      if (t.end === r.text.length && d) return null;
+      let n = r.segments.find((e) => t.start >= e.startIndex && t.start < e.endIndex),
+        i = r.segments.find((e) => t.end - 1 >= e.startIndex && t.end - 1 < e.endIndex),
+        a = n ? e[n.bufferLineNumber - 1] : void 0,
+        o = i ? e[i.bufferLineNumber - 1] : void 0;
+      return !n || !i || !a || !o
+        ? null
+        : {
+            text: t.text,
+            range: {
+              start: { x: W(a, t.start - n.startIndex), y: n.bufferLineNumber - 1 },
+              end: { x: W(o, t.end - 1 - i.startIndex), y: i.bufferLineNumber - 1 },
+            },
+          };
+    }
+  return null;
+}
+function Ie(t, n = navigator.platform) {
+  return t.key.toLowerCase() === `c` ? (e(n) ? t.metaKey : t.ctrlKey && t.shiftKey) : !1;
+}
+function Le(e, t) {
+  ((e.value = t), t.length !== 0 && e.select());
+}
+function Re(e, t) {
+  t.length === 0 || e.value !== t || (e.value = ``);
+}
+function ze(e, t) {
+  return e.length === 0 || !t
+    ? { preventDefault: !1, claimWriteFallback: !1 }
+    : (t.setData(`text/plain`, e), { preventDefault: !0, claimWriteFallback: !0 });
+}
+function Be(t, n = navigator.platform) {
+  let r = t.key.toLowerCase();
+  return r === `insert` && !e(n)
+    ? t.shiftKey && !t.ctrlKey && !t.metaKey
+    : r === `v`
+      ? e(n)
+        ? t.metaKey
+        : t.ctrlKey && t.shiftKey
+      : !1;
+}
+function Ve(e) {
+  return (
+    e.inputType === `` ||
+    e.inputType === `insertCompositionText` ||
+    e.inputType === `insertFromComposition`
+  );
+}
+function G(e, t) {
+  return e.isComposing || t || e.key === `Process` || e.keyCode === 229;
+}
+function He(e) {
+  return e.getModifierState(`AltGraph`) && [...e.key].length === 1;
+}
+function K(e, t) {
+  return e && !t.shiftKey && !t.ctrlKey && !t.metaKey;
+}
+function Ue(e, t, n) {
+  let r = e === `motion` ? t : ``;
+  return { send: t.length > 0 && (e !== `motion` || t !== n), nextMotionData: r };
+}
+function We(e, t, n) {
+  return { tracking: t, motionData: e === t ? n : `` };
+}
+function Ge(e, t, n, r) {
+  let i =
+      r + (e.deltaMode === 1 ? e.deltaY * t : e.deltaMode === 2 ? e.deltaY * n * t : e.deltaY) / t,
+    a = Math.trunc(i);
+  return { rows: a, remainder: i - a };
+}
+function Ke(e, t) {
+  return e === 0
+    ? ``
+    : (e < 0 ? (t ? `\x1BOA` : `\x1B[A`) : t ? `\x1BOB` : `\x1B[B`).repeat(Math.abs(e));
+}
+function q(t, n = navigator.platform) {
+  return e(n) ? t.metaKey && !t.ctrlKey : t.ctrlKey && !t.metaKey;
+}
+function J(e) {
+  switch (e) {
+    case 0:
+      return 1;
+    case 1:
+      return 3;
+    case 2:
+      return 2;
+    case 3:
+      return 4;
+    case 4:
+      return 5;
+    default:
+      return null;
+  }
+}
+function qe(e, t) {
+  return {
+    count:
+      e !== null && t.timeStamp - e.time <= 500 && Math.hypot(t.clientX - e.x, t.clientY - e.y) <= 4
+        ? e.count >= 3
+          ? 1
+          : e.count + 1
+        : 1,
+    time: t.timeStamp,
+    x: t.clientX,
+    y: t.clientY,
+  };
+}
+var Je = class t {
+    canvas;
+    input;
+    scrollbar;
+    cols = 1;
+    rows = 1;
+    mount;
+    context;
+    core;
+    options;
+    metrics;
+    fontFamily;
+    requestedFontFamily;
+    fontSize;
+    fontEpoch = 0;
+    pendingFontEpoch = null;
+    resizeObserver;
+    scrollbarThumb;
+    snapshot = null;
+    frame = 0;
+    cursorTimer = null;
+    compositionInputToSuppress = null;
+    compositionSuppressionTimer = null;
+    cursorOn = !0;
+    renderedCursorY = null;
+    forceFullRender = !0;
+    scrollbarDirty = !0;
+    scrollbarState = null;
+    scrollbarPointerId = null;
+    scrollbarPointerOffset = 0;
+    disposed = !1;
+    resizeNotifyTimer = null;
+    originY = F;
+    mountHeight = 0;
+    selectionEnd = null;
+    selectionAnchorScreen = null;
+    selectionEndScreen = null;
+    selectionMode = `cell`;
+    selectionBase = null;
+    selectionScrollTimer = null;
+    selectionScrollDelta = 0;
+    selectionPointer = null;
+    mouseReportingPointerId = null;
+    mouseReportingButton = null;
+    linkActivationPointerId = null;
+    hoveredLink = null;
+    hoverPointer = null;
+    linkModifierActive = !1;
+    selectionClickSequence = null;
+    selectionMoved = !1;
+    composing = !1;
+    focused = !1;
+    resizeNotified = !1;
+    canvasConfigured = !1;
+    theme;
+    suppressedKeyCodes = new Set();
+    pasteShortcutToken = 0;
+    copyShortcutToken = 0;
+    clearSelectionAfterCopy = !1;
+    primedCopySelection = ``;
+    wheelRemainder = 0;
+    lastMouseMotionData = ``;
+    mouseAnyEventTracking = !1;
+    dprMedia = null;
+    reducedMotionMedia = window.matchMedia?.(`(prefers-reduced-motion: reduce)`);
+    inputLeft = -1;
+    inputTop = -1;
+    constructor(e, t, n, r, i, a, o, s, c, l) {
+      ((this.mount = e),
+        (this.canvas = t),
+        (this.input = n),
+        (this.scrollbar = r),
+        (this.scrollbarThumb = i),
+        (this.context = a),
+        (this.core = o),
+        (this.mouseAnyEventTracking = o.isMouseAnyEventTracking()),
+        (this.metrics = s),
+        (this.options = l),
+        (this.theme = l.theme),
+        (this.fontFamily = c),
+        (this.requestedFontFamily = l.font?.family),
+        (this.fontSize = V(l.font?.size)),
+        (this.resizeObserver = new ResizeObserver(() => this.fit())),
+        this.installEvents(),
+        this.watchDevicePixelRatio(),
+        this.reducedMotionMedia?.addEventListener(`change`, this.onReducedMotionChange),
+        document.fonts.addEventListener(`loadingdone`, this.onFontsLoaded),
+        this.resizeObserver.observe(e));
+    }
+    static async create(e, n) {
+      let r = document.createElement(`canvas`);
+      ((r.className = `pathway-ghostty-canvas`),
+        (r.style.cssText = `display:block;width:100%;height:100%;`),
+        r.setAttribute(`aria-hidden`, `true`));
+      let i = document.createElement(`textarea`);
+      ((i.className = `pathway-ghostty-input`),
+        i.setAttribute(`aria-label`, `Terminal input`),
+        (i.autocapitalize = `off`),
+        (i.autocomplete = `off`),
+        (i.spellcheck = !1),
+        (i.style.cssText = `position:absolute;left:4px;top:4px;width:1px;height:1px;opacity:0;padding:0;border:0;resize:none;pointer-events:none;`));
+      let a = document.createElement(`div`);
+      ((a.className = `pathway-ghostty-scrollbar`),
+        a.setAttribute(`role`, `scrollbar`),
+        a.setAttribute(`aria-label`, `Terminal scrollback`),
+        a.setAttribute(`aria-orientation`, `vertical`),
+        (a.tabIndex = 0),
+        (a.hidden = !0));
+      let o = document.createElement(`div`);
+      ((o.className = `pathway-ghostty-scrollbar-thumb`), a.append(o), e.replaceChildren(r, i, a));
+      let s = r.getContext(`2d`, { alpha: !1 });
+      if (!s) throw Error(`Canvas 2D is unavailable`);
+      ((s.fillStyle = `rgb(${n.theme.background.r}, ${n.theme.background.g}, ${n.theme.background.b})`),
+        s.fillRect(0, 0, r.width, r.height));
+      let c = V(n.font?.size);
+      try {
+        await ke();
+      } catch {}
+      let l = await B(n.font?.family, c),
+        u = O(s, c, l),
+        d = k(e.clientWidth, e.clientHeight, u, F),
+        f = await fe.create(d.cols, d.rows, u.width, u.height, n.theme, n.onData),
+        p = new t(e, r, i, a, o, s, f, u, l, n);
+      return (p.fit(), p.requestRender(), p);
+    }
+    write(e) {
+      this.disposed ||
+        (this.core.write(e),
+        this.synchronizeMouseTrackingState(),
+        (this.cursorOn = !0),
+        (this.scrollbarDirty = !0),
+        this.requestRender());
+    }
+    resetAndWrite(e) {
+      this.disposed ||
+        ((this.lastMouseMotionData = ``),
+        this.core.resetAndWrite(e),
+        this.synchronizeMouseTrackingState(),
+        (this.cursorOn = !0),
+        (this.forceFullRender = !0),
+        (this.scrollbarDirty = !0),
+        this.requestRender());
+    }
+    setTheme(e) {
+      this.disposed ||
+        ((this.theme = e),
+        this.core.setTheme(e),
+        (this.forceFullRender = !0),
+        this.requestRender());
+    }
+    async setFont(e) {
+      if (this.disposed) return;
+      let t = V(e.size),
+        n = ++this.fontEpoch;
+      this.pendingFontEpoch = n;
+      let r = await B(e.family, t);
+      this.disposed ||
+        n !== this.fontEpoch ||
+        ((this.pendingFontEpoch = null),
+        (this.fontFamily = r),
+        (this.requestedFontFamily = e.family),
+        (this.fontSize = t),
+        this.applyFontMetrics());
+    }
+    applyFontMetrics() {
+      ((this.metrics = O(this.context, this.fontSize, this.fontFamily)),
+        this.core.resize(this.cols, this.rows, this.metrics.width, this.metrics.height),
+        (this.inputLeft = -1),
+        (this.inputTop = -1),
+        (this.forceFullRender = !0),
+        (this.scrollbarDirty = !0),
+        this.fit(),
+        this.requestRender());
+    }
+    onReducedMotionChange = () => {
+      this.disposed || ((this.cursorOn = !0), this.requestRender());
+    };
+    onFontsLoaded = () => {
+      if (this.disposed || this.pendingFontEpoch !== null) return;
+      let e = z(this.requestedFontFamily);
+      if (e !== this.fontFamily) {
+        ((this.fontFamily = e), this.applyFontMetrics());
+        return;
+      }
+      let t = O(this.context, this.fontSize, this.fontFamily);
+      (t.width === this.metrics.width &&
+        t.height === this.metrics.height &&
+        t.baseline === this.metrics.baseline) ||
+        this.applyFontMetrics();
+    };
+    fit() {
+      if (this.disposed) return !1;
+      let e = this.mount.clientWidth,
+        t = this.mount.clientHeight;
+      if (e <= 0 || t <= 0) return !1;
+      let n = window.devicePixelRatio || 1,
+        r = Math.max(1, Math.round(e * n)),
+        i = Math.max(1, Math.round(t * n)),
+        a = !1;
+      (this.canvas.width !== r || this.canvas.height !== i || !this.canvasConfigured) &&
+        ((this.canvas.width = r),
+        (this.canvas.height = i),
+        this.context.setTransform(n, 0, 0, n, 0, 0),
+        (this.canvasConfigured = !0),
+        (this.forceFullRender = !0),
+        (this.scrollbarDirty = !0),
+        (a = !0));
+      let o = k(e, t, this.metrics, F);
+      return (
+        (this.mountHeight = t),
+        (o.cols !== this.cols || o.rows !== this.rows || !this.resizeNotified) &&
+          ((this.cols = o.cols),
+          (this.rows = o.rows),
+          this.core.resize(o.cols, o.rows, this.metrics.width, this.metrics.height),
+          this.notifyResize(),
+          (this.forceFullRender = !0),
+          (this.scrollbarDirty = !0),
+          (a = !0)),
+        a && this.renderFrame(),
+        !0
+      );
+    }
+    notifyResize() {
+      ((this.resizeNotified = !0),
+        this.resizeNotifyTimer !== null && window.clearTimeout(this.resizeNotifyTimer),
+        (this.resizeNotifyTimer = window.setTimeout(() => {
+          ((this.resizeNotifyTimer = null),
+            this.disposed || this.options.onResize(this.cols, this.rows));
+        }, 150)));
+    }
+    focus() {
+      this.input.focus({ preventScroll: !0 });
+    }
+    async pasteFromClipboard(e, t = () => !0) {
+      let n = ++this.pasteShortcutToken,
+        r = await e();
+      if (
+        this.disposed ||
+        this.pasteShortcutToken !== n ||
+        !t() ||
+        ((this.pasteShortcutToken += 1), r.length === 0)
+      )
+        return;
+      let i = this.core.encodePaste(r);
+      i.length > 0 && this.options.onData(i);
+    }
+    hasSelection() {
+      return this.core.selectionText().length > 0;
+    }
+    getSelection() {
+      return this.core.selectionText();
+    }
+    getSelectionPosition() {
+      return !this.selectionAnchorScreen || !this.selectionEndScreen || !this.hasSelection()
+        ? null
+        : this.selectionAnchorScreen.y < this.selectionEndScreen.y ||
+            (this.selectionAnchorScreen.y === this.selectionEndScreen.y &&
+              this.selectionAnchorScreen.x <= this.selectionEndScreen.x)
+          ? { start: this.selectionAnchorScreen, end: this.selectionEndScreen }
+          : { start: this.selectionEndScreen, end: this.selectionAnchorScreen };
+    }
+    getSelectionEndClientRect() {
+      let e = this.getSelectionPosition();
+      if (!e) return null;
+      let t = this.core.screenPointToViewport(e.end.x, e.end.y);
+      if (!t) return null;
+      let n = this.canvas.getBoundingClientRect();
+      return {
+        right: n.left + F + (t.x + 1) * this.metrics.width,
+        bottom: n.top + this.originY + (t.y + 1) * this.metrics.height,
+      };
+    }
+    clearSelection() {
+      (this.clearPrimedCopy(),
+        this.core.clearSelection(),
+        (this.selectionEnd = null),
+        (this.selectionAnchorScreen = null),
+        (this.selectionEndScreen = null),
+        (this.selectionMode = `cell`),
+        (this.selectionBase = null),
+        this.setSelectionAutoscroll(0),
+        this.options.onSelectionChange(),
+        (this.forceFullRender = !0),
+        this.requestRender());
+    }
+    scrollToBottom() {
+      (this.core.scrollToBottom(),
+        (this.forceFullRender = !0),
+        (this.scrollbarDirty = !0),
+        this.requestRender());
+    }
+    isAtBottom() {
+      return this.core.isViewportActive();
+    }
+    dispose() {
+      this.disposed ||
+        ((this.disposed = !0),
+        this.resizeObserver.disconnect(),
+        document.fonts.removeEventListener(`loadingdone`, this.onFontsLoaded),
+        this.dprMedia?.removeEventListener(`change`, this.onDevicePixelRatioChange),
+        (this.dprMedia = null),
+        this.reducedMotionMedia?.removeEventListener(`change`, this.onReducedMotionChange),
+        this.selectionScrollTimer !== null && window.clearInterval(this.selectionScrollTimer),
+        this.resizeNotifyTimer !== null &&
+          (window.clearTimeout(this.resizeNotifyTimer),
+          (this.resizeNotifyTimer = null),
+          this.options.onResize(this.cols, this.rows)),
+        this.frame !== 0 && window.cancelAnimationFrame(this.frame),
+        this.cursorTimer !== null && window.clearTimeout(this.cursorTimer),
+        this.compositionSuppressionTimer !== null &&
+          window.clearTimeout(this.compositionSuppressionTimer),
+        this.removeEvents(),
+        this.core.dispose(),
+        (this.canvas.parentElement === this.mount ||
+          this.input.parentElement === this.mount ||
+          this.scrollbar.parentElement === this.mount) &&
+          (this.canvas.remove(), this.input.remove(), this.scrollbar.remove()));
+    }
+    onKeyDown = (t) => {
+      if ((this.updateLinkModifier(t), He(t) || !this.options.beforeKey(t))) {
+        this.suppressedKeyCodes.add(t.code);
+        return;
+      }
+      if (Ie(t) && this.hasSelection()) {
+        let n = this.getSelection();
+        if ((this.primeCopy(n), t.shiftKey)) (t.preventDefault(), document.execCommand(`copy`));
+        else {
+          this.clearSelectionAfterCopy = !t.shiftKey && !e(navigator.platform);
+          let r = navigator.clipboard;
+          if (typeof r?.writeText == `function`) {
+            let e = ++this.copyShortcutToken;
+            Promise.resolve().then(() => {
+              this.disposed ||
+                this.copyShortcutToken !== e ||
+                r.writeText(n).then(
+                  () => {
+                    this.disposed ||
+                      this.copyShortcutToken !== e ||
+                      (this.clearSelectionAfterCopy &&
+                        ((this.clearSelectionAfterCopy = !1), this.clearSelection()));
+                  },
+                  () => {
+                    this.copyShortcutToken === e && (this.clearSelectionAfterCopy = !1);
+                  },
+                );
+            });
+          }
+        }
+        this.suppressedKeyCodes.add(t.code);
+        return;
+      }
+      if (Be(t)) {
+        this.suppressedKeyCodes.add(t.code);
+        let e = navigator.clipboard;
+        if (typeof e?.readText == `function`) {
+          let t = ++this.pasteShortcutToken;
+          e.readText().then(
+            (e) => {
+              this.disposed ||
+                this.pasteShortcutToken !== t ||
+                ((this.pasteShortcutToken += 1),
+                e.length > 0 && this.options.onData(this.core.encodePaste(e)));
+            },
+            () => {},
+          );
+        }
+        return;
+      }
+      if (G(t, this.composing)) return;
+      this.clearPrimedCopy();
+      let n = this.core.encodeKey(t);
+      n.length !== 0 &&
+        (this.suppressedKeyCodes.delete(t.code),
+        t.preventDefault(),
+        t.stopPropagation(),
+        this.options.onData(n));
+    };
+    onKeyUp = (e) => {
+      if (
+        (this.updateLinkModifier(e), this.suppressedKeyCodes.delete(e.code) || G(e, this.composing))
+      )
+        return;
+      let t = this.core.encodeKey(e, `release`);
+      t.length !== 0 && (e.preventDefault(), e.stopPropagation(), this.options.onData(t));
+    };
+    onFocus = () => {
+      ((this.focused = !0), (this.cursorOn = !0), this.requestRender());
+    };
+    onBlur = () => {
+      ((this.focused = !1),
+        (this.linkModifierActive = !1),
+        this.refreshHoveredLink(),
+        (this.cursorOn = !0),
+        this.requestRender());
+    };
+    onDevicePixelRatioChange = () => {
+      (this.watchDevicePixelRatio(), this.fit());
+    };
+    watchDevicePixelRatio() {
+      (this.dprMedia?.removeEventListener(`change`, this.onDevicePixelRatioChange),
+        (this.dprMedia = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)),
+        this.dprMedia.addEventListener(`change`, this.onDevicePixelRatioChange));
+    }
+    primeCopy(e) {
+      ((this.primedCopySelection = e), Le(this.input, e));
+    }
+    clearPrimedCopy() {
+      (Re(this.input, this.primedCopySelection), (this.primedCopySelection = ``));
+    }
+    onCopyEvent = (e) => {
+      let t = this.hasSelection() ? this.getSelection() : this.input.value;
+      this.primeCopy(t);
+      let n = ze(t, e.clipboardData);
+      (n.preventDefault && e.preventDefault(),
+        n.claimWriteFallback &&
+          ((this.copyShortcutToken += 1),
+          this.clearSelectionAfterCopy &&
+            ((this.clearSelectionAfterCopy = !1), this.clearSelection())));
+    };
+    onPaste = (e) => {
+      e.preventDefault();
+      let t = e.clipboardData?.getData(`text/plain`) ?? ``;
+      t.length !== 0 &&
+        ((this.pasteShortcutToken += 1), this.options.onData(this.core.encodePaste(t)));
+    };
+    onCompositionStart = () => {
+      (this.clearPrimedCopy(), this.clearCompositionInputSuppression(), (this.composing = !0));
+    };
+    onCompositionEnd = (e) => {
+      this.composing = !1;
+      let t = this.input.value || e.data;
+      (t.length > 0 && this.options.onData(t),
+        (this.input.value = ``),
+        (this.compositionInputToSuppress = t),
+        (this.compositionSuppressionTimer = window.setTimeout(() => {
+          ((this.compositionInputToSuppress = null), (this.compositionSuppressionTimer = null));
+        }, 100)));
+    };
+    onInput = (e) => {
+      let t = e;
+      if (this.composing || t.isComposing) return;
+      let n = this.input.value || t.data || ``;
+      if (n === this.compositionInputToSuppress && Ve(t)) {
+        (this.clearCompositionInputSuppression(), (this.input.value = ``));
+        return;
+      }
+      (this.clearCompositionInputSuppression(),
+        n.length > 0 && this.options.onData(n),
+        (this.input.value = ``));
+    };
+    clearCompositionInputSuppression() {
+      (this.compositionSuppressionTimer !== null &&
+        (window.clearTimeout(this.compositionSuppressionTimer),
+        (this.compositionSuppressionTimer = null)),
+        (this.compositionInputToSuppress = null));
+    }
+    onPointerDown = (e) => {
+      if ((this.focus(), K(this.core.isMouseTracking(), e))) {
+        let t = J(e.button);
+        if (t === null) return;
+        (e.preventDefault(),
+          e.stopPropagation(),
+          this.clearHoveredLink(`default`),
+          (this.mouseReportingPointerId = e.pointerId),
+          (this.mouseReportingButton = t),
+          this.sendMouse(`press`, t, e),
+          this.canvas.setPointerCapture(e.pointerId));
+        return;
+      }
+      if (e.button !== 0) return;
+      if (q(e)) {
+        (e.preventDefault(),
+          e.stopPropagation(),
+          (this.linkActivationPointerId = e.pointerId),
+          this.canvas.setPointerCapture(e.pointerId));
+        return;
+      }
+      this.clearHoveredLink();
+      let t = this.cellAt(e.clientX, e.clientY);
+      ((this.selectionMoved = !1),
+        (this.selectionClickSequence = qe(this.selectionClickSequence, e)));
+      let n = this.selectionClickSequence.count;
+      this.selectionMode = n >= 3 ? `line` : n === 2 ? `word` : `cell`;
+      let r =
+        this.selectionMode === `line`
+          ? this.core.selectLine(t.x, t.y)
+          : this.selectionMode === `word`
+            ? this.core.selectWord(t.x, t.y)
+            : null;
+      if (r)
+        ((this.selectionBase = r.screen),
+          (this.selectionEnd = r.viewport.end),
+          (this.selectionAnchorScreen = r.screen.start),
+          (this.selectionEndScreen = r.screen.end),
+          this.options.onSelectionChange());
+      else {
+        ((this.selectionMode = `cell`), (this.selectionBase = null), (this.selectionEnd = t));
+        let e = this.core.viewportPointToScreen(t.x, t.y);
+        ((this.selectionAnchorScreen = e),
+          (this.selectionEndScreen = e),
+          e
+            ? this.core.setSelection({ ...e, tag: 2 }, { ...e, tag: 2 })
+            : this.core.setSelection(t, t));
+      }
+      ((this.forceFullRender = !0),
+        this.canvas.setPointerCapture(e.pointerId),
+        this.requestRender());
+    };
+    onPointerMove = (e) => {
+      if (this.linkActivationPointerId === e.pointerId) return;
+      let t = this.synchronizeMouseTrackingState();
+      if (this.mouseReportingPointerId === e.pointerId || K(t, e)) {
+        (e.preventDefault(),
+          (this.hoverPointer = { x: e.clientX, y: e.clientY }),
+          (this.linkModifierActive = q(e)),
+          this.setHoveredLink(null),
+          (this.canvas.style.cursor = `default`),
+          this.sendMouse(`motion`, this.buttonFromButtons(e.buttons), e));
+        return;
+      }
+      if (
+        ((this.lastMouseMotionData = ``),
+        !this.selectionAnchorScreen || !this.canvas.hasPointerCapture(e.pointerId))
+      ) {
+        this.updateHoverCursor(e);
+        return;
+      }
+      (this.clearHoveredLink(), (this.selectionPointer = { x: e.clientX, y: e.clientY }));
+      let n = this.canvas.getBoundingClientRect();
+      this.setSelectionAutoscroll(e.clientY < n.top ? -1 : +(e.clientY > n.bottom));
+      let r = this.cellAt(e.clientX, e.clientY);
+      (r.x === this.selectionEnd?.x && r.y === this.selectionEnd.y) ||
+        this.extendSelectionTo(e.clientX, e.clientY);
+    };
+    extendSelectionTo(e, t) {
+      let n = this.selectionAnchorScreen;
+      if (n === null) return;
+      let r = this.cellAt(e, t);
+      ((this.selectionMoved = !0), (this.selectionEnd = r));
+      let i =
+          this.selectionMode === `line`
+            ? this.core.selectLine(r.x, r.y)
+            : this.selectionMode === `word`
+              ? this.core.selectWord(r.x, r.y)
+              : null,
+        a = this.core.viewportPointToScreen(r.x, r.y);
+      if (a === null) return;
+      let o = this.selectionBase,
+        s = o !== null && (a.y < o.start.y || (a.y === o.start.y && a.x < o.start.x)),
+        c = o === null ? n : s ? o.end : o.start,
+        l = i === null ? a : s ? i.screen.start : i.screen.end;
+      ((this.selectionAnchorScreen = c),
+        (this.selectionEndScreen = l),
+        this.core.setSelection({ ...c, tag: 2 }, { ...l, tag: 2 }),
+        this.options.onSelectionChange(),
+        (this.forceFullRender = !0),
+        this.requestRender());
+    }
+    setSelectionAutoscroll(e) {
+      if (((this.selectionScrollDelta = e), e === 0)) {
+        this.selectionScrollTimer !== null &&
+          (window.clearInterval(this.selectionScrollTimer), (this.selectionScrollTimer = null));
+        return;
+      }
+      this.selectionScrollTimer === null &&
+        (this.selectionScrollTimer = window.setInterval(() => {
+          if (this.disposed || this.selectionScrollDelta === 0) return;
+          this.scrollViewport(this.selectionScrollDelta);
+          let e = this.selectionPointer;
+          e && this.extendSelectionTo(e.x, e.y);
+        }, 80));
+    }
+    updateHoverCursor(e) {
+      ((this.hoverPointer = { x: e.clientX, y: e.clientY }),
+        (this.linkModifierActive = q(e)),
+        this.refreshHoveredLink());
+    }
+    updateLinkModifier(e) {
+      let t = q(e);
+      t !== this.linkModifierActive && ((this.linkModifierActive = t), this.refreshHoveredLink());
+    }
+    onPointerLeave = () => {
+      ((this.lastMouseMotionData = ``), this.clearHoveredLink());
+    };
+    clearHoveredLink(e = ``) {
+      ((this.hoverPointer = null), this.setHoveredLink(null), (this.canvas.style.cursor = e));
+    }
+    refreshHoveredLink() {
+      let e = this.hoverPointer,
+        t = e && this.linkModifierActive ? this.linkAt(e.x, e.y) : null;
+      this.setHoveredLink(t);
+    }
+    setHoveredLink(e) {
+      let t = this.hoveredLink,
+        n =
+          t?.text === e?.text &&
+          t?.range.start.x === e?.range.start.x &&
+          t?.range.start.y === e?.range.start.y &&
+          t?.range.end.x === e?.range.end.x &&
+          t?.range.end.y === e?.range.end.y;
+      ((this.canvas.style.cursor = e ? `pointer` : ``),
+        !n && ((this.hoveredLink = e), (this.forceFullRender = !0), this.requestRender()));
+    }
+    onPointerUp = (e) => {
+      if ((this.setSelectionAutoscroll(0), this.linkActivationPointerId === e.pointerId)) {
+        if (
+          (e.preventDefault(),
+          e.stopPropagation(),
+          (this.linkActivationPointerId = null),
+          this.canvas.hasPointerCapture(e.pointerId) &&
+            this.canvas.releasePointerCapture(e.pointerId),
+          e.type !== `pointercancel`)
+        ) {
+          let t = this.linkAt(e.clientX, e.clientY);
+          t && this.options.onLinkActivate(t.text, e);
+        }
+        return;
+      }
+      if (this.mouseReportingPointerId === e.pointerId) {
+        (e.preventDefault(),
+          e.stopPropagation(),
+          this.sendMouse(`release`, this.mouseReportingButton, e),
+          (this.mouseReportingPointerId = null),
+          (this.mouseReportingButton = null),
+          this.canvas.hasPointerCapture(e.pointerId) &&
+            this.canvas.releasePointerCapture(e.pointerId),
+          e.type === `pointercancel`
+            ? this.clearHoveredLink()
+            : ((this.hoverPointer = { x: e.clientX, y: e.clientY }),
+              (this.linkModifierActive = q(e)),
+              this.refreshHoveredLink()));
+        return;
+      }
+      (this.canvas.hasPointerCapture(e.pointerId) && this.canvas.releasePointerCapture(e.pointerId),
+        e.button === 0 &&
+          (!this.selectionMoved && this.selectionMode === `cell` && this.clearSelection(),
+          this.options.onSelectionChange()));
+    };
+    onWheel = (e) => {
+      if (e.deltaY === 0) return;
+      e.preventDefault();
+      let t = Ge(e, this.metrics.height, this.rows, this.wheelRemainder);
+      if (((this.wheelRemainder = t.remainder), t.rows === 0)) return;
+      let n = Math.abs(t.rows);
+      if (K(this.core.isMouseTracking(), e)) {
+        let r = t.rows < 0 ? 4 : 5;
+        for (let t = 0; t < n; t += 1) this.sendMouse(`press`, r, e);
+        return;
+      }
+      if (this.core.isAlternateScreen()) {
+        this.options.onData(Ke(t.rows, this.core.isApplicationCursorKeys()));
+        return;
+      }
+      this.scrollViewport(t.rows);
+    };
+    onMouseDown = (e) => {
+      (e.button === 0 && e.preventDefault(), this.focus());
+    };
+    onContextMenu = (e) => {
+      if (K(this.core.isMouseTracking(), e)) {
+        e.preventDefault();
+        return;
+      }
+      this.options.onContextMenu?.(e);
+    };
+    onScrollbarPointerDown = (e) => {
+      if (e.button !== 0) return;
+      let t = this.readScrollbarState();
+      if (t === null) return;
+      let n = this.scrollbar.getBoundingClientRect(),
+        r = H(t, n.height);
+      r !== null &&
+        (e.preventDefault(),
+        e.stopPropagation(),
+        (this.scrollbarPointerId = e.pointerId),
+        (this.scrollbarPointerOffset =
+          e.target === this.scrollbarThumb ? e.clientY - n.top - r.thumbTop : r.thumbHeight / 2),
+        this.scrollbar.setPointerCapture(e.pointerId),
+        this.scrollbarToPointer(e.clientY, n));
+    };
+    onScrollbarPointerMove = (e) => {
+      e.pointerId !== this.scrollbarPointerId ||
+        this.scrollbarState === null ||
+        (e.preventDefault(),
+        this.scrollbarToPointer(e.clientY, this.scrollbar.getBoundingClientRect()));
+    };
+    onScrollbarPointerUp = (e) => {
+      e.pointerId === this.scrollbarPointerId &&
+        (e.preventDefault(),
+        (this.scrollbarPointerId = null),
+        this.scrollbar.hasPointerCapture(e.pointerId) &&
+          this.scrollbar.releasePointerCapture(e.pointerId));
+    };
+    onScrollbarKeyDown = (e) => {
+      let t = this.readScrollbarState();
+      if (t === null) return;
+      let n = 0;
+      switch (e.key) {
+        case `ArrowUp`:
+          n = -1;
+          break;
+        case `ArrowDown`:
+          n = 1;
+          break;
+        case `PageUp`:
+          n = -Math.max(1, t.len);
+          break;
+        case `PageDown`:
+          n = Math.max(1, t.len);
+          break;
+        case `Home`:
+          n = -t.offset;
+          break;
+        case `End`:
+          n = t.total - t.len - t.offset;
+          break;
+        default:
+          return;
+      }
+      (e.preventDefault(), e.stopPropagation(), this.scrollViewport(n));
+    };
+    installEvents() {
+      (this.input.addEventListener(`keydown`, this.onKeyDown),
+        this.input.addEventListener(`keyup`, this.onKeyUp),
+        this.input.addEventListener(`focus`, this.onFocus),
+        this.input.addEventListener(`blur`, this.onBlur),
+        this.input.addEventListener(`input`, this.onInput),
+        this.input.addEventListener(`copy`, this.onCopyEvent),
+        this.input.addEventListener(`paste`, this.onPaste),
+        this.input.addEventListener(`compositionstart`, this.onCompositionStart),
+        this.input.addEventListener(`compositionend`, this.onCompositionEnd),
+        this.canvas.addEventListener(`pointerdown`, this.onPointerDown),
+        this.canvas.addEventListener(`pointermove`, this.onPointerMove),
+        this.canvas.addEventListener(`pointerleave`, this.onPointerLeave),
+        this.canvas.addEventListener(`pointerup`, this.onPointerUp),
+        this.canvas.addEventListener(`pointercancel`, this.onPointerUp),
+        this.canvas.addEventListener(`wheel`, this.onWheel, { passive: !1 }),
+        this.canvas.addEventListener(`mousedown`, this.onMouseDown),
+        this.canvas.addEventListener(`contextmenu`, this.onContextMenu),
+        this.scrollbar.addEventListener(`pointerdown`, this.onScrollbarPointerDown),
+        this.scrollbar.addEventListener(`pointermove`, this.onScrollbarPointerMove),
+        this.scrollbar.addEventListener(`pointerup`, this.onScrollbarPointerUp),
+        this.scrollbar.addEventListener(`pointercancel`, this.onScrollbarPointerUp),
+        this.scrollbar.addEventListener(`keydown`, this.onScrollbarKeyDown));
+    }
+    removeEvents() {
+      (this.input.removeEventListener(`keydown`, this.onKeyDown),
+        this.input.removeEventListener(`keyup`, this.onKeyUp),
+        this.input.removeEventListener(`focus`, this.onFocus),
+        this.input.removeEventListener(`blur`, this.onBlur),
+        this.input.removeEventListener(`input`, this.onInput),
+        this.input.removeEventListener(`copy`, this.onCopyEvent),
+        this.input.removeEventListener(`paste`, this.onPaste),
+        this.input.removeEventListener(`compositionstart`, this.onCompositionStart),
+        this.input.removeEventListener(`compositionend`, this.onCompositionEnd),
+        this.canvas.removeEventListener(`pointerdown`, this.onPointerDown),
+        this.canvas.removeEventListener(`pointermove`, this.onPointerMove),
+        this.canvas.removeEventListener(`pointerleave`, this.onPointerLeave),
+        this.canvas.removeEventListener(`pointerup`, this.onPointerUp),
+        this.canvas.removeEventListener(`pointercancel`, this.onPointerUp),
+        this.canvas.removeEventListener(`wheel`, this.onWheel),
+        this.canvas.removeEventListener(`mousedown`, this.onMouseDown),
+        this.canvas.removeEventListener(`contextmenu`, this.onContextMenu),
+        this.scrollbar.removeEventListener(`pointerdown`, this.onScrollbarPointerDown),
+        this.scrollbar.removeEventListener(`pointermove`, this.onScrollbarPointerMove),
+        this.scrollbar.removeEventListener(`pointerup`, this.onScrollbarPointerUp),
+        this.scrollbar.removeEventListener(`pointercancel`, this.onScrollbarPointerUp),
+        this.scrollbar.removeEventListener(`keydown`, this.onScrollbarKeyDown));
+    }
+    scrollViewport(e) {
+      let t = Math.trunc(e),
+        n = this.readScrollbarState();
+      if (n !== null) {
+        let e = Math.max(0, n.total - n.len),
+          r = Math.max(0, Math.min(n.offset + t, e));
+        ((t = r - n.offset), (this.scrollbarState = { ...n, offset: r }));
+      }
+      t !== 0 &&
+        (this.core.scroll(t),
+        (this.forceFullRender = !0),
+        (this.scrollbarDirty = !0),
+        this.requestRender());
+    }
+    scrollbarToPointer(e, t) {
+      let n = this.scrollbarState;
+      if (n === null) return;
+      let r = Me(n, t.height, e - t.top, this.scrollbarPointerOffset);
+      this.scrollViewport(r - n.offset);
+    }
+    updateScrollbar() {
+      let e = this.readScrollbarState(),
+        t = e === null ? null : H(e, Math.max(0, this.mount.clientHeight - F * 2));
+      ((this.scrollbar.hidden = t === null),
+        !(e === null || t === null) &&
+          (this.scrollbar.setAttribute(`aria-valuemin`, `0`),
+          this.scrollbar.setAttribute(`aria-valuemax`, String(t.maxOffset)),
+          this.scrollbar.setAttribute(
+            `aria-valuenow`,
+            String(Math.max(0, Math.min(e.offset, t.maxOffset))),
+          ),
+          (this.scrollbarThumb.style.height = `${t.thumbHeight}px`),
+          (this.scrollbarThumb.style.transform = `translateY(${t.thumbTop}px)`)));
+    }
+    readScrollbarState() {
+      let e = this.core.scrollbarState();
+      return ((this.scrollbarState = e), e);
+    }
+    requestRender() {
+      this.disposed ||
+        this.frame !== 0 ||
+        (this.frame = window.requestAnimationFrame(() => {
+          ((this.frame = 0), this.renderFrame());
+        }));
+    }
+    renderFrame() {
+      if (this.disposed) return;
+      (this.frame !== 0 && (window.cancelAnimationFrame(this.frame), (this.frame = 0)),
+        (this.snapshot = this.core.snapshot()),
+        this.blinkEnabled() || (this.cursorOn = !0));
+      let e = this.readScrollbarState(),
+        t = e !== null && e.total > e.len,
+        n = je(this.mountHeight, F, this.rows, this.metrics.height, t);
+      (n !== this.originY && ((this.originY = n), (this.forceFullRender = !0)),
+        this.refreshHoveredLink(),
+        ge({
+          context: this.context,
+          snapshot: this.snapshot,
+          metrics: this.metrics,
+          fontSize: this.fontSize,
+          fontFamily: this.fontFamily,
+          padding: F,
+          originY: this.originY,
+          forceFull: this.forceFullRender,
+          cursorOn: this.cursorOn,
+          previousCursorY: this.renderedCursorY,
+          focused: this.focused,
+          hoveredLinkRange: this.hoveredLink?.range ?? null,
+          ...(this.theme.selectionBackground === void 0
+            ? {}
+            : { selectionBackground: this.theme.selectionBackground }),
+        }),
+        this.positionInput(),
+        (this.renderedCursorY =
+          this.cursorOn && this.snapshot.cursorVisible && this.snapshot.cursorY >= 0
+            ? this.snapshot.cursorY
+            : null),
+        this.scrollbarDirty && ((this.scrollbarDirty = !1), this.updateScrollbar()),
+        (this.forceFullRender = !1),
+        this.scheduleCursorBlink());
+    }
+    scheduleCursorBlink() {
+      (this.cursorTimer !== null && window.clearTimeout(this.cursorTimer),
+        (this.cursorTimer = null),
+        this.blinkEnabled() &&
+          (this.cursorTimer = window.setTimeout(() => {
+            ((this.cursorTimer = null), (this.cursorOn = !this.cursorOn), this.requestRender());
+          }, Ee)));
+    }
+    blinkEnabled() {
+      let e = this.snapshot;
+      return e
+        ? Ae({
+            focused: this.focused,
+            cursorBlinking: e.cursorBlinking,
+            cursorVisible: e.cursorVisible,
+            reducedMotion: this.reducedMotionMedia?.matches ?? !1,
+          })
+        : !1;
+    }
+    positionInput() {
+      let e = this.snapshot;
+      if (!e || !e.cursorVisible || e.cursorX < 0 || e.cursorY < 0) return;
+      let t = F + e.cursorX * this.metrics.width,
+        n = this.originY + e.cursorY * this.metrics.height;
+      (t === this.inputLeft && n === this.inputTop) ||
+        ((this.inputLeft = t),
+        (this.inputTop = n),
+        (this.input.style.left = `${t}px`),
+        (this.input.style.top = `${n}px`),
+        (this.input.style.height = `${this.metrics.height}px`));
+    }
+    cellAt(e, t) {
+      let n = this.canvas.getBoundingClientRect();
+      return {
+        x: Math.max(0, Math.min(this.cols - 1, Math.floor((e - n.left - F) / this.metrics.width))),
+        y: Math.max(
+          0,
+          Math.min(this.rows - 1, Math.floor((t - n.top - this.originY) / this.metrics.height)),
+        ),
+      };
+    }
+    linkAt(e, t) {
+      if (!this.snapshot) return null;
+      let n = Ne({
+        bounds: this.canvas.getBoundingClientRect(),
+        clientX: e,
+        clientY: t,
+        cols: this.cols,
+        rows: this.rows,
+        metrics: this.metrics,
+        padding: F,
+        originY: this.originY,
+      });
+      if (!n) return null;
+      let r = this.core.hyperlinkAt(n.x, n.y);
+      if (r) {
+        let e = { ...n },
+          t = { ...n };
+        for (;;) {
+          let t =
+            e.x > 0
+              ? { x: e.x - 1, y: e.y }
+              : e.y > 0 && this.snapshot.rowData[e.y]?.isWrapContinuation
+                ? { x: this.cols - 1, y: e.y - 1 }
+                : null;
+          if (!t || this.core.hyperlinkAt(t.x, t.y) !== r) break;
+          ((e.x = t.x), (e.y = t.y));
+        }
+        for (;;) {
+          let e =
+            t.x + 1 < this.cols
+              ? { x: t.x + 1, y: t.y }
+              : t.y + 1 < this.rows && this.snapshot.rowData[t.y]?.wrapsToNext
+                ? { x: 0, y: t.y + 1 }
+                : null;
+          if (!e || this.core.hyperlinkAt(e.x, e.y) !== r) break;
+          ((t.x = e.x), (t.y = e.y));
+        }
+        return { text: r, range: { start: e, end: t } };
+      }
+      return Fe(this.snapshot.rowData, n.y, n.x);
+    }
+    sendMouse(e, t, n) {
+      let r = this.canvas.getBoundingClientRect(),
+        i = this.core.encodeMouse({
+          action: e,
+          button: t,
+          mods: !!n.shiftKey | (n.ctrlKey ? 2 : 0) | (n.altKey ? 4 : 0) | (n.metaKey ? 8 : 0),
+          x: Math.max(0, n.clientX - r.left),
+          y: Math.max(0, n.clientY - r.top),
+          screenWidth: r.width,
+          screenHeight: r.height,
+          cellWidth: this.metrics.width,
+          cellHeight: this.metrics.height,
+          paddingLeft: F,
+          paddingRight: F,
+          paddingTop: this.originY,
+          paddingBottom: Math.max(0, r.height - this.originY - this.rows * this.metrics.height),
+          anyButtonPressed: n.buttons !== 0,
+        }),
+        a = Ue(e, i, this.lastMouseMotionData);
+      ((this.lastMouseMotionData = a.nextMotionData), a.send && this.options.onData(i));
+    }
+    synchronizeMouseTrackingState() {
+      let e = this.core.isMouseAnyEventTracking(),
+        t = We(this.mouseAnyEventTracking, e, this.lastMouseMotionData);
+      return (
+        (this.mouseAnyEventTracking = t.tracking), (this.lastMouseMotionData = t.motionData), e
+      );
+    }
+    buttonFromButtons(e) {
+      return e & 1 ? 1 : e & 4 ? 3 : e & 2 ? 2 : e & 8 ? 4 : e & 16 ? 5 : null;
+    }
+  },
+  Y = !1,
+  X = !1,
+  Z,
+  Q = (e) => {
+    X || window.webkit?.messageHandlers.terminal.postMessage(e);
+  },
+  $ = () => {
+    ((X = !0), Z?.dispose(), (Z = void 0));
+  };
+(window.addEventListener(`pagehide`, $, { once: !0 }), (window.open = () => null));
+async function Ye() {
+  let e = document.getElementById(`terminal`);
+  if (!e) throw Error(`Terminal mount is missing`);
+  let t = await Je.create(e, {
+    theme: {
+      background: { r: 20, g: 22, b: 25 },
+      foreground: { r: 227, g: 229, b: 232 },
+      cursor: { r: 227, g: 229, b: 232 },
+    },
+    font: { size: 14 },
+    onData: (e) => {
+      Y && e.length > 0 && Q({ type: `input`, data: e });
+    },
+    onResize: (e, t) => Q({ type: `resize`, cols: e, rows: t }),
+    onSelectionChange: () => {},
+    onCopy: (e) => Q({ type: `copy`, data: e }),
+    beforeKey: () => !0,
+    onLinkActivate: (e, t) => t.preventDefault(),
+  });
+  if (X) {
+    t.dispose();
+    return;
+  }
+  ((Z = t),
+    (window.pathwayTerminal = {
+      receive(e) {
+        for (let n of e)
+          switch (n.kind) {
+            case `write`:
+              t.write(n.data ?? ``);
+              break;
+            case `reset`:
+              t.resetAndWrite(n.data ?? ``);
+              break;
+            case `paste`:
+              Y && t.pasteFromClipboard(async () => n.data ?? ``);
+              break;
+            case `copy`:
+              Q({ type: `copy`, data: t.getSelection() });
+              break;
+            case `focus`:
+              t.focus();
+              break;
+            case `enabled`:
+              ((Y = n.enabled === !0), (t.input.readOnly = !Y));
+              break;
+          }
+      },
+      dispose: $,
+    }),
+    Q({ type: `ready` }));
+}
+Ye().catch((e) =>
+  Q({ type: `error`, message: e instanceof Error ? e.message : `Terminal could not start` }),
+);

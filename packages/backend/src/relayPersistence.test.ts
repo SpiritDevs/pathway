@@ -474,3 +474,66 @@ describe("relayPersistence", () => {
     ).rejects.toThrow("Delivery attempt id already exists");
   });
 });
+
+describe("visionOS notification registrations", () => {
+  const registration = {
+    deviceId: "vision-device",
+    label: "Vision Pro",
+    platform: "visionos" as const,
+    iosMajorVersion: 26,
+    pushToken: "vision-push",
+    preferences: {
+      liveActivitiesEnabled: false,
+      notificationsEnabled: true,
+      notifyOnApproval: true,
+      notifyOnInput: true,
+      notifyOnCompletion: true,
+      notifyOnFailure: true,
+    },
+  };
+
+  it("retains visionOS as a notification delivery target and refuses activity registration", async () => {
+    const { relay } = testRelay();
+    const now = "2026-09-06T00:00:00.000Z";
+    await relay.mutation(api.relayPersistence.registerDevice, {
+      userId: "vision-user",
+      now,
+      registration,
+    });
+    expect(
+      await relay.query(api.relayPersistence.listLiveActivityTargets, { userId: "vision-user" }),
+    ).toMatchObject([
+      {
+        platform: "visionos",
+        pushToken: "vision-push",
+        pushToStartToken: null,
+        activityPushToken: null,
+      },
+    ]);
+    await expect(
+      relay.mutation(api.relayPersistence.registerLiveActivity, {
+        userId: "vision-user",
+        deviceId: "vision-device",
+        activityPushToken: "invalid-activity",
+        now,
+      }),
+    ).rejects.toThrow("Live Activities are not supported on visionOS");
+  });
+
+  it("rejects unsupported Live Activity settings before saving a visionOS device", async () => {
+    const { relay } = testRelay();
+    await expect(
+      relay.mutation(api.relayPersistence.registerDevice, {
+        userId: "vision-user",
+        now: "2026-09-06T00:00:00.000Z",
+        registration: {
+          ...registration,
+          preferences: { ...registration.preferences, liveActivitiesEnabled: true },
+        },
+      }),
+    ).rejects.toThrow("Live Activities are not supported on visionOS");
+    expect(await relay.query(api.relayPersistence.listDevices, { userId: "vision-user" })).toEqual(
+      [],
+    );
+  });
+});

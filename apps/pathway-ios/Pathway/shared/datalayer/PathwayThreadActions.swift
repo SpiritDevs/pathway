@@ -4,6 +4,7 @@ import Observation
 enum PathwayThreadAction: Equatable, Sendable {
     case pin, unpin, settle, reopen, wake
     case sleep(until: Date)
+    case rename(String), archive, restore, delete, reorder(String)
 
     func command(threadID: String, commandID: String = UUID().uuidString.lowercased()) -> JSONValue {
         var fields: [String: JSONValue] = [
@@ -13,6 +14,15 @@ enum PathwayThreadAction: Equatable, Sendable {
         switch self {
         case .pin: type = "thread.pin"
         case .unpin: type = "thread.unpin"
+        case let .rename(title):
+            type = "thread.metadata.update"
+            fields["title"] = .string(title.trimmingCharacters(in: .whitespacesAndNewlines))
+        case .archive: type = "thread.archive"
+        case .restore: type = "thread.unarchive"
+        case .delete: type = "thread.delete"
+        case let .reorder(orderKey):
+            type = "thread.pin.reorder"
+            fields["orderKey"] = .string(orderKey)
         case .settle: type = "thread.settle"
         case .reopen:
             type = "thread.unsettle"

@@ -168,7 +168,9 @@ function TeamSheet({
               <label key={member.id} className="flex items-start gap-2 rounded-lg border p-2.5">
                 <Checkbox
                   checked={memberIds.has(member.id)}
-                  disabled={team?.archivedAt !== null && !existingMemberIds.has(member.id)}
+                  disabled={
+                    team !== null && team.archivedAt !== null && !existingMemberIds.has(member.id)
+                  }
                   onCheckedChange={() => toggleMember(member.id)}
                 />
                 <span className="min-w-0">
@@ -183,7 +185,7 @@ function TeamSheet({
             ))}
         </div>
       </fieldset>
-      {team !== null && team.archivedAt === null ? (
+      {team !== null ? (
         <div className="border-t pt-5">
           <Button
             variant="ghost"
@@ -193,19 +195,20 @@ function TeamSheet({
               if (
                 settings.admin === null ||
                 settings.companyId === null ||
-                !window.confirm(`Archive ${team.name}?`)
+                !window.confirm(`${team.archivedAt === null ? "Archive" : "Restore"} ${team.name}?`)
               ) {
                 return;
               }
               setPending(true);
-              void settings.admin
-                .archiveTeam({ companyId: settings.companyId, teamId: team.id })
+              const change =
+                team.archivedAt === null ? settings.admin.archiveTeam : settings.admin.restoreTeam;
+              void change({ companyId: settings.companyId, teamId: team.id })
                 .then(() => onOpenChange(false))
-                .catch((error) => reportError("Could not archive team", error))
+                .catch((error) => reportError("Could not update team", error))
                 .finally(() => setPending(false));
             }}
           >
-            <ArchiveIcon /> Archive team
+            <ArchiveIcon /> {team.archivedAt === null ? "Archive team" : "Restore team"}
           </Button>
         </div>
       ) : null}

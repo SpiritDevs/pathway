@@ -193,7 +193,7 @@ struct PathwayIssueWorkView: View {
               let environment = appModel.cloud.environments.first(where: {
                   $0.companyId == binding.companyId && $0.environment.environmentId == binding.binding.environmentId
               }) else { return }
-        let next = PathwayAgentThreadCreationModel(binding: binding, environment: environment, connect: connect)
+        let next = PathwayAgentThreadCreationModel(binding: binding, environment: environment, connect: connect, storageDirectory: appModel.localStorageDirectory)
         next.prompt = commentBody ?? workPrompt()
         next.runtimeMode = "approval-required"
         creation = next

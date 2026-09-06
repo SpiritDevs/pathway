@@ -20,6 +20,10 @@ struct AgentThreadComposer: View {
     @Namespace private var surfaceNamespace
     @State private var showsFiles = false
     @State private var showsPhotos = false
+    #if os(iOS)
+    @State private var capture: Capture?
+    private enum Capture: String, Identifiable { case camera, document; var id: String { rawValue } }
+    #endif
     @State private var showsSettings = false
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var errorMessage: String?
@@ -27,11 +31,12 @@ struct AgentThreadComposer: View {
     @State private var isInterrupting = false
     @State private var showsStash = false
     @State private var stashCount = 0
+    @State private var stash: AgentThreadPromptStash?
     @State private var isStashing = false
     @State private var isStartingNewThread = false
     @State private var textSelection: TextSelection?
     @State private var isApplyingSuggestion = false
-    @ScaledMetric(relativeTo: .body) private var controlDiameter: CGFloat = 36
+    @ScaledMetric(relativeTo: .body) private var controlDiameter: CGFloat = 44
 
     var body: some View {
         Group {
@@ -73,22 +78,50 @@ struct AgentThreadComposer: View {
                 }
             }
         }
+        #if os(iOS)
+        .sheet(item: $capture) { kind in
+            switch kind {
+            case .camera: PathwayCameraCapture { captureResult($0, name: "Camera Photo.jpg", mimeType: "image/jpeg") }.ignoresSafeArea()
+            case .document: PathwayDocumentCapture { captureResult($0, name: "Scanned Document.pdf", mimeType: "application/pdf") }.ignoresSafeArea()
+            }
+        }
+        #endif
         .sheet(isPresented: $showsSettings) {
             AgentThreadComposerSettings(model: model)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showsStash, onDismiss: {
-            Task { stashCount = (try? await AgentThreadPromptStash.shared.entries().count) ?? 0 }
+            Task { await reloadStashCount() }
         }) {
-            AgentThreadPromptStashSheet(store: .shared, restore: restoreStash)
-                .presentationDetents([.medium, .large])
+            if let stash {
+                AgentThreadPromptStashSheet(store: stash, restore: restoreStash)
+                    .presentationDetents([.medium, .large])
+            }
         }
-        .task { stashCount = (try? await AgentThreadPromptStash.shared.entries().count) ?? 0 }
+        .task(id: model.storageDirectory) {
+            stash = model.storageDirectory.map { AgentThreadPromptStash(directory: $0.appending(path: "PromptStash")) }
+            await reloadStashCount()
+        }
         .alert("Couldn't complete action", isPresented: Binding(get: { errorMessage != nil || model.actionError != nil }, set: { if !$0 { clearError() } })) {
             Button("OK", role: .cancel) { clearError() }
         } message: { Text(errorMessage ?? model.actionError ?? "") }
     }
+
+    #if os(iOS)
+    private func requestCapture(_ kind: Capture) {
+        Task {
+            if await PathwayCameraPermission.request() { capture = kind }
+            else { errorMessage = "Allow Camera access in Settings to take photos or scan documents." }
+        }
+    }
+    private func captureResult(_ result: Result<Data, any Error>, name: String, mimeType: String) {
+        switch result {
+        case let .success(data): Task { await model.addAttachment(data: data, name: name, mimeType: mimeType) }
+        case let .failure(error): errorMessage = error.localizedDescription
+        }
+    }
+    #endif
 
     private var collapsedComposer: some View {
         Button {
@@ -184,13 +217,22 @@ struct AgentThreadComposer: View {
             Group {
                 Button("Photos", systemImage: "photo.on.rectangle") { showsPhotos = true }
                 Button("Choose files", systemImage: "folder") { showsFiles = true }
+                #if os(iOS)
+                if PathwayCameraCapture.isSupported {
+                    Button("Take photo", systemImage: "camera") { requestCapture(.camera) }
+                }
+                if PathwayDocumentCapture.isSupported, model.maximumFileAttachmentBytes != nil {
+                    Button("Scan document", systemImage: "document.viewfinder") { requestCapture(.document) }
+                }
+                #endif
                 PasteButton(supportedContentTypes: [.image]) { providers in pasteImages(providers) }
             }
-            .disabled(model.draftAttachments.count >= 8)
+            .disabled(!model.supportsAttachmentUploads || model.draftAttachments.count >= 8)
             Divider()
             Button("Stash draft", systemImage: "tray.and.arrow.down") { stashDraft() }
-                .disabled(!hasContent || model.draftAttachments.contains(where: { $0.state != .ready }))
+                .disabled(stash == nil || !hasContent || model.draftAttachments.contains(where: { $0.state != .ready }))
             Button("Saved prompts (\(stashCount))", systemImage: "tray.full") { showsStash = true }
+                .disabled(stash == nil)
         } label: {
             Image(systemName: "plus").font(.title3)
                 .frame(width: controlDiameter, height: controlDiameter)
@@ -260,7 +302,7 @@ struct AgentThreadComposer: View {
         Button(action: send) {
             Group {
                 if model.isSending || isStartingNewThread { ProgressView().tint(Color(.systemBackground)) }
-                else { Image(systemName: model.activeRunID == nil ? "arrow.up" : "text.line.last.and.arrowtriangle.forward").font(.body.weight(.bold)) }
+                else { Image(systemName: model.activeRunID == nil ? "arrow.up" : PathwayGeneralPreferences.shared.activeTurnSendMode == "steer" ? "arrow.turn.up.right" : "text.line.last.and.arrowtriangle.forward").font(.body.weight(.bold)) }
             }
             .frame(width: controlDiameter, height: controlDiameter)
             .foregroundStyle(model.canSend ? Color(.systemBackground) : Color.secondary)
@@ -279,7 +321,7 @@ struct AgentThreadComposer: View {
                     .disabled(!model.canStartSideChat)
             }
         }
-        .accessibilityLabel(model.activeRunID == nil ? "Send message" : "Queue message")
+        .accessibilityLabel(model.activeRunID == nil ? "Send message" : PathwayGeneralPreferences.shared.activeTurnSendMode == "steer" ? "Steer now" : "Queue message")
         .accessibilityIdentifier("agent-thread-send")
     }
 
@@ -339,7 +381,13 @@ struct AgentThreadComposer: View {
         model.clearActionError()
     }
 
+    private func reloadStashCount() async {
+        guard let stash else { stashCount = 0; return }
+        stashCount = (try? await stash.entries().count) ?? 0
+    }
+
     private func stashDraft() {
+        guard let stash else { errorMessage = "Sign in to save prompts on this device."; return }
         guard !isStashing else { return }
         isStashing = true
         let prompt = model.draft
@@ -353,16 +401,17 @@ struct AgentThreadComposer: View {
                     }
                     return .init(name: attachment.name, mimeType: attachment.mimeType, data: data)
                 }
-                try await AgentThreadPromptStash.shared.save(prompt: prompt, attachments: attachments)
+                try await stash.save(prompt: prompt, attachments: attachments)
                 if model.draft == prompt { model.draft = "" }
                 for attachment in selected { await model.removeAttachment(id: attachment.id) }
-                stashCount = try await AgentThreadPromptStash.shared.entries().count
+                stashCount = try await stash.entries().count
             } catch { errorMessage = error.localizedDescription }
         }
     }
 
     private func restoreStash(_ entry: AgentThreadPromptStashEntry) async throws {
-        let attachments = try await AgentThreadPromptStash.shared.attachments(for: entry.id)
+        guard let stash else { throw PathwayThreadConversationError.message("Sign in to restore saved prompts.") }
+        let attachments = try await stash.attachments(for: entry.id)
         let missing = attachments.filter { attachment in
             !model.draftAttachments.contains { $0.name == attachment.name && $0.mimeType == attachment.mimeType && $0.sizeBytes == attachment.data.count }
         }
@@ -377,12 +426,12 @@ struct AgentThreadComposer: View {
         }) else {
             throw PathwayThreadConversationError.message("Some attachments couldn't upload. The saved prompt is still in your stash; retry its files, then restore it again.")
         }
-        try await AgentThreadPromptStash.shared.remove(id: entry.id)
+        try await stash.remove(id: entry.id)
         model.draft = AgentThreadPromptStash.appending(entry.prompt, to: model.draft)
         if !entry.prompt.isEmpty {
             textSelection = TextSelection(insertionPoint: model.draft.endIndex)
         }
-        stashCount = try await AgentThreadPromptStash.shared.entries().count
+        stashCount = try await stash.entries().count
         isFocused = true
     }
 
@@ -432,7 +481,7 @@ struct AgentThreadComposer: View {
     }
 
     private func send() {
-        send(mode: "queue")
+        send(mode: PathwayGeneralPreferences.shared.activeTurnSendMode)
     }
 
     private func send(mode: String) {

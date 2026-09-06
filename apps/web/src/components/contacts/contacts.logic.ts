@@ -8,6 +8,7 @@ export interface ContactRecord {
   readonly notes: string;
   readonly favorite: boolean;
   readonly createdAt: string;
+  readonly revision?: number;
 }
 
 export function contactInitials(name: string): string {

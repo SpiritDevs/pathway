@@ -1,11 +1,28 @@
 import Foundation
 
+protocol PathwayIssueRPCClient: Sendable {
+    func subscribe(_ tag: String, payload: JSONValue) async -> AsyncThrowingStream<JSONValue, Error>
+    func request(_ tag: String, payload: JSONValue, requiresSubscription: Bool, waitForSubscription: Bool, timeout: Duration) async throws -> JSONValue
+    func stop() async
+}
+
+extension PathwayRPCClient: PathwayIssueRPCClient {}
+
 /// Keeps protocol negotiation and the event drain alive on the connection that executes work.
 @MainActor
 final class PathwayIssueEnvironmentClient {
+    typealias ClientFactory = @MainActor (PathwayCompanyEnvironment, PathwayConnectClient) -> any PathwayIssueRPCClient
     var onEvent: (@MainActor (String, String, JSONValue) -> Void)?
-    private var clients: [String: PathwayRPCClient] = [:]
+    private let makeClient: ClientFactory
+    private var clients: [String: any PathwayIssueRPCClient] = [:]
+    private var clientIDs: [String: UUID] = [:]
     private var eventTasks: [String: Task<Void, Never>] = [:]
+
+    init(makeClient: @escaping ClientFactory = { environment, connect in
+        PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+    }) {
+        self.makeClient = makeClient
+    }
 
     func request(
         environment: PathwayCompanyEnvironment,
@@ -14,37 +31,55 @@ final class PathwayIssueEnvironmentClient {
         payload: JSONValue
     ) async throws -> JSONValue {
         let key = environment.id
-        let rpc: PathwayRPCClient
-        if let existing = clients[key] {
+        let rpc: any PathwayIssueRPCClient
+        let clientID: UUID
+        if let existing = clients[key], let existingID = clientIDs[key] {
             rpc = existing
+            clientID = existingID
         } else {
-            rpc = PathwayRPCClient {
-                try await connect.prepare(environment: environment).webSocketURL
-            }
+            rpc = makeClient(environment, connect)
+            clientID = UUID()
             clients[key] = rpc
+            clientIDs[key] = clientID
             let stream = await rpc.subscribe("issues.stream", payload: .object([
                 "clientProtocolVersion": .number(1)
             ]))
+            // Stop/reconnect may replace this entry while subscribe prepares its stream.
+            guard clientIDs[key] == clientID, !Task.isCancelled else {
+                if clientIDs[key] == clientID {
+                    clients.removeValue(forKey: key)
+                    clientIDs.removeValue(forKey: key)
+                }
+                await rpc.stop()
+                throw CancellationError()
+            }
             eventTasks[key] = Task { [weak self] in
                 do {
                     for try await event in stream {
-                        guard !Task.isCancelled else { return }
-                        self?.onEvent?(environment.companyId, environment.environment.environmentId, event)
+                        guard !Task.isCancelled, let self, clientIDs[key] == clientID else { break }
+                        onEvent?(environment.companyId, environment.environment.environmentId, event)
                     }
                 } catch {
-                    self?.clients.removeValue(forKey: key)
-                    self?.eventTasks.removeValue(forKey: key)
-                    await rpc.stop()
+                    // The request transport owns its user-visible error. This drain owns cleanup.
                 }
+                if let self, clientIDs[key] == clientID {
+                    clients.removeValue(forKey: key)
+                    clientIDs.removeValue(forKey: key)
+                    eventTasks.removeValue(forKey: key)
+                }
+                await rpc.stop()
             }
         }
-        // The RPC client repeats this gate after reconnecting, when the server has forgotten
-        // this connection's protocol version. A one-time handshake task cannot provide that.
-        return try await rpc.request(method, payload: payload, requiresSubscription: true)
+        // Reconnect repeats this gate because protocol negotiation belongs to the socket.
+        let result = try await rpc.request(method, payload: payload, requiresSubscription: true,
+                                           waitForSubscription: true, timeout: .seconds(30))
+        guard clientIDs[key] == clientID, !Task.isCancelled else { throw CancellationError() }
+        return result
     }
 
     func stop() async {
         let openClients = Array(clients.values)
+        clientIDs = [:]
         eventTasks.values.forEach { $0.cancel() }
         eventTasks = [:]
         clients = [:]

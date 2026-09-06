@@ -17,7 +17,7 @@ import {
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { AttentionEvent } from "./focus.ts";
 
-export const RelayAgentAwarenessPlatform = Schema.Literal("ios");
+export const RelayAgentAwarenessPlatform = Schema.Literals(["ios", "visionos"]);
 export type RelayAgentAwarenessPlatform = typeof RelayAgentAwarenessPlatform.Type;
 
 export const RelayAgentAwarenessPhase = Schema.Literals([
@@ -48,6 +48,7 @@ export const RelayDeviceRegistrationRequest = Schema.Struct({
   deviceId: TrimmedNonEmptyString,
   label: TrimmedNonEmptyString,
   platform: RelayAgentAwarenessPlatform,
+  // Legacy wire name retained for both platforms; visionOS sends its actual major version.
   iosMajorVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(18)),
   appVersion: Schema.optional(TrimmedNonEmptyString),
   // APNs routing for this install: the topic must match the app's bundle id
@@ -59,13 +60,22 @@ export const RelayDeviceRegistrationRequest = Schema.Struct({
   pushToken: Schema.optional(TrimmedNonEmptyString),
   pushToStartToken: Schema.optional(TrimmedNonEmptyString),
   preferences: RelayAgentAwarenessPreferences,
-});
+}).check(
+  Schema.makeFilter(
+    (registration) =>
+      registration.platform !== "visionos" ||
+      (!registration.preferences.liveActivitiesEnabled &&
+        registration.pushToStartToken === undefined) ||
+      "Live Activities are not supported on visionOS.",
+  ),
+);
 export type RelayDeviceRegistrationRequest = typeof RelayDeviceRegistrationRequest.Type;
 
 export const RelayClientDeviceRecord = Schema.Struct({
   deviceId: TrimmedNonEmptyString,
   label: TrimmedNonEmptyString,
   platform: RelayAgentAwarenessPlatform,
+  // Legacy wire name retained for both platforms; visionOS sends its actual major version.
   iosMajorVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(18)),
   appVersion: Schema.NullOr(TrimmedNonEmptyString),
   notifications: Schema.Struct({
