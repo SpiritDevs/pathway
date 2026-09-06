@@ -2,7 +2,7 @@
   "ghosttyRevision": "9f62873bf195e4d8a762d768a1405a5f2f7b1697",
   "inputs": {
     "apps/pathway-ios/terminal/entry.ts": "81339f4f33b83cd17a37cc14ffe18290b5c87c84da714482dc11976897ada04f",
-    "apps/pathway-ios/terminal/index.html": "cd05ef4a65571a935c4d8bb9cf1c5093033eb75524d50974c6d3e656ce3f0a4f",
+    "apps/pathway-ios/terminal/index.html": "113cc2b939b77d024a9fb4c8016ee1d97b46555e6753d142bdc551ded864d9e0",
     "apps/web/src/appearanceFonts.ts": "f1a4ce520db7bbde3744a76ea07c8d7b2402ee521aad1588286a36c87557f1dc",
     "apps/web/src/components/chat/ComposerControl.tsx": "8c1aa28e5eabfcfa3dfe568690490b3d779960865d2e7a19b0587f26cc685d69",
     "apps/web/src/components/chat/TraitsPicker.tsx": "d0aa8f02dc9ecb1886f06d2f755f5fc9bfdb3e6f9e5784288df0dcca78817198",
@@ -109,7 +109,7 @@
     "FONT-LICENSE.txt": "84a7a98c82140fb12c37fe42b93805baa16024cb3e5acc599b7ffe612c55d847",
     "GHOSTTY-LICENSE.txt": "386211873e5b7a02f663ae4d7adf96285999f91608f8f9f31fecfd0f4095e6f1",
     "Info.plist": "5d5a6a27dc772777a48771b27ad58470f52f2e6ea716859324530aab6c9efd85",
-    "index.html": "31a2dc0c652ee734dfa16cb3aa5001aeae4d842edbfdf9ba2b32e056c1019521",
+    "index.html": "0d964fbf04e33ff630c4d834ef92050ac7e578d861daf45f0410861dc539db1a",
     "assets/SymbolsNerdFontMono-Regular-aK5vsLov.woff2": "a8e2fc5ae3c2525812151b95da80c5beab0befa84aca84fc33aaed94317502df",
     "assets/ghostty-vt-DdA0Zryv.wasm": "51b016a6aa3c29ead71c7c8acf8c01d43b064bae19957a9c9f9e2bf469267629",
     "assets/ghostty-write-pty-BtvRgxrn.wasm": "9a378324be4d69c52d9a11ea38a8e0797c24e8fed5ab39451048bdc016b74b41",
