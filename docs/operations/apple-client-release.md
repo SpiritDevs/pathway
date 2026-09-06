@@ -18,7 +18,7 @@ This version targets iOS, iPadOS and visionOS. Android is excluded. Code coverag
 - `scripts/ios/ci-check.sh iphone` and `ipad` build and run fixture tests on installed simulators. `visionos` builds the native simulator target. These scripts launch simulator testing and should only be used locally with permission.
 - For software-keyboard tests, select the intended Simulator device and turn off **I/O → Keyboard → Connect Hardware Keyboard**. This is a per-device preference. Verify the keyboard appears before typing; XCTest typing can temporarily summon it even with hardware input connected, hiding a setup error. The issue property-picker test checks this precondition and preserves its keyboard assertions throughout selection.
 - Unsigned simulator fixture tests bypass Clerk. For real development sign-in, keep simulator ad-hoc signing enabled so Keychain entitlements are available; an unsigned app can terminate during Clerk configuration with OSStatus -34018. Verify the built public key is `pk_test_` before unattended authentication. Use a temporary `-xcconfig` override to preserve an existing production `Config/Local.xcconfig`.
-- The native workflow runs those jobs on an Apple Silicon macOS runner. A checked-in workflow is not evidence that GitHub executed it.
+- Run the applicable native checks locally before pushing. The native GitHub workflow is manual-only (`workflow_dispatch`); pull requests do not automatically repeat iPhone, iPad or visionOS checks. When requested, the manual workflow runs those jobs on an Apple Silicon macOS runner.
 
 ## Integrated device verification
 

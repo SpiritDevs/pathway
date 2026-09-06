@@ -1,16 +1,6 @@
 name: Native Apple clients
 
 on:
-  pull_request:
-    paths:
-      - "apps/pathway-ios/**"
-      - "packages/contracts/**"
-      - "packages/backend/convex/**"
-      - "scripts/ios/**"
-      - "apps/web/src/terminal/ghostty/**"
-      - "native/libghostty-vt/**"
-      - "pnpm-lock.yaml"
-      - ".github/workflows/native.yml"
   workflow_dispatch:
 
 permissions:
