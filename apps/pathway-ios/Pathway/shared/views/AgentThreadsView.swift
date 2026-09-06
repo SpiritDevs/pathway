@@ -59,15 +59,8 @@ struct AgentThreadsView: View {
             await openPendingThread()
         }
         .accessibilityIdentifier("agent-threads-list")
-        .confirmationDialog("Sleep thread", isPresented: Binding(
-            get: { sleepingThread != nil },
-            set: { if !$0 { sleepingThread = nil } }
-        ), titleVisibility: .visible, presenting: sleepingThread) { thread in
-            Button("For 1 hour") { sleep(thread, hours: 1) }
-            Button("For 3 hours") { sleep(thread, hours: 3) }
-            Button("For 1 day") { sleep(thread, hours: 24) }
-            Button("For 1 week") { sleep(thread, hours: 168) }
-            Button("Cancel", role: .cancel) {}
+        .sheet(item: $sleepingThread) { thread in
+            sleepSheet(for: thread)
         }
         .alert("Couldn’t update thread", isPresented: Binding(
             get: { threadActions.errorMessage != nil },
@@ -264,7 +257,32 @@ private extension AgentThreadsView {
         .accessibilityValue(threadActions.pendingThreadIDs.contains(thread.id) ? "Updating" : "")
     }
 
+    private func sleepSheet(for thread: PathwayAgentThread) -> some View {
+        NavigationStack {
+            List {
+                Button("For 1 hour") { sleep(thread, hours: 1) }
+                Button("For 3 hours") { sleep(thread, hours: 3) }
+                Button("For 1 day") { sleep(thread, hours: 24) }
+                Button("For 1 week") { sleep(thread, hours: 168) }
+            }
+            .navigationTitle("Sleep thread")
+            .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                Button("Cancel", role: .cancel) { sleepingThread = nil }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationCompactAdaptation(.sheet)
+        .accessibilityIdentifier("sleep-thread-sheet")
+    }
+
     private func sleep(_ thread: PathwayAgentThread, hours: Double) {
+        sleepingThread = nil
         perform(.sleep(until: Date().addingTimeInterval(hours * 3600)), on: thread)
     }
 

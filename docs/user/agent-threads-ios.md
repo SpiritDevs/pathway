@@ -14,7 +14,8 @@ comes from the thread's environment, including when an instance has a custom nam
 Snoozed and settled threads stay in their collapsible sections with compact rows.
 
 Swipe right on an active thread to reveal **Pin** (or **Unpin**) and **Sleep**. Sleep lets you choose
-one hour, three hours, one day, or one week. Swipe left to reveal **Settle**, or continue swiping
+one hour, three hours, one day, or one week in a bottom sheet. Tap **Cancel** or swipe the sheet
+down to leave the thread awake. Swipe left to reveal **Settle**, or continue swiping
 all the way left to settle immediately. These actions sync through the thread's environment.
 
 To bring a thread back, expand **Snoozed** and swipe left for **Wake**, or expand **Settled** and
