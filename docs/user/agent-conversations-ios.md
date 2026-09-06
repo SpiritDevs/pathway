@@ -21,3 +21,5 @@ The agents pill beside the file summary opens a compact live list. Working agent
 Subagent rows open the child conversation as a full screen. You can inspect its work and send a follow-up, then return to the parent. A subagent managed by its provider inherits configuration from its parent; its model controls explain that restriction.
 
 Questions show the available options and a field for your own answer. For several questions, move through them before sending the complete response. Approval requests offer the available approval decisions. A disconnected or historical request cannot submit a new response.
+
+The model picker shows Favourites first, followed by provider submenus. Every favourite has a star. Use **Settings → Favourite models** to add or remove models; the same screen is available from composer options. Mobile favourites are saved on this device separately for each environment. Providers reported by the environment remain visible when they are not installed, disabled, or require sign-in; their models cannot be selected until setup is complete.

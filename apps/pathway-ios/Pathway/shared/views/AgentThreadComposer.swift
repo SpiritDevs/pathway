@@ -209,19 +209,12 @@ struct AgentThreadComposer: View {
 
     private var modelMenu: some View {
         Menu {
-            ForEach(model.providers) { provider in
-                Section(provider.name) {
-                    ForEach(provider.models) { availableModel in
-                        Button {
-                            changeModel(providerID: provider.id, modelID: availableModel.id)
-                        } label: {
-                            if model.currentModelSelection.instanceId == provider.id && model.currentModelSelection.model == availableModel.id {
-                                Label(availableModel.name, systemImage: "checkmark")
-                            } else { Text(availableModel.name) }
-                        }
-                    }
-                }
-            }
+            AgentThreadModelMenuContent(
+                providers: model.modelCatalog.isEmpty ? model.providers : model.modelCatalog,
+                selection: model.currentModelSelection,
+                environmentID: model.thread.environmentId,
+                onSelect: changeModel
+            )
         } label: {
             HStack(spacing: 4) {
                 Text(selectedModelName.isEmpty ? modelName : selectedModelName).lineLimit(1)
@@ -232,8 +225,9 @@ struct AgentThreadComposer: View {
             .frame(minHeight: controlDiameter)
             .contentShape(Rectangle())
         }
+        .menuOrder(.fixed)
         .buttonStyle(.plain)
-        .disabled(model.providers.isEmpty || isChangingModel || model.isSending || model.isConfigurationLocked)
+        .disabled((model.providers.isEmpty && model.modelCatalog.isEmpty) || isChangingModel || model.isSending || model.isConfigurationLocked)
         .accessibilityLabel("Thread model")
         .accessibilityValue(selectedModelName)
         .accessibilityIdentifier("agent-thread-model-picker")

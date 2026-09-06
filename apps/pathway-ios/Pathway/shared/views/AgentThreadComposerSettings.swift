@@ -27,6 +27,14 @@ struct AgentThreadComposerSettings: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                Section("Models") {
+                    NavigationLink("Favourite models") {
+                        PathwayModelFavouritesSettings(
+                            providers: model.modelCatalog.isEmpty ? model.providers : model.modelCatalog,
+                            environmentID: model.thread.environmentId
+                        )
+                    }
+                }
                 Section("How it should work") {
                     if provider?.showsInteractionMode == true {
                         Picker("Mode", selection: Binding(get: { model.interactionMode }, set: { value in

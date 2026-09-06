@@ -28,6 +28,7 @@ struct PathwayServerProvider: Equatable, Identifiable, Sendable {
     let name: String
     let models: [PathwayServerModel]
     let showsInteractionMode: Bool
+    var unavailableReason: String? = nil
 }
 
 @MainActor

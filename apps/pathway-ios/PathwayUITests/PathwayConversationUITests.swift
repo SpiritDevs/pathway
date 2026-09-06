@@ -40,6 +40,32 @@ final class PathwayConversationUITests: XCTestCase {
     }
 
     @MainActor
+    func testModelFavourites() {
+        let app = launchFixture()
+        app.buttons["agent-thread-composer-collapsed"].tap()
+        app.buttons["agent-thread-composer-options"].tap()
+        app.buttons["Favourite models"].tap()
+        let toggle = app.buttons["model-favourite-codex-gpt-5.4-mini"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        if toggle.value as? String != "Favourite" { toggle.tap() }
+        capture(app, "Favourite model settings")
+        app.navigationBars.buttons["Composer options"].tap()
+        app.buttons["Done"].tap()
+        app.buttons["agent-thread-model-picker"].tap()
+        let favourite = app.buttons["gpt-5.4-mini · Codex"]
+        XCTAssertTrue(favourite.waitForExistence(timeout: 5))
+        XCTAssertLessThan(favourite.frame.midY, app.buttons["Codex"].frame.midY)
+        XCTAssertFalse(app.buttons["Edit favourites"].exists)
+        capture(app, "Starred favourites above providers")
+        favourite.tap()
+        XCTAssertEqual(app.buttons["agent-thread-model-picker"].value as? String, "gpt-5.4-mini")
+        app.buttons["agent-thread-composer-options"].tap()
+        app.buttons["Favourite models"].tap()
+        XCTAssertEqual(toggle.value as? String, "Favourite")
+        toggle.tap()
+    }
+
+    @MainActor
     func testComposerModelEditAndFork() {
         let app = launchFixture()
         app.buttons["agent-thread-composer-collapsed"].tap()
@@ -47,6 +73,7 @@ final class PathwayConversationUITests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap(); field.typeText("Keep my draft")
         app.buttons["agent-thread-model-picker"].tap()
+        app.buttons["Codex"].tap()
         app.buttons["gpt-5.4-mini"].tap()
         XCTAssertEqual(app.buttons["agent-thread-model-picker"].value as? String, "gpt-5.4-mini")
         capture(app, "Conversation composer and model")

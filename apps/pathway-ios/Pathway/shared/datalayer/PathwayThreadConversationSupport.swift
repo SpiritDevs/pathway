@@ -82,13 +82,19 @@ extension PathwayAgentThreadModel {
         supportsAttachmentUploads = capabilities["attachmentUploads"]?.boolValue == true
         maximumFileAttachmentBytes = supportsAttachmentUploads ? capabilities["fileAttachments"]?.objectValue?["maxUploadBytes"]?.intValue : nil
         let providerValues = object["providers"]?.arrayValue ?? []
-        providers = providerValues.compactMap(Self.provider).filter { !$0.models.isEmpty }
+        modelCatalog = providerValues.compactMap(Self.provider)
+        providers = modelCatalog.filter { $0.unavailableReason == nil && !$0.models.isEmpty }
     }
 
-    private static func provider(_ value: JSONValue) -> PathwayServerProvider? {
+    static func provider(_ value: JSONValue) -> PathwayServerProvider? {
         guard let object = value.objectValue, let id = object["instanceId"]?.stringValue,
-              let driver = object["driver"]?.stringValue, object["enabled"]?.boolValue == true,
-              object["installed"]?.boolValue == true, object["availability"]?.stringValue != "unavailable" else { return nil }
+              let driver = object["driver"]?.stringValue else { return nil }
+        let reason: String?
+        if object["availability"]?.stringValue == "unavailable" { reason = object["unavailableReason"]?.stringValue ?? "Not set up" }
+        else if object["installed"]?.boolValue != true { reason = "Not installed" }
+        else if object["enabled"]?.boolValue != true { reason = "Disabled" }
+        else if object["auth"]?.objectValue?["status"]?.stringValue == "unauthenticated" { reason = "Sign in required" }
+        else { reason = nil }
         let models = (object["models"]?.arrayValue ?? []).compactMap { value -> PathwayServerModel? in
             guard let model = value.objectValue, let id = model["slug"]?.stringValue, let name = model["name"]?.stringValue else { return nil }
             let options = (model["capabilities"]?.objectValue?["optionDescriptors"]?.arrayValue ?? []).compactMap { value -> PathwayProviderOptionDescriptor? in
@@ -102,7 +108,7 @@ extension PathwayAgentThreadModel {
             return PathwayServerModel(id: id, name: name, isDefault: model["isDefault"]?.boolValue ?? false, optionDescriptors: options)
         }
         return PathwayServerProvider(id: id, driver: driver, name: object["displayName"]?.stringValue ?? driver, models: models,
-                                     showsInteractionMode: object["showInteractionModeToggle"]?.boolValue ?? false)
+                                     showsInteractionMode: object["showInteractionModeToggle"]?.boolValue ?? false, unavailableReason: reason)
     }
 
     func makeChildModel(threadID: String) async throws -> PathwayAgentThreadModel {

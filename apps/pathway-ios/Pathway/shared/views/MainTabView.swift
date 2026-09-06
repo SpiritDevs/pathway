@@ -383,6 +383,11 @@ struct PathwaySettingsView: View {
 
     var body: some View {
         Form {
+            Section("Models") {
+                NavigationLink("Favourite models") {
+                    PathwayModelFavouritesEnvironments()
+                }
+            }
             Section("Account") {
                 Button("Sign out", role: .destructive) {
                     Task {

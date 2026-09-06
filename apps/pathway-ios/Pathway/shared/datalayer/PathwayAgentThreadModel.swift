@@ -215,6 +215,7 @@ final class PathwayAgentThreadModel {
     private(set) var items: [PathwayTimelineItem] = []
     var serverConfig: [String: JSONValue] = [:]
     var providers: [PathwayServerProvider] = []
+    var modelCatalog: [PathwayServerProvider] = []
     var currentModelSelection: PathwayModelSelection
     private(set) var runtimeMode: String
     private(set) var interactionMode: String

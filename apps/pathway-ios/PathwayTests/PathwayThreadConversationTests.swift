@@ -4,6 +4,23 @@ import Testing
 
 @MainActor
 struct PathwayThreadConversationTests {
+    @Test func modelCatalogKeepsUnconfiguredProvidersWithoutMakingThemSelectable() {
+        let model = makeModel { _, _ in .object([:]) }
+        func provider(_ id: String, installed: Bool, auth: String = "authenticated") -> JSONValue {
+            .object(["instanceId": .string(id), "driver": .string("codex"), "enabled": .bool(true),
+                     "installed": .bool(installed), "auth": .object(["status": .string(auth)]),
+                     "models": .array([.object(["slug": .string("model"), "name": .string("Model")])])])
+        }
+        model.installServerConfig(.object(["providers": .array([
+            provider("ready", installed: true), provider("missing", installed: false),
+            provider("signed-out", installed: true, auth: "unauthenticated")
+        ])]))
+        #expect(model.modelCatalog.map(\.id) == ["ready", "missing", "signed-out"])
+        #expect(model.providers.map(\.id) == ["ready"])
+        #expect(model.modelCatalog[1].unavailableReason == "Not installed")
+        #expect(model.modelCatalog[2].unavailableReason == "Sign in required")
+    }
+
     @Test func liveRunOverridesStaleShellAndSteeringTargetsIt() async throws {
         var calls: [(String, JSONValue)] = []
         let model = makeModel { calls.append(($0, $1)); return .object(["sequence": .number(1)]) }
