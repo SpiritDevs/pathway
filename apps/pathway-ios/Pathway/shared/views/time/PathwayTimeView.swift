@@ -5,6 +5,7 @@ struct PathwayTimeView: View {
     let accountID: String
     var projects: [PathwayCompanyProject] = []
     var initialFilter = "all"
+    @Environment(\.scenePhase) private var scenePhase
     @State private var period = "all"
     @State private var description = ""
     @State private var projectID = ""
@@ -53,7 +54,15 @@ struct PathwayTimeView: View {
             }
             Section("Sessions") {
                 Picker("Period", selection: $period) { Text("Today").tag("today"); Text("This week").tag("this-week"); Text("All sessions").tag("all") }
-                LabeledContent("Total", value: Duration.milliseconds(total).formatted(.time(pattern: .hourMinute)))
+                if period == "all" {
+                    LabeledContent("Loaded sessions total", value: Duration.milliseconds(total).formatted(.time(pattern: .hourMinute)))
+                } else if let totals = model.totals, totals.complete {
+                    LabeledContent("Total", value: Duration.milliseconds(period == "today" ? totals.todayClippedMs : totals.weekClippedMs).formatted(.time(pattern: .hourMinute)))
+                } else if model.totals?.complete == false {
+                    Text("This week exceeds 2,000 sessions. Summary totals are unavailable; all sessions remain accessible in history.").foregroundStyle(.secondary)
+                } else if let error = model.totalsError {
+                    Text("Total unavailable: \(error)").foregroundStyle(.secondary)
+                } else { ProgressView("Loading total…") }
                 if model.loading { ProgressView("Loading tracked time…") }
                 ForEach(displayedEntries) { entry in
                     HStack {
@@ -65,11 +74,17 @@ struct PathwayTimeView: View {
                     .contextMenu { Button("Delete session", role: .destructive) { deleting = entry } }
                 }
             }
+            if model.hasMore {
+                Section { Button(model.loadingMore ? "Loading…" : "Load more sessions") { run { try await model.loadMore() } }.disabled(model.loadingMore) }
+            }
             if let error = model.errorMessage { Section { Text(error).foregroundStyle(.red); Button("Reconnect") { retry += 1 } } }
         }
         .navigationTitle("Time Tracker")
         .onChange(of: initialFilter, initial: true) { period = initialFilter }
-        .task(id: "\(accountID):\(retry)") { await model.observe(accountID: accountID) }
+        .task(id: "\(accountID):\(period):\(retry)") { await model.observe(accountID: accountID, since: windowStart) }
+        .refreshable { retry += 1 }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in retry += 1 }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { retry += 1 } }
         .confirmationDialog("Delete this tracked session?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
             if let entry = deleting { Button("Delete session", role: .destructive) { run { try await model.remove(entry); deleting = nil } } }
         }

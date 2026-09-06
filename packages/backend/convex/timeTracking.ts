@@ -23,21 +23,88 @@ function validate(value: { description: string; projectKey: string; projectName:
   return { ...value, description };
 }
 export const listMine = query({
-  args: {},
-  returns: v.object({ active: v.union(sessionWire, v.null()), entries: v.array(sessionWire) }),
-  handler: async (ctx) => {
+  args: { cursor: v.optional(v.union(v.string(), v.null())), since: v.optional(v.string()) },
+  returns: v.object({
+    active: v.union(sessionWire, v.null()),
+    entries: v.array(sessionWire),
+    cursor: v.union(v.string(), v.null()),
+    isDone: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
     const user = await requireUser(ctx);
+    if (args.since && !Number.isFinite(Date.parse(args.since)))
+      throw backendError("invalid-arguments", "Choose a valid history period.");
+    const active = await ctx.db
+      .query("trackedSessions")
+      .withIndex("by_user_and_state", (q) => q.eq("userId", user._id).eq("state", "running"))
+      .first();
+    const page = await ctx.db
+      .query("trackedSessions")
+      .withIndex("by_user_and_state_and_stopped_at", (q) =>
+        q
+          .eq("userId", user._id)
+          .eq("state", "stopped")
+          .gte("stoppedAt", args.since ? new Date(args.since).toISOString() : ""),
+      )
+      .order("desc")
+      .paginate({ cursor: args.cursor ?? null, numItems: 50 });
+    return {
+      active: active ? encode(active) : null,
+      entries: page.page.map(encode),
+      cursor: page.isDone ? null : page.continueCursor,
+      isDone: page.isDone,
+    };
+  },
+});
+
+/** Summary reads cover only the current local week, never lifetime history. */
+export const recentTotals = query({
+  args: { todayStart: v.string(), weekStart: v.string() },
+  returns: v.object({
+    todayMs: v.number(),
+    weekMs: v.number(),
+    todayClippedMs: v.number(),
+    weekClippedMs: v.number(),
+    complete: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    const user = await requireUser(ctx);
+    const today = Date.parse(args.todayStart),
+      week = Date.parse(args.weekStart),
+      now = Date.now();
+    if (
+      ![today, week].every(Number.isFinite) ||
+      week > today ||
+      today > now ||
+      week < now - 8 * 86_400_000 ||
+      today < now - 26 * 3_600_000
+    ) {
+      throw backendError("invalid-arguments", "Choose the current local day and week.");
+    }
     const rows = await ctx.db
       .query("trackedSessions")
-      .withIndex("by_user_and_started_at", (q) => q.eq("userId", user._id))
-      .order("desc")
-      .collect();
-    return {
-      active: rows.find((row) => row.state === "running")
-        ? encode(rows.find((row) => row.state === "running")!)
-        : null,
-      entries: rows.filter((row) => row.state === "stopped").map(encode),
-    };
+      .withIndex("by_user_and_state_and_stopped_at", (q) =>
+        q
+          .eq("userId", user._id)
+          .eq("state", "stopped")
+          .gte("stoppedAt", new Date(week).toISOString()),
+      )
+      .take(2_001);
+    // Never present a read-ceiling subtotal as the full period total.
+    if (rows.length > 2_000)
+      return { todayMs: 0, weekMs: 0, todayClippedMs: 0, weekClippedMs: 0, complete: false };
+    const totals = { todayMs: 0, weekMs: 0, todayClippedMs: 0, weekClippedMs: 0, complete: true };
+    for (const row of rows) {
+      const start = Date.parse(row.startedAt),
+        stop = Date.parse(row.stoppedAt!);
+      totals.weekMs += row.durationMs;
+      totals.weekClippedMs += Math.max(0, stop - Math.max(start, week));
+      if (stop >= today) {
+        totals.todayMs += row.durationMs;
+        totals.todayClippedMs += Math.max(0, stop - Math.max(start, today));
+      }
+    }
+    return totals;
   },
 });
 export const start = mutation({

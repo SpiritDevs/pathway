@@ -24,3 +24,19 @@ export const TrackedSession = Schema.Struct({
   durationMs: Schema.Number,
 });
 export type TrackedSession = typeof TrackedSession.Type;
+
+export const TrackedSessionPage = Schema.Struct({
+  active: Schema.NullOr(TrackedSession),
+  entries: Schema.Array(TrackedSession),
+  cursor: Schema.NullOr(Schema.String),
+  isDone: Schema.Boolean,
+});
+export type TrackedSessionPage = typeof TrackedSessionPage.Type;
+export const RecentTrackedTimeTotals = Schema.Struct({
+  todayMs: Schema.Number,
+  weekMs: Schema.Number,
+  todayClippedMs: Schema.Number,
+  weekClippedMs: Schema.Number,
+  complete: Schema.Boolean,
+});
+export type RecentTrackedTimeTotals = typeof RecentTrackedTimeTotals.Type;

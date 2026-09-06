@@ -166,7 +166,7 @@ struct PathwayWorkspacePullRequestView: View {
                         }
                     }
                     Button("Submit review") { pending = "review" }
-                        .disabled(drafts.contains { !$0.isValid } || (!drafts.isEmpty && !detail.canDraftInline))
+                        .disabled(!PathwayWorkspaceReviewValidation.canSubmit(verdict: verdict, body: comment, drafts: drafts) || (!drafts.isEmpty && !detail.canDraftInline))
                 }
             }.disabled(busy || !client.context.canMutate || comment.count > 65_536)
         }
@@ -188,8 +188,8 @@ struct PathwayWorkspacePullRequestView: View {
             let latest: PathwayWorkspacePullRequestDetail = try await client.call("pullRequests.detail", row.payload)
             detail = latest
             let permitted: Bool
-            if action == "comment" { permitted = latest.canComment }
-            else if action == "review" { permitted = latest.availableVerdicts.contains(verdict) && (drafts.isEmpty || (latest.canDraftInline && drafts.allSatisfy(\.isValid))) }
+            if action == "comment" { permitted = latest.canComment && !comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && comment.count <= 65_536 }
+            else if action == "review" { permitted = latest.availableVerdicts.contains(verdict) && PathwayWorkspaceReviewValidation.canSubmit(verdict: verdict, body: comment, drafts: drafts) && (drafts.isEmpty || latest.canDraftInline) }
             else { permitted = latest.availableActions.contains(action) && (action != "merge" || latest.availableMergeMethods.contains(mergeMethod)) }
             guard permitted else { throw PathwayRPCError.remote("This action is no longer available. Review the refreshed pull request.") }
             var payload = row.payload

@@ -131,12 +131,25 @@ final class PathwayAppleLayoutUITests: XCTestCase {
     @MainActor private func assertAccessibleCalendarMenu(in app: XCUIApplication) {
         let picker = app.buttons["calendar-view-picker"].firstMatch
         XCTAssertTrue(picker.waitForExistence(timeout: 5), "Accessibility sizes must expose the Calendar view menu")
-        tap(picker, in: app)
-        tap(app.buttons["Timeline"].firstMatch, in: app)
-        XCTAssertTrue(picker.label.contains("Timeline") || (picker.value as? String) == "Timeline")
-        tap(picker, in: app)
-        tap(app.buttons["Agenda"].firstMatch, in: app)
-        XCTAssertTrue(picker.label.contains("Agenda") || (picker.value as? String) == "Agenda")
+        for selection in ["Timeline", "Agenda"] {
+            tap(picker, in: app)
+            let option = app.buttons[selection].firstMatch
+            // A menu is presented asynchronously. Swiping the app to reveal a missing
+            // option can dismiss it before its buttons become available.
+            let available = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "exists == true AND hittable == true"), object: option)
+            guard XCTWaiter.wait(for: [available], timeout: 5) == .completed else {
+                XCTFail("Calendar menu must expose the reachable \(selection) option")
+                return
+            }
+            option.tap()
+            let selected = XCTNSPredicateExpectation(predicate: NSPredicate { element, _ in
+                guard let button = element as? XCUIElement, button.exists else { return false }
+                return button.label.contains(selection) || (button.value as? String) == selection
+            }, object: picker)
+            XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed,
+                           "Calendar picker must apply \(selection) before continuing")
+        }
     }
 
     @MainActor private func launch(contentSize: String) -> XCUIApplication {

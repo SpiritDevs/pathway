@@ -1,8 +1,13 @@
 import { useBusinessToolsCloud, useBusinessToolsQuery } from "../contacts/businessToolsCloud";
 import type { Value } from "convex/values";
+import { makeFunctionReference } from "convex/server";
+import type {
+  TrackedSessionPage,
+  RecentTrackedTimeTotals,
+} from "@spiritdevs/contracts/businessTools";
 import * as Schema from "effect/Schema";
 import { Clock3Icon, FolderKanbanIcon, PlayIcon, SquareIcon, Trash2Icon } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { randomUUID } from "~/lib/utils";
@@ -16,7 +21,6 @@ import {
   formatTrackedDuration,
   startOfLocalDay,
   startOfLocalWeek,
-  totalDuration,
   type ActiveTimeEntry,
   type TimeEntry,
 } from "./timeTracker.logic";
@@ -70,13 +74,88 @@ export function TimeTrackerView() {
     TimeTrackerStateSchema,
   );
   const cloud = useBusinessToolsCloud();
-  const result = useBusinessToolsQuery<typeof EMPTY_TIME_TRACKER_STATE>(
+  const result = useBusinessToolsQuery<TrackedSessionPage>(
     cloud.client,
     cloud.accountID,
     "timeTracking:listMine",
     {},
   );
   const state = result.value ?? EMPTY_TIME_TRACKER_STATE;
+  const latestPage = useRef(result.value);
+  useEffect(() => {
+    latestPage.current = result.value;
+    return () => {
+      latestPage.current = undefined;
+    };
+  }, [result.value]);
+  const [day, setDay] = useState(() => startOfLocalDay(new Date()));
+  useEffect(() => {
+    const refreshDay = () => setDay(startOfLocalDay(new Date()));
+    const id = window.setInterval(refreshDay, 60_000);
+    window.addEventListener("focus", refreshDay);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", refreshDay);
+    };
+  }, []);
+  const totals = useBusinessToolsQuery<RecentTrackedTimeTotals>(
+    cloud.client,
+    cloud.accountID,
+    "timeTracking:recentTotals",
+    {
+      todayStart: new Date(day).toISOString(),
+      weekStart: new Date(startOfLocalWeek(new Date(day))).toISOString(),
+    },
+  );
+  const [history, setHistory] = useState<{
+    base: TrackedSessionPage;
+    entries: TrackedSessionPage["entries"];
+    cursor: string | null;
+    isDone: boolean;
+  } | null>(null);
+  // A new live first page invalidates previously fetched pages and outstanding requests.
+  const currentHistory = history?.base === result.value ? history : null;
+  const orderedEntries = currentHistory?.entries ?? state.entries;
+  const nextCursor = currentHistory?.cursor ?? result.value?.cursor;
+  const historyDone = currentHistory?.isDone ?? result.value?.isDone ?? true;
+  const [pageRequest, setPageRequest] = useState<{
+    base: TrackedSessionPage;
+    loading: boolean;
+    error?: string;
+  } | null>(null);
+  const loadingMore =
+    pageRequest !== null && pageRequest.base === result.value && pageRequest.loading;
+  const pageError =
+    pageRequest !== null && pageRequest.base === result.value ? pageRequest.error : undefined;
+  const loadMore = async () => {
+    if (!cloud.client || !result.value || !nextCursor || loadingMore) return;
+    const base = result.value;
+    setPageRequest({ base, loading: true });
+    try {
+      const page = await cloud.client.query(
+        makeFunctionReference<"query", { cursor: string }, TrackedSessionPage>(
+          "timeTracking:listMine",
+        ),
+        { cursor: nextCursor },
+      );
+      if (latestPage.current !== base) return;
+      const ids = new Set(orderedEntries.map((entry) => entry.id));
+      setHistory({
+        base,
+        entries: [...orderedEntries, ...page.entries.filter((entry) => !ids.has(entry.id))],
+        cursor: page.cursor,
+        isDone: page.isDone,
+      });
+      setPageRequest({ base, loading: false });
+    } catch (error) {
+      if (latestPage.current !== base) return;
+      setPageRequest({
+        base,
+        loading: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<{
     accountID: string;
@@ -160,12 +239,6 @@ export function TimeTrackerView() {
   };
   const [description, setDescription] = useState("");
   const [projectKey, setProjectKey] = useState("");
-  const todayTotal = totalDuration(state.entries, startOfLocalDay(new Date()));
-  const weekTotal = totalDuration(state.entries, startOfLocalWeek(new Date()));
-  const orderedEntries = useMemo(
-    () => state.entries.toSorted((left, right) => right.startedAt.localeCompare(left.startedAt)),
-    [state.entries],
-  );
 
   const startTimer = (event: FormEvent) => {
     event.preventDefault();
@@ -210,9 +283,9 @@ export function TimeTrackerView() {
             </p>
           </div>
 
-          {error || result.error ? (
+          {error || result.error || totals.error || pageError ? (
             <p role="alert" className="mt-4 text-sm text-destructive">
-              {error ?? result.error}
+              {error ?? result.error ?? totals.error ?? pageError}
             </p>
           ) : null}
           {!cloud.client ? (
@@ -373,22 +446,36 @@ export function TimeTrackerView() {
             <div className="py-6 pr-6">
               <p className="text-xs text-muted-foreground">Today</p>
               <p className="mt-1 font-heading text-2xl font-semibold tabular-nums">
-                {formatTrackedDuration(todayTotal)}
+                {totals.value?.complete
+                  ? formatTrackedDuration(totals.value.todayMs)
+                  : totals.value
+                    ? "Unavailable"
+                    : "…"}
               </p>
             </div>
             <div className="border-l border-border/70 py-6 pl-6">
               <p className="text-xs text-muted-foreground">This week</p>
               <p className="mt-1 font-heading text-2xl font-semibold tabular-nums">
-                {formatTrackedDuration(weekTotal)}
+                {totals.value?.complete
+                  ? formatTrackedDuration(totals.value.weekMs)
+                  : totals.value
+                    ? "Unavailable"
+                    : "…"}
               </p>
             </div>
           </section>
 
+          {totals.value && !totals.value.complete ? (
+            <p role="status" className="mt-3 text-sm text-muted-foreground">
+              This week exceeds 2,000 sessions. Summary totals are unavailable; all sessions remain
+              accessible in history.
+            </p>
+          ) : null}
           <section className="mt-8">
             <div className="flex items-center justify-between gap-4">
               <h2 className="font-heading text-lg font-semibold">Recent entries</h2>
               <span className="text-xs text-muted-foreground tabular-nums">
-                {orderedEntries.length} total
+                {orderedEntries.length} {historyDone ? "total" : "loaded"}
               </span>
             </div>
             {orderedEntries.length === 0 ? (
@@ -434,7 +521,17 @@ export function TimeTrackerView() {
                       className="opacity-70 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
                       disabled={writing}
                       onClick={() =>
-                        void run(() => cloud.request("timeTracking:remove", { id: entry.id }))
+                        void run(async () => {
+                          await cloud.request("timeTracking:remove", { id: entry.id });
+                          setHistory((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  entries: current.entries.filter((row) => row.id !== entry.id),
+                                }
+                              : current,
+                          );
+                        })
                       }
                     >
                       <Trash2Icon />
@@ -443,6 +540,21 @@ export function TimeTrackerView() {
                 ))}
               </div>
             )}
+            {!historyDone ? (
+              <Button
+                className="mt-4"
+                variant="outline"
+                disabled={loadingMore}
+                onClick={() => void loadMore()}
+              >
+                {loadingMore ? "Loading…" : "Load more sessions"}
+              </Button>
+            ) : null}
+            {currentHistory ? (
+              <Button className="mt-4 ml-2" variant="ghost" onClick={() => setHistory(null)}>
+                Refresh history
+              </Button>
+            ) : null}
           </section>
         </div>
       </ScrollArea>

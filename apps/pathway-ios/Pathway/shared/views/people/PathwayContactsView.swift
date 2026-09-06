@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct PathwayContactsView: View {
+    @Environment(PathwayAppModel.self) private var appModel
     @Bindable var model: PathwayContactsModel
     let companies: [PathwayCompany]
     var initialFilter = "people"
@@ -9,6 +10,7 @@ struct PathwayContactsView: View {
     @State private var editing: PathwayContact?
     @State private var retry = 0
     private var filtered: [PathwayContact] { model.contacts.filter { (initialFilter != "favorites" || $0.favorite) && (query.isEmpty || [$0.name, $0.role, $0.company, $0.email, $0.phone].contains { $0.localizedCaseInsensitiveContains(query) }) } }
+    private var canManage: Bool { PathwayContactsModel.canManage(companyID: companyID, companies: appModel.cloud.companies, entities: appModel.cloud.issues.entities) }
     var body: some View {
         List {
             Section { Picker("Workspace", selection: $companyID) { ForEach(companies) { Text($0.name).tag($0.id) } } }
@@ -21,24 +23,27 @@ struct PathwayContactsView: View {
                     }
                 }
             }
-            if !model.loading && filtered.isEmpty { ContentUnavailableView("No contacts", systemImage: "person.crop.rectangle.stack", description: Text("Add a contact to this workspace, or change your search.")) }
+            if !model.loading && filtered.isEmpty { ContentUnavailableView("No contacts", systemImage: "person.crop.rectangle.stack", description: Text(canManage ? "Add a contact to this workspace, or change your search." : "No contacts match your search in this workspace.")) }
             if let error = model.errorMessage { Section { Text(error).foregroundStyle(.red); Button("Reconnect") { retry += 1 } } }
         }
         .navigationTitle("Contacts")
         .searchable(text: $query)
-        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Add contact", systemImage: "plus") { editing = .draft() }.disabled(companyID.isEmpty) } }
+        .toolbar { if canManage { ToolbarItem(placement: .topBarTrailing) { Button("Add contact", systemImage: "plus") { editing = .draft() } } } }
         .onChange(of: companies, initial: true) { if !companies.contains(where: { $0.id == companyID }) { companyID = companies.first?.id ?? "" } }
         .task(id: "\(companyID):\(retry)") { await model.observe(companyID: companyID) }
         .sheet(item: $editing) { contact in PathwayContactEditor(model: model, companyID: companyID, contact: contact) }
+        .onChange(of: canManage) { if !canManage { editing = nil } }
     }
 }
 private struct PathwayContactDetail: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(PathwayAppModel.self) private var appModel
     @Bindable var model: PathwayContactsModel
     let companyID: String
     let contactID: String
     @State private var editing: PathwayContact?
     @State private var deleting = false
+    private var canManage: Bool { PathwayContactsModel.canManage(companyID: companyID, companies: appModel.cloud.companies, entities: appModel.cloud.issues.entities) }
     var body: some View {
         Group {
             if let contact = model.contacts.first(where: { $0.id == contactID }), model.companyID == companyID {
@@ -49,24 +54,27 @@ private struct PathwayContactDetail: View {
                         if !contact.phone.isEmpty, let url = URL(string: "tel:\(contact.phone)") { Link(contact.phone, destination: url) }
                     }
                     Section("Notes") { Text(contact.notes.isEmpty ? "No notes" : contact.notes).textSelection(.enabled) }
-                    Section { Button("Edit") { editing = contact }; Button("Delete contact", role: .destructive) { deleting = true } }
+                    if canManage { Section { Button("Edit") { editing = contact }; Button("Delete contact", role: .destructive) { deleting = true } } }
                     if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
                 }
-                .confirmationDialog("Delete this contact from the workspace?", isPresented: $deleting, titleVisibility: .visible) { Button("Delete contact", role: .destructive) { Task { if await model.perform({ try await model.remove(contact, companyID: companyID) }) { dismiss() } } } }
+                .confirmationDialog("Delete this contact from the workspace?", isPresented: $deleting, titleVisibility: .visible) { Button("Delete contact", role: .destructive) { Task { guard canManage else { return }; if await model.perform({ try await model.remove(contact, companyID: companyID) }) { dismiss() } } } }
             } else { ContentUnavailableView("Contact unavailable", systemImage: "person.crop.rectangle") }
         }
         .navigationTitle("Contact")
         .sheet(item: $editing) { contact in PathwayContactEditor(model: model, companyID: companyID, contact: contact) }
+        .onChange(of: canManage) { if !canManage { editing = nil } }
     }
 }
 private struct PathwayContactEditor: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(PathwayAppModel.self) private var appModel
     @Bindable var model: PathwayContactsModel
     let companyID: String
     @State private var contact: PathwayContact
     @State private var requestID = UUID().uuidString.lowercased()
     @State private var submitted: PathwayContact?
     init(model: PathwayContactsModel, companyID: String, contact: PathwayContact) { self.model = model; self.companyID = companyID; _contact = State(initialValue: contact) }
+    private var canManage: Bool { PathwayContactsModel.canManage(companyID: companyID, companies: appModel.cloud.companies, entities: appModel.cloud.issues.entities) }
     var body: some View {
         NavigationStack {
             Form {
@@ -84,10 +92,11 @@ private struct PathwayContactEditor: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
+                        guard canManage else { return }
                         if let submitted, submitted != contact { requestID = UUID().uuidString.lowercased() }
                         submitted = contact
                         Task { if await model.perform({ try await model.save(contact, companyID: companyID, requestID: requestID) }) { dismiss() } }
-                    }.disabled(model.writing || contact.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }.disabled(!canManage || model.writing || contact.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }

@@ -37,7 +37,7 @@ struct PathwayCompanyMemberView: View {
                     ForEach(model.teams) { team in
                         Toggle(team.name + (team.archivedAt == nil ? "" : " (archived)"), isOn: Binding(get: { member.teamIds.contains(team.id) }, set: { enabled in
                             Task { _ = await model.mutate(enabled ? "teams:addMember" : "teams:removeMember", fields: ["teamId": .string(team.id), "membershipId": .string(member.id)]) }
-                        })).disabled(!model.allows("teams.manage") || member.state != "active" || team.archivedAt != nil)
+                        })).disabled(!model.allows("teams.manage") || !member.canChangeMembership(in: team))
                     }
                 }
                 Section("Roles") {

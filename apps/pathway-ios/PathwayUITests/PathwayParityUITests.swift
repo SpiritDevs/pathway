@@ -124,6 +124,26 @@ final class PathwayParityUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Release ready"].exists)
     }
 
+    @MainActor func testSMTPRoutingPasswordIsSecure() {
+        let app = launch(extra: ["--parity-email"])
+        app.buttons["Email settings"].tap()
+        app.buttons["Parity server"].tap()
+        let form = app.descendants(matching: .any)["email-capture-settings"].firstMatch
+        XCTAssertTrue(form.waitForExistence(timeout: 5))
+        let project = app.buttons["parity-project"]
+        reveal(project, in: app, within: form)
+        waitForSettledFrame(project)
+        project.tap()
+        let password = app.secureTextFields["SMTP routing password (optional)"]
+        XCTAssertTrue(password.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.textFields["SMTP routing password (optional)"].exists)
+        password.tap(); password.typeText("fixture-only-password")
+        XCTAssertTrue((password.value as? String)?.contains("•") == true)
+        XCTAssertNotEqual(password.value as? String, "fixture-only-password")
+        capture(app, "SMTP routing password masked")
+
+    }
+
     @MainActor func testEmailCaptureRetentionPersistsAndAnalyticsLoads() {
         let app = launch(extra: ["--parity-email"])
         app.buttons["Email settings"].tap()
@@ -140,6 +160,7 @@ final class PathwayParityUITests: XCTestCase {
         waitForSettledFrame(save)
         capture(app, "Capture retention before Save")
         save.tap()
+        XCTAssertTrue(app.staticTexts["Capture settings saved."].waitForExistence(timeout: 5))
         capture(app, "Capture retention after Save")
         back(from: "Parity server", in: app)
         app.buttons["Parity server"].tap()

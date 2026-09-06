@@ -1,5 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
 import { activeCompanyIdAtom, companyListAtom } from "../../cloud/activeCompany";
+import {
+  companyRegistryMembershipIdsAtom,
+  companyRegistryReplicasAtom,
+} from "../../cloud/companyRegistryReplica";
+import { canManageContactsFromReplica } from "./contactPermissions";
 import { useBusinessToolsCloud, useBusinessToolsQuery } from "./businessToolsCloud";
 import * as Schema from "effect/Schema";
 import {
@@ -200,11 +205,13 @@ function ContactDetail({
   onBack,
   onDelete,
   onToggleFavorite,
+  canManage,
 }: {
   contact: ContactRecord;
   onBack: () => void;
   onDelete: () => void;
   onToggleFavorite: () => void;
+  canManage: boolean;
 }) {
   return (
     <ScrollArea className="min-h-0 flex-1">
@@ -221,15 +228,17 @@ function ContactDetail({
               {[contact.role, contact.company].filter(Boolean).join(" · ") || "No role added"}
             </p>
           </div>
-          <Button
-            size="icon"
-            variant="ghost"
-            aria-label={contact.favorite ? "Remove from favorites" : "Add to favorites"}
-            aria-pressed={contact.favorite}
-            onClick={onToggleFavorite}
-          >
-            <StarIcon className={cn(contact.favorite && "fill-amber-400 text-amber-500")} />
-          </Button>
+          {canManage ? (
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label={contact.favorite ? "Remove from favorites" : "Add to favorites"}
+              aria-pressed={contact.favorite}
+              onClick={onToggleFavorite}
+            >
+              <StarIcon className={cn(contact.favorite && "fill-amber-400 text-amber-500")} />
+            </Button>
+          ) : null}
         </div>
 
         <div className="mt-10 grid border-y border-border/70 sm:grid-cols-2 sm:divide-x sm:divide-border/70">
@@ -286,12 +295,14 @@ function ContactDetail({
           </p>
         </section>
 
-        <div className="mt-12 border-t border-border/70 pt-5">
-          <Button size="sm" variant="destructive-outline" onClick={onDelete}>
-            <Trash2Icon />
-            Delete contact
-          </Button>
-        </div>
+        {canManage ? (
+          <div className="mt-12 border-t border-border/70 pt-5">
+            <Button size="sm" variant="destructive-outline" onClick={onDelete}>
+              <Trash2Icon />
+              Delete contact
+            </Button>
+          </div>
+        ) : null}
       </div>
     </ScrollArea>
   );
@@ -302,6 +313,16 @@ export function ContactsView() {
   const companyID = useAtomValue(activeCompanyIdAtom);
   const companies = useAtomValue(companyListAtom);
   const cloud = useBusinessToolsCloud();
+  const replicas = useAtomValue(companyRegistryReplicasAtom);
+  const memberships = useAtomValue(companyRegistryMembershipIdsAtom);
+  const replica = companyID ? replicas.get(companyID) : undefined;
+  const membershipID = companyID ? (memberships.get(companyID) ?? null) : null;
+  const canManage = useMemo(
+    () =>
+      Boolean(cloud.client) &&
+      canManageContactsFromReplica(replica?.view.values() ?? [], membershipID),
+    [cloud.client, replica, membershipID],
+  );
   const result = useBusinessToolsQuery<readonly ContactRecord[]>(
     cloud.client,
     cloud.accountID,
@@ -325,7 +346,8 @@ export function ContactsView() {
   }, [selectedContact, selectedId]);
 
   const addContact = async (contact: ContactRecord, requestId: string) => {
-    if (!companyID) throw new Error("Select a workspace before saving a contact.");
+    if (!companyID || !canManage)
+      throw new Error("You need projects.manage permission to change contacts in this workspace.");
     const { id, name, role, company, email, phone, notes, favorite } = contact;
     await cloud.request("contacts:upsert", {
       companyId: companyID,
@@ -353,7 +375,7 @@ export function ContactsView() {
     <WorkspaceViewFrame
       title="Contacts"
       actions={
-        companyID && cloud.client ? (
+        canManage ? (
           <div className="flex gap-2">
             {selectedContact ? (
               <AddContactDialog
@@ -377,7 +399,7 @@ export function ContactsView() {
           {error ?? result.error}
         </p>
       ) : null}
-      {companyID && legacyContacts.length > 0 ? (
+      {canManage && legacyContacts.length > 0 ? (
         <div className="flex items-center gap-3 border-b p-3 text-sm">
           <span>{legacyContacts.length} contacts remain stored on this device.</span>
           <Button variant="outline" size="sm" onClick={() => setConfirmImport(true)}>
@@ -385,7 +407,7 @@ export function ContactsView() {
           </Button>
         </div>
       ) : null}
-      <Dialog open={confirmImport} onOpenChange={setConfirmImport}>
+      <Dialog open={confirmImport && canManage} onOpenChange={setConfirmImport}>
         <DialogPopup>
           <DialogHeader>
             <DialogTitle>
@@ -402,8 +424,9 @@ export function ContactsView() {
               Cancel
             </Button>
             <Button
-              disabled={importing}
+              disabled={importing || !canManage}
               onClick={() => {
+                if (!canManage || !companyID) return;
                 setImporting(true);
                 run(async () => {
                   try {
@@ -445,7 +468,9 @@ export function ContactsView() {
             {filteredContacts.length === 0 ? (
               <div className="px-5 py-12 text-center text-sm text-muted-foreground">
                 {contacts.length === 0
-                  ? "Add your first contact to get started."
+                  ? canManage
+                    ? "Add your first contact to get started."
+                    : "This workspace has no contacts yet."
                   : "No contacts match your search."}
               </div>
             ) : (
@@ -495,6 +520,7 @@ export function ContactsView() {
           {selectedContact ? (
             <ContactDetail
               contact={selectedContact}
+              canManage={canManage}
               onBack={() => setSelectedId(null)}
               onToggleFavorite={() =>
                 run(() =>
@@ -506,6 +532,7 @@ export function ContactsView() {
               }
               onDelete={() =>
                 run(async () => {
+                  if (!canManage || !companyID) return;
                   await cloud.request("contacts:remove", {
                     companyId: companyID!,
                     id: selectedContact.id,
@@ -523,7 +550,9 @@ export function ContactsView() {
                 </EmptyMedia>
                 <EmptyTitle>Your people, close at hand</EmptyTitle>
                 <EmptyDescription>
-                  Add a contact to keep useful context beside your work.
+                  {canManage
+                    ? "Add a contact to keep useful context beside your work."
+                    : "Choose a contact to view its details."}
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>

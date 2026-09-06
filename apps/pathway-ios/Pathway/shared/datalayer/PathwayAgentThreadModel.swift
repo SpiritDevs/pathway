@@ -617,10 +617,18 @@ final class PathwayAgentThreadModel {
         let pending = pendingCacheWrite; pendingCacheWrite = nil
         return pending
     }
-    func restoreDraft() async {
+    func restoreDraft(legacyDefaults: UserDefaults = .standard) async {
         guard !didRestoreDraft, let draftStore else { return }
         didRestoreDraft = true
-        guard let restored = await draftStore.load() else { return }
+        let legacyKey = "pathway.agent-thread.draft.\(thread.id)"
+        if draft.isEmpty, draftAttachments.isEmpty, let legacy = legacyDefaults.string(forKey: legacyKey) {
+            do {
+                if try await draftStore.migrateLegacyText(legacy), legacyDefaults.string(forKey: legacyKey) == legacy {
+                    legacyDefaults.removeObject(forKey: legacyKey)
+                }
+            } catch { actionError = "The previous draft could not be saved on this device. " + error.localizedDescription }
+        }
+        guard let restored = await draftStore.load(expirePendingUploads: true) else { return }
         // Do not overwrite a draft the user already started while disk I/O was pending.
         guard draft.isEmpty, draftAttachments.isEmpty else { return }
         draft = restored.text

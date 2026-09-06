@@ -80,6 +80,7 @@ private struct PathwayEmailCaptureSettingsView: View {
     @Bindable var model: PathwayEmailModel
     let environment: PathwayCompanyEnvironment
     @State private var snapshot: [String: JSONValue]?
+    @State private var saved = false
     @State private var enabled = true
     @State private var bindAddress = ""
     @State private var port = 1025
@@ -111,9 +112,11 @@ private struct PathwayEmailCaptureSettingsView: View {
                         NavigationLink(project.string("mailSlug")) { PathwayEmailProjectCaptureView(model: model, environment: environment, original: project) }
                     }
                 }
+                if saved { Text("Capture settings saved.").foregroundStyle(.secondary) }
                 Button("Save capture settings") {
+                    saved = false
                     Task {
-                        _ = await model.perform {
+                        saved = await model.perform {
                             // Refresh before replacing the full document so other project settings are retained.
                             let current = try await model.environment(companyID: environment.companyId, environmentID: environment.environment.environmentId, method: "email.getSettings")
                             guard var settings = current.objectValue?["settings"]?.objectValue else { throw PathwayIssueWriteError(message: "Capture settings are unavailable.") }
@@ -160,7 +163,7 @@ private struct PathwayEmailProjectCaptureView: View {
     var body: some View {
         Form {
             TextField("Mail slug", text: $slug).textInputAutocapitalization(.never).autocorrectionDisabled()
-            TextField("SMTP routing password (optional)", text: $password).textInputAutocapitalization(.never).autocorrectionDisabled()
+            SecureField("SMTP routing password (optional)", text: $password).textInputAutocapitalization(.never).autocorrectionDisabled()
             Toggle("Mute this project's desktop banners", isOn: $muted)
             TextField("Code extraction pattern (optional)", text: $codeRegex).textInputAutocapitalization(.never).autocorrectionDisabled()
             Section {

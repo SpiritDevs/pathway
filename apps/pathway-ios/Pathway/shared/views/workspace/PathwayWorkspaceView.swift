@@ -94,7 +94,8 @@ struct PathwayWorkspaceGitView: View {
                             .disabled(selected.isEmpty || message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         Button("Push commits") { pendingAction = "push" }.disabled(!status.hasPrimaryRemote)
                         Button("Pull upstream changes") { pendingAction = "pull" }.disabled(!status.hasUpstream)
-                        Button("Create pull request") { pendingAction = "create_pr" }.disabled(!status.hasPrimaryRemote)
+                        Button("Create pull request") { pendingAction = "create_pr" }.disabled(!status.canCreatePullRequest)
+                        if status.hasWorkingTreeChanges { Text("Commit local changes before creating a pull request.").font(.caption).foregroundStyle(.secondary) }
                     }.disabled(busy || !client.context.canMutate)
                 } else { Text("This workspace is not a repository.") }
             } else if busy { ProgressView("Loading repository…") }
@@ -124,6 +125,13 @@ struct PathwayWorkspaceGitView: View {
     private func perform(_ action: String) async {
         busy = true; error = nil; notice = nil
         do {
+            if action == "create_pr" {
+                let latest: PathwayWorkspaceStatus = try await client.call("vcs.refreshStatus", client.cwdPayload)
+                status = latest
+                guard latest.canCreatePullRequest else {
+                    throw PathwayRPCError.remote(latest.hasWorkingTreeChanges ? "Commit local changes before creating a pull request." : "A repository with a remote is required to create a pull request.")
+                }
+            }
             if action == "pull" {
                 _ = try await client.run("vcs.pull", client.cwdPayload)
                 notice = "Upstream pull completed"

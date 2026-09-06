@@ -20,6 +20,13 @@ struct PathwayWorkspaceReviewDraft: Identifiable {
     }
 }
 
+enum PathwayWorkspaceReviewValidation {
+    static func canSubmit(verdict: String, body: String, drafts: [PathwayWorkspaceReviewDraft]) -> Bool {
+        body.count <= 65_536 && drafts.allSatisfy(\.isValid)
+            && (verdict == "approve" || !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !drafts.isEmpty)
+    }
+}
+
 /// Anchors only lines present in a valid unified hunk. Quoted paths stay visible
 /// but are not guessed: Git's C-style octal path encoding needs a full decoder.
 struct PathwayWorkspaceDiffLine: Identifiable {

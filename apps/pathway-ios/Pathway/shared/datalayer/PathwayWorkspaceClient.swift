@@ -111,6 +111,7 @@ struct PathwayWorkspaceStatus: Decodable {
     let aheadCount: Int
     let behindCount: Int
     let workingTree: WorkingTree
+    var canCreatePullRequest: Bool { isRepo && hasPrimaryRemote && !hasWorkingTreeChanges }
     struct WorkingTree: Decodable {
         let files: [File]
         struct File: Decodable, Identifiable {

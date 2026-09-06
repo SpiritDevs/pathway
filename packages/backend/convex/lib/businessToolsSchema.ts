@@ -55,5 +55,6 @@ export const businessToolsTables = {
   })
     .index("by_user_and_id", ["userId", "id"])
     .index("by_user_and_state", ["userId", "state"])
+    .index("by_user_and_state_and_stopped_at", ["userId", "state", "stoppedAt"])
     .index("by_user_and_started_at", ["userId", "startedAt"]),
 };

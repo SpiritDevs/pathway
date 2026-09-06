@@ -11,6 +11,9 @@ struct PathwayCompanyAdminMember: Decodable, Identifiable {
     let state: String
     let isOwner: Bool
     let teamIds: [String]
+    func canChangeMembership(in team: PathwayCompanyAdminTeam) -> Bool {
+        teamIds.contains(team.id) || (state == "active" && team.archivedAt == nil)
+    }
 }
 struct PathwayCompanyAdminTeam: Decodable, Identifiable {
     let id: String
@@ -41,7 +44,10 @@ struct PathwayCompanyAdminInvitation: Decodable, Identifiable {
     let lastDeliveryAt: Double?
     let teamIds: [String]
     let roleIds: [String]
-    var canResend: Bool { state != "accepted" && state != "revoked" && Date().timeIntervalSince1970 * 1000 - (lastDeliveryAt ?? 0) >= 60_000 }
+    var resendAvailableAt: Date? { lastDeliveryAt.map { Date(timeIntervalSince1970: ($0 + 60_000) / 1000) } }
+    func canResend(at date: Date) -> Bool {
+        state != "accepted" && state != "revoked" && (resendAvailableAt.map { date >= $0 } ?? true)
+    }
 }
 
 /// Company administrative grants never flow from a team-scoped assignment.

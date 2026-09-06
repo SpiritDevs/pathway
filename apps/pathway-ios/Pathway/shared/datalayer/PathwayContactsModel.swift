@@ -27,6 +27,22 @@ final class PathwayContactsModel {
     @ObservationIgnored private let request: PathwayIssuesModel.CloudRequest
     @ObservationIgnored private let subscribe: Subscribe
     init(request: @escaping PathwayIssuesModel.CloudRequest, subscribe: @escaping Subscribe) { self.request = request; self.subscribe = subscribe }
+    static func canManage(companyID: String, companies: [PathwayCompany], entities: [PathwayIssueEntity]) -> Bool {
+        guard let company = companies.first(where: { $0.id == companyID }),
+              entities.contains(where: { $0.companyId == companyID && $0.kind == "membership" && $0.id == company.membershipId && $0.string("state") == "active" }) else { return false }
+        if company.isOwner { return true }
+        let roles = entities.filter { $0.companyId == companyID && $0.kind == "role" }
+        return entities.contains { assignment in
+            assignment.companyId == companyID && assignment.kind == "roleAssignment"
+                && assignment.string("membershipId") == company.membershipId
+                && assignment.fields["scope"]?.objectValue?["kind"] == .string("company")
+                && roles.contains { role in
+                    role.id == assignment.string("roleId")
+                        && role.fields["permissions"]?.arrayValue?.contains(.string("projects.manage")) == true
+                }
+        }
+    }
+
     func clear() {
         observationGeneration += 1; companyID = ""; contacts = []; loading = false; writing = false; errorMessage = nil
     }

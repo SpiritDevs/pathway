@@ -99,7 +99,7 @@ private struct PathwayEmailRow: View {
             HStack { if !message.isRead { Image(systemName: "circle.fill").font(.caption2).foregroundStyle(.blue).accessibilityLabel("Unread") }; Text(message.subject).fontWeight(message.isRead ? .regular : .semibold) }
             Text(message.sender).font(.subheadline).lineLimit(1)
             Text(message.message["textBody"]?.stringValue ?? "HTML message").font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            HStack { Text(message.inbox); if let date = ISO8601DateFormatter().date(from: message.receivedAt) { Text(date, format: .dateTime.day().month().hour().minute()) } }.font(.caption2).foregroundStyle(.secondary)
+            HStack { Text(message.inbox); if let date = pathwayDate(from: message.receivedAt) { Text(date, format: .dateTime.day().month().hour().minute()) } }.font(.caption2).foregroundStyle(.secondary)
         }.accessibilityElement(children: .combine)
     }
 }

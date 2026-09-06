@@ -4,6 +4,29 @@ import Testing
 
 @MainActor
 struct PathwayWorkspaceTests {
+    @Test func creatingPullRequestsRequiresACleanRepositoryWithARemote() {
+        for isRepo in [false, true] {
+            for hasRemote in [false, true] {
+                for dirty in [false, true] {
+                    let status = PathwayWorkspaceStatus(isRepo: isRepo, refName: "feature", hasWorkingTreeChanges: dirty, hasPrimaryRemote: hasRemote, hasUpstream: true, aheadCount: 0, behindCount: 0, workingTree: .init(files: []))
+                    #expect(status.canCreatePullRequest == (isRepo && hasRemote && !dirty))
+                }
+            }
+        }
+    }
+
+    @Test func emptyReviewsRequireApprovalOrAValidLineComment() {
+        let draft = PathwayWorkspaceReviewDraft(anchor: .init(path: "a.swift", oldPath: nil, line: 1, side: "right"), body: "Explain this change")
+        let emptyDraft = PathwayWorkspaceReviewDraft(anchor: draft.anchor, body: " \n")
+        for verdict in ["comment", "request-changes", "approve"] {
+            #expect(PathwayWorkspaceReviewValidation.canSubmit(verdict: verdict, body: " \n", drafts: []) == (verdict == "approve"))
+            #expect(PathwayWorkspaceReviewValidation.canSubmit(verdict: verdict, body: "Summary", drafts: []))
+            #expect(PathwayWorkspaceReviewValidation.canSubmit(verdict: verdict, body: "", drafts: [draft]))
+            #expect(!PathwayWorkspaceReviewValidation.canSubmit(verdict: verdict, body: "Summary", drafts: [emptyDraft]))
+            #expect(!PathwayWorkspaceReviewValidation.canSubmit(verdict: verdict, body: String(repeating: "a", count: 65_537), drafts: []))
+        }
+    }
+
     private var context: PathwayWorkspaceContext {
         .init(threadID: "thread-a", projectID: "project-a", cwd: "/worktrees/a", projectRoot: "/repo")
     }

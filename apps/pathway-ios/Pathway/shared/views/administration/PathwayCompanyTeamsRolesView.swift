@@ -35,10 +35,10 @@ struct PathwayCompanyTeamEditor: View {
             Button("Save team") { Task { await save() } }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.allows("teams.manage"))
             if let team {
                 Section("Members") {
-                    ForEach(model.members.filter { $0.state == "active" }) { member in
+                    ForEach(model.members.filter { $0.state == "active" || $0.teamIds.contains(team.id) }) { member in
                         Toggle(member.displayName.isEmpty ? member.email : member.displayName, isOn: Binding(get: { member.teamIds.contains(team.id) }, set: { enabled in
                             Task { _ = await model.mutate(enabled ? "teams:addMember" : "teams:removeMember", fields: ["teamId": .string(team.id), "membershipId": .string(member.id)]) }
-                        })).disabled(!model.allows("teams.manage") || team.archivedAt != nil)
+                        })).disabled(!model.allows("teams.manage") || !member.canChangeMembership(in: team))
                     }
                 }
                 if model.allows("teams.manage") {

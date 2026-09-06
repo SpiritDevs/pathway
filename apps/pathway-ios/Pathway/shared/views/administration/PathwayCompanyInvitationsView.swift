@@ -4,6 +4,11 @@ struct PathwayCompanyInvitationsView: View {
     let model: PathwayCompanyAdministrationModel
     @State private var invitation: PathwayCompanyAdminInvitation?
     @State private var action: String?
+    @State private var now = Date()
+    @Environment(\.scenePhase) private var scenePhase
+    private var resendDeadlines: [Date] {
+        model.invitations.filter { $0.state != "accepted" && $0.state != "revoked" }.compactMap(\.resendAvailableAt).sorted()
+    }
     var body: some View {
         List {
             PathwayCompanyAdminFeedback(model: model)
@@ -14,7 +19,7 @@ struct PathwayCompanyInvitationsView: View {
                     Text("Expires \(Date(timeIntervalSince1970: invitation.expiresAt / 1000).formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
                     if model.allows("members.invite") && invitation.state != "accepted" && invitation.state != "revoked" {
                         HStack {
-                            Button("Resend") { self.invitation = invitation; action = "resend" }.disabled(!invitation.canResend)
+                            Button("Resend") { self.invitation = invitation; action = "resend" }.disabled(!invitation.canResend(at: now))
                             Button("Revoke", role: .destructive) { self.invitation = invitation; action = "revoke" }
                         }
                     }
@@ -22,6 +27,15 @@ struct PathwayCompanyInvitationsView: View {
             }
             if model.invitations.isEmpty { Text("No invitations") }
         }.navigationTitle("Invitations").disabled(model.busy).refreshable { await model.load() }
+            .task(id: resendDeadlines) {
+                now = Date()
+                for deadline in resendDeadlines where deadline > now {
+                    do { try await Task.sleep(for: .seconds(max(0, deadline.timeIntervalSinceNow))) }
+                    catch { return }
+                    now = Date()
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in if phase == .active { now = Date() } }
             .toolbar { if model.allows("members.invite") { NavigationLink { PathwayCompanyInviteEditor(model: model) } label: { Image(systemName: "plus") }.accessibilityLabel("Invite member") } }
             .confirmationDialog(action == "resend" ? "Resend invitation email?" : "Revoke invitation?", isPresented: Binding(get: { action != nil }, set: { if !$0 { action = nil } })) {
                 Button(action == "resend" ? "Send email" : "Revoke", role: action == "resend" ? nil : .destructive) {
