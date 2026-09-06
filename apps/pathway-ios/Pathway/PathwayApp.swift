@@ -16,7 +16,7 @@ struct PathwayApp: App {
     init() {
         missingConfigurationKeys = AppConfiguration.missingRequiredKeys
         #if DEBUG && !os(visionOS)
-        if ProcessInfo.processInfo.arguments.contains("--uitest-issues") {
+        if ProcessInfo.processInfo.arguments.contains("--uitest-issues") || ProcessInfo.processInfo.arguments.contains("--uitest-conversation") {
             _appModel = State(initialValue: nil)
             return
         }
@@ -90,6 +90,8 @@ struct PathwayApp: App {
         #if DEBUG && !os(visionOS)
         if ProcessInfo.processInfo.arguments.contains("--uitest-issues") {
             PathwayIssuesSimulatorScene()
+        } else if ProcessInfo.processInfo.arguments.contains("--uitest-conversation") {
+            PathwayConversationSimulatorScene()
         } else {
             authenticatedContent
         }

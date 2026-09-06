@@ -547,7 +547,11 @@ private struct AgentThreadDetailRoute: View {
             AgentThreadConversationView(
                 thread: thread,
                 environment: environment,
-                connect: connect
+                connect: connect,
+                workspaceRoot: appModel.cloud.environmentBindings.first {
+                    $0.companyId == thread.companyId && $0.binding.environmentId == thread.environmentId
+                        && $0.binding.localProjectId == thread.shell.projectId
+                }?.binding.localWorkspaceRoot
             )
         } else {
             ContentUnavailableView {
@@ -567,331 +571,197 @@ private struct AgentThreadDetailRoute: View {
     }
 }
 
-private struct AgentThreadConversationView: View {
+struct AgentThreadConversationView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.compactThreadChrome) private var compactThreadChrome
-    let thread: PathwayAgentThread
     @State private var model: PathwayAgentThreadModel
     @State private var isComposerExpanded = false
+    @State private var isNearBottom = true
+    @State private var followsLatest = true
+    @State private var userIsScrolling = false
+    private let workspaceRoot: String?
+    @State private var childDestination: AgentThreadDestination?
+    @State private var isOpeningChild = false
+    @State private var showsChanges = false
+    @State private var navigationError: String?
+    @State private var isForking = false
     @FocusState private var isComposerFocused: Bool
 
-    init(
-        thread: PathwayAgentThread,
-        environment: PathwayCompanyEnvironment,
-        connect: PathwayConnectClient
-    ) {
-        self.thread = thread
-        _model = State(
-            initialValue: PathwayAgentThreadModel(
-                thread: thread,
-                environment: environment,
-                connect: connect
-            )
-        )
+    init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient, workspaceRoot: String? = nil) {
+        self.workspaceRoot = workspaceRoot
+        _model = State(initialValue: PathwayAgentThreadModel(thread: thread, environment: environment, connect: connect))
+    }
+
+    init(model: PathwayAgentThreadModel, workspaceRoot: String? = nil) {
+        self.workspaceRoot = workspaceRoot
+        _model = State(initialValue: model)
     }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 16) {
                     connectionBanner
-
-                    ForEach(model.items) { item in
-                        AgentTimelineItemView(item: item, model: model)
-                            .id(item.id)
-                    }
+                    AgentThreadTranscript(model: model, onOpenChild: openChild)
                 }
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 16)
             }
             .defaultScrollAnchor(.bottom)
-            .simultaneousGesture(
-                TapGesture().onEnded { collapseInteractiveChrome() }
-            )
+            .scrollDismissesKeyboard(.interactively)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentSize.height <= geometry.visibleRect.height
+                    || geometry.visibleRect.maxY >= geometry.contentSize.height - 100
+            } action: { _, value in
+                isNearBottom = value
+                if userIsScrolling { followsLatest = value }
+            }
             .onScrollPhaseChange { _, phase in
-                if phase == .interacting {
-                    collapseInteractiveChrome()
+                if phase == .interacting { userIsScrolling = true }
+                if phase == .idle && userIsScrolling {
+                    followsLatest = isNearBottom
+                    userIsScrolling = false
                 }
             }
-            .onChange(of: model.items.last?.id) { _, identifier in
-                guard let identifier else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(identifier, anchor: .bottom)
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
+                if old != new && followsLatest && !userIsScrolling && model.activeRunID != nil {
+                    proxy.scrollTo("agent-transcript-bottom", anchor: .bottom)
+                }
+            }
+            .onChange(of: model.items.last?.text) { _, _ in
+                if followsLatest && !userIsScrolling { proxy.scrollTo("agent-transcript-bottom", anchor: .bottom) }
+            }
+            .onChange(of: model.items.last?.id) { _, _ in
+                if followsLatest && !userIsScrolling { proxy.scrollTo("agent-transcript-bottom", anchor: .bottom) }
+            }
+            .overlay(alignment: .bottom) {
+                    if !isNearBottom {
+                        Button("Latest message", systemImage: "arrow.down") {
+                            followsLatest = true
+                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                                proxy.scrollTo("agent-transcript-bottom", anchor: .bottom)
+                            }
+                        }
+                        .labelStyle(.iconOnly).buttonStyle(.glass).buttonBorderShape(.circle)
+                        .accessibilityIdentifier("agent-thread-jump-bottom")
+                    }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 4) {
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                    if !changedItems.isEmpty {
+                        Button { showsChanges = true } label: {
+                            HStack(spacing: 8) {
+                                Text("\(changedFileCount) \(changedFileCount == 1 ? "file" : "files")")
+                                Text("+\(changedItems.reduce(0) { $0 + ($1.additions ?? 0) })").foregroundStyle(.green)
+                                Text("−\(changedItems.reduce(0) { $0 + ($1.deletions ?? 0) })").foregroundStyle(.red)
+                            }.font(.caption).monospacedDigit()
+                        }
+                        .buttonStyle(.glass).buttonBorderShape(.capsule)
+                        .accessibilityIdentifier("agent-thread-changes")
+                    }
+                        AgentThreadSubagentPicker(model: model, openThread: openChild)
+                    }
+                    AgentThreadComposer(model: model, isExpanded: $isComposerExpanded,
+                        isFocused: $isComposerFocused, modelName: model.currentModelSelection.model,
+                        usesCompactPresentation: true, isNavigationExpanded: false, onOpenThread: openChild, workspaceRoot: workspaceRoot)
                 }
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            AgentThreadComposer(
-                model: model,
-                isExpanded: $isComposerExpanded,
-                isFocused: $isComposerFocused,
-                modelName: thread.shell.modelSelection.model,
-                usesCompactPresentation: compactThreadChrome != nil,
-                isNavigationExpanded: compactThreadChrome?.isNavigationExpanded == true
-            )
-        }
-        .navigationTitle(thread.shell.title)
+        .navigationTitle(model.threadTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            compactThreadChrome?.enterThreadDetail()
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.threadTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    Text(model.environmentLabel).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                .accessibilityIdentifier("agent-thread-heading")
+            }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button("Write message", systemImage: "square.and.pencil") {
+                    isComposerExpanded = true; isComposerFocused = true
+                }
+                Menu {
+                    Button("Fork thread", systemImage: "arrow.triangle.branch") { fork() }.disabled(isForking)
+                    Button("Copy conversation", systemImage: "doc.on.doc") {
+                        UIPasteboard.general.string = model.items.filter(\.isConversation).compactMap(\.text).joined(separator: "\n\n")
+                    }
+                    if !model.subagents.isEmpty {
+                        Section("Subagents") {
+                            ForEach(model.subagents) { agent in
+                                if let id = agent.childThreadID {
+                                    Button(agent.title, systemImage: "person.crop.square") { openChild(id) }
+                                        .accessibilityIdentifier("agent-thread-open-child-\(id)")
+                                }
+                            }
+                        }
+                    }
+                } label: { Image(systemName: "ellipsis") }
+                .accessibilityLabel("Thread actions").accessibilityIdentifier("agent-thread-actions")
+            }
         }
-        .onChange(of: isComposerExpanded, initial: true) { _, isExpanded in
-            compactThreadChrome?.setComposerExpanded(isExpanded)
+        .sheet(isPresented: $showsChanges) { AgentThreadChangesView(model: model) }
+        .navigationDestination(item: $childDestination) { destination in
+            AgentThreadConversationView(model: destination.model, workspaceRoot: destination.workspaceRoot)
         }
+        .alert("Couldn’t open thread", isPresented: Binding(get: { navigationError != nil }, set: { if !$0 { navigationError = nil } })) {
+            Button("OK") { navigationError = nil }
+        } message: { Text(navigationError ?? "") }
+        .onAppear { compactThreadChrome?.enterThreadDetail() }
+        .onChange(of: isComposerExpanded, initial: true) { _, expanded in compactThreadChrome?.setComposerExpanded(expanded) }
         .task { model.start() }
         .onDisappear {
             compactThreadChrome?.leaveThreadDetail()
             Task { await model.stop() }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-thread-conversation")
     }
 
-    @ViewBuilder
-    private var connectionBanner: some View {
+    private var changedFileCount: Int { Set(changedItems.compactMap(\.fileName)).count }
+    private var changedItems: [PathwayTimelineItem] { model.items.filter { $0.type == "file_change" } }
+    private func openChild(_ id: String) {
+        guard !isOpeningChild else { return }
+        isComposerFocused = false
+        isOpeningChild = true
+        Task {
+            defer { isOpeningChild = false }
+            do {
+                let child = try await model.makeChildModel(threadID: id)
+                childDestination = AgentThreadDestination(model: child, workspaceRoot: model.thread.shell.worktreePath ?? workspaceRoot)
+            } catch { navigationError = error.localizedDescription }
+        }
+    }
+    private func fork() {
+        isForking = true
+        Task {
+            defer { isForking = false }
+            do { openChild(try await model.fork()) }
+            catch { navigationError = error.localizedDescription }
+        }
+    }
+    @ViewBuilder private var connectionBanner: some View {
         switch model.connectionState {
         case .connecting:
-            HStack(spacing: 8) {
-                ProgressView()
-                Text("Connecting to the environment…")
-            }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
+            HStack(spacing: 8) { ProgressView(); Text("Connecting to the environment…") }
+                .font(.footnote).foregroundStyle(.secondary)
         case .cached:
             Label("Showing saved messages while the environment reconnects", systemImage: "wifi.slash")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
         case let .failed(message):
-            Label(message, systemImage: "exclamationmark.triangle")
-                .font(.footnote)
-                .foregroundStyle(.red)
-        default:
-            EmptyView()
+            Label(message, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
+        default: EmptyView()
         }
-    }
-
-    private func collapseInteractiveChrome() {
-        guard isComposerExpanded || compactThreadChrome?.isNavigationExpanded == true else {
-            return
-        }
-        withAnimation(
-            reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation
-        ) {
-            isComposerExpanded = false
-            compactThreadChrome?.collapseNavigation()
-        }
-        isComposerFocused = false
     }
 }
 
-private struct AgentTimelineItemView: View {
-    let item: PathwayTimelineItem
+private struct AgentThreadDestination: Hashable {
+    let id = UUID()
     let model: PathwayAgentThreadModel
-
-    var body: some View {
-        if item.isConversation {
-            conversation
-        } else if item.type == "approval_request" {
-            ApprovalCard(item: item, model: model)
-        } else if item.type == "user_input_request" {
-            UserInputCard(item: item, model: model)
-        } else {
-            WorkEventCard(item: item)
-        }
-    }
-
-    private var conversation: some View {
-        VStack(alignment: item.isUserMessage ? .trailing : .leading, spacing: 8) {
-            if let text = item.text, !text.isEmpty {
-                PathwayMarkdownText(markdown: text)
-                    .textSelection(.enabled)
-            }
-
-            ForEach(item.attachments) { attachment in
-                Label(attachment.name, systemImage: attachment.type == "image" ? "photo" : "doc")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            if item.streaming {
-                ProgressView()
-                    .controlSize(.small)
-                    .accessibilityLabel("Agent is responding")
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: item.isUserMessage ? .trailing : .leading)
-        .padding(item.isUserMessage ? 12 : 0)
-        .background {
-            if item.isUserMessage {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.13))
-            }
-        }
-        .padding(.leading, item.isUserMessage ? 44 : 0)
-        .padding(.trailing, item.isUserMessage ? 0 : 20)
-    }
-}
-
-private struct PathwayMarkdownText: View {
-    let markdown: String
-
-    var body: some View {
-        if let attributed = try? AttributedString(
-            markdown: markdown,
-            options: .init(interpretedSyntax: .full)
-        ) {
-            Text(attributed)
-        } else {
-            Text(markdown)
-        }
-    }
-}
-
-private struct WorkEventCard: View {
-    let item: PathwayTimelineItem
-    @State private var isExpanded = false
-
-    var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            if let text = item.text, !text.isEmpty {
-                PathwayMarkdownText(markdown: text)
-                    .font(.callout.monospaced(item.type == "command_execution"))
-                    .textSelection(.enabled)
-                    .padding(.top, 8)
-            }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .foregroundStyle(iconColor)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(label)
-                        .font(.callout.weight(.medium))
-                    if let detail {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Spacer()
-
-                if item.status == "running" {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-            }
-        }
-        .padding(12)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private var label: String {
-        item.title ?? item.fileName ?? item.type.replacingOccurrences(of: "_", with: " ").capitalized
-    }
-
-    private var detail: String? {
-        if item.type == "file_change" {
-            return "+\(item.additions ?? 0) −\(item.deletions ?? 0)"
-        }
-        if let exitCode = item.exitCode { return "Exited with code \(exitCode)" }
-        return item.status.capitalized
-    }
-
-    private var icon: String {
-        switch item.type {
-        case "reasoning": "brain"
-        case "command_execution": "terminal"
-        case "file_change": "doc.badge.ellipsis"
-        case "source_control": "arrow.triangle.branch"
-        case "subagent": "person.2"
-        case "error": "exclamationmark.triangle"
-        case "checkpoint": "clock.arrow.circlepath"
-        default: "gearshape.2"
-        }
-    }
-
-    private var iconColor: Color {
-        item.type == "error" || item.status == "failed" ? .red : .secondary
-    }
-}
-
-private struct ApprovalCard: View {
-    let item: PathwayTimelineItem
-    let model: PathwayAgentThreadModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Approval needed", systemImage: "checkmark.shield")
-                .font(.headline)
-
-            if let text = item.text {
-                Text(text)
-                    .font(.callout)
-            }
-
-            if item.requiresResponse, let requestID = item.requestID {
-                HStack {
-                    Button("Decline", role: .destructive) {
-                        Task { await model.respondToApproval(requestID: requestID, decision: "decline") }
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button("Allow") {
-                        Task { await model.respondToApproval(requestID: requestID, decision: "accept") }
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-            }
-        }
-        .padding(14)
-        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
-    }
-}
-
-private struct UserInputCard: View {
-    let item: PathwayTimelineItem
-    let model: PathwayAgentThreadModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("The agent has a question", systemImage: "questionmark.bubble")
-                .font(.headline)
-
-            ForEach(item.questions) { question in
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(question.header)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(question.question)
-
-                    if item.requiresResponse, let requestID = item.requestID {
-                        ForEach(question.options, id: \.label) { option in
-                            Button {
-                                Task {
-                                    await model.respondToQuestion(
-                                        requestID: requestID,
-                                        questionID: question.id,
-                                        answer: option.label
-                                    )
-                                }
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(option.label)
-                                    Text(option.description)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                    }
-                }
-            }
-        }
-        .padding(14)
-        .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
-    }
+    let workspaceRoot: String?
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
+    nonisolated func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }

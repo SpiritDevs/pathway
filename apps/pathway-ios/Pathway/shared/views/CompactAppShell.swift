@@ -51,7 +51,7 @@ enum CompactAppShellMetrics {
                     .accessibilityLabel("Dismiss navigation menu")
                 }
 
-                if !threadChrome.isComposerExpanded && !isIssueDetailActive {
+                if !threadChrome.isComposerExpanded && !threadChrome.isThreadDetailActive && !isIssueDetailActive {
                     PathwayTabBar(
                         selectedDestination: $selectedDestination,
                         isMoreMenuPresented: $isMoreMenuPresented,

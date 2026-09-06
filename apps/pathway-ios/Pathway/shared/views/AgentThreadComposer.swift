@@ -1,20 +1,11 @@
+import ImageIO
+import PhotosUI
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Bottom composer for a thread conversation.
-///
-/// In the compact shell this view owns the middle slot of the immutable three-control bottom
-/// row: `CompactAppShell` draws the leading navigation surface and the trailing orchestrator
-/// button, and the two clear spacers here reserve their footprint. Tapping the middle pill
-/// expands it into a full editing card and the shell drops its tab bar in the same transaction,
-/// so the card replaces the row rather than covering it. Both halves run on
-/// `CompactAppShellMetrics.navigationChromeAnimation` for that reason.
+/// The floating composer shares expansion state with the compact thread screen.
 struct AgentThreadComposer: View {
-    /// Matches the collapsed pill and the expanded card so one surface grows between them
-    /// instead of two surfaces cross-fading in place. Both halves are on screen together
-    /// while the transition runs, so `isSource` follows `isExpanded`: the arriving shape owns
-    /// the geometry and the departing one interpolates onto it, in either direction.
     private static let surfaceID = "agent-thread-composer-surface"
-    private static let placeholder = "Ask the repo agent, or run a command…"
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var model: PathwayAgentThreadModel
@@ -23,257 +14,438 @@ struct AgentThreadComposer: View {
     let modelName: String
     let usesCompactPresentation: Bool
     let isNavigationExpanded: Bool
+    var onOpenThread: ((String) -> Void)? = nil
+    var workspaceRoot: String? = nil
 
     @Namespace private var surfaceNamespace
-    @State private var isAttachmentNoticePresented = false
-    /// Keeps the toolbar controls proportional to the editor text at every Dynamic Type size.
+    @State private var showsFiles = false
+    @State private var showsPhotos = false
+    @State private var showsSettings = false
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var errorMessage: String?
+    @State private var isChangingModel = false
+    @State private var isInterrupting = false
+    @State private var showsStash = false
+    @State private var stashCount = 0
+    @State private var isStashing = false
+    @State private var isStartingNewThread = false
+    @State private var textSelection: TextSelection?
+    @State private var isApplyingSuggestion = false
     @ScaledMetric(relativeTo: .body) private var controlDiameter: CGFloat = 36
 
-    @ViewBuilder
     var body: some View {
-        if usesCompactPresentation {
-            if isExpanded {
+        Group {
+            if usesCompactPresentation && !isExpanded {
+                collapsedComposer
+                    .transition(.opacity)
+            } else {
                 expandedComposer
                     .task {
+                        guard usesCompactPresentation else { return }
                         await Task.yield()
                         guard isExpanded else { return }
                         isFocused = true
                     }
                     .transition(.opacity)
-            } else {
-                collapsedComposer
-                    .transition(.opacity)
             }
-        } else {
-            inlineComposer
         }
+        .fileImporter(isPresented: $showsFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls):
+                Task { for url in urls { await model.addAttachment(fileURL: url) } }
+            case .failure(let error): errorMessage = error.localizedDescription
+            }
+        }
+        .photosPicker(isPresented: $showsPhotos, selection: $selectedPhotos,
+                      maxSelectionCount: max(1, 8 - model.draftAttachments.count), matching: .images,
+                      preferredItemEncoding: .compatible)
+        .onChange(of: selectedPhotos) { _, photos in
+            guard !photos.isEmpty else { return }
+            selectedPhotos = []
+            Task {
+                for (index, photo) in photos.enumerated() {
+                    do {
+                        guard let data = try await photo.loadTransferable(type: Data.self) else { continue }
+                        let type = Self.imageType(data) ?? photo.supportedContentTypes.first(where: { $0.conforms(to: .image) }) ?? .jpeg
+                        await model.addAttachment(data: data, name: "Photo \(index + 1).\(type.preferredFilenameExtension ?? "jpg")",
+                                                  mimeType: type.preferredMIMEType ?? "image/jpeg")
+                    } catch { errorMessage = error.localizedDescription }
+                }
+            }
+        }
+        .sheet(isPresented: $showsSettings) {
+            AgentThreadComposerSettings(model: model)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showsStash, onDismiss: {
+            Task { stashCount = (try? await AgentThreadPromptStash.shared.entries().count) ?? 0 }
+        }) {
+            AgentThreadPromptStashSheet(store: .shared, restore: restoreStash)
+                .presentationDetents([.medium, .large])
+        }
+        .task { stashCount = (try? await AgentThreadPromptStash.shared.entries().count) ?? 0 }
+        .alert("Couldn't complete action", isPresented: Binding(get: { errorMessage != nil || model.actionError != nil }, set: { if !$0 { clearError() } })) {
+            Button("OK", role: .cancel) { clearError() }
+        } message: { Text(errorMessage ?? model.actionError ?? "") }
     }
 
     private var collapsedComposer: some View {
-        HStack(spacing: 12) {
-            Color.clear
-                .frame(
-                    width: CompactAppShellMetrics.tabBarHeight,
-                    height: CompactAppShellMetrics.tabBarHeight
-                )
-                .accessibilityHidden(true)
-
-            Button {
-                withAnimation(
-                    reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation
-                ) {
-                    isExpanded = true
-                }
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "plus")
-                        .font(.body.weight(.semibold))
-                    Text("Message agent")
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 18)
-                .frame(maxWidth: .infinity)
-                .frame(height: CompactAppShellMetrics.tabBarHeight)
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.primary)
-            .background {
-                Capsule()
-                    .fill(.regularMaterial)
-                    .matchedGeometryEffect(
-                        id: Self.surfaceID,
-                        in: surfaceNamespace,
-                        isSource: !isExpanded
-                    )
-            }
-            .accessibilityLabel("Message agent")
-            .accessibilityHint("Expands the message composer")
-            // Collapses towards the trailing edge as the navigation surface grows over it
-            // from the leading edge. `scaleEffect` is geometry-only, so the inset keeps its
-            // height and the transcript never jumps.
-            .scaleEffect(x: isNavigationExpanded ? 0.001 : 1, anchor: .trailing)
-            .opacity(isNavigationExpanded ? 0 : 1)
-            .allowsHitTesting(!isNavigationExpanded)
-            .accessibilityHidden(isNavigationExpanded)
-
-            Color.clear
-                .frame(
-                    width: CompactAppShellMetrics.tabBarHeight,
-                    height: CompactAppShellMetrics.tabBarHeight
-                )
-                .accessibilityHidden(true)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, CompactAppShellMetrics.tabBarBottomPadding)
-        // Scoped so the shrink runs on the shared curve regardless of which transaction
-        // (button tap, backdrop tap, scroll) drove the change.
-        .animation(
-            reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation,
-            value: isNavigationExpanded
-        )
-    }
-
-    private var expandedComposer: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // The lower bound reserves the card's resting height in text lines, so the card
-            // keeps its proportions as Dynamic Type grows instead of clipping the editor.
-            TextField(Self.placeholder, text: $model.draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(5 ... 10)
-                .focused($isFocused)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .accessibilityIdentifier("agent-thread-composer-field")
-
-            composerToolbar
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
-        .background {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .fill(.regularMaterial)
-                .matchedGeometryEffect(
-                    id: Self.surfaceID,
-                    in: surfaceNamespace,
-                    isSource: isExpanded
-                )
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, CompactAppShellMetrics.tabBarBottomPadding)
-        .alert("Attachments", isPresented: $isAttachmentNoticePresented) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Sending attachments from the Pathway iOS app isn't available yet.")
-        }
-        .accessibilityIdentifier("agent-thread-composer-expanded")
-    }
-
-    private var composerToolbar: some View {
-        HStack(spacing: 10) {
-            attachmentButton
-            modelMenu
-            Spacer(minLength: 0)
-            sendButton
-        }
-    }
-
-    private var attachmentButton: some View {
         Button {
-            isAttachmentNoticePresented = true
+            withAnimation(reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation) { isExpanded = true }
         } label: {
-            Image(systemName: "plus")
-                .font(.body.weight(.semibold))
-                .frame(width: controlDiameter, height: controlDiameter)
-                .background(Color(.tertiarySystemFill), in: Circle())
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.primary)
-        .accessibilityLabel("Add attachment")
-    }
-
-    /// The thread's model is fixed once Pathway launches the thread, and Connect exposes no
-    /// command to change it. The menu therefore reports the selection instead of offering
-    /// alternatives it could not apply.
-    private var modelMenu: some View {
-        Menu {
-            Section("Thread model") {
-                Label(modelName, systemImage: "checkmark")
-            }
-
-            Section {
-                Text("Switching models on an existing thread isn't available yet.")
-            }
-        } label: {
-            HStack(spacing: 5) {
-                Text(modelName)
+            HStack(spacing: 14) {
+                Image(systemName: "plus").font(.title3)
+                Text(model.draft.isEmpty ? promptPlaceholder : model.draft)
+                    .foregroundStyle(model.draft.isEmpty ? Color.secondary : .primary)
                     .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.semibold))
+                Spacer(minLength: 0)
+                if !model.draftAttachments.isEmpty {
+                    Label("\(model.draftAttachments.count)", systemImage: "paperclip")
+                        .font(.subheadline)
+                }
             }
-            .font(.subheadline)
-            .padding(.horizontal, 12)
-            .frame(height: controlDiameter)
-            .background(Color(.tertiarySystemFill), in: Capsule())
+            .padding(.horizontal, 18)
+            .frame(maxWidth: .infinity, minHeight: CompactAppShellMetrics.tabBarHeight)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
+        .background {
+            Capsule().fill(.regularMaterial)
+                .overlay { Capsule().strokeBorder(.primary.opacity(0.10), lineWidth: 0.5) }
+                .matchedGeometryEffect(id: Self.surfaceID, in: surfaceNamespace, isSource: !isExpanded)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, CompactAppShellMetrics.tabBarBottomPadding)
+        .opacity(isNavigationExpanded ? 0 : 1)
+        .allowsHitTesting(!isNavigationExpanded)
+        .accessibilityHidden(isNavigationExpanded)
+        .accessibilityLabel("Message agent")
+        .accessibilityHint("Expands the message composer")
+        .accessibilityIdentifier("agent-thread-composer-collapsed")
+    }
+
+    private var expandedComposer: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if isFocused, let trigger = composerTrigger {
+                AgentThreadComposerSuggestions(model: model, trigger: trigger, workspaceRoot: workspaceRoot, select: selectSuggestion)
+                    .disabled(isApplyingSuggestion)
+            }
+            if !model.draftAttachments.isEmpty {
+                AgentThreadComposerAttachments(model: model)
+            }
+            TextField(promptPlaceholder, text: $model.draft, selection: $textSelection, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(2 ... 7)
+                .focused($isFocused)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .accessibilityIdentifier("agent-thread-composer-field")
+            if model.draft.count > 120_000 {
+                Text("Message is too long. Use 120,000 characters or fewer.")
+                    .font(.caption).foregroundStyle(.red)
+            }
+            composerToolbar
+        }
+        .padding(14)
+        .background {
+            RoundedRectangle(cornerRadius: 26).fill(.regularMaterial)
+                .overlay { RoundedRectangle(cornerRadius: 26).strokeBorder(.primary.opacity(0.10), lineWidth: 0.5) }
+                .matchedGeometryEffect(id: Self.surfaceID, in: surfaceNamespace, isSource: isExpanded)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, CompactAppShellMetrics.tabBarBottomPadding)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("agent-thread-composer-expanded")
+    }
+
+    private var composerToolbar: some View {
+        HStack(spacing: 6) {
+            attachmentMenu
+            modelMenu
+            Button { showsSettings = true } label: {
+                Image(systemName: model.interactionMode == "plan" ? "list.bullet.clipboard" : "slider.horizontal.3")
+                    .frame(width: controlDiameter, height: controlDiameter)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Composer options")
+            .accessibilityIdentifier("agent-thread-composer-options")
+            Spacer(minLength: 0)
+            if model.activeRunID != nil { stopButton }
+            if model.activeRunID == nil || hasContent { sendButton }
+        }
+        .foregroundStyle(.primary)
+    }
+
+    private var attachmentMenu: some View {
+        Menu {
+            Group {
+                Button("Photos", systemImage: "photo.on.rectangle") { showsPhotos = true }
+                Button("Choose files", systemImage: "folder") { showsFiles = true }
+                PasteButton(supportedContentTypes: [.image]) { providers in pasteImages(providers) }
+            }
+            .disabled(model.draftAttachments.count >= 8)
+            Divider()
+            Button("Stash draft", systemImage: "tray.and.arrow.down") { stashDraft() }
+                .disabled(!hasContent || model.draftAttachments.contains(where: { $0.state != .ready }))
+            Button("Saved prompts (\(stashCount))", systemImage: "tray.full") { showsStash = true }
+        } label: {
+            Image(systemName: "plus").font(.title3)
+                .frame(width: controlDiameter, height: controlDiameter)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isSending || isStashing || isStartingNewThread)
+        .accessibilityLabel("Add attachment")
+        .accessibilityIdentifier("agent-thread-add-attachment")
+    }
+
+    private var selectedModelName: String {
+        model.providers.first { $0.id == model.currentModelSelection.instanceId }?.models
+            .first { $0.id == model.currentModelSelection.model }?.name ?? model.currentModelSelection.model
+    }
+
+    private var modelMenu: some View {
+        Menu {
+            ForEach(model.providers) { provider in
+                Section(provider.name) {
+                    ForEach(provider.models) { availableModel in
+                        Button {
+                            changeModel(providerID: provider.id, modelID: availableModel.id)
+                        } label: {
+                            if model.currentModelSelection.instanceId == provider.id && model.currentModelSelection.model == availableModel.id {
+                                Label(availableModel.name, systemImage: "checkmark")
+                            } else { Text(availableModel.name) }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(selectedModelName.isEmpty ? modelName : selectedModelName).lineLimit(1)
+                if isChangingModel || (model.providers.isEmpty && model.connectionState == .connecting) { ProgressView().controlSize(.mini) }
+                else { Image(systemName: "chevron.down").font(.caption2.weight(.semibold)) }
+            }
+            .font(.subheadline)
+            .frame(minHeight: controlDiameter)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.providers.isEmpty || isChangingModel || model.isSending || model.isConfigurationLocked)
         .accessibilityLabel("Thread model")
-        .accessibilityValue(modelName)
+        .accessibilityValue(selectedModelName)
+        .accessibilityIdentifier("agent-thread-model-picker")
+    }
+
+    private var stopButton: some View {
+        Button {
+            isInterrupting = true
+            Task {
+                defer { isInterrupting = false }
+                do { try await model.interrupt() }
+                catch { errorMessage = error.localizedDescription }
+            }
+        } label: {
+            Group {
+                if isInterrupting { ProgressView().tint(Color(.systemBackground)) }
+                else { Image(systemName: "stop.fill").font(.subheadline) }
+            }
+            .frame(width: controlDiameter, height: controlDiameter)
+            .foregroundStyle(Color(.systemBackground))
+            .background(Color.primary, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isInterrupting)
+        .accessibilityLabel("Stop response")
+        .accessibilityIdentifier("agent-thread-stop")
     }
 
     private var sendButton: some View {
         Button(action: send) {
             Group {
-                if model.isSending {
-                    ProgressView()
-                        .tint(.white)
-                } else {
-                    Image(systemName: "arrow.up")
-                        .font(.body.weight(.bold))
-                }
+                if model.isSending || isStartingNewThread { ProgressView().tint(Color(.systemBackground)) }
+                else { Image(systemName: model.activeRunID == nil ? "arrow.up" : "text.line.last.and.arrowtriangle.forward").font(.body.weight(.bold)) }
             }
             .frame(width: controlDiameter, height: controlDiameter)
-            .foregroundStyle(canSend ? Color.white : Color.secondary)
-            .background(canSend ? Color.accentColor : Color(.tertiarySystemFill), in: Circle())
-            .contentShape(Circle())
+            .foregroundStyle(model.canSend ? Color(.systemBackground) : Color.secondary)
+            .background(model.canSend ? Color.primary : Color(.tertiarySystemFill), in: Circle())
         }
         .buttonStyle(.plain)
-        .disabled(!canSend)
-        .accessibilityLabel("Send message")
+        .disabled(!model.canSend || isStartingNewThread || isStashing)
+        .contextMenu {
+            if model.activeRunID != nil {
+                Button("Queue message", systemImage: "text.line.last.and.arrowtriangle.forward") { send(mode: "queue") }
+                Button("Steer now", systemImage: "arrow.turn.up.right") { send(mode: "steer") }
+            }
+            if onOpenThread != nil {
+                Button("Start in new chat", systemImage: "square.and.pencil") { startNewThread(sideChat: false) }
+                Button("Start in side chat", systemImage: "rectangle.split.2x1") { startNewThread(sideChat: true) }
+                    .disabled(!model.canStartSideChat)
+            }
+        }
+        .accessibilityLabel(model.activeRunID == nil ? "Send message" : "Queue message")
+        .accessibilityIdentifier("agent-thread-send")
     }
 
-    /// Regular-width windows keep the single-row composer: they never collapse into the
-    /// compact three-control chrome, so there is nothing for a tall card to morph out of.
-    private var inlineComposer: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            TextField(Self.placeholder, text: $model.draft, axis: .vertical)
-                .lineLimit(1 ... 7)
-                .textFieldStyle(.plain)
-                .focused($isFocused)
-                .padding(.horizontal, 4)
-                .padding(.vertical, 8)
-                .submitLabel(.send)
-                .onSubmit(send)
+    private var hasContent: Bool { !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.draftAttachments.isEmpty }
+    private var promptPlaceholder: String { model.environmentLabel.isEmpty ? "Message agent" : "Work on \(model.environmentLabel)" }
+    private var composerTrigger: AgentThreadComposerTrigger? {
+        guard !model.draft.isEmpty else { return nil }
+        let cursor: Int
+        if let textSelection {
+            switch textSelection.indices {
+            case .selection(let range):
+                guard range.isEmpty else { return nil }
+                cursor = range.lowerBound <= model.draft.endIndex ? range.lowerBound.utf16Offset(in: model.draft) : model.draft.utf16.count
+            case .multiSelection: return nil
+            @unknown default: return nil
+            }
+        } else { cursor = model.draft.utf16.count }
+        return AgentThreadComposerTrigger.detect(in: model.draft, cursor: cursor)
+    }
 
-            Button(action: send) {
-                if model.isSending {
-                    ProgressView()
-                        .frame(width: 34, height: 34)
-                } else {
-                    Image(systemName: "arrow.up")
-                        .font(.body.weight(.bold))
-                        .frame(width: 34, height: 34)
+    private func selectSuggestion(_ suggestion: AgentThreadComposerSuggestion, trigger: AgentThreadComposerTrigger) {
+        guard composerTrigger == trigger, !isApplyingSuggestion else { return }
+        switch suggestion.action {
+        case .insert(let text): applySuggestion(trigger, replacement: text)
+        case .model(let selection):
+            isApplyingSuggestion = true
+            Task {
+                defer { isApplyingSuggestion = false }
+                do {
+                    if selection.instanceId != model.currentModelSelection.instanceId || selection.model != model.currentModelSelection.model {
+                        try await model.changeModelSelection(selection)
+                    }
+                    applySuggestion(trigger, replacement: "")
+                } catch { errorMessage = error.localizedDescription }
+            }
+        case .mode(let mode):
+            isApplyingSuggestion = true
+            Task {
+                defer { isApplyingSuggestion = false }
+                do { try await model.setInteractionMode(mode); applySuggestion(trigger, replacement: "") }
+                catch { errorMessage = error.localizedDescription }
+            }
+        }
+    }
+
+    private func applySuggestion(_ trigger: AgentThreadComposerTrigger, replacement: String) {
+        guard composerTrigger == trigger, let result = trigger.replacing(in: model.draft, with: replacement) else { return }
+        model.draft = result.text
+        if let range = Range(NSRange(location: result.cursor, length: 0), in: result.text) {
+            textSelection = TextSelection(insertionPoint: range.lowerBound)
+        }
+        isFocused = true
+    }
+
+    private func clearError() {
+        errorMessage = nil
+        model.clearActionError()
+    }
+
+    private func stashDraft() {
+        guard !isStashing else { return }
+        isStashing = true
+        let prompt = model.draft
+        let selected = model.draftAttachments
+        Task {
+            defer { isStashing = false }
+            do {
+                let attachments = try selected.map { attachment -> AgentThreadStashAttachment in
+                    guard let data = model.attachmentData[attachment.id] else {
+                        throw PathwayThreadConversationError.message("Reattach \(attachment.name) before stashing this draft.")
+                    }
+                    return .init(name: attachment.name, mimeType: attachment.mimeType, data: data)
+                }
+                try await AgentThreadPromptStash.shared.save(prompt: prompt, attachments: attachments)
+                if model.draft == prompt { model.draft = "" }
+                for attachment in selected { await model.removeAttachment(id: attachment.id) }
+                stashCount = try await AgentThreadPromptStash.shared.entries().count
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    private func restoreStash(_ entry: AgentThreadPromptStashEntry) async throws {
+        let attachments = try await AgentThreadPromptStash.shared.attachments(for: entry.id)
+        let missing = attachments.filter { attachment in
+            !model.draftAttachments.contains { $0.name == attachment.name && $0.mimeType == attachment.mimeType && $0.sizeBytes == attachment.data.count }
+        }
+        guard model.draftAttachments.count + missing.count <= 8 else {
+            throw PathwayThreadConversationError.message("Remove an attachment first. Restoring this prompt would exceed the 8-file limit.")
+        }
+        for attachment in missing {
+            await model.addAttachment(data: attachment.data, name: attachment.name, mimeType: attachment.mimeType)
+        }
+        guard attachments.allSatisfy({ attachment in
+            model.draftAttachments.contains { $0.name == attachment.name && $0.mimeType == attachment.mimeType && $0.sizeBytes == attachment.data.count && $0.state == .ready }
+        }) else {
+            throw PathwayThreadConversationError.message("Some attachments couldn't upload. The saved prompt is still in your stash; retry its files, then restore it again.")
+        }
+        try await AgentThreadPromptStash.shared.remove(id: entry.id)
+        model.draft = AgentThreadPromptStash.appending(entry.prompt, to: model.draft)
+        if !entry.prompt.isEmpty {
+            textSelection = TextSelection(insertionPoint: model.draft.endIndex)
+        }
+        stashCount = try await AgentThreadPromptStash.shared.entries().count
+        isFocused = true
+    }
+
+    private func startNewThread(sideChat: Bool) {
+        guard !isStartingNewThread else { return }
+        isStartingNewThread = true
+        Task {
+            defer { isStartingNewThread = false }
+            do {
+                let id = try await model.startDraftInNewThread(sideChat: sideChat)
+                isFocused = false
+                onOpenThread?(id)
+            } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    private nonisolated static func imageType(_ data: Data) -> UTType? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let identifier = CGImageSourceGetType(source) else { return nil }
+        return UTType(identifier as String)
+    }
+
+    private func pasteImages(_ providers: [NSItemProvider]) {
+        for provider in providers.prefix(max(0, 8 - model.draftAttachments.count)) {
+            guard let type = provider.registeredTypeIdentifiers.compactMap(UTType.init)
+                .first(where: { $0.conforms(to: .image) }) else { continue }
+            provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, error in
+                Task { @MainActor in
+                    if let error { errorMessage = error.localizedDescription; return }
+                    guard let data else { return }
+                    let actualType = Self.imageType(data) ?? type
+                    await model.addAttachment(data: data, name: "Pasted image.\(actualType.preferredFilenameExtension ?? "png")",
+                                              mimeType: actualType.preferredMIMEType ?? "image/png")
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.circle)
-            .disabled(!canSend)
-            .accessibilityLabel("Send message")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
     }
 
-    private var canSend: Bool {
-        !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isSending
+    private func changeModel(providerID: String, modelID: String) {
+        guard providerID != model.currentModelSelection.instanceId || modelID != model.currentModelSelection.model else { return }
+        isChangingModel = true
+        Task {
+            defer { isChangingModel = false }
+            do { try await model.changeModelSelection(.init(instanceId: providerID, model: modelID, options: nil)) }
+            catch { errorMessage = error.localizedDescription }
+        }
     }
 
     private func send() {
+        send(mode: "queue")
+    }
+
+    private func send(mode: String) {
         Task {
-            await model.send()
-            guard usesCompactPresentation, model.draft.isEmpty else { return }
-            withAnimation(
-                reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation
-            ) {
-                isExpanded = false
-            }
+            await model.send(mode: mode)
+            guard usesCompactPresentation, model.draft.isEmpty, model.draftAttachments.isEmpty else { return }
+            withAnimation(reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation) { isExpanded = false }
             isFocused = false
         }
     }
