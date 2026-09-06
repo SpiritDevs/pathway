@@ -12,6 +12,9 @@ struct PathwayIssueDetailView: View {
     @State private var selectedTab = "Details"
     @State private var openedIssueID: String?
     @State private var editor = false
+    @State private var showProperties = false
+    @State private var commentExpanded = false
+    @FocusState private var commentFocused: Bool
     @State private var creatingChild = false
     @State private var showRelationPicker = false
     @State private var showWork = false
@@ -49,7 +52,11 @@ struct PathwayIssueDetailView: View {
             .toolbarVisibility(.visible, for: .navigationBar)
             .preference(key: IssueDetailNavigationActiveKey.self, value: true)
             .toolbar {
+                ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }
                 ToolbarItemGroup(placement: .primaryAction) {
+                    Button("Edit title and description", systemImage: "square.and.pencil") { editor = true }
+                        .accessibilityIdentifier("issue-detail-edit")
+                        .disabled(busy)
                     Menu {
                         Button("Edit issue", systemImage: "pencil") { editor = true }
                         Button("Add sub-issue", systemImage: "plus.square.on.square") { creatingChild = true }
@@ -82,6 +89,14 @@ struct PathwayIssueDetailView: View {
             }
             .sheet(isPresented: $editor) {
                 PathwayIssueEditorView(model: model, companyID: companyID, issueID: issueID)
+            }
+            .sheet(isPresented: $showProperties) {
+                PathwayIssuePropertiesView(model: model, companyID: companyID, issueID: issueID, onOpenIssue: { id in
+                    showProperties = false
+                    openedIssueID = id
+                })
+                .presentationBackground(.clear)
+                .presentationDetents([.large])
             }
             .sheet(isPresented: $creatingChild) {
                 PathwayIssueEditorView(model: model, companyID: companyID, parentID: issueID)
@@ -138,33 +153,37 @@ struct PathwayIssueDetailView: View {
 
     private func issueContent(_ issue: PathwayIssueRecord) -> some View {
         let detail = model.detail(for: issue)
-        return VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(issue.title).font(.title2.weight(.semibold)).textSelection(.enabled)
-                compactProperties(issue)
-                if issue.triage {
-                    HStack {
-                        Label("Needs triage", systemImage: "tray")
-                        Spacer()
-                        Button("Accept") { perform { try await model.update(issue, patch: ["triage": .bool(false)]) } }
-                        Button("Reject", role: .destructive) { confirmDelete = true }
-                    }.font(.subheadline)
+        return Group {
+            if selectedTab == "Details" {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        readingHeader(issue)
+                        detailSections(issue, detail: detail)
+                    }
+                    .frame(maxWidth: 760, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 28)
                 }
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.vertical, 12)
-            tabStrip
-            List {
-                switch selectedTab {
-                case "Comments": commentSections(issue, detail: detail)
-                case "Attachments": attachmentSections(issue, detail: detail)
-                case "Sub-issues": subIssueSections(issue)
-                case "AI": aiSections(issue, detail: detail)
-                case "Activity": activitySections(detail)
-                default: detailSections(issue, detail: detail)
+                .scrollDismissesKeyboard(.interactively)
+                .accessibilityIdentifier("issue-detail-content")
+            } else {
+                List {
+                    Section {
+                        Text(issue.title).font(.title3.weight(.semibold))
+                    } header: { Text(selectedTab) }
+                    switch selectedTab {
+                    case "Comments": commentSections(issue, detail: detail)
+                    case "Attachments": attachmentSections(issue, detail: detail)
+                    case "Sub-issues": subIssueSections(issue)
+                    case "AI": aiSections(issue, detail: detail)
+                    default: activitySections(detail)
+                    }
                 }
+                .listStyle(.plain)
+                .accessibilityIdentifier("issue-detail-content")
             }
-            .listStyle(.plain)
-            .accessibilityIdentifier("issue-detail-content")
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) { commentDock(issue) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("issue-detail-screen")
         .task(id: issue.identity) { await model.observe(issue) }
@@ -182,33 +201,146 @@ struct PathwayIssueDetailView: View {
         }
     }
 
-    private var tabStrip: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal) {
-                HStack(spacing: 24) {
-                    ForEach(["Details", "Comments", "Attachments", "Sub-issues", "AI", "Activity"], id: \.self) { tab in
-                        Button {
-                            selectedTab = tab
-                            proxy.scrollTo(tab, anchor: .center)
-                        } label: {
-                            Text(tab)
-                                .font(.subheadline.weight(selectedTab == tab ? .semibold : .regular))
-                                .foregroundStyle(selectedTab == tab ? Color.primary : Color.secondary)
-                                .padding(.vertical, 13)
-                                .overlay(alignment: .bottom) {
-                                    if selectedTab == tab { Capsule().fill(.primary).frame(height: 2) }
-                                }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
-                        .accessibilityIdentifier("issue-tab-\(tab)")
-                        .id(tab)
-                    }
-                }.padding(.horizontal, 20)
-            }.scrollIndicators(.hidden)
-                .accessibilityIdentifier("issue-tabs")
+    private var sectionMenu: some View {
+        Menu {
+            ForEach(["Details", "Comments", "Attachments", "Sub-issues", "AI", "Activity"], id: \.self) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    Label(tab, systemImage: selectedTab == tab ? "checkmark" : sectionIcon(tab))
+                }
+                .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
+                .accessibilityIdentifier("issue-tab-\(tab)")
+            }
+        } label: {
+            Image(systemName: sectionIcon(selectedTab)).font(.title3)
+                .frame(width: 48, height: 48)
+                .background(.regularMaterial, in: Circle())
         }
-        .overlay(alignment: .bottom) { Divider() }
+        .accessibilityLabel("Issue sections, \(selectedTab)")
+        .accessibilityIdentifier("issue-tabs")
+    }
+
+    private func sectionIcon(_ tab: String) -> String {
+        switch tab {
+        case "Comments": "bubble.left.and.bubble.right"
+        case "Attachments": "paperclip"
+        case "Sub-issues": "square.stack.3d.up"
+        case "AI": "sparkles"
+        case "Activity": "clock.arrow.circlepath"
+        default: "square.grid.2x2"
+        }
+    }
+
+    private func readingHeader(_ issue: PathwayIssueRecord) -> some View {
+        VStack(alignment: .leading, spacing: 13) {
+            Text(issue.key).font(.subheadline).foregroundStyle(.secondary)
+            Text(issue.title).font(.title2.weight(.bold)).fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            if let parent = model.records.first(where: { $0.companyId == companyID && $0.id == issue.parentId }) {
+                Button { openIssue(parent.id) } label: {
+                    HStack(spacing: 7) {
+                        Text("Sub-issue of").foregroundStyle(.primary)
+                        Image(systemName: "circle").foregroundStyle(.secondary)
+                        Text(parent.title).foregroundStyle(.secondary).lineLimit(1)
+                    }.font(.subheadline)
+                }.buttonStyle(.plain).disabled(!canNavigate)
+            }
+            compactProperties(issue)
+            if issue.triage {
+                HStack {
+                    Label("Needs triage", systemImage: "tray")
+                    Spacer()
+                    Button("Accept") { perform { try await model.update(issue, patch: ["triage": .bool(false)]) } }
+                    Button("Reject", role: .destructive) { confirmDelete = true }
+                }.font(.subheadline)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func commentDock(_ issue: PathwayIssueRecord) -> some View {
+        Group {
+            if commentExpanded {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .top) {
+                        TextField(editingCommentID == nil ? "Comment" : "Edit comment", text: $commentText, axis: .vertical)
+                            .lineLimit(2...7).focused($commentFocused)
+                            .accessibilityIdentifier("issue-comment-input")
+                        Button("Collapse comment", systemImage: "chevron.down") {
+                            commentFocused = false
+                            commentExpanded = false
+                        }.labelStyle(.iconOnly).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("issue-comment-collapse")
+                    }
+                    if !attachmentIDs.isEmpty {
+                        ScrollView(.horizontal) {
+                            HStack {
+                                ForEach(attachmentIDs, id: \.self) { id in
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "photo")
+                                        Text("Image").font(.caption)
+                                        Button("Remove attachment", systemImage: "xmark.circle.fill") { attachmentIDs.removeAll { $0 == id } }
+                                            .labelStyle(.iconOnly)
+                                    }.padding(8).background(.quaternary, in: Capsule())
+                                }
+                            }
+                        }.scrollIndicators(.hidden)
+                    }
+                    HStack(spacing: 20) {
+                        PhotosPicker(selection: $photo, matching: .images) { Image(systemName: "photo") }
+                            .accessibilityLabel("Attach image").disabled(attachmentIDs.count >= 8)
+                        if editingCommentID == nil {
+                            Button("Ask agent", systemImage: "at") { commentFocused = false; showMention = true }
+                                .labelStyle(.iconOnly)
+                                .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        } else {
+                            Button("Cancel edit") { clearComment() }.font(.subheadline)
+                        }
+                        Spacer()
+                        Button { saveComment(issue) } label: {
+                            Image(systemName: "arrow.up").font(.body.weight(.semibold))
+                                .frame(width: 32, height: 32)
+                                .background(.quaternary, in: Circle())
+                        }
+                        .accessibilityLabel(editingCommentID == nil ? "Send comment" : "Save comment")
+                        .accessibilityIdentifier("issue-comment-send")
+                        .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }.font(.title3)
+                }
+                .padding(16)
+                .background(.regularMaterial, in: .rect(cornerRadius: 26))
+                .task { commentFocused = true }
+            } else {
+                HStack(spacing: 10) {
+                    sectionMenu
+                    Button {
+                        commentExpanded = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "plus").foregroundStyle(.primary)
+                            Text(commentText.isEmpty ? "Comment" : commentText)
+                                .foregroundStyle(.secondary).lineLimit(1)
+                            Spacer(minLength: 0)
+                            if !attachmentIDs.isEmpty { Image(systemName: "paperclip").foregroundStyle(.secondary) }
+                        }
+                        .padding(.horizontal, 16).frame(height: 48)
+                        .background(.regularMaterial, in: Capsule())
+                    }
+                    .accessibilityLabel(commentText.isEmpty ? "Write a comment" : "Continue comment draft")
+                    .accessibilityIdentifier("issue-comment-open")
+                    Button("Agent work & investigation", systemImage: "sparkles") { showWork = true }
+                        .labelStyle(.iconOnly).font(.title3)
+                        .frame(width: 48, height: 48)
+                        .background(.regularMaterial, in: Circle())
+                        .accessibilityIdentifier("issue-ai-dock")
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .shadow(color: .black.opacity(0.07), radius: 14, y: 5)
+        .frame(maxWidth: 760)
+        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
     }
 
     @ViewBuilder
@@ -225,36 +357,74 @@ struct PathwayIssueDetailView: View {
     }
 
     private func compactProperties(_ issue: PathwayIssueRecord) -> some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 16) {
-                Menu {
-                    ForEach(model.statuses.filter { $0.companyId == companyID }) { status in
-                        Button(status.name) { perform { try await model.update(issue, patch: ["statusId": .string(status.id)]) } }
+        let status = model.statuses.first { $0.companyId == companyID && $0.id == issue.statusId }
+        let project = appModel.cloud.projects.first { $0.companyId == companyID && $0.project.id == issue.projectId }
+        let milestone = model.milestones.first { $0.companyId == companyID && $0.id == issue.milestoneId }
+        let cycle = model.cycles.first { $0.companyId == companyID && $0.id == issue.cycleId }
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        Button { showProperties = true } label: {
+                            HStack(spacing: 5) {
+                                PathwayIssueStatusGlyph(category: status?.category ?? "unstarted", hexColor: status?.color)
+                                Text(status?.name ?? "Status")
+                            }.padding(.horizontal, 8).padding(.vertical, 5).background(Color(uiColor: .tertiarySystemFill).opacity(0.5), in: Capsule())
+                        }
+                        propertyChip(issue.priority == "none" ? "No priority" : issue.priority.capitalized, icon: "chart.bar.fill", iconOnly: true)
+                        propertyChip(issue.assignee == nil ? "Unassigned" : actorName(issue.assignee), icon: issue.assignee?.objectValue?["kind"]?.stringValue == "agent" ? "sparkles" : "person.crop.circle", iconOnly: true)
+                        propertyChip(issue.labelIds.isEmpty ? "Labels" : "\(issue.labelIds.count) \(issue.labelIds.count == 1 ? "label" : "labels")", icon: "circle.hexagongrid.fill")
                     }
-                } label: {
-                    Label(model.statuses.first { $0.companyId == companyID && $0.id == issue.statusId }?.name ?? "Status",
-                          systemImage: "circle.lefthalf.filled")
-                }
-                Menu {
-                    ForEach(["none", "urgent", "high", "medium", "low"], id: \.self) { priority in
-                        Button(priority.capitalized) { perform { try await model.update(issue, patch: ["priority": .string(priority)]) } }
+                }.scrollIndicators(.hidden)
+                Button("Properties", systemImage: "plus") { showProperties = true }
+                    .labelStyle(.iconOnly).frame(width: 30, height: 30)
+                    .background(.quaternary, in: Circle())
+                    .accessibilityIdentifier("issue-properties")
+            }
+            HStack(spacing: 8) {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        propertyChip(project?.project.name ?? "Project", icon: "shippingbox", maxWidth: 88)
+                        if let milestone { propertyChip(milestone.name, icon: "diamond", maxWidth: 88) }
+                        if let cycle { propertyChip(cycle.name, icon: "arrow.trianglehead.2.clockwise.rotate.90", maxWidth: 88) }
                     }
-                } label: { Label(issue.priority == "none" ? "Priority" : issue.priority.capitalized, systemImage: "chart.bar.fill") }
-                Button("Properties", systemImage: "slider.horizontal.3") { editor = true }
-            }.font(.subheadline).foregroundStyle(.secondary)
-        }.scrollIndicators(.hidden)
+                }.scrollIndicators(.hidden)
+                propertyChip(dueDateLabel(issue.dueDate), icon: "calendar").fixedSize()
+            }
+        }
+        .font(.subheadline).buttonStyle(.plain).foregroundStyle(.primary)
+        .padding(10).background(Color(uiColor: .secondarySystemBackground), in: .rect(cornerRadius: 22))
+    }
+
+    private func dueDateLabel(_ value: String?) -> String {
+        guard let value else { return "Due date" }
+        let parts = value.prefix(10).split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3, let date = Calendar.current.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2])) else { return value }
+        return date.formatted(date: .numeric, time: .omitted)
+    }
+
+    private func propertyChip(_ title: String, icon: String, iconOnly: Bool = false, maxWidth: CGFloat? = nil) -> some View {
+        Button { showProperties = true } label: {
+            HStack(spacing: 5) {
+                Image(systemName: icon).foregroundStyle(.secondary)
+                if !iconOnly { Text(title).lineLimit(1) }
+            }.frame(maxWidth: maxWidth).padding(.horizontal, 8).padding(.vertical, 6)
+                .background(Color(uiColor: .tertiarySystemFill).opacity(0.5), in: Capsule())
+        }.accessibilityLabel(title)
     }
 
     @ViewBuilder
     private func detailSections(_ issue: PathwayIssueRecord, detail: PathwayIssueDetail) -> some View {
-        Section {
-            if issue.description.isEmpty {
-                Button("Add description…") { editor = true }.foregroundStyle(.secondary)
-            } else {
-                Text(.init(issue.description)).textSelection(.enabled).font(.body)
+        if issue.description.isEmpty {
+            Button("Add description…") { editor = true }.foregroundStyle(.secondary)
+        } else {
+            PathwayIssueMarkdownView(markdown: issue.description) { line in
+                toggleDescriptionTask(issue, line: line)
             }
         }
-        Section("Checklist") {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Checklist").font(.headline)
+
             ForEach(detail.todos) { todo in
                 HStack {
                     Button {
@@ -267,6 +437,8 @@ struct PathwayIssueDetailView: View {
                         .strikethrough(todo.fields["done"]?.boolValue == true)
                     Spacer()
                     Menu {
+                        Button("Edit", systemImage: "pencil") { editingTodo = todo; editedTodoText = todo.fields["text"]?.stringValue ?? "" }
+                        Button("Delete", systemImage: "trash", role: .destructive) { mutate(issue, kind: "issueTodo.delete", id: todo.id) }
                         Button("Move up", systemImage: "arrow.up") { moveTodo(issue, todo: todo, offset: -1) }
                             .disabled(detail.todos.first?.id == todo.id)
                         Button("Move down", systemImage: "arrow.down") { moveTodo(issue, todo: todo, offset: 1) }
@@ -283,18 +455,15 @@ struct PathwayIssueDetailView: View {
                 if !todoText.isEmpty { Button("Add", systemImage: "plus") { addTodo(issue) }.labelStyle(.iconOnly) }
             }
         }
-        if issue.parentId != nil || !detail.relations.isEmpty {
-            Section("Relations") {
-                if let parent = model.records.first(where: { $0.companyId == companyID && $0.id == issue.parentId }) {
-                    Button { openIssue(parent.id) } label: {
-                        VStack(alignment: .leading) { Text("Parent issue").font(.caption).foregroundStyle(.secondary); Text(parent.title).foregroundStyle(.primary) }
-                    }.disabled(!canNavigate)
-                }
+        if !detail.relations.isEmpty {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Relations").font(.headline)
                 ForEach(detail.relations) { relation in relationRow(issue, relation: relation) }
             }
         }
         if issue.fields["pullRequest"]?.objectValue != nil || issue.fields["slackSource"]?.objectValue != nil {
-        Section("Links") {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Links").font(.headline)
             if let pr = issue.fields["pullRequest"]?.objectValue, let rawURL = pr["url"]?.stringValue, let url = URL(string: rawURL) {
                 Link(destination: url) { Label(pr["title"]?.stringValue ?? "Open pull request", systemImage: "arrow.triangle.pull") }
             }
@@ -371,6 +540,7 @@ struct PathwayIssueDetailView: View {
     @ViewBuilder
     private func commentSections(_ issue: PathwayIssueRecord, detail: PathwayIssueDetail) -> some View {
         Section {
+            if detail.comments.isEmpty { Text("No comments yet").foregroundStyle(.secondary) }
             ForEach(detail.comments) { comment in
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
@@ -383,13 +553,15 @@ struct PathwayIssueDetailView: View {
                                 editingCommentID = comment.id
                                 commentText = comment.fields["body"]?.stringValue ?? ""
                                 attachmentIDs = comment.fields["attachmentIds"]?.arrayValue?.compactMap(\.stringValue) ?? []
+                                commentExpanded = true
+                                commentFocused = true
                             }
                             }
                             Button("Delete", systemImage: "trash", role: .destructive) { mutate(issue, kind: "issueComment.delete", id: comment.id) }
                         } label: { Image(systemName: "ellipsis").padding(8) }.accessibilityLabel("Comment actions")
                         }
                     }
-                    Text(.init(comment.fields["body"]?.stringValue ?? "")).textSelection(.enabled)
+                    PathwayIssueMarkdownView(markdown: comment.fields["body"]?.stringValue ?? "")
                     ForEach(comment.fields["attachmentIds"]?.arrayValue?.compactMap(\.stringValue) ?? [], id: \.self) { id in
                         if let url = attachmentURLs[id] {
                             Link(destination: url) {
@@ -415,30 +587,6 @@ struct PathwayIssueDetailView: View {
                 }.padding(.vertical, 6)
             }
         }
-        Section(editingCommentID == nil ? "Add a comment" : "Edit comment") {
-            TextField("Write a comment…", text: $commentText, axis: .vertical).lineLimit(3...10)
-                .accessibilityIdentifier("issue-comment-input")
-            if !attachmentIDs.isEmpty {
-                ForEach(attachmentIDs, id: \.self) { id in
-                    HStack {
-                        Label("Attached image", systemImage: "photo")
-                        Spacer()
-                        Button("Remove", systemImage: "xmark.circle") { attachmentIDs.removeAll { $0 == id } }.labelStyle(.iconOnly)
-                    }.font(.caption)
-                }
-            }
-            HStack {
-                PhotosPicker(selection: $photo, matching: .images) { Label("Attach", systemImage: "paperclip") }
-                if editingCommentID == nil {
-                    Button("Ask agent", systemImage: "at") { showMention = true }
-                        .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                Spacer()
-                if editingCommentID != nil { Button("Cancel") { clearComment() } }
-                Button(editingCommentID == nil ? "Send" : "Save") { saveComment(issue) }
-                    .disabled(commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
     }
 
     private func relationRow(_ issue: PathwayIssueRecord, relation: PathwayIssueEntity) -> some View {
@@ -453,7 +601,9 @@ struct PathwayIssueDetailView: View {
                 Button { openIssue(other.id) } label: {
                     VStack(alignment: .leading) { Text(label).font(.caption).foregroundStyle(.secondary); Text(other.title).lineLimit(1).foregroundStyle(.primary) }
                 }.disabled(!canNavigate)
-                .swipeActions { Button("Remove", role: .destructive) { mutate(issue, kind: "issueRelation.delete", id: relation.id) } }
+                 .contextMenu {
+                    Button("Remove relation", systemImage: "link.badge.minus", role: .destructive) { mutate(issue, kind: "issueRelation.delete", id: relation.id) }
+                }
             }
         }
     }
@@ -571,7 +721,17 @@ struct PathwayIssueDetailView: View {
         }
     }
 
-    private func clearComment() { commentText = ""; attachmentIDs = []; editingCommentID = nil }
+    private func clearComment() {
+        commentText = ""; attachmentIDs = []; editingCommentID = nil
+        commentFocused = false; commentExpanded = false
+    }
+    private func toggleDescriptionTask(_ issue: PathwayIssueRecord, line: Int) {
+        var lines = issue.description.components(separatedBy: "\n")
+        guard lines.indices.contains(line), let range = lines[line].range(of: #"\[[ xX]\]"#, options: .regularExpression) else { return }
+        let checked = lines[line][range].lowercased() == "[x]"
+        lines[line].replaceSubrange(range, with: checked ? "[ ]" : "[x]")
+        perform { try await model.update(issue, patch: ["description": .string(lines.joined(separator: "\n"))]) }
+    }
     private func mutate(_ issue: PathwayIssueRecord, kind: String, id: String, args: [String: JSONValue] = [:]) {
         perform { _ = try await model.mutate(companyID: issue.companyId, kind: kind, entityID: id, args: args) }
     }

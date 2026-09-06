@@ -8,12 +8,19 @@ Touch and hold a row for its actions, including assignment, status, priority, du
 properties. With manual sorting, drag a row to change its order or move it into another status.
 The same actions are available in board layout.
 
-Tap an existing issue to open its own screen. Use the Details, Comments, Attachments, Sub-issues,
-AI, and Activity tabs. Sub-issues and related issues open as additional screens; Back returns to
+Tap an existing issue to open its own reading screen, with its properties summarized beneath the
+title. The section menu beside the comment bar opens Details, Comments, Attachments, Sub-issues,
+AI, and Activity. Tap the property summary to open a Properties card; each change saves immediately.
+Tap Comment to expand the composer above the keyboard, attach an image, or ask an agent. Collapse
+the composer to keep an unsent draft while reading. Sub-issues and related issues open as additional screens; Back returns to
 the previous issue with its draft intact. The app dock returns when you go back to the issue list.
 The AI tab shows reviews and linked work, with agent controls on a separate screen.
-New issues open in a creation sheet. Properties opens an editing sheet for status, priority, assignment, labels, project, environment,
-milestone, cycle, parent issue, and due date. You can attach images to issues and comments.
+New issues open in a spacious creation sheet. Write a title and description, then use the property
+chips above the keyboard to set assignment, priority, labels, project, status, milestone, cycle,
+parent issue, and due date. Scroll the chips sideways to reach more properties. Assignee and label
+pickers support search; labels allow multiple selections. The editing toolbar adds images and
+Markdown formatting to the description. Tap the arrow to save or the cross to cancel.
+The edit button opens the title and description editor for an existing issue. You can also attach images to comments.
 Deleted issues can be restored from Recently deleted.
 
 Agent work lets you choose a connected environment, provider, model, and workspace. Start work

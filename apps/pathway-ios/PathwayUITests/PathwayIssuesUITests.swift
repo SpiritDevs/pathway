@@ -41,12 +41,130 @@ final class PathwayIssuesUITests: XCTestCase {
     }
 
     @MainActor
+    func testComposerFormattingAndCancel() throws {
+        let app = launchFixture()
+        XCTAssertTrue(app.buttons["New issue"].waitForExistence(timeout: 10))
+        app.buttons["New issue"].tap()
+        let title = app.descendants(matching: .any).matching(identifier: "issue-title-input").firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.typeText("Discard this draft")
+        app.buttons["Insert checklist"].tap()
+        let description = app.textViews["issue-description-input"]
+        XCTAssertTrue(description.waitForExistence(timeout: 5))
+        XCTAssertEqual(description.value as? String, "- [ ] Task")
+        description.typeText("Check the keyboard")
+        XCTAssertEqual(description.value as? String, "- [ ] Check the keyboard")
+        app.buttons["Cancel"].tap()
+        XCTAssertFalse(app.staticTexts["Discard this draft"].exists)
+        app.buttons["New issue"].tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.value as? String, "")
+        XCTAssertFalse(app.buttons["issue-save"].isEnabled)
+    }
+
+    @MainActor
+    func testComposerPropertyCardsPreserveDraft() throws {
+        let app = launchFixture()
+        XCTAssertTrue(app.buttons["New issue"].waitForExistence(timeout: 10))
+        app.buttons["New issue"].tap()
+        let title = app.descendants(matching: .any).matching(identifier: "issue-title-input").firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["issue-save"].isEnabled)
+        title.tap()
+        title.typeText("Composer property selections")
+        capture(app, name: "New issue composer with keyboard")
+
+        app.buttons["issue-property-assignee"].tap()
+        let search = app.textFields["issue-picker-search"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        search.typeText("Corey")
+        capture(app, name: "Assignee card with keyboard")
+        app.buttons["issue-picker-option-member:sim-member"].tap()
+        XCTAssertEqual(title.value as? String, "Composer property selections")
+
+        app.buttons["issue-property-priority"].tap()
+        XCTAssertTrue(app.buttons["issue-picker-option-high"].waitForExistence(timeout: 5))
+        capture(app, name: "Priority card")
+        app.buttons["issue-picker-option-high"].tap()
+
+        app.buttons["issue-property-labels"].tap()
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText("AI")
+        search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 2))
+        app.buttons["issue-picker-option-sim-ai"].tap()
+        app.buttons["issue-picker-option-sim-bug"].tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        for id in ["sim-ai", "sim-bug"] {
+            let selected = app.buttons["issue-picker-option-\(id)"]
+            expectation(for: NSPredicate(format: "selected == true"), evaluatedWith: selected)
+        }
+        waitForExpectations(timeout: 5)
+        expectation(for: NSPredicate { _, _ in app.keyboards.keys["space"].isHittable }, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+        capture(app, name: "Labels card with multiple selections")
+        search.tap()
+        search.typeText("Backend")
+        XCTAssertFalse(app.buttons["issue-picker-option-sim-ai"].exists)
+        app.buttons["issue-picker-option-sim-backend"].tap()
+        app.buttons["issue-picker-close"].tap()
+        XCTAssertEqual(title.value as? String, "Composer property selections")
+        app.buttons["issue-save"].tap()
+        let created = app.staticTexts["Composer property selections"]
+        XCTAssertTrue(created.waitForExistence(timeout: 5))
+        created.tap()
+        app.buttons["issue-detail-actions"].tap()
+        app.buttons["Edit issue"].tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["issue-property-priority"].label.contains("High"))
+        XCTAssertTrue(app.buttons["issue-property-assignee"].label.contains("Corey"))
+        app.buttons["issue-property-labels"].tap()
+        for id in ["sim-ai", "sim-bug", "sim-backend"] {
+            XCTAssertTrue(app.buttons["issue-picker-option-\(id)"].isSelected)
+        }
+    }
+
+    @MainActor
+    func testReadingViewPropertiesAndFloatingComment() throws {
+        let app = launchFixture()
+        let row = app.buttons["issue-row-PW-248"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+        XCTAssertTrue(app.buttons["issue-properties"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Goal"].exists)
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "2026")).firstMatch.isHittable)
+        capture(app, name: "Issue reading view")
+        app.buttons["issue-properties"].tap()
+        XCTAssertTrue(app.buttons["issue-properties-priority"].waitForExistence(timeout: 5))
+        capture(app, name: "Issue properties card")
+        app.buttons["issue-properties-priority"].tap()
+        app.buttons["issue-picker-option-medium"].tap()
+        XCTAssertTrue(app.buttons["issue-properties-priority"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["issue-properties-priority"].label.contains("Medium"))
+        app.buttons["issue-properties-assignee"].tap()
+        app.buttons["issue-picker-option-none"].tap()
+        XCTAssertTrue(app.buttons["issue-properties-assignee"].label.contains("No assignee"))
+        app.buttons["issue-picker-close"].tap()
+        app.buttons["issue-comment-open"].tap()
+        let comment = app.descendants(matching: .any).matching(identifier: "issue-comment-input").firstMatch
+        XCTAssertTrue(comment.waitForExistence(timeout: 5))
+        comment.tap()
+        comment.typeText("A comment from the reading view")
+        capture(app, name: "Floating comment with keyboard")
+        app.buttons["issue-comment-send"].tap()
+        selectIssueTab("Comments", in: app)
+        XCTAssertTrue(app.staticTexts["A comment from the reading view"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testRelatedIssueNavigation() throws {
         let app = launchFixture()
         let first = app.buttons["issue-row-PW-248"]
         XCTAssertTrue(first.waitForExistence(timeout: 10))
         first.tap()
-        app.buttons["issue-tab-Comments"].tap()
+        selectIssueTab("Comments", in: app)
+        app.buttons["issue-comment-open"].tap()
         let comment = app.descendants(matching: .any).matching(identifier: "issue-comment-input").firstMatch
         XCTAssertTrue(comment.waitForExistence(timeout: 5))
         comment.tap()
@@ -60,6 +178,7 @@ final class PathwayIssuesUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["PW-248"].waitForExistence(timeout: 5))
         XCTAssertTrue(child.waitForExistence(timeout: 5))
         selectIssueTab("Comments", in: app)
+        app.buttons["issue-comment-open"].tap()
         XCTAssertEqual(comment.value as? String, "Keep this parent draft")
         app.navigationBars["PW-248"].buttons.element(boundBy: 0).tap()
         XCTAssertTrue(first.waitForExistence(timeout: 5))
@@ -174,9 +293,9 @@ final class PathwayIssuesUITests: XCTestCase {
         XCTAssertTrue(issue.waitForExistence(timeout: 10))
         issue.tap()
         XCTAssertTrue(app.navigationBars["PW-248"].waitForExistence(timeout: 5))
-        app.buttons["issue-tab-Comments"].tap()
+        selectIssueTab("Comments", in: app)
         capture(app, name: "Issue comments tab")
-        app.buttons["issue-tab-Attachments"].tap()
+        selectIssueTab("Attachments", in: app)
         capture(app, name: "Issue attachments tab")
         selectIssueTab("Sub-issues", in: app)
         XCTAssertTrue(app.buttons["Reconnect remote sessions"].waitForExistence(timeout: 5))
@@ -196,11 +315,10 @@ final class PathwayIssuesUITests: XCTestCase {
     @MainActor
     private func selectIssueTab(_ name: String, in app: XCUIApplication) {
         let tab = app.buttons["issue-tab-\(name)"]
-        let strip = app.scrollViews["issue-tabs"]
-        if !tab.isHittable {
-            if name == "Details" || name == "Comments" { strip.swipeRight() }
-            else { strip.swipeLeft() }
-        }
+        let collapse = app.buttons["issue-comment-collapse"]
+        if collapse.exists { collapse.tap() }
+        app.buttons["issue-tabs"].tap()
+        XCTAssertTrue(tab.waitForExistence(timeout: 5))
         XCTAssertTrue(tab.isHittable)
         tab.tap()
     }

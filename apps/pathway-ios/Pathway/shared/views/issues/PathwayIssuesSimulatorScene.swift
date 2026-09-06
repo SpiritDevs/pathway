@@ -44,16 +44,21 @@ private final class PathwayIssueSimulatorWorkspace {
                 "scope": .string("company"), "color": .string(status.2), "position": .number(Double(index))])
         }
         append("issueLabel", "sim-bug", ["name": .string("Bug"), "color": .string("#FF3B30")])
+        append("issueLabel", "sim-ai", ["name": .string("AI"), "color": .string("#AF52DE")])
+        append("issueLabel", "sim-backend", ["name": .string("Backend"), "color": .string("#008080")])
+        append("issueMilestone", "sim-milestone", ["name": .string("M5 · Desktop and mobile sync"), "cloudProjectId": .string("sim-project")])
         let titles = ["Calendar changes jump back", "Reconnect remote sessions", "Preview issue attachments",
             "Keep project selection after reconnect", "Open linked agent threads", "Improve issue search",
             "Sync status across devices", "Add images to comments", "Restore saved views", "Fix milestone date picker",
             "Show pull request updates", "Preserve unsent replies", "Keyboard focus in issue editor"]
         for (index, title) in titles.enumerated() {
             append("issue", "sim-issue-\(index)", ["key": .string("PW-\(248 + index)"), "title": .string(title),
-                "description": .string("Keep the latest change visible while the server catches up."),
+                "description": .string(index == 0 ? "## Goal\n\nKeep the latest calendar change visible while the server catches up. Users should be able to move between desktop and mobile without losing their work.\n\n## Source decision\n\nPreserve the local update until the workspace confirms it. A slow connection should never make a successful change jump back.\n\n## Done in repo\n\n- [x] Keep the most recent change visible.\n- [x] Restore the previous value only when saving fails.\n- [ ] Verify the reconnect flow on mobile." : "Keep the latest change visible while the server catches up."),
                 "statusId": .string(index < 7 ? "review" : index < 10 ? "started" : "unstarted"),
                 "priority": .string(index == 0 ? "high" : "none"), "projectId": .string("sim-project"),
-                "cloudProjectId": .string("sim-project"), "triage": .bool(false), "labelIds": .array([]),
+                "cloudProjectId": .string("sim-project"), "triage": .bool(false), "labelIds": .array(index == 0 ? [.string("sim-ai"), .string("sim-backend"), .string("sim-bug")] : []),
+                "milestoneId": index == 0 ? .string("sim-milestone") : .null,
+                "dueDate": index == 0 ? .string("2026-09-20") : .null,
                 "assignee": .object(["kind": .string("member"), "membershipId": .string("sim-member")]),
                 "sortOrder": .string(String(UnicodeScalar(98 + index)!)),
                 "parentId": index == 1 ? .string("sim-issue-0") : .null,
