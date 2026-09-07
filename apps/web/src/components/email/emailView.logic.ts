@@ -34,6 +34,10 @@ export const ALL_EMAIL_SCOPE_PARAM = "all";
 export const UNASSIGNED_EMAIL_SCOPE_PARAM = "unassigned";
 
 export interface EmailSearch {
+  readonly source?: "mail" | "capture" | undefined;
+  readonly account?: string | undefined;
+  readonly mailMessage?: string | undefined;
+  readonly bucket?: "priority" | "noise" | "all" | "drafts" | undefined;
   /** `all`, `unassigned`, or a project id. Absent means All mail. */
   readonly inbox: string | undefined;
   readonly message: string | undefined;
@@ -47,6 +51,10 @@ export interface EmailSearch {
 }
 
 export type EmailSearchPatch = Partial<{
+  readonly source: "mail" | "capture" | undefined;
+  readonly account: string | undefined;
+  readonly mailMessage: string | undefined;
+  readonly bucket: "priority" | "noise" | "all" | "drafts" | undefined;
   readonly inbox: string | undefined;
   readonly message: string | undefined;
   readonly environment: string | undefined;
@@ -62,6 +70,15 @@ function optionalParam(value: unknown): string | undefined {
 export function parseEmailSearch(raw: Record<string, unknown>): EmailSearch {
   const tab = raw.tab;
   return {
+    ...(raw.source === "mail" || raw.source === "capture" ? { source: raw.source } : {}),
+    ...(optionalParam(raw.account) ? { account: optionalParam(raw.account) } : {}),
+    ...(optionalParam(raw.mailMessage) ? { mailMessage: optionalParam(raw.mailMessage) } : {}),
+    ...(raw.bucket === "priority" ||
+    raw.bucket === "noise" ||
+    raw.bucket === "all" ||
+    raw.bucket === "drafts"
+      ? { bucket: raw.bucket }
+      : {}),
     inbox: optionalParam(raw.inbox),
     message: optionalParam(raw.message),
     environment: optionalParam(raw.environment),

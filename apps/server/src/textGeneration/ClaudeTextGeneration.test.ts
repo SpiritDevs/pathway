@@ -225,6 +225,26 @@ function withFakeClaudeEnv<A, E, R>(
 }
 
 it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
+  it.effect("disables tools and configured MCP servers for private mail analysis", () =>
+    withFakeClaudeEnv(
+      {
+        output: '{"bucket":"noise","reason":"Newsletter"}',
+        argsMustContain:
+          '--tools  --strict-mcp-config --mcp-config {"mcpServers":{}} --setting-sources  --no-session-persistence',
+      },
+      (generation) =>
+        generation.investigate({
+          cwd: process.cwd(),
+          prompt: "Classify this email.",
+          contentOnly: true,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "claude-sonnet-4-6",
+          },
+        }),
+    ),
+  );
+
   it.effect("forwards Claude thinking settings for Haiku without passing effort", () =>
     withFakeClaudeEnv(
       {

@@ -466,7 +466,7 @@ private extension PathwayConnectClient {
             )
         }
         do {
-            return try JSONDecoder().decode(type, from: data)
+            return try JSONDecoder().decode(type, from: data.isEmpty ? Data("null".utf8) : data)
         } catch {
             throw PathwayConnectError.invalidResponse
         }

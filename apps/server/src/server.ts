@@ -124,6 +124,7 @@ import { companySlackCoordinatorLayer } from "./cloud/companySlackCoordinator.ts
 import { cloudSyncDaemonLayer } from "./cloud/syncDaemon.ts";
 import { cloudProjectPublisherLayer } from "./cloud/cloudProjectPublisher.ts";
 import { cloudAgentThreadPublisherLayer } from "./cloud/cloudAgentThreadPublisher.ts";
+import { mailBrainLayer } from "./cloud/mailBrain.ts";
 import { capturedEmailPublisherLayer } from "./cloud/capturedEmailPublisher.ts";
 import { cloudSyncEngineRegistryLayer } from "./cloud/CloudSyncEngineRegistry.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
@@ -771,6 +772,7 @@ export const makeServerLayer = Layer.unwrap(
       cloudProjectPublisherLayer(),
       cloudAgentThreadPublisherLayer(),
       capturedEmailPublisherLayer(),
+      mailBrainLayer(),
       environmentCommandClaimantLayer(),
       companySlackCoordinatorLayer(),
     );

@@ -26,6 +26,8 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+import { mailTables } from "./lib/mailSchema.ts";
+
 import { businessToolsTables } from "./lib/businessToolsSchema.ts";
 
 import { repositoryIdentityArg } from "./lib/validators.ts";
@@ -175,6 +177,7 @@ const relayActivityAggregateState = v.object({
 
 export default defineSchema({
   ...businessToolsTables,
+  ...mailTables,
   // ---------------------------------------------------------------------------
   // Identity, companies, and authorization
   // ---------------------------------------------------------------------------

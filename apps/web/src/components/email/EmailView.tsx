@@ -550,14 +550,14 @@ export function EmailView({
   // scope the mailbox below it would have shown.
   if (search.analytics === true) {
     return (
-      <EmailShell inboxName={inboxName}>
+      <EmailShell inboxName={inboxName} onMail={() => onSearch({ source: "mail" })}>
         <EmailAnalyticsPanel inboxName={inboxName} projectTitles={projectTitles} scope={scope} />
       </EmailShell>
     );
   }
 
   return (
-    <EmailShell inboxName={inboxName}>
+    <EmailShell inboxName={inboxName} onMail={() => onSearch({ source: "mail" })}>
       <div className="flex min-h-0 flex-1" ref={splitPaneRef}>
         <div
           className="relative flex min-w-0 shrink-0 flex-col border-e border-border/50"
@@ -805,7 +805,15 @@ function EmailMessageListResizeHandle({
   );
 }
 
-function EmailShell({ inboxName, children }: { inboxName: string; children: ReactNode }) {
+function EmailShell({
+  inboxName,
+  children,
+  onMail,
+}: {
+  inboxName: string;
+  children: ReactNode;
+  onMail: () => void;
+}) {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
@@ -820,6 +828,9 @@ function EmailShell({ inboxName, children }: { inboxName: string; children: Reac
             <WorkspaceBreadcrumbSeparator />
             <WorkspaceBreadcrumbItem current>{inboxName}</WorkspaceBreadcrumbItem>
           </WorkspaceBreadcrumb>
+          <Button className="no-drag ml-auto" size="xs" variant="outline" onClick={onMail}>
+            Connected mail
+          </Button>
         </header>
         {children}
       </div>

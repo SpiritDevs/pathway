@@ -18,7 +18,8 @@
     "@spiritdevs/shared": "workspace:*",
     "alchemy": "2.0.0-beta.65",
     "convex": "^1.16.0",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "jose": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260601.1",

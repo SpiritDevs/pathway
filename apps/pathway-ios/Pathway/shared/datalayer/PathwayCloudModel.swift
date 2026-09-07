@@ -81,6 +81,21 @@ final class PathwayCloudModel {
     )
 
     @ObservationIgnored private let client: (any PathwayCloudSyncClient)?
+    @ObservationIgnored lazy var connectedMail = PathwayConnectedMailModel(
+        request: { [weak self] kind, name, arguments in
+            guard let self else { throw CancellationError() }
+            return try await request(kind: kind, name: name, arguments: arguments)
+        }, subscribe: { [weak self] name, arguments in
+            self?.subscribe(name: name, arguments: arguments) ?? AsyncThrowingStream { $0.finish(throwing: CancellationError()) }
+        }, relayRequest: { [weak self] path, payload in
+            guard let connect = self?.connect else { throw URLError(.notConnectedToInternet) }
+            return try await connect.relayAccountRequest(method: "POST", path: "/v1/mail/\(path)", payload: payload)
+        }, environmentRequest: { [weak self] environment in
+            guard let self else { throw CancellationError() }
+            return try await environmentRequest(environment: environment, method: "server.getConfig", payload: .object([:]))
+        }
+    )
+
     @ObservationIgnored lazy var contacts = PathwayContactsModel(
         request: { [weak self] kind, name, arguments in
             guard let self else { throw CancellationError() }
@@ -331,6 +346,7 @@ final class PathwayCloudModel {
         calendar.replaceReplica([:])
         email.replaceReplica([:])
         contacts.clear()
+        connectedMail.clear()
         time.clear()
         replicaRevision += 1
     }

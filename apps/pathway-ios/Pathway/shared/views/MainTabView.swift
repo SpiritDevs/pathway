@@ -381,7 +381,7 @@ private struct PathwayContextDestinationView: View {
         } else if destination == .calendar {
             PathwayCalendarView(model: appModel.cloud.calendar, companies: appModel.cloud.companies, initialMode: contextDestination.id).id(contextDestination.id)
         } else if destination == .email {
-            PathwayEmailView(model: appModel.cloud.email, companies: appModel.cloud.companies, environments: appModel.cloud.environments, initialFilter: contextDestination.id).id(contextDestination.id)
+            PathwayEmailHubView(capture: appModel.cloud.email, mail: appModel.cloud.connectedMail, companies: appModel.cloud.companies, environments: appModel.cloud.environments, initialFilter: contextDestination.id).id(contextDestination.id)
         } else if destination == .contacts {
             PathwayContactsView(model: appModel.cloud.contacts, companies: appModel.cloud.companies, initialFilter: contextDestination.id).id(contextDestination.id)
         } else if destination == .timeTracker {
@@ -430,7 +430,7 @@ struct PathwayFeatureDestinationView: View {
         } else if destination == .calendar {
             PathwayCalendarView(model: appModel.cloud.calendar, companies: appModel.cloud.companies)
         } else if destination == .email {
-            PathwayEmailView(model: appModel.cloud.email, companies: appModel.cloud.companies, environments: appModel.cloud.environments)
+            PathwayEmailHubView(capture: appModel.cloud.email, mail: appModel.cloud.connectedMail, companies: appModel.cloud.companies, environments: appModel.cloud.environments)
         } else if destination == .sourceControl {
             PathwaySourceControlDestination()
         } else if destination == .projects {

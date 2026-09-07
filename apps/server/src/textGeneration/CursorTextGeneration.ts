@@ -255,6 +255,14 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")((
   const investigate: TextGeneration.TextGeneration["Service"]["investigate"] = Effect.fn(
     "CursorTextGeneration.investigate",
   )(function* (input) {
+    if (input.contentOnly) {
+      return yield* new TextGenerationError({
+        operation: "investigate",
+        detail:
+          "Cursor does not support tool-free mail analysis. Select Codex, Claude or OpenCode for this mailbox.",
+      });
+    }
+
     const operation = "investigate" as const;
     const apiKey = yield* resolveCursorApiKey(operation);
     const promptResult = yield* Effect.tryPromise({

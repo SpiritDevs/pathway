@@ -6,8 +6,6 @@
  * message: a message id belongs to exactly one inbox, so carrying it across would leave the
  * reading pane on something the list beside it no longer shows.
  *
- * The Gmail side keeps its placeholder; direct mailbox integration is separate work.
- *
  * @module components/email/EmailSidebar
  */
 import type { EmailInboxScope, EnvironmentId, ProjectId } from "@spiritdevs/contracts";
@@ -19,11 +17,15 @@ import {
   FolderIcon,
   InboxIcon,
   MailQuestionIcon,
+  MailIcon,
+  FilePenLineIcon,
+  CircleOffIcon,
+  StarIcon,
   MonitorIcon,
   SettingsIcon,
   TagsIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { cn } from "../../lib/utils";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
@@ -54,6 +56,7 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useIssueProjectOptions } from "../issues/useIssueProjectOptions";
 import { buildEmailSidebarProjects, findEmailSidebarProject } from "./emailSidebar.logic";
+import { isCapturedEmailSearch } from "./connectedMail.logic";
 import { findEmailProjectSettings, withEmailProjectSettings } from "./emailSettings.logic";
 import { reportEmailWriteFailure } from "./emailWrites";
 import {
@@ -61,6 +64,7 @@ import {
   emailScopeParam,
   parseEmailSearch,
   type EmailSearchPatch,
+  type EmailSearch,
 } from "./emailView.logic";
 
 type EmailSource = "local-smtp" | "gmail";
@@ -164,7 +168,17 @@ export function EmailSourceToggle({
 }
 
 export function EmailSidebar() {
-  const [source, setSource] = useState<EmailSource>("local-smtp");
+  const navigate = useNavigate();
+  const rawSearch = useLocation({ select: (location) => location.search });
+  const search = parseEmailSearch(rawSearch as Record<string, unknown>);
+  const source = isCapturedEmailSearch(search) ? "local-smtp" : "gmail";
+  const setSource = (next: EmailSource) => {
+    void navigate({
+      to: "/email",
+      replace: true,
+      search: { ...search, source: next === "local-smtp" ? "capture" : "mail" },
+    });
+  };
 
   return (
     <>
@@ -173,19 +187,83 @@ export function EmailSidebar() {
         <SidebarGroup className="p-[var(--sidebar-content-inset)]">
           <EmailSourceToggle onSource={setSource} source={source} />
         </SidebarGroup>
-        {source === "local-smtp" ? <LocalSmtpInboxes /> : <GmailPlaceholder />}
+        {source === "local-smtp" ? <LocalSmtpInboxes /> : <ConnectedMailSidebar />}
       </SidebarContent>
     </>
   );
 }
 
-function GmailPlaceholder() {
+const MAIL_SIDEBAR_VIEWS = [
+  { value: "priority", label: "Priority", icon: StarIcon },
+  { value: "noise", label: "Noise", icon: CircleOffIcon },
+  { value: "all", label: "All mail", icon: MailIcon },
+  { value: "drafts", label: "Drafts", icon: FilePenLineIcon },
+] as const;
+
+export function ConnectedMailSidebarItems({
+  bucket,
+  onBucket,
+  onSettings,
+}: {
+  bucket: EmailSearch["bucket"];
+  onBucket: (bucket: NonNullable<EmailSearch["bucket"]>) => void;
+  onSettings: () => void;
+}) {
   return (
-    <SidebarGroup>
-      <p className="px-2 py-1.5 text-xs text-sidebar-muted-foreground/70">
-        Connecting a Gmail mailbox is not available yet.
-      </p>
-    </SidebarGroup>
+    <>
+      <SidebarGroup>
+        <SidebarMenu>
+          {MAIL_SIDEBAR_VIEWS.map(({ value, label, icon: Icon }) => (
+            <SidebarMenuItem key={value}>
+              <SidebarMenuButton
+                isActive={(bucket ?? "priority") === value}
+                onClick={() => onBucket(value)}
+              >
+                <Icon />
+                <span>{label}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroup>
+      <SidebarGroup className="mt-auto">
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={onSettings}>
+              <SettingsIcon />
+              <span>Mail settings</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarGroup>
+    </>
+  );
+}
+
+function ConnectedMailSidebar() {
+  const navigate = useNavigate();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const rawSearch = useLocation({ select: (location) => location.search });
+  const search = parseEmailSearch(rawSearch as Record<string, unknown>);
+  const closeMobile = () => {
+    if (isMobile) setOpenMobile(false);
+  };
+  return (
+    <ConnectedMailSidebarItems
+      bucket={search.bucket}
+      onBucket={(bucket) => {
+        closeMobile();
+        void navigate({
+          to: "/email",
+          replace: true,
+          search: { ...search, source: "mail", bucket, mailMessage: undefined },
+        });
+      }}
+      onSettings={() => {
+        closeMobile();
+        void navigate({ to: "/settings/email", search: { source: "mail" } });
+      }}
+    />
   );
 }
 
@@ -289,7 +367,11 @@ function LocalSmtpInboxes() {
 
   const navigateWith = (patch: EmailSearchPatch) => {
     if (isMobile) setOpenMobile(false);
-    void navigate({ to: "/email", replace: true, search: { ...search, ...patch } });
+    void navigate({
+      to: "/email",
+      replace: true,
+      search: { ...search, ...patch, source: "capture" },
+    });
   };
 
   // A row lands on an inbox and nothing else: the message and the tab belong to whatever was open
@@ -471,7 +553,7 @@ function LocalSmtpInboxes() {
             <SidebarMenuButton
               onClick={() => {
                 if (isMobile) setOpenMobile(false);
-                void navigate({ to: "/settings/email" });
+                void navigate({ to: "/settings/email", search: { source: "capture" } });
               }}
             >
               <SettingsIcon />

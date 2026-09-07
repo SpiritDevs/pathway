@@ -1,6 +1,8 @@
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { ConvexHttpClient } from "convex/browser";
+import { makeFunctionReference } from "convex/server";
+import type { DefaultFunctionArgs } from "convex/server";
 import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -49,7 +51,15 @@ import * as EnvironmentLinks from "./environments/EnvironmentLinks.ts";
 import * as ManagedEndpointAllocations from "./environments/ManagedEndpointAllocations.ts";
 import * as LiveActivities from "./agentActivity/LiveActivities.ts";
 import * as RelayDb from "./db.ts";
-import { RelayApnsDeliveryDeadLetterQueue, RelayApnsDeliveryQueue } from "./queues.ts";
+import {
+  RelayApnsDeliveryDeadLetterQueue,
+  RelayApnsDeliveryQueue,
+  RelayMailQueue,
+  RelayMailDeadLetterQueue,
+} from "./queues.ts";
+import { loadMailConfiguration, MailQueueError } from "./mail/config.ts";
+import { makeMailRuntime, type MailRpc, type MailQueueJob } from "./mail/runtime.ts";
+import { ConnectedMail, mailRoutes } from "./mail/routes.ts";
 import * as RelayConfiguration from "./Config.ts";
 import * as AgentActivityPublisher from "./agentActivity/AgentActivityPublisher.ts";
 import * as ApnsClient from "./agentActivity/ApnsClient.ts";
@@ -116,8 +126,8 @@ export const ApiLive = Api.make(
       flags: ["nodejs_compat"],
     },
     // Clerk verification and challenge signing regularly exceed the Free plan's 10 ms ceiling.
-    // Keep the paid Worker tightly bounded rather than inheriting its 30-second default.
-    limits: { cpuMs: 100 },
+    // Mail MIME decoding needs headroom beyond token verification; retain a bounded CPU budget.
+    limits: { cpuMs: 1_000 },
     // Public traffic enters through the tiny gateway Worker, which forwards non-preflight
     // requests over this private service binding.
     url: false,
@@ -127,6 +137,10 @@ export const ApiLive = Api.make(
     // 1. Provision Infrastructure for the Worker to use
     //
     const { relayPublicOrigin, stage } = yield* RelayDeploymentConfig;
+    const mailConfiguration = yield* loadMailConfiguration;
+    const mailQueue = yield* RelayMailQueue;
+    const mailDeadLetterQueue = yield* RelayMailDeadLetterQueue;
+    const mailQueueSender = yield* Cloudflare.Queues.WriteQueue(mailQueue);
     const apnsDeliveryQueue = yield* RelayApnsDeliveryQueue;
     const apnsDeliveryDeadLetterQueue = yield* RelayApnsDeliveryDeadLetterQueue;
     const cloudMintKeyPair = yield* CloudMintKeyPair;
@@ -232,7 +246,47 @@ export const ApiLive = Api.make(
       Layer.provideMerge(webcryptoLayer),
     );
 
-    const runtimeLayer = Layer.empty.pipe(
+    const mailConvexClient = yield* RelayDb.RelayConvexClient.pipe(
+      Effect.provide(cloudSyncRuntimeLayer),
+      Effect.orDie,
+    );
+    const mailRpc: MailRpc = {
+      query: <T>(name: string, args: Record<string, unknown>) =>
+        Effect.runPromise(
+          mailConvexClient.query(
+            makeFunctionReference<"query", DefaultFunctionArgs, T>(`mailRelay:${name}`),
+            args as DefaultFunctionArgs,
+          ),
+        ),
+      mutation: <T>(name: string, args: Record<string, unknown>) =>
+        Effect.runPromise(
+          mailConvexClient.mutation(
+            makeFunctionReference<"mutation", DefaultFunctionArgs, T>(`mailRelay:${name}`),
+            args as DefaultFunctionArgs,
+          ),
+        ),
+    };
+    const mailRuntime = mailConfiguration
+      ? makeMailRuntime({
+          config: mailConfiguration,
+          origin: relayPublicOrigin,
+          rpc: mailRpc,
+          enqueue: (job) =>
+            Effect.runPromise(
+              mailQueueSender
+                .send(job)
+                .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+            ),
+        })
+      : undefined;
+    const mailLayer = Layer.succeed(
+      ConnectedMail,
+      mailRuntime && mailConfiguration
+        ? { runtime: mailRuntime, config: mailConfiguration }
+        : undefined,
+    );
+
+    const runtimeLayer = mailLayer.pipe(
       Layer.provideMerge(MobileRegistrations.layer),
       Layer.provideMerge(AgentActivityPublisher.layer),
       Layer.provideMerge(EnvironmentConnector.layer),
@@ -298,6 +352,40 @@ export const ApiLive = Api.make(
         ),
     );
 
+    yield* Cloudflare.Queues.consumeQueueMessages<MailQueueJob>(
+      mailQueue,
+      {
+        batchSize: 1,
+        maxRetries: 5,
+        maxWaitTime: "5 seconds",
+        retryDelay: "60 seconds",
+        deadLetterQueue: mailDeadLetterQueue.queueName as unknown as string,
+      },
+      (stream) =>
+        stream.pipe(
+          Stream.runForEach((message) =>
+            Effect.tryPromise({
+              try: async () => {
+                if (!mailRuntime)
+                  throw new MailQueueError({ message: "Connected email is disabled" });
+                if (typeof message.body?.accountId !== "string")
+                  throw new MailQueueError({ message: "Invalid mailbox job" });
+                await mailRuntime.process(message.body);
+              },
+              catch: () => new MailQueueError({ message: "Mail queue processing failed" }),
+            }),
+          ),
+        ),
+    );
+    yield* Cloudflare.Workers.cron("*/5 * * * *", () =>
+      mailRuntime
+        ? Effect.tryPromise({
+            try: () => mailRuntime.reconcile(),
+            catch: () => new MailQueueError({ message: "Mail reconciliation failed" }),
+          })
+        : Effect.void,
+    );
+
     const MAX_PRUNE_BATCHES_PER_RUN = 10;
     const drainPruneBatches = <E, R>(
       prune: Effect.Effect<number, E, R>,
@@ -340,6 +428,7 @@ export const ApiLive = Api.make(
         HttpApiScalar.layer(RelayApi, { path: "/docs" }),
         relayDocsRedirectRoute,
         ConvexJwks.route,
+        mailRoutes,
       ).pipe(Layer.provide([Etag.layerWeak, httpPlatformNotSupportedLayer, relayCors])),
       relayNotFoundRoute,
     ).pipe(
