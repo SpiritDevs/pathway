@@ -1,17 +1,17 @@
 // Explicit opt-in integration verification. Uses only a loopback fixture and a temporary profile.
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalConsole:off - Native adapter integration test.
-import assert from "node:assert/strict";
-import { createServer } from "node:http";
-import { mkdtemp, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import * as NodeAssert from "node:assert/strict";
+import * as NodeHttp from "node:http";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeCrypto from "node:crypto";
+import * as NodeChildProcess from "node:child_process";
 import { ThreadId, type PreviewAutomationOperation } from "@spiritdevs/contracts";
 import { RemoteBrowserRuntime } from "../src/preview/RemoteBrowserRuntime.ts";
 
-const directory = await mkdtemp(join(tmpdir(), "pathway-browser-proof-"));
-const fixture = createServer((request, response) => {
+const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "pathway-browser-proof-"));
+const fixture = NodeHttp.createServer((request, response) => {
   response.setHeader("content-type", "text/html");
   response.end(`<!doctype html><title>Pathway browser verification</title><style>body{font:24px system-ui;padding:30px}input{display:block;margin:10px}</style>
 <h1>${request.url === "/popup" ? "Popup works" : "Isolated browser fixture"}</h1>
@@ -20,16 +20,16 @@ const fixture = createServer((request, response) => {
 });
 await new Promise<void>((resolve) => fixture.listen(0, "127.0.0.1", resolve));
 const address = fixture.address();
-assert(address && typeof address !== "string");
+NodeAssert.ok(address && typeof address !== "string");
 const origin = `http://127.0.0.1:${address.port}`;
-const threadId = ThreadId.make(`browser-proof-${randomUUID()}`);
+const threadId = ThreadId.make(`browser-proof-${NodeCrypto.randomUUID()}`);
 const runtime = new RemoteBrowserRuntime(
-  join(directory, "browser"),
-  join(directory, "attachments"),
+  NodePath.join(directory, "browser"),
+  NodePath.join(directory, "attachments"),
 );
 const cleanups: Array<() => Promise<void>> = [];
 try {
-  assert.equal((await runtime.list(threadId)).tabs.length, 0);
+  NodeAssert.equal((await runtime.list(threadId)).tabs.length, 0);
   let observedTabs = 0;
   cleanups.push(
     await runtime.subscribe(threadId, undefined, (frame) => {
@@ -38,11 +38,11 @@ try {
   );
   const opened = await runtime.command({ action: "open", threadId, url: origin });
   const tabId = opened.selectedTabId!;
-  assert(tabId);
-  assert.equal(observedTabs, 1);
+  NodeAssert.ok(tabId);
+  NodeAssert.equal(observedTabs, 1);
   const automate = (operation: PreviewAutomationOperation, input: unknown) =>
     runtime.automate({
-      requestId: randomUUID(),
+      requestId: NodeCrypto.randomUUID(),
       threadId,
       tabId,
       operation,
@@ -53,7 +53,7 @@ try {
   cleanups.push(
     await runtime.subscribe(threadId, tabId, (frame) => {
       if (frame.data) {
-        assert.equal(frame.width, 1280);
+        NodeAssert.equal(frame.width, 1280);
         firstFrame.resolve();
       }
     }),
@@ -71,8 +71,8 @@ try {
     expression:
       "({username:document.querySelector('[name=username]').value,hasPassword:document.querySelector('[name=password]').value.length>0,submitted:document.querySelector('h1').textContent==='Signed in'})",
   });
-  assert.deepEqual(filled, { username: "synthetic-user", hasPassword: true, submitted: false });
-  await assert.rejects(
+  NodeAssert.deepEqual(filled, { username: "synthetic-user", hasPassword: true, submitted: false });
+  await NodeAssert.rejects(
     runtime.command({
       action: "autofill",
       threadId,
@@ -92,7 +92,7 @@ try {
   );
   await automate("click", { selector: "a[target=_blank]" });
   await popupArrived.promise;
-  assert.equal((await runtime.list(threadId)).tabs.length, 2);
+  NodeAssert.equal((await runtime.list(threadId)).tabs.length, 2);
   const blankPopupArrived = Promise.withResolvers<void>();
   cleanups.push(
     await runtime.subscribe(threadId, undefined, (frame) => {
@@ -107,22 +107,25 @@ try {
       "(() => {const popup=window.open('');popup.location.href='/popup?blank=1';return true})()",
   });
   await blankPopupArrived.promise;
-  assert.equal((await runtime.list(threadId)).tabs.length, 3);
+  NodeAssert.equal((await runtime.list(threadId)).tabs.length, 3);
   const screenshot = await runtime.command({ action: "screenshot", threadId, tabId });
-  assert(screenshot.artifact && screenshot.artifact.sizeBytes > 100);
-  assert.equal((await readFile(screenshot.artifact.path)).subarray(1, 4).toString(), "PNG");
+  NodeAssert.ok(screenshot.artifact && screenshot.artifact.sizeBytes > 100);
+  NodeAssert.equal(
+    (await NodeFSP.readFile(screenshot.artifact.path)).subarray(1, 4).toString(),
+    "PNG",
+  );
   await runtime.command({ action: "recordingStart", threadId, tabId });
   await automate("evaluate", {
     expression:
       "new Promise(resolve=>{let n=0;const t=setInterval(()=>{document.querySelector('h1').textContent='Capture frame '+(++n);if(n===12){clearInterval(t);resolve(n)}},100)})",
   });
   const video = await runtime.command({ action: "recordingStop", threadId, tabId });
-  assert(
+  NodeAssert.ok(
     video.artifact && video.artifact.mimeType === "video/mp4" && video.artifact.sizeBytes > 100,
   );
-  assert.equal((await readFile(video.artifact.path)).subarray(4, 8).toString(), "ftyp");
+  NodeAssert.equal((await NodeFSP.readFile(video.artifact.path)).subarray(4, 8).toString(), "ftyp");
   const duration = Number(
-    execFileSync(
+    NodeChildProcess.execFileSync(
       "ffprobe",
       [
         "-v",
@@ -136,12 +139,12 @@ try {
       { encoding: "utf8" },
     ).trim(),
   );
-  assert(
+  NodeAssert.ok(
     duration >= 0.9 && duration <= 3,
     `Recording duration must match capture time; got ${duration}s`,
   );
   await runtime.command({ action: "close", threadId, tabId });
-  assert.equal((await runtime.list(threadId)).tabs.length, 2);
+  NodeAssert.equal((await runtime.list(threadId)).tabs.length, 2);
   console.log(
     JSON.stringify(
       {
