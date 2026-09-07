@@ -73,7 +73,7 @@ export function assertSubagentV2NestedOutput(
 
   const first = assertCompletedProviderNativeSubagent({
     projection: rootProjection,
-    title: "/root/hello_agent",
+    title: "Hello agent",
     result: "Subagent says: “Hello.”",
   });
   if (first.childThreadId === null) {
@@ -81,6 +81,7 @@ export function assertSubagentV2NestedOutput(
   }
 
   const firstProjection = projectionById(result, first.childThreadId);
+  assert.equal(firstProjection.thread.title, first.title);
   assert.equal(firstProjection.thread.lineage.parentThreadId, rootProjection.thread.id);
   assert.equal(firstProjection.thread.lineage.relationshipToParent, "subagent");
   assert.equal(firstProjection.thread.lineage.rootThreadId, rootProjection.thread.id);
@@ -90,7 +91,7 @@ export function assertSubagentV2NestedOutput(
 
   const second = assertCompletedProviderNativeSubagent({
     projection: firstProjection,
-    title: "/root/hello_agent/hello_agent",
+    title: "Hello agent",
     result: "Subagent says: “Hello.”",
   });
   if (second.childThreadId === null) {
@@ -98,6 +99,7 @@ export function assertSubagentV2NestedOutput(
   }
 
   const secondProjection = projectionById(result, second.childThreadId);
+  assert.equal(secondProjection.thread.title, second.title);
   assert.equal(secondProjection.thread.lineage.parentThreadId, firstProjection.thread.id);
   assert.equal(secondProjection.thread.lineage.relationshipToParent, "subagent");
   assert.equal(secondProjection.thread.lineage.rootThreadId, rootProjection.thread.id);
@@ -107,7 +109,7 @@ export function assertSubagentV2NestedOutput(
 
   const third = assertCompletedProviderNativeSubagent({
     projection: secondProjection,
-    title: "/root/hello_agent/hello_agent/hello_agent",
+    title: "Hello agent",
     result: "Hello.",
   });
   if (third.childThreadId === null) {
@@ -115,6 +117,7 @@ export function assertSubagentV2NestedOutput(
   }
 
   const thirdProjection = projectionById(result, third.childThreadId);
+  assert.equal(thirdProjection.thread.title, third.title);
   assert.equal(thirdProjection.thread.lineage.parentThreadId, secondProjection.thread.id);
   assert.equal(thirdProjection.thread.lineage.relationshipToParent, "subagent");
   assert.equal(thirdProjection.thread.lineage.rootThreadId, rootProjection.thread.id);

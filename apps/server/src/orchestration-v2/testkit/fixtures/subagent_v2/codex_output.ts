@@ -39,7 +39,7 @@ export function assertSubagentV2Output(
   assert.equal(subagent.origin, "provider_native");
   assert.equal(subagent.createdBy, "agent");
   assert.equal(subagent.driver, "codex");
-  assert.equal(subagent.title, "/root/hello_agent");
+  assert.equal(subagent.title, "Hello agent");
   assert.equal(subagent.prompt, "");
   assert.equal(subagent.status, "completed");
   assert.equal(subagent.result, "Hello.");
@@ -55,6 +55,7 @@ export function assertSubagentV2Output(
     throw new Error(`Missing parent lifecycle item for subagent ${subagent.id}`);
   }
   assert.equal(parentItem.result, subagent.result);
+  assert.equal(parentItem.title, subagent.title);
   if (subagent.childThreadId === null) {
     throw new Error(`Subagent ${subagent.id} is missing its child thread`);
   }
@@ -68,6 +69,7 @@ export function assertSubagentV2Output(
 
   const childProjection = result.projections.get(subagent.childThreadId);
   assert.isDefined(childProjection);
+  assert.equal(childProjection.thread.title, subagent.title);
   assert.equal(childProjection.thread.lineage.parentThreadId, projection.thread.id);
   assert.equal(childProjection.thread.lineage.relationshipToParent, "subagent");
   assert.equal(childProjection.thread.activeProviderThreadId, providerThread.id);
