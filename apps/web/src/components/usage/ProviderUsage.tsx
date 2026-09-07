@@ -656,7 +656,7 @@ function ProviderUsageCard({ account }: { account: ConnectedProviderUsageAccount
           <div className="min-w-0">
             <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
             <p className="truncate text-[11px] text-muted-foreground">
-              {account.provider.auth.email ?? account.environmentLabel}
+              {[account.provider.auth.email, account.environmentLabel].filter(Boolean).join(" · ")}
             </p>
             {displayName !== providerName(usageProvider) ? (
               <p className="text-[11px] text-muted-foreground">{providerName(usageProvider)}</p>
@@ -735,7 +735,7 @@ function ConnectedProviderUsageRow({ account }: { account: ConnectedProviderUsag
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
           {displayName}
           <span className="ml-1 font-normal text-muted-foreground">
-            · {account.provider.auth.email ?? account.environmentLabel}
+            · {[account.provider.auth.email, account.environmentLabel].filter(Boolean).join(" · ")}
           </span>
         </span>
         {usage.data?.status === "ok" && usage.data.planName ? (

@@ -106,6 +106,7 @@ interface ScheduledRateLimitRefresh {
 }
 
 const contextIdentities = new Map<string, string>();
+const codexAccountKeyReaders = new Map<string, () => Promise<string | undefined>>();
 const snapshotCache = new Map<string, CachedSnapshot>();
 const inFlightFetches = new Map<string, InFlightFetch>();
 const retryAfterGates = new Map<string, number>();
@@ -920,6 +921,21 @@ async function fetchCodexUsage(ctx: ProviderContext): Promise<ProviderFetchResul
       }),
     );
   }
+  const result = await fetchCodexUsageWithAuth(ctx, auth);
+  const accountKey = codexAccountKey(auth);
+  return accountKey ? { ...result, snapshot: { ...result.snapshot, accountKey } } : result;
+}
+
+function codexAccountKey(auth: CodexAuth | "api-key" | null): string | undefined {
+  return auth && auth !== "api-key" && auth.accountId
+    ? NodeCrypto.createHash("sha256").update(auth.accountId).digest("hex")
+    : undefined;
+}
+
+async function fetchCodexUsageWithAuth(
+  ctx: ProviderContext,
+  auth: CodexAuth,
+): Promise<ProviderFetchResult> {
   const expiresAt = decodeJwtExpMs(auth.accessToken);
   if (expiresAt !== null && expiresAt <= ctx.nowMs)
     return fetched(needsAuthSnapshot(ctx, "Token expired — run codex to refresh"));
@@ -1498,7 +1514,20 @@ export const ingestPushedSnapshot = Effect.fn("ProviderUsage.ingestPushedSnapsho
 ) {
   const now = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
   const cacheKey = cacheKeyFor(input);
-  const cached = snapshotCache.get(cacheKey);
+  let cached = snapshotCache.get(cacheKey);
+  if (cached?.snapshot.accountKey) {
+    const readAccountKey = codexAccountKeyReaders.get(cacheKey);
+    const accountKey = readAccountKey ? yield* Effect.promise(readAccountKey) : undefined;
+    if (accountKey !== cached.snapshot.accountKey) {
+      // A push has no login identity. Do not merge it with a previous login's
+      // full quota or publish it under that login while credentials change.
+      snapshotCache.delete(cacheKey);
+      inFlightFetches.delete(cacheKey);
+      retryAfterGates.delete(cacheKey);
+      cancelScheduledRateLimitRefresh(cacheKey);
+      cached = undefined;
+    }
+  }
   const stamp = (limit: ServerProviderUsageLimit | undefined) =>
     limit && { ...limit, fetchedAt: now };
   const merged = mergePushedSnapshot(
@@ -1574,6 +1603,11 @@ async function resolveProviderUsage(
     await ensureRateLimitPersistenceLoaded(ctx.rateLimitPersistence, ctx.nowMs);
   }
   const cacheKey = cacheKeyFor(ctx);
+  if (ctx.provider === "codex") {
+    setBounded(codexAccountKeyReaders, cacheKey, async () =>
+      codexAccountKey(await resolveCodexAuth(ctx)),
+    );
+  }
   const identity = NodeCrypto.createHash("sha256")
     .update(
       JSON.stringify([
@@ -1973,6 +2007,7 @@ export function resetProviderUsageCache(): void {
   for (const scheduled of scheduledRateLimitRefreshes.values()) scheduled.controller.abort();
   readKeychainPassword = defaultReadKeychainPassword;
   contextIdentities.clear();
+  codexAccountKeyReaders.clear();
   snapshotCache.clear();
   inFlightFetches.clear();
   retryAfterGates.clear();

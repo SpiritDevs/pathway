@@ -385,22 +385,30 @@ it.effect("preserves only metadata pushed after an HTTP refresh started", () =>
 );
 
 it.effect(
-  "groups Codex credentials by account across token rotation and preserves identity on pushes",
+  "keeps account grouping through token rotation and failures, but clears it on a login switch",
   () =>
-    Effect.gen(function* () {
-      const first = yield* Effect.promise(async () => {
-        const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
-        const { tmpdir } = await import("node:os");
-        const { join } = await import("node:path");
-        const home = await mkdtemp(join(tmpdir(), "pathway-usage-identity-"));
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* Effect.promise(() => import("node:fs/promises"));
+        const os = yield* Effect.promise(() => import("node:os"));
+        const path = yield* Effect.promise(() => import("node:path"));
+        const home = yield* Effect.acquireRelease(
+          Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "pathway-usage-identity-"))),
+          (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+        );
+        let httpStatus = 200;
         vi.stubGlobal(
           "fetch",
           vi.fn(
             async () =>
               new Response(
                 JSON.stringify({
-                  rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 18000 } },
+                  rate_limit: {
+                    primary_window: { used_percent: 20, limit_window_seconds: 18000 },
+                    secondary_window: { used_percent: 40, limit_window_seconds: 604800 },
+                  },
                 }),
+                { status: httpStatus },
               ),
           ),
         );
@@ -411,36 +419,53 @@ it.effect(
           providerHomePath: home,
           homeDir: home,
         };
-        const fetchAccount = async (accountId: string | undefined, token: string) => {
-          await writeFile(
-            join(home, "auth.json"),
+        const writeAuth = (accountId: string | undefined, token = "token") =>
+          fs.writeFile(
+            path.join(home, "auth.json"),
             JSON.stringify({ tokens: { access_token: token, account_id: accountId } }),
           );
-          return providerUsageTestKit.fetchCodex(input);
-        };
-        try {
-          const first = await fetchAccount("account-a", "token-a");
-          const rotated = await fetchAccount("account-a", "token-b");
-          const other = await fetchAccount("account-b", "token-c");
+        const first = yield* Effect.promise(async () => {
+          await writeAuth("account-a", "token-a");
+          const first = await providerUsageTestKit.fetchCodex(input);
+          await writeAuth("account-a", "token-b");
+          expect((await providerUsageTestKit.fetchCodex(input)).snapshot.accountKey).toBe(
+            first.snapshot.accountKey,
+          );
           expect(first.snapshot.accountKey).toMatch(/^[a-f0-9]{64}$/);
-          expect(rotated.snapshot.accountKey).toBe(first.snapshot.accountKey);
-          expect(other.snapshot.accountKey).not.toBe(first.snapshot.accountKey);
-          expect((await fetchAccount(undefined, "token-d")).snapshot.accountKey).toBeUndefined();
+          for (const status of [401, 403, 500]) {
+            httpStatus = status;
+            const result = await providerUsageTestKit.fetchCodex(input);
+            expect(result.snapshot.accountKey).toBe(first.snapshot.accountKey);
+            expect(result.snapshot.status).toBe(status === 500 ? "error" : "needs-auth");
+          }
+          httpStatus = 200;
+          const expired = `header.${Buffer.from('{"exp":1}').toString("base64url")}.signature`;
+          await writeAuth("account-a", expired);
+          expect((await providerUsageTestKit.fetchCodex(input)).snapshot).toMatchObject({
+            status: "needs-auth",
+            accountKey: first.snapshot.accountKey,
+          });
+          await writeAuth(undefined);
+          expect(
+            (await providerUsageTestKit.fetchCodex(input)).snapshot.accountKey,
+          ).toBeUndefined();
+          await writeAuth("account-a");
+          await providerUsageTestKit.resolve(input, async () => first);
           return first;
-        } finally {
-          await rm(home, { recursive: true, force: true });
-        }
-      });
-      yield* Effect.promise(() =>
-        providerUsageTestKit.resolve({ instanceId, provider: "codex", nowMs }, async () => first),
-      );
-      const pushed = yield* ingestPushedSnapshot(
-        mapCodexRateLimitsUpdated({
+        });
+        const push = mapCodexRateLimitsUpdated({
           instanceId,
           rateLimits: { primary: { usedPercent: 30, windowDurationMins: 300 } },
-        }),
-        nowMs + 1,
-      );
-      expect(pushed.accountKey).toBe(first.snapshot.accountKey);
-    }),
+        });
+        const pushed = yield* ingestPushedSnapshot(push, nowMs + 1);
+        expect(pushed.accountKey).toBe(first.snapshot.accountKey);
+        expect(pushed.limits).toHaveLength(2);
+        yield* Effect.promise(() => writeAuth("account-b"));
+        const switched = yield* ingestPushedSnapshot(push, nowMs + 2);
+        expect(switched.accountKey).toBeUndefined();
+        expect(switched.limits).toHaveLength(1);
+        const other = yield* Effect.promise(() => providerUsageTestKit.fetchCodex(input));
+        expect(other.snapshot.accountKey).not.toBe(first.snapshot.accountKey);
+      }),
+    ),
 );
