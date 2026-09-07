@@ -1,5 +1,6 @@
 import type { RuntimeRequestId } from "@spiritdevs/contracts";
 import { MessageCircleQuestionIcon } from "lucide-react";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { PendingUserInput } from "../../session-logic";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 
@@ -26,13 +27,22 @@ export function ComposerAsyncQuestions({
   const prompt = prompts[0];
   if (!prompt) return null;
   return (
-    <button
-      type="button"
-      className="mt-2 flex items-center gap-2 rounded-full border bg-background px-3 py-1.5 text-sm"
-      onClick={() => onOpen(prompt.requestId)}
-    >
-      <MessageCircleQuestionIcon className="size-4" aria-hidden="true" />
-      Questions <span className="tabular-nums">{prompt.questions.length}</span>
-    </button>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            className="flex items-center gap-2 rounded-full border bg-background px-3 py-1.5 text-sm hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+            onClick={() => onOpen(prompt.requestId)}
+          />
+        }
+      >
+        <MessageCircleQuestionIcon className="size-4" aria-hidden="true" />
+        Question
+      </TooltipTrigger>
+      <TooltipPopup className="max-w-sm whitespace-pre-wrap" align="start">
+        {prompt.questions.map((question) => question.question).join("\n\n")}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
