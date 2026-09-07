@@ -469,6 +469,8 @@ export function PullRequestDetailPanel({
   const [refreshToken, setRefreshToken] = useState(0);
   const refreshFromHost = useCallback(async () => {
     await invalidate({ environmentId, input: { reference } });
+    // Listings have a separate cache epoch from the PR detail and activity.
+    if (renderActions) await invalidate({ environmentId, input: {} });
     refreshDetail();
     setRefreshToken((token) => token + 1);
     if (renderActions) onActed?.();
