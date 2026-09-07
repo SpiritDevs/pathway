@@ -13,14 +13,10 @@ export type EnvironmentIdentificationPillLabel = "Dev" | "Nightly";
 const STAGE_BACKDROP_VIEW_BOX = "0 0 8192 96";
 
 export function resolveSidebarStageBackdropVariant(
-  stageLabel: string,
+  _stageLabel: string,
   enabled = true,
 ): SidebarStageBackdropVariant | null {
-  if (!enabled) return null;
-  const normalized = stageLabel.trim().toLowerCase();
-  if (normalized === "nightly") return "nightly";
-  if (normalized === "dev" || normalized === "alpha") return "dev";
-  return null;
+  return enabled ? "dev" : null;
 }
 
 export function resolveSidebarStageFocusRingOffsetClass(
@@ -54,7 +50,7 @@ export function useSidebarStageBackdropVariant(enabled = true): SidebarStageBack
   return resolveSidebarStageBackdropVariant(useEnvironmentStageLabel(), enabled);
 }
 
-/** Stage-channel header art; palettes mirror the per-channel app icons in `assets/`. */
+/** Shared header artwork for development, nightly, and production builds. */
 export function SidebarStageBackdrop({ variant }: { variant: SidebarStageBackdropVariant }) {
   return (
     <div

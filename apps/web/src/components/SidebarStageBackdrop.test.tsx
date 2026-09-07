@@ -10,13 +10,13 @@ import {
 } from "./SidebarStageBackdrop";
 
 describe("SidebarStageBackdrop", () => {
-  it("resolves stage artwork only when enabled", () => {
-    expect(resolveSidebarStageBackdropVariant("Dev")).toBe("dev");
-    expect(resolveSidebarStageBackdropVariant("Alpha")).toBe("dev");
-    expect(resolveSidebarStageBackdropVariant("Nightly")).toBe("nightly");
-    expect(resolveSidebarStageBackdropVariant("Dev", false)).toBeNull();
-    expect(resolveSidebarStageBackdropVariant("Latest")).toBeNull();
-  });
+  it.each(["Dev", "Alpha", "Nightly", "Latest", "Production", ""])(
+    "uses blue artwork for %s unless disabled",
+    (stageLabel) => {
+      expect(resolveSidebarStageBackdropVariant(stageLabel)).toBe("dev");
+      expect(resolveSidebarStageBackdropVariant(stageLabel, false)).toBeNull();
+    },
+  );
 
   it("resolves supported environment pill labels", () => {
     expect(resolveEnvironmentIdentificationPillLabel("Dev")).toBe("Dev");
