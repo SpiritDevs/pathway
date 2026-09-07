@@ -5,20 +5,20 @@ import {
   squashAtomCommandFailure,
 } from "@spiritdevs/client-runtime/state/runtime";
 
+import { requestConfirmDialog } from "~/confirmDialog";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { manualServerUpdateCommand } from "~/versionSkew";
+import { Spinner } from "./ui/spinner";
 import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
 
-// The wire "installing" stage is a sub-second launcher handoff, so the UI
-// folds it into the download phase; everything after the handoff is the
-// restart the user is actually waiting through.
 const UPDATE_STAGE_LABELS: Record<ServerUpdateStage, string> = {
-  downloading: "Downloading…",
-  installing: "Downloading…",
-  resuming: "Restarting…",
+  checking: "Checking for updates…",
+  downloading: "Downloading update…",
+  installing: "Installing update…",
+  resuming: "Reconnecting…",
 };
 const pendingUpdateEnvironmentIds = new Set<EnvironmentId>();
 
@@ -30,12 +30,7 @@ function updateFailureMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Server update failed.";
 }
 
-/**
- * One-row status for an in-flight server update: "Downloading…" then
- * "Restarting…". The update is a wait, not a warning: a single pulsing dot
- * and label, no step rail, no versions. Failure turns the row red with the
- * rollback reason.
- */
+/** The same update stages used in the composer bar and Connections settings. */
 export function ServerUpdateProgress({
   state,
 }: {
@@ -52,11 +47,8 @@ export function ServerUpdateProgress({
     );
   }
   return (
-    <div className="mt-1 flex items-center gap-2 text-xs font-medium text-foreground">
-      <span
-        className="size-1.5 shrink-0 animate-status-pulse rounded-full bg-foreground"
-        aria-hidden="true"
-      />
+    <div className="mt-1 flex items-center gap-2 text-xs font-medium text-foreground" role="status">
+      <Spinner className="size-3.5 shrink-0 motion-reduce:animate-none" aria-hidden="true" />
       <span>{serverUpdateStageLabel(state.stage)}</span>
     </div>
   );
@@ -71,15 +63,20 @@ export function ServerUpdateAction({
   environmentId,
   serverLabel,
   selfUpdate,
+  desktopAppUpdate = false,
   targetVersion,
   label = "Update",
 }: {
   readonly environmentId: EnvironmentId;
   readonly serverLabel: string;
   readonly selfUpdate: ServerSelfUpdateCapability | null;
+  /** The desktop app supervising this server accepts remote update
+      requests (capabilities.desktopAppUpdate). */
+  readonly desktopAppUpdate?: boolean;
   readonly targetVersion: string;
   readonly label?: string;
 }) {
+  const isDesktopAppUpdate = selfUpdate === "desktop-managed";
   const updateServer = useAtomCommand(serverEnvironment.updateServer, {
     reportFailure: false,
   });
@@ -107,6 +104,14 @@ export function ServerUpdateAction({
     }
     pendingUpdateEnvironmentIds.add(environmentId);
     try {
+      if (isDesktopAppUpdate) {
+        // Without a dialog host the click remains the explicit update request.
+        const confirmed =
+          (await requestConfirmDialog(
+            `Update the Pathway desktop app that runs ${serverLabel}? It will close and relaunch on that machine.`,
+          )) ?? true;
+        if (!confirmed) return;
+      }
       const result = await updateServer({
         environmentId,
         input: { targetVersion },
@@ -125,14 +130,16 @@ export function ServerUpdateAction({
       toastManager.add({
         type: "success",
         title: `${serverLabel} updated`,
-        description: `Reconnected on @spiritdevs/pathway@${result.value.targetVersion}.`,
+        description: isDesktopAppUpdate
+          ? `Desktop app relaunched on ${result.value.targetVersion}.`
+          : `Reconnected on @spiritdevs/pathway@${result.value.targetVersion}.`,
       });
     } finally {
       pendingUpdateEnvironmentIds.delete(environmentId);
     }
   };
 
-  if (selfUpdate === "desktop-managed") {
+  if (selfUpdate === "desktop-managed" && !desktopAppUpdate) {
     return (
       <span className="text-muted-foreground text-xs">
         Update the desktop app on that machine to update this server.

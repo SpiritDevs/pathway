@@ -8,32 +8,44 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
 import { RpcClientError } from "effect/unstable/rpc";
+import { Atom, AtomRegistry } from "effect/unstable/reactivity";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import {
   AVAILABLE_CONNECTION_STATE,
   PrimaryConnectionTarget,
+  type NetworkStatus,
   type PreparedConnection,
+  type SupervisorConnectionState,
 } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
+import { EnvironmentRegistry } from "../connection/registry.ts";
+import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
 import * as Persistence from "../platform/persistence.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import {
   applyServerConfigProjection,
+  createServerEnvironmentAtoms,
   makeEnvironmentServerConfigState,
   isLegacyUpdateHandoffLoss,
+  isDesktopUpdateHandoffLoss,
   matchesServerUpdateReadyEvent,
+  matchesServerUpdateResumeEvent,
   nudgeReconnectDuringUpdateRestart,
   projectServerWelcome,
   resolveServerConfigValue,
@@ -41,6 +53,9 @@ import {
   serverUpdateStateForProgressEvent,
   serverUpdateStateForServerVersion,
   validateServerUpdateReadyEvent,
+  waitForDesktopUpdateTarget,
+  waitForNextEnvironmentReconnect,
+  runDesktopCommitWithReconnectObserver,
   withProviderUsageLegacyFallback,
 } from "./server.ts";
 
@@ -53,6 +68,8 @@ const CONFIG = {
   providers: [],
   settings: {},
 } as unknown as ServerConfig;
+
+const isEnvironmentRpcUnavailableError = Schema.is(EnvironmentRpcUnavailableError);
 
 const snapshotEvent = (config: ServerConfig): ServerConfigStreamEvent => ({
   version: 1,
@@ -78,6 +95,317 @@ function session(client: WsRpcProtocolClient): RpcSession {
 }
 
 describe("update restart reconnect nudges", () => {
+  it.effect("bounds a missing-session commit when the environment never reconnects", () =>
+    Effect.gen(function* () {
+      const committed = yield* Deferred.make<void>();
+      const states = yield* SubscriptionRef.make({ phase: "backoff" });
+      const unavailable = new EnvironmentRpcUnavailableError({
+        environmentId: TARGET.environmentId,
+        message: "The environment is not connected.",
+      });
+      const retry = yield* runDesktopCommitWithReconnectObserver(
+        SubscriptionRef.changes(states),
+        Deferred.succeed(committed, undefined).pipe(Effect.andThen(Effect.fail(unavailable))),
+      ).pipe(Effect.flip, Effect.forkChild);
+      yield* Deferred.await(committed);
+      yield* TestClock.adjust(Duration.minutes(4));
+      expect(yield* Fiber.join(retry)).toMatchObject({ _tag: "TimeoutError" });
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it("keeps unavailable-session recovery specific to desktop commits", () => {
+    const unavailable = Cause.fail(
+      new EnvironmentRpcUnavailableError({
+        environmentId: TARGET.environmentId,
+        message: "The environment is not connected.",
+      }),
+    );
+    expect(isDesktopUpdateHandoffLoss(unavailable)).toBe(true);
+    expect(isLegacyUpdateHandoffLoss(unavailable)).toBe(false);
+    expect(isDesktopUpdateHandoffLoss(Cause.fail(new Error("Access denied.")))).toBe(false);
+    expect(isDesktopUpdateHandoffLoss(Cause.fail(new Error("The prepared update expired.")))).toBe(
+      false,
+    );
+  });
+
+  it.effect("retains the prepared token when the session drops before the initial commit", () =>
+    Effect.gen(function* () {
+      const prepared = {
+        method: "desktop-app" as const,
+        targetVersion: "0.0.34",
+        desktopUpdateToken: "prepared-token",
+      };
+      const initialConfig = {
+        ...CONFIG,
+        environment: {
+          serverVersion: "0.0.30",
+          capabilities: {
+            serverSelfUpdate: "desktop-managed",
+            serverSelfUpdateProgress: true,
+            desktopAppUpdate: true,
+          },
+        },
+      } as ServerConfig;
+      const states = yield* SubscriptionRef.make<SupervisorConnectionState>({
+        ...AVAILABLE_CONNECTION_STATE,
+        phase: "connected" as const,
+      });
+      const sessions = yield* SubscriptionRef.make(Option.none<RpcSession>());
+      const preparations = yield* Ref.make(0);
+      const commits = yield* Ref.make<ReadonlyArray<string>>([]);
+      const unavailableCommits = yield* Ref.make(0);
+      const disconnect = new RpcClientError.RpcClientError({
+        reason: new Socket.SocketCloseError({ code: 1006 }),
+      });
+      const makeClient = (serverVersion: string): WsRpcProtocolClient =>
+        ({
+          [WS_METHODS.subscribeServerConfig]: () => Stream.never,
+          [WS_METHODS.subscribeServerLifecycle]: () =>
+            Stream.make({
+              version: 1,
+              sequence: 1,
+              type: "ready",
+              payload: { at: "2026-09-01T00:00:00.000Z", environment: { serverVersion } },
+            }),
+          [WS_METHODS.serverUpdateServerWithProgress]: () =>
+            Stream.concat(
+              Stream.fromEffect(Ref.update(preparations, (count) => count + 1)).pipe(Stream.drain),
+              Stream.concat(
+                Stream.make({ type: "complete", result: prepared }),
+                Stream.fromEffect(
+                  Effect.gen(function* () {
+                    yield* SubscriptionRef.set(sessions, Option.none());
+                    yield* SubscriptionRef.update(states, (state) => ({
+                      ...state,
+                      phase: "backoff" as const,
+                    }));
+                  }),
+                ).pipe(Stream.drain),
+              ),
+            ),
+          [WS_METHODS.serverCommitDesktopUpdate]: ({ requestId }: { requestId: string }) =>
+            Effect.gen(function* () {
+              yield* Ref.update(commits, (values) => [...values, requestId]);
+              yield* SubscriptionRef.update(states, (state) => ({
+                ...state,
+                phase: "backoff" as const,
+              }));
+              yield* SubscriptionRef.set(
+                sessions,
+                Option.some(session(makeClient(prepared.targetVersion))),
+              );
+              yield* SubscriptionRef.update(states, (state) => ({
+                ...state,
+                phase: "connected" as const,
+              }));
+              return yield* disconnect;
+            }),
+        }) as unknown as WsRpcProtocolClient;
+      const oldSession = session(makeClient(initialConfig.environment.serverVersion));
+      yield* SubscriptionRef.set(sessions, Option.some(oldSession));
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: TARGET,
+        state: states,
+        session: sessions,
+        prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      });
+      const environmentRegistry = EnvironmentRegistry.of({
+        entries: yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
+          new Map(),
+        ),
+        networkStatus: yield* SubscriptionRef.make<NetworkStatus>("online"),
+        start: Effect.void,
+        register: () => Effect.void,
+        registerPlatform: () => Effect.void,
+        reconcilePlatform: () => Effect.void,
+        remove: () => Effect.void,
+        removeRelayEnvironments: () => Effect.void,
+        retryNow: () => Effect.void,
+        disconnectNow: () => Effect.void,
+        state: () => SubscriptionRef.get(states),
+        stateChanges: () => SubscriptionRef.changes(states),
+        run: (_environmentId, effect) =>
+          Effect.provideService(
+            effect,
+            EnvironmentSupervisor.EnvironmentSupervisor,
+            supervisor,
+          ).pipe(
+            Effect.tapError((error) =>
+              isEnvironmentRpcUnavailableError(error)
+                ? Effect.gen(function* () {
+                    yield* Ref.update(unavailableCommits, (count) => count + 1);
+                    yield* SubscriptionRef.set(sessions, Option.some(oldSession));
+                    yield* SubscriptionRef.update(states, (state) => ({
+                      ...state,
+                      phase: "connected" as const,
+                    }));
+                  })
+                : Effect.void,
+            ),
+          ),
+        runStream: (_environmentId, stream) =>
+          Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        followStream: (_environmentId, stream) =>
+          Stream.provideService(stream, EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+      });
+      const cache = Persistence.EnvironmentCacheStore.of({
+        loadShell: () => Effect.succeed(Option.none()),
+        saveShell: () => Effect.void,
+        loadThread: () => Effect.succeed(Option.none()),
+        saveThread: () => Effect.void,
+        removeThread: () => Effect.void,
+        loadServerConfig: () => Effect.succeed(Option.none()),
+        saveServerConfig: () => Effect.void,
+        loadVcsRefs: () => Effect.succeed(Option.none()),
+        saveVcsRefs: () => Effect.void,
+        removeVcsRefs: () => Effect.void,
+        clearVcsRefs: () => Effect.void,
+        clear: () => Effect.void,
+      });
+      const runtime = Atom.runtime(
+        Layer.merge(
+          Layer.succeed(EnvironmentRegistry, environmentRegistry),
+          Layer.succeed(Persistence.EnvironmentCacheStore, cache),
+        ),
+      );
+      const atoms = createServerEnvironmentAtoms(runtime, {
+        initialConfigValueAtom: () => Atom.make(initialConfig),
+      });
+      const atomRegistry = AtomRegistry.make();
+      const result = yield* Effect.promise(() =>
+        atoms.updateServer.run(atomRegistry, {
+          environmentId: TARGET.environmentId,
+          input: { targetVersion: "0.0.31" },
+        }),
+      ).pipe(Effect.ensuring(Effect.sync(() => atomRegistry.dispose())));
+      expect(result).toMatchObject({ _tag: "Success", value: prepared });
+      expect(yield* Ref.get(preparations)).toBe(1);
+      expect(yield* Ref.get(unavailableCommits)).toBe(1);
+      expect(yield* Ref.get(commits)).toEqual([prepared.desktopUpdateToken]);
+    }),
+  );
+  it.effect("retries a desktop commit that was lost before delivery", () =>
+    Effect.gen(function* () {
+      const readyEvents =
+        yield* Queue.unbounded<Parameters<typeof matchesServerUpdateReadyEvent>[1]>();
+      const ready = (serverVersion: string) =>
+        ({
+          version: 1 as const,
+          sequence: 1,
+          type: "ready" as const,
+          payload: {
+            at: "2026-09-01T00:00:00.000Z",
+            environment: { serverVersion },
+          },
+        }) as Parameters<typeof matchesServerUpdateReadyEvent>[1];
+      yield* Queue.offerAll(readyEvents, [ready("0.0.30"), ready("0.0.31")]);
+      const retries = yield* Ref.make(0);
+      const disconnect = new RpcClientError.RpcClientError({
+        reason: new Socket.SocketCloseError({ code: 1006 }),
+      });
+
+      const result = yield* waitForDesktopUpdateTarget(
+        "0.0.31",
+        Queue.take(readyEvents),
+        Ref.update(retries, (count) => count + 1).pipe(Effect.andThen(Effect.fail(disconnect))),
+      );
+
+      expect(result.payload.environment.serverVersion).toBe("0.0.31");
+      expect(yield* Ref.get(retries)).toBe(1);
+    }),
+  );
+  it.effect("bounds commit retries when the desktop keeps resuming on the old version", () =>
+    Effect.gen(function* () {
+      const ready = {
+        type: "ready",
+        version: 1,
+        sequence: 1,
+        payload: { at: "2026-09-01T00:00:00.000Z", environment: { serverVersion: "0.0.30" } },
+      } as Parameters<typeof matchesServerUpdateReadyEvent>[1];
+      const retries = yield* Ref.make(0);
+      const disconnect = new RpcClientError.RpcClientError({
+        reason: new Socket.SocketCloseError({ code: 1006 }),
+      });
+      const failure = yield* waitForDesktopUpdateTarget(
+        "0.0.31",
+        Effect.succeed(ready),
+        Ref.update(retries, (count) => count + 1).pipe(Effect.andThen(Effect.fail(disconnect))),
+      ).pipe(Effect.flip);
+      expect(failure.message).toBe(
+        "The desktop app resumed without installing the prepared update.",
+      );
+      expect(yield* Ref.get(retries)).toBe(2);
+    }),
+  );
+
+  it.effect("surfaces a rejected desktop commit without another retry", () =>
+    Effect.gen(function* () {
+      const ready = {
+        type: "ready",
+        version: 1,
+        sequence: 1,
+        payload: { at: "2026-09-01T00:00:00.000Z", environment: { serverVersion: "0.0.30" } },
+      } as Parameters<typeof matchesServerUpdateReadyEvent>[1];
+      const rejection = new Error("The prepared update expired.");
+      const failure = yield* waitForDesktopUpdateTarget(
+        "0.0.31",
+        Effect.succeed(ready),
+        Effect.fail(rejection),
+      ).pipe(Effect.flip);
+      expect(failure).toBe(rejection);
+    }),
+  );
+
+  it.effect("observes a fast reconnect even when the caller awaits it later", () =>
+    Effect.gen(function* () {
+      const states = yield* Queue.unbounded<{ readonly phase: string }>();
+      const reconnected = yield* waitForNextEnvironmentReconnect(Stream.fromQueue(states)).pipe(
+        Effect.forkChild,
+      );
+      yield* Queue.offerAll(states, [
+        { phase: "connected" },
+        { phase: "backoff" },
+        { phase: "connected" },
+      ]);
+
+      yield* Fiber.join(reconnected);
+    }),
+  );
+  it.effect("arms the retry observer before a commit can disconnect", () =>
+    Effect.gen(function* () {
+      const allowSubscription = yield* Deferred.make<void>();
+      const subscriptionStarted = yield* Deferred.make<void>();
+      const states = yield* Queue.unbounded<{ readonly phase: string }>();
+      const commits = yield* Ref.make(0);
+      const disconnect = new RpcClientError.RpcClientError({
+        reason: new Socket.SocketCloseError({ code: 1006 }),
+      });
+      const stateChanges = Stream.unwrap(
+        Deferred.succeed(subscriptionStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(allowSubscription)),
+          Effect.as(Stream.fromQueue(states)),
+        ),
+      );
+      const retry = yield* runDesktopCommitWithReconnectObserver(
+        stateChanges,
+        Ref.update(commits, (count) => count + 1).pipe(
+          Effect.andThen(Queue.offerAll(states, [{ phase: "backoff" }, { phase: "connected" }])),
+          Effect.andThen(Effect.fail(disconnect)),
+        ),
+      ).pipe(Effect.flip, Effect.forkChild);
+
+      yield* Deferred.await(subscriptionStarted);
+      expect(yield* Ref.get(commits)).toBe(0);
+      yield* Deferred.succeed(allowSubscription, undefined);
+      yield* Queue.offer(states, { phase: "connected" });
+
+      expect(yield* Fiber.join(retry)).toBe(disconnect);
+      expect(yield* Ref.get(commits)).toBe(1);
+    }),
+  );
   it.effect("retries once per backoff entry instead of only the first", () =>
     Effect.gen(function* () {
       const retries = yield* Ref.make(0);
@@ -229,7 +557,25 @@ describe("server state projection", () => {
     });
   });
 
-  it("keeps active update state and hides stale failures after a version change", () => {
+  it("keeps a prepared desktop update installing until the commit and uses its actual version", () => {
+    expect(
+      serverUpdateStateForProgressEvent("0.0.30", "0.0.31", {
+        type: "complete",
+        result: {
+          targetVersion: "0.0.34",
+          method: "desktop-app",
+          desktopUpdateToken: "prepared-update",
+        },
+      }),
+    ).toEqual({
+      status: "running",
+      stage: "installing",
+      fromVersion: "0.0.30",
+      targetVersion: "0.0.34",
+    });
+  });
+
+  it("keeps active update state and clears failures only after the target version arrives", () => {
     const running = {
       status: "running" as const,
       stage: "resuming" as const,
@@ -247,6 +593,7 @@ describe("server state projection", () => {
     expect(serverUpdateStateForServerVersion(running, "0.0.31")).toBe(running);
     expect(serverUpdateStateForServerVersion(failed, "0.0.30")).toBe(failed);
     expect(serverUpdateStateForServerVersion(failed, null)).toBe(failed);
+    expect(serverUpdateStateForServerVersion(failed, "0.0.32")).toBe(failed);
     expect(serverUpdateStateForServerVersion(failed, "0.0.31")).toEqual({ status: "idle" });
   });
 
@@ -283,6 +630,36 @@ describe("server state projection", () => {
       expect(rollback.message).toBe("prepared-timeout");
     }),
   );
+
+  it("requires tokenless desktop updates to reach the target version", () => {
+    const ready = (serverVersion: string) =>
+      ({
+        version: 1 as const,
+        sequence: 1,
+        type: "ready" as const,
+        payload: {
+          at: "2026-09-01T00:00:00.000Z",
+          environment: { serverVersion },
+        },
+      }) as Parameters<typeof matchesServerUpdateResumeEvent>[1];
+
+    expect(
+      matchesServerUpdateResumeEvent(
+        { targetVersion: "0.0.31", method: "desktop-app" },
+        ready("0.0.30"),
+      ),
+    ).toBe(false);
+    expect(
+      matchesServerUpdateResumeEvent(
+        {
+          targetVersion: "0.0.31",
+          method: "desktop-app",
+          desktopUpdateToken: "update-1",
+        },
+        ready("0.0.30"),
+      ),
+    ).toBe(true);
+  });
 
   it("applies every config category to the projected snapshot", () => {
     const snapshot = applyServerConfigProjection(Option.none(), {

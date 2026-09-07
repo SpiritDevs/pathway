@@ -73,8 +73,10 @@ export type ThreadEnvMode = typeof ThreadEnvMode.Type;
 
 /** How a server can replace itself with another version when asked over RPC.
     New servers only advertise the stable launcher-backed "boot-service" path;
-    "respawn" remains decodable for compatibility with older servers. */
-export const ServerSelfUpdateMethod = Schema.Literals(["boot-service", "respawn"]);
+    "respawn" remains decodable for compatibility with older servers.
+    "desktop-app" means the supervising desktop app updated and relaunched
+    itself, bringing the server back with it. */
+export const ServerSelfUpdateMethod = Schema.Literals(["boot-service", "respawn", "desktop-app"]);
 export type ServerSelfUpdateMethod = typeof ServerSelfUpdateMethod.Type;
 
 /** What update path a client should offer for a server: one of the RPC
@@ -141,6 +143,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server can stream self-update progress before acknowledging the
       restart. Clients fall back to server.updateServer when absent. */
   serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
+  /** The supervising desktop app supports remote check/download and token-based installation.
+      Absent on older desktop hosts, which must be updated locally first. */
+  desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

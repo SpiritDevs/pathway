@@ -7,6 +7,7 @@ import {
   type DesktopHostTelemetryMessage as DesktopHostTelemetryMessageValue,
   type DesktopHostTelemetrySnapshot,
   DesktopTelemetryControlMessage,
+  type DesktopUpdateStatusReport,
   type ResourceTelemetrySourceStatus,
 } from "@spiritdevs/contracts";
 import { resolveServerBackgroundActivitySettings } from "@spiritdevs/shared/backgroundActivitySettings";
@@ -171,6 +172,29 @@ export class DesktopTelemetryReceiver extends Context.Service<
     readonly setDiagnosticsDemand: (
       enabled: boolean,
     ) => Effect.Effect<void, DesktopTelemetryControlError>;
+    /** Asks the desktop app supervising this server to update itself. The
+        desktop answers with desktopUpdateStatus reports carrying the same
+        requestId. */
+    readonly requestDesktopUpdate: (
+      requestId: string,
+    ) => Effect.Effect<void, DesktopTelemetryControlError>;
+    readonly commitDesktopUpdate: (
+      requestId: string,
+    ) => Effect.Effect<void, DesktopTelemetryControlError>;
+    readonly cancelDesktopUpdate: (
+      requestId: string,
+    ) => Effect.Effect<void, DesktopTelemetryControlError>;
+    /** Latest desktop update state report plus subsequent reports. The
+        desktop replays its latest report when the backend attaches, so this
+        is populated shortly after startup on desktop-managed servers. */
+    readonly desktopUpdates: Effect.Effect<
+      {
+        readonly latest: Option.Option<DesktopUpdateStatusReport>;
+        readonly changes: Stream.Stream<DesktopUpdateStatusReport>;
+      },
+      never,
+      Scope.Scope
+    >;
   }
 >()("@spiritdevs/pathway/resourceTelemetry/DesktopTelemetryReceiver") {}
 
@@ -322,6 +346,16 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   );
   const changes = yield* PubSub.sliding<DesktopHostTelemetrySnapshot>(8);
   const healthChanges = yield* PubSub.sliding<DesktopTelemetryReceiverHealth>(4);
+  const latestUpdateReport = yield* Ref.make(Option.none<DesktopUpdateStatusReport>());
+  const updateReportChanges = yield* PubSub.sliding<Option.Option<DesktopUpdateStatusReport>>(16);
+  const updateReportsClosed = yield* Ref.make(false);
+  // Queue the end after any final report, so transport closure cannot discard
+  // a prepared token or retained installation failure already received.
+  const closeUpdateReports = Ref.getAndSet(updateReportsClosed, true).pipe(
+    Effect.flatMap((closed) =>
+      closed ? Effect.void : PubSub.publish(updateReportChanges, Option.none()).pipe(Effect.asVoid),
+    ),
+  );
   const controlMutex = yield* Semaphore.make(1);
   const snapshotMutex = yield* Semaphore.make(1);
   const health = yield* Ref.make<DesktopTelemetryReceiverHealth>({
@@ -370,7 +404,7 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
               ...current,
               status: "degraded",
               lastError: Option.some(error.message),
-            })),
+            })).pipe(Effect.andThen(closeUpdateReports)),
           ),
         );
       }),
@@ -503,6 +537,15 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
           );
         }
 
+        // Not a resource sample: do not touch `latest` or sample health.
+        if (message.type === "desktopUpdateStatus") {
+          return recordContact.pipe(
+            Effect.andThen(Ref.set(latestUpdateReport, Option.some(message))),
+            Effect.andThen(PubSub.publish(updateReportChanges, Option.some(message))),
+            Effect.asVoid,
+          );
+        }
+
         const sampledAt = DateTime.makeUnsafe(message.sampledAtUnixMs);
         return snapshotMutex.withPermits(1)(
           recordContact.pipe(
@@ -531,6 +574,7 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
           }),
         ),
       ),
+      Effect.ensuring(closeUpdateReports),
       Effect.forkScoped,
     );
 
@@ -616,6 +660,30 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
     health: Ref.get(health),
     subscribeHealth: subscribeBeforeSnapshotWithoutMutex(healthChanges, Ref.get(health)),
     setDiagnosticsDemand,
+    requestDesktopUpdate: (requestId) =>
+      sendControlMessage({
+        version: 1,
+        type: "requestDesktopUpdate",
+        requestId,
+      }),
+    commitDesktopUpdate: (requestId) =>
+      sendControlMessage({ version: 1, type: "commitDesktopUpdate", requestId }),
+    cancelDesktopUpdate: (requestId) =>
+      sendControlMessage({ version: 1, type: "cancelDesktopUpdate", requestId }),
+    desktopUpdates: Effect.gen(function* () {
+      const subscription = yield* PubSub.subscribe(updateReportChanges);
+      const initial = yield* Ref.get(latestUpdateReport);
+      const closed = yield* Ref.get(updateReportsClosed);
+      return {
+        latest: initial,
+        changes: closed
+          ? Stream.empty
+          : Stream.fromSubscription(subscription).pipe(
+              Stream.takeWhile(Option.isSome),
+              Stream.map((report) => report.value),
+            ),
+      };
+    }),
   });
 });
 
@@ -656,6 +724,15 @@ export const layerTest = (
           })),
         ),
       setDiagnosticsDemand: () => Effect.void,
+      requestDesktopUpdate: () => Effect.void,
+      commitDesktopUpdate: () => Effect.void,
+      cancelDesktopUpdate: () => Effect.void,
+      desktopUpdates:
+        overrides.desktopUpdates ??
+        Effect.succeed({
+          latest: Option.none<DesktopUpdateStatusReport>(),
+          changes: Stream.empty,
+        }),
       ...overrides,
     }),
   );

@@ -12,6 +12,7 @@ import { makeComponentLogger } from "./DesktopObservability.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
+import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
@@ -35,8 +36,12 @@ export type DesktopLifecycleRuntimeServices =
   | ElectronApp.ElectronApp
   | ElectronTheme.ElectronTheme;
 
+type DesktopLifecycleRegistrationServices =
+  | DesktopLifecycleRuntimeServices
+  | ElectronWindow.ElectronWindow;
+
 /**
- * @effect-expect-leaking DesktopEnvironment | DesktopShutdown | DesktopState | DesktopWindow | ElectronApp | ElectronTheme
+ * @effect-expect-leaking DesktopEnvironment | DesktopShutdown | DesktopState | DesktopWindow | ElectronApp | ElectronTheme | ElectronWindow
  */
 export class DesktopLifecycle extends Context.Service<
   DesktopLifecycle,
@@ -44,7 +49,11 @@ export class DesktopLifecycle extends Context.Service<
     readonly relaunch: (
       reason: string,
     ) => Effect.Effect<void, never, DesktopLifecycleRuntimeServices>;
-    readonly register: Effect.Effect<void, never, Scope.Scope | DesktopLifecycleRuntimeServices>;
+    readonly register: Effect.Effect<
+      void,
+      never,
+      Scope.Scope | DesktopLifecycleRegistrationServices
+    >;
   }
 >()("@spiritdevs/desktop/app/DesktopLifecycle") {}
 
@@ -170,10 +179,11 @@ export const make = DesktopLifecycle.of({
   }),
   register: Effect.gen(function* () {
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
+    const electronWindow = yield* ElectronWindow.ElectronWindow;
     const electronApp = yield* ElectronApp.ElectronApp;
     const electronTheme = yield* ElectronTheme.ElectronTheme;
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
-    const context = yield* Effect.context<DesktopLifecycleRuntimeServices>();
+    const context = yield* Effect.context<DesktopLifecycleRegistrationServices>();
     const runEffect = Effect.runPromiseWith(context);
     let quitAllowed = false;
     let updaterQuitAllowed = false;
@@ -187,8 +197,16 @@ export const make = DesktopLifecycle.of({
       // Cancelling the following app "before-quit" event breaks that sequence,
       // most visibly on macOS where the native updater performs the relaunch.
       updaterQuitAllowed = true;
-      void runEffect(
-        logLifecycleInfo("allowing updater-controlled quit").pipe(
+      // This event is synchronous and the updater's quit proceeds as soon as
+      // the listener returns, so a forked destroyAll would race the quit
+      // and windows could still be open when the process exits (visible on
+      // macOS). Destroy them inline.
+      Effect.runSyncWith(context)(
+        electronWindow.destroyAll.pipe(
+          Effect.andThen(logLifecycleInfo("allowing updater-controlled quit")),
+          Effect.catchCause((cause) =>
+            logLifecycleError("failed to destroy windows before updater quit", { cause }),
+          ),
           Effect.withSpan("desktop.lifecycle.beforeQuitForUpdate"),
         ),
       );
