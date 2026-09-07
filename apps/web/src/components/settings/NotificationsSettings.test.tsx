@@ -168,7 +168,7 @@ describe("NotificationsSettings", () => {
     expect(state.update).toHaveBeenCalledWith({
       threadAlerts: { ...state.settings, customSound: replacement },
     });
-    expect(state.remove).toHaveBeenCalledWith("user", "old");
+    expect(state.remove).toHaveBeenCalledWith("old");
   });
   it("preserves the old file and selection when decoding the replacement fails", async () => {
     state.upload.mockRejectedValue(new Error("Audio could not be decoded."));
