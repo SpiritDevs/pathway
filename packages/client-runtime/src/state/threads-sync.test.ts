@@ -483,6 +483,17 @@ describe("EnvironmentThreads", () => {
           THREAD_NOT_FOUND_MAX_ATTEMPTS + 1,
         );
         expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBeUndefined();
+        const loaderCalls = yield* Ref.get(harness.loaderCalls);
+        for (let retry = 1; retry <= 4; retry += 1) {
+          yield* Queue.offer(harness.inputs, new Error("thread still missing"));
+          yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.error));
+          yield* Effect.yieldNow;
+          yield* TestClock.adjust("250 millis");
+          expect(yield* Queue.take(harness.subscriptionStarts)).toBe(
+            THREAD_NOT_FOUND_MAX_ATTEMPTS + 1 + retry,
+          );
+          expect(yield* Ref.get(harness.loaderCalls)).toBe(loaderCalls);
+        }
         yield* Queue.offer(harness.inputs, snapshot(BASE_PROJECTION));
         const recovering = yield* awaitThreadState(harness.observed, (value) =>
           Option.isSome(value.data),

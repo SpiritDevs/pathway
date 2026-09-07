@@ -28,6 +28,7 @@ import {
   scopeThreadRef,
 } from "@spiritdevs/client-runtime/environment";
 import type { RuntimeSubagent } from "@spiritdevs/client-runtime/state/subagentRuntime";
+import type { EnvironmentShellStatus } from "@spiritdevs/client-runtime/state/shell";
 import * as Schema from "effect/Schema";
 import * as Equal from "effect/Equal";
 import * as Effect from "effect/Effect";
@@ -249,6 +250,7 @@ const PendingDraftSend = Schema.Struct({
   text: Schema.String,
   title: Schema.String,
   createdAt: Schema.String,
+  recoveryDraft: Schema.optionalKey(PersistedComposerThreadDraftState),
 });
 const isPendingDraftSend = Schema.is(PendingDraftSend);
 
@@ -364,6 +366,8 @@ export function composerDraftHasUserContent(
  */
 export interface DraftSessionState {
   pendingSend?: typeof PendingDraftSend.Type | null;
+  /** Hydration has no live request to finish this send; reconcile with a live shell. */
+  pendingSendNeedsReconciliation?: boolean;
   threadId: ThreadId;
   environmentId: EnvironmentId;
   projectId: ProjectId;
@@ -1607,6 +1611,7 @@ function createDraftThreadState(
     startFromOrigin: nextStartFromOrigin,
     promotedTo: null,
     pendingSend: existingThread?.pendingSend ?? null,
+    pendingSendNeedsReconciliation: existingThread?.pendingSendNeedsReconciliation ?? false,
   };
 }
 
@@ -1641,6 +1646,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
     left.pendingSend === right.pendingSend &&
+    left.pendingSendNeedsReconciliation === right.pendingSendNeedsReconciliation &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
 }
@@ -2072,6 +2078,72 @@ function migratePersistedComposerDraftStoreState(
   };
 }
 
+function toPersistedThreadDraft(
+  draft: ComposerThreadDraftState,
+): DeepMutable<PersistedComposerThreadDraftState> {
+  const hasModelData =
+    Object.keys(draft.modelSelectionByProvider).length > 0 || draft.activeProvider !== null;
+  return {
+    prompt: draft.prompt,
+    attachments: draft.persistedAttachments,
+    ...(draft.terminalContexts.length > 0
+      ? {
+          terminalContexts: draft.terminalContexts.map((context) => ({
+            id: context.id,
+            threadId: context.threadId,
+            createdAt: context.createdAt,
+            terminalId: context.terminalId,
+            terminalLabel: context.terminalLabel,
+            lineStart: context.lineStart,
+            lineEnd: context.lineEnd,
+          })),
+        }
+      : {}),
+    ...(draft.elementContexts.length > 0
+      ? {
+          elementContexts: draft.elementContexts.map((context) => ({
+            id: context.id,
+            threadId: context.threadId,
+            pickedAt: context.pickedAt,
+            pageUrl: context.pageUrl,
+            pageTitle: context.pageTitle,
+            tagName: context.tagName,
+            selector: context.selector,
+            htmlPreview: context.htmlPreview,
+            componentName: context.componentName,
+            source: context.source,
+            styles: context.styles,
+          })),
+        }
+      : {}),
+    ...(draft.issueContexts.length > 0
+      ? {
+          issueContexts: draft.issueContexts.map((context) => ({ ...context })),
+        }
+      : {}),
+    ...(draft.previewAnnotations.length > 0
+      ? {
+          previewAnnotations: draft.previewAnnotations.map(
+            (annotation) => ({ ...annotation }) as DeepMutable<PreviewAnnotationPayload>,
+          ),
+        }
+      : {}),
+    ...(draft.reviewComments.length > 0
+      ? {
+          reviewComments: draft.reviewComments.map((comment) => ({ ...comment })),
+        }
+      : {}),
+    ...(hasModelData
+      ? {
+          modelSelectionByProvider: compactModelSelectionByProvider(draft.modelSelectionByProvider),
+          activeProvider: draft.activeProvider,
+        }
+      : {}),
+    ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
+    ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
+  };
+}
+
 function partializeComposerDraftStoreState(
   state: ComposerDraftStoreState,
 ): PersistedComposerDraftStoreState {
@@ -2122,78 +2194,17 @@ function partializeComposerDraftStoreState(
     ) {
       continue;
     }
-    const persistedDraft: DeepMutable<PersistedComposerThreadDraftState> = {
-      prompt: draft.prompt,
-      attachments: draft.persistedAttachments,
-      ...(draft.terminalContexts.length > 0
-        ? {
-            terminalContexts: draft.terminalContexts.map((context) => ({
-              id: context.id,
-              threadId: context.threadId,
-              createdAt: context.createdAt,
-              terminalId: context.terminalId,
-              terminalLabel: context.terminalLabel,
-              lineStart: context.lineStart,
-              lineEnd: context.lineEnd,
-            })),
-          }
-        : {}),
-      ...(draft.elementContexts.length > 0
-        ? {
-            elementContexts: draft.elementContexts.map((context) => ({
-              id: context.id,
-              threadId: context.threadId,
-              pickedAt: context.pickedAt,
-              pageUrl: context.pageUrl,
-              pageTitle: context.pageTitle,
-              tagName: context.tagName,
-              selector: context.selector,
-              htmlPreview: context.htmlPreview,
-              componentName: context.componentName,
-              source: context.source,
-              styles: context.styles,
-            })),
-          }
-        : {}),
-      ...(draft.issueContexts.length > 0
-        ? {
-            issueContexts: draft.issueContexts.map((context) => ({ ...context })),
-          }
-        : {}),
-      ...(draft.previewAnnotations.length > 0
-        ? {
-            previewAnnotations: draft.previewAnnotations.map(
-              (annotation) => ({ ...annotation }) as DeepMutable<PreviewAnnotationPayload>,
-            ),
-          }
-        : {}),
-      ...(draft.reviewComments.length > 0
-        ? {
-            reviewComments: draft.reviewComments.map((comment) => ({ ...comment })),
-          }
-        : {}),
-      ...(hasModelData
-        ? {
-            modelSelectionByProvider: compactModelSelectionByProvider(
-              draft.modelSelectionByProvider,
-            ),
-            activeProvider: draft.activeProvider,
-          }
-        : {}),
-      ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
-      ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
-    };
+    const persistedDraft = toPersistedThreadDraft(draft);
     persistedDraftsByThreadKey[threadKey] = persistedDraft;
   }
-  const persistedDraftThreadsByThreadKey: DeepMutable<
-    PersistedComposerDraftStoreState["draftThreadsByThreadKey"]
-  > = {};
+  const persistedDraftThreadsByThreadKey: Record<string, PersistedDraftThreadState> = {};
   for (const [threadKey, draftThread] of Object.entries(state.draftThreadsByThreadKey)) {
     if (!keptSessionKeys.has(threadKey)) {
       continue;
     }
+    const { pendingSendNeedsReconciliation: _runtimeOnly, ...persistedThread } = draftThread;
     persistedDraftThreadsByThreadKey[threadKey] = {
-      ...draftThread,
+      ...persistedThread,
       locations: [...draftThread.locations],
     };
   }
@@ -2482,6 +2493,7 @@ function toHydratedDraftThreadState(
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
     pendingSend: persistedDraftThread.pendingSend ?? null,
+    pendingSendNeedsReconciliation: persistedDraftThread.pendingSend != null,
     promotedTo: persistedDraftThread.promotedTo
       ? scopeThreadRef(
           persistedDraftThread.promotedTo.environmentId as EnvironmentId,
@@ -2727,6 +2739,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               startFromOrigin: nextStartFromOrigin,
               promotedTo: existing.promotedTo ?? null,
               pendingSend: existing.pendingSend ?? null,
+              pendingSendNeedsReconciliation: existing.pendingSendNeedsReconciliation ?? false,
             };
             const isUnchanged =
               nextDraftThread.environmentId === existing.environmentId &&
@@ -2809,7 +2822,24 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return {
               draftThreadsByThreadKey: {
                 ...state.draftThreadsByThreadKey,
-                [threadKey]: { ...existing, pendingSend: pendingSend ?? null },
+                [threadKey]: {
+                  ...existing,
+                  pendingSend: pendingSend
+                    ? {
+                        ...pendingSend,
+                        recoveryDraft:
+                          pendingSend.recoveryDraft ??
+                          existing.pendingSend?.recoveryDraft ??
+                          toPersistedThreadDraft(
+                            state.draftsByThreadKey[threadKey] ?? {
+                              ...createEmptyThreadDraft(),
+                              prompt: pendingSend.text,
+                            },
+                          ),
+                      }
+                    : null,
+                  pendingSendNeedsReconciliation: false,
+                },
               },
             };
           });
@@ -3932,6 +3962,115 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
 );
 
 export const useComposerDraftStore = composerDraftStore;
+
+/** Capture the editable input separately from the expanded provider prompt. */
+export function captureComposerDraft(
+  target: ComposerThreadTarget,
+  overrides?: Partial<ComposerThreadDraftState>,
+) {
+  const draft = {
+    ...(useComposerDraftStore.getState().getComposerDraft(target) ?? createEmptyThreadDraft()),
+    ...overrides,
+  };
+  const saved = toPersistedThreadDraft(draft);
+  saved.attachments = draft.images.map((image) => {
+    const persisted = draft.persistedAttachments.find((attachment) => attachment.id === image.id);
+    return (
+      persisted ?? {
+        type: image.type,
+        id: image.id,
+        name: image.name,
+        mimeType: image.mimeType,
+        sizeBytes: image.sizeBytes,
+        ...(image.previewUrl.startsWith("data:") ? { dataUrl: image.previewUrl } : {}),
+        ...(image.type === "file"
+          ? { attachmentId: image.uploadedAttachmentId, environmentId: image.uploadEnvironmentId }
+          : {}),
+      }
+    );
+  });
+  return saved;
+}
+
+/** Reconcile pending sends using an authoritative, unfiltered environment shell. */
+export function reconcilePendingDraftSends(input: {
+  status: EnvironmentShellStatus;
+  environmentId: EnvironmentId;
+  acceptedThreadIds: ReadonlySet<ThreadId>;
+  activeDraftId: string | null;
+}) {
+  if (input.status !== "live") return;
+  useComposerDraftStore.setState((initial) => {
+    let state = initial;
+    const edit = () => {
+      if (state === initial)
+        state = {
+          ...initial,
+          draftsByThreadKey: { ...initial.draftsByThreadKey },
+          draftThreadsByThreadKey: { ...initial.draftThreadsByThreadKey },
+          logicalProjectDraftThreadKeyByLogicalProjectKey: {
+            ...initial.logicalProjectDraftThreadKeyByLogicalProjectKey,
+          },
+        };
+      return state;
+    };
+    for (const [draftKey, session] of Object.entries(initial.draftThreadsByThreadKey)) {
+      if (session.environmentId !== input.environmentId || !session.pendingSend) continue;
+      if (input.acceptedThreadIds.has(session.threadId)) {
+        // The active draft route owns its handoff until the message is visible.
+        if (draftKey === input.activeDraftId) continue;
+        const canonicalKey = scopedThreadKey(
+          scopeThreadRef(session.environmentId, session.threadId),
+        );
+        const composer = state.draftsByThreadKey[draftKey];
+        // Preserve any follow-up typed during launch in the canonical composer.
+        if (composerDraftHasUserContent(composer)) {
+          if (composerDraftHasUserContent(state.draftsByThreadKey[canonicalKey])) continue;
+          edit().draftsByThreadKey[canonicalKey] = composer!;
+        } else {
+          revokeDraftThreadPreviewUrls(composer);
+        }
+        const next = edit();
+        delete next.draftsByThreadKey[draftKey];
+        delete next.draftThreadsByThreadKey[draftKey];
+        for (const [key, mappedDraft] of Object.entries(
+          next.logicalProjectDraftThreadKeyByLogicalProjectKey,
+        )) {
+          if (mappedDraft === draftKey)
+            delete next.logicalProjectDraftThreadKeyByLogicalProjectKey[key];
+        }
+      } else if (session.pendingSendNeedsReconciliation) {
+        const restored = toHydratedThreadDraft(
+          session.pendingSend.recoveryDraft ?? {
+            prompt: session.pendingSend.text,
+            attachments: [],
+          },
+        );
+        const current = state.draftsByThreadKey[draftKey];
+        // An invested next draft must not be overwritten during reconnect.
+        if (composerDraftHasUserContent(current)) {
+          restored.prompt = [restored.prompt, current!.prompt].filter(Boolean).join("\n\n");
+          restored.images.push(...current!.images);
+          restored.persistedAttachments.push(...current!.persistedAttachments);
+          restored.terminalContexts.push(...current!.terminalContexts);
+          restored.elementContexts.push(...current!.elementContexts);
+          restored.issueContexts.push(...current!.issueContexts);
+          restored.previewAnnotations.push(...current!.previewAnnotations);
+          restored.reviewComments.push(...current!.reviewComments);
+        }
+        const next = edit();
+        next.draftsByThreadKey[draftKey] = restored;
+        next.draftThreadsByThreadKey[draftKey] = {
+          ...session,
+          pendingSend: null,
+          pendingSendNeedsReconciliation: false,
+          promotedTo: null,
+        };
+      }
+    }
+    return state;
+  });
+}
 
 export function clearComposerDraftsEnvironment(environmentId: EnvironmentId): void {
   useComposerDraftStore.setState((state) => {

@@ -21,6 +21,7 @@ import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
+  buildPendingDraftMessage,
   canReplaceInitialThreadProject,
   copyMessageAttachmentsForNewThread,
   createLocalDispatchSnapshot,
@@ -1284,5 +1285,55 @@ describe("deriveAcknowledgedOptimisticUserMessageIds", () => {
         projectedServerMessageIds: new Set([queuedId, steerId]),
       }),
     ).toEqual(new Set([queuedId]));
+  });
+});
+
+describe("pending first-send attachments", () => {
+  it("reconstructs image previews and file cards without exposing the synthetic attachment prompt", () => {
+    const message = buildPendingDraftMessage({
+      messageId: MessageId.make("pending-attachments"),
+      title: "Attachments",
+      text: "Synthetic bootstrap prompt",
+      createdAt: "2026-09-08T00:00:00.000Z",
+      recoveryDraft: {
+        prompt: "",
+        attachments: [
+          {
+            type: "image",
+            id: "image-1",
+            name: "diagram.png",
+            mimeType: "image/png",
+            sizeBytes: 1,
+            dataUrl: "data:image/png;base64,YQ==",
+          },
+          {
+            type: "file",
+            id: "file-1",
+            name: "notes.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 10,
+          },
+        ],
+      },
+    });
+    expect(message?.text).toBe("");
+    expect(message?.attachments).toEqual([
+      {
+        type: "image",
+        id: "image-1",
+        name: "diagram.png",
+        mimeType: "image/png",
+        sizeBytes: 1,
+        previewUrl: "data:image/png;base64,YQ==",
+      },
+      {
+        type: "file",
+        id: "file-1",
+        name: "notes.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+        previewUrl: "",
+      },
+    ]);
   });
 });

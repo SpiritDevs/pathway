@@ -277,7 +277,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       }
       if (httpSnapshot._tag === "Unavailable") {
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
-        yield* Ref.set(notFoundAttempts, 0);
+        yield* Ref.set(notFoundAttempts, 1);
         yield* SubscriptionRef.update(state, (current) => ({
           ...current,
           status: "synchronizing" as const,
@@ -343,7 +343,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                 projection: httpSnapshot.snapshot.projection,
               });
               current = yield* SubscriptionRef.get(state);
-            } else if (shouldConfirmDeletion) {
+            } else {
               // A transport or auth failure cannot confirm deletion. Start a
               // fresh retry window and let the socket path keep recovering.
               yield* Ref.set(notFoundAttempts, 1);

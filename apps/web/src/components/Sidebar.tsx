@@ -1,4 +1,5 @@
 import { selectSidebarDraftRows, type SidebarDraftRowData } from "./sidebarDrafts";
+import { DraftSendReconciliation } from "./DraftSendReconciliation";
 import { autoAnimate } from "@formkit/auto-animate";
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
@@ -3780,6 +3781,7 @@ export default function Sidebar() {
   return (
     <>
       <SidebarChromeHeader isElectron={isElectron} />
+      <DraftSendReconciliation activeDraftId={routeDraftIdForRows} />
       <SidebarContent
         className="gap-0"
         fixedHeader={

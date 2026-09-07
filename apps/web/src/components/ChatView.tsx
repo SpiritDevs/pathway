@@ -254,6 +254,7 @@ import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
   composerDraftHasUserContent,
+  captureComposerDraft,
   deriveComposerControlsLocked,
   deriveSubagentComposerModelSelection,
   useComposerDraftStore,
@@ -396,6 +397,7 @@ import {
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
+  buildPendingDraftMessage,
   canReplaceInitialThreadProject,
   collectUserMessageBlobPreviewUrls,
   copyMessageAttachmentsForNewThread,
@@ -1631,16 +1633,8 @@ function ChatViewContent(props: ChatViewProps) {
     ) {
       return localOptimisticUserMessages;
     }
-    const message: ChatMessage = {
-      id: pending.messageId,
-      role: "user",
-      text: pending.text,
-      createdAt: pending.createdAt,
-      updatedAt: pending.createdAt,
-      runId: null,
-      streaming: false,
-    };
-    return [message, ...localOptimisticUserMessages];
+    const message = buildPendingDraftMessage(pending);
+    return message ? [message, ...localOptimisticUserMessages] : localOptimisticUserMessages;
   }, [draftThread?.pendingSend, localOptimisticUserMessages, serverProjection?.messages]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
@@ -7172,6 +7166,15 @@ function ChatViewContent(props: ChatViewProps) {
         text: promptForSend,
         title: deriveThreadTitleSeed({ text: trimmed, attachments: composerImages }),
         createdAt: messageCreatedAt,
+        recoveryDraft: captureComposerDraft(composerDraftTarget, {
+          prompt: promptForSend,
+          images: composerImages,
+          terminalContexts: sendableComposerTerminalContexts,
+          elementContexts: composerElementContexts,
+          issueContexts: composerIssueContexts,
+          previewAnnotations: composerPreviewAnnotations,
+          reviewComments: composerReviewComments,
+        }),
       });
     }
     if (isDraftHeroState && activeThreadKey) {
@@ -7364,6 +7367,25 @@ function ChatViewContent(props: ChatViewProps) {
     }
 
     const turnAttachmentsResult = await settlePromise(() => turnAttachmentsPromise);
+    if (pendingDraftTarget !== null && turnAttachmentsResult._tag === "Success") {
+      const store = useComposerDraftStore.getState();
+      const pending = store.getDraftThread(pendingDraftTarget)?.pendingSend;
+      if (pending?.recoveryDraft)
+        store.setDraftPendingSend(pendingDraftTarget, {
+          ...pending,
+          recoveryDraft: {
+            ...pending.recoveryDraft,
+            attachments: pending.recoveryDraft.attachments.map((attachment, index) => {
+              const uploaded = turnAttachmentsResult.value[index];
+              if (uploaded && "dataUrl" in uploaded)
+                return { ...attachment, dataUrl: uploaded.dataUrl };
+              return uploaded && "id" in uploaded
+                ? { ...attachment, attachmentId: uploaded.id, environmentId }
+                : attachment;
+            }),
+          },
+        });
+    }
     if (failure === null && turnAttachmentsResult._tag === "Failure") {
       failure = turnAttachmentsResult;
     }
@@ -7565,11 +7587,16 @@ function ChatViewContent(props: ChatViewProps) {
         // The view may now be showing another draft. Restore the original
         // send in its own store entry even when the live composer has changed.
         if (!composerDraftHasUserContent(store.getComposerDraft(pendingDraftTarget))) {
-          store.setPrompt(pendingDraftTarget, messageTextForSend);
+          store.setPrompt(pendingDraftTarget, promptForSend);
           store.addImages(
             pendingDraftTarget,
             composerImagesSnapshot.map(cloneComposerAttachmentForRetry),
           );
+          store.setTerminalContexts(pendingDraftTarget, composerTerminalContextsSnapshot);
+          store.setElementContexts(pendingDraftTarget, composerElementContextsSnapshot);
+          store.setIssueContexts(pendingDraftTarget, composerIssueContextsSnapshot);
+          store.setPreviewAnnotations(pendingDraftTarget, composerPreviewAnnotationsSnapshot);
+          store.setReviewComments(pendingDraftTarget, composerReviewCommentsSnapshot);
         }
         store.setDraftPendingSend(pendingDraftTarget, null);
       }
