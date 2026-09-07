@@ -304,15 +304,18 @@ function preserveProtocolCompatibility(value: Schema.Json): Schema.Json {
     "phase" in properties &&
     "type" in properties
   ) {
-    properties.questions ??= {
-      type: ["array", "null"],
-      items: {
-        type: "object",
-        properties: {
-          title: { type: "string" },
-          options: { type: ["array", "null"], items: { type: "string" } },
+    next.properties = {
+      ...properties,
+      questions: properties.questions ?? {
+        type: ["array", "null"],
+        items: {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            options: { type: ["array", "null"], items: { type: "string" } },
+          },
+          required: ["title"],
         },
-        required: ["title"],
       },
     };
   }
