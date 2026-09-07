@@ -450,13 +450,15 @@ import {
   AlertDialogTitle,
 } from "./ui/alert-dialog";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
-import { ServerUpdateAction, ServerUpdateProgress } from "./ServerUpdateAction";
+import { ServerUpdateAction, serverUpdateStageLabel } from "./ServerUpdateAction";
+import { Spinner } from "./ui/spinner";
 import {
   buildVersionMismatchDismissalKey,
   dismissVersionMismatch,
   isVersionMismatchDismissed,
   resolveServerConfigVersionMismatch,
   resolveServerSelfUpdateCapability,
+  supportsDesktopAppUpdate,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
 import { normalizeComposerAttachmentName } from "./chat/composerAttachmentFiles";
@@ -2556,6 +2558,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [setDismissedVersionMismatchKey, versionMismatchDismissKey]);
   const serverUpdateEnvironmentId = activeThread?.environmentId ?? null;
   const versionMismatchSelfUpdate = resolveServerSelfUpdateCapability(serverConfig);
+  const versionMismatchDesktopAppUpdate = supportsDesktopAppUpdate(serverConfig);
   const serverUpdateState = useAtomValue(
     serverEnvironment.updateStateAtom(serverUpdateEnvironmentId),
   );
@@ -2635,39 +2638,42 @@ function ChatViewContent(props: ChatViewProps) {
     ) {
       const updateInProgress = serverUpdateState.status === "running";
       const updateFailed = serverUpdateState.status === "failed";
+      const updateTargetVersion =
+        versionMismatch?.clientVersion ?? (updateFailed ? serverUpdateState.targetVersion : null);
       items.push({
         id: `server-version:${serverUpdateEnvironmentId}`,
-        variant: updateFailed ? "error" : updateInProgress ? "default" : "warning",
-        ...(updateInProgress || updateFailed ? {} : { presentation: "lip" as const }),
+        variant: updateFailed ? "error" : "warning",
+        presentation: "lip",
+        urgent: updateInProgress || updateFailed,
         icon: updateInProgress ? (
-          <span
-            className="size-1.5 animate-status-pulse rounded-full bg-foreground"
-            aria-hidden="true"
-          />
+          <Spinner className="motion-reduce:animate-none" aria-hidden="true" />
         ) : (
           <TriangleAlertIcon />
         ),
-        title:
-          updateInProgress || updateFailed
-            ? `${updateFailed ? "Could not update" : "Updating"} ${versionMismatchServerLabel}`
-            : versionMismatchSelfUpdate === "desktop-managed"
-              ? `Update the desktop app on ${versionMismatchEnvironmentLabel ?? "the server machine"}`
-              : "Client and server versions differ",
-        description:
-          updateInProgress || updateFailed ? (
-            <ServerUpdateProgress state={serverUpdateState} />
-          ) : null,
-        // Desktop-managed servers cannot be updated from this client, so keep
-        // their lip notification-only.
+        title: updateInProgress ? (
+          <span role="status" aria-live="polite">
+            {versionMismatchEnvironmentLabel ? `${versionMismatchEnvironmentLabel}: ` : ""}
+            {serverUpdateStageLabel(serverUpdateState.stage)}
+          </span>
+        ) : updateFailed ? (
+          `Could not update ${versionMismatchServerLabel}`
+        ) : versionMismatchSelfUpdate === "desktop-managed" ? (
+          `Update the desktop app on ${versionMismatchEnvironmentLabel ?? "the server machine"}`
+        ) : (
+          "Client and server versions differ"
+        ),
+        description: updateFailed ? serverUpdateState.message : undefined,
         actions:
           updateInProgress ||
-          !versionMismatch ||
-          versionMismatchSelfUpdate === "desktop-managed" ? undefined : (
+          updateTargetVersion === null ||
+          (versionMismatchSelfUpdate === "desktop-managed" &&
+            !versionMismatchDesktopAppUpdate) ? undefined : (
             <ServerUpdateAction
               environmentId={serverUpdateEnvironmentId}
               serverLabel={versionMismatchServerLabel}
               selfUpdate={versionMismatchSelfUpdate}
-              targetVersion={versionMismatch.clientVersion}
+              desktopAppUpdate={versionMismatchDesktopAppUpdate}
+              targetVersion={updateTargetVersion}
               {...(updateFailed ? { label: "Retry update" } : {})}
             />
           ),
@@ -2691,6 +2697,7 @@ function ChatViewContent(props: ChatViewProps) {
     versionMismatchDismissKey,
     serverUpdateEnvironmentId,
     versionMismatchSelfUpdate,
+    versionMismatchDesktopAppUpdate,
     versionMismatchEnvironmentLabel,
     versionMismatchServerLabel,
   ]);
