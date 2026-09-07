@@ -577,6 +577,14 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
 
   for (const row of input.visibleTurnItems) {
     const { item } = row;
+    // Known existing workspaces use normal activity. Older servers omit preparation metadata.
+    if (
+      turnItemIsWorkspacePreparation(item) &&
+      (item.workspacePreparation?.workspaceKind === "root" ||
+        item.workspacePreparation?.workspaceKind === "existing_worktree")
+    ) {
+      continue;
+    }
     const createdAt = projectedItemCreatedAt(row);
     const attempt = resolveAttempt(item);
     const attemptMetadata = attempt === undefined ? {} : { attempt };
