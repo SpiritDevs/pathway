@@ -764,19 +764,28 @@ function useConnectedProviderUsageAccounts() {
       Atom.make(
         (get) =>
           new Map(
-            connected.map((environment) => [
-              environment.environmentId,
-              Option.getOrNull(
-                AsyncResult.value(
-                  get(
-                    serverEnvironment.providerUsageLive({
-                      environmentId: environment.environmentId,
-                      input: {},
-                    }),
-                  ),
-                ),
-              ),
-            ]),
+            connected.map((environment) => {
+              const result = get(
+                serverEnvironment.providerUsageLive({
+                  environmentId: environment.environmentId,
+                  input: {},
+                }),
+              );
+              const success =
+                result._tag === "Success"
+                  ? result
+                  : result._tag === "Failure"
+                    ? Option.getOrNull(result.previousSuccess)
+                    : null;
+              return [
+                environment.environmentId,
+                {
+                  data: success?.value ?? [],
+                  receivedAt: success?.timestamp ?? 0,
+                  loading: result._tag === "Initial",
+                },
+              ];
+            }),
           ),
       ),
     [connected],
@@ -789,17 +798,20 @@ function useConnectedProviderUsageAccounts() {
           environmentId: environment.environmentId,
           environmentLabel: environment.label,
           providers: serverConfigs.get(environment.environmentId)?.providers ?? null,
-          usage: usage.get(environment.environmentId) ?? [],
+          usage: usage.get(environment.environmentId)?.data ?? [],
+          receivedAt: usage.get(environment.environmentId)?.receivedAt ?? 0,
         })),
       ),
     [connected, serverConfigs, usage],
   );
   const loading =
     !isReady ||
-    (connected.length > 0 &&
-      accounts.length === 0 &&
-      connected.some((environment) => !serverConfigs.has(environment.environmentId)));
-  return { accounts, connectedCount: connected.length, loading };
+    connected.some(
+      (environment) =>
+        !serverConfigs.has(environment.environmentId) ||
+        usage.get(environment.environmentId)?.loading,
+    );
+  return { accounts: loading ? [] : accounts, connectedCount: connected.length, loading };
 }
 
 export function ConnectedProviderUsageMenu() {

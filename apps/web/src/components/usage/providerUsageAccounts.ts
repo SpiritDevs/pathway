@@ -16,6 +16,7 @@ function isProviderUsageDriver(driver: string): driver is ProviderUsageDriver {
 export interface ConnectedProviderUsageEnvironment {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel?: string;
+  readonly receivedAt?: number;
   readonly usage?: ReadonlyArray<ServerProviderUsageSnapshot>;
   readonly providers: ReadonlyArray<ServerProvider> | null;
 }
@@ -26,6 +27,7 @@ export interface ConnectedProviderUsageAccount {
   readonly environmentLabel: string;
   readonly provider: ServerProvider;
   readonly displayName: string;
+  readonly receivedAt: number;
   readonly snapshot: ServerProviderUsageSnapshot | null;
 }
 
@@ -54,6 +56,7 @@ export function deriveConnectedProviderUsageAccounts(
         provider: entry.snapshot,
         displayName: entry.displayName,
         snapshot,
+        receivedAt: environment.receivedAt ?? 0,
       };
       const preferCandidate =
         !existing ||
@@ -62,7 +65,7 @@ export function deriveConnectedProviderUsageAccounts(
           Number(snapshot?.stale ?? false) < Number(existing.snapshot?.stale ?? false)) ||
         (snapshot?.status === existing.snapshot?.status &&
           Boolean(snapshot?.stale) === Boolean(existing.snapshot?.stale) &&
-          Date.parse(snapshot?.updatedAt ?? "") > Date.parse(existing.snapshot?.updatedAt ?? ""));
+          candidate.receivedAt > existing.receivedAt);
       accounts.set(key, preferCandidate ? candidate : existing);
     }
   }

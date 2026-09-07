@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import {
   ingestPushedSnapshot,
   mapCodexRateLimitsUpdated,
@@ -468,4 +469,57 @@ it.effect(
         expect(other.snapshot.accountKey).not.toBe(first.snapshot.accountKey);
       }),
     ),
+);
+
+it.effect("preserves a new-login refresh that starts while a push checks the old login", () =>
+  Effect.gen(function* () {
+    const initial = {
+      ...parseCodexUsage({
+        instanceId,
+        nowMs,
+        json: { rate_limit: { primary_window: { used_percent: 10 } } },
+      }),
+      accountKey: "account-a",
+    };
+    yield* Effect.promise(() =>
+      providerUsageTestKit.resolve(
+        { instanceId, provider: "codex", nowMs, providerHomePath: "/synthetic/a" },
+        async () => ({ snapshot: initial }),
+      ),
+    );
+    const readerStarted = Promise.withResolvers<void>();
+    const identity = Promise.withResolvers<string>();
+    providerUsageTestKit.setCodexAccountKeyReader(instanceId, () => {
+      readerStarted.resolve();
+      return identity.promise;
+    });
+    const push = yield* ingestPushedSnapshot(
+      mapCodexRateLimitsUpdated({ instanceId, rateLimits: { primary: { usedPercent: 30 } } }),
+      nowMs + 2,
+    ).pipe(Effect.forkChild);
+    yield* Effect.promise(() => readerStarted.promise);
+    const response = Promise.withResolvers<{ snapshot: typeof initial }>();
+    const refreshStarted = Promise.withResolvers<void>();
+    const input = {
+      instanceId,
+      provider: "codex" as const,
+      nowMs: nowMs + 1,
+      providerHomePath: "/synthetic/b",
+    };
+    const refresh = providerUsageTestKit.resolve(input, () => {
+      refreshStarted.resolve();
+      return response.promise;
+    });
+    yield* Effect.promise(() => refreshStarted.promise);
+    identity.resolve("account-b");
+    yield* Fiber.join(push);
+    response.resolve({ snapshot: { ...initial, accountKey: "account-b" } });
+    yield* Effect.promise(() => refresh);
+    const cached = yield* Effect.promise(() =>
+      providerUsageTestKit.resolve(input, async () => {
+        throw new Error("The completed refresh should remain cached");
+      }),
+    );
+    expect(cached.accountKey).toBe("account-b");
+  }),
 );

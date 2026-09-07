@@ -1516,13 +1516,16 @@ export const ingestPushedSnapshot = Effect.fn("ProviderUsage.ingestPushedSnapsho
   const cacheKey = cacheKeyFor(input);
   let cached = snapshotCache.get(cacheKey);
   if (cached?.snapshot.accountKey) {
+    const pending = inFlightFetches.get(cacheKey);
     const readAccountKey = codexAccountKeyReaders.get(cacheKey);
     const accountKey = readAccountKey ? yield* Effect.promise(readAccountKey) : undefined;
-    if (accountKey !== cached.snapshot.accountKey) {
+    if (snapshotCache.get(cacheKey) !== cached) {
+      cached = snapshotCache.get(cacheKey);
+    } else if (accountKey !== cached.snapshot.accountKey) {
       // A push has no login identity. Do not merge it with a previous login's
       // full quota or publish it under that login while credentials change.
       snapshotCache.delete(cacheKey);
-      inFlightFetches.delete(cacheKey);
+      if (inFlightFetches.get(cacheKey) === pending) inFlightFetches.delete(cacheKey);
       retryAfterGates.delete(cacheKey);
       cancelScheduledRateLimitRefresh(cacheKey);
       cached = undefined;
@@ -1966,6 +1969,12 @@ function testingContext(input: {
 }
 
 export const providerUsageTestKit = {
+  setCodexAccountKeyReader: (
+    instanceId: ProviderInstanceId,
+    read: () => Promise<string | undefined>,
+  ) => {
+    codexAccountKeyReaders.set(cacheKeyFor({ instanceId, provider: "codex" }), read);
+  },
   credentialIdentity: (input: Parameters<typeof testingContext>[0]) =>
     readCredentialIdentity({ ...testingContext(input), useDefaultCredentialStore: true }),
   setKeychainReader: (reader: typeof defaultReadKeychainPassword) => {

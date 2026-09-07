@@ -475,6 +475,31 @@ describe("provider usage panel refresh", () => {
     expect(renderRow(row.props)).toBeNull();
   });
 
+  it("keeps both usage views loading until the initial usage subscription arrives", () => {
+    setConnectedProviders(
+      [environmentId, EnvironmentId.make("laptop")].map((id) => ({
+        environmentId: id,
+        label: String(id),
+        providers: [provider("codex", codexId)],
+      })),
+    );
+    testState.listLoaded = false;
+    hooks.beginRender();
+    const menu = ConnectedProviderUsageMenu() as ReactElement<Record<string, unknown>>;
+    expect(visitElements(menu, (element) => Boolean(element.props.account))).toBeNull();
+    expect(
+      visitElements(menu, (element) => element.props.children === "Loading provider accounts…"),
+    ).not.toBeNull();
+    hooks.reset();
+    hooks.beginRender();
+    const settings = ProviderUsageSettingsSection() as ReactElement<Record<string, unknown>>;
+    expect(visitElements(settings, (element) => element.props.loading === true)).not.toBeNull();
+    expect(
+      visitElements(settings, (element) => element.props["aria-label"] === "Refresh provider usage")
+        ?.props.disabled,
+    ).toBe(true);
+  });
+
   it("groups matching subscriptions in the menu and refreshes each account once in settings", async () => {
     const laptopId = EnvironmentId.make("usage-laptop");
     const workId = ProviderInstanceId.make("work");
