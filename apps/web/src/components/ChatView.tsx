@@ -110,6 +110,7 @@ import {
   derivePendingUserInputs,
   deriveThreadPhase,
   deriveTimelineEntriesFromVisibleTurnItems,
+  withOptimisticWorkspacePreparation,
   deriveRevertTurnCountByUserMessageId,
   deriveActiveWorkStartedAt,
   findLatestProposedPlan,
@@ -666,6 +667,7 @@ function useLocalDispatchState(input: {
   activeThread: Thread | undefined;
   activeLatestRun: Thread["latestRun"] | null;
   latestUserMessageId: MessageId | null;
+  hasWorkspacePreparation: boolean;
   phase: SessionPhase;
   activePendingApproval: RuntimeRequestId | null;
   activePendingUserInput: RuntimeRequestId | null;
@@ -700,7 +702,13 @@ function useLocalDispatchState(input: {
       localDispatch,
     ],
   );
-  const activeLocalDispatch = serverAcknowledgedLocalDispatch ? null : localDispatch;
+  const waitingForPreparation =
+    localDispatch?.preparingWorktree &&
+    !input.hasWorkspacePreparation &&
+    !input.threadError &&
+    (input.activeLatestRun === null || input.activeLatestRun.status === "preparing");
+  const activeLocalDispatch =
+    serverAcknowledgedLocalDispatch && !waitingForPreparation ? null : localDispatch;
   const beginLocalDispatch = useCallback(
     (options?: { preparingWorktree?: boolean }) => {
       const preparingWorktree = Boolean(options?.preparingWorktree);
@@ -2810,6 +2818,10 @@ function ChatViewContent(props: ChatViewProps) {
     activeLatestRun,
     latestUserMessageId:
       serverProjection?.messages.findLast((message) => message.role === "user")?.id ?? null,
+    hasWorkspacePreparation:
+      serverProjection?.turnItems.some(
+        (item) => item.type === "command_execution" && item.input === "Preparing workspace",
+      ) ?? false,
     phase,
     activePendingApproval: activePendingApproval?.requestId ?? null,
     activePendingUserInput: activePendingUserInput?.requestId ?? null,
@@ -3309,7 +3321,23 @@ function ChatViewContent(props: ChatViewProps) {
       ),
     [optimisticUserMessages],
   );
-  const timelineEntries = isServerThread ? serverTimelineEntries : draftTimelineEntries;
+  const timelineEntries = useMemo(
+    () =>
+      withOptimisticWorkspacePreparation(
+        isServerThread ? serverTimelineEntries : draftTimelineEntries,
+        isPreparingWorktree && localDispatchStartedAt && activeThread
+          ? { threadId: activeThread.id, startedAt: localDispatchStartedAt }
+          : null,
+      ),
+    [
+      isServerThread,
+      serverTimelineEntries,
+      draftTimelineEntries,
+      isPreparingWorktree,
+      localDispatchStartedAt,
+      activeThread,
+    ],
+  );
   const [dockedDraftHeroThreadKey, setDockedDraftHeroThreadKey] = useState<string | null>(null);
   const draftHeroDockRequested =
     activeThreadKey !== null && dockedDraftHeroThreadKey === activeThreadKey;
@@ -7374,7 +7402,6 @@ function ChatViewContent(props: ChatViewProps) {
                   : {}),
               }
             : undefined;
-      beginLocalDispatch({ preparingWorktree: false });
       const startResult = await startThreadTurn({
         environmentId,
         input: {

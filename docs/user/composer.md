@@ -15,3 +15,8 @@ to new threads and existing conversations, including phone-sized web windows.
 
 Approval requests, questions from an agent, and plan follow-ups keep their own controls. Native
 mobile apps retain their existing composer layout.
+
+When you send the first message with **New worktree** selected, a workspace preparation card
+appears beside your message. It shows preparation, checkout progress, and the setup action as
+they happen. Once the workspace is ready for the agent, the card disappears and the Working
+timer starts. Setup failures stay visible so you can inspect them.

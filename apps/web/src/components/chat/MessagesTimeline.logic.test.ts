@@ -1,3 +1,6 @@
+import { RunId, ThreadId } from "@spiritdevs/contracts";
+import * as DateTime from "effect/DateTime";
+import { withOptimisticWorkspacePreparation, type TimelineEntry } from "../../session-logic";
 import { describe, expect, it } from "vite-plus/test";
 import {
   computeStableMessagesTimelineRows,
@@ -1805,5 +1808,69 @@ describe("deriveMessagesTimelineRows waiting-background", () => {
         label: "Waiting on 2 background tasks: first, …",
       },
     ]);
+  });
+});
+
+describe("workspace preparation before provider work", () => {
+  const runId = RunId.make("worktree-run");
+  const submittedAt = "2026-01-01T00:00:00.000Z";
+  const readyAt = "2026-01-01T00:01:00.000Z";
+  const optimistic = () =>
+    withOptimisticWorkspacePreparation([], {
+      threadId: ThreadId.make("worktree-thread"),
+      startedAt: submittedAt,
+    });
+  function rows(entries: TimelineEntry[], startedAt: string | null = null) {
+    return deriveMessagesTimelineRows({
+      timelineEntries: entries,
+      latestRun: { runId, status: "running", startedAt, completedAt: null },
+      isWorking: true,
+      activeTurnStartedAt: submittedAt,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+  }
+  function prepared(status: "running" | "completed" | "failed" | "interrupted") {
+    return optimistic().map(
+      (entry): TimelineEntry =>
+        entry.kind !== "event"
+          ? entry
+          : {
+              ...entry,
+              projectedItem: {
+                ...entry.projectedItem,
+                item: {
+                  ...entry.projectedItem.item,
+                  runId,
+                  status,
+                  completedAt: status === "running" ? null : DateTime.makeUnsafe(readyAt),
+                },
+              },
+            },
+    );
+  }
+  it("shows preparation immediately and suppresses Working while checkout runs", () => {
+    expect(rows(optimistic()).map((row) => row.kind)).toEqual(["event"]);
+    expect(rows(prepared("running")).map((row) => row.kind)).toEqual(["event"]);
+  });
+  it("hands off to the server item without duplicating the card", () => {
+    const entries = prepared("running");
+    expect(
+      withOptimisticWorkspacePreparation(entries, {
+        threadId: ThreadId.make("worktree-thread"),
+        startedAt: submittedAt,
+      }),
+    ).toBe(entries);
+    expect(withOptimisticWorkspacePreparation([], null)).toEqual([]);
+  });
+  it("removes successful setup and starts Working at readiness, never submission", () => {
+    expect(rows(prepared("completed"))).toMatchObject([{ kind: "working", createdAt: readyAt }]);
+    const providerStartedAt = "2026-01-01T00:01:02.000Z";
+    expect(rows(prepared("completed"), providerStartedAt)).toMatchObject([
+      { kind: "working", createdAt: providerStartedAt },
+    ]);
+  });
+  it.each(["failed", "interrupted"] as const)("retains %s preparation for recovery", (status) => {
+    expect(rows(prepared(status))[0]?.kind).toBe("event");
   });
 });
