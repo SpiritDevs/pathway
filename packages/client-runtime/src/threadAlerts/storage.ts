@@ -124,33 +124,30 @@ export async function updateAlertPresence(
   });
 }
 
-export async function saveAlertSound(userId: string, id: string, file: Blob): Promise<void> {
+export async function saveAlertSound(id: string, file: Blob): Promise<void> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const tx = db.transaction("sounds", "readwrite");
-    tx.objectStore("sounds").put(file, JSON.stringify([userId, id]));
+    tx.objectStore("sounds").put(file, id);
     tx.oncomplete = () => resolve();
     tx.addEventListener("error", () => reject(tx.error));
   });
 }
 
-export async function readAlertSound(userId: string, id: string): Promise<Blob | undefined> {
+export async function readAlertSound(id: string): Promise<Blob | undefined> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
-    const request = db
-      .transaction("sounds")
-      .objectStore("sounds")
-      .get(JSON.stringify([userId, id]));
+    const request = db.transaction("sounds").objectStore("sounds").get(id);
     request.onsuccess = () => resolve(request.result as Blob | undefined);
     request.addEventListener("error", () => reject(request.error));
   });
 }
 
-export async function deleteAlertSound(userId: string, id: string): Promise<void> {
+export async function deleteAlertSound(id: string): Promise<void> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const tx = db.transaction("sounds", "readwrite");
-    tx.objectStore("sounds").delete(JSON.stringify([userId, id]));
+    tx.objectStore("sounds").delete(id);
     tx.oncomplete = () => resolve();
     tx.addEventListener("error", () => reject(tx.error));
   });

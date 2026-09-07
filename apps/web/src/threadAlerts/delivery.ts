@@ -139,7 +139,7 @@ export async function deliverThreadAlert(
       ? showThreadAlert(alertNotificationInput(userId, action), onNavigate, isActive)
       : Promise.resolve(),
     settings.soundEnabled && (action.type === "summary" || action.sound)
-      ? previewAlertSound(userId, settings)
+      ? previewAlertSound(settings)
       : Promise.resolve(),
   ]);
 }
@@ -161,7 +161,7 @@ export async function testThreadAlert(
           () => {},
         )
       : Promise.resolve(),
-    settings.soundEnabled ? previewAlertSound(userId, settings) : Promise.resolve(),
+    settings.soundEnabled ? previewAlertSound(settings) : Promise.resolve(),
   ]);
   const failed = results.find((result) => result.status === "rejected");
   if (failed?.status === "rejected") throw failed.reason;

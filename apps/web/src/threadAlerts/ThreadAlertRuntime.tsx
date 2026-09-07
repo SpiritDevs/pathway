@@ -144,7 +144,7 @@ export function ThreadAlertRuntime() {
     [threadMap, projectMap, policyMap, rowMap, policyScopes],
   );
   const onNavigate = useCallback(
-    (target: ThreadAlertTarget) => {
+    async (target: ThreadAlertTarget) => {
       if (target === null) {
         window.dispatchEvent(new Event(OPEN_NOTIFICATION_TRAY_EVENT));
         return;
@@ -160,22 +160,35 @@ export function ThreadAlertRuntime() {
         (value) => value.projectKey === `${target.environmentId}:${thread?.projectId}`,
       );
       appAtomRegistry.set(activeFocusIdAtom, assignment?.focusId ?? ALL_FOCUS_ID);
-      void navigate({
-        to: "/threads/$environmentId/$threadId",
-        params: {
-          environmentId: EnvironmentId.make(target.environmentId),
-          threadId: ThreadId.make(target.threadId),
-        },
-      })
-        .then(() => mutations?.markNotificationRead?.(target.eventId))
-        .catch((error: unknown) => {
-          toastManager.add({
-            type: "error",
-            title: "Could not open notification",
-            description:
-              error instanceof Error ? error.message : "Try opening it from the notification tray.",
-          });
+      try {
+        await navigate({
+          to: "/threads/$environmentId/$threadId",
+          params: {
+            environmentId: EnvironmentId.make(target.environmentId),
+            threadId: ThreadId.make(target.threadId),
+          },
         });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not open notification",
+          description:
+            error instanceof Error ? error.message : "Try opening it from the notification tray.",
+        });
+        return;
+      }
+      try {
+        await mutations?.markNotificationRead?.(target.eventId);
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not mark notification as read",
+          description:
+            error instanceof Error
+              ? error.message
+              : "Try marking it read from the notification tray.",
+        });
+      }
     },
     [assignments, threadMap, navigate, mutations, replicas],
   );

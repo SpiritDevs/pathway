@@ -263,11 +263,11 @@ export function NotificationsSettings() {
                 event.target.value = "";
                 if (file && userId)
                   void run(async () => {
-                    const customSound = await saveCustomAlertSound(userId, file);
+                    const customSound = await saveCustomAlertSound(file);
                     const previousSound = getClientSettings().threadAlerts.customSound;
                     update({ soundId: "custom", customSound });
                     if (previousSound && previousSound.id !== customSound.id) {
-                      await removeCustomAlertSound(userId, previousSound.id);
+                      await removeCustomAlertSound(previousSound.id);
                     }
                   });
               }}
@@ -277,7 +277,7 @@ export function NotificationsSettings() {
               variant="outline"
               disabled={!userId || busy}
               onClick={() => {
-                if (userId) void run(() => previewAlertSound(userId, settings));
+                if (userId) void run(() => previewAlertSound(settings));
               }}
             >
               Preview
@@ -291,7 +291,7 @@ export function NotificationsSettings() {
                   const sound = settings.customSound;
                   if (userId && sound)
                     void run(async () => {
-                      await removeCustomAlertSound(userId, sound.id);
+                      await removeCustomAlertSound(sound.id);
                       update({
                         customSound: null,
                         soundId: settings.soundId === "custom" ? "system" : settings.soundId,

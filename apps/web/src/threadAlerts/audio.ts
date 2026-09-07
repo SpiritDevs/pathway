@@ -34,7 +34,7 @@ export function validateAlertSoundFile(file: Pick<File, "name" | "size" | "type"
   }
 }
 
-export async function saveCustomAlertSound(userId: string, file: File) {
+export async function saveCustomAlertSound(file: File) {
   validateAlertSoundFile(file);
   let decoded: AudioBuffer;
   try {
@@ -46,7 +46,7 @@ export async function saveCustomAlertSound(userId: string, file: File) {
     throw new Error("Choose an audio file no longer than 10 seconds.");
   }
   const id = randomUUID();
-  await saveAlertSound(userId, id, file);
+  await saveAlertSound(id, file);
   return { id, name: file.name, mimeType: file.type, size: file.size, duration: decoded.duration };
 }
 
@@ -73,16 +73,13 @@ export function stopAlertSound(): void {
   active = undefined;
 }
 
-export async function previewAlertSound(
-  userId: string,
-  settings: AlertDeliverySettings,
-): Promise<void> {
+export async function previewAlertSound(settings: AlertDeliverySettings): Promise<void> {
   stopAlertSound();
   const revision = playbackRevision;
   let useSystem = settings.soundId === "system";
   let bytes: Blob | undefined;
   if (settings.soundId === "custom" || settings.soundId === settings.customSound?.id) {
-    if (settings.customSound) bytes = await readAlertSound(userId, settings.customSound.id);
+    if (settings.customSound) bytes = await readAlertSound(settings.customSound.id);
     if (!bytes) useSystem = true;
   }
   if (revision !== playbackRevision) return;

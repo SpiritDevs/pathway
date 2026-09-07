@@ -1832,7 +1832,9 @@ export function ProjectDetail({
             scopeKey={alertProjectScopeKey(
               representative.environmentId,
               representative.id,
-              representative.repositoryIdentity?.canonicalKey,
+              workspaceProject?.repositoryIdentity?.canonicalKey ??
+                group.memberProjects.find((member) => member.repositoryIdentity != null)
+                  ?.repositoryIdentity?.canonicalKey,
             )}
             name={group.displayName}
           />

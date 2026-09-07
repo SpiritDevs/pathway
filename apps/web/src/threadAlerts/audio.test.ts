@@ -31,7 +31,7 @@ describe("custom alert audio validation", () => {
   });
   it("rejects oversized files before decoding or saving", async () => {
     await expect(
-      saveCustomAlertSound("account", file("alert.mp3", "audio/mpeg", 5 * 1024 * 1024 + 1)),
+      saveCustomAlertSound(file("alert.mp3", "audio/mpeg", 5 * 1024 * 1024 + 1)),
     ).rejects.toThrow("5 MB");
     expect(decode).not.toHaveBeenCalled();
     expect(saveAlertSound).not.toHaveBeenCalled();
@@ -42,21 +42,21 @@ describe("custom alert audio validation", () => {
   });
   it("rejects undecodable and overlong audio without saving", async () => {
     decode.mockRejectedValueOnce(new Error("decode failed"));
-    await expect(saveCustomAlertSound("account", file())).rejects.toThrow("decoded");
+    await expect(saveCustomAlertSound(file())).rejects.toThrow("decoded");
     decode.mockResolvedValueOnce({ duration: 10.01 });
-    await expect(saveCustomAlertSound("account", file())).rejects.toThrow("10 seconds");
+    await expect(saveCustomAlertSound(file())).rejects.toThrow("10 seconds");
     expect(saveAlertSound).not.toHaveBeenCalled();
   });
-  it("decodes before saving original bytes under the account", async () => {
+  it("decodes before saving original bytes for the installation", async () => {
     decode.mockResolvedValueOnce({ duration: 10 });
     const input = file();
-    const saved = await saveCustomAlertSound("account", input);
+    const saved = await saveCustomAlertSound(input);
     expect(saved).toMatchObject({
       name: "alert.mp3",
       mimeType: "audio/mpeg",
       duration: 10,
       size: 1024,
     });
-    expect(saveAlertSound).toHaveBeenCalledWith("account", saved.id, input);
+    expect(saveAlertSound).toHaveBeenCalledWith(saved.id, input);
   });
 });

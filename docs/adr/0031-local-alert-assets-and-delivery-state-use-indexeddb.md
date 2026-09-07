@@ -9,3 +9,6 @@ sound identifier, asset metadata, delivery switches, and quiet-hours schedule.
 
 This keeps multi-megabyte audio out of browser `localStorage` and Electron's JSON settings file while
 using one storage contract on both first-release clients.
+
+Custom sound bytes share the installation scope of their settings metadata, including across account
+changes. Delivery cursors, handled events, leases, and focused-thread presence remain account-scoped.

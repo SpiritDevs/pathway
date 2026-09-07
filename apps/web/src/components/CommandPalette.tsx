@@ -641,6 +641,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         if (state.open) return;
         event.preventDefault();
         event.stopPropagation();
+        if (event.repeat) return;
         void toggleCurrentThreadAlerts(routeThreadRef.environmentId, routeThreadRef.threadId).catch(
           (error) =>
             toastManager.add({

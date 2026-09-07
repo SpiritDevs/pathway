@@ -164,6 +164,7 @@ import { MenuItem } from "../ui/menu";
 import { Select, SelectValue } from "../ui/select";
 import { Sheet } from "../ui/sheet";
 import { ProjectFaviconPickerDialog } from "./ProjectFaviconPickerDialog";
+import { ProjectAlertOverride } from "./NotificationsSettings";
 import { CheckoutlessProjectSettings, ProjectDetail } from "./ProjectSettingsPanel";
 
 const localEnvironmentId = EnvironmentId.make("local");
@@ -266,6 +267,22 @@ describe("Project settings favicon selection", () => {
     cloudState.deleteCompanyProject.mockReset().mockResolvedValue({ deleted: true });
     cloudState.setPreferredEnvironmentBinding.mockReset().mockResolvedValue(undefined);
     companyState.companies = [];
+  });
+
+  it("uses the repository policy when the representative has lost its identity", () => {
+    const group = makeGroup(null);
+    const staleGroup = {
+      ...group,
+      memberProjects: group.memberProjects.map((member) => {
+        if (member.environmentId !== group.environmentId || member.id !== group.id) return member;
+        const { repositoryIdentity: _identity, ...stale } = member;
+        return stale;
+      }),
+    };
+    hooks.beginRender();
+    const tree = ProjectDetail({ group: staleGroup }) as ReactElement<Record<string, unknown>>;
+    const override = visitElements(tree, (element) => element.type === ProjectAlertOverride);
+    expect(override?.props.scopeKey).toBe("github.com/spiritdevs/pathway");
   });
 
   it("fans the selected relative path out to every member and renders projected state", async () => {

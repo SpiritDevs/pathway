@@ -78,12 +78,19 @@ describe("transactional installation storage", () => {
     );
     expect(result?.actions).toHaveLength(1);
   });
-  it("isolates audio assets by account and removes only the chosen asset", async () => {
-    const bytes = new Blob(["audio"], { type: "audio/mpeg" });
-    await saveAlertSound("sound-account", "custom", bytes);
-    expect(await readAlertSound("different-account", "custom")).toBeUndefined();
-    expect(await (await readAlertSound("sound-account", "custom"))?.text()).toBe("audio");
-    await deleteAlertSound("sound-account", "custom");
-    expect(await readAlertSound("sound-account", "custom")).toBeUndefined();
+  it("shares custom sound bytes across accounts like installation settings", async () => {
+    const customSound = { id: "custom" };
+    await claimAlertDelivery("sound-account-a", "tab-a", input([]));
+    await saveAlertSound(customSound.id, new Blob(["original"], { type: "audio/mpeg" }));
+    await releaseAlertLease("sound-account-a", "tab-a");
+
+    await claimAlertDelivery("sound-account-b", "tab-b", input([]));
+    expect(await (await readAlertSound(customSound.id))?.text()).toBe("original");
+    await saveAlertSound("replacement", new Blob(["replacement"], { type: "audio/mpeg" }));
+    await deleteAlertSound(customSound.id);
+    expect(await readAlertSound(customSound.id)).toBeUndefined();
+    expect(await (await readAlertSound("replacement"))?.text()).toBe("replacement");
+    await deleteAlertSound("replacement");
+    expect(await readAlertSound("replacement")).toBeUndefined();
   });
 });
