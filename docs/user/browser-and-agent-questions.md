@@ -2,9 +2,9 @@
 
 ## Questions while work continues
 
-Some Codex models can ask a question while continuing their work. A Questions button beside the message composer shows how many answers are waiting. New questions do not open the picker or move your typing focus.
+Some Codex models can ask a question while continuing their work. A Questions button inside each input request in the conversation shows how many answers are waiting for that request. Open it to show the question and its options in a panel attached above the message composer. Use the composer to write your own answer, or leave it blank to use the selected option, then submit. Close the panel to return to your message draft. New questions do not open the panel or move your typing focus.
 
-Open the button to review a question group. A suggested answer can be selected initially, but nothing is sent until you submit. You can write your own answer. Closing the picker keeps the question available. Submit the complete group together.
+Open the button to review a question group. A suggested answer can be selected initially, but nothing is sent until you submit. You can write your own answer. Closing the panel keeps the question and your answer draft available. Submit the complete group together.
 
 Pending questions survive reconnects. An answer sent after the agent finishes starts a follow-up in the same task. If a question came from a subagent, its answer returns to that conversation. If delivery fails, the question becomes available for retry.
 

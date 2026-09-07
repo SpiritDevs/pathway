@@ -5,7 +5,7 @@ import {
   derivePendingUserInputProgress,
   type PendingUserInputDraftAnswer,
 } from "../../pendingUserInput";
-import { CheckIcon, ChevronDownIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, XIcon } from "lucide-react";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { cn } from "~/lib/utils";
 import { shortcutScopeOwnsEvent } from "../ChatView.logic";
@@ -18,6 +18,7 @@ interface PendingUserInputPanelProps {
   questionIndex: number;
   onToggleOption: (questionId: string, optionLabel: string) => void;
   onAdvance: () => void;
+  onDismiss?: (() => void) | undefined;
 }
 
 export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserInputPanel({
@@ -28,6 +29,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
   questionIndex,
   onToggleOption,
   onAdvance,
+  onDismiss,
 }: PendingUserInputPanelProps) {
   if (pendingUserInputs.length === 0) return null;
   const activePrompt = pendingUserInputs[0];
@@ -42,6 +44,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
       questionIndex={questionIndex}
       onToggleOption={onToggleOption}
       onAdvance={onAdvance}
+      onDismiss={onDismiss}
       shortcutScope={shortcutScope}
     />
   );
@@ -54,6 +57,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex,
   onToggleOption,
   onAdvance,
+  onDismiss,
   shortcutScope,
 }: {
   prompt: PendingUserInput;
@@ -62,11 +66,12 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex: number;
   onToggleOption: (questionId: string, optionLabel: string) => void;
   onAdvance: () => void;
+  onDismiss?: (() => void) | undefined;
   shortcutScope: "page" | "side-chat";
 }) {
   const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
   const activeQuestion = progress.activeQuestion;
-  const canRespond = prompt.responseCapability === "live";
+  const canRespond = prompt.responseCapability !== "not_resumable";
   const responseDisabled = isResponding || !canRespond;
   const autoAdvanceTimerRef = useRef<number | null>(null);
   const onAdvanceRef = useRef(onAdvance);
@@ -119,7 +124,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
 
   const handleOptionSelection = useCallback(
     (questionId: string, optionLabel: string) => {
-      if (activeQuestion?.multiSelect) {
+      if (activeQuestion?.multiSelect || prompt.isBlocking === false) {
         onToggleOption(questionId, optionLabel);
         return;
       }
@@ -133,7 +138,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         onAdvanceRef.current();
       }, 200);
     },
-    [activeQuestion, onToggleOption],
+    [activeQuestion, onToggleOption, prompt.isBlocking],
   );
 
   // Keyboard shortcut: number keys 1-9 select corresponding options when focus is
@@ -190,7 +195,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
           header label and the chevron still line up with the left and right
           edges of the question text below. The negative block margin keeps the
           taller hit area from pushing the panel down. */}
-      <div className="px-1.5 sm:px-2.5">
+      <div className="flex items-center px-1.5 sm:px-2.5">
         <CollapsibleTrigger
           title={
             isCollapsed ? "Show the question and its options" : "Hide the question and its options"
@@ -224,6 +229,16 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             )}
           />
         </CollapsibleTrigger>
+        {onDismiss ? (
+          <button
+            type="button"
+            onClick={onDismiss}
+            aria-label="Close question and return to message"
+            className="mr-2 rounded p-1 text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+          >
+            <XIcon className="size-4" aria-hidden="true" />
+          </button>
+        ) : null}
       </div>
       {/* The panel carries the horizontal padding itself: it clips its content
           while the height animates, so the option buttons have to sit inside

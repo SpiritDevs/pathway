@@ -1,3 +1,4 @@
+import { initialAsyncQuestionAnswers } from "./chat/ComposerAsyncQuestions";
 import {
   DEFAULT_MODEL,
   defaultInstanceIdForDriver,
@@ -121,7 +122,6 @@ import {
   scrollTimelineToEndIfFollowing,
   type TimelineScrollMode,
 } from "./chat/timelineScrollAnchoring";
-import { ComposerAsyncQuestions } from "./chat/ComposerAsyncQuestions";
 import {
   buildPendingUserInputAnswers,
   derivePendingUserInputProgress,
@@ -2738,14 +2738,21 @@ function ChatViewContent(props: ChatViewProps) {
     () => derivePendingUserInputs(pendingRequests.userInputs),
     [pendingRequests.userInputs],
   );
-  const pendingUserInputs = useMemo(
-    () => allPendingUserInputs.filter((request) => request.isBlocking !== false),
-    [allPendingUserInputs],
+  const [selectedAsyncQuestionId, setSelectedAsyncQuestionId] = useState<RuntimeRequestId | null>(
+    null,
   );
   const asyncUserInputs = useMemo(
     () => allPendingUserInputs.filter((request) => request.isBlocking === false),
     [allPendingUserInputs],
   );
+  const pendingUserInputs = useMemo(() => {
+    const blocking = allPendingUserInputs.filter((request) => request.isBlocking !== false);
+    const selected = asyncUserInputs.find(
+      (request) => request.requestId === selectedAsyncQuestionId,
+    );
+    return blocking.length > 0 ? blocking : selected ? [selected] : [];
+  }, [allPendingUserInputs, asyncUserInputs, selectedAsyncQuestionId]);
+  const closeAsyncQuestion = useCallback(() => setSelectedAsyncQuestionId(null), []);
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const activePendingDraftAnswers = useMemo(
     () =>
@@ -2777,7 +2784,7 @@ function ChatViewContent(props: ChatViewProps) {
     [activePendingDraftAnswers, activePendingUserInput],
   );
   const activePendingIsResponding = activePendingUserInput
-    ? activePendingUserInput.responseCapability !== "live" ||
+    ? activePendingUserInput.responseCapability === "not_resumable" ||
       respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
   const activeProposedPlan = useMemo(() => {
@@ -8037,6 +8044,23 @@ function ChatViewContent(props: ChatViewProps) {
     [activePendingProgress?.activeQuestion, activePendingUserInput, composerRef],
   );
 
+  const timelineAsyncQuestions = useMemo(
+    () => ({
+      prompts: asyncUserInputs,
+      onOpen: (requestId: RuntimeRequestId) => {
+        const prompt = asyncUserInputs.find((entry) => entry.requestId === requestId);
+        if (!prompt) return;
+        setPendingUserInputAnswersByRequestId((existing) => ({
+          ...existing,
+          [requestId]: existing[requestId] ?? initialAsyncQuestionAnswers(prompt),
+        }));
+        setSelectedAsyncQuestionId(requestId);
+        scheduleComposerFocus();
+      },
+    }),
+    [asyncUserInputs, scheduleComposerFocus],
+  );
+
   const onChangeActivePendingUserInputCustomAnswer = useCallback(
     (
       questionId: string,
@@ -8072,11 +8096,7 @@ function ChatViewContent(props: ChatViewProps) {
   );
 
   const onAdvanceActivePendingUserInput = useCallback(() => {
-    if (
-      !activePendingUserInput ||
-      activePendingUserInput.responseCapability !== "live" ||
-      !activePendingProgress
-    ) {
+    if (!activePendingUserInput || activePendingIsResponding || !activePendingProgress) {
       return;
     }
     if (activePendingProgress.isLastQuestion) {
@@ -8090,6 +8110,7 @@ function ChatViewContent(props: ChatViewProps) {
     activePendingProgress,
     activePendingResolvedAnswers,
     activePendingUserInput,
+    activePendingIsResponding,
     onRespondToUserInput,
     setActivePendingUserInputQuestionIndex,
   ]);
@@ -8957,6 +8978,7 @@ function ChatViewContent(props: ChatViewProps) {
                 activeTurnStartedAt={activeWorkStartedAt}
                 pendingBackgroundTasks={pendingBackgroundTasks}
                 listRef={legendListRef}
+                asyncQuestions={timelineAsyncQuestions}
                 timelineEntries={timelineEntries}
                 latestRun={activeActivityRun}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
@@ -9138,15 +9160,6 @@ function ChatViewContent(props: ChatViewProps) {
                         </div>
                       </div>
                     </div>
-                    <ComposerAsyncQuestions
-                      key={`${environmentId}:${activeThreadId ?? "draft"}`}
-                      prompts={asyncUserInputs}
-                      respondingRequestIds={respondingUserInputRequestIds}
-                      onRespond={async (requestId, answers) => {
-                        const result = await onRespondToUserInput(requestId, answers);
-                        return result !== undefined && result._tag !== "Failure";
-                      }}
-                    />
                     <div className="chat-composer-glass-shell chat-composer-glass-shell-with-context chat-composer-content-sized-shell relative mx-auto w-full max-w-3xl">
                       <div className="relative z-10 w-full">
                         <div className="relative z-10">
@@ -9172,6 +9185,11 @@ function ChatViewContent(props: ChatViewProps) {
                             activePendingApproval={activePendingApproval}
                             pendingApprovals={pendingApprovals}
                             pendingUserInputs={pendingUserInputs}
+                            onDismissAsyncQuestion={
+                              activePendingUserInput?.isBlocking === false
+                                ? closeAsyncQuestion
+                                : undefined
+                            }
                             activePendingProgress={activePendingProgress}
                             activePendingResolvedAnswers={activePendingResolvedAnswers}
                             activePendingIsResponding={activePendingIsResponding}

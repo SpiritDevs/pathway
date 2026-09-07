@@ -23,15 +23,16 @@ const prompt: PendingUserInput = {
   ],
 };
 
-function renderPanel() {
+function renderPanel(request = prompt, onDismiss?: () => void) {
   return renderToStaticMarkup(
     <ComposerPendingUserInputPanel
-      pendingUserInputs={[prompt]}
+      pendingUserInputs={[request]}
       respondingRequestIds={[]}
       answers={{}}
       questionIndex={0}
       onToggleOption={() => {}}
       onAdvance={() => {}}
+      onDismiss={onDismiss}
     />,
   );
 }
@@ -49,6 +50,23 @@ describe("ComposerPendingUserInputPanel", () => {
     const controlledId = toggle?.match(/aria-controls="([^"]+)"/)?.[1];
     expect(controlledId).toBeDefined();
     expect(markup).toMatch(new RegExp(`<div[^>]*\\sid="${controlledId}"`));
+  });
+
+  it("allows async follow-up answers and returning to the message composer", () => {
+    const markup = renderPanel(
+      { ...prompt, isBlocking: false, responseCapability: "message" },
+      () => {},
+    );
+    expect(markup).toContain('aria-label="Close question and return to message"');
+    expect(markup).not.toContain('disabled=""');
+    expect(markup).not.toContain("<input");
+    expect(markup).not.toContain("<textarea");
+  });
+
+  it("disables answers for requests that can no longer receive a response", () => {
+    const markup = renderPanel({ ...prompt, responseCapability: "not_resumable" });
+    expect(markup).toContain('disabled=""');
+    expect(markup).not.toContain('aria-label="Close question and return to message"');
   });
 
   it("starts expanded so the question and its options are visible", () => {

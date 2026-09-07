@@ -1,3 +1,4 @@
+import { ComposerAsyncQuestions } from "./ComposerAsyncQuestions";
 import { turnItemIsWorkspacePreparation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
 import { WorkspacePreparationCard } from "./WorkspacePreparationCard";
 import {
@@ -32,6 +33,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -265,7 +267,11 @@ const NOOP_PANEL_SURFACE_OPEN = () => undefined;
 // Props (public API)
 // ---------------------------------------------------------------------------
 
+type AsyncQuestionsProps = ComponentProps<typeof ComposerAsyncQuestions>;
+const TimelineQuestionsCtx = createContext<AsyncQuestionsProps | null>(null);
+
 interface MessagesTimelineProps {
+  asyncQuestions?: AsyncQuestionsProps;
   isWorking: boolean;
   workingPresentation?: WorkingPresentation;
   activeTurnInProgress: boolean;
@@ -353,6 +359,7 @@ const NOOP_WAIT_FOR_USAGE_RESET = () => undefined;
 const LOCAL_DAY_CLOCK_RECHECK_MS = 60_000;
 
 export const MessagesTimeline = memo(function MessagesTimeline({
+  asyncQuestions,
   isWorking,
   workingPresentation = "activity",
   activeTurnInProgress,
@@ -939,54 +946,56 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   return (
     <TimelineRowCtx value={sharedState}>
-      <TimelineRowActivityCtx value={activityState}>
-        <div ref={setTimelineViewportElement} className="relative h-full min-h-0">
-          <LegendList<MessagesTimelineRow>
-            ref={listRef}
-            data={rows}
-            keyExtractor={keyExtractor}
-            getItemType={getItemType}
-            renderItem={renderItem}
-            estimatedItemSize={90}
-            initialScrollAtEnd
-            {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            contentInsetEndAdjustment={contentInsetEndAdjustment}
-            // LegendList owns ordinary end-follow (#5449): the app only turns
-            // it off while the user reads history (liveFollowEnabled), while a
-            // sent turn anchors near the top (anchoredEndSpace), or for the
-            // two-frame settle window of a fold toggle.
-            maintainScrollAtEnd={
-              anchoredEndSpace || !liveFollowEnabled || disclosureToggleSettling
-                ? false
-                : TIMELINE_MAINTAIN_SCROLL_AT_END
-            }
-            maintainVisibleContentPosition={maintainVisibleContentPosition}
-            onScroll={handleScroll}
-            className={cn(
-              "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
-              topFadeEnabled && "chat-timeline-scroll-fade",
-            )}
-            ListHeaderComponent={
-              topFadeEnabled && parentThreadLink === null ? TIMELINE_LIST_FADE_HEADER : listHeader
-            }
-            ListFooterComponent={TIMELINE_LIST_FOOTER}
-          />
-          <TimelineMinimap
-            items={minimapItems}
-            hasPersistentGutter={minimapHasPersistentGutter}
-            hitStripWidth={minimapHitStripWidth}
-            stripMap={minimapStripMap}
-            onSelect={(item) => {
-              onManualNavigation();
-              void listRef.current?.scrollToIndex({
-                index: item.rowIndex,
-                animated: true,
-                viewOffset: 24,
-              });
-            }}
-          />
-        </div>
-      </TimelineRowActivityCtx>
+      <TimelineQuestionsCtx value={asyncQuestions ?? null}>
+        <TimelineRowActivityCtx value={activityState}>
+          <div ref={setTimelineViewportElement} className="relative h-full min-h-0">
+            <LegendList<MessagesTimelineRow>
+              ref={listRef}
+              data={rows}
+              keyExtractor={keyExtractor}
+              getItemType={getItemType}
+              renderItem={renderItem}
+              estimatedItemSize={90}
+              initialScrollAtEnd
+              {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+              contentInsetEndAdjustment={contentInsetEndAdjustment}
+              // LegendList owns ordinary end-follow (#5449): the app only turns
+              // it off while the user reads history (liveFollowEnabled), while a
+              // sent turn anchors near the top (anchoredEndSpace), or for the
+              // two-frame settle window of a fold toggle.
+              maintainScrollAtEnd={
+                anchoredEndSpace || !liveFollowEnabled || disclosureToggleSettling
+                  ? false
+                  : TIMELINE_MAINTAIN_SCROLL_AT_END
+              }
+              maintainVisibleContentPosition={maintainVisibleContentPosition}
+              onScroll={handleScroll}
+              className={cn(
+                "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
+                topFadeEnabled && "chat-timeline-scroll-fade",
+              )}
+              ListHeaderComponent={
+                topFadeEnabled && parentThreadLink === null ? TIMELINE_LIST_FADE_HEADER : listHeader
+              }
+              ListFooterComponent={TIMELINE_LIST_FOOTER}
+            />
+            <TimelineMinimap
+              items={minimapItems}
+              hasPersistentGutter={minimapHasPersistentGutter}
+              hitStripWidth={minimapHitStripWidth}
+              stripMap={minimapStripMap}
+              onSelect={(item) => {
+                onManualNavigation();
+                void listRef.current?.scrollToIndex({
+                  index: item.rowIndex,
+                  animated: true,
+                  viewOffset: 24,
+                });
+              }}
+            />
+          </div>
+        </TimelineRowActivityCtx>
+      </TimelineQuestionsCtx>
     </TimelineRowCtx>
   );
 });
@@ -2026,10 +2035,15 @@ function v2EventPresentation(item: OrchestrationV2TurnItem): {
 function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event" }> }) {
   const ctx = use(TimelineRowCtx);
   const activity = use(TimelineRowActivityCtx);
+  const questions = use(TimelineQuestionsCtx);
   const inspectorId = useId();
   const [inspectorVisible, setInspectorVisible] = useState(false);
   const [errorDetailsOpen, setErrorDetailsOpen] = useState(false);
   const { item, visibility, sourceThreadId } = row.projectedItem;
+  const prompt =
+    item.type === "user_input_request" && visibility === "local"
+      ? questions?.prompts.find((prompt) => prompt.requestId === item.requestId)
+      : undefined;
   if (turnItemIsWorkspacePreparation(item)) {
     return (
       <WorkspacePreparationCard
@@ -2120,6 +2134,13 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
                 lineBreaks
               />
             </div>
+          ) : null}
+          {prompt && questions ? (
+            <ComposerAsyncQuestions
+              key={prompt.requestId}
+              prompts={[prompt]}
+              onOpen={questions.onOpen}
+            />
           ) : null}
           {visibility === "inherited" ? (
             <p className="mt-1 font-mono text-[10px] text-muted-foreground/65">

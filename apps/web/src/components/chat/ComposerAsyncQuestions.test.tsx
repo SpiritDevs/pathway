@@ -28,25 +28,22 @@ const prompt: PendingUserInput = {
   ],
 };
 
-describe("async question picker", () => {
-  it("announces the question count without opening the picker or submitting", () => {
-    let submissions = 0;
+describe("inline async question button", () => {
+  it("announces the question count without opening the panel", () => {
+    let opens = 0;
     const markup = renderToStaticMarkup(
       <ComposerAsyncQuestions
         prompts={[prompt]}
-        respondingRequestIds={[]}
-        onRespond={async () => {
-          submissions++;
-          return true;
+        onOpen={() => {
+          opens++;
         }}
       />,
     );
     expect(markup).toContain("Questions");
-    expect(markup).toContain('aria-expanded="false"');
     expect(markup).toContain('tabular-nums">2');
     expect(markup).not.toContain("Which approach?");
     expect(markup).not.toContain("autofocus");
-    expect(submissions).toBe(0);
+    expect(opens).toBe(0);
   });
 
   it("preselects the first suggestion but waits for every free-form answer", () => {
@@ -66,14 +63,8 @@ describe("async question picker", () => {
   });
 
   it("does not show a question button when all groups are resolved", () => {
-    expect(
-      renderToStaticMarkup(
-        <ComposerAsyncQuestions
-          prompts={[]}
-          respondingRequestIds={[]}
-          onRespond={async () => true}
-        />,
-      ),
-    ).toBe("");
+    expect(renderToStaticMarkup(<ComposerAsyncQuestions prompts={[]} onOpen={() => {}} />)).toBe(
+      "",
+    );
   });
 });

@@ -522,6 +522,7 @@ export interface ChatComposerProps {
   activePendingApproval: PendingApproval | null;
   pendingApprovals: PendingApproval[];
   pendingUserInputs: PendingUserInput[];
+  onDismissAsyncQuestion?: (() => void) | undefined;
   activePendingProgress: {
     questionIndex: number;
     isLastQuestion: boolean;
@@ -638,6 +639,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activePendingApproval,
     pendingApprovals,
     pendingUserInputs,
+    onDismissAsyncQuestion,
     activePendingProgress,
     activePendingResolvedAnswers,
     activePendingIsResponding,
@@ -1419,6 +1421,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   useEffect(() => {
     const nextCustomAnswer = activePendingProgress?.customAnswer;
     if (typeof nextCustomAnswer !== "string") {
+      if (lastSyncedPendingInputRef.current !== null) {
+        promptRef.current = prompt;
+        setComposerCursor(collapseExpandedComposerCursor(prompt, prompt.length));
+        setComposerTrigger(null);
+        setComposerHighlightedItemId(null);
+      }
       lastSyncedPendingInputRef.current = null;
       return;
     }
@@ -1450,6 +1458,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
     setComposerHighlightedItemId(null);
   }, [
+    prompt,
     activePendingProgress?.customAnswer,
     activePendingProgress?.activeQuestion?.id,
     activePendingUserInput?.requestId,
@@ -3014,11 +3023,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               <ComposerPendingUserInputPanel
                 shortcutScope={shortcutScope}
                 pendingUserInputs={pendingUserInputs}
-                respondingRequestIds={respondingRequestIds}
+                respondingRequestIds={
+                  activePendingIsResponding && activePendingUserInput
+                    ? [activePendingUserInput.requestId]
+                    : []
+                }
                 answers={activePendingDraftAnswers}
                 questionIndex={activePendingQuestionIndex}
                 onToggleOption={onSelectActivePendingUserInputOption}
                 onAdvance={onAdvanceActivePendingUserInput}
+                onDismiss={onDismissAsyncQuestion}
               />
             </div>
           ) : showPlanFollowUpPrompt && activeProposedPlan ? (
