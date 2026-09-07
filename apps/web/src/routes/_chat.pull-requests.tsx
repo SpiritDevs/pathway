@@ -52,6 +52,7 @@ import {
   PullRequestRowActions,
   type PullRequestRowActionTarget,
 } from "../components/pullRequest/PullRequestRowActions";
+import { pullRequestRowMenuPosition } from "../components/pullRequest/pullRequestRowActions.logic";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import { useWorkspaceProjects } from "../components/projects/useWorkspaceProjects";
@@ -189,7 +190,8 @@ function PullRequestsRouteView() {
   const [rowActionTarget, setRowActionTarget] = useState<PullRequestRowActionTarget | null>(null);
   const showRowActions = useCallback(
     (entry: SourcedPullRequestListEntry, event: React.MouseEvent<HTMLButtonElement>) => {
-      const { clientX: x, clientY: y, currentTarget: trigger } = event;
+      const { x, y } = pullRequestRowMenuPosition(event);
+      const trigger = event.currentTarget;
       setRowActionTarget((previous) => ({ id: (previous?.id ?? 0) + 1, entry, x, y, trigger }));
     },
     [],

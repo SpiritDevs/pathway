@@ -107,7 +107,6 @@ import {
   buildAskAboutPullRequestHandoff,
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
-  buildFixFindingsHandoff,
   buildResolveConflictsPrompt,
   canPerformPullRequestAction,
   isPullRequestConflicting,
@@ -120,6 +119,7 @@ import {
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
 import { buildPullRequestAgentReviewPrompt } from "./pullRequestAgentReview.logic";
+import { usePullRequestFindings } from "./usePullRequestFindings";
 import { usePullRequestActionRunner, usePullRequestHandoffs } from "./usePullRequestActions";
 import {
   PullRequestActorLabel,
@@ -355,7 +355,7 @@ export function PullRequestDetailPanel({
     pullRequestEnvironment.detail({ environmentId, input: reference }),
   );
   const activityQuery = useEnvironmentQuery(
-    pullRequestEnvironment.activity({ environmentId, input: reference }),
+    renderActions ? null : pullRequestEnvironment.activity({ environmentId, input: reference }),
   );
   // Detail and diff are independent server reads, so the diff for the default view (no commit,
   // no cursor) is started here too rather than waiting for the Code tab to mount. This is one
@@ -615,7 +615,17 @@ export function PullRequestDetailPanel({
       onActed?.();
     },
   });
-  const { handoff, startAsk, startHandoff } = usePullRequestHandoffs({ environmentId, detail });
+  const {
+    handoff: activeHandoff,
+    startAsk,
+    startHandoff,
+  } = usePullRequestHandoffs({ environmentId, detail });
+  const { pending: findingsPending, start: startFixFindings } = usePullRequestFindings({
+    environmentId,
+    detail,
+    startHandoff,
+  });
+  const handoff = findingsPending ? "findings" : activeHandoff;
 
   const askAboutPullRequest = () => {
     if (!detail) return;
@@ -676,24 +686,6 @@ export function PullRequestDetailPanel({
         headBranch: detail.headBranch,
         baseBranch: detail.baseBranch,
         finding,
-      }),
-    );
-  };
-
-  const startFixFindings = () => {
-    if (!detail) return;
-    void startHandoff(
-      "findings",
-      buildFixFindingsHandoff({
-        number: detail.number,
-        title: detail.title,
-        url: detail.url,
-        headBranch: detail.headBranch,
-        baseBranch: detail.baseBranch,
-        reviewThreads: detail.reviewThreads,
-        comments: detail.comments,
-        checks: detail.checks,
-        commentsTruncated: detail.commentsTruncated,
       }),
     );
   };
@@ -783,10 +775,7 @@ export function PullRequestDetailPanel({
           </span>
         </span>
       </MenuItem>
-      <MenuItem
-        disabled={handoff !== null || activityPending || activityError !== null}
-        onClick={startFixFindings}
-      >
+      <MenuItem disabled={handoff !== null} onClick={startFixFindings}>
         <HammerIcon className="size-3.5" />
         {handoff === "findings" ? "Preparing..." : "Fix findings in a thread"}
       </MenuItem>
