@@ -1325,6 +1325,7 @@ function PullRequestsRouteView() {
             baselineQuery.refresh();
             authoredQuery.refresh();
             reviewingQuery.refresh();
+            statsQuery.refresh();
           }}
           onStateChange={handlePullRequestTabStatusChange}
           chromeVariant="collapse"
@@ -1343,6 +1344,7 @@ function PullRequestsRouteView() {
             baselineQuery.refresh();
             authoredQuery.refresh();
             reviewingQuery.refresh();
+            statsQuery.refresh();
           }}
         />
       ) : null}
