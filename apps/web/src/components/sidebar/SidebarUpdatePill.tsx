@@ -143,7 +143,7 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
   const handleAction = useCallback(async () => {
     const bridge = window.desktopBridge;
     if (!bridge || !state) return;
-    if (isInteractionDisabled || action === "none") return;
+    if (isInteractionDisabled) return;
 
     setIsActionPending(true);
 
