@@ -126,8 +126,14 @@ describe("thread alert channels", () => {
   });
   it("summaries contain counts only and target the tray", () => {
     expect(
-      alertNotificationInput({ type: "summary", id: "summary", eventCount: 4, threadCount: 2 }),
+      alertNotificationInput("account", {
+        type: "summary",
+        id: "summary",
+        eventCount: 4,
+        threadCount: 2,
+      }),
     ).toEqual({
+      userId: "account",
       id: "summary",
       title: "Pathway thread alerts",
       body: "4 unread events across 2 threads.",
@@ -149,7 +155,13 @@ describe("notification lifetime", () => {
   it("caps retained browser notifications even if the browser never emits close", async () => {
     for (let index = 0; index < 201; index += 1) {
       await showThreadAlert(
-        { id: `bounded:${index}`, title: "Thread", body: "Run completed", target: null },
+        {
+          userId: "account",
+          id: `bounded:${index}`,
+          title: "Thread",
+          body: "Run completed",
+          target: null,
+        },
         vi.fn(),
       );
     }
@@ -161,7 +173,7 @@ describe("notification lifetime", () => {
   it("does not post a notification if account teardown happens during its permission check", async () => {
     let active = true;
     const posting = showThreadAlert(
-      { id: "departing", title: "Thread", body: "Run completed", target: null },
+      { userId: "account", id: "departing", title: "Thread", body: "Run completed", target: null },
       vi.fn(),
       () => active,
     );
@@ -179,7 +191,7 @@ describe("notification lifetime", () => {
     vi.stubGlobal("window", { desktopBridge: { threadAlerts: bridge } });
     await expect(
       showThreadAlert(
-        { id: "native", title: "Thread", body: "Run completed", target: null },
+        { userId: "account", id: "native", title: "Thread", body: "Run completed", target: null },
         vi.fn(),
       ),
     ).rejects.toThrow("Permission revoked");

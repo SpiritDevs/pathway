@@ -137,9 +137,9 @@ export function ThreadAlertHost(props: ThreadAlertHostProps) {
       wasConnected = false;
       catchUp = true;
     };
-    const clickUnsubscribe = window.desktopBridge?.threadAlerts?.onClick((target) =>
-      latest.current.onNavigate(target),
-    );
+    const clickUnsubscribe = window.desktopBridge?.threadAlerts?.onClick(userId, (target) => {
+      if (!disposed && latest.current.userId === userId) latest.current.onNavigate(target);
+    });
     wake.current = schedule;
     document.addEventListener("visibilitychange", visibility);
     window.addEventListener("focus", schedule);

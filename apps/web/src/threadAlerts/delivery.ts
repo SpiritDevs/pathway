@@ -99,9 +99,13 @@ const EVENT_LABELS: Record<string, string> = {
   failed: "Run failed",
 };
 
-export function alertNotificationInput(action: AlertDeliveryAction): DesktopThreadAlertInput {
+export function alertNotificationInput(
+  userId: string,
+  action: AlertDeliveryAction,
+): DesktopThreadAlertInput {
   if (action.type === "summary") {
     return {
+      userId,
       id: action.id,
       title: "Pathway thread alerts",
       body: `${action.eventCount} unread ${action.eventCount === 1 ? "event" : "events"} across ${action.threadCount} ${action.threadCount === 1 ? "thread" : "threads"}.`,
@@ -109,6 +113,7 @@ export function alertNotificationInput(action: AlertDeliveryAction): DesktopThre
     };
   }
   return {
+    userId,
     id: action.id,
     title: action.event.threadTitle || "Pathway thread",
     body: `${EVENT_LABELS[action.event.kind] ?? "Attention needed"}${action.event.projectName ? ` · ${action.event.projectName}` : ""}${action.count > 1 ? ` · ${action.count} events` : ""}`,
@@ -131,7 +136,7 @@ export async function deliverThreadAlert(
   // Neither channel can prevent the other from delivering.
   await Promise.allSettled([
     settings.osNotificationsEnabled
-      ? showThreadAlert(alertNotificationInput(action), onNavigate, isActive)
+      ? showThreadAlert(alertNotificationInput(userId, action), onNavigate, isActive)
       : Promise.resolve(),
     settings.soundEnabled && (action.type === "summary" || action.sound)
       ? previewAlertSound(userId, settings)
@@ -147,6 +152,7 @@ export async function testThreadAlert(
     settings.osNotificationsEnabled
       ? showThreadAlert(
           {
+            userId,
             id: "thread-alert:test",
             title: "Pathway test alert",
             body: "Thread alerts are ready on this device.",

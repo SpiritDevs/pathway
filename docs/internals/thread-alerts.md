@@ -41,7 +41,8 @@ Focused tests cover policy inheritance, event fanout, acknowledgement retention,
 bell interactions, settings, local delivery decisions, browser-tab claims, audio validation, and
 desktop IPC. Use the repository's focused test commands for these files.
 
-The 2026-09-08 local verification passed 334 tests across 27 focused files. Typechecks passed for
+The 2026-09-08 local verification passed 341 tests across 27 focused files after rebasing onto
+`242053e03`. Typechecks passed for
 contracts, client-runtime, backend, server, relay, web, and desktop. Targeted lint and
 `git diff --check` passed. Server and desktop reported existing suggestions in unrelated code.
 The production web build passed with chunk-size and dynamic-import warnings.
@@ -53,7 +54,15 @@ delivery could not be verified. Chrome reported notification permission as block
 checks paused because another session was controlling Chrome; subsequent attempts to reconnect to
 Chrome timed out. The resulting cloud-load error message has focused test coverage: both updated
 settings and subscription test files passed, 16 tests total, along with web typecheck and scoped lint.
-Packaged desktop notification checks have not run.
+The final desktop review added account ownership to queued click targets. A listener for a different
+account cannot consume an old account's target, while same-account remounts retain pending clicks.
+
+An anonymous local Convex deployment passed live global, project, and thread policy writes, scoped
+reads, account isolation, and reset checks. This used synthetic test identities on loopback port 3215. The shared development backend was not changed. Pathway's built-in browser paired and signed
+in with the dedicated Clerk test account, but computer-use timeouts prevented completing the UI
+pass. An earlier maximum-update-depth error during hot reload could not be attributed from its
+truncated stack and has not recurred in the fresh server log. Packaged desktop notification checks
+have not run.
 
 Packaged OS behavior still requires a signed macOS build, the installed Windows AppUserModelID and
 shortcut path, and a supported Linux notification service. Electron exposes limited permission

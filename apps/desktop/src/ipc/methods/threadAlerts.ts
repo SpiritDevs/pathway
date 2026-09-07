@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
   DesktopThreadAlertInput,
-  ThreadAlertTarget,
+  DesktopThreadAlertClick,
   type ThreadAlertSupport,
 } from "@spiritdevs/contracts/threadAlerts";
 import * as DesktopWindow from "../../window/DesktopWindow.ts";
@@ -21,7 +21,7 @@ class ThreadAlertDeliveryError extends Schema.TaggedErrorClass<ThreadAlertDelive
 }
 
 const active = new Map<string, Notification>();
-const pendingClicks: ThreadAlertTarget[] = [];
+const pendingClicks: DesktopThreadAlertClick[] = [];
 let deliveryBlocked = false;
 
 export const getThreadAlertSupport = DesktopIpc.makeIpcMethod({
@@ -65,7 +65,7 @@ export const showThreadAlert = DesktopIpc.makeIpcMethod({
         });
         notification.on("close", forget);
         notification.on("click", () => {
-          pendingClicks.push(input.target);
+          pendingClicks.push({ userId: input.userId, target: input.target });
           if (pendingClicks.length > 20) pendingClicks.shift();
           void runPromise(windows.revealOrCreateMain)
             .then((window) => {
@@ -115,7 +115,7 @@ export const closeThreadAlert = DesktopIpc.makeIpcMethod({
 export const consumeThreadAlertClicks = DesktopIpc.makeIpcMethod({
   channel: Channels.THREAD_ALERT_CONSUME_CLICKS_CHANNEL,
   payload: Schema.Void,
-  result: Schema.Array(ThreadAlertTarget),
+  result: Schema.Array(DesktopThreadAlertClick),
   handler: () => Effect.sync(() => pendingClicks.splice(0)),
 });
 export const playThreadAlertSystemSound = DesktopIpc.makeIpcMethod({

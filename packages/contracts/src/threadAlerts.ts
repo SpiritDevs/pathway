@@ -115,7 +115,13 @@ export const ThreadAlertTarget = Schema.NullOr(
   }),
 );
 export type ThreadAlertTarget = typeof ThreadAlertTarget.Type;
+export const DesktopThreadAlertClick = Schema.Struct({
+  userId: Schema.String,
+  target: ThreadAlertTarget,
+});
+export type DesktopThreadAlertClick = typeof DesktopThreadAlertClick.Type;
 export const DesktopThreadAlertInput = Schema.Struct({
+  userId: Schema.String,
   id: Schema.String,
   title: Schema.String,
   body: Schema.String,
@@ -129,5 +135,5 @@ export interface DesktopThreadAlertsBridge {
   close: (id: string) => Promise<void>;
   playSystemSound: () => Promise<void>;
   openSettings: () => Promise<boolean>;
-  onClick: (listener: (target: ThreadAlertTarget) => void) => () => void;
+  onClick: (userId: string, listener: (target: ThreadAlertTarget) => void) => () => void;
 }

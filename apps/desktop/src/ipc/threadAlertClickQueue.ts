@@ -1,20 +1,25 @@
-import type { ThreadAlertTarget } from "@spiritdevs/contracts/threadAlerts";
+import type {
+  DesktopThreadAlertClick,
+  ThreadAlertTarget,
+} from "@spiritdevs/contracts/threadAlerts";
 
 /** Keep consumed clicks across renderer listener replacements, including React's effect remount. */
 export function createThreadAlertClickSubscription(input: {
-  consume: () => Promise<readonly ThreadAlertTarget[]>;
+  consume: () => Promise<readonly DesktopThreadAlertClick[]>;
   listen: (receive: () => void) => () => void;
 }) {
-  const listeners = new Set<(target: ThreadAlertTarget) => void>();
-  const pending: ThreadAlertTarget[] = [];
+  const listeners = new Map<(target: ThreadAlertTarget) => void, string>();
+  const pending: DesktopThreadAlertClick[] = [];
   let stopListening: (() => void) | undefined;
   let consuming = false;
   let consumeAgain = false;
 
   const deliver = () => {
     while (listeners.size > 0 && pending.length > 0) {
-      const target = pending.shift()!;
-      for (const listener of listeners) listener(target);
+      const click = pending.shift()!;
+      for (const [listener, userId] of listeners) {
+        if (userId === click.userId) listener(click.target);
+      }
     }
   };
   const receive = () => {
@@ -42,8 +47,8 @@ export function createThreadAlertClickSubscription(input: {
         }
       });
   };
-  return (listener: (target: ThreadAlertTarget) => void) => {
-    listeners.add(listener);
+  return (userId: string, listener: (target: ThreadAlertTarget) => void) => {
+    listeners.set(listener, userId);
     if (stopListening === undefined) stopListening = input.listen(receive);
     deliver();
     receive();

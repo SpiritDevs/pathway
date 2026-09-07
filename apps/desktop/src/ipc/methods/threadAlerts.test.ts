@@ -49,6 +49,7 @@ import {
 } from "./threadAlerts.ts";
 
 const input = (id: string) => ({
+  userId: "account-a",
   id,
   title: "Thread",
   body: "Completed · Project",
@@ -133,7 +134,9 @@ describe("desktop thread alerts", () => {
       expect(send).not.toHaveBeenCalled();
       finishLoad();
       expect(send).toHaveBeenCalledWith(Channels.THREAD_ALERT_CLICK_CHANNEL);
-      expect(yield* consumeThreadAlertClicks.handler(undefined)).toEqual([input("loading").target]);
+      expect(yield* consumeThreadAlertClicks.handler(undefined)).toEqual([
+        { userId: "account-a", target: input("loading").target },
+      ]);
       expect(yield* consumeThreadAlertClicks.handler(undefined)).toEqual([]);
     }),
   );
