@@ -12,6 +12,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  MessageId,
   type ModelSelection,
   type ProviderOptionSelection,
 } from "@spiritdevs/contracts";
@@ -60,6 +61,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
   clearComposerDraftsEnvironment,
+  captureComposerDraft,
+  reconcilePendingDraftSends,
   finalizePromotedDraftThreadByRef,
   hydrateImagesFromPersisted,
   markPromotedDraftThread,
@@ -78,6 +81,7 @@ import {
   type TerminalContextDraft,
 } from "./lib/terminalContext";
 import { createDebouncedJSONStorage, createDebouncedStorage } from "./lib/storage";
+import { selectSidebarDraftRows } from "./components/sidebarDrafts";
 
 function makeImage(input: {
   id: string;
@@ -234,6 +238,7 @@ function draftByKey(key: string) {
 }
 
 type PersistedComposerDraftTestState = {
+  draftThreadsByThreadKey?: Record<string, { pendingSend?: unknown }>;
   draftsByThreadKey?: Record<
     string,
     {
@@ -1124,6 +1129,251 @@ describe("composerDraftStore project draft thread mapping", () => {
     // draft rows to surface.
     expect(useComposerDraftStore.getState().getDraftThread(draftId)?.threadId).toBe(threadId);
     expect(draftByKey(draftId)?.prompt).toBe("keep me around");
+  });
+
+  it("shows a first send immediately and preserves it when navigating to another draft", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "Build the feature");
+    const pendingSend = {
+      messageId: MessageId.make("first-send"),
+      text: "Build the feature",
+      title: "Build the feature",
+      createdAt: "2026-09-08T00:00:00.000Z",
+    };
+    const rows = (routeDraftId: string | null, serverThreadKeys = new Set<string>()) =>
+      selectSidebarDraftRows({
+        ...useComposerDraftStore.getState(),
+        routeDraftId,
+        serverThreadKeys,
+        scopedProjectKeys: null,
+        frozenActive: { routeDraftId: null, row: null },
+      });
+    expect(rows(draftId)).toEqual([]);
+    store.setDraftPendingSend(draftId, pendingSend);
+    store.clearComposerContent(draftId);
+    expect(rows(draftId).map((row) => row.session.pendingSend?.title)).toEqual([
+      "Build the feature",
+    ]);
+
+    // Clicking New Thread after Send must not recycle or garbage-collect
+    // the now-empty composer while its launch is still in flight.
+    store.setProjectDraftThreadId(projectRef, otherDraftId, { threadId: otherThreadId });
+    expect(rows(otherDraftId).map((row) => row.draftId)).toEqual([draftId]);
+    expect(
+      rows(
+        otherDraftId,
+        new Set([scopedThreadKey(scopeThreadRef(OTHER_TEST_ENVIRONMENT_ID, threadId))]),
+      ).map((row) => row.draftId),
+    ).toEqual([draftId]);
+    expect(store.getDraftSession(draftId)?.pendingSend).toMatchObject(pendingSend);
+    expect(
+      flushComposerDraftStorage().draftThreadsByThreadKey?.[draftId]?.pendingSend,
+    ).toMatchObject(pendingSend);
+    const merge = useComposerDraftStore.persist.getOptions().merge!;
+    const hydrated = merge(flushComposerDraftStorage(), useComposerDraftStore.getState());
+    expect(hydrated.draftThreadsByThreadKey[draftId]?.pendingSend).toMatchObject(pendingSend);
+
+    // The canonical row replaces the pending row even if its draft route
+    // is no longer mounted to observe promotion.
+    expect(
+      rows(otherDraftId, new Set([scopedThreadKey(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId))])),
+    ).toEqual([]);
+    finalizePromotedDraftThreadByRef(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId));
+    expect(store.getDraftSession(draftId)).toBeNull();
+  });
+
+  it.each([false, true])(
+    "restores a reload-orphaned send once (composer cleared: %s)",
+    (cleared) => {
+      const store = useComposerDraftStore.getState();
+      store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+      store.setPrompt(draftId, "Editable prompt");
+      const issue = { id: "issue:1", key: "PW-1", title: "Fix it", url: "https://example.com/1" };
+      store.setIssueContexts(draftId, [issue]);
+      const terminal = makeTerminalContext({ id: "terminal-restore" });
+      const element = {
+        id: "element-restore",
+        threadId,
+        pickedAt: "2026-09-08T00:00:00.000Z",
+        pageUrl: "https://example.com",
+        pageTitle: null,
+        tagName: "button",
+        selector: "#send",
+        htmlPreview: "<button>Send</button>",
+        componentName: null,
+        source: null,
+        styles: "",
+      };
+      const annotation = {
+        id: "annotation-restore",
+        pageUrl: "https://example.com",
+        pageTitle: null,
+        comment: "Fix layout",
+        elements: [],
+        regions: [],
+        strokes: [],
+        styleChanges: [],
+        screenshot: {
+          dataUrl: "data:image/png;base64,YQ==",
+          width: 1,
+          height: 1,
+          cropRect: { x: 0, y: 0, width: 1, height: 1 },
+        },
+        createdAt: "2026-09-08T00:00:00.000Z",
+      };
+      const review = {
+        id: "review-restore",
+        sectionId: "file:app.ts",
+        sectionTitle: "File",
+        filePath: "app.ts",
+        startIndex: 1,
+        endIndex: 1,
+        rangeLabel: "L1",
+        text: "Keep this",
+        diff: "",
+      };
+      store.setTerminalContexts(draftId, [terminal]);
+      store.setElementContexts(draftId, [element]);
+      store.setPreviewAnnotations(draftId, [annotation]);
+      store.setReviewComments(draftId, [review]);
+      store.addImage(
+        draftId,
+        makeImage({ id: "restored-image", previewUrl: "data:image/png;base64,YQ==" }),
+      );
+      store.syncPersistedAttachments(draftId, [...captureComposerDraft(draftId).attachments]);
+      store.setDraftPendingSend(draftId, {
+        messageId: MessageId.make("interrupted"),
+        text: "Expanded provider context",
+        title: "Editable prompt",
+        createdAt: "2026-09-08T00:00:00.000Z",
+        recoveryDraft: captureComposerDraft(draftId),
+      });
+      if (cleared) store.clearComposerContent(draftId);
+      const merge = useComposerDraftStore.persist.getOptions().merge!;
+      useComposerDraftStore.setState(
+        merge(flushComposerDraftStorage(), useComposerDraftStore.getState()),
+      );
+      expect(store.getDraftSession(draftId)?.pendingSendNeedsReconciliation).toBe(true);
+      const input = {
+        environmentId: TEST_ENVIRONMENT_ID,
+        acceptedThreadIds: new Set<ThreadId>(),
+        activeDraftId: draftId,
+      };
+      reconcilePendingDraftSends({ ...input, status: "cached" });
+      expect(store.getDraftSession(draftId)?.pendingSend).not.toBeNull();
+      reconcilePendingDraftSends({
+        ...input,
+        status: "live",
+        environmentId: OTHER_TEST_ENVIRONMENT_ID,
+      });
+      expect(store.getDraftSession(draftId)?.pendingSend).not.toBeNull();
+      reconcilePendingDraftSends({ ...input, status: "live" });
+      expect(store.getDraftSession(draftId)?.pendingSend).toBeNull();
+      expect(store.getComposerDraft(draftId)?.prompt).toBe(
+        `${INLINE_TERMINAL_CONTEXT_PLACEHOLDER}Editable prompt`,
+      );
+      expect(store.getComposerDraft(draftId)?.issueContexts).toEqual([issue]);
+      expect(store.getComposerDraft(draftId)?.terminalContexts).toEqual([
+        { ...terminal, threadId, text: "" },
+      ]);
+      expect(store.getComposerDraft(draftId)?.elementContexts).toEqual([element]);
+      expect(store.getComposerDraft(draftId)?.previewAnnotations).toEqual([annotation]);
+      expect(store.getComposerDraft(draftId)?.reviewComments).toEqual([review]);
+      expect(store.getComposerDraft(draftId)?.images).toHaveLength(1);
+      expect(store.getComposerDraft(draftId)?.persistedAttachments).toHaveLength(1);
+      expect(store.getComposerDraft(draftId)?.images[0]?.previewUrl).toBe(
+        "data:image/png;base64,YQ==",
+      );
+    },
+  );
+
+  it("keeps new input alongside an interrupted send without duplicating shared attachments", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "First prompt");
+    store.addImage(draftId, makeImage({ id: "first", previewUrl: "data:image/png;base64,YQ==" }));
+    store.setDraftPendingSend(draftId, {
+      messageId: MessageId.make("interrupted"),
+      text: "First prompt",
+      title: "First prompt",
+      createdAt: "2026-09-08T00:00:00.000Z",
+      recoveryDraft: captureComposerDraft(draftId),
+    });
+    store.setPrompt(draftId, "New input");
+    store.addImage(
+      draftId,
+      makeImage({ id: "second", name: "second.png", previewUrl: "data:image/png;base64,Yg==" }),
+    );
+    store.syncPersistedAttachments(draftId, [...captureComposerDraft(draftId).attachments]);
+    const merge = useComposerDraftStore.persist.getOptions().merge!;
+    useComposerDraftStore.setState(
+      merge(flushComposerDraftStorage(), useComposerDraftStore.getState()),
+    );
+    reconcilePendingDraftSends({
+      status: "live",
+      environmentId: TEST_ENVIRONMENT_ID,
+      acceptedThreadIds: new Set(),
+      activeDraftId: draftId,
+    });
+    expect(store.getComposerDraft(draftId)?.prompt).toBe("First prompt\n\nNew input");
+    expect(store.getComposerDraft(draftId)?.images.map((item) => item.id)).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(store.getComposerDraft(draftId)?.persistedAttachments.map((item) => item.id)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  it("finalizes an unvisited accepted send and cannot resurrect it after server deletion", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setDraftPendingSend(draftId, {
+      messageId: MessageId.make("accepted"),
+      text: "sent",
+      title: "sent",
+      createdAt: "2026-09-08T00:00:00.000Z",
+    });
+    store.clearComposerContent(draftId);
+    const input = {
+      status: "live" as const,
+      environmentId: TEST_ENVIRONMENT_ID,
+      acceptedThreadIds: new Set([threadId]),
+    };
+    reconcilePendingDraftSends({ ...input, activeDraftId: draftId });
+    expect(store.getDraftSession(draftId)).not.toBeNull();
+    store.setPrompt(draftId, "A follow-up typed during launch");
+    reconcilePendingDraftSends({ ...input, activeDraftId: otherDraftId });
+    expect(store.getDraftSession(draftId)).toBeNull();
+    expect(store.getDraftThreadByProjectRef(projectRef)).toBeNull();
+    expect(store.getComposerDraft(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId))?.prompt).toBe(
+      "A follow-up typed during launch",
+    );
+    reconcilePendingDraftSends({
+      ...input,
+      acceptedThreadIds: new Set(),
+      activeDraftId: otherDraftId,
+    });
+    expect(flushComposerDraftStorage().draftThreadsByThreadKey?.[draftId]).toBeUndefined();
+  });
+
+  it("retains a failed first send as a retryable draft", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setDraftPendingSend(draftId, {
+      messageId: MessageId.make("failed-send"),
+      text: "Keep this work",
+      title: "Keep this work",
+      createdAt: "2026-09-08T00:00:00.000Z",
+    });
+    store.clearComposerContent(draftId);
+    store.setProjectDraftThreadId(projectRef, otherDraftId, { threadId: otherThreadId });
+    store.setPrompt(draftId, "Keep this work");
+    store.setDraftPendingSend(draftId, null);
+    expect(store.getDraftSession(draftId)?.pendingSend).toBeNull();
+    expect(store.getComposerDraft(draftId)?.prompt).toBe("Keep this work");
   });
 
   it("clears every session for a project, including unmapped invested drafts", () => {

@@ -180,6 +180,30 @@ export function resolveThreadMetadataUpdateForNextTurn(input: {
   };
 }
 
+export function buildPendingDraftMessage(
+  pending: DraftThreadState["pendingSend"],
+): ChatMessage | null {
+  if (!pending) return null;
+  const attachments = pending.recoveryDraft?.attachments.map((attachment) => ({
+    type: attachment.type ?? ("image" as const),
+    id: attachment.id,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+    previewUrl: attachment.dataUrl ?? "",
+  }));
+  return {
+    id: pending.messageId,
+    role: "user",
+    text: attachments?.length && pending.recoveryDraft?.prompt.trim() === "" ? "" : pending.text,
+    ...(attachments?.length ? { attachments } : {}),
+    createdAt: pending.createdAt,
+    updatedAt: pending.createdAt,
+    runId: null,
+    streaming: false,
+  };
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
@@ -189,7 +213,7 @@ export function buildLocalDraftThread(
   return presentThreadShell(draftThread.environmentId, {
     id: threadId,
     projectId: draftThread.projectId,
-    title: "New thread",
+    title: draftThread.pendingSend?.title ?? "New thread",
     providerInstanceId: fallbackModelSelection.instanceId,
     modelSelection: fallbackModelSelection,
     runtimeMode: draftThread.runtimeMode,
