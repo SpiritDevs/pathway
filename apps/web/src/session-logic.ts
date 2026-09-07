@@ -577,6 +577,13 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
 
   for (const row of input.visibleTurnItems) {
     const { item } = row;
+    // Only new worktrees need a setup card. Other launches use the normal activity status.
+    if (
+      turnItemIsWorkspacePreparation(item) &&
+      item.workspacePreparation?.workspaceKind !== "worktree"
+    ) {
+      continue;
+    }
     const createdAt = projectedItemCreatedAt(row);
     const attempt = resolveAttempt(item);
     const attemptMetadata = attempt === undefined ? {} : { attempt };

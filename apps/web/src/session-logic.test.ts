@@ -304,6 +304,7 @@ describe("V2 session presentation", () => {
       type: "command_execution" as const,
       title: "Workspace ready",
       input: "Preparing workspace",
+      workspacePreparation: { phase: "setup", workspaceKind: "worktree" },
       output: "Workspace preparation completed.",
       exitCode: 0,
     } satisfies OrchestrationV2TurnItem;
@@ -339,6 +340,34 @@ describe("V2 session presentation", () => {
       ["event", threadCreatedItem.id],
       ["event", workspacePreparationItem.id],
     ]);
+    for (const workspaceKind of ["root", "existing_worktree", "worktree", undefined] as const) {
+      for (const status of ["running", "completed", "failed", "interrupted"] as const) {
+        const preparationEntries = deriveTimelineEntriesFromVisibleTurnItems({
+          visibleTurnItems: visibleTurnItems.map((row) =>
+            row.item.id === workspacePreparationItem.id
+              ? {
+                  ...row,
+                  item: {
+                    ...workspacePreparationItem,
+                    status,
+                    workspacePreparation: workspaceKind
+                      ? { phase: "preparing", workspaceKind }
+                      : undefined,
+                  },
+                }
+              : row,
+          ),
+          optimisticMessages: [],
+        });
+        expect(preparationEntries.map((entry) => entry.id)).toEqual(
+          entries
+            .filter(
+              (entry) => workspaceKind === "worktree" || entry.id !== workspacePreparationItem.id,
+            )
+            .map((entry) => entry.id),
+        );
+      }
+    }
     const commandEntry = entries[2];
     const userEntry = entries[0];
     expect(userEntry?.kind).toBe("message");
