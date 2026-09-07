@@ -10,6 +10,7 @@ import {
   type ServerSelfUpdateResult,
   WS_METHODS,
 } from "@spiritdevs/contracts";
+import { compareSemverVersions, parseSemver } from "@spiritdevs/shared/semver";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
@@ -282,12 +283,15 @@ export function serverUpdateStateForServerVersion(
   state: ServerUpdateState,
   serverVersion: string | null,
 ): ServerUpdateState {
-  return state.status === "idle" ||
-    state.status === "running" ||
-    serverVersion === null ||
-    state.targetVersion !== serverVersion
-    ? state
-    : IDLE_SERVER_UPDATE_STATE;
+  if (state.status !== "failed" || serverVersion === null) {
+    return state;
+  }
+  return state.targetVersion === serverVersion ||
+    (parseSemver(serverVersion) !== null &&
+      parseSemver(state.targetVersion) !== null &&
+      compareSemverVersions(serverVersion, state.targetVersion) >= 0)
+    ? IDLE_SERVER_UPDATE_STATE
+    : state;
 }
 
 function serverUpdateFailureMessage(error: unknown): string {

@@ -16,6 +16,8 @@ Desktop-managed environments update through their supervising Electron app. The 
 
 Local and remote updater actions share one reservation. Duplicate commits cannot start a second install; a matching active install can be joined. Installation failures retain the reservation until backend restart attempts finish and preserve a failure report for reconnecting clients. Cancelling preparation does not cancel an install that has already committed.
 
+A fresh preparation request reclaims an uncommitted download and invalidates its previous token. This lets clients recover immediately when a preparation response is lost; late commits or cancellation from the old request cannot affect its replacement. An installation that has already committed cannot be reclaimed.
+
 The telemetry receiver is shared with resource monitoring. Creating another receiver for the update service would introduce competing readers on the same descriptor. Update progress travels over the existing authenticated environment connection, including Pathway Connect; it does not require a new public endpoint.
 
 The shared client runtime owns operation state independently of the composer component. Chat and Connections render that state, including failure and retry. Native iOS does not yet expose an update action.

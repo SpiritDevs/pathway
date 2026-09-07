@@ -599,6 +599,102 @@ describe("DesktopRemoteUpdates", () => {
     );
   });
 
+  it.effect("reclaims a lost preparation without another check or download", () => {
+    const harness = makeHarness();
+
+    return runRemoteUpdatesTest(
+      harness,
+      ({ drainWorkers, reports, requests, commits, cancellations }) =>
+        Effect.gen(function* () {
+          yield* Queue.offer(requests, request("req-lost-preparation"));
+          yield* drainWorkers;
+          harness.emit("update-available", { version: "1.2.4" });
+          yield* drainWorkers;
+          harness.emit("update-downloaded", { version: "1.2.4" });
+          yield* drainWorkers;
+
+          yield* Queue.offer(requests, request("req-reclaimed"));
+          yield* drainWorkers;
+          assert.deepEqual(
+            terminalReports(reports).map((report) => ({
+              requestId: report.requestId,
+              outcome: report.outcome,
+              downloadedVersion: report.state.downloadedVersion,
+            })),
+            ["req-lost-preparation", "req-reclaimed"].map((requestId) => ({
+              requestId,
+              outcome: "ready-to-install" as const,
+              downloadedVersion: "1.2.4",
+            })),
+          );
+          assert.equal(harness.checkCount(), 1);
+          assert.equal(harness.downloadCount(), 1);
+          assert.equal(harness.quitAndInstalls(), 0);
+
+          // The lost response can arrive late, but its token cannot install.
+          yield* Queue.offer(commits, {
+            version: 1,
+            type: "commitDesktopUpdate",
+            requestId: "req-lost-preparation",
+          });
+          yield* drainWorkers;
+          assert.equal(terminalReports(reports).at(-1)?.outcome, "failed");
+          assert.equal(terminalReports(reports).at(-1)?.requestId, "req-lost-preparation");
+          assert.equal(harness.quitAndInstalls(), 0);
+
+          // Cleanup from that request must not cancel its replacement.
+          yield* Queue.offer(cancellations, {
+            version: 1,
+            type: "cancelDesktopUpdate",
+            requestId: "req-lost-preparation",
+          });
+          yield* drainWorkers;
+          const commit = {
+            version: 1 as const,
+            type: "commitDesktopUpdate" as const,
+            requestId: "req-reclaimed",
+          };
+          yield* Queue.offer(commits, commit);
+          yield* drainWorkers;
+          yield* Queue.offer(commits, commit);
+          yield* drainWorkers;
+          assert.equal(harness.quitAndInstalls(), 1);
+        }),
+    );
+  });
+
+  it.effect("keeps a reclaimed preparation bound to its reported download version", () => {
+    const harness = makeHarness();
+
+    return runRemoteUpdatesTest(harness, ({ drainWorkers, reports, requests, commits }) =>
+      Effect.gen(function* () {
+        yield* Queue.offer(requests, request("req-lost-version"));
+        yield* drainWorkers;
+        harness.emit("update-available", { version: "1.2.4" });
+        yield* drainWorkers;
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* drainWorkers;
+
+        yield* Queue.offer(requests, request("req-reclaimed-version"));
+        yield* drainWorkers;
+        assert.equal(terminalReports(reports).at(-1)?.outcome, "ready-to-install");
+        assert.equal(terminalReports(reports).at(-1)?.state.downloadedVersion, "1.2.4");
+
+        harness.emit("update-downloaded", { version: "1.2.5" });
+        yield* drainWorkers;
+        yield* Queue.offer(commits, {
+          version: 1,
+          type: "commitDesktopUpdate",
+          requestId: "req-reclaimed-version",
+        });
+        yield* drainWorkers;
+        assert.equal(terminalReports(reports).at(-1)?.outcome, "failed");
+        assert.equal(terminalReports(reports).at(-1)?.requestId, "req-reclaimed-version");
+        assert.equal(harness.quitAndInstalls(), 0);
+      }),
+    );
+  });
+
   it.effect("rejects a new preparation while an install commit is active", () => {
     const installStarted = Deferred.makeUnsafe<void>();
     const releaseInstall = Deferred.makeUnsafe<void>();

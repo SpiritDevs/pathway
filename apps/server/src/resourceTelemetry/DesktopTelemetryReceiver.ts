@@ -327,6 +327,29 @@ export function requireDesktopTelemetryWriteProgress(
     : Effect.fail(new DesktopTelemetryControlStalled({ fd, remainingBytes }));
 }
 
+export const subscribeDesktopUpdateReports = Effect.fn(
+  "resourceTelemetry.desktopTelemetryReceiver.subscribeDesktopUpdateReports",
+)(function* (
+  reports: PubSub.PubSub<Option.Option<DesktopUpdateStatusReport>>,
+  isClosed: Effect.Effect<boolean>,
+  latest: Effect.Effect<Option.Option<DesktopUpdateStatusReport>>,
+) {
+  const subscription = yield* PubSub.subscribe(reports);
+  const closed = yield* isClosed;
+  // Read closure before the snapshot: a closed stream's snapshot includes
+  // its final report, while an open subscription must drain through EOF.
+  const initial = yield* latest;
+  return {
+    latest: initial,
+    changes: closed
+      ? Stream.empty
+      : Stream.fromSubscription(subscription).pipe(
+          Stream.takeWhile(Option.isSome),
+          Stream.map((report) => report.value),
+        ),
+  };
+});
+
 export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")(function* () {
   const config = yield* ServerConfig;
   const serverSettings = yield* ServerSettingsService;
@@ -670,20 +693,11 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
       sendControlMessage({ version: 1, type: "commitDesktopUpdate", requestId }),
     cancelDesktopUpdate: (requestId) =>
       sendControlMessage({ version: 1, type: "cancelDesktopUpdate", requestId }),
-    desktopUpdates: Effect.gen(function* () {
-      const subscription = yield* PubSub.subscribe(updateReportChanges);
-      const initial = yield* Ref.get(latestUpdateReport);
-      const closed = yield* Ref.get(updateReportsClosed);
-      return {
-        latest: initial,
-        changes: closed
-          ? Stream.empty
-          : Stream.fromSubscription(subscription).pipe(
-              Stream.takeWhile(Option.isSome),
-              Stream.map((report) => report.value),
-            ),
-      };
-    }),
+    desktopUpdates: subscribeDesktopUpdateReports(
+      updateReportChanges,
+      Ref.get(updateReportsClosed),
+      Ref.get(latestUpdateReport),
+    ),
   });
 });
 

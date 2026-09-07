@@ -157,11 +157,11 @@ export const listen: Effect.Effect<
         });
         if (!shouldStart) return;
 
-        const now = yield* Clock.currentTimeMillis;
+        // A client may have lost the ready-to-install response and its token.
+        // Invalidate an uncommitted token atomically against commit claims;
+        // the state machine below reuses the download with a fresh token.
         const prepared = yield* Ref.modify(preparedUpdateRef, (current) =>
-          Option.isSome(current) &&
-          current.value.status === "prepared" &&
-          current.value.expiresAt <= now
+          Option.isSome(current) && current.value.status === "prepared"
             ? ([Option.none<typeof current.value>(), Option.none()] as const)
             : ([current, current] as const),
         );

@@ -575,27 +575,62 @@ describe("server state projection", () => {
     });
   });
 
-  it("keeps active update state and clears failures only after the target version arrives", () => {
+  it("keeps active update state even when the target or a newer version arrives", () => {
     const running = {
       status: "running" as const,
       stage: "resuming" as const,
       fromVersion: "0.0.30",
       targetVersion: "0.0.31",
     };
-    const failed = {
-      status: "failed" as const,
-      stage: "installing" as const,
-      fromVersion: "0.0.30",
-      targetVersion: "0.0.31",
-      message: "Install failed.",
-    };
-
     expect(serverUpdateStateForServerVersion(running, "0.0.31")).toBe(running);
-    expect(serverUpdateStateForServerVersion(failed, "0.0.30")).toBe(failed);
-    expect(serverUpdateStateForServerVersion(failed, null)).toBe(failed);
-    expect(serverUpdateStateForServerVersion(failed, "0.0.32")).toBe(failed);
-    expect(serverUpdateStateForServerVersion(failed, "0.0.31")).toEqual({ status: "idle" });
+    expect(serverUpdateStateForServerVersion(running, "0.0.32")).toBe(running);
   });
+
+  it.each([
+    ["1.1.0", "1.1.0"],
+    ["1.1.0", "1.2.0"],
+    ["1.9.0", "1.10.0"],
+    ["1.1.0", "v1.1.0"],
+    ["1.1.0-nightly.9", "1.1.0-nightly.10"],
+    ["1.1.0-nightly.10", "1.1.0"],
+    ["custom-build", "custom-build"],
+  ])(
+    "clears a failed update to %s when the server is already on %s",
+    (targetVersion, serverVersion) => {
+      const failed = {
+        status: "failed" as const,
+        stage: "installing" as const,
+        fromVersion: "1.0.0",
+        targetVersion,
+        message: "Install failed.",
+      };
+
+      expect(serverUpdateStateForServerVersion(failed, serverVersion)).toEqual({ status: "idle" });
+    },
+  );
+
+  it.each([
+    ["1.1.0", "1.0.0"],
+    ["1.1.0", null],
+    ["1.1.0", "1.1.0-nightly.10"],
+    ["1.1.0-nightly.10", "1.1.0-nightly.9"],
+    ["1.1.0", "unknown"],
+    ["custom-build", "newer-custom-build"],
+    ["custom-build", "2.0.0"],
+  ])(
+    "retains a failed update to %s when server version %s does not establish recovery",
+    (targetVersion, serverVersion) => {
+      const failed = {
+        status: "failed" as const,
+        stage: "installing" as const,
+        fromVersion: "1.0.0",
+        targetVersion,
+        message: "Install failed.",
+      };
+
+      expect(serverUpdateStateForServerVersion(failed, serverVersion)).toBe(failed);
+    },
+  );
 
   it.effect("correlates launcher outcomes and fails immediately after rollback", () =>
     Effect.gen(function* () {
