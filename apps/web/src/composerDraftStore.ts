@@ -17,6 +17,7 @@ import {
   type ScopedThreadRef,
   ThreadLocation,
   ThreadId,
+  MessageId,
 } from "@spiritdevs/contracts";
 import {
   parseScopedProjectKey,
@@ -243,11 +244,20 @@ type LegacyPersistedComposerDraftStoreState = PersistedComposerDraftStoreState &
   LegacyStickyModelFields &
   LegacyV2StoreFields;
 
+const PendingDraftSend = Schema.Struct({
+  messageId: MessageId,
+  text: Schema.String,
+  title: Schema.String,
+  createdAt: Schema.String,
+});
+const isPendingDraftSend = Schema.is(PendingDraftSend);
+
 const PersistedDraftThreadState = Schema.Struct({
   threadId: ThreadId,
   environmentId: Schema.String,
   projectId: ProjectId,
   logicalProjectKey: Schema.optionalKey(Schema.String),
+  pendingSend: Schema.optionalKey(Schema.NullOr(PendingDraftSend)),
   createdAt: Schema.String,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
@@ -353,6 +363,7 @@ export function composerDraftHasUserContent(
  * environment/worktree configuration before the first send.
  */
 export interface DraftSessionState {
+  pendingSend?: typeof PendingDraftSend.Type | null;
   threadId: ThreadId;
   environmentId: EnvironmentId;
   projectId: ProjectId;
@@ -472,6 +483,10 @@ interface ComposerDraftStoreState {
   ) => void;
   /** Marks a draft session as being promoted to a real server thread. */
   markDraftThreadPromoting: (threadRef: ComposerThreadTarget, promotedTo?: ScopedThreadRef) => void;
+  setDraftPendingSend: (
+    threadRef: ComposerThreadTarget,
+    pendingSend: DraftSessionState["pendingSend"],
+  ) => void;
   /** Removes draft-session metadata after promotion is complete. */
   finalizePromotedDraftThread: (threadRef: ComposerThreadTarget) => void;
   clearDraftThread: (threadRef: ComposerThreadTarget) => void;
@@ -1591,6 +1606,7 @@ function createDraftThreadState(
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
     startFromOrigin: nextStartFromOrigin,
     promotedTo: null,
+    pendingSend: existingThread?.pendingSend ?? null,
   };
 }
 
@@ -1624,6 +1640,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
+    left.pendingSend === right.pendingSend &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
 }
@@ -1768,6 +1785,9 @@ function normalizePersistedDraftThreads(
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         startFromOrigin,
         promotedTo,
+        pendingSend: isPendingDraftSend(candidateDraftThread.pendingSend)
+          ? candidateDraftThread.pendingSend
+          : null,
       };
     }
   }
@@ -2069,6 +2089,7 @@ function partializeComposerDraftStoreState(
         ([threadKey, draftThread]) =>
           mappedDraftKeys.has(threadKey) ||
           isDraftThreadPromoting(draftThread) ||
+          draftThread.pendingSend != null ||
           composerDraftHasUserContent(state.draftsByThreadKey[threadKey]),
       )
       .map(([threadKey]) => threadKey),
@@ -2460,6 +2481,7 @@ function toHydratedDraftThreadState(
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    pendingSend: persistedDraftThread.pendingSend ?? null,
     promotedTo: persistedDraftThread.promotedTo
       ? scopeThreadRef(
           persistedDraftThread.promotedTo.environmentId as EnvironmentId,
@@ -2617,6 +2639,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 previousThreadKeyForLogicalProject,
               ) &&
               !isDraftThreadPromoting(previousDraftThread) &&
+              previousDraftThread?.pendingSend == null &&
               !composerDraftHasUserContent(
                 state.draftsByThreadKey[previousThreadKeyForLogicalProject],
               )
@@ -2703,6 +2726,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
               startFromOrigin: nextStartFromOrigin,
               promotedTo: existing.promotedTo ?? null,
+              pendingSend: existing.pendingSend ?? null,
             };
             const isUnchanged =
               nextDraftThread.environmentId === existing.environmentId &&
@@ -2774,6 +2798,20 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               return state;
             }
             return removeDraftThreadReferences(state, threadKey);
+          });
+        },
+        setDraftPendingSend: (threadRef, pendingSend) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (!threadKey) return;
+          set((state) => {
+            const existing = state.draftThreadsByThreadKey[threadKey];
+            if (!existing) return state;
+            return {
+              draftThreadsByThreadKey: {
+                ...state.draftThreadsByThreadKey,
+                [threadKey]: { ...existing, pendingSend: pendingSend ?? null },
+              },
+            };
           });
         },
         markDraftThreadPromoting: (threadRef, promotedTo) => {

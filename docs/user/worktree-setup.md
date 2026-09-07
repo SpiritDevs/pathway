@@ -1,5 +1,7 @@
 # Creating a worktree
 
+On web and desktop, a new conversation appears in the sidebar as **Starting** as soon as you send its first message. You can open another conversation and return while it starts. Once the server confirms the conversation, its regular sidebar entry replaces the starting entry. If sending fails, your message returns to its draft for retry.
+
 On web and desktop, when you send the first message in a new worktree, a progress card appears beneath your message. It shows the current stage and checks off each completed stage:
 
 - Preparing the workspace, including fetching the base branch when requested.

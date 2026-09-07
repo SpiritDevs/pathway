@@ -12,6 +12,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  MessageId,
   type ModelSelection,
   type ProviderOptionSelection,
 } from "@spiritdevs/contracts";
@@ -78,6 +79,7 @@ import {
   type TerminalContextDraft,
 } from "./lib/terminalContext";
 import { createDebouncedJSONStorage, createDebouncedStorage } from "./lib/storage";
+import { selectSidebarDraftRows } from "./components/sidebarDrafts";
 
 function makeImage(input: {
   id: string;
@@ -234,6 +236,7 @@ function draftByKey(key: string) {
 }
 
 type PersistedComposerDraftTestState = {
+  draftThreadsByThreadKey?: Record<string, { pendingSend?: unknown }>;
   draftsByThreadKey?: Record<
     string,
     {
@@ -1124,6 +1127,75 @@ describe("composerDraftStore project draft thread mapping", () => {
     // draft rows to surface.
     expect(useComposerDraftStore.getState().getDraftThread(draftId)?.threadId).toBe(threadId);
     expect(draftByKey(draftId)?.prompt).toBe("keep me around");
+  });
+
+  it("shows a first send immediately and preserves it when navigating to another draft", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "Build the feature");
+    const pendingSend = {
+      messageId: MessageId.make("first-send"),
+      text: "Build the feature",
+      title: "Build the feature",
+      createdAt: "2026-09-08T00:00:00.000Z",
+    };
+    const rows = (routeDraftId: string | null, serverThreadKeys = new Set<string>()) =>
+      selectSidebarDraftRows({
+        ...useComposerDraftStore.getState(),
+        routeDraftId,
+        serverThreadKeys,
+        scopedProjectKeys: null,
+        frozenActive: { routeDraftId: null, row: null },
+      });
+    expect(rows(draftId)).toEqual([]);
+    store.setDraftPendingSend(draftId, pendingSend);
+    store.clearComposerContent(draftId);
+    expect(rows(draftId).map((row) => row.session.pendingSend?.title)).toEqual([
+      "Build the feature",
+    ]);
+
+    // Clicking New Thread after Send must not recycle or garbage-collect
+    // the now-empty composer while its launch is still in flight.
+    store.setProjectDraftThreadId(projectRef, otherDraftId, { threadId: otherThreadId });
+    expect(rows(otherDraftId).map((row) => row.draftId)).toEqual([draftId]);
+    expect(
+      rows(
+        otherDraftId,
+        new Set([scopedThreadKey(scopeThreadRef(OTHER_TEST_ENVIRONMENT_ID, threadId))]),
+      ).map((row) => row.draftId),
+    ).toEqual([draftId]);
+    expect(store.getDraftSession(draftId)?.pendingSend).toEqual(pendingSend);
+    expect(flushComposerDraftStorage().draftThreadsByThreadKey?.[draftId]?.pendingSend).toEqual(
+      pendingSend,
+    );
+    const merge = useComposerDraftStore.persist.getOptions().merge!;
+    const hydrated = merge(flushComposerDraftStorage(), useComposerDraftStore.getState());
+    expect(hydrated.draftThreadsByThreadKey[draftId]?.pendingSend).toEqual(pendingSend);
+
+    // The canonical row replaces the pending row even if its draft route
+    // is no longer mounted to observe promotion.
+    expect(
+      rows(otherDraftId, new Set([scopedThreadKey(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId))])),
+    ).toEqual([]);
+    finalizePromotedDraftThreadByRef(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId));
+    expect(store.getDraftSession(draftId)).toBeNull();
+  });
+
+  it("retains a failed first send as a retryable draft", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setDraftPendingSend(draftId, {
+      messageId: MessageId.make("failed-send"),
+      text: "Keep this work",
+      title: "Keep this work",
+      createdAt: "2026-09-08T00:00:00.000Z",
+    });
+    store.clearComposerContent(draftId);
+    store.setProjectDraftThreadId(projectRef, otherDraftId, { threadId: otherThreadId });
+    store.setPrompt(draftId, "Keep this work");
+    store.setDraftPendingSend(draftId, null);
+    expect(store.getDraftSession(draftId)?.pendingSend).toBeNull();
+    expect(store.getComposerDraft(draftId)?.prompt).toBe("Keep this work");
   });
 
   it("clears every session for a project, including unmapped invested drafts", () => {

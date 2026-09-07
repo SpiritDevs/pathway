@@ -458,6 +458,46 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect(
+    "recovers over the socket when HTTP becomes unavailable after confirming a missing thread",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({ httpNotFound: true, completionMarker: true });
+        expect(yield* Queue.take(harness.subscriptionStarts)).toBe(1);
+        for (let attempt = 2; attempt <= THREAD_NOT_FOUND_MAX_ATTEMPTS; attempt += 1) {
+          yield* harness.clearSession;
+          yield* Effect.yieldNow;
+          yield* harness.replaceSession;
+          expect(yield* Queue.take(harness.subscriptionStarts)).toBe(attempt);
+        }
+        yield* harness.clearSession;
+        yield* Effect.yieldNow;
+        yield* harness.replaceSession;
+        yield* awaitThreadState(harness.observed, (value) => value.status === "deleted");
+
+        // The HTTP loader maps expired credentials / transport failures to
+        // Unavailable. The existing authenticated socket is still usable.
+        yield* Ref.set(harness.httpNotFound, false);
+        yield* TestClock.adjust(THREAD_DELETED_REPROBE_INTERVAL);
+        expect(yield* Queue.take(harness.subscriptionStarts)).toBe(
+          THREAD_NOT_FOUND_MAX_ATTEMPTS + 1,
+        );
+        expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBeUndefined();
+        yield* Queue.offer(harness.inputs, snapshot(BASE_PROJECTION));
+        const recovering = yield* awaitThreadState(harness.observed, (value) =>
+          Option.isSome(value.data),
+        );
+        expect(recovering.status).toBe("synchronizing");
+        yield* Queue.offer(harness.inputs, { kind: "synchronized" });
+        const state = yield* awaitThreadState(
+          harness.observed,
+          (value) => value.status === "live" && Option.isSome(value.data),
+        );
+        expect(Option.getOrThrow(state.data).thread.id).toBe(THREAD_ID);
+        expect(yield* Ref.get(harness.retryCount)).toBe(0);
+      }),
+  );
+
   it.effect("ignores replayed thread events at or below the snapshot sequence", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_PROJECTION });

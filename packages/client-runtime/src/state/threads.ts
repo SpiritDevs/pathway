@@ -256,20 +256,33 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   );
 
   // Runs while the thread is in the deleted state with no data. Holds the
-  // socket subscription back (so a missing thread does not churn the 250ms
-  // retry loop) and probes over HTTP until the thread materializes, at which
-  // point the caller resumes the normal subscribe path.
-  const recoverDeletedThread = Effect.gen(function* () {
+  // socket subscription back while HTTP confirms the thread is missing.
+  // An unavailable HTTP path (including expired credentials) must release
+  // the socket fallback; a healthy socket can outlive its HTTP credential.
+  const recoverDeletedThread = Effect.fn("EnvironmentThreadState.recoverDeletedThread")(function* (
+    supportsCompletionMarker: boolean,
+  ) {
     while (true) {
       yield* Effect.sleep(THREAD_DELETED_REPROBE_INTERVAL);
       const prepared = yield* awaitPrepared;
       const httpSnapshot = yield* snapshotLoader.load(prepared, threadId);
       if (httpSnapshot._tag === "Snapshot") {
+        yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* applyItem({
           kind: "snapshot",
           snapshotSequence: httpSnapshot.snapshot.snapshotSequence,
           projection: httpSnapshot.snapshot.projection,
         });
+        return yield* SubscriptionRef.get(state);
+      }
+      if (httpSnapshot._tag === "Unavailable") {
+        yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
+        yield* Ref.set(notFoundAttempts, 0);
+        yield* SubscriptionRef.update(state, (current) => ({
+          ...current,
+          status: "synchronizing" as const,
+          error: Option.none(),
+        }));
         return yield* SubscriptionRef.get(state);
       }
     }
@@ -309,7 +322,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
         let current = yield* SubscriptionRef.get(state);
         if (Option.isNone(current.data) && current.status === "deleted") {
-          current = yield* recoverDeletedThread;
+          current = yield* recoverDeletedThread(supportsCompletionMarker);
         } else if (Option.isNone(current.data)) {
           const missingAttempts = yield* Ref.get(notFoundAttempts);
           const shouldConfirmDeletion = missingAttempts >= THREAD_NOT_FOUND_MAX_ATTEMPTS;
@@ -319,7 +332,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             if (httpSnapshot._tag === "NotFound") {
               if (shouldConfirmDeletion) {
                 yield* setDeleted();
-                current = yield* recoverDeletedThread;
+                current = yield* recoverDeletedThread(supportsCompletionMarker);
               } else {
                 yield* Ref.set(notFoundAttempts, 1);
               }
