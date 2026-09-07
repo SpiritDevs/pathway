@@ -1973,40 +1973,82 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 });
 
-it.effect("removes a newly created worktree if configuring its base ref fails", () =>
-  Effect.gen(function* () {
-    const cwd = yield* makeTmpDir();
-    yield* initRepoWithCommit(cwd);
-    const target = (yield* Path.Path).join(yield* makeTmpDir(), "partial");
-    const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const failingConfig = ChildProcessSpawner.make((command) =>
-      ChildProcess.isStandardCommand(command) &&
-      command.args.some((arg) => arg.endsWith(".gh-merge-base"))
-        ? Effect.succeed(makeNonRepositoryHandle())
-        : delegate.spawn(command),
-    );
-    const driver = yield* makeGitVcsDriverCore().pipe(
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, failingConfig),
-    );
-    const result = yield* driver
-      .createWorktree({
-        cwd,
-        path: target,
-        newRefName: "pathway/partial",
-        refName: "HEAD",
-        baseRefName: "main",
-      })
-      .pipe(Effect.result);
-    assert.equal(result._tag, "Failure");
-    assert.isFalse(yield* (yield* FileSystem.FileSystem).exists(target));
-    assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), target);
-  }).pipe(
-    Effect.provide(
-      GitVcsDriver.layer.pipe(
-        Layer.provideMerge(ServerConfigLayer),
-        Layer.provideMerge(NodeServices.layer),
+for (const branchChanged of [false, true]) {
+  it.effect(
+    branchChanged
+      ? "preserves a concurrently changed branch after a configuration failure"
+      : "removes a newly created worktree and branch so configuration failures can be retried",
+    () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const target = (yield* Path.Path).join(yield* makeTmpDir(), "partial");
+        const changedCommit = yield* git(cwd, [
+          "commit-tree",
+          "HEAD^{tree}",
+          "-p",
+          "HEAD",
+          "-m",
+          "Concurrent work",
+        ]);
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const healthyDriver = yield* GitVcsDriver.GitVcsDriver;
+        const failingConfig = ChildProcessSpawner.make((command) =>
+          ChildProcess.isStandardCommand(command) &&
+          command.args.some((arg) => arg.endsWith(".gh-merge-base"))
+            ? Effect.gen(function* () {
+                if (branchChanged)
+                  yield* healthyDriver
+                    .execute({
+                      operation: "test.concurrentBranchUpdate",
+                      cwd,
+                      args: ["update-ref", "refs/heads/pathway/partial", changedCommit],
+                    })
+                    .pipe(Effect.orDie);
+                return makeNonRepositoryHandle();
+              })
+            : delegate.spawn(command),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, failingConfig),
+        );
+        const result = yield* driver
+          .createWorktree({
+            cwd,
+            path: target,
+            newRefName: "pathway/partial",
+            refName: "HEAD",
+            baseRefName: "main",
+          })
+          .pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        assert.isFalse(yield* (yield* FileSystem.FileSystem).exists(target));
+        assert.notInclude(yield* git(cwd, ["worktree", "list", "--porcelain"]), target);
+        if (branchChanged) {
+          assert.equal(yield* git(cwd, ["rev-parse", "refs/heads/pathway/partial"]), changedCommit);
+          return;
+        }
+        assert.notInclude(
+          yield* git(cwd, ["branch", "--list", "pathway/partial"]),
+          "pathway/partial",
+        );
+        const retried = yield* healthyDriver.createWorktree({
+          cwd,
+          path: target,
+          newRefName: "pathway/partial",
+          refName: "HEAD",
+          baseRefName: "main",
+        });
+        assert.equal(retried.worktree.refName, "pathway/partial");
+        assert.isTrue(yield* (yield* FileSystem.FileSystem).exists(target));
+      }).pipe(
+        Effect.provide(
+          GitVcsDriver.layer.pipe(
+            Layer.provideMerge(ServerConfigLayer),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+        Effect.scoped,
       ),
-    ),
-    Effect.scoped,
-  ),
-);
+  );
+}

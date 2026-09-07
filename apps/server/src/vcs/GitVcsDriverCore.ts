@@ -2785,6 +2785,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
 
+    const initialCommit =
+      input.newRefName && input.baseRefName
+        ? (yield* executeGit(
+            "GitVcsDriver.createWorktree.resolveBase",
+            input.cwd,
+            ["rev-parse", "--verify", `${input.refName}^{commit}`],
+            { fallbackErrorDetail: "Could not resolve the worktree starting commit" },
+          )).stdout.trim()
+        : null;
     let lastPercent = -5;
     yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
       env: { LC_ALL: "C", GIT_PROGRESS_DELAY: "0" },
@@ -2822,12 +2831,25 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         { fallbackErrorDetail: "Could not configure the worktree base branch" },
       ).pipe(
         Effect.tapError(() =>
-          executeGit(
-            "GitVcsDriver.createWorktree.cleanup",
-            input.cwd,
-            ["worktree", "remove", "--force", worktreePath],
-            { fallbackErrorDetail: "Could not remove the partially prepared worktree" },
-          ),
+          Effect.gen(function* () {
+            yield* executeGit(
+              "GitVcsDriver.createWorktree.cleanup",
+              input.cwd,
+              ["worktree", "remove", "--force", worktreePath],
+              { fallbackErrorDetail: "Could not remove the partially prepared worktree" },
+            );
+            // Delete only the ref this successful add created, and only if its tip has not changed.
+            if (initialCommit !== null) {
+              yield* executeGit(
+                "GitVcsDriver.createWorktree.cleanupBranch",
+                input.cwd,
+                ["update-ref", "-d", `refs/heads/${input.newRefName}`, initialCommit],
+                {
+                  fallbackErrorDetail: "Could not safely remove the partially prepared branch",
+                },
+              );
+            }
+          }),
         ),
       );
     }
