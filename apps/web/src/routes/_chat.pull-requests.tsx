@@ -48,6 +48,11 @@ import {
 } from "../components/pullRequest/PullRequestListFilters";
 import { PullRequestListEmptyState } from "../components/pullRequest/PullRequestListEmptyState";
 import { PullRequestListGhost } from "../components/pullRequest/PullRequestGhosts";
+import {
+  PullRequestRowActions,
+  type PullRequestRowActionTarget,
+} from "../components/pullRequest/PullRequestRowActions";
+import { pullRequestRowMenuPosition } from "../components/pullRequest/pullRequestRowActions.logic";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import { useWorkspaceProjects } from "../components/projects/useWorkspaceProjects";
@@ -182,6 +187,15 @@ export const Route = createFileRoute("/_chat/pull-requests")({
 });
 
 function PullRequestsRouteView() {
+  const [rowActionTarget, setRowActionTarget] = useState<PullRequestRowActionTarget | null>(null);
+  const showRowActions = useCallback(
+    (entry: SourcedPullRequestListEntry, event: React.MouseEvent<HTMLButtonElement>) => {
+      const { x, y } = pullRequestRowMenuPosition(event);
+      const trigger = event.currentTarget;
+      setRowActionTarget((previous) => ({ id: (previous?.id ?? 0) + 1, entry, x, y, trigger }));
+    },
+    [],
+  );
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const primaryEnvironment = usePrimaryEnvironment();
@@ -1118,6 +1132,7 @@ function PullRequestsRouteView() {
                       selected.environmentId === entry.environmentId)
                   }
                   onSelect={() => selectEntry(entry)}
+                  onContextMenu={showRowActions}
                 />
               ))}
             </div>
@@ -1310,6 +1325,7 @@ function PullRequestsRouteView() {
             baselineQuery.refresh();
             authoredQuery.refresh();
             reviewingQuery.refresh();
+            statsQuery.refresh();
           }}
           onStateChange={handlePullRequestTabStatusChange}
           chromeVariant="collapse"
@@ -1319,6 +1335,19 @@ function PullRequestsRouteView() {
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+      {rowActionTarget ? (
+        <PullRequestRowActions
+          key={rowActionTarget.id}
+          target={rowActionTarget}
+          onActed={() => {
+            refreshList();
+            baselineQuery.refresh();
+            authoredQuery.refresh();
+            reviewingQuery.refresh();
+            statsQuery.refresh();
+          }}
+        />
+      ) : null}
       <div className="relative flex min-h-0 flex-1">
         {pullRequestsSupported && rightPanelState.isOpen ? openPanelControls : null}
         <PullRequestsColumn {...columnProps} />

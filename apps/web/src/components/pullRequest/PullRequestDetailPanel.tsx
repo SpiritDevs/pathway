@@ -38,6 +38,7 @@ import {
   TriangleAlertIcon,
 } from "lucide-react";
 import {
+  type ReactNode,
   lazy,
   Suspense,
   useCallback,
@@ -106,7 +107,6 @@ import {
   buildAskAboutPullRequestHandoff,
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
-  buildFixFindingsHandoff,
   buildResolveConflictsPrompt,
   canPerformPullRequestAction,
   isPullRequestConflicting,
@@ -119,6 +119,7 @@ import {
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
 import { buildPullRequestAgentReviewPrompt } from "./pullRequestAgentReview.logic";
+import { usePullRequestFindings } from "./usePullRequestFindings";
 import { usePullRequestActionRunner, usePullRequestHandoffs } from "./usePullRequestActions";
 import {
   PullRequestActorLabel,
@@ -191,7 +192,10 @@ export function PullRequestDetailPanel({
   onStateChange,
   context = "page",
   chromeVariant = "full",
+  renderActions,
 }: {
+  /** Render only the action menu and its dialogs, without opening or warming the detail views. */
+  renderActions?: (items: ReactNode) => ReactNode;
   environmentId: EnvironmentId;
   reference: PullRequestRef;
   /**
@@ -344,21 +348,21 @@ export function PullRequestDetailPanel({
   // The chunk is fetched as soon as the panel exists rather than waiting for the Code tab to be
   // clicked, so a reader who does click it lands on a chunk already in the module cache.
   useEffect(() => {
-    void loadCodeTab();
-  }, []);
+    if (!renderActions) void loadCodeTab();
+  }, [renderActions]);
 
   const detailQuery = useEnvironmentQuery(
     pullRequestEnvironment.detail({ environmentId, input: reference }),
   );
   const activityQuery = useEnvironmentQuery(
-    pullRequestEnvironment.activity({ environmentId, input: reference }),
+    renderActions ? null : pullRequestEnvironment.activity({ environmentId, input: reference }),
   );
   // Detail and diff are independent server reads, so the diff for the default view (no commit,
   // no cursor) is started here too rather than waiting for the Code tab to mount. This is one
   // extra cached read per opened pull request even for readers who never open the tab, but it
   // turns the tab's first paint from a cold request into a cache hit.
   const _diffWarmUpQuery = useEnvironmentQuery(
-    pullRequestEnvironment.diff({ environmentId, input: { ...reference } }),
+    renderActions ? null : pullRequestEnvironment.diff({ environmentId, input: { ...reference } }),
   );
   const coreDetail = detailQuery.data;
   const activity = activityQuery.data;
@@ -454,6 +458,7 @@ export function PullRequestDetailPanel({
   // while a reader sits on it. Keyed by the pull request rather than by the panel, because this
   // one panel shows a different pull request every time it is opened.
   useLiveRefresh(refreshDetail, {
+    enabled: !renderActions,
     key: `pull-request:${reference.projectId}:${reference.repository}#${reference.number}`,
   });
   // The button, on the other hand, goes around the server's cache rather than through it: it is
@@ -464,9 +469,12 @@ export function PullRequestDetailPanel({
   const [refreshToken, setRefreshToken] = useState(0);
   const refreshFromHost = useCallback(async () => {
     await invalidate({ environmentId, input: { reference } });
+    // Listings have a separate cache epoch from the PR detail and activity.
+    if (renderActions) await invalidate({ environmentId, input: {} });
     refreshDetail();
     setRefreshToken((token) => token + 1);
-  }, [environmentId, invalidate, reference, refreshDetail]);
+    if (renderActions) onActed?.();
+  }, [environmentId, invalidate, reference, refreshDetail, renderActions, onActed]);
   const startAgentReview = useCallback(
     (input: {
       readonly modelSelection: ModelSelection;
@@ -569,7 +577,9 @@ export function PullRequestDetailPanel({
           toastManager.update(toastId, {
             type: "success",
             title: "Agent review started",
-            description: "Follow its progress in Reviewing.",
+            description: renderActions
+              ? "Open the pull request to follow its progress in Reviewing."
+              : "Follow its progress in Reviewing.",
           });
         } catch (error) {
           toastManager.update(toastId, {
@@ -582,7 +592,15 @@ export function PullRequestDetailPanel({
         }
       })();
     },
-    [detail, environmentId, prepareReviewThread, pullRequestKey, startReviewTurn, startingReview],
+    [
+      detail,
+      environmentId,
+      prepareReviewThread,
+      pullRequestKey,
+      startReviewTurn,
+      startingReview,
+      renderActions,
+    ],
   );
   // A refresh asked for by the page: the detail, and through the token below, the diff with it.
   const appliedForcedToken = useRef(forcedRefreshToken);
@@ -599,7 +617,17 @@ export function PullRequestDetailPanel({
       onActed?.();
     },
   });
-  const { handoff, startAsk, startHandoff } = usePullRequestHandoffs({ environmentId, detail });
+  const {
+    handoff: activeHandoff,
+    startAsk,
+    startHandoff,
+  } = usePullRequestHandoffs({ environmentId, detail });
+  const { pending: findingsPending, start: startFixFindings } = usePullRequestFindings({
+    environmentId,
+    detail,
+    startHandoff,
+  });
+  const handoff = findingsPending ? "findings" : activeHandoff;
 
   const askAboutPullRequest = () => {
     if (!detail) return;
@@ -664,24 +692,6 @@ export function PullRequestDetailPanel({
     );
   };
 
-  const startFixFindings = () => {
-    if (!detail) return;
-    void startHandoff(
-      "findings",
-      buildFixFindingsHandoff({
-        number: detail.number,
-        title: detail.title,
-        url: detail.url,
-        headBranch: detail.headBranch,
-        baseBranch: detail.baseBranch,
-        reviewThreads: detail.reviewThreads,
-        comments: detail.comments,
-        checks: detail.checks,
-        commentsTruncated: detail.commentsTruncated,
-      }),
-    );
-  };
-
   const startResolveConflicts = () => {
     if (!detail) return;
     void startHandoff("conflicts", {
@@ -718,19 +728,222 @@ export function PullRequestDetailPanel({
   const showsDraftToggle =
     detail?.state === "open" &&
     can(detail.isDraft ? "ready" : "draft") &&
-    !(detail.isDraft && primaryAction === "ready");
+    (renderActions !== undefined || !(detail.isDraft && primaryAction === "ready"));
   const showsMergeMethods =
     detail?.state === "open" &&
     can("merge") &&
     !detail.isDraft &&
     !conflicting &&
-    allowedMergeMethods.length > 1;
+    allowedMergeMethods.length > (renderActions ? 0 : 1);
   // The pull request number carries this state in the overview and the right-panel tab mirrors
   // it. Conflicts keep their own row below: an open pull request remains green there.
   const statePresentation = detail
     ? resolvePullRequestState({ state: detail.state, isDraft: detail.isDraft })
     : null;
   const checksSummary = detail ? summarizePullRequestChecks(detail.checks) : null;
+
+  const actionMenuItems = detail ? (
+    <>
+      <MenuItem disabled={detailQuery.isPending} onClick={() => void refreshFromHost()}>
+        <RefreshCwIcon className="size-3.5" />
+        Refresh
+      </MenuItem>
+      <MenuItem disabled={handoff !== null} onClick={askAboutPullRequest}>
+        <MessageCircleQuestionIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
+        <span className="flex min-w-0 flex-col">
+          <span>{handoff === "ask" ? "Opening..." : "Ask a question"}</span>
+          <span className="text-xs text-muted-foreground">
+            Opens a thread that knows which pull request you mean.
+          </span>
+        </span>
+      </MenuItem>
+      <MenuItem disabled={handoff !== null} onClick={explainPullRequest}>
+        <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
+        <span className="flex min-w-0 flex-col">
+          <span>{handoff === "explain" ? "Opening..." : "Explain this PR"}</span>
+          <span className="text-xs text-muted-foreground">
+            A walk through the diff and what to read closely.
+          </span>
+        </span>
+      </MenuItem>
+      <MenuItem disabled={startingReview} onClick={() => setReviewDialogOpen(true)}>
+        <ScanSearchIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
+        <span className="flex min-w-0 flex-col">
+          <span>
+            {activeReview === null ? "Review with an agent" : "Start another agent review"}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            Choose an agent, model, reasoning, and speed.
+          </span>
+        </span>
+      </MenuItem>
+      <MenuItem disabled={handoff !== null} onClick={startFixFindings}>
+        <HammerIcon className="size-3.5" />
+        {handoff === "findings" ? "Preparing..." : "Fix findings in a thread"}
+      </MenuItem>
+      <MenuSeparator />
+      {detail.state === "open" ? (
+        <>
+          {/* Row menus also include actions otherwise offered by the header buttons. */}
+          {showsDraftToggle ? (
+            <MenuItem
+              disabled={actionPending}
+              onClick={() => void perform(detail.isDraft ? "ready" : "draft")}
+            >
+              {detail.isDraft ? (
+                <GitPullRequestIcon className="size-3.5" />
+              ) : (
+                <GitPullRequestDraftIcon className="size-3.5" />
+              )}
+              {detail.isDraft ? "Ready for review" : "Convert to draft"}
+            </MenuItem>
+          ) : null}
+          {/* The panel chooses a merge method; the row menu confirms a merge directly. */}
+          {showsMergeMethods ? (
+            <>
+              {/* Separate the draft and merge controls only when both are present. */}
+              {showsDraftToggle ? <MenuSeparator /> : null}
+              {renderActions ? (
+                allowedMergeMethods.map((method) => (
+                  <MenuItem
+                    key={method}
+                    disabled={actionPending}
+                    onClick={() => {
+                      setMergeMethod(method);
+                      setConfirmAction("merge");
+                    }}
+                  >
+                    <GitMergeIcon className="size-3.5" />
+                    {MERGE_METHOD_LABELS[method]}
+                  </MenuItem>
+                ))
+              ) : (
+                <MenuRadioGroup
+                  value={selectedMergeMethod}
+                  onValueChange={(method) => setMergeMethod(method as PullRequestMergeMethod)}
+                >
+                  {allowedMergeMethods.map((method) => (
+                    <MenuRadioItem key={method} value={method} disabled={actionPending}>
+                      {/* Radio items need an inner row to align the icon and label. */}
+                      <span className="flex min-w-0 items-center gap-2">
+                        <GitMergeIcon className="size-3.5" />
+                        <span>{MERGE_METHOD_LABELS[method]}</span>
+                      </span>
+                    </MenuRadioItem>
+                  ))}
+                </MenuRadioGroup>
+              )}
+            </>
+          ) : null}
+          {pullRequestActionMenuHasGroup(showsDraftToggle, showsMergeMethods) ? (
+            <MenuSeparator />
+          ) : null}
+        </>
+      ) : null}
+      <MenuItem onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}>
+        <ArrowUpRightIcon className="size-3.5" />
+        {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+      </MenuItem>
+      <MenuItem onClick={() => void writeTextToClipboard(detail.url)}>
+        <LinkIcon className="size-3.5" />
+        Copy link
+      </MenuItem>
+      {/* The row menu has no primary button for resolving conflicts. */}
+      {conflicting && (renderActions !== undefined || primaryAction !== "resolve") ? (
+        <MenuItem disabled={handoff !== null} onClick={startResolveConflicts}>
+          <GitMergeIcon className="size-3.5" />
+          {handoff === "conflicts" ? "Preparing..." : "Resolve conflicts in a thread"}
+        </MenuItem>
+      ) : null}
+      {detail.state === "open" && can("close") ? (
+        <>
+          <MenuSeparator />
+          <MenuItem
+            variant="destructive"
+            disabled={actionPending}
+            onClick={() => setConfirmAction("close")}
+          >
+            <GitPullRequestClosedIcon className="size-3.5" />
+            Close pull request
+          </MenuItem>
+        </>
+      ) : detail.state === "closed" && can("reopen") ? (
+        <>
+          <MenuSeparator />
+          <MenuItem disabled={actionPending} onClick={() => void perform("reopen")}>
+            <GitPullRequestIcon className="size-3.5" />
+            Reopen pull request
+          </MenuItem>
+        </>
+      ) : null}
+    </>
+  ) : (
+    <MenuItem disabled={!detailQuery.error} onClick={refreshDetail}>
+      {detailQuery.error ? "Could not load PR actions. Retry" : "Loading PR actions..."}
+    </MenuItem>
+  );
+  const actionDialogs = (
+    <>
+      <PullRequestAgentReviewDialog
+        canPublishComments={
+          detail?.capabilities.review.inlineComment === true &&
+          detail.capabilities.review.verdicts.includes("comment")
+        }
+        initialModelSelection={initialReviewModelSelection}
+        instanceEntries={reviewInstanceEntries}
+        modelOptionsByInstance={reviewModelOptionsByInstance}
+        onOpenChange={setReviewDialogOpen}
+        onStart={startAgentReview}
+        open={reviewDialogOpen}
+        starting={startingReview}
+      />
+
+      <AlertDialog
+        open={confirmAction !== null}
+        onOpenChange={(open) => !open && setConfirmAction(null)}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAction === "merge" ? "Merge pull request?" : "Close pull request?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAction === "merge"
+                ? `This merges #${reference.number} using ${selectedMergeMethod}.`
+                : `This closes #${reference.number} without merging it.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+              Cancel
+            </AlertDialogClose>
+            <Button
+              size="sm"
+              variant={confirmAction === "close" ? "destructive" : "default"}
+              disabled={actionPending}
+              onClick={() => {
+                const action = confirmAction;
+                setConfirmAction(null);
+                if (action === "merge") void perform("merge", selectedMergeMethod);
+                if (action === "close") void perform("close");
+              }}
+            >
+              {confirmAction === "merge" ? selectedMergeMethodLabel : "Close"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </>
+  );
+
+  if (renderActions) {
+    return (
+      <>
+        {renderActions(actionMenuItems)}
+        {actionDialogs}
+      </>
+    );
+  }
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
@@ -832,135 +1045,7 @@ export function PullRequestDetailPanel({
                   <MoreHorizontalIcon className="size-4" />
                 </MenuTrigger>
                 <MenuPopup align="end" side="bottom" className="min-w-72">
-                  <MenuItem disabled={detailQuery.isPending} onClick={() => void refreshFromHost()}>
-                    <RefreshCwIcon className="size-3.5" />
-                    Refresh
-                  </MenuItem>
-                  <MenuItem disabled={handoff !== null} onClick={askAboutPullRequest}>
-                    <MessageCircleQuestionIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>{handoff === "ask" ? "Opening..." : "Ask a question"}</span>
-                      <span className="text-xs text-muted-foreground">
-                        Opens a thread that knows which pull request you mean.
-                      </span>
-                    </span>
-                  </MenuItem>
-                  <MenuItem disabled={handoff !== null} onClick={explainPullRequest}>
-                    <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>{handoff === "explain" ? "Opening..." : "Explain this PR"}</span>
-                      <span className="text-xs text-muted-foreground">
-                        A walk through the diff and what to read closely.
-                      </span>
-                    </span>
-                  </MenuItem>
-                  <MenuItem disabled={startingReview} onClick={() => setReviewDialogOpen(true)}>
-                    <ScanSearchIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>
-                        {activeReview === null
-                          ? "Review with an agent"
-                          : "Start another agent review"}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        Choose an agent, model, reasoning, and speed.
-                      </span>
-                    </span>
-                  </MenuItem>
-                  <MenuItem disabled={handoff !== null} onClick={startFixFindings}>
-                    <HammerIcon className="size-3.5" />
-                    {handoff === "findings" ? "Preparing..." : "Fix findings in a thread"}
-                  </MenuItem>
-                  <MenuSeparator />
-                  {detail.state === "open" ? (
-                    <>
-                      {/* Only where the button row could not take it: "Ready for review" on a
-                          draft is the primary header button, so offering it here as well would
-                          show the same action twice. */}
-                      {showsDraftToggle ? (
-                        <MenuItem
-                          disabled={actionPending}
-                          onClick={() => void perform(detail.isDraft ? "ready" : "draft")}
-                        >
-                          {detail.isDraft ? (
-                            <GitPullRequestIcon className="size-3.5" />
-                          ) : (
-                            <GitPullRequestDraftIcon className="size-3.5" />
-                          )}
-                          {detail.isDraft ? "Ready for review" : "Convert to draft"}
-                        </MenuItem>
-                      ) : null}
-                      {/* A preference for the merge action rather than a second action, so it
-                          is a radio group here instead of a chevron welded to the Merge pill.
-                          Hidden while conflicting: every method would fail. */}
-                      {/* Only where merging is on offer at all: a strategy to merge with is not
-                          a choice for someone who may not merge. */}
-                      {showsMergeMethods ? (
-                        <>
-                          {/* Only below the draft control. A host with no draft of its own, or
-                              a draft whose control is already the header button, would leave
-                              this against the separator that opened the group. */}
-                          {showsDraftToggle ? <MenuSeparator /> : null}
-                          <MenuRadioGroup
-                            value={selectedMergeMethod}
-                            onValueChange={(method) =>
-                              setMergeMethod(method as PullRequestMergeMethod)
-                            }
-                          >
-                            {allowedMergeMethods.map((method) => (
-                              <MenuRadioItem key={method} value={method} disabled={actionPending}>
-                                {/* The radio item lays its children out as one block, so the
-                                    icon and the label need their own row to share a line. */}
-                                <span className="flex min-w-0 items-center gap-2">
-                                  <GitMergeIcon className="size-3.5" />
-                                  <span>{MERGE_METHOD_LABELS[method]}</span>
-                                </span>
-                              </MenuRadioItem>
-                            ))}
-                          </MenuRadioGroup>
-                        </>
-                      ) : null}
-                      {pullRequestActionMenuHasGroup(showsDraftToggle, showsMergeMethods) ? (
-                        <MenuSeparator />
-                      ) : null}
-                    </>
-                  ) : null}
-                  <MenuItem onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}>
-                    <ArrowUpRightIcon className="size-3.5" />
-                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
-                  </MenuItem>
-                  <MenuItem onClick={() => void writeTextToClipboard(detail.url)}>
-                    <LinkIcon className="size-3.5" />
-                    Copy link
-                  </MenuItem>
-                  {/* Only where the button row could not take it, so it is never offered twice. */}
-                  {conflicting && primaryAction !== "resolve" ? (
-                    <MenuItem disabled={handoff !== null} onClick={startResolveConflicts}>
-                      <GitMergeIcon className="size-3.5" />
-                      {handoff === "conflicts" ? "Preparing..." : "Resolve conflicts in a thread"}
-                    </MenuItem>
-                  ) : null}
-                  {detail.state === "open" && can("close") ? (
-                    <>
-                      <MenuSeparator />
-                      <MenuItem
-                        variant="destructive"
-                        disabled={actionPending}
-                        onClick={() => setConfirmAction("close")}
-                      >
-                        <GitPullRequestClosedIcon className="size-3.5" />
-                        Close pull request
-                      </MenuItem>
-                    </>
-                  ) : detail.state === "closed" && can("reopen") ? (
-                    <>
-                      <MenuSeparator />
-                      <MenuItem disabled={actionPending} onClick={() => void perform("reopen")}>
-                        <GitPullRequestIcon className="size-3.5" />
-                        Reopen pull request
-                      </MenuItem>
-                    </>
-                  ) : null}
+                  {actionMenuItems}
                 </MenuPopup>
               </Menu>
               {/* Checking a pull request out is the reason to open one here at all, so it is a
@@ -1413,55 +1498,7 @@ export function PullRequestDetailPanel({
         ) : null}
       </div>
 
-      <PullRequestAgentReviewDialog
-        canPublishComments={
-          detail?.capabilities.review.inlineComment === true &&
-          detail.capabilities.review.verdicts.includes("comment")
-        }
-        initialModelSelection={initialReviewModelSelection}
-        instanceEntries={reviewInstanceEntries}
-        modelOptionsByInstance={reviewModelOptionsByInstance}
-        onOpenChange={setReviewDialogOpen}
-        onStart={startAgentReview}
-        open={reviewDialogOpen}
-        starting={startingReview}
-      />
-
-      <AlertDialog
-        open={confirmAction !== null}
-        onOpenChange={(open) => !open && setConfirmAction(null)}
-      >
-        <AlertDialogPopup>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {confirmAction === "merge" ? "Merge pull request?" : "Close pull request?"}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirmAction === "merge"
-                ? `This merges #${reference.number} using ${selectedMergeMethod}.`
-                : `This closes #${reference.number} without merging it.`}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
-              Cancel
-            </AlertDialogClose>
-            <Button
-              size="sm"
-              variant={confirmAction === "close" ? "destructive" : "default"}
-              disabled={actionPending}
-              onClick={() => {
-                const action = confirmAction;
-                setConfirmAction(null);
-                if (action === "merge") void perform("merge", selectedMergeMethod);
-                if (action === "close") void perform("close");
-              }}
-            >
-              {confirmAction === "merge" ? selectedMergeMethodLabel : "Close"}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogPopup>
-      </AlertDialog>
+      {actionDialogs}
     </div>
   );
 }

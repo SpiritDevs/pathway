@@ -1,9 +1,10 @@
-import type { PullRequestListEntry } from "@spiritdevs/contracts";
 import { BotIcon } from "lucide-react";
 
-import { memo } from "react";
+import { memo, type MouseEvent } from "react";
 
 import { cn } from "~/lib/utils";
+import { readLocalApi } from "~/localApi";
+import type { SourcedPullRequestListEntry } from "~/state/pullRequests";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
@@ -23,8 +24,9 @@ function PullRequestRowImpl({
   matchedElsewhere,
   agentReviewActive,
   onSelect,
+  onContextMenu,
 }: {
-  entry: PullRequestListEntry;
+  entry: SourcedPullRequestListEntry;
   selected: boolean;
   showProjectTitle: boolean;
   /** Only when the list spans more than one host, where the repository alone is ambiguous. */
@@ -36,14 +38,28 @@ function PullRequestRowImpl({
   matchedElsewhere?: boolean;
   /** A Pathway review thread for this pull request currently has active agent work. */
   agentReviewActive: boolean;
-  onSelect: (entry: PullRequestListEntry) => void;
+  onSelect: (entry: SourcedPullRequestListEntry) => void;
+  onContextMenu: (entry: SourcedPullRequestListEntry, event: MouseEvent<HTMLButtonElement>) => void;
 }) {
   const { Icon, providerName } = getSourceControlPresentationForKind(entry.provider);
   return (
     <button
       type="button"
       aria-current={selected ? "true" : undefined}
-      onClick={() => onSelect(entry)}
+      onClick={(event) => {
+        if (event.ctrlKey || event.metaKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          void readLocalApi()?.shell.openExternal(entry.url);
+          return;
+        }
+        onSelect(entry);
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onContextMenu(entry, event);
+      }}
       className={cn(
         "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         // Offscreen rows are skipped for style, layout and paint: a long list costs what the
