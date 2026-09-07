@@ -382,6 +382,7 @@ describe("Convex relay repositories", () => {
       eventId: "attention:event-1",
       threadId: "thread-one",
       projectKey: "env-one:project-one",
+      alertProjectKey: "github.com/spiritdevs/pathway",
       eventKind: "pending-approval",
     } as AttentionEvent;
 
@@ -403,6 +404,7 @@ describe("Convex relay repositories", () => {
             eventId: "attention:event-1",
             threadId: "thread-one",
             projectKey: "env-one:project-one",
+            alertProjectKey: "github.com/spiritdevs/pathway",
             eventKind: "pending-approval",
           },
         },

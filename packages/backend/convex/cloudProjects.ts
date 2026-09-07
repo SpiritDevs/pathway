@@ -17,6 +17,7 @@ import {
 } from "./lib/companyApply.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { backendError } from "./lib/errors.ts";
+import { deleteThreadAlertPolicies } from "./lib/threadAlertPolicy.ts";
 import {
   actorRecord,
   requireCompanyActor,
@@ -1604,6 +1605,7 @@ export const deleteCompanyProject = mutation({
     // Thread shells are shared discovery metadata only. Their owning environment will delete the
     // full local threads when it consumes the revoked binding.
     for (const thread of agentThreads) {
+      await deleteThreadAlertPolicies(ctx, thread.environmentId, thread.threadId);
       await ctx.db.delete(thread._id);
       changes.push({
         entityKind: "agentThread" as const,

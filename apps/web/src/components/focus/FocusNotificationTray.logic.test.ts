@@ -58,6 +58,7 @@ function notification(
 ): FocusNotification {
   return {
     id: FocusNotificationId.make(id),
+    alertEligibleAtCreation: false,
     eventId: AttentionEventId.make(id),
     environmentId: ENVIRONMENT,
     threadId: ThreadId.make(`thread-${id}`),
@@ -133,6 +134,25 @@ describe("Focus notification rows", () => {
       [WORK, "Work"],
       [HOBBIES, "Hobbies"],
       ["all", "All"],
+    ]);
+  });
+
+  it("keeps an older event unread when a newer event was acknowledged individually", () => {
+    const [group] = buildFocusNotificationRows({
+      notifications: [
+        notification("newer-read", 30, { isRead: true }),
+        notification("older-unread", 20, { isRead: false }),
+      ],
+      unreadCount: 1,
+      focuses: [],
+      assignments: [],
+      activeFocusId: "all",
+      threadTitlesByKey: new Map(),
+      projectNamesByKey: new Map(),
+    });
+    expect(group?.rows.map((row) => [row.notification.id, row.unread])).toEqual([
+      ["newer-read", false],
+      ["older-unread", true],
     ]);
   });
 

@@ -1,4 +1,11 @@
 export const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
+export const THREAD_ALERT_SUPPORT_CHANNEL = "desktop:thread-alert-support";
+export const THREAD_ALERT_SHOW_CHANNEL = "desktop:thread-alert-show";
+export const THREAD_ALERT_CLOSE_CHANNEL = "desktop:thread-alert-close";
+export const THREAD_ALERT_CLICK_CHANNEL = "desktop:thread-alert-click";
+export const THREAD_ALERT_CONSUME_CLICKS_CHANNEL = "desktop:thread-alert-consume-clicks";
+export const THREAD_ALERT_SYSTEM_SOUND_CHANNEL = "desktop:thread-alert-system-sound";
+export const THREAD_ALERT_OPEN_SETTINGS_CHANNEL = "desktop:thread-alert-open-settings";
 export const PICK_THEME_FILES_CHANNEL = "desktop:pick-theme-files";
 export const SET_THEME_CHANNEL = "desktop:set-theme";
 export const CONTEXT_MENU_CHANNEL = "desktop:context-menu";

@@ -34,6 +34,7 @@ import type * as lib_identity from "../lib/identity.js";
 import type * as lib_issueApply from "../lib/issueApply.js";
 import type * as lib_relayIdentity from "../lib/relayIdentity.js";
 import type * as lib_slackOutbound from "../lib/slackOutbound.js";
+import type * as lib_threadAlertPolicy from "../lib/threadAlertPolicy.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as memberships from "../memberships.js";
 import type * as projectMigration from "../projectMigration.js";
@@ -44,6 +45,7 @@ import type * as slackOperations from "../slackOperations.js";
 import type * as smoke from "../smoke.js";
 import type * as sync from "../sync.js";
 import type * as teams from "../teams.js";
+import type * as threadAlertPolicies from "../threadAlertPolicies.js";
 import type * as trustedEmailSenders from "../trustedEmailSenders.js";
 
 import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server";
@@ -75,6 +77,7 @@ declare const fullApi: ApiFromModules<{
   "lib/issueApply": typeof lib_issueApply;
   "lib/relayIdentity": typeof lib_relayIdentity;
   "lib/slackOutbound": typeof lib_slackOutbound;
+  "lib/threadAlertPolicy": typeof lib_threadAlertPolicy;
   "lib/validators": typeof lib_validators;
   memberships: typeof memberships;
   projectMigration: typeof projectMigration;
@@ -85,6 +88,7 @@ declare const fullApi: ApiFromModules<{
   smoke: typeof smoke;
   sync: typeof sync;
   teams: typeof teams;
+  threadAlertPolicies: typeof threadAlertPolicies;
   trustedEmailSenders: typeof trustedEmailSenders;
 }>;
 

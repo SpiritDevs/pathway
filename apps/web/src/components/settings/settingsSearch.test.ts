@@ -278,6 +278,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
   it("keeps Projects in the Workspace group with its own settings page", () => {
     expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Workspace")?.paths).toEqual([
       "/settings/general",
+      "/settings/notifications",
       "/settings/appearance",
       "/settings/keybindings",
       "/settings/projects",

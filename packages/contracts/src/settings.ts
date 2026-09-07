@@ -12,6 +12,7 @@ import {
 } from "./model.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
+import { AlertDeliverySettings, DEFAULT_ALERT_DELIVERY_SETTINGS } from "./threadAlerts.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -150,6 +151,9 @@ export const ActionPaletteSectionPreference = Schema.Struct({
 export type ActionPaletteSectionPreference = typeof ActionPaletteSectionPreference.Type;
 
 export const ClientSettingsSchema = Schema.Struct({
+  threadAlerts: AlertDeliverySettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_ALERT_DELIVERY_SETTINGS)),
+  ),
   activeTurnSendMode: ActiveTurnSendMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ACTIVE_TURN_SEND_MODE)),
   ),
@@ -997,6 +1001,7 @@ export const ServerSettingsPatch = Schema.Struct({
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
+  threadAlerts: Schema.optionalKey(AlertDeliverySettings),
   activeTurnSendMode: Schema.optionalKey(ActiveTurnSendMode),
   actionPaletteSections: Schema.optionalKey(Schema.Array(ActionPaletteSectionPreference)),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
