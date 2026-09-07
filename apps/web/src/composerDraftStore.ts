@@ -2629,6 +2629,14 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               ...state.logicalProjectDraftThreadKeyByLogicalProjectKey,
               [normalizedLogicalProjectKey]: draftId,
             };
+            // Moving a draft must leave its old project free to start a new one.
+            for (const [key, mappedDraftId] of Object.entries(
+              nextLogicalProjectDraftThreadKeyByLogicalProjectKey,
+            )) {
+              if (mappedDraftId === draftId && key !== normalizedLogicalProjectKey) {
+                delete nextLogicalProjectDraftThreadKeyByLogicalProjectKey[key];
+              }
+            }
             const nextDraftThreadsByThreadKey: Record<string, DraftThreadState> = {
               ...state.draftThreadsByThreadKey,
               [draftId]: nextDraftThread,

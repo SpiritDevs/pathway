@@ -6,17 +6,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { useNewThreadHandler } from "./useHandleNewThread";
+import { selectSidebarDraftRows } from "../components/sidebarDrafts";
 
 const mocks = vi.hoisted(() => ({
   readDefaults: vi.fn(),
   navigate: vi.fn().mockResolvedValue(undefined),
+  routeParams: {} as Record<string, string>,
 }));
 
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: () => ({ defaultThreadEnvMode: "local", newWorktreesStartFromOrigin: false }),
 }));
 vi.mock("@tanstack/react-router", () => ({
-  useRouter: () => ({ state: { matches: [] }, navigate: mocks.navigate }),
+  useRouter: () => ({
+    state: { matches: [{ params: mocks.routeParams }] },
+    navigate: mocks.navigate,
+  }),
 }));
 vi.mock("../state/server", () => ({ primaryServerSettingsAtom: {} }));
 vi.mock("./useSettings", () => ({ useClientSettings: () => ({}) }));
@@ -49,6 +54,7 @@ function createHandler() {
 describe("new-thread creation while project defaults load", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.routeParams = {};
     useComposerDraftStore.setState({
       draftsByThreadKey: {},
       draftThreadsByThreadKey: {},
@@ -60,6 +66,38 @@ describe("new-thread creation while project defaults load", () => {
 
   afterEach(() => {
     useComposerDraftStore.persist.clearStorage();
+  });
+
+  it("leaves the current message in the sidebar when New Thread starts a separate draft", async () => {
+    const projectA = scopeProjectRef(EnvironmentId.make("env-a"), ProjectId.make("project-a"));
+    const projectB = scopeProjectRef(EnvironmentId.make("env-b"), ProjectId.make("project-b"));
+    const handler = createHandler();
+    const original = await handler(projectA, { envMode: "local" });
+    expect(original).not.toBeNull();
+    mocks.routeParams = { draftId: original!.draftId };
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(original!.draftId, "Save this idea for later");
+
+    const fresh = await handler(projectA, { envMode: "local" });
+    expect(fresh).not.toBeNull();
+    expect(fresh?.draftId).not.toBe(original?.draftId);
+    expect(store.getComposerDraft(fresh!.draftId)?.prompt ?? "").toBe("");
+
+    store.setLogicalProjectDraftThreadId("another-project", projectB, fresh!.draftId);
+    store.setPrompt(fresh!.draftId, "A separate idea");
+    expect(store.getDraftSession(original!.draftId)?.projectId).toBe(projectA.projectId);
+    expect(store.getComposerDraft(original!.draftId)?.prompt).toBe("Save this idea for later");
+    const state = useComposerDraftStore.getState();
+    expect(
+      selectSidebarDraftRows({
+        draftThreadsByThreadKey: state.draftThreadsByThreadKey,
+        draftsByThreadKey: state.draftsByThreadKey,
+        serverThreadKeys: new Set(),
+        routeDraftId: fresh!.draftId,
+        scopedProjectKeys: null,
+        frozenActive: { routeDraftId: fresh!.draftId, row: null },
+      }).map((row) => row.draftId),
+    ).toEqual([original!.draftId]);
   });
 
   it.each(["pending send", "typed content", "empty"] as const)(
