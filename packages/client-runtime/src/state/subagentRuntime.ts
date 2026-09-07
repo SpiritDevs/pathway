@@ -38,12 +38,12 @@ export type RuntimeSubagentStatus =
 
 export interface SubagentUsage {
   readonly totalTokens: number;
-  readonly inputTokens?: number;
-  readonly cachedInputTokens?: number;
-  readonly outputTokens?: number;
-  readonly reasoningOutputTokens?: number;
-  readonly toolUses?: number;
-  readonly durationMs?: number;
+  readonly inputTokens?: number | undefined;
+  readonly cachedInputTokens?: number | undefined;
+  readonly outputTokens?: number | undefined;
+  readonly reasoningOutputTokens?: number | undefined;
+  readonly toolUses?: number | undefined;
+  readonly durationMs?: number | undefined;
 }
 
 export interface SubagentActivityEntry {
@@ -753,9 +753,9 @@ export function projectedSubagentsToRuntime(
     readonly childThreadId: ThreadId | null;
     readonly title: string | null;
     readonly prompt: string;
-    readonly usage?: SubagentUsage;
-    readonly activationCount?: number;
-    readonly role?: string;
+    readonly usage?: SubagentUsage | undefined;
+    readonly activationCount?: number | undefined;
+    readonly role?: string | undefined;
     readonly model: string | null;
     readonly options?: ReadonlyArray<ProviderOptionSelection> | undefined;
     readonly status:
