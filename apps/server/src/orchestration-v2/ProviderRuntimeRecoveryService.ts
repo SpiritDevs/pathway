@@ -329,18 +329,16 @@ export const make = Effect.gen(function* () {
           request.responseCommandId === undefined
         )
           continue;
-        const deliveryEffects = yield* outbox
-          .listByCommandId(request.responseCommandId)
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new ProviderRuntimeRecoveryError({
-                  operation: "reconcile",
-                  threadId: projection.thread.id,
-                  cause,
-                }),
-            ),
-          );
+        const deliveryEffects = yield* outbox.listByCommandId(request.responseCommandId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProviderRuntimeRecoveryError({
+                operation: "reconcile",
+                threadId: projection.thread.id,
+                cause,
+              }),
+          ),
+        );
         const delivery = deliveryEffects.filter(
           (effect) =>
             effect.request.type === "provider-turn.start" ||
