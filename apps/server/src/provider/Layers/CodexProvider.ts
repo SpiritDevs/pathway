@@ -34,6 +34,7 @@ import {
 } from "../providerSnapshot.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import packageJson from "../../../package.json" with { type: "json" };
+import { BUNDLED_MODEL_MANIFEST } from "../ModelManifest.ts";
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
@@ -62,16 +63,8 @@ const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
 };
 
 const DEFAULT_SERVICE_TIER_ID = "default";
-const CURRENT_CODEX_MODELS = new Set([
-  "gpt-5.6-luna",
-  "gpt-5.6-terra",
-  "gpt-5.6-sol",
-  "gpt-daybreak-blue-latest",
-  "gpt-daybreak-red-latest",
-]);
-
 export function isLegacyCodexModel(model: string): boolean {
-  return !CURRENT_CODEX_MODELS.has(model);
+  return BUNDLED_MODEL_MANIFEST.models.codex?.[model] === "legacy";
 }
 
 function reasoningEffortLabel(reasoningEffort: string): string {
@@ -245,7 +238,6 @@ function appendCustomCodexModels(
   }
 
   const seen = new Set(models.map((model) => model.slug));
-  const fallbackCapabilities = models.find((model) => model.capabilities)?.capabilities ?? null;
   const customEntries: ServerProviderModel[] = [];
   for (const rawModel of customModels) {
     const slug = rawModel.trim();
@@ -257,7 +249,7 @@ function appendCustomCodexModels(
       slug,
       name: slug,
       isCustom: true,
-      capabilities: fallbackCapabilities,
+      capabilities: null,
     });
   }
   return customEntries.length === 0 ? models : [...models, ...customEntries];

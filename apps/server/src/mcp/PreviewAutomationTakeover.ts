@@ -48,8 +48,8 @@ export class PreviewAutomationTakeoverFence extends Context.Service<
     /**
      * Fences all new automation for the environment+thread immediately, then
      * waits for in-flight requests for that thread to settle (bounded by
-     * `drainTimeoutMs`), cancelling stragglers with
-     * `PreviewAutomationTakeoverActiveError`. Resolves only once exclusivity
+     * `drainTimeoutMs`). A drain timeout fails while leaving automation fenced;
+     * it never treats a caller timeout as host cancellation. Resolves only once exclusivity
      * actually holds, and captures the pinned host and tab at that moment.
      * Fails when the thread has no live host assignment.
      */

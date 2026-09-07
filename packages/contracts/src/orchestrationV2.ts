@@ -787,8 +787,12 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
     Schema.Literals(["dynamic_tool_call", "user_input", "auth_refresh"]),
   ]),
   status: Schema.Literals(["pending", "resolved", "expired", "cancelled"]),
+  isBlocking: Schema.optional(Schema.Boolean),
+  responseMessageId: Schema.optional(MessageId),
+  responseCommandId: Schema.optional(CommandId),
   responseCapability: Schema.Union([
     Schema.Struct({ type: Schema.Literal("live"), providerSessionId: ProviderSessionId }),
+    Schema.Struct({ type: Schema.Literal("message"), providerThreadId: ProviderThreadId }),
     Schema.Struct({ type: Schema.Literal("not_resumable"), reason: Schema.String }),
   ]),
   createdAt: Schema.DateTimeUtc,
@@ -826,6 +830,9 @@ export const OrchestrationV2PlanStep = Schema.Struct({
 export type OrchestrationV2PlanStep = typeof OrchestrationV2PlanStep.Type;
 
 export const OrchestrationV2UserInputQuestion = Schema.Struct({
+  isSecret: Schema.optional(Schema.Boolean),
+  isOther: Schema.optional(Schema.Boolean),
+  multiSelect: Schema.optional(Schema.Boolean),
   id: TrimmedNonEmptyString,
   header: TrimmedNonEmptyString,
   question: TrimmedNonEmptyString,
@@ -1451,6 +1458,7 @@ export const OrchestrationV2ShellThreadStatus = Schema.Union([
 export type OrchestrationV2ShellThreadStatus = typeof OrchestrationV2ShellThreadStatus.Type;
 
 export const OrchestrationV2PendingRuntimeRequestSummary = Schema.Struct({
+  isBlocking: Schema.optional(Schema.Boolean),
   id: RuntimeRequestId,
   kind: OrchestrationV2RuntimeRequest.fields.kind,
   createdAt: Schema.DateTimeUtc,
@@ -2433,6 +2441,7 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     messageId: MessageId,
     text: Schema.String,
+    replyToRuntimeRequestId: Schema.optional(RuntimeRequestId),
     attachments: Schema.Array(ChatAttachment),
     /** Seed the temporary title and generate a durable replacement for the first message. */
     titleSeed: Schema.optional(TrimmedNonEmptyString),

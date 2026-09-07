@@ -2,6 +2,28 @@
 
 Project-specific vocabulary beyond the small glossary in `AGENTS.md`. Be opinionated: one canonical word per concept; alternates go under _Avoid_.
 
+## Agent questions
+
+The following terms support the [Astra design record](../adr/0014-astra-questions-and-browser-scope.md). They describe the design under discussion, not shipped support.
+
+**Question group**:
+One identified set of questions raised together by an agent. It retains its originating environment, provider thread, and question order.
+
+**Non-blocking question**:
+A question the agent can leave open while continuing independent work. An unanswered question is an attention state, not proof that the turn is stopped.
+
+**Message reply**:
+An answer delivered as a user message to the provider thread that asked. For Codex async questions this steers active work or starts a follow-up after completion.
+
+**RPC reply**:
+An answer returned to an outstanding provider request. It depends on the original live request and cannot be resumed merely by preserving the question text.
+
+**Browser host**:
+The runtime that owns the automated browser, its live tabs, and its cookies. It may be on a different machine from the environment where the agent runs.
+
+**Model manifest**:
+A versioned data file used for model metadata and classification. It does not prove that an account or installed provider can use a model.
+
 ## Thread workspaces
 
 **Workspace move**:

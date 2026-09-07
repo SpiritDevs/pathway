@@ -27,6 +27,9 @@ const mocks = vi.hoisted(() => ({
   showEmptyState: false,
   loading: false,
   recordVisitForThread: vi.fn(),
+  hasDesktopBridge: true,
+  remoteCommand: vi.fn(async (_input: unknown) => ({ _tag: "Success" as const, value: {} })),
+  remoteRendered: vi.fn(),
 }));
 
 const EMPTY_HISTORY: never[] = [];
@@ -107,7 +110,7 @@ vi.mock("~/state/preview", () => ({
 }));
 
 vi.mock("~/state/use-atom-command", () => ({
-  useAtomCommand: () => vi.fn(),
+  useAtomCommand: () => mocks.remoteCommand,
 }));
 
 vi.mock("~/browser/browserRecording", () => ({
@@ -163,13 +166,17 @@ vi.mock("~/components/ui/toast", () => ({
 }));
 
 vi.mock("./previewBridge", () => ({
-  previewBridge: {
-    navigate: mocks.navigate,
-    pickElement: mocks.pickElement,
-    pictureInPicture: {
-      open: mocks.openPictureInPicture,
-      close: mocks.closePictureInPicture,
-    },
+  get previewBridge() {
+    return mocks.hasDesktopBridge
+      ? {
+          navigate: mocks.navigate,
+          pickElement: mocks.pickElement,
+          pictureInPicture: {
+            open: mocks.openPictureInPicture,
+            close: mocks.closePictureInPicture,
+          },
+        }
+      : null;
   },
 }));
 
@@ -209,6 +216,13 @@ vi.mock("./PreviewUnreachable", () => ({ PreviewUnreachable: () => null }));
 vi.mock("./ZoomIndicator", () => ({ ZoomIndicator: () => null }));
 vi.mock("./AgentBrowserCursor", () => ({ AgentBrowserCursor: () => null }));
 vi.mock("~/browser/BrowserSurfaceSlot", () => ({ BrowserSurfaceSlot: () => null }));
+vi.mock("~/browser/RemoteBrowserView", () => ({
+  RemoteBrowserView: () => {
+    mocks.remoteRendered();
+    return null;
+  },
+}));
+vi.mock("~/browser/BrowserSavedLoginPicker", () => ({ BrowserSavedLoginPicker: () => null }));
 vi.mock("./usePreviewSession", () => ({ usePreviewSession: vi.fn() }));
 
 import { PreviewView } from "./PreviewView";
@@ -228,6 +242,7 @@ class TestNode {
   readonly tagName: string;
   readonly namespaceURI = "http://www.w3.org/1999/xhtml";
   readonly style = {};
+  private ownText = "";
 
   constructor(
     name: string,
@@ -238,13 +253,23 @@ class TestNode {
     this.tagName = this.nodeName;
   }
 
-  set textContent(_value: string) {
+  set textContent(value: string) {
+    this.ownText = value;
     this.childNodes = [];
+  }
+  get textContent(): string {
+    return this.ownText + this.childNodes.map((child) => child.textContent).join("");
   }
 
   appendChild(child: TestNode) {
     child.parentNode = this;
     this.childNodes.push(child);
+    return child;
+  }
+
+  insertBefore(child: TestNode, before: TestNode) {
+    child.parentNode = this;
+    this.childNodes.splice(this.childNodes.indexOf(before), 0, child);
     return child;
   }
 
@@ -261,6 +286,10 @@ class TestNode {
   addEventListener() {}
   removeEventListener() {}
   setAttribute() {}
+  removeAttribute() {}
+  get options() {
+    return this.childNodes;
+  }
 }
 
 function installTestDom() {
@@ -307,6 +336,63 @@ describe("PreviewView navigation", () => {
     mocks.showEmptyState = false;
     mocks.loading = false;
     mocks.recordVisitForThread.mockClear();
+    mocks.hasDesktopBridge = true;
+    mocks.remoteCommand.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
+    mocks.remoteRendered.mockClear();
+  });
+
+  it("selects the environment host before showing a browser without a desktop bridge", async () => {
+    mocks.hasDesktopBridge = false;
+    let finish!: (value: { _tag: "Success"; value: object }) => void;
+    mocks.remoteCommand.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const document = installTestDom();
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(document.createElement("div") as unknown as Element);
+    try {
+      await act(() => {
+        root.render(<PreviewView threadRef={TEST_THREAD_REF} visible />);
+      });
+      expect(mocks.remoteCommand).toHaveBeenCalledWith({
+        environmentId: TEST_THREAD_REF.environmentId,
+        input: { action: "selectHost", threadId: TEST_THREAD_REF.threadId, host: "environment" },
+      });
+      expect(mocks.remoteRendered).not.toHaveBeenCalled();
+      await act(async () => {
+        finish({ _tag: "Success", value: {} });
+      });
+      expect(mocks.remoteRendered).toHaveBeenCalledOnce();
+    } finally {
+      await act(() => root.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows a refused host switch without displaying or retrying the wrong browser", async () => {
+    mocks.hasDesktopBridge = false;
+    mocks.remoteCommand.mockRejectedValue(
+      new Error("Finish the browser action before switching hosts."),
+    );
+    const document = installTestDom();
+    const container = document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => {
+        root.render(<PreviewView threadRef={TEST_THREAD_REF} visible />);
+      });
+      expect(container.textContent).toContain("Finish the browser action before switching hosts.");
+      expect(container.textContent).toContain("Retry browser connection");
+      expect(mocks.remoteRendered).not.toHaveBeenCalled();
+      expect(mocks.remoteCommand).toHaveBeenCalledOnce();
+    } finally {
+      await act(() => root.unmount());
+      vi.unstubAllGlobals();
+    }
   });
 
   it("does not rerender while loading time passes", async () => {

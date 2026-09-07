@@ -60,7 +60,12 @@ struct AgentThreadTranscript: View {
         } else if item.type == "approval_request" {
             AgentTranscriptApproval(item: item, model: model)
         } else if item.type == "user_input_request" {
-            AgentTranscriptQuestions(item: item, model: model)
+            if item.requiresResponse && model.isNonBlockingQuestion(item) {
+                Label("\(item.questions.count) unanswered questions. Open Questions near the composer to reply.", systemImage: "questionmark.bubble")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                AgentTranscriptQuestions(item: item, model: model)
+            }
         } else {
             AgentTranscriptEventRow(item: item, model: model, onOpenChild: onOpenChild)
         }

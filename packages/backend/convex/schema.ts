@@ -191,6 +191,24 @@ export default defineSchema({
     .index("by_clerk_subject", ["clerkSubject"])
     .index("by_email", ["email"]),
 
+  /** Account-owned vault. Ciphertext stays out of company replication and agent APIs. */
+  browserPasswords: defineTable({
+    id: domainId,
+    userId: v.id("users"),
+    label: v.string(),
+    origin: v.string(),
+    username: v.string(),
+    keyId: v.string(),
+    iv: v.string(),
+    ciphertext: v.string(),
+    authenticationTag: v.string(),
+    revision: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_id", ["userId", "id"]),
+
   /** Account-owned Agent Threads filters. Selection stays local to each client. */
   focuses: defineTable({
     id: domainId,

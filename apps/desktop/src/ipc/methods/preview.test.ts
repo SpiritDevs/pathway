@@ -28,6 +28,8 @@ vi.mock("electron", () => ({
   },
 }));
 
+const isPreviewAutofillError = Schema.is(PreviewManager.PreviewAutofillError);
+
 describe("preview IPC methods", () => {
   beforeEach(() => {
     fromPartition.mockClear();
@@ -49,6 +51,25 @@ describe("preview IPC methods", () => {
         const error = Cause.findErrorOption(exit.cause);
         expect(Option.isSome(error) && Schema.isSchemaError(error.value)).toBe(true);
         expect(fromPartition).not.toHaveBeenCalled();
+      },
+    ),
+  );
+
+  effectIt.effect("discards malformed credential payloads without retaining secret values", () =>
+    Effect.map(
+      PreviewIpc.autofillLogin
+        .handler({
+          tabId: "tab-1",
+          input: { origin: null, username: "private-user", password: "private-password" },
+        })
+        .pipe(Effect.provideService(PreviewManager.PreviewManager, null as never), Effect.exit),
+      (exit) => {
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isSuccess(exit)) return;
+        const error = Cause.findErrorOption(exit.cause);
+        expect(Option.isSome(error) && isPreviewAutofillError(error.value)).toBe(true);
+        expect(JSON.stringify(exit)).not.toContain("private-password");
+        expect(JSON.stringify(exit)).not.toContain("private-user");
       },
     ),
   );

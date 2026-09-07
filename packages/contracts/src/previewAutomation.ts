@@ -533,6 +533,13 @@ export const PreviewAutomationSnapshot = Schema.Struct({
   loading: Schema.Boolean,
   visibleText: Schema.String,
   interactiveElements: Schema.Array(PreviewAutomationElement),
+  viewport: Schema.optional(
+    Schema.Struct({
+      width: Schema.Number,
+      height: Schema.Number,
+      deviceScaleFactor: Schema.Number,
+    }),
+  ),
   accessibilityTree: Schema.Unknown,
   consoleEntries: Schema.Array(PreviewAutomationConsoleEntry),
   networkEntries: Schema.Array(PreviewAutomationNetworkEntry),
@@ -542,6 +549,8 @@ export const PreviewAutomationSnapshot = Schema.Struct({
     data: Schema.String,
     width: Schema.Int,
     height: Schema.Int,
+    // CSS input units per screenshot pixel; older hosts may omit it.
+    coordinateScale: Schema.optional(Schema.Struct({ x: Schema.Number, y: Schema.Number })),
   }),
 });
 export type PreviewAutomationSnapshot = typeof PreviewAutomationSnapshot.Type;

@@ -48,6 +48,8 @@ import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { PreviewUnreachable } from "./PreviewUnreachable";
 import { revealInFileExplorerLabel } from "./fileExplorerLabel";
 import { shouldShowPreviewEmptyState } from "./previewEmptyStateLogic";
+import { BrowserSavedLoginPicker } from "~/browser/BrowserSavedLoginPicker";
+import { RemoteBrowserView } from "~/browser/RemoteBrowserView";
 import { BrowserSurfaceSlot } from "~/browser/BrowserSurfaceSlot";
 import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
 import { usePreviewSession } from "./usePreviewSession";
@@ -78,7 +80,164 @@ const localApi = typeof window === "undefined" ? null : ensureLocalApi();
  * Single-tab preview surface: chrome row on top, one webview below, empty
  * state when no session exists for the thread.
  */
-export function PreviewView({
+export function PreviewView(props: Props) {
+  return (
+    <PreviewHostView
+      key={`${props.threadRef.environmentId}:${props.threadRef.threadId}`}
+      {...props}
+    />
+  );
+}
+
+function PreviewHostView(props: Props) {
+  const preferenceKey = `pathway:browser-host:${props.threadRef.environmentId}:${props.threadRef.threadId}`;
+  const [remote, setRemote] = useState(() => {
+    if (!previewBridge) return true;
+    try {
+      return window.localStorage?.getItem(preferenceKey) === "environment";
+    } catch {
+      return false;
+    }
+  });
+  const selectHost = useAtomCommand(previewEnvironment.remoteCommand);
+  const [changingHost, setChangingHost] = useState(false);
+  const [hostError, setHostError] = useState<string>();
+  const [environmentHostReady, setEnvironmentHostReady] = useState(!!previewBridge);
+  const [hostAttempt, setHostAttempt] = useState(0);
+  const hostChangeVersion = useRef(0);
+  useEffect(() => {
+    if (!props.visible) return;
+    let disposed = false;
+    if (!previewBridge) {
+      setEnvironmentHostReady(false);
+      setHostError(undefined);
+      void selectHost({
+        environmentId: props.threadRef.environmentId,
+        input: { action: "selectHost", threadId: props.threadRef.threadId, host: "environment" },
+      })
+        .then((result) => {
+          if (disposed) return;
+          if (result._tag === "Failure") {
+            const error = squashAtomCommandFailure(result);
+            setHostError(
+              error instanceof Error ? error.message : "Could not select the environment browser.",
+            );
+          } else setEnvironmentHostReady(true);
+        })
+        .catch((error: unknown) => {
+          if (!disposed)
+            setHostError(
+              error instanceof Error ? error.message : "Could not select the environment browser.",
+            );
+        });
+      return () => {
+        disposed = true;
+        setEnvironmentHostReady(false);
+      };
+    }
+    const version = hostChangeVersion.current;
+    void selectHost({
+      environmentId: props.threadRef.environmentId,
+      input: { action: "list", threadId: props.threadRef.threadId },
+    }).then((result) => {
+      if (
+        disposed ||
+        version !== hostChangeVersion.current ||
+        result._tag !== "Success" ||
+        result.value.host === undefined
+      )
+        return;
+      setRemote(result.value.host === "environment");
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [
+    props.visible,
+    props.threadRef.environmentId,
+    props.threadRef.threadId,
+    selectHost,
+    hostAttempt,
+  ]);
+  const changeHost = async (next: boolean) => {
+    hostChangeVersion.current += 1;
+    setChangingHost(true);
+    setHostError(undefined);
+    try {
+      const result = await selectHost({
+        environmentId: props.threadRef.environmentId,
+        input: {
+          action: "selectHost",
+          threadId: props.threadRef.threadId,
+          host: next ? "environment" : "automatic",
+        },
+      });
+      if (result._tag === "Failure") {
+        const error = squashAtomCommandFailure(result);
+        setHostError(error instanceof Error ? error.message : "Could not change browser host.");
+        return;
+      }
+      setRemote(next);
+      try {
+        window.localStorage?.setItem(preferenceKey, next ? "environment" : "desktop");
+      } catch {
+        /* Browser storage is optional. */
+      }
+    } finally {
+      setChangingHost(false);
+    }
+  };
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {previewBridge && (
+        <div className="flex justify-end border-b px-2 py-1">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Browser host</span>
+            <select
+              aria-label="Browser host"
+              className="rounded bg-background px-2 py-1"
+              value={remote ? "environment" : "desktop"}
+              disabled={changingHost}
+              onChange={(event) => void changeHost(event.target.value === "environment")}
+            >
+              <option value="desktop">This desktop</option>
+              <option value="environment">Environment browser</option>
+            </select>
+          </label>
+        </div>
+      )}
+      {hostError && (
+        <p role="alert" className="p-2 text-sm text-destructive">
+          {hostError}
+        </p>
+      )}
+      {!previewBridge && !environmentHostReady ? (
+        <div className="p-3 text-sm text-muted-foreground">
+          {hostError ? (
+            <button
+              className="rounded border px-2 py-1"
+              onClick={() => setHostAttempt((value) => value + 1)}
+            >
+              Retry browser connection
+            </button>
+          ) : (
+            <p role="status">Connecting to the environment browser…</p>
+          )}
+        </div>
+      ) : remote ? (
+        <RemoteBrowserView
+          key={`${props.threadRef.environmentId}:${props.threadRef.threadId}`}
+          threadRef={props.threadRef}
+          visible={props.visible}
+        />
+      ) : (
+        <DesktopPreviewView {...props} />
+      )}
+    </div>
+  );
+}
+
+function DesktopPreviewView({
   threadRef,
   tabId: requestedTabId,
   configuredUrls,
@@ -86,6 +245,7 @@ export function PreviewView({
   allowInlinePictureInPicture = true,
   onSendAnnotation,
 }: Props) {
+  const [showSavedLogins, setShowSavedLogins] = useState(false);
   const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);
   const [pickActive, setPickActive] = useState(false);
   const activeRecordingTabIds = useActiveBrowserRecordingTabIds();
@@ -561,8 +721,12 @@ export function PreviewView({
         try {
           screenshotFile = await previewAnnotationScreenshotFile(annotation);
         } catch {
-          // The structured annotation is still sendable when converting its
-          // optional screenshot into a composer attachment fails.
+          toastManager.add({
+            type: "warning",
+            title: "Annotation saved without a screenshot",
+            description:
+              "The screenshot could not be attached. Your annotation is still available.",
+          });
         }
         const image =
           screenshotFile && annotation.screenshot
@@ -698,6 +862,32 @@ export function PreviewView({
         }
       />
 
+      {previewBridge && runtimeTabId && tabId && /^https?:/.test(url) && (
+        <div className="border-b p-2">
+          <button
+            type="button"
+            className="rounded border px-2 py-1 text-xs"
+            onClick={() => setShowSavedLogins((value) => !value)}
+            disabled={!previewBridge.autofillLogin}
+          >
+            {previewBridge.autofillLogin ? "Saved logins" : "Update desktop to fill saved logins"}
+          </button>
+          {showSavedLogins && (
+            <BrowserSavedLoginPicker
+              key={`${runtimeTabId}:${new URL(url).origin}`}
+              threadRef={threadRef}
+              tabId={tabId}
+              origin={new URL(url).origin}
+              fillLogin={async (login) => {
+                if (!previewBridge || !previewBridge.autofillLogin)
+                  throw new Error("Update Pathway desktop to fill saved logins.");
+                await previewBridge.autofillLogin(runtimeTabId, login);
+                return true;
+              }}
+            />
+          )}
+        </div>
+      )}
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {runtimeTabId && snapshot && !showEmptyState ? (
           <BrowserSurfaceSlot

@@ -1,6 +1,9 @@
 import { assert, it } from "@effect/vitest";
 import {
   type ModelSelection,
+  MessageId,
+  CommandId,
+  RuntimeRequestId,
   NodeId,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ThreadProjection,
@@ -23,6 +26,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { QuestionAnswerDelivery } from "./QuestionAnswerDelivery.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { layer as idAllocatorLayer } from "./IdAllocator.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
@@ -394,4 +398,102 @@ it.effect("forces an interrupted terminal state when the provider stays running"
       ],
     );
   }),
+);
+
+it.effect(
+  "hands an async answer to durable follow-up dispatch when its turn completed before delivery",
+  () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:async-race");
+      const providerThreadId = ProviderThreadId.make("provider-thread:async-race");
+      const providerTurnId = ProviderTurnId.make("provider-turn:async-race");
+      const providerSessionId = ProviderSessionId.make("session:async-race");
+      const messageId = MessageId.make("message:async-answer");
+      const commandId = CommandId.make("command:answer");
+      const providerThread: OrchestrationV2ProviderThread = {
+        id: providerThreadId,
+        driver,
+        providerInstanceId,
+        providerSessionId,
+        appThreadId: threadId,
+        ownerNodeId: null,
+        nativeThreadRef: { driver, nativeId: "native-async", strength: "strong" },
+        nativeConversationHeadRef: null,
+        status: "idle",
+        firstRunOrdinal: 1,
+        lastRunOrdinal: 1,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const base = makeProjection({
+        now,
+        threadId,
+        providerThread,
+        providerTurnId,
+        attemptId: RunAttemptId.make("attempt:async"),
+      });
+      const projection = {
+        ...base,
+        providerTurns: base.providerTurns.map((turn) => ({
+          ...turn,
+          status: "completed" as const,
+          completedAt: now,
+        })),
+        runtimeRequests: [
+          {
+            id: RuntimeRequestId.make("request:async"),
+            nodeId: NodeId.make("node:async"),
+            providerTurnId,
+            nativeRequestRef: null,
+            kind: "user_input" as const,
+            status: "resolved" as const,
+            isBlocking: false,
+            responseCapability: { type: "message" as const, providerThreadId },
+            responseMessageId: messageId,
+            responseCommandId: commandId,
+            createdAt: now,
+            resolvedAt: now,
+          },
+        ],
+      };
+      const delivered = yield* Ref.make<ReadonlyArray<MessageId>>([]);
+      const controlLayer = providerTurnControlLayer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProjectionStoreV2)({
+              getThreadProjection: () => Effect.succeed(projection),
+            }),
+            Layer.mock(ProviderSessionManagerV2)({
+              get: () => Effect.die("A completed turn must not reacquire its old session."),
+            }),
+            Layer.mock(EventSinkV2)({}),
+            idAllocatorLayer,
+            Layer.mock(QuestionAnswerDelivery)({
+              followUp: (input) => {
+                assert.equal(input.providerThreadId, providerThreadId);
+                assert.equal(input.commandId, commandId);
+                return Ref.update(delivered, (messages) => [...messages, input.messageId]);
+              },
+            }),
+          ),
+        ),
+      );
+      yield* ProviderTurnControlServiceV2.pipe(
+        Effect.flatMap((control) =>
+          control.steer({
+            threadId,
+            providerThreadId,
+            providerTurnId,
+            providerSessionId,
+            messageId,
+            answerCommandId: commandId,
+          }),
+        ),
+        Effect.provide(controlLayer),
+      );
+      assert.deepEqual(yield* Ref.get(delivered), [messageId]);
+    }),
 );

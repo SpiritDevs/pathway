@@ -121,6 +121,7 @@ import {
   scrollTimelineToEndIfFollowing,
   type TimelineScrollMode,
 } from "./chat/timelineScrollAnchoring";
+import { ComposerAsyncQuestions } from "./chat/ComposerAsyncQuestions";
 import {
   buildPendingUserInputAnswers,
   derivePendingUserInputProgress,
@@ -2733,9 +2734,17 @@ function ChatViewContent(props: ChatViewProps) {
     () => derivePendingApprovals(pendingRequests.approvals),
     [pendingRequests.approvals],
   );
-  const pendingUserInputs = useMemo(
+  const allPendingUserInputs = useMemo(
     () => derivePendingUserInputs(pendingRequests.userInputs),
     [pendingRequests.userInputs],
+  );
+  const pendingUserInputs = useMemo(
+    () => allPendingUserInputs.filter((request) => request.isBlocking !== false),
+    [allPendingUserInputs],
+  );
+  const asyncUserInputs = useMemo(
+    () => allPendingUserInputs.filter((request) => request.isBlocking === false),
+    [allPendingUserInputs],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const activePendingDraftAnswers = useMemo(
@@ -7932,13 +7941,10 @@ function ChatViewContent(props: ChatViewProps) {
   const onRespondToUserInput = useCallback(
     async (requestId: RuntimeRequestId, answers: Record<string, unknown>) => {
       if (!activeThreadId) return;
-      if (
-        pendingUserInputs.find((input) => input.requestId === requestId)?.responseCapability !==
-        "live"
-      )
-        return;
+      const request = allPendingUserInputs.find((input) => input.requestId === requestId);
+      if (!request || request.responseCapability === "not_resumable") return;
 
-      const resumeCompactionDismissed = pendingUserInputs
+      const resumeCompactionDismissed = allPendingUserInputs
         .find((input) => input.requestId === requestId)
         ?.questions.some(
           (question) =>
@@ -7973,7 +7979,7 @@ function ChatViewContent(props: ChatViewProps) {
     [
       activeThreadId,
       environmentId,
-      pendingUserInputs,
+      allPendingUserInputs,
       respondToThreadUserInput,
       setResumeCompactionPermanentlyDismissed,
       setThreadError,
@@ -9127,6 +9133,15 @@ function ChatViewContent(props: ChatViewProps) {
                         </div>
                       </div>
                     </div>
+                    <ComposerAsyncQuestions
+                      key={`${environmentId}:${activeThreadId ?? "draft"}`}
+                      prompts={asyncUserInputs}
+                      respondingRequestIds={respondingUserInputRequestIds}
+                      onRespond={async (requestId, answers) => {
+                        const result = await onRespondToUserInput(requestId, answers);
+                        return result !== undefined && result._tag !== "Failure";
+                      }}
+                    />
                     <div className="chat-composer-glass-shell chat-composer-glass-shell-with-context chat-composer-content-sized-shell relative mx-auto w-full max-w-3xl">
                       <div className="relative z-10 w-full">
                         <div className="relative z-10">

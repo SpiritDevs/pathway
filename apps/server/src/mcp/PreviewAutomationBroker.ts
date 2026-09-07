@@ -51,6 +51,26 @@ export interface PreviewAutomationInvokeInput {
   readonly timeoutMs?: number;
 }
 
+export class PreviewAutomationHostSelectionError extends Schema.TaggedErrorClass<PreviewAutomationHostSelectionError>()(
+  "PreviewAutomationHostSelectionError",
+  {
+    reason: Schema.Literals(["no_live_host", "action_in_progress", "takeover_active"]),
+    environmentId: Schema.String,
+    threadId: Schema.String,
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "no_live_host":
+        return "The selected browser is not connected to this environment.";
+      case "action_in_progress":
+        return "Wait for the current browser action to finish before switching browsers.";
+      case "takeover_active":
+        return "Release browser takeover before switching browsers.";
+    }
+  }
+}
+
 export class PreviewAutomationBroker extends Context.Service<
   PreviewAutomationBroker,
   {
@@ -58,6 +78,15 @@ export class PreviewAutomationBroker extends Context.Service<
       host: PreviewAutomationHost,
     ) => Effect.Effect<Stream.Stream<PreviewAutomationStreamEvent>>;
     readonly focusHost: (host: PreviewAutomationHostFocus) => Effect.Effect<void>;
+    readonly selectHostForThread: (input: {
+      readonly environmentId: EnvironmentId;
+      readonly threadId: ThreadId;
+      readonly clientId: string | null;
+    }) => Effect.Effect<void, PreviewAutomationHostSelectionError>;
+    readonly getSelectedHostForThread: (input: {
+      readonly environmentId: EnvironmentId;
+      readonly threadId: ThreadId;
+    }) => Effect.Effect<string | null>;
     readonly respond: (
       response: PreviewAutomationResponse,
     ) => Effect.Effect<void, PreviewAutomationError>;
@@ -82,16 +111,15 @@ interface PendingRequest {
   readonly deferred: Deferred.Deferred<unknown, PreviewAutomationError>;
   /**
    * Completed once the owning `invoke` has stopped touching broker state, which
-   * a takeover drain waits on. Distinct from {@link deferred}: an invoke that
-   * times out or is interrupted never resolves its response deferred, yet is
-   * just as finished from the fence's point of view.
+   * a takeover drain waits on alongside the host response. Caller timeout or
+   * interruption does not imply that the browser operation has stopped.
    */
   readonly settled: Deferred.Deferred<void>;
   readonly context: PreviewAutomationRequestErrorContext;
 }
 
 /**
- * A lease pinning one provider session to one desktop runtime. It lives exactly
+ * A lease pinning a thread and provider session to one browser runtime. It lives exactly
  * as long as the connection it names: `connectionId`/`queue` identity is what
  * makes a lease valid, so a disconnected or replaced host is dropped on the next
  * lookup. The lease deliberately has no clock of its own — it used to inherit
@@ -154,6 +182,7 @@ type InvokeRoute =
 interface BrokerState {
   readonly clients: ReadonlyMap<string, ClientConnection>;
   readonly assignments: ReadonlyMap<string, HostAssignment>;
+  readonly preferredHosts: ReadonlyMap<string, string>;
   readonly pending: ReadonlyMap<string, PendingRequest>;
   readonly fences: ReadonlyMap<string, TakeoverFence>;
   readonly requestSequence: number;
@@ -198,7 +227,7 @@ const selectorDiagnosticsFromInput = (
 };
 
 const hostAssignmentKey = (scope: McpInvocationContext.McpInvocationScope): string =>
-  `${scope.environmentId}\u0000${scope.providerSessionId}`;
+  `${scope.environmentId}\u0000${scope.threadId}\u0000${scope.providerSessionId}`;
 
 /** Takeovers and preview activity are keyed per thread, not per provider session. */
 const threadKey = (environmentId: EnvironmentId, threadId: ThreadId): string =>
@@ -374,6 +403,7 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
   const state = yield* SynchronizedRef.make<BrokerState>({
     clients: new Map(),
     assignments: new Map(),
+    preferredHosts: new Map(),
     pending: new Map(),
     fences: new Map(),
     requestSequence: 0,
@@ -505,9 +535,7 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
       ) {
         return [undefined, current] as const;
       }
-      const next = new Map(current.pending);
-      next.delete(response.requestId);
-      return [entry, { ...current, pending: next }] as const;
+      return [entry, current] as const;
     });
     if (!pending) return;
     if (response.ok) {
@@ -520,219 +548,336 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
           : new PreviewAutomationMalformedResponseError(pending.context),
       );
     }
+    // Retain the request until both the host and the caller have finished.
+    // In particular, caller timeout does not cancel browser-side execution.
+    if (Option.isNone(yield* Deferred.poll(pending.settled))) return;
+    yield* SynchronizedRef.update(state, (current) => {
+      if (current.pending.get(response.requestId) !== pending) return current;
+      const next = new Map(current.pending);
+      next.delete(response.requestId);
+      return { ...current, pending: next };
+    });
+  }, Effect.uninterruptible);
+
+  const getSelectedHostForThread = Effect.fn("PreviewAutomationBroker.getSelectedHostForThread")(
+    function* (
+      input: Parameters<PreviewAutomationBroker["Service"]["getSelectedHostForThread"]>[0],
+    ) {
+      const current = yield* SynchronizedRef.get(state);
+      const preferred = current.preferredHosts.get(threadKey(input.environmentId, input.threadId));
+      if (preferred !== undefined) return preferred;
+      let latest: HostAssignment | undefined;
+      for (const assignment of current.assignments.values()) {
+        if (
+          assignment.threadId !== input.threadId ||
+          !isConnectionLive(current, assignment) ||
+          current.clients.get(assignment.clientId)?.environmentId !== input.environmentId
+        )
+          continue;
+        if (latest === undefined || assignment.sequence > latest.sequence) latest = assignment;
+      }
+      return latest?.clientId ?? null;
+    },
+  );
+
+  const selectHostForThread = Effect.fn("PreviewAutomationBroker.selectHostForThread")(function* (
+    input: Parameters<PreviewAutomationBroker["Service"]["selectHostForThread"]>[0],
+  ) {
+    yield* SynchronizedRef.modifyEffect(state, (current) =>
+      Effect.gen(function* () {
+        const key = threadKey(input.environmentId, input.threadId);
+        if (
+          current.preferredHosts.get(key) === input.clientId ||
+          (input.clientId === null && !current.preferredHosts.has(key))
+        )
+          return [undefined, current] as const;
+        if (
+          input.clientId !== null &&
+          current.clients.get(input.clientId)?.environmentId !== input.environmentId
+        ) {
+          return yield* new PreviewAutomationHostSelectionError({
+            ...input,
+            reason: "no_live_host",
+          });
+        }
+        const fence = current.fences.get(key);
+        if (fence && fence.hostClientId !== input.clientId) {
+          return yield* new PreviewAutomationHostSelectionError({
+            ...input,
+            reason: "takeover_active",
+          });
+        }
+        if (
+          Array.from(current.pending.values()).some(
+            (request) =>
+              request.context.environmentId === input.environmentId &&
+              request.context.threadId === input.threadId &&
+              request.context.clientId !== input.clientId,
+          )
+        ) {
+          return yield* new PreviewAutomationHostSelectionError({
+            ...input,
+            reason: "action_in_progress",
+          });
+        }
+        const preferredHosts = new Map(current.preferredHosts);
+        if (input.clientId === null) preferredHosts.delete(key);
+        else preferredHosts.set(key, input.clientId);
+        const assignments = new Map(
+          Array.from(current.assignments).filter(
+            ([, assignment]) =>
+              assignment.threadId !== input.threadId ||
+              assignment.clientId === input.clientId ||
+              current.clients.get(assignment.clientId)?.environmentId !== input.environmentId,
+          ),
+        );
+        return [undefined, { ...current, preferredHosts, assignments }] as const;
+      }),
+    );
   });
 
   const invoke = Effect.fn("PreviewAutomationBroker.invoke")(function* <A = unknown>(
     input: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0],
   ): Effect.fn.Return<A, PreviewAutomationError> {
-    const timeoutMs = input.timeoutMs ?? 15_000;
-    const deferred = yield* Deferred.make<unknown, PreviewAutomationError>();
-    const settled = yield* Deferred.make<void>();
-    const route = yield* SynchronizedRef.modify(
-      state,
-      (current): readonly [InvokeRoute, BrokerState] => {
-        // Both preview tool handlers and issues_comment_evidence land here, so
-        // the takeover fence sits in routing rather than in any one caller. A
-        // fenced thread never fails over to another host or queues for later: the
-        // agent is told a human holds the browser.
-        const fence = current.fences.get(
-          threadKey(input.scope.environmentId, input.scope.threadId),
-        );
-        if (fence) {
-          return [{ kind: "blocked", takeoverId: fence.takeoverId } as const, current] as const;
-        }
-        const assignments = new Map(
-          Array.from(current.assignments).filter(([, assignment]) => {
-            const connection = current.clients.get(assignment.clientId);
-            return (
-              connection?.connectionId === assignment.connectionId &&
-              connection.queue === assignment.queue
+    // Register and enqueue as one interruption-safe setup. Only waiting for the
+    // host is interruptible; caller settlement is installed before restoring it.
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const timeoutMs = input.timeoutMs ?? 15_000;
+        const deferred = yield* Deferred.make<unknown, PreviewAutomationError>();
+        const settled = yield* Deferred.make<void>();
+        const route = yield* SynchronizedRef.modify(
+          state,
+          (current): readonly [InvokeRoute, BrokerState] => {
+            // Both preview tool handlers and issues_comment_evidence land here, so
+            // the takeover fence sits in routing rather than in any one caller. A
+            // fenced thread never fails over to another host or queues for later: the
+            // agent is told a human holds the browser.
+            const fence = current.fences.get(
+              threadKey(input.scope.environmentId, input.scope.threadId),
             );
-          }),
-        );
-        const assignmentKey = hostAssignmentKey(input.scope);
-        const assigned = assignments.get(assignmentKey);
-        const assignedConnection = assigned ? current.clients.get(assigned.clientId) : undefined;
-        const hasLiveAssignment = assignedConnection?.environmentId === input.scope.environmentId;
-        // Keep one provider session on one physical desktop runtime so a
-        // multi-step browser interaction cannot jump between independent
-        // Electron cookie/DOM state. A live assignment that predates an
-        // operation is not silently moved to a newer client: the caller gets a
-        // capability failure and can deliberately start a fresh provider
-        // session. A dead lease is pruned above and may fail over.
-        const connection =
-          hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
-            ? assignedConnection
-            : hasLiveAssignment
-              ? undefined
-              : Array.from(current.clients.values())
-                  .filter(
-                    (host) =>
-                      host.environmentId === input.scope.environmentId &&
-                      supportsOperation(host, input.operation),
-                  )
-                  .sort(
-                    (left, right) =>
-                      right.supportedOperations.size - left.supportedOperations.size ||
-                      Number(right.focused) - Number(left.focused) ||
-                      right.focusOrder - left.focusOrder,
-                  )[0];
-        if (!connection) {
-          if (!hasLiveAssignment) assignments.delete(assignmentKey);
-          return [undefined, { ...current, assignments }] as const;
-        }
-        const canReuseAssignedTab =
-          assigned !== undefined &&
-          assigned.connectionId === connection.connectionId &&
-          assigned.queue === connection.queue;
-        const requestSequence = current.requestSequence;
-        assignments.set(assignmentKey, {
-          clientId: connection.clientId,
-          connectionId: connection.connectionId,
-          queue: connection.queue,
-          threadId: input.scope.threadId,
-          sequence: requestSequence,
-          ...(canReuseAssignedTab && assigned.tabId !== undefined ? { tabId: assigned.tabId } : {}),
-          ...(canReuseAssignedTab && assigned.tabSequence !== undefined
-            ? { tabSequence: assigned.tabSequence }
-            : {}),
-        });
+            if (fence) {
+              return [{ kind: "blocked", takeoverId: fence.takeoverId } as const, current] as const;
+            }
+            const assignments = new Map(
+              Array.from(current.assignments).filter(([, assignment]) => {
+                const connection = current.clients.get(assignment.clientId);
+                return (
+                  connection?.connectionId === assignment.connectionId &&
+                  connection.queue === assignment.queue
+                );
+              }),
+            );
+            const assignmentKey = hostAssignmentKey(input.scope);
+            const assigned = assignments.get(assignmentKey);
+            const assignedConnection = assigned
+              ? current.clients.get(assigned.clientId)
+              : undefined;
+            const hasLiveAssignment =
+              assignedConnection?.environmentId === input.scope.environmentId;
+            // Keep a thread and provider session on one browser runtime so a
+            // multi-step browser interaction cannot jump between independent
+            // browser cookie/DOM state. A live assignment that predates an
+            // operation is not silently moved to a newer client: the caller gets a
+            // capability failure and can deliberately start a fresh provider
+            // session. A dead lease is pruned above and may fail over.
+            const preferredClientId = current.preferredHosts.get(
+              threadKey(input.scope.environmentId, input.scope.threadId),
+            );
+            const preferredConnection =
+              preferredClientId === undefined ? undefined : current.clients.get(preferredClientId);
+            const connection =
+              preferredClientId !== undefined
+                ? preferredConnection?.environmentId === input.scope.environmentId &&
+                  supportsOperation(preferredConnection, input.operation)
+                  ? preferredConnection
+                  : undefined
+                : hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
+                  ? assignedConnection
+                  : hasLiveAssignment
+                    ? undefined
+                    : Array.from(current.clients.values())
+                        .filter(
+                          (host) =>
+                            host.environmentId === input.scope.environmentId &&
+                            supportsOperation(host, input.operation),
+                        )
+                        .sort(
+                          (left, right) =>
+                            right.supportedOperations.size - left.supportedOperations.size ||
+                            Number(right.focused) - Number(left.focused) ||
+                            right.focusOrder - left.focusOrder,
+                        )[0];
+            if (!connection) {
+              if (!hasLiveAssignment) assignments.delete(assignmentKey);
+              return [undefined, { ...current, assignments }] as const;
+            }
+            const canReuseAssignedTab =
+              assigned !== undefined &&
+              assigned.connectionId === connection.connectionId &&
+              assigned.queue === connection.queue;
+            const requestSequence = current.requestSequence;
+            assignments.set(assignmentKey, {
+              clientId: connection.clientId,
+              connectionId: connection.connectionId,
+              queue: connection.queue,
+              threadId: input.scope.threadId,
+              sequence: requestSequence,
+              ...(canReuseAssignedTab && assigned.tabId !== undefined
+                ? { tabId: assigned.tabId }
+                : {}),
+              ...(canReuseAssignedTab && assigned.tabSequence !== undefined
+                ? { tabSequence: assigned.tabSequence }
+                : {}),
+            });
 
-        const requestId = `preview-${requestSequence}`;
-        const tabId = input.tabId ?? (canReuseAssignedTab ? assigned.tabId : undefined);
-        const selectorDiagnostics = selectorDiagnosticsFromInput(input.input);
-        const context: PreviewAutomationRequestErrorContext = {
-          operation: input.operation,
-          environmentId: input.scope.environmentId,
-          threadId: input.scope.threadId,
-          providerSessionId: input.scope.providerSessionId,
-          providerInstanceId: input.scope.providerInstanceId,
-          clientId: connection.clientId,
-          connectionId: connection.connectionId,
-          requestId,
-          ...(tabId === undefined ? {} : { tabId }),
-          timeoutMs,
-          ...selectorDiagnostics,
-        };
-        const pending = new Map(current.pending);
-        pending.set(requestId, { queue: connection.queue, deferred, settled, context });
-        return [
-          {
-            kind: "routed",
-            connection,
-            requestId,
-            requestContext: context,
-            requestSequence,
-            activity: activityRecord(input.scope, connection.clientId, tabId ?? null),
-          } as const,
-          {
-            ...current,
-            assignments,
-            pending,
-            requestSequence: requestSequence + 1,
+            const requestId = `preview-${requestSequence}`;
+            const tabId = input.tabId ?? (canReuseAssignedTab ? assigned.tabId : undefined);
+            const selectorDiagnostics = selectorDiagnosticsFromInput(input.input);
+            const context: PreviewAutomationRequestErrorContext = {
+              operation: input.operation,
+              environmentId: input.scope.environmentId,
+              threadId: input.scope.threadId,
+              providerSessionId: input.scope.providerSessionId,
+              providerInstanceId: input.scope.providerInstanceId,
+              clientId: connection.clientId,
+              connectionId: connection.connectionId,
+              requestId,
+              ...(tabId === undefined ? {} : { tabId }),
+              timeoutMs,
+              ...selectorDiagnostics,
+            };
+            const pending = new Map(current.pending);
+            pending.set(requestId, { queue: connection.queue, deferred, settled, context });
+            return [
+              {
+                kind: "routed",
+                connection,
+                requestId,
+                requestContext: context,
+                requestSequence,
+                activity: activityRecord(input.scope, connection.clientId, tabId ?? null),
+              } as const,
+              {
+                ...current,
+                assignments,
+                pending,
+                requestSequence: requestSequence + 1,
+              },
+            ] as const;
           },
-        ] as const;
-      },
-    );
-    if (!route) {
-      return yield* new PreviewAutomationNoAvailableHostError({
-        operation: input.operation,
-        environmentId: input.scope.environmentId,
-        threadId: input.scope.threadId,
-        providerSessionId: input.scope.providerSessionId,
-        providerInstanceId: input.scope.providerInstanceId,
-      });
-    }
-    if (route.kind === "blocked") {
-      return yield* new PreviewAutomationTakeoverActiveError({
-        operation: input.operation,
-        environmentId: input.scope.environmentId,
-        threadId: input.scope.threadId,
-        providerSessionId: input.scope.providerSessionId,
-        providerInstanceId: input.scope.providerInstanceId,
-        ...(input.tabId === undefined ? {} : { tabId: input.tabId }),
-        timeoutMs,
-        takeoverId: route.takeoverId,
-      });
-    }
-    const { connection, requestId, requestContext, requestSequence } = route;
-    const removePending = SynchronizedRef.update(state, (next) => {
-      if (!next.pending.has(requestId)) return next;
-      const pending = new Map(next.pending);
-      pending.delete(requestId);
-      return { ...next, pending };
-    });
-    const awaitResponse = Effect.fn("PreviewAutomationBroker.awaitResponse")(function* () {
-      const offered = yield* Queue.offer(connection.queue, {
-        type: "request",
-        connectionId: connection.connectionId,
-        request: {
-          requestId,
-          threadId: input.scope.threadId,
-          tabId: requestContext.tabId,
-          tabIdExplicit: input.tabId !== undefined,
-          operation: input.operation,
-          input: input.input,
-          timeoutMs,
-        },
-      });
-      if (!offered) {
-        const completion = yield* Deferred.poll(deferred);
-        if (Option.isSome(completion)) {
-          return (yield* completion.value) as A;
-        }
-        return yield* new PreviewAutomationRequestQueueClosedError(requestContext);
-      }
-      const result = yield* Deferred.await(deferred).pipe(Effect.timeoutOption(timeoutMs));
-      return yield* Option.match(result, {
-        onNone: () => Effect.fail(new PreviewAutomationTimeoutError(requestContext)),
-        onSome: (value) => Effect.succeed(value as A),
-      });
-    });
-    const shouldRecordActivity = recordsPreviewActivity(input.operation);
-    if (shouldRecordActivity) yield* publishActivity(route.activity);
-    // `settled` outlives the response deferred on purpose: a takeover drain
-    // waits for the whole invoke, including the tab bookkeeping below, so the
-    // lease it hands the user names the tab this request ended on.
-    const completed = yield* Effect.gen(function* () {
-      const result = yield* awaitResponse().pipe(Effect.ensuring(removePending));
-      const responseTabId = readResultTabId(result);
-      const resultTabId = responseTabId === undefined ? input.tabId : responseTabId;
-      if (resultTabId === undefined) return { result, activity: undefined };
-      const assignmentKey = hostAssignmentKey(input.scope);
-      const activity = yield* SynchronizedRef.modify(state, (current) => {
-        const assignment = current.assignments.get(assignmentKey);
-        if (
-          !assignment ||
-          assignment.connectionId !== connection.connectionId ||
-          assignment.queue !== connection.queue ||
-          (assignment.tabSequence ?? -1) > requestSequence
-        ) {
-          return [undefined, current] as const;
-        }
-        const assignments = new Map(current.assignments);
-        if (resultTabId === null) {
-          const { tabId: _tabId, ...withoutTabId } = assignment;
-          assignments.set(assignmentKey, { ...withoutTabId, tabSequence: requestSequence });
-        } else {
-          assignments.set(assignmentKey, {
-            ...assignment,
-            tabId: resultTabId,
-            tabSequence: requestSequence,
+        );
+        if (!route) {
+          return yield* new PreviewAutomationNoAvailableHostError({
+            operation: input.operation,
+            environmentId: input.scope.environmentId,
+            threadId: input.scope.threadId,
+            providerSessionId: input.scope.providerSessionId,
+            providerInstanceId: input.scope.providerInstanceId,
           });
         }
-        // Only a correction: the record published when this request was routed
-        // named the tab we expected, and the response moved it.
-        const record =
-          !shouldRecordActivity || resultTabId === route.activity.tabId
-            ? undefined
-            : activityRecord(input.scope, connection.clientId, resultTabId);
-        return [record, { ...current, assignments }] as const;
-      });
-      return { result, activity };
-    }).pipe(Effect.ensuring(Deferred.succeed(settled, undefined)));
-    if (completed.activity) yield* publishActivity(completed.activity);
-    return completed.result;
+        if (route.kind === "blocked") {
+          return yield* new PreviewAutomationTakeoverActiveError({
+            operation: input.operation,
+            environmentId: input.scope.environmentId,
+            threadId: input.scope.threadId,
+            providerSessionId: input.scope.providerSessionId,
+            providerInstanceId: input.scope.providerInstanceId,
+            ...(input.tabId === undefined ? {} : { tabId: input.tabId }),
+            timeoutMs,
+            takeoverId: route.takeoverId,
+          });
+        }
+        const { connection, requestId, requestContext, requestSequence } = route;
+        const removePending = SynchronizedRef.update(state, (next) => {
+          if (!next.pending.has(requestId)) return next;
+          const pending = new Map(next.pending);
+          pending.delete(requestId);
+          return { ...next, pending };
+        });
+        const awaitResponse = Effect.fn("PreviewAutomationBroker.awaitResponse")(function* () {
+          const offered = yield* Queue.offer(connection.queue, {
+            type: "request",
+            connectionId: connection.connectionId,
+            request: {
+              requestId,
+              threadId: input.scope.threadId,
+              tabId: requestContext.tabId,
+              tabIdExplicit: input.tabId !== undefined,
+              operation: input.operation,
+              input: input.input,
+              timeoutMs,
+            },
+          });
+          if (!offered) {
+            yield* removePending;
+            const completion = yield* Deferred.poll(deferred);
+            if (Option.isSome(completion)) {
+              return (yield* completion.value) as A;
+            }
+            return yield* new PreviewAutomationRequestQueueClosedError(requestContext);
+          }
+          const result = yield* restore(
+            Deferred.await(deferred).pipe(Effect.timeoutOption(timeoutMs)),
+          );
+          return yield* Option.match(result, {
+            onNone: () => Effect.fail(new PreviewAutomationTimeoutError(requestContext)),
+            onSome: (value) => Effect.succeed(value as A),
+          });
+        });
+        const shouldRecordActivity = recordsPreviewActivity(input.operation);
+        if (shouldRecordActivity) yield* publishActivity(route.activity);
+        // `settled` outlives the response deferred on purpose: a takeover drain
+        // waits for the whole invoke, including the tab bookkeeping below, so the
+        // lease it hands the user names the tab this request ended on.
+        const completed = yield* Effect.gen(function* () {
+          const result = yield* awaitResponse();
+          const responseTabId = readResultTabId(result);
+          const resultTabId = responseTabId === undefined ? input.tabId : responseTabId;
+          if (resultTabId === undefined) return { result, activity: undefined };
+          const assignmentKey = hostAssignmentKey(input.scope);
+          const activity = yield* SynchronizedRef.modify(state, (current) => {
+            const assignment = current.assignments.get(assignmentKey);
+            if (
+              !assignment ||
+              assignment.connectionId !== connection.connectionId ||
+              assignment.queue !== connection.queue ||
+              (assignment.tabSequence ?? -1) > requestSequence
+            ) {
+              return [undefined, current] as const;
+            }
+            const assignments = new Map(current.assignments);
+            if (resultTabId === null) {
+              const { tabId: _tabId, ...withoutTabId } = assignment;
+              assignments.set(assignmentKey, { ...withoutTabId, tabSequence: requestSequence });
+            } else {
+              assignments.set(assignmentKey, {
+                ...assignment,
+                tabId: resultTabId,
+                tabSequence: requestSequence,
+              });
+            }
+            // Only a correction: the record published when this request was routed
+            // named the tab we expected, and the response moved it.
+            const record =
+              !shouldRecordActivity || resultTabId === route.activity.tabId
+                ? undefined
+                : activityRecord(input.scope, connection.clientId, resultTabId);
+            return [record, { ...current, assignments }] as const;
+          });
+          return { result, activity };
+        }).pipe(
+          Effect.ensuring(
+            Effect.gen(function* () {
+              yield* Deferred.succeed(settled, undefined);
+              if (Option.isSome(yield* Deferred.poll(deferred))) yield* removePending;
+            }),
+          ),
+        );
+        if (completed.activity) yield* publishActivity(completed.activity);
+        return completed.result;
+      }),
+    );
   });
 
   /**
@@ -787,18 +932,24 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
         takeoverId: input.takeoverId,
       });
     }
-    yield* Effect.forEach(armed.draining, ({ entry }) => Deferred.await(entry.settled), {
-      concurrency: "unbounded",
-      discard: true,
-    }).pipe(Effect.timeoutOption(input.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS));
+    const drain = yield* Effect.forEach(
+      armed.draining,
+      ({ entry }) =>
+        Deferred.await(entry.deferred).pipe(
+          Effect.result,
+          Effect.andThen(Deferred.await(entry.settled)),
+        ),
+      { concurrency: "unbounded", discard: true },
+    ).pipe(Effect.timeoutOption(input.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS));
+    if (Option.isNone(drain)) {
+      return yield* new PreviewTakeoverFenceError({
+        reason: "drain_failed",
+        environmentId: input.environmentId,
+        threadId: input.threadId,
+        takeoverId: input.takeoverId,
+      });
+    }
     const drained = yield* SynchronizedRef.modify(state, (current) => {
-      const pending = new Map(current.pending);
-      const stragglers: PendingRequest[] = [];
-      for (const { requestId, entry } of armed.draining) {
-        if (pending.get(requestId) !== entry) continue;
-        pending.delete(requestId);
-        stragglers.push(entry);
-      }
       const assignment = current.assignments.get(armed.captured.assignmentKey);
       const live =
         assignment !== undefined &&
@@ -818,19 +969,10 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
         tabId: isPreviewTabId(lease.tabId) ? lease.tabId : null,
       });
       return [
-        { stragglers, live, lease },
-        { ...current, pending, fences },
+        { live, lease },
+        { ...current, fences },
       ] as const;
     });
-    yield* Effect.forEach(
-      drained.stragglers,
-      ({ deferred, context }) =>
-        Deferred.fail(
-          deferred,
-          new PreviewAutomationTakeoverActiveError({ ...context, takeoverId: input.takeoverId }),
-        ),
-      { discard: true },
-    );
     if (!drained.live) {
       return yield* new PreviewTakeoverFenceError({
         reason: "host_disconnected",
@@ -873,7 +1015,14 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
   });
 
   return {
-    broker: PreviewAutomationBroker.of({ connect, focusHost, respond, invoke }),
+    broker: PreviewAutomationBroker.of({
+      connect,
+      focusHost,
+      selectHostForThread,
+      getSelectedHostForThread,
+      respond,
+      invoke,
+    }),
     fence: PreviewAutomationTakeoverFence.of({ acquire, release, rearm }),
   };
 }).pipe(Effect.withSpan("PreviewAutomationBroker.make"));

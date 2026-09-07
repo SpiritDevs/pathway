@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   MessageId,
   NodeId,
+  ProviderThreadId,
   RunId,
   RuntimeRequestId,
   TurnItemId,
@@ -67,6 +68,24 @@ describe("V2 client presentation", () => {
     expect(shell.runtime).toBeNull();
     expect(shell.attachedPullRequest).toBeNull();
     expect(shell.source).toBe(v2ThreadShell);
+  });
+
+  it("does not mark a nonblocking question as blocked user input", () => {
+    const pendingRuntimeRequest = {
+      id: RuntimeRequestId.make("async"),
+      kind: "user_input" as const,
+      createdAt: v2ThreadShell.createdAt,
+    };
+    expect(
+      presentThreadShell(environmentId, { ...v2ThreadShell, pendingRuntimeRequest })
+        .hasPendingUserInput,
+    ).toBe(true);
+    expect(
+      presentThreadShell(environmentId, {
+        ...v2ThreadShell,
+        pendingRuntimeRequest: { ...pendingRuntimeRequest, isBlocking: false },
+      }).hasPendingUserInput,
+    ).toBe(false);
   });
 
   it("presents a manual pull request attachment from the thread shell", () => {
@@ -374,6 +393,77 @@ describe("V2 client presentation", () => {
       status: "running",
       activeRunId: runId,
     });
+  });
+
+  it("keeps message-replied questions actionable after their run and preserves metadata", () => {
+    const now = DateTime.makeUnsafe("2026-09-07T01:00:00.000Z");
+    const requestId = RuntimeRequestId.make("async-question");
+    const request = {
+      id: requestId,
+      nodeId: NodeId.make("node-root"),
+      providerTurnId: null,
+      nativeRequestRef: null,
+      kind: "user_input" as const,
+      status: "pending" as const,
+      isBlocking: false,
+      responseCapability: {
+        type: "message" as const,
+        providerThreadId: ProviderThreadId.make("provider-thread"),
+      },
+      createdAt: now,
+      resolvedAt: null,
+    };
+    const item = {
+      id: TurnItemId.make("item-question"),
+      threadId: v2Projection.thread.id,
+      runId: null,
+      nodeId: request.nodeId,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "waiting" as const,
+      title: null,
+      startedAt: now,
+      completedAt: null,
+      updatedAt: now,
+      type: "user_input_request" as const,
+      requestId,
+      questions: [
+        {
+          id: "q",
+          header: "Pick",
+          question: "Choose?",
+          options: [],
+          isSecret: true,
+          isOther: true,
+          multiSelect: true,
+        },
+      ],
+    };
+    const projection = { ...v2Projection, runs: [], runtimeRequests: [request], turnItems: [item] };
+    expect(derivePendingThreadRequests(projection).userInputs).toEqual([
+      {
+        requestId,
+        createdAt: "2026-09-07T01:00:00.000Z",
+        responseCapability: "message",
+        isBlocking: false,
+        questions: item.questions,
+      },
+    ]);
+    expect(
+      derivePendingThreadRequests({
+        ...projection,
+        runtimeRequests: [{ ...request, status: "resolved" }],
+      }).userInputs,
+    ).toEqual([]);
+    expect(
+      derivePendingThreadRequests({
+        ...projection,
+        runtimeRequests: [{ ...request, isBlocking: undefined }],
+      }).userInputs[0]?.isBlocking,
+    ).toBe(true);
   });
 
   it("joins pending request entities to their native turn-item display data", () => {

@@ -78,6 +78,9 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as ModelManifest from "./provider/ModelManifest.ts";
+import * as RemoteBrowser from "./preview/RemoteBrowser.ts";
+import { layer as questionAnswerDeliveryLayer } from "./orchestration-v2/QuestionAnswerDelivery.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as ProcessRunner from "./processRunner.ts";
@@ -453,6 +456,7 @@ const RunFinalizationObserverLayerLive = RunFinalizationService.observerLive.pip
 );
 
 const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
+  Layer.provide(questionAnswerDeliveryLayer),
   Layer.provide(CheckpointStoreLayerLive),
   Layer.provide(ResourceCleanupService.live),
   Layer.provide(RunFinalizationObserverLayerLive),
@@ -482,6 +486,7 @@ const RuntimeCoreDependenciesBaseLive = AgentAwarenessRelay.layer.pipe(
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
   Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+  Layer.provideMerge(ModelManifest.layer.pipe(Layer.provide(ServerSettingsLayerLive))),
 );
 
 const IssueAutomationCoordinatorLayerLive = IssueAutomationCoordinator.layer.pipe(
@@ -618,6 +623,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
+  Layer.provide(RemoteBrowser.layer),
   Layer.provide(previewAutomationBrokerLayer),
   Layer.provide(ServerSelfUpdate.layer),
   Layer.provide(commandReadinessLayer),

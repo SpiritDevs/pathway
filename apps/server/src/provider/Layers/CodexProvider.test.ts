@@ -9,6 +9,7 @@ import {
 it("keeps current Codex models out of legacy models", () => {
   assert.deepStrictEqual(
     [
+      "gpt-6-astra",
       "gpt-5.6-luna",
       "gpt-5.6-terra",
       "gpt-5.6-sol",
@@ -17,6 +18,7 @@ it("keeps current Codex models out of legacy models", () => {
       "gpt-5.4",
     ].map((model) => [model, isLegacyCodexModel(model)]),
     [
+      ["gpt-6-astra", false],
       ["gpt-5.6-luna", false],
       ["gpt-5.6-terra", false],
       ["gpt-5.6-sol", false],

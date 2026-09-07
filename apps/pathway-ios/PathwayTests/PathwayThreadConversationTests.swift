@@ -4,6 +4,62 @@ import Testing
 
 @MainActor
 struct PathwayThreadConversationTests {
+    @Test(arguments: ["preparing", "starting", "running", "waiting", "completed", "failed"])
+    func browserTakeoverMatchesTheServerRunEligibility(status: String) {
+        let thread = makeModel { _, _ in .object([:]) }
+        thread.installSnapshot(snapshot(status: status), sequence: 1)
+        let browser = PathwayRemoteBrowserModel(thread: thread)
+        #expect(browser.canTakeControl == ["preparing", "starting", "running"].contains(status))
+        if status == "waiting" { #expect(thread.activeRunID != nil) }
+    }
+
+    @Test func environmentBrowserWaitsForHostSelectionBeforeLoadingTabs() async throws {
+        let thread = makeModel { _, _ in .object([:]) }
+        let started = AsyncStream<Void>.makeStream()
+        var release: CheckedContinuation<JSONValue, Error>?
+        var actions: [String] = []
+        let response: JSONValue = .object(["tabs": .array([]), "selectedTabId": .null])
+        let browser = PathwayRemoteBrowserModel(thread: thread, request: { method, payload in
+            #expect(method == "preview.remote.command")
+            let fields = try #require(payload.objectValue)
+            let action = try #require(fields["action"]?.stringValue)
+            actions.append(action)
+            if action == "selectHost" {
+                #expect(fields["host"]?.stringValue == "environment")
+                #expect(fields["tabId"] == nil)
+                started.continuation.yield()
+                return try await withCheckedThrowingContinuation { release = $0 }
+            }
+            return response
+        })
+        let start = Task { await browser.start() }
+        var iterator = started.stream.makeAsyncIterator()
+        await iterator.next()
+        #expect(!browser.isHostReady)
+        #expect(!(await browser.command("open")))
+        release?.resume(returning: response)
+        await start.value
+        #expect(browser.isHostReady)
+        #expect(actions == ["selectHost", "list"])
+        started.continuation.finish()
+        await browser.stop()
+    }
+
+    @Test func refusedEnvironmentBrowserHostRemainsUnavailableWithoutAutomaticRetry() async {
+        let thread = makeModel { _, _ in .object([:]) }
+        var calls = 0
+        let browser = PathwayRemoteBrowserModel(thread: thread, request: { _, _ in
+            calls += 1
+            throw PathwayRPCError.remote("Release browser takeover before switching browsers.")
+        })
+        await browser.start()
+        #expect(!browser.isHostReady)
+        #expect(browser.error == "Release browser takeover before switching browsers.")
+        #expect(!(await browser.command("open")))
+        #expect(calls == 1)
+        await browser.stop()
+    }
+
     @Test func streamingUpdatesPreserveOrderingAndReorderedItemsMove() throws {
         let model = makeModel { _, _ in .object([:]) }
         func item(_ id: String, _ ordinal: Int, _ text: String) -> JSONValue {
@@ -95,6 +151,39 @@ struct PathwayThreadConversationTests {
         #expect(calls.last?.objectValue?["answers"] == .object(answers))
         model.applySubscriptionValue(event(sequence: 1, type: "runtime-request.updated", payload: .object(["id": .string("request-1"), "status": .string("resolved"), "responseCapability": .object(["type": .string("live")])])))
         #expect(!model.canRespond(to: item))
+    }
+
+    @Test func asyncQuestionsRemainActionableAfterCompletionAndKeepDraftOnReconnect() async throws {
+        var calls: [JSONValue] = []
+        let model = makeModel { _, value in calls.append(value); return .object([:]) }
+        let question: JSONValue = .object([
+            "id": .string("async-item"), "type": .string("user_input_request"),
+            "status": .string("waiting"), "requestId": .string("async-request"),
+            "questions": .array([.object([
+                "id": .string("q1"), "header": .string("Approach"), "question": .string("Which approach?"),
+                "options": .array([.object(["label": .string("First"), "description": .string("")])])])])
+        ])
+        let runtime: JSONValue = .object([
+            "id": .string("async-request"), "status": .string("pending"), "isBlocking": .bool(false),
+            "responseCapability": .object(["type": .string("message"), "providerThreadId": .string("provider-thread")])
+        ])
+        let projection: JSONValue = .object([
+            "runs": .array([run(status: "completed")]),
+            "visibleTurnItems": .array([.object(["item": question])]), "runtimeRequests": .array([runtime])
+        ])
+        model.installSnapshot(projection)
+        let item = try #require(model.pendingAsyncQuestions.first)
+        #expect(model.activeRunID == nil)
+        #expect(model.canRespond(to: item))
+        model.prepareQuestionDraft(for: item)
+        #expect(model.questionDrafts[item.id]?.selected["q1"] == ["First"])
+        #expect(calls.isEmpty)
+        model.questionDrafts[item.id]?.custom["q1"] = "My answer"
+        model.installSnapshot(projection)
+        model.prepareQuestionDraft(for: item)
+        #expect(model.questionDrafts[item.id]?.custom["q1"] == "My answer")
+        try await model.respondToQuestions(requestID: "async-request", answers: ["q1": .string("My answer")])
+        #expect(calls.last?.objectValue?["answers"] == .object(["q1": .string("My answer")]))
     }
 
     @Test func failedSendRetainsDraftAndPreparedAttachmentsForRetry() async throws {

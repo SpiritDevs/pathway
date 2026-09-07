@@ -169,6 +169,17 @@ final class PathwayCloudModel {
         }
     }
 
+    func browserPasswordRequest(_ operation: String, arguments: JSONValue) async throws -> JSONValue {
+        let kind: String
+        switch operation {
+        case "list": kind = "query"
+        case "save", "getForAutofill": kind = "action"
+        case "remove": kind = "mutation"
+        default: throw URLError(.unsupportedURL)
+        }
+        return try await request(kind: kind, name: "browserPasswords:\(operation)", arguments: arguments)
+    }
+
     func request(kind: String, name: String, arguments: JSONValue) async throws -> JSONValue {
         guard let client else { throw URLError(.notConnectedToInternet) }
         return try await client.issueRequest(kind: kind, name: name, arguments: arguments)

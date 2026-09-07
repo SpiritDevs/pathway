@@ -22,9 +22,17 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { QuestionAnswerDelivery, QuestionAnswerDeliveryError } from "./QuestionAnswerDelivery.ts";
+
 import { BrowserTakeoverService } from "./BrowserTakeoverService.ts";
 import { CheckpointRollbackServiceV2 } from "./CheckpointRollbackService.ts";
-import { EffectOutboxError, EffectOutboxV2, type OrchestrationEffectV2 } from "./EffectOutbox.ts";
+import {
+  EffectOutboxError,
+  EffectOutboxV2,
+  layer as effectOutboxLayer,
+  type OrchestrationEffectV2,
+} from "./EffectOutbox.ts";
 import {
   executorLayer,
   isNonRetryableProviderTurnControlFailure,
@@ -834,3 +842,101 @@ it.effect("safely retries after replacement cleanup succeeds and start fails", (
     ]);
   }),
 );
+
+for (const failurePhase of ["before-event-commit", "after-event-commit"] as const) {
+  it.effect(`retries question recovery ${failurePhase} without another provider delivery`, () =>
+    Effect.gen(function* () {
+      const outbox = yield* EffectOutboxV2;
+      const deliveries = yield* Ref.make(0);
+      const recoveries = yield* Ref.make(0);
+      const requestStatus = yield* Ref.make<"resolved" | "pending">("resolved");
+      const recoveryCommits = yield* Ref.make(0);
+      const commandId = CommandId.make(`command:question-recovery:${failurePhase}`);
+      const effectId = `effect:question-recovery:${failurePhase}`;
+      const deliveryLayer = Layer.mock(QuestionAnswerDelivery)({
+        failed: (input) =>
+          Effect.gen(function* () {
+            assert.equal(input.commandId, commandId);
+            const attempt = yield* Ref.updateAndGet(recoveries, (count) => count + 1);
+            // The real handler re-reads under the thread lock and only writes a
+            // resolved request. Model both a failed write and a lost commit ack.
+            if (failurePhase === "before-event-commit" && attempt <= 2) {
+              return yield* new QuestionAnswerDeliveryError({ cause: "EventSink.write failed" });
+            }
+            if ((yield* Ref.get(requestStatus)) === "resolved") {
+              yield* Ref.set(requestStatus, "pending");
+              yield* Ref.update(recoveryCommits, (count) => count + 1);
+            }
+            if (failurePhase === "after-event-commit" && attempt === 1) {
+              return yield* new QuestionAnswerDeliveryError({
+                cause: "Event commit acknowledgement failed",
+              });
+            }
+          }),
+      });
+      const workerLayer = effectWorkerLayerWithOptions({
+        workerId: "question-recovery-worker",
+        maxAttempts: 1,
+      }).pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(EffectOutboxV2, outbox),
+            deliveryLayer,
+            Layer.succeed(OrchestrationEffectExecutorV2, {
+              execute: (effect) =>
+                Ref.update(deliveries, (count) => count + 1).pipe(
+                  Effect.andThen(() =>
+                    Effect.fail(
+                      new OrchestrationEffectExecutionError({
+                        effectId: effect.id,
+                        effectType: effect.request.type,
+                        cause: "Provider rejected answer",
+                      }),
+                    ),
+                  ),
+                ),
+            }),
+          ),
+        ),
+      );
+      yield* outbox.enqueue([
+        {
+          id: effectId,
+          commandId,
+          threadId,
+          request: {
+            type: "provider-turn.steer",
+            providerSessionId: oldSessionId,
+            providerThreadId,
+            providerTurnId,
+            messageId: MessageId.make("answer-message"),
+          },
+        },
+      ]);
+      yield* Effect.gen(function* () {
+        const worker = yield* OrchestrationEffectWorkerV2;
+        const failedRecoveryCount = failurePhase === "before-event-commit" ? 2 : 1;
+        for (let attempt = 0; attempt < failedRecoveryCount; attempt += 1) {
+          assert.isTrue(Exit.isFailure(yield* Effect.exit(worker.runOnce)));
+          const pending = yield* outbox.get(effectId);
+          assert.isTrue(Option.isSome(pending));
+          if (Option.isSome(pending)) {
+            assert.equal(pending.value.status, "pending");
+            assert.equal(pending.value.attemptCount, attempt + 1);
+          }
+          assert.equal(yield* Ref.get(deliveries), 1);
+          assert.isFalse(yield* worker.runOnce);
+          yield* TestClock.adjust("1 second");
+        }
+        assert.isTrue(yield* worker.runOnce);
+        assert.isFalse(yield* worker.runOnce);
+      }).pipe(Effect.provide(workerLayer));
+      const settled = yield* outbox.get(effectId);
+      assert.isTrue(Option.isSome(settled));
+      if (Option.isSome(settled)) assert.equal(settled.value.status, "failed");
+      assert.equal(yield* Ref.get(requestStatus), "pending");
+      assert.equal(yield* Ref.get(deliveries), 1);
+      assert.equal(yield* Ref.get(recoveryCommits), 1);
+    }).pipe(Effect.provide(effectOutboxLayer.pipe(Layer.provide(SqlitePersistenceMemory)))),
+  );
+}

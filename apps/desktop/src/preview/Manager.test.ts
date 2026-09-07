@@ -1,3 +1,4 @@
+import * as NodeUtil from "node:util";
 import { it as effectIt } from "@effect/vitest";
 import type { DesktopPreviewRecordingFrame } from "@spiritdevs/contracts";
 import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
@@ -56,6 +57,77 @@ describe("resolvePreviewReloadShortcut", () => {
     expect(PreviewManager.resolvePreviewReloadShortcut(input({ shift: true }))).toBe("hardReload");
     expect(PreviewManager.resolvePreviewReloadShortcut(input({ alt: true }))).toBeNull();
     expect(PreviewManager.resolvePreviewReloadShortcut(input({ type: "keyUp" }))).toBeNull();
+  });
+});
+
+describe("previewWindowOpenAction", () => {
+  it("allows blank OAuth windows only with verified sandboxed no-Node opener preferences", () => {
+    const safePreferences = {
+      sandbox: true,
+      nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      nodeIntegrationInWorker: false,
+      webviewTag: false,
+      contextIsolation: false,
+    };
+    for (const url of ["", "about:blank"]) {
+      const details = { url, disposition: "new-window" as const };
+      expect(PreviewManager.previewWindowOpenAction(details, safePreferences)).toBe("popup");
+      expect(PreviewManager.previewWindowOpenAction(details)).toBe("tab");
+      for (const key of [
+        "sandbox",
+        "nodeIntegration",
+        "nodeIntegrationInSubFrames",
+        "nodeIntegrationInWorker",
+        "webviewTag",
+      ] as const) {
+        expect(
+          PreviewManager.previewWindowOpenAction(details, {
+            ...safePreferences,
+            [key]: !safePreferences[key],
+          }),
+        ).toBe("tab");
+        expect(
+          PreviewManager.previewWindowOpenAction(details, { ...safePreferences, [key]: undefined }),
+        ).toBe("tab");
+      }
+    }
+  });
+
+  it("keeps scripted OAuth windows alive while links open as tabs", () => {
+    expect(
+      PreviewManager.previewWindowOpenAction({
+        url: "https://accounts.example.com/login",
+        disposition: "new-window",
+      }),
+    ).toBe("popup");
+    for (const disposition of ["foreground-tab", "background-tab"] as const) {
+      expect(
+        PreviewManager.previewWindowOpenAction({ url: "https://example.com", disposition }),
+      ).toBe("tab");
+    }
+    for (const url of ["about:blank", "file:///etc/passwd", "javascript:alert(1)", "invalid"]) {
+      expect(PreviewManager.previewWindowOpenAction({ url, disposition: "new-window" })).toBe(
+        "tab",
+      );
+    }
+  });
+});
+
+describe("boundAccessibilityTree", () => {
+  it("bounds large accessibility responses and marks truncation", () => {
+    const nodes = Array.from({ length: 1000 }, (_, nodeId) => ({ nodeId }));
+    expect(PreviewManager.boundAccessibilityTree({ nodes })).toEqual({
+      nodes: nodes.slice(0, 500),
+      truncated: true,
+    });
+    expect(
+      PreviewManager.boundAccessibilityTree({ nodes: [{ value: "x".repeat(64_000) }] }),
+    ).toEqual({ nodes: [], truncated: true });
+    expect(PreviewManager.boundAccessibilityTree({ nodes: [{ nodeId: 1 }] })).toEqual({
+      nodes: [{ nodeId: 1 }],
+      truncated: false,
+    });
   });
 });
 
@@ -177,6 +249,7 @@ const makeTestPreviewWebContents = (
     send: webviewSend,
     navigationHistory: { canGoBack: () => false, canGoForward: () => false },
     setWindowOpenHandler: vi.fn(),
+    setIgnoreMenuShortcuts: vi.fn(),
     debugger: {
       isAttached: () => false,
       attach: vi.fn(),
@@ -347,6 +420,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),
@@ -395,6 +469,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler,
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),
@@ -413,10 +488,21 @@ describe("PreviewManager", () => {
         yield* manager.createTab("tab_popup");
         yield* manager.registerWebview("tab_popup", 42);
 
-        const handler = setWindowOpenHandler.mock.calls[0]?.[0] as (details: { url: string }) => {
+        const handler = setWindowOpenHandler.mock.calls[0]?.[0] as (details: {
+          url: string;
+          disposition?: string;
+        }) => {
           action: string;
         };
         expect(handler).toBeTypeOf("function");
+        expect(
+          handler({ url: "https://accounts.example.com/oauth", disposition: "new-window" }),
+        ).toMatchObject({
+          action: "allow",
+          overrideBrowserWindowOptions: {
+            webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+          },
+        });
 
         expect(handler({ url: "https://example.com/documents/1" })).toEqual({ action: "deny" });
         yield* Effect.yieldNow;
@@ -425,7 +511,11 @@ describe("PreviewManager", () => {
         expect(handler({ url: "about:blank" })).toEqual({ action: "deny" });
         expect(handler({ url: "" })).toEqual({ action: "deny" });
         yield* Effect.yieldNow;
-        expect(events).toHaveLength(1);
+        expect(events).toHaveLength(3);
+        expect(events.slice(1)).toEqual([
+          expect.objectContaining({ tabId: "tab_popup", blockedReason: expect.any(String) }),
+          expect.objectContaining({ tabId: "tab_popup", blockedReason: expect.any(String) }),
+        ]);
       }),
     ),
   );
@@ -458,6 +548,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),
@@ -514,6 +605,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),
@@ -554,6 +646,7 @@ describe("PreviewManager", () => {
               send: webviewSend,
               navigationHistory: { canGoBack: () => false, canGoForward: () => false },
               setWindowOpenHandler: vi.fn(),
+              setIgnoreMenuShortcuts: vi.fn(),
               debugger: {
                 isAttached: () => false,
                 attach: vi.fn(),
@@ -701,6 +794,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),
@@ -793,6 +887,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),
@@ -853,6 +948,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),
@@ -905,6 +1001,85 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("bounds a stalled screenshot and never writes its late result", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        let resolveCapture: ((image: TestCapturedPreviewImage) => void) | undefined;
+        const capturePage = vi.fn(
+          () =>
+            new Promise<TestCapturedPreviewImage>((resolve) => {
+              resolveCapture = resolve;
+            }),
+        );
+        fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
+        yield* manager.createTab("stalled");
+        yield* manager.registerWebview("stalled", 42);
+        const capture = yield* Effect.forkChild(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            return yield* manager.captureScreenshot("stalled");
+          }),
+        );
+        yield* Deferred.await(started);
+        yield* TestClock.adjust(5_000);
+        const exit = yield* Fiber.await(capture);
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit))
+          expect(Option.getOrThrow(Cause.findErrorOption(exit.cause))).toMatchObject({
+            operation: "captureScreenshot.capturePage",
+          });
+        resolveCapture?.({
+          toJPEG: () => Buffer.from("late"),
+          getSize: () => ({ width: 1, height: 1 }),
+        });
+        yield* Effect.yieldNow;
+        expect(writeFile).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+
+  effectIt.effect("rejects screenshots from a guest replaced during capture", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const image = {
+          toJPEG: () => Buffer.from("image"),
+          getSize: () => ({ width: 1, height: 1 }),
+        };
+        const started = yield* Deferred.make<void>();
+        let resolveCapture: ((image: TestCapturedPreviewImage) => void) | undefined;
+        const first = makeTestPreviewWebContents(
+          () =>
+            new Promise<TestCapturedPreviewImage>((resolve) => {
+              resolveCapture = resolve;
+            }),
+          42,
+        );
+        const second = makeTestPreviewWebContents(async () => image, 43);
+        fromId.mockImplementation((id) => (id === 42 ? first : second));
+        yield* manager.createTab("replaced");
+        yield* manager.registerWebview("replaced", 42);
+        const capture = yield* Effect.forkChild(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined);
+            return yield* manager.captureScreenshot("replaced");
+          }),
+        );
+        yield* Deferred.await(started);
+        yield* Effect.yieldNow;
+        yield* manager.registerWebview("replaced", 43);
+        resolveCapture?.(image);
+        const exit = yield* Fiber.await(capture);
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit))
+          expect(Option.getOrThrow(Cause.findErrorOption(exit.cause))).toMatchObject({
+            operation: "browser.validateGuest",
+          });
+        expect(writeFile).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+
   effectIt.effect("captures hidden preview recordings independently for concurrent tabs", () =>
     withManager((manager) =>
       Effect.gen(function* () {
@@ -940,6 +1115,7 @@ describe("PreviewManager", () => {
             send: webviewSend,
             navigationHistory: { canGoBack: () => false, canGoForward: () => false },
             setWindowOpenHandler: vi.fn(),
+            setIgnoreMenuShortcuts: vi.fn(),
             debugger: {
               isAttached: () => false,
               attach: vi.fn(),
@@ -1150,6 +1326,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),
@@ -1230,6 +1407,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),
@@ -1329,8 +1507,14 @@ describe("PreviewManager", () => {
         const framesBeforePictureInPictureOnlyTick = pictureInPictureSend.mock.calls.length;
         yield* TestClock.adjust(100);
         expect(capturePage).toHaveBeenCalledTimes(3);
-        expect(pictureInPictureSend.mock.calls.length).toBeGreaterThan(
-          framesBeforePictureInPictureOnlyTick,
+        expect(pictureInPictureSend.mock.calls.length).toBe(framesBeforePictureInPictureOnlyTick);
+        capturePage.mockResolvedValueOnce({
+          toJPEG: () => Buffer.from("changed-frame"),
+          getSize: () => ({ width: 1280, height: 720 }),
+        });
+        yield* TestClock.adjust(100);
+        expect(pictureInPictureSend.mock.calls.length).toBe(
+          framesBeforePictureInPictureOnlyTick + 1,
         );
         expect(recordingFrames).toHaveLength(1);
 
@@ -1627,6 +1811,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),
@@ -1700,6 +1885,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),
@@ -1793,6 +1979,87 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect(
+    "retains the debugger wrapper and reports CSS coordinates for reduced Retina screenshots",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const viewport = { width: 1600, height: 900, deviceScaleFactor: 2 };
+          const sendCommand = vi.fn(async (method: string) =>
+            method === "Runtime.evaluate"
+              ? {
+                  result: {
+                    value: {
+                      url: "https://example.com",
+                      title: "Example",
+                      loading: false,
+                      visibleText: "Example",
+                      interactiveElements: [],
+                      viewport,
+                    },
+                  },
+                }
+              : method === "Accessibility.getFullAXTree"
+                ? { nodes: [] }
+                : undefined,
+          );
+          const debuggerApi = {
+            isAttached: () => false,
+            attach: vi.fn(),
+            detach: vi.fn(),
+            sendCommand,
+            on: vi.fn(),
+            off: vi.fn(),
+          };
+          const debuggerGetter = vi.fn(() => debuggerApi);
+          const resizedImage = {
+            getSize: () => ({ width: 1280, height: 720 }),
+            toPNG: () => Buffer.from("png"),
+          };
+          const sourceImage = {
+            getSize: () => ({ width: 3200, height: 1800 }),
+            resize: vi.fn(() => resizedImage),
+          };
+          const guest = {
+            id: 42,
+            isDestroyed: () => false,
+            getType: () => "webview",
+            getURL: () => "https://example.com",
+            getTitle: () => "Example",
+            isLoading: () => false,
+            isDevToolsOpened: () => false,
+            getZoomFactor: () => 1,
+            setZoomFactor: vi.fn(),
+            on: vi.fn(),
+            off: vi.fn(),
+            ipc: { on: vi.fn(), off: vi.fn() },
+            send: webviewSend,
+            navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+            setWindowOpenHandler: vi.fn(),
+            setIgnoreMenuShortcuts: vi.fn(),
+            capturePage: vi.fn(async () => sourceImage),
+            get debugger() {
+              return debuggerGetter();
+            },
+          };
+          fromId.mockReturnValue(guest as never);
+          yield* manager.createTab("retina");
+          yield* manager.registerWebview("retina", 42);
+          const snapshot = yield* manager.automationSnapshot("retina");
+          expect(snapshot.viewport).toEqual(viewport);
+          expect(snapshot.screenshot).toMatchObject({
+            width: 1280,
+            height: 720,
+            coordinateScale: { x: 1.25, y: 1.25 },
+          });
+          expect(debuggerGetter).toHaveBeenCalledOnce();
+          yield* manager.closeTab("retina");
+          expect(debuggerGetter).toHaveBeenCalledOnce();
+          expect(debuggerApi.off).toHaveBeenCalled();
+        }),
+      ),
+  );
+
   effectIt.effect("emits the resolved pointer target before dispatching an automation click", () =>
     withManager((manager) =>
       Effect.gen(function* () {
@@ -1826,6 +2093,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),
@@ -1867,6 +2135,59 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect(
+    "fills saved logins without returning credentials or page-controlled errors",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          let result = "filled";
+          let pageFailure = false;
+          const sendCommand = vi.fn(async (method: string) => {
+            if (method !== "Runtime.evaluate") return undefined;
+            return pageFailure
+              ? {
+                  exceptionDetails: {
+                    text: "private-test-password",
+                    exception: { description: "private-test-password" },
+                  },
+                }
+              : { result: { value: result } };
+          });
+          fromId.mockReturnValue({
+            ...(makeTestPreviewWebContents(async () => {
+              throw new Error("unused");
+            }) as object),
+            isDevToolsOpened: () => false,
+            debugger: {
+              isAttached: () => false,
+              attach: vi.fn(),
+              sendCommand,
+              on: vi.fn(),
+              off: vi.fn(),
+            },
+          } as never);
+          yield* manager.createTab("saved-login");
+          yield* manager.registerWebview("saved-login", 42);
+          const input = {
+            origin: "https://example.com",
+            username: "private-user",
+            password: "private-test-password",
+          };
+          expect(yield* manager.autofillLogin("saved-login", input)).toBeUndefined();
+          result = "origin";
+          const changed = yield* manager.autofillLogin("saved-login", input).pipe(Effect.exit);
+          expect(Exit.isFailure(changed)).toBe(true);
+          pageFailure = true;
+          const failed = yield* manager.autofillLogin("saved-login", input).pipe(Effect.exit);
+          expect(Exit.isFailure(failed)).toBe(true);
+          expect(NodeUtil.inspect(failed)).not.toContain("private-test-password");
+          const status = yield* manager.automationStatus("saved-login");
+          expect(NodeUtil.inspect(status)).not.toContain("private-test-password");
+          expect(NodeUtil.inspect(status)).not.toContain("private-user");
+        }),
+      ),
+  );
+
   effectIt.effect("types in background webviews and enables native key input", () =>
     withManager((manager) =>
       Effect.gen(function* () {
@@ -1905,6 +2226,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),
@@ -2047,6 +2369,7 @@ describe("PreviewManager", () => {
           send: webviewSend,
           navigationHistory: { canGoBack: () => false, canGoForward: () => false },
           setWindowOpenHandler: vi.fn(),
+          setIgnoreMenuShortcuts: vi.fn(),
           debugger: {
             isAttached: () => false,
             attach: vi.fn(),

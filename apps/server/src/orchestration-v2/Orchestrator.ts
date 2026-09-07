@@ -1,7 +1,7 @@
 import {
   type ChatAttachment,
   CommandId,
-  type MessageId,
+  MessageId,
   type ModelSelection,
   orchestrationV2ProjectionCanReplaceInitialProject,
   OrchestrationV2Command,
@@ -42,6 +42,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import { QuestionAnswerDelivery, QuestionAnswerDeliveryError } from "./QuestionAnswerDelivery.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import { CommandPolicyV2 } from "./CommandPolicy.ts";
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
@@ -637,6 +638,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const projectionStore = yield* ProjectionStoreV2;
   const providerAdapters = yield* ProviderAdapterRegistryV2;
   const continuationRequests = yield* ProviderContinuationRequests;
+  const questionDelivery = yield* Effect.serviceOption(QuestionAnswerDelivery);
   const providerSessions = yield* ProviderSessionManagerV2;
   const providerSwitchService = yield* ProviderSwitchServiceV2;
   const runtimePolicy = yield* RuntimePolicyV2;
@@ -3495,6 +3497,47 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) =>
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      if (command.replyToRuntimeRequestId !== undefined) {
+        const question = projection.runtimeRequests.find(
+          (request) => request.id === command.replyToRuntimeRequestId,
+        );
+        if (
+          question?.responseCapability.type !== "message" ||
+          question.status !== "resolved" ||
+          question.responseMessageId !== command.messageId ||
+          question.responseCapability.providerThreadId !== projection.thread.activeProviderThreadId
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "The answer's originating conversation is no longer active.",
+          });
+        }
+      }
+
+      const answeredRequest = projection.runtimeRequests.find(
+        (request) =>
+          request.responseMessageId === command.messageId &&
+          request.status === "resolved" &&
+          request.responseCapability.type === "message",
+      );
+      if (
+        answeredRequest !== undefined &&
+        answeredRequest.responseCommandId !== command.commandId
+      ) {
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "runtime-request.updated",
+          threadId: command.threadId,
+          nodeId: answeredRequest.nodeId,
+          occurredAt: yield* DateTime.now,
+          payload: { ...answeredRequest, responseCommandId: command.commandId },
+        });
+        projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      }
+
       if (projection.thread.workspaceMove?.status === "running") {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -5624,6 +5667,204 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           commandType: command.type,
           cause: `Runtime request ${command.requestId} is ${runtimeRequest.status}.`,
         });
+      }
+      const questionItem = projection.turnItems.find(
+        (item) => item.type === "user_input_request" && item.requestId === command.requestId,
+      );
+      if (
+        runtimeRequest.kind === "user_input" &&
+        command.decision !== "cancel" &&
+        command.decision !== "decline"
+      ) {
+        if (
+          questionItem?.type !== "user_input_request" ||
+          questionItem.questions.some((question) => {
+            const answer = command.answers?.[question.id];
+            return typeof answer === "string"
+              ? answer.trim().length === 0
+              : !Array.isArray(answer) ||
+                  answer.length === 0 ||
+                  answer.some((value) => typeof value !== "string" || value.trim().length === 0);
+          })
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "Answer every question before submitting.",
+          });
+        }
+      }
+      if (runtimeRequest.responseCapability.type === "message") {
+        if (questionItem?.type !== "user_input_request") {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "The question content is unavailable.",
+          });
+        }
+        const originId = runtimeRequest.responseCapability.providerThreadId;
+        const origin = projection.providerThreads.find((candidate) => candidate.id === originId);
+        const originRun = projection.runs.findLast(
+          (candidate) => candidate.providerThreadId === originId,
+        );
+        if (
+          origin === undefined ||
+          (originRun === undefined && origin.forkedFrom === null) ||
+          projection.thread.activeProviderThreadId !== originId
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause:
+              "This question belongs to a previous provider conversation. Restore that conversation before answering.",
+          });
+        }
+        const now = yield* DateTime.now;
+        const emitEvent = emit(events, command);
+        const node = projection.nodes.find((candidate) => candidate.id === runtimeRequest.nodeId);
+        yield* emitEvent({
+          type: "runtime-request.updated",
+          threadId: command.threadId,
+          nodeId: runtimeRequest.nodeId,
+          occurredAt: now,
+          payload: {
+            ...runtimeRequest,
+            status: "resolved",
+            resolvedAt: now,
+            responseMessageId: MessageId.make(`message:question-answer:${runtimeRequest.id}`),
+            responseCommandId: command.commandId,
+          },
+        });
+        if (node !== undefined) {
+          yield* emitEvent({
+            type: "node.updated",
+            threadId: command.threadId,
+            nodeId: node.id,
+            occurredAt: now,
+            payload: { ...node, status: "completed", completedAt: now },
+          });
+        }
+        yield* emitEvent({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: { ...questionItem, status: "completed", completedAt: now, updatedAt: now },
+        });
+        const declined = command.decision === "cancel" || command.decision === "decline";
+        const text = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+          request_user_input_async: runtimeRequest.nativeRequestRef?.nativeId ?? command.requestId,
+          answers: questionItem.questions.map((question) => ({
+            question: question.question,
+            answer: declined ? "The user chose not to answer." : command.answers?.[question.id],
+          })),
+        }).pipe(mapDispatchError(command));
+        const activeRun = projection.runs.find(
+          (candidate) => candidate.providerThreadId === originId && candidate.status === "running",
+        );
+        const nativeActiveTurn =
+          originRun === undefined
+            ? projection.providerTurns.findLast(
+                (turn) =>
+                  turn.providerThreadId === originId &&
+                  turn.status === "running" &&
+                  turn.runAttemptId === null,
+              )
+            : undefined;
+        if (nativeActiveTurn !== undefined) {
+          const providerSessionId = origin.providerSessionId;
+          if (providerSessionId === null) {
+            return yield* new OrchestratorDispatchError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause: "The child agent session is unavailable. Wait for recovery before answering.",
+            });
+          }
+          const messageId = MessageId.make(`message:question-answer:${runtimeRequest.id}`);
+          yield* emitEvent({
+            type: "message.updated",
+            threadId: command.threadId,
+            occurredAt: now,
+            payload: {
+              id: messageId,
+              threadId: command.threadId,
+              runId: null,
+              nodeId: nativeActiveTurn.nodeId,
+              role: "user",
+              createdBy: "user",
+              creationSource: "server",
+              text,
+              attachments: [],
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          });
+          yield* emitEvent({
+            type: "turn-item.updated",
+            threadId: command.threadId,
+            occurredAt: now,
+            payload: {
+              id: idAllocator.derive.userTurnItem({ messageId }),
+              threadId: command.threadId,
+              runId: null,
+              nodeId: nativeActiveTurn.nodeId,
+              providerThreadId: originId,
+              providerTurnId: nativeActiveTurn.id,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: nextTurnItemOrdinal(projection),
+              status: "completed",
+              title: null,
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              type: "user_message",
+              createdBy: "user",
+              creationSource: "server",
+              messageId,
+              inputIntent: "steer",
+              text,
+              attachments: [],
+            },
+          });
+          yield* Ref.update(effects, (existing) => [
+            ...existing,
+            {
+              id: `effect:${command.commandId}:provider-turn.steer:${nativeActiveTurn.id}`,
+              commandId: command.commandId,
+              threadId: command.threadId,
+              request: {
+                type: "provider-turn.steer",
+                providerSessionId,
+                providerThreadId: originId,
+                providerTurnId: nativeActiveTurn.id,
+                messageId,
+              },
+            } satisfies PendingOrchestrationEffectV2,
+          ]);
+          return;
+        }
+        yield* dispatchMessage(
+          {
+            type: "message.dispatch",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            messageId: MessageId.make(`message:question-answer:${runtimeRequest.id}`),
+            replyToRuntimeRequestId: runtimeRequest.id,
+            createdBy: "user",
+            creationSource: "server",
+            text,
+            attachments: [],
+            modelSelection: originRun?.modelSelection ?? projection.thread.modelSelection,
+            dispatchMode:
+              activeRun === undefined
+                ? { type: "start_immediately" }
+                : { type: "steer_active", targetRunId: activeRun.id },
+          },
+          events,
+          effects,
+        );
+        return;
       }
       if (runtimeRequest.responseCapability.type !== "live") {
         return yield* new OrchestratorDispatchError({
@@ -8234,6 +8475,96 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       Effect.logWarning("Failed to inspect settle-after-completion requests", { cause }),
     ),
   );
+
+  if (Option.isSome(questionDelivery)) {
+    yield* questionDelivery.value.bind({
+      followUp: (input) =>
+        Effect.gen(function* () {
+          const projection = yield* projectionStore.getThreadProjection(input.threadId);
+          const message = projection.messages.find((candidate) => candidate.id === input.messageId);
+          const question = projection.runtimeRequests.find(
+            (request) =>
+              request.responseMessageId === input.messageId &&
+              request.responseCapability.type === "message",
+          );
+          const originRun = projection.runs.findLast(
+            (candidate) => candidate.providerThreadId === input.providerThreadId,
+          );
+          if (
+            message === undefined ||
+            question === undefined ||
+            projection.thread.activeProviderThreadId !== input.providerThreadId
+          ) {
+            return yield* new QuestionAnswerDeliveryError({
+              cause: "The answer's originating conversation is no longer active.",
+            });
+          }
+          yield* dispatchWithReceipt({
+            type: "message.dispatch",
+            commandId: CommandId.make(`command:question-follow-up:${input.commandId}`),
+            threadId: input.threadId,
+            messageId: input.messageId,
+            replyToRuntimeRequestId: question.id,
+            text: message.text,
+            attachments: message.attachments,
+            createdBy: message.createdBy,
+            creationSource: message.creationSource,
+            modelSelection: originRun?.modelSelection ?? projection.thread.modelSelection,
+            dispatchMode: { type: "queue_after_active" },
+          });
+        }).pipe(Effect.mapError((cause) => new QuestionAnswerDeliveryError({ cause }))),
+      failed: (input) =>
+        threadDispatch
+          .withLock(
+            input.threadId,
+            Effect.gen(function* () {
+              const projection = yield* projectionStore.getThreadProjection(input.threadId);
+              const request = projection.runtimeRequests.find(
+                (candidate) =>
+                  candidate.responseCommandId === input.commandId &&
+                  candidate.status === "resolved" &&
+                  candidate.responseCapability.type === "message",
+              );
+              if (request === undefined) return;
+              const now = yield* DateTime.now;
+              const events: Array<OrchestrationV2DomainEvent> = [];
+              const append = <Event extends OrchestrationV2DomainEvent>(event: Omit<Event, "id">) =>
+                idAllocator.allocate
+                  .event({ threadId: input.threadId })
+                  .pipe(Effect.map((id) => events.push({ ...event, id } as Event)));
+              yield* append({
+                type: "runtime-request.updated",
+                threadId: input.threadId,
+                nodeId: request.nodeId,
+                occurredAt: now,
+                payload: { ...request, status: "pending", resolvedAt: null },
+              });
+              const node = projection.nodes.find((candidate) => candidate.id === request.nodeId);
+              if (node !== undefined)
+                yield* append({
+                  type: "node.updated",
+                  threadId: input.threadId,
+                  nodeId: node.id,
+                  occurredAt: now,
+                  payload: { ...node, status: "waiting", completedAt: null },
+                });
+              const item = projection.turnItems.find(
+                (candidate) =>
+                  candidate.type === "user_input_request" && candidate.requestId === request.id,
+              );
+              if (item !== undefined)
+                yield* append({
+                  type: "turn-item.updated",
+                  threadId: input.threadId,
+                  occurredAt: now,
+                  payload: { ...item, status: "waiting", completedAt: null, updatedAt: now },
+                });
+              yield* eventSink.write({ events });
+            }),
+          )
+          .pipe(Effect.mapError((cause) => new QuestionAnswerDeliveryError({ cause }))),
+    });
+  }
 
   return OrchestratorV2.of({
     resumeQueuedRuns,

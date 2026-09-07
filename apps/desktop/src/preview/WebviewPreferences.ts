@@ -19,8 +19,9 @@
  *   third-party page in the preview full Node + IPC access to the host.
  *   In sandboxed mode Electron still synthesizes the `electron` module for
  *   the preload's `import { ipcRenderer }` line, but no Node globals leak.
- * - `nodeIntegration=false`: pinned for clarity (the page itself never gets
- *   Node access).
+ * - Node integration in the page, subframes, and workers stays disabled;
+ *   webviewTag=false prevents nested browser guests. Blank native popups copy
+ *   these preferences, so they must be explicit on the opener itself.
  *
  * Format notes (locked down by `WebviewPreferences.test.ts`):
  * - Whitespace-free. Electron's webpreferences parser splits on `,` and
@@ -39,4 +40,4 @@
  * security-critical flags can't regress on preview tabs.
  */
 export const PREVIEW_WEBVIEW_PREFERENCES =
-  "contextIsolation=false,sandbox=true,nodeIntegration=false";
+  "contextIsolation=false,sandbox=true,nodeIntegration=false,nodeIntegrationInSubFrames=false,nodeIntegrationInWorker=false,webviewTag=false";

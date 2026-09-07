@@ -118,6 +118,8 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
+import { RemoteBrowser } from "./preview/RemoteBrowser.ts";
+import { remoteBrowserRpcHandlers } from "./preview/RemoteBrowserRpc.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import {
   attachmentMetadataMatchesStoredPath,
@@ -601,6 +603,7 @@ const makeWsRpcLayer = (
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
+      const remoteBrowser = yield* RemoteBrowser;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerInstanceRegistry = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
@@ -2295,6 +2298,7 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.previewOpen, previewManager.open(input), {
             "rpc.aggregate": "preview",
           }),
+        ...remoteBrowserRpcHandlers(currentSession.scopes, remoteBrowser),
         [WS_METHODS.previewNavigate]: (input) =>
           observeRpcEffect(WS_METHODS.previewNavigate, previewManager.navigate(input), {
             "rpc.aggregate": "preview",

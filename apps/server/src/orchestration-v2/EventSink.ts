@@ -208,18 +208,62 @@ const baseLayer: Layer.Layer<
             : [],
         ),
       );
-      return Effect.forEach(
-        events,
-        (event): Effect.Effect<OrchestrationV2DomainEvent, unknown> =>
-          event.type === "turn-item.updated"
-            ? turnItemPositions
-                .normalize(
-                  event.payload,
-                  event.payload.runId === null ? undefined : runOrdinals.get(event.payload.runId),
-                )
-                .pipe(Effect.map((payload) => ({ ...event, payload })))
-            : Effect.succeed(event),
-        { concurrency: 1 },
+      const reopenedRequests = new Set(
+        events.flatMap((event) =>
+          event.type === "runtime-request.updated" &&
+          event.payload.status === "pending" &&
+          event.payload.responseMessageId !== undefined
+            ? [event.payload.id]
+            : [],
+        ),
+      );
+      return Effect.filter(events, (event) =>
+        Effect.gen(function* () {
+          const requestId =
+            event.type === "runtime-request.updated" &&
+            event.payload.responseCapability.type === "message" &&
+            event.payload.status === "pending" &&
+            event.payload.responseMessageId === undefined
+              ? event.payload.id
+              : event.type === "turn-item.updated" &&
+                  event.payload.type === "user_input_request" &&
+                  event.payload.status === "waiting"
+                ? event.payload.requestId
+                : event.type === "node.updated" &&
+                    event.payload.kind === "user_input_request" &&
+                    event.payload.status === "waiting"
+                  ? event.payload.runtimeRequestId
+                  : null;
+          if (requestId === null || reopenedRequests.has(requestId)) return true;
+          const rows = yield* sql<{ readonly status: string; readonly response_type: string }>`
+          SELECT status, json_extract(payload_json, '$.responseCapability.type') AS response_type
+          FROM orchestration_v2_projection_runtime_requests WHERE runtime_request_id = ${requestId} LIMIT 1
+        `;
+          const previous = rows[0];
+          return (
+            previous === undefined ||
+            previous.response_type !== "message" ||
+            (event.type !== "runtime-request.updated" && previous.status === "pending")
+          );
+        }),
+      ).pipe(
+        Effect.flatMap((filtered) =>
+          Effect.forEach(
+            filtered,
+            (event): Effect.Effect<OrchestrationV2DomainEvent, unknown> =>
+              event.type === "turn-item.updated"
+                ? turnItemPositions
+                    .normalize(
+                      event.payload,
+                      event.payload.runId === null
+                        ? undefined
+                        : runOrdinals.get(event.payload.runId),
+                    )
+                    .pipe(Effect.map((payload) => ({ ...event, payload })))
+                : Effect.succeed(event),
+            { concurrency: 1 },
+          ),
+        ),
       );
     };
 

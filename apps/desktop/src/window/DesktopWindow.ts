@@ -461,6 +461,8 @@ export const make = Effect.gen(function* () {
       webPreferences.sandbox = true;
       webPreferences.nodeIntegration = false;
       webPreferences.nodeIntegrationInSubFrames = false;
+      webPreferences.nodeIntegrationInWorker = false;
+      webPreferences.webviewTag = false;
       webPreferences.contextIsolation = false;
     });
 

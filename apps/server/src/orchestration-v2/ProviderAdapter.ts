@@ -401,7 +401,8 @@ export interface ProviderAdapterV2TurnInput {
 
 export interface ProviderAdapterV2SteerInput {
   readonly threadId: ThreadId;
-  readonly runId: RunId;
+  /** Provider-native subagent turns do not have a Pathway run. */
+  readonly runId: RunId | null;
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly providerTurnId: ProviderTurnId;
   readonly message: ProviderAdapterV2TurnMessage;

@@ -2,6 +2,38 @@
 import Testing
 
 struct PathwayRPCSubscriptionTests {
+    @Test func transportChangesDoNotTerminateAFullBrowserFrameBuffer() async throws {
+        let pair = AsyncThrowingStream<JSONValue, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        pair.continuation.yield(.string("old frame"))
+        pathwayRPCYieldTransportState("connecting", to: pair.continuation, policy: .bufferingNewest(1))
+        var iterator = pair.stream.makeAsyncIterator()
+        let connecting = try await iterator.next()
+        #expect(connecting?.objectValue?["_pathwayTransport"]?.stringValue == "connecting")
+        pair.continuation.yield(.string("new connection frame"))
+        let latest = try await iterator.next()
+        #expect(latest?.stringValue == "new connection frame")
+        pair.continuation.finish()
+    }
+
+    @Test func browserFramesCoalesceWithoutForcingAReconnect() async throws {
+        let pair = AsyncThrowingStream<JSONValue, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        pair.continuation.yield(.string("old frame"))
+        let result = pair.continuation.yield(.string("latest frame"))
+        #expect(!pathwayRPCBufferOverflowIsFatal(result, policy: .bufferingNewest(1)))
+        var iterator = pair.stream.makeAsyncIterator()
+        let latest = try await iterator.next()
+        #expect(latest?.stringValue == "latest frame")
+        pair.continuation.finish()
+    }
+
+    @Test func lostConversationEventsStillRequireAReconnect() {
+        let pair = AsyncThrowingStream<JSONValue, Error>.makeStream(bufferingPolicy: .bufferingOldest(1))
+        pair.continuation.yield(.string("first event"))
+        let result = pair.continuation.yield(.string("lost event"))
+        #expect(pathwayRPCBufferOverflowIsFatal(result, policy: .bufferingOldest(1)))
+        pair.continuation.finish()
+    }
+
     @Test func issueRequestsWaitForTheCurrentSocketsProtocolAcknowledgement() {
         var gate = PathwayRPCSubscriptionGate()
         #expect(gate.allowsRequest(requiresSubscription: false))

@@ -107,6 +107,7 @@ actor PathwayRPCClient {
     private var subscriptionRequestID: Int?
     private var subscriptionGate = PathwayRPCSubscriptionGate()
     private var subscriptionContinuation: AsyncThrowingStream<JSONValue, Error>.Continuation?
+    private var subscriptionBufferingPolicy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy = .bufferingOldest(256)
 
     init(
         session: URLSession = .shared,
@@ -136,12 +137,21 @@ actor PathwayRPCClient {
         _ tag: String,
         payload: JSONValue
     ) -> AsyncThrowingStream<JSONValue, Error> {
+        subscribe(tag, payload: payload, bufferingPolicy: .bufferingOldest(256))
+    }
+
+    func subscribe(
+        _ tag: String,
+        payload: JSONValue,
+        bufferingPolicy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy
+    ) -> AsyncThrowingStream<JSONValue, Error> {
         subscriptionContinuation?.finish()
         let subscriptionID = UUID()
         self.subscriptionID = subscriptionID
         subscriptionTag = tag
         subscriptionPayload = payload
-        let stream = AsyncThrowingStream<JSONValue, Error>(bufferingPolicy: .bufferingOldest(256)) { continuation in
+        subscriptionBufferingPolicy = bufferingPolicy
+        let stream = AsyncThrowingStream<JSONValue, Error>(bufferingPolicy: bufferingPolicy) { continuation in
             subscriptionContinuation = continuation
             continuation.onTermination = { @Sendable _ in
                 Task { await self.removeSubscription(id: subscriptionID) }
@@ -299,7 +309,8 @@ actor PathwayRPCClient {
                 for id in pending.keys { Task { await self.sendPending(id) } }
             }
             for value in values {
-                if case .dropped = subscriptionContinuation?.yield(value) {
+                if let result = subscriptionContinuation?.yield(value),
+                   pathwayRPCBufferOverflowIsFatal(result, policy: subscriptionBufferingPolicy) {
                     throw PathwayRPCError.protocolViolation(
                         "The live thread produced events faster than the app could display them."
                     )
@@ -464,10 +475,8 @@ actor PathwayRPCClient {
     /// Transport changes share the subscription queue so an old snapshot cannot overwrite
     /// a newer disconnect notification in the consumer.
     private func yieldTransportState(_ state: String) {
-        let result = subscriptionContinuation?.yield(.object(["_pathwayTransport": .string(state)]))
-        if case .dropped = result {
-            subscriptionContinuation?.finish(throwing: PathwayRPCError.disconnected)
-        }
+        guard let subscriptionContinuation else { return }
+        pathwayRPCYieldTransportState(state, to: subscriptionContinuation, policy: subscriptionBufferingPolicy)
     }
 
     private func allocateRequestID() -> Int {
@@ -478,6 +487,27 @@ actor PathwayRPCClient {
     private static func remoteMessage(_ exit: PathwayRPCExit) -> String {
         exit.cause?.compactMap { $0.error?.displayString ?? $0.defect?.displayString }.first
             ?? "The Pathway environment rejected the request."
+    }
+}
+
+/// Frame streams deliberately replace old images; conversation streams must recover lost events.
+func pathwayRPCBufferOverflowIsFatal(
+    _ result: AsyncThrowingStream<JSONValue, Error>.Continuation.YieldResult,
+    policy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy
+) -> Bool {
+    guard case .dropped = result else { return false }
+    if case .bufferingNewest = policy { return false }
+    return true
+}
+
+func pathwayRPCYieldTransportState(
+    _ state: String,
+    to continuation: AsyncThrowingStream<JSONValue, Error>.Continuation,
+    policy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy
+) {
+    let result = continuation.yield(.object(["_pathwayTransport": .string(state)]))
+    if pathwayRPCBufferOverflowIsFatal(result, policy: policy) {
+        continuation.finish(throwing: PathwayRPCError.disconnected)
     }
 }
 

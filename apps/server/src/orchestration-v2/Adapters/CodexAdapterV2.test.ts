@@ -265,6 +265,28 @@ describe("CodexAdapterV2 assistant message streaming", () => {
 });
 
 describe("CodexAdapterV2 runtime policy", () => {
+  it.effect("clears unsupported saved options in both turn and collaboration settings", () =>
+    Effect.gen(function* () {
+      const params = yield* buildCodexTurnStartParams({
+        nativeThreadId: "native-stale-options",
+        codexInput: [{ type: "text", text: "test" }],
+        runtimePolicy: { runtimeMode: "full-access", interactionMode: "plan", cwd: null },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-6-astra",
+          options: [
+            { id: "reasoningEffort", value: "minimal" },
+            { id: "fastMode", value: true },
+          ],
+        },
+        modelCapabilities: {},
+      });
+      assert.equal(params.effort, null);
+      assert.equal(params.serviceTier, null);
+      assert.equal(params.collaborationMode?.settings.reasoning_effort, null);
+    }),
+  );
+
   it.effect("derives concrete Codex turn policies from every Pathway runtime mode", () =>
     Effect.gen(function* () {
       const build = (
@@ -1526,6 +1548,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       readonly omitPhase?: boolean;
       readonly streamed?: boolean;
       readonly completionDelayMs?: number;
+      readonly questions?: ReadonlyArray<{ title: string; options?: ReadonlyArray<string> }>;
     }>,
   ) => {
     const nativeThreadId = `native-${scenario}-thread`;
@@ -1553,6 +1576,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     type: "agentMessage",
                     id: answer.id,
                     text: answer.text,
+                    ...(answer.questions === undefined
+                      ? {}
+                      : { delivery: "async", questions: answer.questions }),
                     ...phase,
                     memoryCitation: null,
                   },
@@ -1807,6 +1833,162 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         assert.equal(
           new Set(assistantMessages(harness.events).map((event) => event.message.id)).size,
           1,
+        );
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
+  it.effect(
+    "correlates provider resolution with the RPC envelope and cancels only that question",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const nativeThreadId = "rpc-resolution-thread";
+          const nativeTurnId = "rpc-resolution-turn";
+          const entries: Array<CodexReplay.CodexAppServerReplayEntry> = [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Ask questions." }),
+            ...[71, 72].map(
+              (id): CodexReplay.CodexAppServerReplayEntry => ({
+                type: "emit_inbound",
+                label: `question-${id}`,
+                frame: {
+                  id,
+                  method: "item/tool/requestUserInput",
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    itemId: `item-${id}`,
+                    questions: [
+                      {
+                        id: "choice",
+                        header: "Choice",
+                        question: "Proceed?",
+                        isOther: true,
+                        isSecret: false,
+                        options: [],
+                      },
+                    ],
+                  },
+                },
+              }),
+            ),
+            ...[
+              { threadId: "wrong-thread", requestId: 72 },
+              { threadId: nativeThreadId, requestId: "72" },
+              { threadId: nativeThreadId, requestId: 71 },
+            ].map(
+              (params): CodexReplay.CodexAppServerReplayEntry => ({
+                type: "emit_inbound",
+                label: "serverRequest/resolved",
+                frame: { method: "serverRequest/resolved", params },
+              }),
+            ),
+          ];
+          const harness = yield* makeCodexReplayHarness(
+            makeCodexReplayTranscript({ scenario: "rpc-resolution", entries }),
+          );
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-rpc-resolution"),
+              text: "Ask questions.",
+            }),
+          );
+          yield* awaitUntil(
+            () =>
+              harness.events.some(
+                (event) =>
+                  event.type === "runtime_request.updated" &&
+                  event.runtimeRequest.status === "cancelled",
+              ),
+            "provider question cancellation",
+          );
+          const updates = harness.events.filter(
+            (event) => event.type === "runtime_request.updated",
+          );
+          assert.equal(
+            updates.filter((event) => event.runtimeRequest.status === "cancelled").length,
+            1,
+          );
+          assert.equal(
+            updates.find((event) => event.runtimeRequest.status === "cancelled")?.runtimeRequest
+              .nativeRequestRef?.nativeId,
+            "71",
+          );
+          assert.equal(
+            updates.findLast((event) => event.runtimeRequest.nativeRequestRef?.nativeId === "72")
+              ?.runtimeRequest.status,
+            "pending",
+          );
+          const item = harness.events.findLast(
+            (event) =>
+              event.type === "turn_item.updated" &&
+              event.turnItem.nativeItemRef?.nativeId === "item-71",
+          );
+          assert.equal(
+            item?.type === "turn_item.updated" ? item.turnItem.status : undefined,
+            "cancelled",
+          );
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+  );
+
+  it.effect("projects async questions with stable identity without blocking turn completion", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const question = {
+          id: "async-call",
+          text: "",
+          questions: [
+            { title: "Which café?", options: ["北", "South"] },
+            { title: "Anything else?" },
+          ],
+        };
+        const harness = yield* makeCodexReplayHarness(
+          finalAnswerTranscript("async-questions", [
+            question,
+            question,
+            { id: "final", text: "Work complete." },
+          ]),
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-async"),
+            text: "Reply with the requested recovery marker.",
+          }),
+        );
+        yield* awaitUntil(
+          () => harness.terminalEvents().length === 1,
+          "async question turn terminal",
+        );
+        const requests = harness.events.filter((event) => event.type === "runtime_request.updated");
+        assert.equal(requests.length, 2);
+        assert.equal(requests[0]?.runtimeRequest.id, requests[1]?.runtimeRequest.id);
+        assert.equal(requests[0]?.runtimeRequest.isBlocking, false);
+        assert.deepEqual(requests[0]?.runtimeRequest.responseCapability, {
+          type: "message",
+          providerThreadId: harness.providerThread.id,
+        });
+        const item = harness.events.find(
+          (event) =>
+            event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+        );
+        assert.isTrue(
+          item?.type === "turn_item.updated" && item.turnItem.type === "user_input_request",
+        );
+        if (item?.type === "turn_item.updated" && item.turnItem.type === "user_input_request") {
+          assert.equal(item.turnItem.questions[0]?.question, "Which café?");
+          assert.equal(item.turnItem.questions[0]?.options[0]?.label, "北");
+          assert.deepEqual(item.turnItem.questions[1]?.options, []);
+        }
+        assert.deepEqual(
+          assistantMessages(harness.events).map((event) => event.message.text),
+          ["Work complete."],
         );
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),

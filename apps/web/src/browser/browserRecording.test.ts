@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 const {
   events,
+  toastAdd,
   frameSubscription,
   onFrame,
   registrySet,
@@ -27,6 +28,7 @@ const {
   };
   return {
     events,
+    toastAdd: vi.fn(),
     frameSubscription,
     onFrame: vi.fn((listener: (frame: Frame) => void) => {
       frameSubscription.listener = listener;
@@ -69,6 +71,8 @@ const {
   };
 });
 
+vi.mock("~/components/ui/toast", () => ({ toastManager: { add: toastAdd } }));
+
 vi.mock("~/components/preview/previewBridge", () => ({
   previewBridge: {
     recording: { onFrame, save, startScreencast, stopScreencast },
@@ -87,6 +91,8 @@ vi.mock("./browserSurfaceStore", () => ({
 
 import {
   BROWSER_RECORDING_FIRST_FRAME_SIZE_TIMEOUT_MS,
+  BROWSER_RECORDING_MAX_DURATION_MS,
+  BROWSER_RECORDING_MAX_BYTES,
   BROWSER_RECORDING_STARTUP_SETTLE_TIMEOUT_MS,
   BrowserRecordingConflictError,
   findActiveBrowserRecordingRuntimeTabId,
@@ -102,6 +108,10 @@ class FakeMediaRecorder {
     return true;
   }
 
+  static latest: FakeMediaRecorder;
+  constructor() {
+    FakeMediaRecorder.latest = this;
+  }
   state: RecordingState = "inactive";
   private readonly listeners = new Map<string, Set<EventListenerOrEventListenerObject>>();
 
@@ -109,6 +119,14 @@ class FakeMediaRecorder {
     const listeners = this.listeners.get(type) ?? new Set();
     listeners.add(listener);
     this.listeners.set(type, listeners);
+  }
+
+  data(blob: Blob): void {
+    for (const listener of this.listeners.get("dataavailable") ?? []) {
+      const event = { data: blob } as BlobEvent;
+      if (typeof listener === "function") listener(event);
+      else listener.handleEvent(event);
+    }
   }
 
   start(): void {
@@ -177,6 +195,28 @@ describe("browser recording", () => {
     vi.unstubAllGlobals();
   });
 
+  it("automatically saves at the duration limit and clears its active state", async () => {
+    vi.useFakeTimers();
+    await startBrowserRecording("recording-tab");
+    await vi.advanceTimersByTimeAsync(BROWSER_RECORDING_MAX_DURATION_MS);
+    expect(save).toHaveBeenCalledOnce();
+    expect(readActiveBrowserRecordingTabIds().size).toBe(0);
+    expect(toastAdd).toHaveBeenCalledWith(expect.objectContaining({ title: "Recording saved" }));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("stops and saves when accumulated media reaches the memory bound", async () => {
+    await startBrowserRecording("recording-tab");
+    // The native encoder's blob size triggers the limit without allocating100MiB in the test.
+    const chunk = new Blob(["encoded-test-frame"]);
+    Object.defineProperty(chunk, "size", { value: BROWSER_RECORDING_MAX_BYTES });
+    FakeMediaRecorder.latest.data(chunk);
+    await stopBrowserRecording("recording-tab");
+    expect(save).toHaveBeenCalledOnce();
+    expect(readActiveBrowserRecordingTabIds().size).toBe(0);
+    expect(toastAdd).toHaveBeenCalledWith(expect.objectContaining({ title: "Recording saved" }));
+  });
+
   it("starts recording for a visible tab", async () => {
     await startBrowserRecording("recording-tab");
 
@@ -228,7 +268,8 @@ describe("browser recording", () => {
     const canvas = {
       width: 0,
       height: 0,
-      captureStream: () => {
+      captureStream: (frameRate: number) => {
+        expect(frameRate).toBe(30);
         capturedStreamSize = { width: canvas.width, height: canvas.height };
         return {};
       },

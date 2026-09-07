@@ -1,6 +1,7 @@
 import { assert, it, vi } from "@effect/vitest";
 import {
   MessageId,
+  CommandId,
   NodeId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -82,6 +83,22 @@ it.effect("expires orphaned runtime requests before command readiness", () => {
     thread: { id: threadId },
     runtimeRequests: [
       {
+        id: RuntimeRequestId.make("request_undelivered"),
+        nodeId: NodeId.make("node_undelivered"),
+        status: "resolved",
+        isBlocking: false,
+        responseMessageId: MessageId.make("saved-answer"),
+        responseCommandId: CommandId.make("answer-command"),
+        responseCapability: { type: "message", providerThreadId: ProviderThreadId.make("origin") },
+      },
+      {
+        id: RuntimeRequestId.make("request_async"),
+        nodeId: NodeId.make("node_async"),
+        status: "pending",
+        isBlocking: false,
+        responseCapability: { type: "message", providerThreadId: ProviderThreadId.make("origin") },
+      },
+      {
         id: RuntimeRequestId.make("request_orphaned"),
         nodeId: NodeId.make("node_orphaned"),
         status: "pending",
@@ -92,6 +109,7 @@ it.effect("expires orphaned runtime requests before command readiness", () => {
     providerThreads: [],
     runs: [],
     nodes: [],
+    turnItems: [],
   } as unknown as OrchestrationV2ThreadProjection;
   const layer = ProviderRuntimeRecovery.layer.pipe(
     Layer.provide(
@@ -110,6 +128,10 @@ it.effect("expires orphaned runtime requests before command readiness", () => {
         IdAllocator.layer,
         Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({ runOnce: Effect.succeed(false) }),
         Layer.mock(EffectOutbox.EffectOutboxV2)({
+          listByCommandId: () =>
+            Effect.succeed([
+              { request: { type: "provider-turn.steer" }, status: "running" },
+            ] as never),
           reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
         }),
       ),
@@ -120,6 +142,20 @@ it.effect("expires orphaned runtime requests before command readiness", () => {
     const command = committedInput;
     assert.isNotNull(command);
     if (command === null) return;
+    assert.isFalse(
+      command.events.some(
+        (event) => event.type === "runtime-request.updated" && event.payload.id === "request_async",
+      ),
+    );
+    const retriable = command.events.find(
+      (event) =>
+        event.type === "runtime-request.updated" && event.payload.id === "request_undelivered",
+    );
+    assert.isDefined(retriable);
+    if (retriable?.type === "runtime-request.updated") {
+      assert.equal(retriable.payload.status, "pending");
+      assert.equal(retriable.payload.responseMessageId, "saved-answer");
+    }
     assert.equal(command?.events[0]?.type, "runtime-request.updated");
     if (command?.events[0]?.type === "runtime-request.updated") {
       assert.equal(command.events[0].payload.status, "expired");

@@ -32,6 +32,7 @@ import {
 import { layerFromStores as eventSinkLayer } from "../EventSink.ts";
 import { layer as eventStoreLayer } from "../EventStore.ts";
 import { layer as idAllocatorLayer } from "../IdAllocator.ts";
+import { layer as questionAnswerDeliveryLayer } from "../QuestionAnswerDelivery.ts";
 import { layer as orchestratorLayer } from "../Orchestrator.ts";
 import { layer as projectionStoreLayer } from "../ProjectionStore.ts";
 import { OrchestratorV2, type OrchestratorV2Error } from "../Orchestrator.ts";
@@ -332,6 +333,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   const providerTurnControlServiceProvided = providerTurnControlServiceLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        questionAnswerDeliveryLayer,
         eventSinkProvided,
         idAllocatorLayer,
         storesLayer,
@@ -378,6 +380,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
   const orchestratorProvided = orchestratorLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        questionAnswerDeliveryLayer,
         checkpointServiceProvided,
         commandPolicyLayer,
         contextHandoffServiceProvided,
@@ -413,7 +416,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     ),
   );
   const effectWorkerProvided = effectWorkerLayer.pipe(
-    Layer.provide(Layer.merge(storesLayer, effectExecutorProvided)),
+    Layer.provide(Layer.mergeAll(storesLayer, effectExecutorProvided, questionAnswerDeliveryLayer)),
   );
   const replayRuntime = Layer.merge(orchestratorProvided, effectWorkerProvided);
 

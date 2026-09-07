@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "updatedAt": "2026-09-07T00:00:00Z",
+  "models": {
+    "codex": {
+      "gpt-6-astra": "current",
+      "gpt-5.6-sol": "current",
+      "gpt-5.6-terra": "current",
+      "gpt-5.6-luna": "current",
+      "gpt-daybreak-blue-latest": "current",
+      "gpt-daybreak-red-latest": "current",
+      "gpt-5.5": "legacy",
+      "gpt-5.4": "legacy",
+      "gpt-5.4-mini": "legacy",
+      "gpt-5.3-codex": "legacy",
+      "gpt-5.3-codex-spark": "legacy",
+      "gpt-5.2": "legacy",
+      "gpt-5.2-codex": "legacy"
+    }
+  }
+}

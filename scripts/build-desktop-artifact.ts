@@ -703,6 +703,7 @@ interface StagePackageJson {
   readonly version: string;
   readonly buildVersion: string;
   readonly pathwayCommitHash: string;
+  readonly pathwayWebAuthnKeychainGroup?: string;
   readonly private: true;
   readonly packageManager: string;
   readonly description: string;
@@ -939,6 +940,10 @@ export function renderMacPasskeyEntitlements(
     <string>${escapeXml(`${configuration.teamId}.${configuration.appId}`)}</string>
     <key>com.apple.developer.team-identifier</key>
     <string>${escapeXml(configuration.teamId)}</string>
+    <key>keychain-access-groups</key>
+    <array>
+      <string>${escapeXml(`${configuration.teamId}.${configuration.appId}.webauthn`)}</string>
+    </array>
     <key>com.apple.developer.associated-domains</key>
     <array>
 ${associatedDomains}
@@ -2096,6 +2101,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     version: appVersion,
     buildVersion: appVersion,
     pathwayCommitHash: commitHash,
+    ...(macPasskeySigning
+      ? {
+          pathwayWebAuthnKeychainGroup: `${macPasskeySigning.teamId}.${macPasskeySigning.appId}.webauthn`,
+        }
+      : {}),
     private: true,
     packageManager: rootPackageJson.packageManager,
     description: "Pathway desktop build",
