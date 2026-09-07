@@ -649,13 +649,6 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
-    if (
-      timelineEntry.kind === "event" &&
-      turnItemIsWorkspacePreparation(timelineEntry.projectedItem.item) &&
-      timelineEntry.projectedItem.item.status === "completed"
-    )
-      continue;
-
     const turnFold = foldsByAnchorEntryId.get(timelineEntry.id);
     if (turnFold) {
       nextRows.push({
@@ -667,6 +660,13 @@ export function deriveMessagesTimelineRows(input: {
         expanded: input.expandedRunIds?.has(turnFold.runId) ?? false,
       });
     }
+
+    if (
+      timelineEntry.kind === "event" &&
+      turnItemIsWorkspacePreparation(timelineEntry.projectedItem.item) &&
+      timelineEntry.projectedItem.item.status === "completed"
+    )
+      continue;
 
     if (collapsedEntryIds.has(timelineEntry.id)) {
       continue;
@@ -778,8 +778,8 @@ export function deriveMessagesTimelineRows(input: {
   }
 
   if (
-    !isPreparingWorkspace &&
-    (input.isWorking || (input.workingPresentation ?? "activity") !== "activity")
+    (input.isWorking && !isPreparingWorkspace) ||
+    (input.workingPresentation ?? "activity") !== "activity"
   ) {
     nextRows.push({
       kind: "working",
