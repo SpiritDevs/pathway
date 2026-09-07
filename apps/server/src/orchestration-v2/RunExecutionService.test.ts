@@ -476,6 +476,12 @@ function reopenedChildRoutingFixture(key: string): {
     }) as ProviderAdapterV2Event;
   const childEvents: ReadonlyArray<ProviderAdapterV2Event> = [
     {
+      type: "app_thread.model_reported",
+      driver,
+      threadId: childThreadId,
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-astra" },
+    },
+    {
       type: "turn_item.updated",
       driver,
       turnItem: {

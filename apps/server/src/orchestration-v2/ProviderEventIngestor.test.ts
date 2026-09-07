@@ -10,6 +10,7 @@ import {
   type OrchestrationV2TurnItem,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSessionId,
   RunAttemptId,
   RunId,
   TurnItemId,
@@ -652,3 +653,43 @@ layer("ProviderEventIngestorV2", (it) => {
     }),
   );
 });
+
+it.effect(
+  "applies reported child configuration without overwriting user-owned thread metadata",
+  () =>
+    Effect.gen(function* () {
+      const ingestor = yield* ProviderEventIngestorV2;
+      const eventSink = yield* EventSinkV2;
+      const projectionStore = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const created = yield* threadCreatedEvent(now);
+      yield* eventSink.write({ events: [created] });
+      const before = yield* projectionStore.getThreadProjection(created.threadId);
+      const selection = {
+        instanceId: modelSelection.instanceId,
+        model: "gpt-6-astra",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      };
+      const stored = yield* ingestor.ingestNormalized({
+        threadId: created.threadId,
+        providerSessionId: ProviderSessionId.make("reported-model-session"),
+        providerInstanceId: modelSelection.instanceId,
+        event: {
+          type: "app_thread.model_reported",
+          driver: CODEX_DRIVER,
+          threadId: created.threadId,
+          modelSelection: selection,
+        },
+      });
+      const after = yield* projectionStore.getThreadProjection(created.threadId);
+      assert.equal(stored[0]?.event.type, "thread.model-reported");
+      assert.deepEqual(after.thread.modelSelection, selection);
+      assert.equal(after.thread.title, before.thread.title);
+      assert.deepEqual(after.thread.lineage, before.thread.lineage);
+      assert.equal(after.thread.archivedAt, before.thread.archivedAt);
+      assert.deepEqual(
+        (yield* projectionStore.getThreadShell(created.threadId))?.modelSelection,
+        selection,
+      );
+    }).pipe(Effect.provide(TestLayer)),
+);

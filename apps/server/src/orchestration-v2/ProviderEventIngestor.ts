@@ -150,6 +150,14 @@ export const layer: Layer.Layer<ProviderEventIngestorV2, never, EventSinkV2 | Id
       const normalize: ProviderEventIngestorV2Shape["normalize"] = (input) =>
         Effect.gen(function* () {
           switch (input.event.type) {
+            case "app_thread.model_reported":
+              return [
+                yield* makeDomainEvent(input, {
+                  type: "thread.model-reported",
+                  threadId: input.event.threadId,
+                  payload: { modelSelection: input.event.modelSelection },
+                }),
+              ];
             case "app_thread.created":
               return [
                 yield* makeDomainEvent(input, {

@@ -201,6 +201,8 @@ export function applyToProjection(
   };
 
   switch (event.type) {
+    case "thread.model-reported":
+      return { ...base, thread: { ...base.thread, modelSelection: event.payload.modelSelection } };
     case "thread.created":
     case "thread.archived":
     case "thread.unarchived":
@@ -1133,6 +1135,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     const apply: ProjectionStoreV2Shape["apply"] = (event) =>
       Effect.gen(function* () {
         switch (event.type) {
+          case "thread.model-reported":
+            // The shared thread timestamp update below applies the narrow configuration patch.
+            break;
           case "thread.created":
           case "thread.archived":
           case "thread.unarchived":
@@ -1963,7 +1968,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           const row = rows[0];
           if (row !== undefined) {
             const thread = yield* decodeThreadPayload(row.payload_json);
-            const updatedThread = { ...thread, updatedAt: event.occurredAt };
+            const updatedThread = {
+              ...thread,
+              ...(event.type === "thread.model-reported"
+                ? { modelSelection: event.payload.modelSelection }
+                : {}),
+              updatedAt: event.occurredAt,
+            };
             const payloadJson = yield* encodeThreadPayload(updatedThread);
             yield* sql`
               UPDATE orchestration_v2_projection_threads

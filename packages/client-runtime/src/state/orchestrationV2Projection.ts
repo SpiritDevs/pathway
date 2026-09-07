@@ -104,6 +104,15 @@ export function applyOrchestrationV2ProjectionEvent(
 
   const base = { ...projection, updatedAt: event.occurredAt };
   switch (event.type) {
+    case "thread.model-reported":
+      return {
+        ...base,
+        thread: {
+          ...base.thread,
+          modelSelection: event.payload.modelSelection,
+          updatedAt: event.occurredAt,
+        },
+      };
     case "thread.created":
     case "thread.archived":
     case "thread.unarchived":

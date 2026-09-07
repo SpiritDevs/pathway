@@ -551,6 +551,22 @@ describe("orchestration V2 contracts", () => {
       updatedAt: now,
     });
 
+    expect(subagent.usage).toBeUndefined();
+    expect(subagent.activationCount).toBeUndefined();
+    const observed = decodeOrchestrationV2Subagent({
+      ...subagent,
+      activationCount: 2,
+      usage: { totalTokens: 160, inputTokens: 140, outputTokens: 20 },
+      nickname: "Ada",
+      role: "reviewer",
+    });
+    expect(observed.activationCount).toBe(2);
+    expect(observed.usage?.totalTokens).toBe(160);
+    expect(observed.nickname).toBe("Ada");
+    expect(() => decodeOrchestrationV2Subagent({ ...subagent, activationCount: -1 })).toThrow();
+    expect(() =>
+      decodeOrchestrationV2Subagent({ ...subagent, usage: { totalTokens: -1 } }),
+    ).toThrow();
     expect(subagent.origin).toBe("provider_native");
     expect(subagent.progress).toBe("Inspecting package metadata");
     expect(subagent.childThreadId).toBeNull();

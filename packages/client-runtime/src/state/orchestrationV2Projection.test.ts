@@ -4,6 +4,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2TurnItem,
+  EventId,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -102,6 +103,24 @@ const emptyProjection = {
 } as OrchestrationV2ThreadProjection;
 
 describe("applyOrchestrationV2ProjectionEvent", () => {
+  it("patches reported configuration without resetting titles or other metadata", () => {
+    const updatedAt = DateTime.makeUnsafe("2026-06-20T01:00:00.000Z");
+    const modelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-6-astra",
+      options: [],
+    };
+    const event: OrchestrationV2DomainEvent = {
+      id: EventId.make("event-reported-model"),
+      type: "thread.model-reported",
+      threadId,
+      occurredAt: updatedAt,
+      payload: { modelSelection },
+    };
+    const result = applyOrchestrationV2ProjectionEvent(emptyProjection, event);
+    expect(result?.thread).toEqual({ ...emptyProjection.thread, modelSelection, updatedAt });
+  });
+
   it("applies thread lifecycle payloads instead of leaving stale metadata", () => {
     const archivedAt = DateTime.makeUnsafe("2026-06-20T01:00:00.000Z");
     const event = {
