@@ -362,7 +362,10 @@ describe("V2 session presentation", () => {
         expect(preparationEntries.map((entry) => entry.id)).toEqual(
           entries
             .filter(
-              (entry) => workspaceKind === "worktree" || entry.id !== workspacePreparationItem.id,
+              (entry) =>
+                workspaceKind === undefined ||
+                workspaceKind === "worktree" ||
+                entry.id !== workspacePreparationItem.id,
             )
             .map((entry) => entry.id),
         );

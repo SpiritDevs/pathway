@@ -577,10 +577,11 @@ export function deriveTimelineEntriesFromVisibleTurnItems(input: {
 
   for (const row of input.visibleTurnItems) {
     const { item } = row;
-    // Only new worktrees need a setup card. Other launches use the normal activity status.
+    // Known existing workspaces use normal activity. Older servers omit preparation metadata.
     if (
       turnItemIsWorkspacePreparation(item) &&
-      item.workspacePreparation?.workspaceKind !== "worktree"
+      (item.workspacePreparation?.workspaceKind === "root" ||
+        item.workspacePreparation?.workspaceKind === "existing_worktree")
     ) {
       continue;
     }
