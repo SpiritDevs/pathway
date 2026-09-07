@@ -1517,10 +1517,17 @@ for (const action of ["retry", "work_locally"] as const) {
               command: `launch:${action}`,
               thread: `thread:${action}`,
               message: "Keep this request",
-              workspace: { type: "worktree", baseRef: "main" },
+              workspace: { type: "worktree", baseRef: "main", branch: "feature/requested" },
             }),
           );
           yield* Deferred.await(failed);
+          yield* threads.dispatch({
+            type: "thread.settle",
+            commandId: CommandId.make(`settle:${action}`),
+            threadId: launched.threadId,
+          });
+          const settled = yield* threads.getThreadProjection(launched.threadId);
+          assert.equal(settled.thread.settledOverride, "settled");
           const runId = launched.projection.runs[0]!.id;
           const control = {
             commandId: CommandId.make(`recover:${action}`),
@@ -1532,6 +1539,13 @@ for (const action of ["retry", "work_locally"] as const) {
           yield* Deferred.await(released);
           yield* launches.controlPreparation(control);
           const projection = yield* threads.getThreadProjection(launched.threadId);
+          assert.equal(projection.thread.settledOverride, null);
+          assert.equal(projection.thread.settledAt, null);
+          const priorFailure = projection.turnItems.find((item) => item.type === "error");
+          assert.equal(priorFailure?.status, "completed");
+          assert.equal(priorFailure?.title, "Workspace preparation restarted");
+          if (action === "retry")
+            assert.equal(harness.createWorktree.mock.calls[1]?.[0].newRefName, "feature/requested");
           assert.equal(projection.messages.length, 1);
           assert.equal(projection.messages[0]?.text, "Keep this request");
           assert.equal(projection.runs.length, 1);

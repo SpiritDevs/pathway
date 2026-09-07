@@ -1036,6 +1036,7 @@ export const OrchestrationV2WorkspacePreparation = Schema.Struct({
     Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
   ),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  requestedBranch: Schema.optional(Schema.String),
   baseRef: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
   branch: Schema.optional(Schema.String),

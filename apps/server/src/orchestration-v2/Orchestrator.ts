@@ -6486,6 +6486,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         providerInstanceId: state.run.providerInstanceId,
         occurredAt: now,
       };
+      if (projection.thread.settledOverride !== null) {
+        yield* emitEvent({
+          type: "thread.unsettled",
+          threadId: command.threadId,
+          providerInstanceId: projection.thread.providerInstanceId,
+          occurredAt: now,
+          payload: { ...projection.thread, settledOverride: null, settledAt: null, updatedAt: now },
+        });
+      }
+      const failureId = idAllocator.derive.turnItemFromProviderItem({
+        driver: state.providerThread.driver,
+        nativeItemId: `workspace-preparation-failure:${state.run.id}`,
+      });
+      const failureItem = projection.turnItems.find((item) => item.id === failureId);
+      if (failureItem?.type === "error") {
+        yield* emitEvent({
+          ...common,
+          type: "turn-item.updated",
+          payload: {
+            ...failureItem,
+            status: "completed",
+            title: "Workspace preparation restarted",
+            updatedAt: now,
+            completedAt: now,
+          },
+        });
+      }
       yield* emitEvent({
         ...common,
         type: "run-attempt.updated",

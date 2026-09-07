@@ -362,6 +362,29 @@ struct PathwayThreadConversationTests {
         #expect(!model.canSend)
     }
 
+    @Test(arguments: ["retry", "work_locally"])
+    func failedWorkspaceRecoveryTargetsTheFailedRun(action: String) async throws {
+        var sent: [String: JSONValue]?
+        let model = makeModel { method, payload in
+            #expect(method == "orchestration.controlWorkspacePreparation")
+            sent = payload.objectValue
+            return .object([:])
+        }
+        model.installSnapshot(snapshot(status: "failed"), sequence: 1)
+        let item = try #require(PathwayTimelineItem(json: .object([
+            "id": .string("workspace"), "type": .string("command_execution"),
+            "threadId": .string(model.threadID), "runId": .string("run-1"), "status": .string("failed"),
+            "workspacePreparation": .object(["workspaceKind": .string("worktree"), "phase": .string("worktree")])
+        ])))
+        #expect(model.activeRunID == nil)
+        #expect(model.canRecoverWorkspacePreparation(item))
+        try await model.controlWorkspacePreparation(action: action, runID: item.runID)
+        #expect(sent?["runId"]?.stringValue == "run-1")
+        #expect(sent?["action"]?.stringValue == action)
+        model.installSnapshot(snapshot(status: "starting"), sequence: 2)
+        #expect(!model.canRecoverWorkspacePreparation(item))
+    }
+
     private func makeModel(request: @escaping PathwayAgentThreadModel.Request) -> PathwayAgentThreadModel {
         let thread = makeAgentThread()
         let environment = PathwayCompanyEnvironment(companyId: thread.companyId, environment: PathwayEnvironment(id: "environment", environmentId: thread.environmentId,

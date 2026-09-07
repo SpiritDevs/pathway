@@ -339,6 +339,7 @@ export const make = Effect.gen(function* () {
               : {
                   type: "worktree",
                   baseRef: preparation.baseRef,
+                  branch: preparation.requestedBranch ?? current.thread.branch ?? undefined,
                   startFromOrigin: preparation.startFromOrigin,
                 },
         };
@@ -445,6 +446,7 @@ export const make = Effect.gen(function* () {
                 ...(input.workspaceStrategy.type === "worktree"
                   ? {
                       baseRef: input.workspaceStrategy.baseRef,
+                      requestedBranch: input.workspaceStrategy.branch,
                       startFromOrigin: input.workspaceStrategy.startFromOrigin ?? false,
                     }
                   : {}),
