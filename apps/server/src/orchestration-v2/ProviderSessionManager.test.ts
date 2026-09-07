@@ -10,7 +10,10 @@ import {
   type OrchestrationV2ProviderThread,
   ProviderDriverKind,
   ProviderInstanceId,
-  type ProviderSessionId,
+  ProviderSessionId,
+  ProviderTurnId,
+  ProviderThreadId,
+  NodeId,
   ThreadId,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
@@ -2300,6 +2303,72 @@ it.effect(
       yield* effect.pipe(
         Effect.provide(
           makeTestLayer({ state, idleTimeoutMs: 1000, capabilities: ExclusiveCapabilities }),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 gives a resumed child a fresh idle window and still releases completed children",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const pending = yield* Ref.make(false);
+      yield* Effect.gen(function* () {
+        const manager = yield* ProviderSessionManagerV2;
+        const idAllocator = yield* IdAllocatorV2;
+        const eventSink = yield* EventSinkV2;
+        const threadId = ThreadId.make("delayed-child-parent");
+        const providerSessionId = ProviderSessionId.make("delayed-child-session");
+        const now = yield* DateTime.now;
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        const runtime = yield* manager.open({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const subscription = yield* runtime.subscribeEvents!;
+        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId))!;
+        const childTurn = {
+          id: ProviderTurnId.make("delayed-child-turn"),
+          providerThreadId: ProviderThreadId.make("delayed-child-thread"),
+          nodeId: NodeId.make("delayed-child-node"),
+          runAttemptId: null,
+          nativeTurnRef: null,
+          ordinal: 2,
+          status: "running" as const,
+          startedAt: now,
+          completedAt: null,
+        };
+        // The child resumes before the old idle deadline, with no app-owned root turn.
+        yield* TestClock.adjust("900 millis");
+        yield* Ref.set(pending, true);
+        yield* Queue.offer(queue, {
+          type: "provider_turn.updated",
+          driver: CODEX_DRIVER,
+          providerTurn: childTurn,
+        });
+        yield* subscription.events.pipe(Stream.runHead);
+        yield* TestClock.adjust("2 seconds");
+        assert.equal((yield* Ref.get(state)).closeCount, 0);
+        yield* Ref.set(pending, false);
+        yield* Queue.offer(queue, {
+          type: "provider_turn.updated",
+          driver: CODEX_DRIVER,
+          providerTurn: { ...childTurn, status: "completed", completedAt: yield* DateTime.now },
+        });
+        yield* subscription.events.pipe(Stream.runHead);
+        yield* TestClock.adjust("900 millis");
+        assert.equal((yield* Ref.get(state)).closeCount, 0);
+        yield* TestClock.adjust("100 millis");
+        assert.equal((yield* Ref.get(state)).closeCount, 1);
+        assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
+      }).pipe(
+        Effect.provide(
+          makeTestLayer({ state, idleTimeoutMs: 1000, hasPendingBackgroundWork: Ref.get(pending) }),
         ),
       );
     }),
