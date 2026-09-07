@@ -40,7 +40,7 @@ export function selectSidebarDraftRows(input: {
       rows.push({ draftId: DraftId.make(draftKey), session, composer });
     } else if (draftKey === input.routeDraftId) {
       if (input.frozenActive.routeDraftId === draftKey && input.frozenActive.row !== null) {
-        rows.push(input.frozenActive.row);
+        rows.push({ ...input.frozenActive.row, session });
       }
     } else if (composerDraftHasUserContent(composer)) {
       rows.push({ draftId: DraftId.make(draftKey), session, composer });

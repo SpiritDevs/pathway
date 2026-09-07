@@ -1,18 +1,18 @@
 import type { ScopedProjectRef } from "@spiritdevs/contracts";
 
-import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { WorkspaceProjectSelector } from "./WorkspaceProjectSelector";
 
 interface DraftHeroHeadlineProps {
   readonly activeProjectRef: ScopedProjectRef | null;
   readonly activeProjectTitle: string | null;
+  readonly onSelectProject: (projectRef: ScopedProjectRef) => void | Promise<void>;
 }
 
 export function DraftHeroHeadline({
   activeProjectRef,
   activeProjectTitle,
+  onSelectProject,
 }: DraftHeroHeadlineProps) {
-  const handleNewThread = useNewThreadHandler();
   const hasResolvedProject = activeProjectTitle !== null;
   const projectSelector = (
     <WorkspaceProjectSelector
@@ -20,7 +20,7 @@ export function DraftHeroHeadline({
       activeProjectTitle={activeProjectTitle}
       ariaLabel={hasResolvedProject ? "Change project" : "Choose a project"}
       triggerClassName="pointer-events-auto inline-block max-w-64 truncate border-foreground/60 border-b border-dotted align-baseline text-foreground transition-colors hover:border-foreground/80 focus-visible:rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-      onSelectProject={(projectRef) => handleNewThread(projectRef, { replace: true })}
+      onSelectProject={onSelectProject}
     />
   );
 

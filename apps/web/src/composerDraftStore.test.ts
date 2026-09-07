@@ -1131,6 +1131,65 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(draftByKey(draftId)?.prompt).toBe("keep me around");
   });
 
+  it.each([TEST_ENVIRONMENT_ID, OTHER_TEST_ENVIRONMENT_ID])(
+    "moves a draft to a different project in %s without overwriting either message",
+    (environmentId) => {
+      const store = useComposerDraftStore.getState();
+      const destination = scopeProjectRef(environmentId, ProjectId.make("destination"));
+      store.setProjectDraftThreadId(projectRef, draftId, {
+        threadId,
+        branch: "feature/original",
+        worktreePath: "/original/worktree",
+        envMode: "worktree",
+      });
+      store.setPrompt(draftId, "Move this unfinished message");
+      store.addImage(draftId, makeImage({ id: "moving-image", previewUrl: "blob:moving-image" }));
+      const originalComposer = store.getComposerDraft(draftId);
+      store.setProjectDraftThreadId(destination, otherDraftId, { threadId: otherThreadId });
+      store.setPrompt(otherDraftId, "Already waiting here");
+
+      store.setLogicalProjectDraftThreadId(scopedProjectKey(destination), destination, draftId);
+
+      expect(store.getDraftSessionByLogicalProjectKey(scopedProjectKey(projectRef))).toBeNull();
+      expect(store.getDraftSessionByLogicalProjectKey(scopedProjectKey(destination))?.draftId).toBe(
+        draftId,
+      );
+      expect(store.getDraftSession(draftId)).toMatchObject({
+        environmentId,
+        projectId: destination.projectId,
+        threadId,
+        branch: null,
+        worktreePath: null,
+        envMode: "worktree",
+      });
+      expect(store.getComposerDraft(draftId)).toBe(originalComposer);
+      expect(store.getComposerDraft(otherDraftId)?.prompt).toBe("Already waiting here");
+
+      const state = useComposerDraftStore.getState();
+      const movedRow = selectSidebarDraftRows({
+        ...state,
+        serverThreadKeys: new Set(),
+        routeDraftId: draftId,
+        scopedProjectKeys: new Set([scopedProjectKey(destination)]),
+        frozenActive: {
+          routeDraftId: draftId,
+          row: {
+            draftId,
+            session: { ...store.getDraftSession(draftId)!, projectId: projectRef.projectId },
+            composer: originalComposer!,
+          },
+        },
+      }).find((row) => row.draftId === draftId);
+      expect(movedRow?.session.projectId).toBe(destination.projectId);
+
+      store.setLogicalProjectDraftThreadId(scopedProjectKey(projectRef), projectRef, draftId);
+      expect(store.getDraftSessionByLogicalProjectKey(scopedProjectKey(destination))).toBeNull();
+      expect(store.getDraftSession(draftId)?.projectId).toBe(projectRef.projectId);
+      expect(store.getComposerDraft(draftId)).toBe(originalComposer);
+      expect(store.getComposerDraft(otherDraftId)?.prompt).toBe("Already waiting here");
+    },
+  );
+
   it("shows a first send immediately and preserves it when navigating to another draft", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
