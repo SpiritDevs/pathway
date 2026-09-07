@@ -1,4 +1,11 @@
-import { CheckpointRef, EnvironmentId, MessageId, RunId, ThreadId } from "@spiritdevs/contracts";
+import {
+  CheckpointRef,
+  EnvironmentId,
+  MessageId,
+  RunId,
+  RuntimeRequestId,
+  ThreadId,
+} from "@spiritdevs/contracts";
 import { createRef, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
@@ -1774,6 +1781,64 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-v2-item-type="subagent"');
     expect(markup).toContain("Audited 12 packages");
     expect(markup).not.toContain('data-v2-subagent-result-disclosure="true"');
+  });
+
+  it("renders pending async input as a Question button instead of a banner", () => {
+    const requestId = RuntimeRequestId.make("async-question");
+    const questions = [
+      {
+        id: "verify",
+        header: "Verify",
+        question: "May I verify this?",
+        options: [],
+        multiSelect: false,
+      },
+    ];
+    const onOpen = vi.fn();
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        asyncQuestions={{
+          prompts: [
+            {
+              requestId,
+              createdAt: MESSAGE_CREATED_AT,
+              responseCapability: "message",
+              isBlocking: false,
+              questions,
+            },
+          ],
+          onOpen,
+        }}
+        timelineEntries={[
+          {
+            id: "input-request",
+            kind: "event",
+            createdAt: MESSAGE_CREATED_AT,
+            projectedItem: {
+              position: 0,
+              visibility: "local",
+              sourceThreadId: "thread-1",
+              sourceItemId: "input-request",
+              item: {
+                id: "input-request",
+                type: "user_input_request",
+                requestId,
+                status: "waiting",
+                questions,
+              },
+            } as never,
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('data-v2-item-type="user_input_request"');
+    expect(markup).toContain('data-slot="tooltip-trigger"');
+    expect(markup).toContain("Question</button>");
+    expect(markup).not.toContain("Input requested");
+    expect(markup).not.toContain("May I verify this?");
+    expect(onOpen).not.toHaveBeenCalled();
   });
 
   it("renders V2 provider failures as standalone error rows", async () => {

@@ -2071,6 +2071,13 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
       />
     );
   }
+  if (prompt && questions) {
+    return (
+      <div data-v2-item-type={item.type} data-v2-item-visibility={visibility}>
+        <ComposerAsyncQuestions prompts={[prompt]} onOpen={questions.onOpen} />
+      </div>
+    );
+  }
   const presentation = v2EventPresentation(item);
   const Icon = presentation.icon;
   if (item.type === "error") {
@@ -2134,13 +2141,6 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
                 lineBreaks
               />
             </div>
-          ) : null}
-          {prompt && questions ? (
-            <ComposerAsyncQuestions
-              key={prompt.requestId}
-              prompts={[prompt]}
-              onOpen={questions.onOpen}
-            />
           ) : null}
           {visibility === "inherited" ? (
             <p className="mt-1 font-mono text-[10px] text-muted-foreground/65">

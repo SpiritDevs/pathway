@@ -29,7 +29,7 @@ const prompt: PendingUserInput = {
 };
 
 describe("inline async question button", () => {
-  it("announces the question count without opening the panel", () => {
+  it("renders a Question button without opening the panel", () => {
     let opens = 0;
     const markup = renderToStaticMarkup(
       <ComposerAsyncQuestions
@@ -39,8 +39,8 @@ describe("inline async question button", () => {
         }}
       />,
     );
-    expect(markup).toContain("Questions");
-    expect(markup).toContain('tabular-nums">2');
+    expect(markup).toContain("Question");
+    expect(markup).toContain('data-slot="tooltip-trigger"');
     expect(markup).not.toContain("Which approach?");
     expect(markup).not.toContain("autofocus");
     expect(opens).toBe(0);
