@@ -3992,6 +3992,16 @@ export function captureComposerDraft(
   return saved;
 }
 
+function appendMissingDraftItems<T extends { id: string }>(restored: T[], current: readonly T[]) {
+  const restoredIds = new Set(restored.map((item) => item.id));
+  for (const item of current) {
+    if (!restoredIds.has(item.id)) {
+      restored.push(item);
+      restoredIds.add(item.id);
+    }
+  }
+}
+
 /** Reconcile pending sends using an authoritative, unfiltered environment shell. */
 export function reconcilePendingDraftSends(input: {
   status: EnvironmentShellStatus;
@@ -4047,16 +4057,18 @@ export function reconcilePendingDraftSends(input: {
           },
         );
         const current = state.draftsByThreadKey[draftKey];
-        // An invested next draft must not be overwritten during reconnect.
+        // Reload can persist both the pending snapshot and the composer before
+        // send clears it. Keep overlapping content once while retaining new input.
         if (composerDraftHasUserContent(current)) {
-          restored.prompt = [restored.prompt, current!.prompt].filter(Boolean).join("\n\n");
-          restored.images.push(...current!.images);
-          restored.persistedAttachments.push(...current!.persistedAttachments);
-          restored.terminalContexts.push(...current!.terminalContexts);
-          restored.elementContexts.push(...current!.elementContexts);
-          restored.issueContexts.push(...current!.issueContexts);
-          restored.previewAnnotations.push(...current!.previewAnnotations);
-          restored.reviewComments.push(...current!.reviewComments);
+          if (restored.prompt !== current!.prompt)
+            restored.prompt = [restored.prompt, current!.prompt].filter(Boolean).join("\n\n");
+          appendMissingDraftItems(restored.images, current!.images);
+          appendMissingDraftItems(restored.persistedAttachments, current!.persistedAttachments);
+          appendMissingDraftItems(restored.terminalContexts, current!.terminalContexts);
+          appendMissingDraftItems(restored.elementContexts, current!.elementContexts);
+          appendMissingDraftItems(restored.issueContexts, current!.issueContexts);
+          appendMissingDraftItems(restored.previewAnnotations, current!.previewAnnotations);
+          appendMissingDraftItems(restored.reviewComments, current!.reviewComments);
         }
         const next = edit();
         next.draftsByThreadKey[draftKey] = restored;

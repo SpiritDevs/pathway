@@ -1183,103 +1183,148 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(store.getDraftSession(draftId)).toBeNull();
   });
 
-  it("restores a reload-orphaned send only after a live owning shell confirms it is absent", () => {
+  it.each([false, true])(
+    "restores a reload-orphaned send once (composer cleared: %s)",
+    (cleared) => {
+      const store = useComposerDraftStore.getState();
+      store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+      store.setPrompt(draftId, "Editable prompt");
+      const issue = { id: "issue:1", key: "PW-1", title: "Fix it", url: "https://example.com/1" };
+      store.setIssueContexts(draftId, [issue]);
+      const terminal = makeTerminalContext({ id: "terminal-restore" });
+      const element = {
+        id: "element-restore",
+        threadId,
+        pickedAt: "2026-09-08T00:00:00.000Z",
+        pageUrl: "https://example.com",
+        pageTitle: null,
+        tagName: "button",
+        selector: "#send",
+        htmlPreview: "<button>Send</button>",
+        componentName: null,
+        source: null,
+        styles: "",
+      };
+      const annotation = {
+        id: "annotation-restore",
+        pageUrl: "https://example.com",
+        pageTitle: null,
+        comment: "Fix layout",
+        elements: [],
+        regions: [],
+        strokes: [],
+        styleChanges: [],
+        screenshot: {
+          dataUrl: "data:image/png;base64,YQ==",
+          width: 1,
+          height: 1,
+          cropRect: { x: 0, y: 0, width: 1, height: 1 },
+        },
+        createdAt: "2026-09-08T00:00:00.000Z",
+      };
+      const review = {
+        id: "review-restore",
+        sectionId: "file:app.ts",
+        sectionTitle: "File",
+        filePath: "app.ts",
+        startIndex: 1,
+        endIndex: 1,
+        rangeLabel: "L1",
+        text: "Keep this",
+        diff: "",
+      };
+      store.setTerminalContexts(draftId, [terminal]);
+      store.setElementContexts(draftId, [element]);
+      store.setPreviewAnnotations(draftId, [annotation]);
+      store.setReviewComments(draftId, [review]);
+      store.addImage(
+        draftId,
+        makeImage({ id: "restored-image", previewUrl: "data:image/png;base64,YQ==" }),
+      );
+      store.syncPersistedAttachments(draftId, [...captureComposerDraft(draftId).attachments]);
+      store.setDraftPendingSend(draftId, {
+        messageId: MessageId.make("interrupted"),
+        text: "Expanded provider context",
+        title: "Editable prompt",
+        createdAt: "2026-09-08T00:00:00.000Z",
+        recoveryDraft: captureComposerDraft(draftId),
+      });
+      if (cleared) store.clearComposerContent(draftId);
+      const merge = useComposerDraftStore.persist.getOptions().merge!;
+      useComposerDraftStore.setState(
+        merge(flushComposerDraftStorage(), useComposerDraftStore.getState()),
+      );
+      expect(store.getDraftSession(draftId)?.pendingSendNeedsReconciliation).toBe(true);
+      const input = {
+        environmentId: TEST_ENVIRONMENT_ID,
+        acceptedThreadIds: new Set<ThreadId>(),
+        activeDraftId: draftId,
+      };
+      reconcilePendingDraftSends({ ...input, status: "cached" });
+      expect(store.getDraftSession(draftId)?.pendingSend).not.toBeNull();
+      reconcilePendingDraftSends({
+        ...input,
+        status: "live",
+        environmentId: OTHER_TEST_ENVIRONMENT_ID,
+      });
+      expect(store.getDraftSession(draftId)?.pendingSend).not.toBeNull();
+      reconcilePendingDraftSends({ ...input, status: "live" });
+      expect(store.getDraftSession(draftId)?.pendingSend).toBeNull();
+      expect(store.getComposerDraft(draftId)?.prompt).toBe(
+        `${INLINE_TERMINAL_CONTEXT_PLACEHOLDER}Editable prompt`,
+      );
+      expect(store.getComposerDraft(draftId)?.issueContexts).toEqual([issue]);
+      expect(store.getComposerDraft(draftId)?.terminalContexts).toEqual([
+        { ...terminal, threadId, text: "" },
+      ]);
+      expect(store.getComposerDraft(draftId)?.elementContexts).toEqual([element]);
+      expect(store.getComposerDraft(draftId)?.previewAnnotations).toEqual([annotation]);
+      expect(store.getComposerDraft(draftId)?.reviewComments).toEqual([review]);
+      expect(store.getComposerDraft(draftId)?.images).toHaveLength(1);
+      expect(store.getComposerDraft(draftId)?.persistedAttachments).toHaveLength(1);
+      expect(store.getComposerDraft(draftId)?.images[0]?.previewUrl).toBe(
+        "data:image/png;base64,YQ==",
+      );
+    },
+  );
+
+  it("keeps new input alongside an interrupted send without duplicating shared attachments", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
-    store.setPrompt(draftId, "Editable prompt");
-    const issue = { id: "issue:1", key: "PW-1", title: "Fix it", url: "https://example.com/1" };
-    store.setIssueContexts(draftId, [issue]);
-    const terminal = makeTerminalContext({ id: "terminal-restore" });
-    const element = {
-      id: "element-restore",
-      threadId,
-      pickedAt: "2026-09-08T00:00:00.000Z",
-      pageUrl: "https://example.com",
-      pageTitle: null,
-      tagName: "button",
-      selector: "#send",
-      htmlPreview: "<button>Send</button>",
-      componentName: null,
-      source: null,
-      styles: "",
-    };
-    const annotation = {
-      id: "annotation-restore",
-      pageUrl: "https://example.com",
-      pageTitle: null,
-      comment: "Fix layout",
-      elements: [],
-      regions: [],
-      strokes: [],
-      styleChanges: [],
-      screenshot: {
-        dataUrl: "data:image/png;base64,YQ==",
-        width: 1,
-        height: 1,
-        cropRect: { x: 0, y: 0, width: 1, height: 1 },
-      },
-      createdAt: "2026-09-08T00:00:00.000Z",
-    };
-    const review = {
-      id: "review-restore",
-      sectionId: "file:app.ts",
-      sectionTitle: "File",
-      filePath: "app.ts",
-      startIndex: 1,
-      endIndex: 1,
-      rangeLabel: "L1",
-      text: "Keep this",
-      diff: "",
-    };
-    store.setTerminalContexts(draftId, [terminal]);
-    store.setElementContexts(draftId, [element]);
-    store.setPreviewAnnotations(draftId, [annotation]);
-    store.setReviewComments(draftId, [review]);
-    store.addImage(
-      draftId,
-      makeImage({ id: "restored-image", previewUrl: "data:image/png;base64,YQ==" }),
-    );
+    store.setPrompt(draftId, "First prompt");
+    store.addImage(draftId, makeImage({ id: "first", previewUrl: "data:image/png;base64,YQ==" }));
     store.setDraftPendingSend(draftId, {
       messageId: MessageId.make("interrupted"),
-      text: "Expanded provider context",
-      title: "Editable prompt",
+      text: "First prompt",
+      title: "First prompt",
       createdAt: "2026-09-08T00:00:00.000Z",
       recoveryDraft: captureComposerDraft(draftId),
     });
-    store.clearComposerContent(draftId);
+    store.setPrompt(draftId, "New input");
+    store.addImage(
+      draftId,
+      makeImage({ id: "second", name: "second.png", previewUrl: "data:image/png;base64,Yg==" }),
+    );
+    store.syncPersistedAttachments(draftId, [...captureComposerDraft(draftId).attachments]);
     const merge = useComposerDraftStore.persist.getOptions().merge!;
     useComposerDraftStore.setState(
       merge(flushComposerDraftStorage(), useComposerDraftStore.getState()),
     );
-    expect(store.getDraftSession(draftId)?.pendingSendNeedsReconciliation).toBe(true);
-    const input = {
-      environmentId: TEST_ENVIRONMENT_ID,
-      acceptedThreadIds: new Set<ThreadId>(),
-      activeDraftId: draftId,
-    };
-    reconcilePendingDraftSends({ ...input, status: "cached" });
-    expect(store.getDraftSession(draftId)?.pendingSend).not.toBeNull();
     reconcilePendingDraftSends({
-      ...input,
       status: "live",
-      environmentId: OTHER_TEST_ENVIRONMENT_ID,
+      environmentId: TEST_ENVIRONMENT_ID,
+      acceptedThreadIds: new Set(),
+      activeDraftId: draftId,
     });
-    expect(store.getDraftSession(draftId)?.pendingSend).not.toBeNull();
-    reconcilePendingDraftSends({ ...input, status: "live" });
-    expect(store.getDraftSession(draftId)?.pendingSend).toBeNull();
-    expect(store.getComposerDraft(draftId)?.prompt).toBe(
-      `${INLINE_TERMINAL_CONTEXT_PLACEHOLDER}Editable prompt`,
-    );
-    expect(store.getComposerDraft(draftId)?.issueContexts).toEqual([issue]);
-    expect(store.getComposerDraft(draftId)?.terminalContexts).toEqual([
-      { ...terminal, threadId, text: "" },
+    expect(store.getComposerDraft(draftId)?.prompt).toBe("First prompt\n\nNew input");
+    expect(store.getComposerDraft(draftId)?.images.map((item) => item.id)).toEqual([
+      "first",
+      "second",
     ]);
-    expect(store.getComposerDraft(draftId)?.elementContexts).toEqual([element]);
-    expect(store.getComposerDraft(draftId)?.previewAnnotations).toEqual([annotation]);
-    expect(store.getComposerDraft(draftId)?.reviewComments).toEqual([review]);
-    expect(store.getComposerDraft(draftId)?.images[0]?.previewUrl).toBe(
-      "data:image/png;base64,YQ==",
-    );
+    expect(store.getComposerDraft(draftId)?.persistedAttachments.map((item) => item.id)).toEqual([
+      "first",
+      "second",
+    ]);
   });
 
   it("finalizes an unvisited accepted send and cannot resurrect it after server deletion", () => {

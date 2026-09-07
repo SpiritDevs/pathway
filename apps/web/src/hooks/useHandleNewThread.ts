@@ -353,6 +353,8 @@ export function useNewThreadHandler() {
           // to reuse is still mapped at this point — reusing it here would
           // silently undo mint-fresh semantics.
           racedDraft.draftId !== storedDraftThread?.draftId &&
+          racedDraft.pendingSend == null &&
+          !composerDraftHasUserContent(getComposerDraft(racedDraft.draftId)) &&
           readThreadShell(scopeThreadRef(racedDraft.environmentId, racedDraft.threadId)) === null
         ) {
           // Same remap the reuse paths above perform: point the draft at the
