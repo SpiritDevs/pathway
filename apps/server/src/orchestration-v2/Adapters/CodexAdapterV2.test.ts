@@ -49,6 +49,7 @@ import {
   CODEX_DEFAULT_INSTANCE_ID,
   CODEX_DRIVER_KIND,
   codexBackgroundCommandDetail,
+  codexSubagentTitle,
   codexThreadRuntimeParams,
   type CodexAgentMessageDeltaUpdate,
   type CodexAppServerClientFactoryShape,
@@ -4044,6 +4045,20 @@ describe("CodexAdapterV2 collab agent status mapping", () => {
 });
 
 describe("CodexAdapterV2 subagent visibility", () => {
+  it.each([
+    ["/root/audit_server", "Audit server"],
+    ["/root/audit_client/check_accessibility", "Check accessibility"],
+    ["/root/desktop-updates", "Desktop updates"],
+    ["/root/API_review", "API review"],
+    ["  /root/ audit_server / ", "Audit server"],
+    ["review", "Review"],
+    ["/root/修复问题", "修复问题"],
+    [" / / ", null],
+    ["", null],
+  ] as const)("formats task path %s as %s", (path, title) => {
+    assert.equal(codexSubagentTitle(path), title);
+  });
+
   const childUserMessages = (
     events: ReadonlyArray<ProviderAdapterV2Event>,
     childThreadId: string,
@@ -4247,6 +4262,14 @@ describe("CodexAdapterV2 subagent visibility", () => {
         const finalUpdate = harness.subagentUpdates().at(-1);
         assert.equal(finalUpdate?.subagent.prompt, kickoffPrompt);
         assert.equal(finalUpdate?.subagent.status, "completed");
+        assert.equal(finalUpdate?.subagent.title, "Hello agent");
+        const createdChild = harness.events.find(
+          (event) => event.type === "app_thread.created" && event.appThread.id === childThread,
+        );
+        assert.equal(
+          createdChild?.type === "app_thread.created" ? createdChild.appThread.title : null,
+          "Hello agent",
+        );
       }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
     ),
   );
