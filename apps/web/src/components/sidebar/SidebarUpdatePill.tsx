@@ -7,7 +7,6 @@ import { ensureLocalApi } from "../../localApi";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
-  canCheckForUpdate,
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
@@ -106,7 +105,6 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
   const state = useDesktopUpdateState();
   const [dismissed, setDismissed] = useState(false);
   const [isActionPending, setIsActionPending] = useState(false);
-  const [checkAnimationKey, setCheckAnimationKey] = useState(0);
   const [isCheckAnimationLatched, setIsCheckAnimationLatched] = useState(false);
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
 
@@ -134,16 +132,10 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
     ? state
       ? getDesktopUpdateButtonTooltip(state)
       : "Update available"
-    : showCheckIcon
-      ? "Checking for updates…"
-      : "Check for updates";
-  const disabled = showCheckIcon
-    ? true
-    : showUpdateDetails
-      ? isDesktopUpdateButtonDisabled(state)
-      : !canCheckForUpdate(state);
+    : "Checking for updates…";
+  const disabled = showCheckIcon || action === "none" || isDesktopUpdateButtonDisabled(state);
   const isInteractionDisabled = disabled || isActionPending;
-  const visible = isElectron && (!dismissed || !showUpdateDetails);
+  const visible = isElectron && (showUpdateDetails ? !dismissed : showCheckIcon);
   const showArm64Warning = isElectron && shouldShowArm64IntelBuildWarning(state);
   const arm64Description =
     state && showArm64Warning ? getArm64IntelBuildWarningDescription(state) : null;
@@ -151,7 +143,7 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
   const handleAction = useCallback(async () => {
     const bridge = window.desktopBridge;
     if (!bridge || !state) return;
-    if (isInteractionDisabled) return;
+    if (isInteractionDisabled || action === "none") return;
 
     setIsActionPending(true);
 
@@ -233,35 +225,7 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
         .finally(() => setIsActionPending(false));
       return;
     }
-
-    if (!prefersReducedMotion) {
-      setIsCheckAnimationLatched(true);
-      setCheckAnimationKey((key) => key + 1);
-    }
-    void bridge
-      .checkForUpdate()
-      .then((result) => {
-        if (result.checked) return;
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not check for updates",
-            description:
-              result.state.message ?? "Automatic updates are not available in this build.",
-          }),
-        );
-      })
-      .catch((error) => {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not check for updates",
-            description: error instanceof Error ? error.message : "Update check failed.",
-          }),
-        );
-      })
-      .finally(() => setIsActionPending(false));
-  }, [action, isInteractionDisabled, prefersReducedMotion, state]);
+  }, [action, isInteractionDisabled, state]);
 
   const handleCheckAnimationIteration = useCallback(() => {
     setIsCheckAnimationLatched(
@@ -335,7 +299,7 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
                   onClick={handleAction}
                 >
                   <DesktopUpdateStatusIcon
-                    key={showCheckIcon ? checkAnimationKey : iconStatus}
+                    key={iconStatus}
                     downloadPercent={state?.downloadPercent ?? null}
                     isCheckAnimating={showCheckIcon && !prefersReducedMotion}
                     onCheckAnimationIteration={handleCheckAnimationIteration}
@@ -353,9 +317,7 @@ export function SidebarUpdatePill({ expanded }: { readonly expanded: boolean }) 
                             }`
                           : action === "download"
                             ? "Update available"
-                            : showCheckIcon
-                              ? "Checking for updates…"
-                              : "Check for updates"}
+                            : "Checking for updates…"}
                     </span>
                   ) : null}
                 </button>
