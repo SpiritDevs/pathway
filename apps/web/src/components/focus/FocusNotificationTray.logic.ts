@@ -81,7 +81,7 @@ export function buildFocusNotificationRows(input: {
           truncatedId(projectIdFromKey(notification.projectKey)),
         focusId: focus?.id ?? ALL_FOCUS_ID,
         focusName: focus?.name ?? "All",
-        unread: index < unreadCount,
+        unread: notification.isRead === undefined ? index < unreadCount : !notification.isRead,
       };
     });
 

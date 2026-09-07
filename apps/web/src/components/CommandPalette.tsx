@@ -1,5 +1,16 @@
 "use client";
 
+import { alertProjectScopeKey, alertThreadScopeKey } from "@spiritdevs/contracts/threadAlerts";
+import {
+  threadAlertMutationsAtom,
+  threadAlertPoliciesAtom,
+  threadAlertPoliciesReadyAtom,
+} from "../threadAlerts/state";
+import { bulkAlertChoices, threadPolicyView } from "../threadAlerts/policyUi";
+import { appAtomRegistry as alertRegistry } from "../rpc/atomRegistry";
+import { environmentThreadShells as alertThreadShells } from "../state/threads";
+import { environmentProjects as alertProjects } from "../state/projects";
+
 import {
   scopedProjectKey,
   scopeProjectRef,
@@ -506,6 +517,39 @@ function overlayModeForCommand(command: string | null): SearchOverlayMode | null
     : null;
 }
 
+async function toggleCurrentThreadAlerts(environmentId: string, threadId: string) {
+  const thread = alertRegistry
+    .get(alertThreadShells.threadShellsAtom)
+    .find((row) => row.environmentId === environmentId && row.id === threadId);
+  const mutations = alertRegistry.get(threadAlertMutationsAtom);
+  const policies = alertRegistry.get(threadAlertPoliciesAtom);
+  if (
+    !thread ||
+    !mutations ||
+    policies === null ||
+    !alertRegistry.get(threadAlertPoliciesReadyAtom)
+  )
+    return;
+  const project = alertRegistry
+    .get(alertProjects.projectsAtom)
+    .find((row) => row.environmentId === environmentId && row.id === thread.projectId);
+  const threadKey = alertThreadScopeKey(environmentId, threadId);
+  const view = threadPolicyView(
+    policies,
+    alertProjectScopeKey(
+      environmentId,
+      thread.projectId,
+      project?.repositoryIdentity?.canonicalKey,
+    ),
+    threadKey,
+  );
+  await mutations.upsert({
+    scopeKind: "thread",
+    scopeKey: threadKey,
+    choices: bulkAlertChoices(view.effective),
+  });
+}
+
 export function CommandPalette({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reduceCommandPaletteUiState, {
     open: false,
@@ -593,6 +637,21 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           agentThreadsView: isAgentThreadsPath(pathname),
         },
       });
+      if (command === "threadAlerts.toggle" && routeThreadRef) {
+        if (state.open) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) return;
+        void toggleCurrentThreadAlerts(routeThreadRef.environmentId, routeThreadRef.threadId).catch(
+          (error) =>
+            toastManager.add({
+              type: "error",
+              title: "Could not save thread alerts",
+              description: error instanceof Error ? error.message : "Try again.",
+            }),
+        );
+        return;
+      }
       if (command === "focus.cycle") {
         if (state.open || !isAgentThreadsPath(pathname)) return;
         event.preventDefault();
@@ -622,6 +681,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     activeFocusId,
+    routeThreadRef,
     keybindings,
     pathname,
     previewOpen,
@@ -1791,7 +1851,32 @@ function OpenCommandPaletteDialog(props: {
     pushPaletteView,
   ]);
 
+  const alertMutations = useAtomValue(threadAlertMutationsAtom);
+  const alertPolicies = useAtomValue(threadAlertPoliciesAtom);
+  const alertPoliciesReady = useAtomValue(threadAlertPoliciesReadyAtom);
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+  actionItems.push({
+    kind: "action",
+    value: "action:notification-settings",
+    searchTerms: ["notifications", "alerts", "sound", "quiet hours"],
+    title: "Open Notifications settings",
+    icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/settings/notifications" });
+    },
+  });
+  if (activeThread && alertMutations && alertPolicies !== null && alertPoliciesReady)
+    actionItems.push({
+      kind: "action",
+      value: "action:toggle-thread-alerts",
+      searchTerms: ["bell", "notifications", "alerts", "mute"],
+      title: "Toggle alerts for current thread",
+      icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "threadAlerts.toggle",
+      run: async () => {
+        await toggleCurrentThreadAlerts(activeThread.environmentId, activeThread.id);
+      },
+    });
 
   if (
     activeThread &&

@@ -240,6 +240,25 @@ export default defineSchema({
     .index("by_project", ["projectKey"])
     .index("by_focus", ["focusId"]),
 
+  threadAlertPolicies: defineTable({
+    userId: v.string(),
+    scopeKind: v.union(v.literal("global"), v.literal("project"), v.literal("thread")),
+    scopeKey: v.string(),
+    completion: v.optional(v.boolean()),
+    permission: v.optional(v.boolean()),
+    input: v.optional(v.boolean()),
+    failure: v.optional(v.boolean()),
+    updatedAt: v.number(),
+  })
+    .index("by_user_and_scope", ["userId", "scopeKind", "scopeKey"])
+    .index("by_scope", ["scopeKind", "scopeKey"]),
+
+  focusNotificationAcknowledgements: defineTable({
+    userId: v.string(),
+    eventId: v.string(),
+    acknowledgedAt: v.number(),
+  }).index("by_user_and_event", ["userId", "eventId"]),
+
   /** Relay-authored Attention Events, addressed by the Clerk subject used by relay tables. */
   focusNotifications: defineTable({
     eventId: v.string(),
@@ -249,6 +268,8 @@ export default defineSchema({
     threadId: v.string(),
     projectKey: v.string(),
     eventKind: attentionEventKind,
+    alertProjectKey: v.optional(v.string()),
+    alertEligibleAtCreation: v.optional(v.boolean()),
     createdAt: v.number(),
   })
     .index("by_user_and_event", ["userId", "eventId"])

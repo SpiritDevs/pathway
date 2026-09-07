@@ -50,6 +50,7 @@ import { getSidebarForkParentThreadId, resolveThreadLastVisitedAt } from "./Side
 import { derivePendingThreadRequests } from "@spiritdevs/client-runtime/state/thread-requests";
 import {
   parseScopedThreadKey,
+  scopedProjectKey,
   scopedThreadKey,
   scopeProjectRef,
   scopeThreadRef,
@@ -6460,7 +6461,21 @@ function ChatViewContent(props: ChatViewProps) {
       }
 
       if (!isServerThread) {
-        await handleNewThread(projectRef, { replace: true });
+        if (!draftId) return;
+        const session = useComposerDraftStore.getState().getDraftSession(draftId);
+        if (!session || session.pendingSend || session.promotedTo) return;
+        const project = allProjects.find(
+          (candidate) =>
+            candidate.environmentId === projectRef.environmentId &&
+            candidate.id === projectRef.projectId,
+        );
+        setLogicalProjectDraftThreadId(
+          project
+            ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
+            : scopedProjectKey(projectRef),
+          projectRef,
+          draftId,
+        );
         return;
       }
 
@@ -6621,11 +6636,13 @@ function ChatViewContent(props: ChatViewProps) {
       attachProjectDirectory,
       canChangeHeaderProject,
       deleteThread,
-      handleNewThread,
+      draftId,
       isServerThread,
       navigate,
+      projectGroupingSettings,
       serverAttachmentUrlById,
       serverProjection,
+      setLogicalProjectDraftThreadId,
       setThreadError,
       startThreadTurn,
     ],
@@ -9217,6 +9234,7 @@ function ChatViewContent(props: ChatViewProps) {
                         <DraftHeroHeadline
                           activeProjectRef={activeProjectRef}
                           activeProjectTitle={activeProject?.title ?? null}
+                          onSelectProject={handleHeaderProjectChange}
                         />
                       </div>
                       <ComposerBannerStack className="relative z-0" items={composerBannerItems} />

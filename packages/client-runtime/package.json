@@ -202,6 +202,14 @@
     "./state/vcs": {
       "types": "./src/state/vcs.ts",
       "default": "./src/state/vcs.ts"
+    },
+    "./thread-alerts": {
+      "types": "./src/threadAlerts/index.ts",
+      "default": "./src/threadAlerts/index.ts"
+    },
+    "./thread-alerts/storage": {
+      "types": "./src/threadAlerts/storage.ts",
+      "default": "./src/threadAlerts/storage.ts"
     }
   },
   "scripts": {

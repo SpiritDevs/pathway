@@ -8,6 +8,8 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@spiritdevs/contracts";
 
+import { alertProjectScopeKey } from "@spiritdevs/contracts/threadAlerts";
+
 type AttentionTransition = {
   readonly eventKind: AttentionEventKind;
   readonly transitionId: string;
@@ -41,6 +43,7 @@ export function attentionTransitionForEvent(
 export function detectAttentionEventTransition(input: {
   readonly environmentId: EnvironmentId;
   readonly event: OrchestrationV2DomainEvent;
+  readonly repositoryCanonicalKey?: string;
   readonly thread: Pick<OrchestrationV2ThreadShell, "id" | "projectId" | "settledAt">;
 }): AttentionEvent | null {
   const transition = attentionTransitionForEvent(input.event);
@@ -57,6 +60,11 @@ export function detectAttentionEventTransition(input: {
     ),
     threadId: input.thread.id,
     projectKey: FocusProjectKey.make(`${input.environmentId}:${input.thread.projectId}`),
+    alertProjectKey: alertProjectScopeKey(
+      input.environmentId,
+      input.thread.projectId,
+      input.repositoryCanonicalKey,
+    ),
     eventKind: transition.eventKind,
   };
 }

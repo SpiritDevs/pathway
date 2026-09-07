@@ -24,6 +24,7 @@ import type {
 import { BellIcon, Layers3Icon, PlusIcon } from "lucide-react";
 import {
   memo,
+  useEffect,
   useCallback,
   useMemo,
   useRef,
@@ -232,6 +233,10 @@ export function FocusStrip(props: {
       });
     });
   }, [props.mutations, props.notifications, props.unreadCount]);
+  useEffect(() => {
+    window.addEventListener("pathway:open-notification-tray", openNotifications);
+    return () => window.removeEventListener("pathway:open-notification-tray", openNotifications);
+  }, [openNotifications]);
   const selectNotification = useCallback(
     (notification: FocusNotification) => {
       props.onNotificationSelect(notification);

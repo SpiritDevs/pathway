@@ -1,5 +1,6 @@
 /** Synced Focus definitions, project assignments, and Attention Event notifications. */
 import * as Schema from "effect/Schema";
+import * as Effect from "effect/Effect";
 
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { CloudTimestamp } from "./company.ts";
@@ -61,6 +62,7 @@ export const AttentionEventKind = Schema.Literals(ATTENTION_EVENT_KINDS);
 export type AttentionEventKind = typeof AttentionEventKind.Type;
 
 export const AttentionEvent = Schema.Struct({
+  alertProjectKey: Schema.optionalKey(Schema.String),
   eventId: AttentionEventId,
   threadId: ThreadId,
   projectKey: FocusProjectKey,
@@ -69,6 +71,9 @@ export const AttentionEvent = Schema.Struct({
 export type AttentionEvent = typeof AttentionEvent.Type;
 
 export const FocusNotification = Schema.Struct({
+  alertProjectKey: Schema.optionalKey(Schema.String),
+  alertEligibleAtCreation: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  isRead: Schema.optionalKey(Schema.Boolean),
   /** The Attention Event id is also the notification id within one user's feed. */
   id: FocusNotificationId,
   eventId: AttentionEventId,

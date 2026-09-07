@@ -6,10 +6,12 @@ import { api, internal } from "../convex/_generated/api.js";
 import schema from "../convex/schema.ts";
 
 process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
+process.env.PATHWAY_RELAY_JWKS_URL = "https://relay.example.test/.well-known/jwks.json";
 
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
   "../convex/_generated/server.js": () => import("../convex/_generated/server.js"),
+  "../convex/agentThreads.ts": () => import("../convex/agentThreads.ts"),
   "../convex/cloudProjects.ts": () => import("../convex/cloudProjects.ts"),
   "../convex/sync.ts": () => import("../convex/sync.ts"),
 };
@@ -1575,4 +1577,81 @@ describe("stale environment binding reclamation", () => {
     const binding = await t.run(async (ctx) => await ctx.db.get(ids.bindingId));
     expect(binding).toMatchObject({ status: "active" });
   });
+});
+
+describe("thread alert policy cleanup", () => {
+  it.each(["remove", "removeMissing", "reconcile", "deleteCompanyProject"] as const)(
+    "cleans exact thread policies for every user through %s",
+    async (operation) => {
+      const t = harness();
+      const ids = await seed(t);
+      await registerEnvironment(t, ids.companyId);
+      await t.run(async (ctx) => {
+        const roleId = "0198c0de-cccc-7ccc-8ccc-000000000002";
+        await ctx.db.insert("roles", {
+          id: roleId,
+          companyId: ids.companyId,
+          name: "Environment",
+          description: "",
+          permissions: ["projects.manage"],
+          seeded: false,
+          createdAt: NOW,
+          updatedAt: NOW,
+        });
+        const registration = await ctx.db.query("environmentRegistrations").first();
+        if (registration === null) throw new Error("Missing environment");
+        await ctx.db.patch(registration._id, { serviceRoleIds: [roleId] });
+        for (const userId of ["project_owner", "other_user"]) {
+          for (const [scopeKind, scopeKey] of [
+            ["thread", `environment:${ENVIRONMENT_ID}:thread:thread-1`],
+            ["thread", "environment:other:thread:thread-1"],
+            ["project", "github.com/spiritdevs/pathway"],
+          ] as const) {
+            await ctx.db.insert("threadAlertPolicies", {
+              userId,
+              scopeKind,
+              scopeKey,
+              completion: true,
+              updatedAt: NOW,
+            });
+          }
+        }
+      });
+      const environment = t.withIdentity({
+        issuer: "https://relay.example.test",
+        subject: ENVIRONMENT_ID,
+        tokenIdentifier: `https://relay.example.test|${ENVIRONMENT_ID}`,
+        cnf: { jkt: "thumbprint" },
+      });
+      if (operation === "deleteCompanyProject")
+        await asOwner(t).mutation(api.cloudProjects.deleteCompanyProject, {
+          companyId: COMPANY_ID,
+          cloudProjectId: PROJECT_ID,
+        });
+      else if (operation === "removeMissing")
+        await asOwner(t).mutation(api.agentThreads.removeMissing, {
+          companyId: COMPANY_ID,
+          environmentId: ENVIRONMENT_ID,
+          threadId: "thread-1",
+        });
+      else if (operation === "remove")
+        await environment.mutation(api.agentThreads.remove, {
+          companyId: COMPANY_ID,
+          environmentId: ENVIRONMENT_ID,
+          threadId: "thread-1",
+        });
+      else
+        await environment.mutation(api.agentThreads.reconcile, {
+          companyId: COMPANY_ID,
+          environmentId: ENVIRONMENT_ID,
+          currentThreadIds: [],
+        });
+      const policies = await t.run((ctx) => ctx.db.query("threadAlertPolicies").collect());
+      expect(policies).toHaveLength(4);
+      expect(
+        policies.some((row) => row.scopeKey === `environment:${ENVIRONMENT_ID}:thread:thread-1`),
+      ).toBe(false);
+      expect(policies.filter((row) => row.scopeKind === "project")).toHaveLength(2);
+    },
+  );
 });

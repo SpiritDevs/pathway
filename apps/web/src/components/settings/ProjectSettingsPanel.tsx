@@ -1,3 +1,5 @@
+import { alertProjectScopeKey } from "@spiritdevs/contracts/threadAlerts";
+import { ProjectAlertOverride } from "./NotificationsSettings";
 import { useAtomValue } from "@effect/atom-react";
 import { connectionStatusTitle } from "@spiritdevs/client-runtime/connection";
 import {
@@ -1824,6 +1826,19 @@ export function ProjectDetail({
             </SheetPanel>
           </SheetPopup>
         </Sheet>
+
+        <SettingsSection title="Thread alerts">
+          <ProjectAlertOverride
+            scopeKey={alertProjectScopeKey(
+              representative.environmentId,
+              representative.id,
+              workspaceProject?.repositoryIdentity?.canonicalKey ??
+                group.memberProjects.find((member) => member.repositoryIdentity != null)
+                  ?.repositoryIdentity?.canonicalKey,
+            )}
+            name={group.displayName}
+          />
+        </SettingsSection>
 
         <SettingsSection title="Danger">
           <SettingsRow

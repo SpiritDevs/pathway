@@ -27,6 +27,10 @@ import { useEffect } from "react";
 import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "../state/projects";
+import {
+  subscribeThreadAlertPolicies,
+  threadAlertNotificationsReadyAtom,
+} from "../threadAlerts/state";
 import type { ConvexAuthTokenFetcher } from "./syncTransport";
 
 export {
@@ -80,6 +84,7 @@ export const FOCUS_FUNCTION_REFERENCES = {
     "focusNotifications:list",
   ),
   markAllRead: mutationReference<{}, null>("focusNotifications:markAllRead"),
+  markRead: mutationReference<{ eventId: string }, null>("focusNotifications:markRead"),
 } as const;
 
 export interface FocusMutations {
@@ -108,6 +113,7 @@ export interface FocusMutations {
   }) => Promise<null>;
   readonly unassignProject: (input: { readonly projectKey: FocusProjectKey }) => Promise<null>;
   readonly markAllNotificationsRead: () => Promise<null>;
+  readonly markNotificationRead?: (eventId: string) => Promise<null>;
 }
 
 export const focusMutationsAtom = Atom.make<FocusMutations | null>(null).pipe(
@@ -135,6 +141,8 @@ function makeFocusMutations(client: ConvexClient): FocusMutations {
     assignProject: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.assignProject, input),
     unassignProject: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.unassignProject, input),
     markAllNotificationsRead: () => client.mutation(FOCUS_FUNCTION_REFERENCES.markAllRead, {}),
+    markNotificationRead: (eventId) =>
+      client.mutation(FOCUS_FUNCTION_REFERENCES.markRead, { eventId }),
   };
 }
 
@@ -290,18 +298,22 @@ export function useFocusReadModelRuntime(options: {
       appAtomRegistry.set(focusMutationsAtom, null);
       appAtomRegistry.set(focusUnreadCountAtom, 0);
       appAtomRegistry.set(focusNotificationsAtom, EMPTY_FOCUS_NOTIFICATIONS);
+      appAtomRegistry.set(threadAlertNotificationsReadyAtom, false);
       return;
     }
 
+    let active = true;
     const client = new ConvexClient(options.convexUrl);
     client.setAuth(options.fetchToken);
     const mutations = makeFocusMutations(client);
     appAtomRegistry.set(focusMutationsAtom, mutations);
     const unsubscribes = [
+      subscribeThreadAlertPolicies(client, options.accountScope, focusNotificationsAtom),
       client.onUpdate(
         FOCUS_FUNCTION_REFERENCES.readModel,
         {},
         (value) => {
+          if (!active) return;
           const decoded = decodeFocusReadModel(value);
           if (Option.isSome(decoded)) appAtomRegistry.set(focusReadModelAtom, decoded.value);
           else console.warn("Convex returned an invalid Focus read model.");
@@ -312,6 +324,7 @@ export function useFocusReadModelRuntime(options: {
         FOCUS_FUNCTION_REFERENCES.unreadCount,
         {},
         (value) => {
+          if (!active) return;
           const decoded = decodeFocusUnreadCount(value);
           if (Option.isSome(decoded)) appAtomRegistry.set(focusUnreadCountAtom, decoded.value);
           else console.warn("Convex returned an invalid Focus notification unread count.");
@@ -322,15 +335,26 @@ export function useFocusReadModelRuntime(options: {
         FOCUS_FUNCTION_REFERENCES.notifications,
         { limit: FOCUS_NOTIFICATION_MAX_PER_USER },
         (value) => {
+          if (!active) return;
           const decoded = decodeFocusNotifications(value);
-          if (Option.isSome(decoded)) appAtomRegistry.set(focusNotificationsAtom, decoded.value);
-          else console.warn("Convex returned invalid Focus notifications.");
+          if (Option.isSome(decoded)) {
+            appAtomRegistry.set(focusNotificationsAtom, decoded.value);
+            appAtomRegistry.set(threadAlertNotificationsReadyAtom, true);
+          } else {
+            appAtomRegistry.set(threadAlertNotificationsReadyAtom, false);
+            console.warn("Convex returned invalid Focus notifications.");
+          }
         },
-        (error) => console.warn("Could not subscribe to Focus notifications.", error),
+        (error) => {
+          if (!active) return;
+          appAtomRegistry.set(threadAlertNotificationsReadyAtom, false);
+          console.warn("Could not subscribe to Focus notifications.", error);
+        },
       ),
     ];
 
     return () => {
+      active = false;
       for (const unsubscribe of unsubscribes) unsubscribe();
       if (appAtomRegistry.get(focusMutationsAtom) === mutations) {
         appAtomRegistry.set(focusMutationsAtom, null);

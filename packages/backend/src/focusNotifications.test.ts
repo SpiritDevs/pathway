@@ -12,6 +12,7 @@ process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY_ISSUER}/.well-known/jwks.json`;
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
   "../convex/_generated/server.js": () => import("../convex/_generated/server.js"),
+  "../convex/threadAlertPolicies.ts": () => import("../convex/threadAlertPolicies.ts"),
   "../convex/focusNotifications.ts": () => import("../convex/focusNotifications.ts"),
 };
 
@@ -178,6 +179,8 @@ describe("Focus notifications", () => {
         api.focusNotifications.record,
         event(`event-${index.toString().padStart(3, "0")}`),
       );
+      if (index === 0)
+        await h.user.mutation(api.focusNotifications.markRead, { eventId: "event-000" });
       if (index === 99) await h.user.mutation(api.focusNotifications.markAllRead, {});
     }
 
@@ -193,5 +196,206 @@ describe("Focus notifications", () => {
           .unique(),
       ),
     ).resolves.toEqual(expect.objectContaining({ nextCleanupAt: NOW + 1 + 7 * DAY }));
+  });
+  it("snapshots inherited policy per linked user without filtering muted events", async () => {
+    const h = harness();
+    await seed(h, ["user-1", "user-2"]);
+    await h.user.mutation(api.threadAlertPolicies.upsert, {
+      scopeKind: "global",
+      scopeKey: "global",
+      choices: { completion: true, permission: false, input: false, failure: false },
+    });
+    await h.user.mutation(api.threadAlertPolicies.upsert, {
+      scopeKind: "project",
+      scopeKey: "github.com/spiritdevs/pathway",
+      choices: { completion: false, permission: true },
+    });
+    await h.user.mutation(api.threadAlertPolicies.upsert, {
+      scopeKind: "thread",
+      scopeKey: `environment:${ENVIRONMENT_ID}:thread:thread-enabled`,
+      choices: { completion: true },
+    });
+    await h.relay.mutation(api.focusNotifications.record, {
+      ...event("muted"),
+      alertProjectKey: "github.com/spiritdevs/pathway",
+    });
+    await h.relay.mutation(api.focusNotifications.record, {
+      ...event("enabled"),
+      alertProjectKey: "github.com/spiritdevs/pathway",
+    });
+    await h.relay.mutation(api.focusNotifications.record, {
+      ...event("permission"),
+      alertProjectKey: "github.com/spiritdevs/pathway",
+      eventKind: "pending-approval",
+    });
+    const rows = await h.user.query(api.focusNotifications.list, {});
+    expect(new Map(rows.map((row) => [row.eventId, row.alertEligibleAtCreation]))).toEqual(
+      new Map([
+        ["muted", false],
+        ["enabled", true],
+        ["permission", true],
+      ]),
+    );
+    expect(await h.secondUser.query(api.focusNotifications.list, {})).toHaveLength(3);
+    expect(
+      (await h.secondUser.query(api.focusNotifications.list, {})).every(
+        (row) => !row.alertEligibleAtCreation,
+      ),
+    ).toBe(true);
+    await h.user.mutation(api.threadAlertPolicies.reset, {
+      scopeKind: "project",
+      scopeKey: "github.com/spiritdevs/pathway",
+    });
+    await h.relay.mutation(api.focusNotifications.record, {
+      ...event("muted"),
+      alertProjectKey: "github.com/spiritdevs/pathway",
+    });
+    expect(
+      (await h.user.query(api.focusNotifications.list, {})).find((row) => row.eventId === "muted")
+        ?.alertEligibleAtCreation,
+    ).toBe(false);
+  });
+
+  it("uses environment-scoped policy when an older environment omits repository identity", async () => {
+    const h = harness();
+    await seed(h);
+    const scopeKey = `environment:${ENVIRONMENT_ID}:project:project-a`;
+    await h.user.mutation(api.threadAlertPolicies.upsert, {
+      scopeKind: "project",
+      scopeKey,
+      choices: { completion: true },
+    });
+    await h.relay.mutation(api.focusNotifications.record, event("legacy"));
+    expect(await h.user.query(api.focusNotifications.list, {})).toEqual([
+      expect.objectContaining({
+        alertProjectKey: scopeKey,
+        alertEligibleAtCreation: true,
+        isRead: false,
+      }),
+    ]);
+  });
+
+  it("keeps policy writes user-owned, scoped, and reversible", async () => {
+    const h = harness();
+    await seed(h, ["user-1", "user-2"]);
+    await expect(
+      h.t.mutation(api.threadAlertPolicies.upsert, {
+        scopeKind: "project",
+        scopeKey: "repo",
+        choices: { completion: true },
+      }),
+    ).rejects.toThrow();
+    await expect(
+      h.user.mutation(api.threadAlertPolicies.upsert, {
+        scopeKind: "global",
+        scopeKey: "global",
+        choices: { completion: true },
+      }),
+    ).rejects.toThrow("all four");
+    await expect(
+      h.user.mutation(api.threadAlertPolicies.upsert, {
+        scopeKind: "global",
+        scopeKey: "other",
+        choices: {},
+      }),
+    ).rejects.toThrow("global key");
+    await h.user.mutation(api.threadAlertPolicies.upsert, {
+      scopeKind: "project",
+      scopeKey: "repo",
+      choices: { completion: true, failure: false },
+    });
+    await h.user.mutation(api.threadAlertPolicies.upsert, {
+      scopeKind: "project",
+      scopeKey: "repo",
+      choices: { input: true },
+    });
+    expect(
+      await h.user.query(api.threadAlertPolicies.list, {
+        projectKeys: ["repo", "repo"],
+        threadKeys: [],
+      }),
+    ).toEqual([{ scopeKind: "project", scopeKey: "repo", choices: { input: true } }]);
+    expect(
+      await h.secondUser.query(api.threadAlertPolicies.list, {
+        projectKeys: ["repo"],
+        threadKeys: [],
+      }),
+    ).toEqual([]);
+    expect(
+      await h.user.query(api.threadAlertPolicies.list, { projectKeys: [], threadKeys: [] }),
+    ).toEqual([]);
+    await h.user.mutation(api.threadAlertPolicies.upsert, {
+      scopeKind: "project",
+      scopeKey: "repo",
+      choices: {},
+    });
+    expect(
+      await h.user.query(api.threadAlertPolicies.list, { projectKeys: ["repo"], threadKeys: [] }),
+    ).toEqual([]);
+  });
+
+  it("acknowledges only an owned event, idempotently, and clears acknowledgements on mark all read", async () => {
+    const h = harness();
+    await seed(h, ["user-1", "user-2"]);
+    await h.relay.mutation(api.focusNotifications.record, event("first"));
+    await h.relay.mutation(api.focusNotifications.record, event("second"));
+    await h.user.mutation(api.focusNotifications.markRead, { eventId: "first" });
+    await h.user.mutation(api.focusNotifications.markRead, { eventId: "first" });
+    await expect(
+      h.user.mutation(api.focusNotifications.markRead, { eventId: "missing" }),
+    ).rejects.toThrow("not available");
+    expect(await h.user.query(api.focusNotifications.unreadCount, {})).toBe(1);
+    expect(await h.secondUser.query(api.focusNotifications.unreadCount, {})).toBe(2);
+    expect(
+      (await h.user.query(api.focusNotifications.list, {})).find((row) => row.eventId === "first")
+        ?.isRead,
+    ).toBe(true);
+    expect(
+      await h.t.run((ctx) => ctx.db.query("focusNotificationAcknowledgements").collect()),
+    ).toHaveLength(1);
+    await h.user.mutation(api.focusNotifications.markAllRead, {});
+    expect(
+      await h.t.run((ctx) => ctx.db.query("focusNotificationAcknowledgements").collect()),
+    ).toHaveLength(0);
+    expect(await h.user.query(api.focusNotifications.unreadCount, {})).toBe(0);
+  });
+
+  it("prunes individually read events and their acknowledgements at seven days", async () => {
+    const h = harness();
+    await seed(h);
+    await h.relay.mutation(api.focusNotifications.record, event("read"));
+    await h.relay.mutation(api.focusNotifications.record, event("unread"));
+    await h.user.mutation(api.focusNotifications.markRead, { eventId: "read" });
+    vi.setSystemTime(NOW + 7 * DAY);
+    expect(await h.t.mutation(internal.focusNotifications.pruneExpired, {})).toBe(1);
+    expect(await h.user.query(api.focusNotifications.list, {})).toEqual([
+      expect.objectContaining({ eventId: "unread", isRead: false }),
+    ]);
+    expect(
+      await h.t.run((ctx) => ctx.db.query("focusNotificationAcknowledgements").collect()),
+    ).toEqual([]);
+  });
+  it("keeps historical rows ineligible and rejects acknowledgement of another user's event", async () => {
+    const h = harness();
+    await seed(h, ["user-1", "user-2"]);
+    await h.t.run(async (ctx) => {
+      await ctx.db.insert("focusNotifications", {
+        ...event("legacy-row"),
+        userId: "user-1",
+        createdAt: NOW,
+      });
+    });
+    expect(await h.user.query(api.focusNotifications.list, {})).toEqual([
+      expect.objectContaining({
+        eventId: "legacy-row",
+        alertEligibleAtCreation: false,
+        isRead: false,
+      }),
+    ]);
+    await expect(
+      h.secondUser.mutation(api.focusNotifications.markRead, { eventId: "legacy-row" }),
+    ).rejects.toThrow("not available");
+    await h.user.mutation(api.focusNotifications.markRead, { eventId: "legacy-row" });
+    expect(await h.user.query(api.focusNotifications.unreadCount, {})).toBe(0);
   });
 });

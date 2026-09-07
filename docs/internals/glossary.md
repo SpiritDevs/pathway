@@ -126,3 +126,34 @@ _Avoid_: Association, Tag, Reference
 **Mirror Window**:
 The rolling range of Google history copied into Convex — 90 days back, 365 days forward. Events outside it are not replicated and not rendered.
 _Avoid_: Sync range, Horizon
+
+## Thread alerts
+
+**Alert Subscription**:
+The global, project, or thread preference that determines whether an Attention Event is eligible for sound or operating-system notification delivery. It does not filter the Notification Tray. Global is explicitly enabled or disabled; project and thread subscriptions can inherit, enable, or disable.
+
+**Effective Alert Subscription**:
+The four resolved event choices for a thread after applying the global -> project -> thread cascade independently to completion, permission, user-input, and failure. The closest explicit value for each event wins, so a thread can have a mixed effective state.
+_Avoid_: Bell state, Notification status
+
+**Alert Menu**:
+The popup for editing a thread's four event choices or restoring project defaults. Control/Command-hover, right-click, Control/Command+Enter on the focused bell, and long-press on touch open the same menu.
+_Avoid_: Bell popup, Notification popup
+
+**Alert Policy**:
+The cloud-synced global, project, thread, and per-event choices that determine which Attention Events may interrupt the user. Repository-backed project policy uses stable repository identity across worktrees, environments, and client grouping modes. Non-repository project policy uses environment-scoped project identity. Alert Policy does not include a client's sound, OS-notification, or sound-file settings.
+
+**Alert Delivery Settings**:
+The device-local sound toggle, OS-notification toggle, and sound choice used after an Attention Event passes the Alert Policy.
+
+**Quiet Hours**:
+A device-local weekly schedule that suppresses sound and OS-notification delivery without filtering the Notification Tray.
+
+**Quiet-hours Summary**:
+One notification produced when Quiet Hours end. It groups subscribed Attention Events that remain unread by thread, plays at most one sound, and opens the Notification Tray instead of replaying each event.
+
+**Event Acknowledgement**:
+A cloud-synced record that marks one Attention Event read after the user selects its OS notification. It composes with the Notification Tray's all-read watermark without clearing unrelated events.
+
+**Notifications Settings**:
+The settings page for global thread-alert events, logical-project overrides, this client's delivery channels and sound, and this client's Quiet Hours.

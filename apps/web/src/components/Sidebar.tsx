@@ -1,5 +1,12 @@
 import { selectSidebarDraftRows, type SidebarDraftRowData } from "./sidebarDrafts";
 import { DraftSendReconciliation } from "./DraftSendReconciliation";
+import {
+  alertProjectScopeKey,
+  alertThreadScopeKey,
+  type AlertPolicyRow,
+} from "@spiritdevs/contracts/threadAlerts";
+import { ThreadAlertBell } from "./ThreadAlertBell";
+import { threadAlertPoliciesAtom } from "../threadAlerts/state";
 import { autoAnimate } from "@formkit/auto-animate";
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
@@ -781,6 +788,9 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
 });
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+  alertProjectKey: string;
+  alertPolicies: readonly AlertPolicyRow[] | null;
+  alertModifierHeld: boolean;
   thread: SidebarThreadSummary;
   issue: Issue | null;
   variant: "card" | "slim";
@@ -1306,6 +1316,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     </span>
   ) : null;
 
+  const alertBell = (
+    <ThreadAlertBell
+      projectKey={props.alertProjectKey}
+      threadKey={alertThreadScopeKey(thread.environmentId, thread.id)}
+      policies={props.alertPolicies}
+      modifierHeld={props.alertModifierHeld}
+    />
+  );
+
   if (variant === "slim") {
     return (
       <li
@@ -1356,6 +1375,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
             {prBadge}
+            {alertBell}
             <span className="relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end">
               <span
                 className={cn(
@@ -1547,6 +1567,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   />
                 )
               ) : null}
+              {alertBell}
               {/* The visible state owns this slot's width: status at rest,
                   actions on hover/keyboard focus or while the popover is open. Keeping
                   the hidden state out of flow lets the project label reclaim
@@ -1869,6 +1890,21 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 
 export default function Sidebar() {
   const projects = useProjects();
+  const alertPolicies = useAtomValue(threadAlertPoliciesAtom);
+  const alertProjectKeys = useMemo(
+    () =>
+      new Map(
+        projects.map((project) => [
+          `${project.environmentId}:${project.id}`,
+          alertProjectScopeKey(
+            project.environmentId,
+            project.id,
+            project.repositoryIdentity?.canonicalKey,
+          ),
+        ]),
+      ),
+    [projects],
+  );
   const focuses = useAtomValue(focusListAtom);
   const focusAssignments = useAtomValue(focusAssignmentsAtom);
   const activeFocusProjectKeys = useAtomValue(activeFocusProjectKeysAtom);
@@ -4175,6 +4211,12 @@ export default function Sidebar() {
                     const rowVariant = isCard ? "card" : "slim";
                     return (
                       <SidebarThreadRow
+                        alertPolicies={alertPolicies}
+                        alertModifierHeld={shortcutModifiers.ctrlKey || shortcutModifiers.metaKey}
+                        alertProjectKey={
+                          alertProjectKeys.get(`${thread.environmentId}:${thread.projectId}`) ??
+                          alertProjectScopeKey(thread.environmentId, thread.projectId)
+                        }
                         // Keyed per variant on purpose: when a thread settles,
                         // the card fades out in place and the slim row fades
                         // in at its settled position instead of one element
