@@ -43,6 +43,7 @@ import {
   type ProviderUsageDisplayLimit,
 } from "./providerUsageDisplay";
 import {
+  createProviderUsageArrivalTracker,
   deriveConnectedProviderUsageAccounts,
   isProviderUsageDriver,
   type ConnectedProviderUsageAccount,
@@ -791,18 +792,21 @@ function useConnectedProviderUsageAccounts() {
     [connected],
   );
   const usage = useAtomValue(usageAtom);
+  const trackArrivals = useMemo(createProviderUsageArrivalTracker, []);
   const accounts = useMemo(
     () =>
       deriveConnectedProviderUsageAccounts(
-        connected.map((environment) => ({
-          environmentId: environment.environmentId,
-          environmentLabel: environment.label,
-          providers: serverConfigs.get(environment.environmentId)?.providers ?? null,
-          usage: usage.get(environment.environmentId)?.data ?? [],
-          receivedAt: usage.get(environment.environmentId)?.receivedAt ?? 0,
-        })),
+        trackArrivals(
+          connected.map((environment) => ({
+            environmentId: environment.environmentId,
+            environmentLabel: environment.label,
+            providers: serverConfigs.get(environment.environmentId)?.providers ?? null,
+            usage: usage.get(environment.environmentId)?.data ?? [],
+            receivedAt: usage.get(environment.environmentId)?.receivedAt ?? 0,
+          })),
+        ),
       ),
-    [connected, serverConfigs, usage],
+    [connected, serverConfigs, usage, trackArrivals],
   );
   const loading =
     !isReady ||

@@ -8,7 +8,10 @@ import {
 } from "@spiritdevs/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { deriveConnectedProviderUsageAccounts } from "./providerUsageAccounts";
+import {
+  createProviderUsageArrivalTracker,
+  deriveConnectedProviderUsageAccounts,
+} from "./providerUsageAccounts";
 
 const studioId = EnvironmentId.make("studio");
 const laptopId = EnvironmentId.make("laptop");
@@ -195,4 +198,40 @@ describe("grouping Codex subscriptions", () => {
       ]),
     ).toHaveLength(3);
   });
+});
+
+it("does not promote unchanged snapshots when another environment rebroadcasts its cached list", () => {
+  const track = createProviderUsageArrivalTracker();
+  const personal = provider({ driver: "codex", instanceId: "codex", displayName: "Codex" });
+  const first = {
+    environmentId: studioId,
+    providers: [personal],
+    usage: [usage("codex", "account")],
+    receivedAt: 1,
+  };
+  const second = {
+    environmentId: laptopId,
+    providers: [personal],
+    usage: [usage("codex", "account", "2026-09-08T01:00:00Z")],
+    receivedAt: 2,
+  };
+  expect(deriveConnectedProviderUsageAccounts(track([first, second]))[0]?.environmentId).toBe(
+    laptopId,
+  );
+  const rebroadcast = {
+    ...first,
+    receivedAt: 3,
+    usage: first.usage.map((snapshot) => ({ ...snapshot })),
+  };
+  expect(deriveConnectedProviderUsageAccounts(track([rebroadcast, second]))[0]?.environmentId).toBe(
+    laptopId,
+  );
+  const changed = {
+    ...rebroadcast,
+    receivedAt: 4,
+    usage: [usage("codex", "account", "2026-09-08T02:00:00Z")],
+  };
+  expect(deriveConnectedProviderUsageAccounts(track([changed, second]))[0]?.environmentId).toBe(
+    studioId,
+  );
 });

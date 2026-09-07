@@ -39,6 +39,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
@@ -106,6 +107,7 @@ interface ScheduledRateLimitRefresh {
 }
 
 const contextIdentities = new Map<string, string>();
+const pushSemaphores = new Map<string, Semaphore.Semaphore>();
 const codexAccountKeyReaders = new Map<string, () => Promise<string | undefined>>();
 const snapshotCache = new Map<string, CachedSnapshot>();
 const inFlightFetches = new Map<string, InFlightFetch>();
@@ -1508,7 +1510,7 @@ function mergePushedSnapshot(
   };
 }
 
-export const ingestPushedSnapshot = Effect.fn("ProviderUsage.ingestPushedSnapshot")(function* (
+const ingestPushedSnapshotSerial = Effect.fn("ProviderUsage.ingestPushedSnapshotSerial")(function* (
   input: PushedProviderUsageSnapshot,
   nowMs = Date.now(),
 ) {
@@ -1561,6 +1563,19 @@ export const ingestPushedSnapshot = Effect.fn("ProviderUsage.ingestPushedSnapsho
     yield* PubSub.publish(snapshotChanges, undefined);
   }
   return stored.snapshot;
+});
+
+export const ingestPushedSnapshot = Effect.fn("ProviderUsage.ingestPushedSnapshot")(function* (
+  input: PushedProviderUsageSnapshot,
+  nowMs = Date.now(),
+) {
+  const key = cacheKeyFor(input);
+  let semaphore = pushSemaphores.get(key);
+  if (!semaphore) {
+    semaphore = Semaphore.makeUnsafe(1);
+    setBounded(pushSemaphores, key, semaphore);
+  }
+  return yield* ingestPushedSnapshotSerial(input, nowMs).pipe(semaphore.withPermits(1));
 });
 
 function cancelScheduledRateLimitRefresh(cacheKey: string): void {
@@ -2016,6 +2031,7 @@ export function resetProviderUsageCache(): void {
   for (const scheduled of scheduledRateLimitRefreshes.values()) scheduled.controller.abort();
   readKeychainPassword = defaultReadKeychainPassword;
   contextIdentities.clear();
+  pushSemaphores.clear();
   codexAccountKeyReaders.clear();
   snapshotCache.clear();
   inFlightFetches.clear();

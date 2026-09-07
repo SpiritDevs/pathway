@@ -3513,6 +3513,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           }).pipe(Effect.orDie),
         );
 
+        const providerUsageScope = yield* Effect.scope;
         yield* client.handleServerNotification("account/rateLimits/updated", (notification) =>
           ingestCodexRateLimitsUpdated({
             instanceId: adapterOptions.instanceId,
@@ -3520,7 +3521,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             ...(adapterOptions.ingestProviderUsage === undefined
               ? {}
               : { ingest: adapterOptions.ingestProviderUsage }),
-          }).pipe(Effect.asVoid),
+          }).pipe(Effect.forkIn(providerUsageScope), Effect.asVoid),
         );
 
         yield* client.handleServerNotification("turn/started", (payload) =>

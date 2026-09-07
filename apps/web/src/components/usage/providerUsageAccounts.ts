@@ -1,6 +1,7 @@
 import type {
   EnvironmentId,
   ProviderUsageDriver,
+  ProviderInstanceId,
   ServerProvider,
   ServerProviderUsageSnapshot,
 } from "@spiritdevs/contracts";
@@ -17,6 +18,7 @@ export interface ConnectedProviderUsageEnvironment {
   readonly environmentId: EnvironmentId;
   readonly environmentLabel?: string;
   readonly receivedAt?: number;
+  readonly snapshotReceivedAt?: ReadonlyMap<ProviderInstanceId, number>;
   readonly usage?: ReadonlyArray<ServerProviderUsageSnapshot>;
   readonly providers: ReadonlyArray<ServerProvider> | null;
 }
@@ -29,6 +31,32 @@ export interface ConnectedProviderUsageAccount {
   readonly displayName: string;
   readonly receivedAt: number;
   readonly snapshot: ServerProviderUsageSnapshot | null;
+}
+
+/** Keep unchanged quota values at their original client arrival time across list broadcasts. */
+export function createProviderUsageArrivalTracker() {
+  const observed = new Map<string, { fingerprint: string; receivedAt: number }>();
+  return (environments: ReadonlyArray<ConnectedProviderUsageEnvironment>) => {
+    const active = new Set<string>();
+    const result = environments.map((environment) => {
+      const snapshotReceivedAt = new Map<ProviderInstanceId, number>();
+      for (const snapshot of environment.usage ?? []) {
+        const key = JSON.stringify([environment.environmentId, snapshot.instanceId]);
+        active.add(key);
+        const fingerprint = JSON.stringify(snapshot);
+        const previous = observed.get(key);
+        const receivedAt =
+          previous?.fingerprint === fingerprint
+            ? previous.receivedAt
+            : (environment.receivedAt ?? 0);
+        observed.set(key, { fingerprint, receivedAt });
+        snapshotReceivedAt.set(snapshot.instanceId, receivedAt);
+      }
+      return { ...environment, snapshotReceivedAt };
+    });
+    for (const key of observed.keys()) if (!active.has(key)) observed.delete(key);
+    return result;
+  };
 }
 
 /** Group known subscriptions and use the freshest successful snapshot for each account. */
@@ -56,7 +84,8 @@ export function deriveConnectedProviderUsageAccounts(
         provider: entry.snapshot,
         displayName: entry.displayName,
         snapshot,
-        receivedAt: environment.receivedAt ?? 0,
+        receivedAt:
+          environment.snapshotReceivedAt?.get(entry.instanceId) ?? environment.receivedAt ?? 0,
       };
       const preferCandidate =
         !existing ||

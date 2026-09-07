@@ -523,3 +523,49 @@ it.effect("preserves a new-login refresh that starts while a push checks the old
     expect(cached.accountKey).toBe("account-b");
   }),
 );
+
+it.effect("serializes sparse pushes while a credential read is pending", () =>
+  Effect.gen(function* () {
+    const initial = {
+      ...parseCodexUsage({
+        instanceId,
+        nowMs,
+        json: {
+          rate_limit: {
+            primary_window: { used_percent: 10 },
+            secondary_window: { used_percent: 20 },
+          },
+        },
+      }),
+      accountKey: "account-a",
+    };
+    yield* Effect.promise(() =>
+      providerUsageTestKit.resolve({ instanceId, provider: "codex", nowMs }, async () => ({
+        snapshot: initial,
+      })),
+    );
+    const readerStarted = Promise.withResolvers<void>();
+    const identity = Promise.withResolvers<string>();
+    let reads = 0;
+    providerUsageTestKit.setCodexAccountKeyReader(instanceId, () => {
+      reads += 1;
+      readerStarted.resolve();
+      return reads === 1 ? identity.promise : Promise.resolve("account-a");
+    });
+    const first = yield* ingestPushedSnapshot(
+      mapCodexRateLimitsUpdated({ instanceId, rateLimits: { primary: { usedPercent: 25 } } }),
+      nowMs + 1,
+    ).pipe(Effect.forkChild);
+    yield* Effect.promise(() => readerStarted.promise);
+    const second = yield* ingestPushedSnapshot(
+      mapCodexRateLimitsUpdated({ instanceId, rateLimits: { secondary: { usedPercent: 90 } } }),
+      nowMs + 2,
+    ).pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    expect(reads).toBe(1);
+    identity.resolve("account-a");
+    yield* Fiber.join(first);
+    const result = yield* Fiber.join(second);
+    expect(result.limits.map((limit) => limit.usedPercent)).toEqual([25, 90]);
+  }),
+);
