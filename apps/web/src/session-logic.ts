@@ -1,5 +1,6 @@
 import {
   ProviderDriverKind,
+  TurnItemId,
   type OrchestrationV2AppThreadLineage,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2PlanArtifact,
@@ -202,6 +203,55 @@ export function isLatestRunSettled(
   )
     return false;
   return runtime?.activeRunId !== latestRun.runId;
+}
+
+/** Bridges submission to the server-owned preparation item without duplicating it. */
+export function withOptimisticWorkspacePreparation(
+  entries: TimelineEntry[],
+  input: { threadId: ThreadId; startedAt: string } | null,
+): TimelineEntry[] {
+  if (
+    input === null ||
+    entries.some(
+      (entry) => entry.kind === "event" && turnItemIsWorkspacePreparation(entry.projectedItem.item),
+    )
+  )
+    return entries;
+  const id = TurnItemId.make(`workspace-preparation:optimistic:${input.threadId}`);
+  const timestamp = DateTime.makeUnsafe(input.startedAt);
+  return [
+    ...entries,
+    {
+      kind: "event",
+      id,
+      createdAt: input.startedAt,
+      projectedItem: {
+        position: entries.length,
+        visibility: "local",
+        sourceThreadId: input.threadId,
+        sourceItemId: id,
+        item: {
+          id,
+          threadId: input.threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: entries.length,
+          status: "running",
+          title: "Preparing workspace",
+          startedAt: timestamp,
+          completedAt: null,
+          updatedAt: timestamp,
+          type: "command_execution",
+          input: "Preparing workspace",
+          workspacePreparation: { phase: "preparing", workspaceKind: "worktree" },
+        },
+      },
+    },
+  ];
 }
 
 export function deriveActiveWorkStartedAt(
