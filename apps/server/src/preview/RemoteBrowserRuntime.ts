@@ -5,7 +5,13 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
-import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright";
+import {
+  chromium,
+  type BrowserContext,
+  type CDPSession,
+  type Page,
+  type Request,
+} from "playwright";
 import * as Schema from "effect/Schema";
 import {
   PreviewTabId,
@@ -78,6 +84,7 @@ interface Tab {
   completedRecording: BrowserArtifact | null;
   recordingFinalization: Promise<BrowserArtifact> | null;
   recording: Recording | null;
+  navigationRequest: Request | null;
   tail: Promise<unknown>;
 }
 interface BrowserSession {
@@ -97,6 +104,9 @@ export interface BrowserArtifact {
   sizeBytes: number;
   createdAt: string;
 }
+
+export const REMOTE_BROWSER_CAPTURE_MAX_COUNT = 50;
+export const REMOTE_BROWSER_CAPTURE_MAX_BYTES = 1024 * 1024 * 1024;
 
 const BrowserCaptureIndex = Schema.Struct({
   version: Schema.Literal(1),
@@ -244,6 +254,7 @@ export class RemoteBrowserRuntime {
       completedRecording: null,
       recordingFinalization: null,
       recording: null,
+      navigationRequest: null,
       tail: Promise.resolve(),
     };
     session.tabs.set(tab.id, tab);
@@ -258,7 +269,17 @@ export class RemoteBrowserRuntime {
       if (session.tabs.size === 0) void this.closeSession(session).catch(() => undefined);
       void this.publishMetadata(session).catch(() => undefined);
     });
-    page.on("framenavigated", () => {
+    page.on("request", (request) => {
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame())
+        tab.navigationRequest = request;
+    });
+    const navigationFinished = (request: Request) => {
+      if (tab.navigationRequest === request) tab.navigationRequest = null;
+    };
+    page.on("requestfailed", navigationFinished);
+    page.on("requestfinished", navigationFinished);
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) tab.navigationRequest = null;
       void this.publishMetadata(session).catch(() => undefined);
     });
     page.on("domcontentloaded", () => {
@@ -391,6 +412,7 @@ export class RemoteBrowserRuntime {
       const index = decodeCaptureIndex(content);
       if (index.threadId !== threadId)
         throw new Error("Browser capture index ownership does not match this task.");
+      const recovered: BrowserArtifact[] = [];
       for (const capture of index.captures) {
         const extension = capture.mimeType === "image/png" ? "png" : "mp4";
         if (
@@ -406,9 +428,17 @@ export class RemoteBrowserRuntime {
         // Attachment retention can remove a file independently of this index.
         if (!stat?.isFile()) continue;
         const { fileName: _, ...metadata } = capture;
-        this.artifacts.set(path, { ...metadata, path, sizeBytes: stat.size });
-        this.artifactOwners.set(path, threadId);
+        recovered.push({ ...metadata, path, sizeBytes: stat.size });
       }
+      const retained = await this.pruneCaptures(recovered);
+      if (
+        retained.length !== index.captures.length ||
+        retained.some(
+          (capture, position) => capture.sizeBytes !== index.captures[position]?.sizeBytes,
+        )
+      )
+        await this.writeCaptureIndex(threadId, retained);
+      this.replaceArtifacts(threadId, retained);
     };
     const pending = load();
     this.artifactLoads.set(threadId, pending);
@@ -421,40 +451,91 @@ export class RemoteBrowserRuntime {
   async getArtifacts(threadId: string): Promise<BrowserArtifact[]> {
     await this.loadArtifacts(threadId);
     await this.artifactWrites.get(threadId);
-    return [...this.artifacts.values()]
-      .filter((artifact) => this.artifactOwners.get(artifact.path) === threadId)
-      .slice(-50);
+    return [...this.artifacts.values()].filter(
+      (artifact) => this.artifactOwners.get(artifact.path) === threadId,
+    );
+  }
+
+  private async pruneCaptures(captures: BrowserArtifact[], removeAll = false) {
+    let retainedBytes = captures.reduce((total, capture) => total + capture.sizeBytes, 0);
+    let removeCount = 0;
+    const maxCount = removeAll ? 0 : REMOTE_BROWSER_CAPTURE_MAX_COUNT;
+    while (
+      removeCount < captures.length &&
+      (captures.length - removeCount > maxCount || retainedBytes > REMOTE_BROWSER_CAPTURE_MAX_BYTES)
+    ) {
+      const capture = captures[removeCount++]!;
+      // These exact files came from the owned index; never sweep the shared attachment directory.
+      await NodeFSP.unlink(capture.path).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+      });
+      this.artifacts.delete(capture.path);
+      this.artifactOwners.delete(capture.path);
+      retainedBytes -= capture.sizeBytes;
+    }
+    return captures.slice(removeCount);
+  }
+
+  private replaceArtifacts(threadId: string, captures: BrowserArtifact[]) {
+    for (const [path, owner] of this.artifactOwners)
+      if (owner === threadId) {
+        this.artifactOwners.delete(path);
+        this.artifacts.delete(path);
+      }
+    for (const artifact of captures) {
+      this.artifacts.set(artifact.path, artifact);
+      this.artifactOwners.set(artifact.path, threadId);
+    }
+  }
+
+  private async writeCaptureIndex(threadId: string, artifacts: BrowserArtifact[]) {
+    const captures = artifacts.map(({ path, ...metadata }) => ({
+      ...metadata,
+      mimeType: metadata.mimeType as "image/png" | "video/mp4",
+      fileName: NodePath.basename(path),
+    }));
+    const path = this.captureIndexPath(threadId);
+    await NodeFSP.mkdir(NodePath.dirname(path), { recursive: true, mode: 0o700 });
+    const temporary = `${path}.${NodeCrypto.randomUUID()}.tmp`;
+    try {
+      await NodeFSP.writeFile(temporary, encodeCaptureIndex({ version: 1, threadId, captures }), {
+        mode: 0o600,
+      });
+      await NodeFSP.rename(temporary, path);
+    } finally {
+      await NodeFSP.rm(temporary, { force: true });
+    }
   }
 
   private rememberArtifact(threadId: string, artifact: BrowserArtifact): Promise<void> {
     const save = async () => {
+      if (this.closedThreads.has(threadId)) {
+        await NodeFSP.unlink(artifact.path).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") throw error;
+        });
+        throw new Error("This task browser has been closed.");
+      }
       await this.loadArtifacts(threadId);
       const owned = [...this.artifacts.values()].filter(
         (candidate) =>
           this.artifactOwners.get(candidate.path) === threadId && candidate.path !== artifact.path,
       );
-      const captures = [...owned, artifact].map(({ path, ...metadata }) => ({
-        ...metadata,
-        mimeType: metadata.mimeType as "image/png" | "video/mp4",
-        fileName: NodePath.basename(path),
-      }));
-      const path = this.captureIndexPath(threadId);
-      await NodeFSP.mkdir(NodePath.dirname(path), { recursive: true, mode: 0o700 });
-      const temporary = `${path}.${NodeCrypto.randomUUID()}.tmp`;
-      try {
-        await NodeFSP.writeFile(temporary, encodeCaptureIndex({ version: 1, threadId, captures }), {
-          mode: 0o600,
-        });
-        await NodeFSP.rename(temporary, path);
-      } finally {
-        await NodeFSP.rm(temporary, { force: true });
+      if (artifact.sizeBytes > REMOTE_BROWSER_CAPTURE_MAX_BYTES) {
+        await NodeFSP.unlink(artifact.path);
+        throw new Error("The browser capture exceeds this task's 1 GiB capture limit.");
       }
-      this.artifacts.set(artifact.path, artifact);
-      this.artifactOwners.set(artifact.path, threadId);
+      const retained = await this.pruneCaptures([...owned, artifact]);
+      await this.writeCaptureIndex(threadId, retained);
+      this.replaceArtifacts(threadId, retained);
     };
     const pending = (this.artifactWrites.get(threadId) ?? Promise.resolve())
       .catch(() => undefined)
-      .then(save);
+      .then(save)
+      .catch(async (error) => {
+        // A failed index write must not leave a new capture outside the retention index.
+        if (!this.artifacts.has(artifact.path)) await NodeFSP.rm(artifact.path, { force: true });
+        throw error;
+      });
     this.artifactWrites.set(threadId, pending);
     void pending
       .finally(() => {
@@ -572,6 +653,17 @@ export class RemoteBrowserRuntime {
     };
   }
 
+  private async isLoading(tab: Tab): Promise<boolean> {
+    if (tab.navigationRequest) return true;
+    const page = tab.page;
+    // Commit and DOMContentLoaded are earlier than full readiness. A replaced execution
+    // context also means we cannot yet claim the current document has finished loading.
+    return page.evaluate("document.readyState !== 'complete'").then(
+      (loading) => tab.navigationRequest !== null || loading !== false,
+      () => true,
+    );
+  }
+
   private async status(tab: Tab): Promise<PreviewAutomationStatus> {
     return {
       available: true,
@@ -579,7 +671,7 @@ export class RemoteBrowserRuntime {
       tabId: tab.id,
       url: tab.page.url(),
       title: await tab.page.title(),
-      loading: false,
+      loading: await this.isLoading(tab),
       viewport: tab.page.viewportSize() ?? { width: 1280, height: 800 },
       viewportSetting: { _tag: "fill" },
     };
@@ -819,7 +911,7 @@ export class RemoteBrowserRuntime {
     return {
       url: page.url(),
       title,
-      loading: false,
+      loading: await this.isLoading(tab),
       visibleText: text.slice(0, 32_000),
       interactiveElements: [],
       accessibilityTree: tree.slice(0, 48_000),
@@ -841,7 +933,12 @@ export class RemoteBrowserRuntime {
     if (!id) throw new Error("Invalid task identifier.");
     await NodeFSP.mkdir(this.attachmentsDirectory, { recursive: true });
     const path = NodePath.join(this.attachmentsDirectory, `${id}.png`);
-    await tab.page.screenshot({ path, type: "png", timeout: 5000, scale: "css" });
+    await tab.page
+      .screenshot({ path, type: "png", timeout: 5000, scale: "css" })
+      .catch(async (error) => {
+        await NodeFSP.rm(path, { force: true });
+        throw error;
+      });
     const artifact = {
       id,
       path,
@@ -1140,6 +1237,9 @@ export class RemoteBrowserRuntime {
         tab.completedRecording = artifact;
         await this.rememberArtifact(tab.owner.threadId, artifact);
         return artifact;
+      } catch (error) {
+        await NodeFSP.rm(recording.path, { force: true });
+        throw error;
       } finally {
         await this.stopUnusedCapture(tab);
         await this.publishMetadata(tab.owner, true);
@@ -1153,9 +1253,11 @@ export class RemoteBrowserRuntime {
   private async stopRecording(tab: Tab): Promise<BrowserArtifact> {
     const recording = tab.recording;
     if (!recording) {
-      if (tab.recordingFinalization) return tab.recordingFinalization;
-      if (tab.completedRecording) return tab.completedRecording;
-      throw new Error("This tab has no active recording.");
+      const artifact = tab.recordingFinalization
+        ? await tab.recordingFinalization
+        : tab.completedRecording;
+      if (artifact && this.artifacts.has(artifact.path)) return artifact;
+      throw new Error("This tab has no active or retained recording.");
     }
     clearInterval(recording.timer);
     clearTimeout(recording.limitTimer);
@@ -1168,7 +1270,7 @@ export class RemoteBrowserRuntime {
     }
   }
 
-  /** Deletion teardown preserves captures and profile data for the existing retention policy. */
+  /** Task deletion removes its indexed captures; browser profile and unrelated attachments remain. */
   closeThread(threadId: string): Promise<void> {
     const existing = this.threadClosures.get(threadId);
     if (existing) return existing;
@@ -1190,7 +1292,16 @@ export class RemoteBrowserRuntime {
             await this.publishMetadata(session, true);
           }
         }
-        await this.artifactWrites.get(threadId);
+        await this.artifactWrites.get(threadId)?.catch(() => undefined);
+        await this.loadArtifacts(threadId);
+        await this.pruneCaptures(
+          [...this.artifacts.values()].filter(
+            (artifact) => this.artifactOwners.get(artifact.path) === threadId,
+          ),
+          true,
+        );
+        await NodeFSP.rm(this.captureIndexPath(threadId), { force: true });
+        this.replaceArtifacts(threadId, []);
       } finally {
         this.watchers.delete(threadId);
       }

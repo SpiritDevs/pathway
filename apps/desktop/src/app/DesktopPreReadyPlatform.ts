@@ -11,6 +11,7 @@ import { HostProcessPlatform } from "@spiritdevs/shared/hostProcess";
 
 import * as DesktopEarlyElectronStartup from "./DesktopEarlyElectronStartup.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
+import { configureDesktopWebAuthn, DesktopWebAuthnConfigurationError } from "./DesktopWebAuthn.ts";
 
 export interface DesktopPreReadyCommandLineReader {
   readonly hasSwitch: (switchName: string) => boolean;
@@ -48,6 +49,10 @@ export class DesktopPreReadyElectronOptions extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcessPlatform;
+  yield* Effect.try({
+    try: () => configureDesktopWebAuthn(platform),
+    catch: (cause) => new DesktopWebAuthnConfigurationError({ cause }),
+  }).pipe(Effect.catch((error) => Effect.logWarning(error.message)));
   return yield* Effect.sync((): DesktopPreReadyElectronOptions["Service"] => {
     const linuxPasswordStoreCommandLine =
       platform === "linux"
@@ -67,7 +72,7 @@ export const make = Effect.gen(function* () {
 }).pipe(Effect.withSpan("desktop.electron.configureBeforeReady"));
 
 // Keep Electron's strict pre-ready setup isolated so later runtime layers cannot
-// observe app readiness before scheme privileges and command-line switches exist.
+// observe app readiness before platform authenticators, scheme privileges, and switches exist.
 export const layer = Layer.mergeAll(
   ElectronProtocol.layerSchemePrivileges,
   Layer.effect(DesktopPreReadyElectronOptions, make),

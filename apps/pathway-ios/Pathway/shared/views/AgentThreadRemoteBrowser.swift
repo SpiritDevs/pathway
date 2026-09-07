@@ -51,7 +51,7 @@ final class PathwayRemoteBrowserModel {
     @ObservationIgnored private var metadataRevision: Double?
 
     var takeoverStatus: String? { thread.browserTakeover?["status"]?.stringValue }
-    var canTakeControl: Bool { thread.activeRunID != nil }
+    var canTakeControl: Bool { thread.runs.contains { ["preparing", "starting", "running"].contains($0.status) } }
     func takeControl(_ action: String) async {
         do {
             var fields: [String: JSONValue] = [:]

@@ -463,7 +463,11 @@ export const layerWithOptions = (
             }),
           ),
         );
-      const requeueClaim = (effect: OrchestrationEffectV2, cause: Cause.Cause<unknown>) =>
+      const requeueClaim = (
+        effect: OrchestrationEffectV2,
+        cause: Cause.Cause<unknown>,
+        delayMs = 0,
+      ) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.void
           : outbox
@@ -471,7 +475,7 @@ export const layerWithOptions = (
                 effectId: effect.id,
                 workerId,
                 error: `Worker failed before settling the claimed effect: ${Cause.pretty(cause)}`,
-                delayMs: 0,
+                delayMs,
               })
               .pipe(
                 Effect.flatMap((requeued) =>
@@ -538,6 +542,26 @@ export const layerWithOptions = (
           ? requeueClaim(effect, cause)
           : terminalizeClaim(effect, cause);
 
+      const settleExhaustedClaim = Effect.fn("EffectWorker.settleExhaustedClaim")(function* (
+        effect: OrchestrationEffectV2,
+        error: string,
+      ) {
+        // Keep the claim recoverable until the serialized question update commits.
+        // A later claim above maxAttempts performs only this idempotent recovery,
+        // never the provider operation that has already exhausted its attempts.
+        if (Option.isSome(questionDelivery)) {
+          yield* questionDelivery.value
+            .failed({
+              threadId: effect.threadId,
+              commandId: effect.commandId,
+            })
+            .pipe(Effect.onError((cause) => requeueClaim(effect, cause, 1_000)));
+        }
+        return yield* outbox
+          .fail({ effectId: effect.id, workerId, error })
+          .pipe(Effect.onError((cause) => terminalizeClaim(effect, cause)));
+      });
+
       const runOnce = Effect.gen(function* () {
         const claimExit = yield* Effect.exit(outbox.claimNext({ workerId, leaseDurationMs }));
         yield* increment(orchestrationEffectClaimsTotal, {
@@ -585,6 +609,19 @@ export const layerWithOptions = (
         }).pipe(Effect.onError((cause) => requeueClaim(effect, cause)));
         if (cancelledBeforeExecution) return true;
 
+        if (effect.attemptCount > maxAttempts && Option.isSome(questionDelivery)) {
+          const updated = yield* settleExhaustedClaim(
+            effect,
+            effect.lastError ?? "Provider execution exhausted its retry attempts.",
+          ).pipe(Effect.ensuring(outbox.clearCancellation(effect.id)));
+          if (updated || (yield* wasCancelled(effect.id))) return true;
+          return yield* new OrchestrationEffectWorkerError({
+            operation: "reschedule",
+            effectId: effect.id,
+            cause: "The worker no longer owns the effect lease.",
+          });
+        }
+
         const execution = executor.execute(effect).pipe(Effect.as("executed" as const));
         const exit = yield* Effect.exit(Effect.raceFirst(execution, cancellation)).pipe(
           Effect.ensuring(outbox.clearCancellation(effect.id)),
@@ -623,9 +660,7 @@ export const layerWithOptions = (
               .succeed({ effectId: effect.id, workerId })
               .pipe(Effect.onError((cause) => terminalizeClaim(effect, cause)))
           : effect.attemptCount >= maxAttempts
-            ? yield* outbox
-                .fail({ effectId: effect.id, workerId, error })
-                .pipe(Effect.onError((cause) => terminalizeClaim(effect, cause)))
+            ? yield* settleExhaustedClaim(effect, error)
             : yield* outbox
                 .retry({
                   effectId: effect.id,
@@ -634,17 +669,6 @@ export const layerWithOptions = (
                   delayMs: Math.min(30_000, 100 * 2 ** Math.max(0, effect.attemptCount - 1)),
                 })
                 .pipe(Effect.onError((cause) => requeueClaim(effect, cause)));
-        if (
-          updated &&
-          !nonRetryable &&
-          effect.attemptCount >= maxAttempts &&
-          Option.isSome(questionDelivery)
-        ) {
-          yield* questionDelivery.value.failed({
-            threadId: effect.threadId,
-            commandId: effect.commandId,
-          });
-        }
         if (!updated) {
           if (yield* wasCancelled(effect.id)) return true;
           return yield* new OrchestrationEffectWorkerError({

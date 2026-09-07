@@ -5,14 +5,24 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { appendSwitchMock, getSwitchValueMock, hasSwitchMock, registerSchemesMock } = vi.hoisted(
-  () => ({
-    appendSwitchMock: vi.fn(),
-    getSwitchValueMock: vi.fn(),
-    hasSwitchMock: vi.fn(),
-    registerSchemesMock: vi.fn(),
-  }),
-);
+const {
+  appendSwitchMock,
+  getSwitchValueMock,
+  hasSwitchMock,
+  registerSchemesMock,
+  configureWebAuthnMock,
+} = vi.hoisted(() => ({
+  appendSwitchMock: vi.fn(),
+  getSwitchValueMock: vi.fn(),
+  hasSwitchMock: vi.fn(),
+  registerSchemesMock: vi.fn(),
+  configureWebAuthnMock: vi.fn(),
+}));
+
+vi.mock("./DesktopWebAuthn.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./DesktopWebAuthn.ts")>()),
+  configureDesktopWebAuthn: configureWebAuthnMock,
+}));
 
 vi.mock("electron", () => ({
   app: {
@@ -35,6 +45,7 @@ describe("DesktopPreReadyPlatform", () => {
     getSwitchValueMock.mockReset();
     hasSwitchMock.mockReset();
     registerSchemesMock.mockReset();
+    configureWebAuthnMock.mockReset();
   });
 
   it("reads an explicit Electron command-line switch value", () => {
@@ -90,6 +101,10 @@ describe("DesktopPreReadyPlatform", () => {
         registerSchemesMock.mockImplementation(() => {
           events.push("pre-ready");
         });
+        configureWebAuthnMock.mockImplementation(() => {
+          events.push("webauthn");
+          return true;
+        });
 
         const preReadyLayer = DesktopPreReadyPlatform.layer.pipe(
           Layer.provide(Layer.succeed(HostProcessPlatform, "darwin")),
@@ -122,7 +137,9 @@ describe("DesktopPreReadyPlatform", () => {
             linuxPasswordStoreCommandLine: null,
           },
         });
-        assert.deepEqual(events, ["pre-ready", "clerk"]);
+        assert.deepEqual(new Set(events.slice(0, 2)), new Set(["pre-ready", "webauthn"]));
+        assert.equal(events[2], "clerk");
+        assert.deepEqual(configureWebAuthnMock.mock.calls, [["darwin"]]);
         assert.equal(registerSchemesMock.mock.calls.length, 1);
         assert.equal(appendSwitchMock.mock.calls.length, 0);
       }),

@@ -6,7 +6,11 @@ import * as NodeEvents from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { BrowserContext, Page, chromium } from "playwright";
 import { ThreadId, type PreviewRemoteFrame } from "@spiritdevs/contracts";
-import { RemoteBrowserRuntime } from "./RemoteBrowserRuntime.ts";
+import {
+  REMOTE_BROWSER_CAPTURE_MAX_COUNT,
+  REMOTE_BROWSER_CAPTURE_MAX_BYTES,
+  RemoteBrowserRuntime,
+} from "./RemoteBrowserRuntime.ts";
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -21,6 +25,8 @@ function browserFixture() {
   const cdpEvents = new NodeEvents.EventEmitter();
   let closed = false;
   let url = "about:blank";
+  const documentState = { readyState: "complete" };
+  const mainFrame = {};
   const cdp = {
     on: cdpEvents.on.bind(cdpEvents),
     send: vi.fn(async (_method: string) => undefined),
@@ -42,8 +48,11 @@ function browserFixture() {
     fill: vi.fn(async (_text: string, _options?: { timeout?: number }) => undefined),
     pressSequentially: vi.fn(async (_text: string, _options?: { timeout?: number }) => undefined),
     waitFor: vi.fn(async (_options?: { timeout?: number }) => undefined),
+    innerText: vi.fn(async () => "Example"),
+    ariaSnapshot: vi.fn(async () => "- document"),
   };
   const page = {
+    mainFrame: () => mainFrame,
     locator: () => locator,
     getByText: () => ({ first: () => locator }),
     waitForURL: vi.fn(async (_predicate: unknown, _options?: { timeout?: number }) => undefined),
@@ -60,19 +69,24 @@ function browserFixture() {
     context: () => context,
     goto: vi.fn(async (next: string) => {
       url = next;
-      pageEvents.emit("framenavigated");
+      pageEvents.emit("framenavigated", mainFrame);
     }),
     close: vi.fn(async () => {
       closed = true;
       pageEvents.emit("close");
     }),
     mouse: { click: vi.fn(async () => undefined) },
-    evaluate: vi.fn(async (_expression: string): Promise<unknown> => null),
+    evaluate: vi.fn(
+      async (expression: string): Promise<unknown> =>
+        expression === "document.readyState !== 'complete'"
+          ? documentState.readyState !== "complete"
+          : null,
+    ),
   };
   const launch = vi.fn(
     async () => context as unknown as BrowserContext,
   ) as unknown as typeof chromium.launchPersistentContext;
-  return { page, locator, cdp, cdpEvents, context, launch };
+  return { page, pageEvents, mainFrame, locator, cdp, cdpEvents, context, launch, documentState };
 }
 const threadId = ThreadId.make("browser-lifecycle-test");
 
@@ -312,7 +326,7 @@ describe("RemoteBrowserRuntime lifecycle", () => {
     await expect(runtime.command({ action: "open", threadId })).rejects.toThrow("closed");
   });
 
-  it("finalizes an active recording when its task closes and retains its durable capture", async () => {
+  it("stops an active recording on task deletion and removes captures without touching unrelated attachments", async () => {
     const fixture = browserFixture();
     const encoder = NodePath.join(directory, "closing-encoder");
     await NodeFSP.writeFile(
@@ -323,16 +337,153 @@ describe("RemoteBrowserRuntime lifecycle", () => {
     runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch, encoder);
     const { tabs } = await runtime.command({ action: "open", threadId });
     await runtime.command({ action: "recordingStart", threadId, tabId: tabs[0]!.tabId });
+    await NodeFSP.writeFile(NodePath.join(directory, "unrelated-attachment.png"), "keep");
     await runtime.closeThread(threadId);
     expect(fixture.context.close).toHaveBeenCalledOnce();
     const state = await runtime.list(threadId);
     expect(state.tabs).toEqual([]);
-    expect(state.artifacts).toHaveLength(1);
-    expect(await NodeFSP.readFile(state.artifacts[0]!.path, "utf8")).toBe("closed-task-video");
+    expect(state.artifacts).toEqual([]);
+    expect((await NodeFSP.readdir(directory)).filter((name) => name.endsWith(".mp4"))).toEqual([]);
+    expect(
+      await NodeFSP.readFile(NodePath.join(directory, "unrelated-attachment.png"), "utf8"),
+    ).toBe("keep");
     await runtime.close();
     runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch, encoder);
     expect((await runtime.list(threadId)).artifacts).toEqual(state.artifacts);
     expect(fixture.launch).toHaveBeenCalledOnce();
+  });
+
+  it("removes a partially written failed screenshot instead of leaving an unindexed file", async () => {
+    const fixture = browserFixture();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    const { tabs } = await runtime.command({ action: "open", threadId });
+    fixture.page.screenshot.mockImplementationOnce(async (options) => {
+      if (options?.path) await NodeFSP.writeFile(options.path, "partial-capture");
+      throw new Error("Capture failed");
+    });
+    await expect(
+      runtime.command({ action: "screenshot", threadId, tabId: tabs[0]!.tabId }),
+    ).rejects.toThrow("Capture failed");
+    expect((await NodeFSP.readdir(directory)).filter((name) => name.endsWith(".png"))).toEqual([]);
+    expect((await runtime.list(threadId)).artifacts).toEqual([]);
+  });
+
+  it("prunes oldest capture files and index entries once the per-task count is reached", async () => {
+    const fixture = browserFixture();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    const { tabs } = await runtime.command({ action: "open", threadId });
+    const paths: string[] = [];
+    for (let count = 0; count <= REMOTE_BROWSER_CAPTURE_MAX_COUNT; count++) {
+      const result = await runtime.command({
+        action: "screenshot",
+        threadId,
+        tabId: tabs[0]!.tabId,
+      });
+      paths.push(result.artifact!.path);
+    }
+    const retained = (await runtime.list(threadId)).artifacts;
+    expect(retained.map((artifact) => artifact.path)).toEqual(paths.slice(1));
+    await expect(NodeFSP.stat(paths[0]!)).rejects.toMatchObject({ code: "ENOENT" });
+    const indexPath = NodePath.join(
+      directory,
+      "captures",
+      (await NodeFSP.readdir(NodePath.join(directory, "captures")))[0]!,
+    );
+    expect(await NodeFSP.readFile(indexPath, "utf8")).not.toContain(NodePath.basename(paths[0]!));
+    await runtime.close();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    expect((await runtime.list(threadId)).artifacts).toEqual(retained);
+    expect(fixture.launch).toHaveBeenCalledOnce();
+  });
+
+  it.each(["save", "restart"] as const)(
+    "enforces the byte limit on %s and task deletion removes only recovered owned files",
+    async (enforcement) => {
+      const fixture = browserFixture();
+      runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+      const { tabs } = await runtime.command({ action: "open", threadId });
+      if (enforcement === "save")
+        fixture.page.screenshot.mockImplementation(async (options) => {
+          if (options?.path) {
+            await NodeFSP.writeFile(options.path, "test-image");
+            await NodeFSP.truncate(options.path, REMOTE_BROWSER_CAPTURE_MAX_BYTES / 2 + 1);
+          }
+          return Buffer.from("jpeg");
+        });
+      const first = (
+        await runtime.command({ action: "screenshot", threadId, tabId: tabs[0]!.tabId })
+      ).artifact!;
+      const second = (
+        await runtime.command({ action: "screenshot", threadId, tabId: tabs[0]!.tabId })
+      ).artifact!;
+      // Sparse files reproduce an oversized old index without allocating the capture bytes.
+      if (enforcement === "restart") {
+        await NodeFSP.truncate(first.path, REMOTE_BROWSER_CAPTURE_MAX_BYTES / 2 + 1);
+        await NodeFSP.truncate(second.path, REMOTE_BROWSER_CAPTURE_MAX_BYTES / 2 + 1);
+      } else {
+        await expect(NodeFSP.stat(first.path)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      const unrelated = NodePath.join(directory, "ordinary-upload.png");
+      await NodeFSP.writeFile(unrelated, "keep");
+      await runtime.close();
+      runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+      const retained = (await runtime.list(threadId)).artifacts;
+      expect(retained.map((artifact) => artifact.path)).toEqual([second.path]);
+      await expect(NodeFSP.stat(first.path)).rejects.toMatchObject({ code: "ENOENT" });
+      await runtime.closeThread(threadId);
+      await expect(NodeFSP.stat(second.path)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await NodeFSP.readFile(unrelated, "utf8")).toBe("keep");
+      expect(await NodeFSP.readdir(NodePath.join(directory, "captures"))).toEqual([]);
+      expect(fixture.launch).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("reports committed and interactive documents as loading until the document completes", async () => {
+    const fixture = browserFixture();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    const { tabs } = await runtime.command({ action: "open", threadId });
+    const request = { requestId: "readiness", threadId, tabId: tabs[0]!.tabId, timeoutMs: 1000 };
+    fixture.page.goto.mockImplementationOnce(async () => {
+      fixture.documentState.readyState = "loading";
+    });
+    await expect(
+      runtime.automate({
+        ...request,
+        operation: "navigate",
+        input: { url: "https://example.com", readiness: "none" },
+      }),
+    ).resolves.toMatchObject({ loading: true });
+    for (const readyState of ["interactive", "complete"]) {
+      fixture.documentState.readyState = readyState;
+      await expect(
+        runtime.automate({ ...request, operation: "status", input: {} }),
+      ).resolves.toMatchObject({ loading: readyState !== "complete" });
+      await expect(
+        runtime.automate({ ...request, operation: "snapshot", input: {} }),
+      ).resolves.toMatchObject({ loading: readyState !== "complete" });
+    }
+    const navigationRequest = { isNavigationRequest: () => true, frame: () => fixture.mainFrame };
+    fixture.pageEvents.emit("request", navigationRequest);
+    await expect(
+      runtime.automate({ ...request, operation: "status", input: {} }),
+    ).resolves.toMatchObject({ loading: true });
+    fixture.pageEvents.emit("requestfailed", navigationRequest);
+    await expect(
+      runtime.automate({ ...request, operation: "status", input: {} }),
+    ).resolves.toMatchObject({ loading: false });
+    fixture.pageEvents.emit("request", { isNavigationRequest: () => true, frame: () => ({}) });
+    await expect(
+      runtime.automate({ ...request, operation: "status", input: {} }),
+    ).resolves.toMatchObject({ loading: false });
+    fixture.pageEvents.emit("request", navigationRequest);
+    fixture.pageEvents.emit("requestfinished", navigationRequest);
+    await expect(
+      runtime.automate({ ...request, operation: "status", input: {} }),
+    ).resolves.toMatchObject({ loading: false });
+    fixture.page.evaluate.mockRejectedValueOnce(new Error("Execution context replaced"));
+    await expect(
+      runtime.automate({ ...request, operation: "status", input: {} }),
+    ).resolves.toMatchObject({ loading: true });
   });
 
   it("cancels queued actions when the owning task is closed", async () => {

@@ -13,7 +13,6 @@ import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import { installDesktopIpcHandlers } from "../ipc/DesktopIpcHandlers.ts";
 import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
-import { configureDesktopWebAuthn, DesktopWebAuthnConfigurationError } from "./DesktopWebAuthn.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
@@ -281,10 +280,6 @@ const startup = Effect.gen(function* () {
     Effect.catchCause((cause) => fatalStartupCause("whenReady", cause)),
   );
   yield* logStartupInfo("app ready");
-  yield* Effect.try({
-    try: () => configureDesktopWebAuthn(environment.platform),
-    catch: (cause) => new DesktopWebAuthnConfigurationError({ cause }),
-  }).pipe(Effect.catch((error) => logBootstrapWarning(error.message)));
   if (environment.platform === "linux") {
     const selectedBackend = yield* safeStorage.selectedStorageBackend;
     yield* logStartupInfo("safe storage ready", {

@@ -32,4 +32,6 @@ You can replace or delete a saved login. Passkey private keys remain with their 
 
 Capture a screenshot or record the selected tab. Environment recordings are silent MP4 files. They stop after ten minutes or about 500 MiB; desktop recordings stop after ten minutes or about 100 MiB. Completed captures appear in the browser panel or in a saved-recording notification.
 
+Each task keeps up to 50 recent environment-browser captures, totaling at most 1 GiB. The oldest capture files are removed when either limit would be exceeded. Deleting the task removes its environment-browser captures. Download any copies you want to keep.
+
 Your environment needs Chromium for browser work and full FFmpeg for MP4 recording. If either is missing, Pathway shows a setup message. A recording follows its selected tab; changing tabs does not change what is being recorded.

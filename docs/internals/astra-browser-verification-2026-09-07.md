@@ -70,3 +70,11 @@ The published PR was updated after merging main at `1d62a8412`. All five review 
 Focused verification passed: 21 runtime lifecycle tests, 5 deletion-service tests, 11 web preview tests, 4 desktop WebAuthn tests, and 23 native conversation/subscription tests. Scoped server/web/desktop typechecks pass; desktop retains two existing suggestions. No repository-wide checks were run. Native results are in `/Users/coreybaines/Library/Developer/XcodeBuildMCP/workspaces/pathway-bab91144fc1c/result-bundles/test_sim_2026-09-07T04-43-51-541Z_pid86744_97475b0e.xcresult`.
 
 The model-picker and password-vault screenshots were uploaded to the PR's FileStore group. The Apple Passwords and linked-environment UI boundaries above remain unchanged.
+
+## Second PR review round
+
+The next seven review threads are addressed. Takeover waits for both host acknowledgment and caller settlement; drain timeout fails with automation still fenced. Caller timeout or cancellation cannot grant premature control. Failed question reopening remains durable and retryable before outbox terminalization, and recovery retries do not resend the provider answer. Native browser streams preserve their lossy policy for transport markers, and native takeover eligibility matches the server's preparing/starting/running statuses. Desktop WebAuthn configuration now runs in the synchronous pre-ready platform layer.
+
+Environment capture retention now removes both files and index entries beyond 50 captures or 1 GiB per task, enforces those bounds during index recovery, and removes indexed captures on task deletion. Status and snapshots derive loading from document readiness and main-frame navigation events.
+
+Focused verification includes 41 broker tests, 54 takeover-service tests, 26 browser lifecycle tests, 16 effect-worker tests, 7 desktop startup/WebAuthn tests, and 25 native conversation/subscription tests. Server and desktop package typechecks pass. Native results are in `/Users/coreybaines/Library/Developer/XcodeBuildMCP/workspaces/pathway-bab91144fc1c/result-bundles/test_sim_2026-09-07T05-24-21-357Z_pid86744_82a183a4.xcresult`. These regressions do not establish signed hardware passkey support or the outstanding linked remote UI proof described above.

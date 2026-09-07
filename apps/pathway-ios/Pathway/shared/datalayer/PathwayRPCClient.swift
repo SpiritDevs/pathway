@@ -475,10 +475,8 @@ actor PathwayRPCClient {
     /// Transport changes share the subscription queue so an old snapshot cannot overwrite
     /// a newer disconnect notification in the consumer.
     private func yieldTransportState(_ state: String) {
-        let result = subscriptionContinuation?.yield(.object(["_pathwayTransport": .string(state)]))
-        if case .dropped = result {
-            subscriptionContinuation?.finish(throwing: PathwayRPCError.disconnected)
-        }
+        guard let subscriptionContinuation else { return }
+        pathwayRPCYieldTransportState(state, to: subscriptionContinuation, policy: subscriptionBufferingPolicy)
     }
 
     private func allocateRequestID() -> Int {
@@ -500,6 +498,17 @@ func pathwayRPCBufferOverflowIsFatal(
     guard case .dropped = result else { return false }
     if case .bufferingNewest = policy { return false }
     return true
+}
+
+func pathwayRPCYieldTransportState(
+    _ state: String,
+    to continuation: AsyncThrowingStream<JSONValue, Error>.Continuation,
+    policy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy
+) {
+    let result = continuation.yield(.object(["_pathwayTransport": .string(state)]))
+    if pathwayRPCBufferOverflowIsFatal(result, policy: policy) {
+        continuation.finish(throwing: PathwayRPCError.disconnected)
+    }
 }
 
 // swiftlint:enable type_body_length

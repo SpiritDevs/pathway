@@ -2,6 +2,19 @@
 import Testing
 
 struct PathwayRPCSubscriptionTests {
+    @Test func transportChangesDoNotTerminateAFullBrowserFrameBuffer() async throws {
+        let pair = AsyncThrowingStream<JSONValue, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        pair.continuation.yield(.string("old frame"))
+        pathwayRPCYieldTransportState("connecting", to: pair.continuation, policy: .bufferingNewest(1))
+        var iterator = pair.stream.makeAsyncIterator()
+        let connecting = try await iterator.next()
+        #expect(connecting?.objectValue?["_pathwayTransport"]?.stringValue == "connecting")
+        pair.continuation.yield(.string("new connection frame"))
+        let latest = try await iterator.next()
+        #expect(latest?.stringValue == "new connection frame")
+        pair.continuation.finish()
+    }
+
     @Test func browserFramesCoalesceWithoutForcingAReconnect() async throws {
         let pair = AsyncThrowingStream<JSONValue, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
         pair.continuation.yield(.string("old frame"))

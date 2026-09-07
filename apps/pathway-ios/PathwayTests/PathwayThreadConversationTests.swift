@@ -4,6 +4,15 @@ import Testing
 
 @MainActor
 struct PathwayThreadConversationTests {
+    @Test(arguments: ["preparing", "starting", "running", "waiting", "completed", "failed"])
+    func browserTakeoverMatchesTheServerRunEligibility(status: String) {
+        let thread = makeModel { _, _ in .object([:]) }
+        thread.installSnapshot(snapshot(status: status), sequence: 1)
+        let browser = PathwayRemoteBrowserModel(thread: thread)
+        #expect(browser.canTakeControl == ["preparing", "starting", "running"].contains(status))
+        if status == "waiting" { #expect(thread.activeRunID != nil) }
+    }
+
     @Test func environmentBrowserWaitsForHostSelectionBeforeLoadingTabs() async throws {
         let thread = makeModel { _, _ in .object([:]) }
         let started = AsyncStream<Void>.makeStream()
