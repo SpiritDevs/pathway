@@ -1038,6 +1038,7 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
 });
 
 export interface DesktopBridge {
+  threadAlerts?: import("./threadAlerts.ts").DesktopThreadAlertsBridge;
   getAppBranding: () => DesktopAppBranding | null;
   // One bootstrap per pool instance currently registered with bootstrap
   // info (omits instances whose backend hasn't produced a config yet).

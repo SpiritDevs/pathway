@@ -33,6 +33,7 @@ import { Route as SettingsSourceControlRouteImport } from './routes/settings.sou
 import { Route as SettingsScheduledTasksRouteImport } from './routes/settings.scheduled-tasks'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
 import { Route as SettingsProjectsRouteImport } from './routes/settings.projects'
+import { Route as SettingsNotificationsRouteImport } from './routes/settings.notifications'
 import { Route as SettingsMembersTeamsRouteImport } from './routes/settings.members-teams'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIssuesStatusesRouteImport } from './routes/settings.issues-statuses'
@@ -184,6 +185,11 @@ const SettingsProvidersRoute = SettingsProvidersRouteImport.update({
 const SettingsProjectsRoute = SettingsProjectsRouteImport.update({
   id: '/projects',
   path: '/projects',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsMembersTeamsRoute = SettingsMembersTeamsRouteImport.update({
@@ -402,6 +408,7 @@ export interface FileRoutesByFullPath {
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/members-teams': typeof SettingsMembersTeamsRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
@@ -459,6 +466,7 @@ export interface FileRoutesByTo {
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/members-teams': typeof SettingsMembersTeamsRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
@@ -519,6 +527,7 @@ export interface FileRoutesById {
   '/settings/issues-statuses': typeof SettingsIssuesStatusesRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/members-teams': typeof SettingsMembersTeamsRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
@@ -579,6 +588,7 @@ export interface FileRouteTypes {
     | '/settings/issues-statuses'
     | '/settings/keybindings'
     | '/settings/members-teams'
+    | '/settings/notifications'
     | '/settings/projects'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
@@ -636,6 +646,7 @@ export interface FileRouteTypes {
     | '/settings/issues-statuses'
     | '/settings/keybindings'
     | '/settings/members-teams'
+    | '/settings/notifications'
     | '/settings/projects'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
@@ -695,6 +706,7 @@ export interface FileRouteTypes {
     | '/settings/issues-statuses'
     | '/settings/keybindings'
     | '/settings/members-teams'
+    | '/settings/notifications'
     | '/settings/projects'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
@@ -903,6 +915,13 @@ declare module '@tanstack/react-router' {
       path: '/projects'
       fullPath: '/settings/projects'
       preLoaderRoute: typeof SettingsProjectsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/notifications': {
+      id: '/settings/notifications'
+      path: '/notifications'
+      fullPath: '/settings/notifications'
+      preLoaderRoute: typeof SettingsNotificationsRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/members-teams': {
@@ -1194,6 +1213,7 @@ interface SettingsRouteChildren {
   SettingsIssuesStatusesRoute: typeof SettingsIssuesStatusesRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsMembersTeamsRoute: typeof SettingsMembersTeamsRoute
+  SettingsNotificationsRoute: typeof SettingsNotificationsRoute
   SettingsProjectsRoute: typeof SettingsProjectsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
   SettingsScheduledTasksRoute: typeof SettingsScheduledTasksRoute
@@ -1226,6 +1246,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsIssuesStatusesRoute: SettingsIssuesStatusesRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsMembersTeamsRoute: SettingsMembersTeamsRoute,
+  SettingsNotificationsRoute: SettingsNotificationsRoute,
   SettingsProjectsRoute: SettingsProjectsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsScheduledTasksRoute: SettingsScheduledTasksRoute,

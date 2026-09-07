@@ -683,18 +683,21 @@ export const make = Effect.gen(function* () {
               return;
             }
             const transition = attentionTransitionForEvent(event);
-            const attentionEvent =
-              transition === null
-                ? null
-                : yield* threads
-                    .getThreadShell(threadId)
-                    .pipe(
-                      Effect.map((thread) =>
-                        thread === null
-                          ? null
-                          : detectAttentionEventTransition({ environmentId, event, thread }),
-                      ),
-                    );
+            let attentionEvent: AttentionEvent | null = null;
+            if (transition !== null) {
+              const thread = yield* threads.getThreadShell(threadId);
+              if (thread !== null) {
+                const project = yield* projects.getById(thread.projectId);
+                attentionEvent = detectAttentionEventTransition({
+                  environmentId,
+                  event,
+                  thread,
+                  ...(Option.isSome(project) && project.value.repositoryIdentity?.canonicalKey
+                    ? { repositoryCanonicalKey: project.value.repositoryIdentity.canonicalKey }
+                    : {}),
+                });
+              }
+            }
             yield* Effect.logDebug("agent activity publishing queued thread publish", {
               eventType: event.type,
               threadId,

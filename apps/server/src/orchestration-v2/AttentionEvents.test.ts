@@ -55,6 +55,7 @@ it("detects each Attention Event from committed state transitions", () => {
         ),
         threadId: thread.id,
         projectKey: FocusProjectKey.make("environment:test:project:test"),
+        alertProjectKey: "environment:environment:test:project:project:test",
         eventKind: "finished-unsettled",
       },
       {
@@ -63,6 +64,7 @@ it("detects each Attention Event from committed state transitions", () => {
         ),
         threadId: thread.id,
         projectKey: FocusProjectKey.make("environment:test:project:test"),
+        alertProjectKey: "environment:environment:test:project:project:test",
         eventKind: "pending-approval",
       },
       {
@@ -71,6 +73,7 @@ it("detects each Attention Event from committed state transitions", () => {
         ),
         threadId: thread.id,
         projectKey: FocusProjectKey.make("environment:test:project:test"),
+        alertProjectKey: "environment:environment:test:project:project:test",
         eventKind: "awaiting-input",
       },
       {
@@ -79,6 +82,7 @@ it("detects each Attention Event from committed state transitions", () => {
         ),
         threadId: thread.id,
         projectKey: FocusProjectKey.make("environment:test:project:test"),
+        alertProjectKey: "environment:environment:test:project:project:test",
         eventKind: "failed",
       },
     ],
@@ -131,5 +135,26 @@ it("mints different event ids for the same transition in different environments"
     thread,
   });
 
+  assert.notEqual(first?.eventId, clone?.eventId);
+});
+
+it("uses repository identity across environments without changing event identity", () => {
+  const terminal = event("run.updated", { id: "run:stable", status: "completed" });
+  const first = detectAttentionEventTransition({
+    environmentId,
+    event: terminal,
+    thread,
+    repositoryCanonicalKey: "github.com/spiritdevs/pathway",
+  });
+  const clone = detectAttentionEventTransition({
+    environmentId: EnvironmentId.make("environment:clone"),
+    event: terminal,
+    thread,
+    repositoryCanonicalKey: "github.com/spiritdevs/pathway",
+  });
+  const fallback = detectAttentionEventTransition({ environmentId, event: terminal, thread });
+  assert.equal(first?.alertProjectKey, clone?.alertProjectKey);
+  assert.equal(first?.alertProjectKey, "github.com/spiritdevs/pathway");
+  assert.equal(first?.eventId, fallback?.eventId);
   assert.notEqual(first?.eventId, clone?.eventId);
 });

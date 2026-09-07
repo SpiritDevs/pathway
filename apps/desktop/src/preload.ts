@@ -9,6 +9,17 @@ import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
+import { createThreadAlertClickSubscription } from "./ipc/threadAlertClickQueue.ts";
+
+const subscribeThreadAlertClicks = createThreadAlertClickSubscription({
+  consume: () => ipcRenderer.invoke(IpcChannels.THREAD_ALERT_CONSUME_CLICKS_CHANNEL),
+  listen: (receive) => {
+    ipcRenderer.on(IpcChannels.THREAD_ALERT_CLICK_CHANNEL, receive);
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.THREAD_ALERT_CLICK_CHANNEL, receive);
+    };
+  },
+});
 
 exposeClerkBridge({ passkeys: true });
 
@@ -29,6 +40,14 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  threadAlerts: {
+    getSupport: () => ipcRenderer.invoke(IpcChannels.THREAD_ALERT_SUPPORT_CHANNEL),
+    show: (input) => ipcRenderer.invoke(IpcChannels.THREAD_ALERT_SHOW_CHANNEL, input),
+    close: (id) => ipcRenderer.invoke(IpcChannels.THREAD_ALERT_CLOSE_CHANNEL, id),
+    playSystemSound: () => ipcRenderer.invoke(IpcChannels.THREAD_ALERT_SYSTEM_SOUND_CHANNEL),
+    openSettings: () => ipcRenderer.invoke(IpcChannels.THREAD_ALERT_OPEN_SETTINGS_CHANNEL),
+    onClick: subscribeThreadAlertClicks,
+  },
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {

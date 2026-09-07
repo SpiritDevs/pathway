@@ -1,4 +1,5 @@
 export type SettingsPath =
+  | "/settings/notifications"
   | "/settings/general"
   | "/settings/appearance"
   | "/settings/keybindings"
@@ -82,6 +83,7 @@ const COMPANY_SCOPED_SETTINGS_PATHS: ReadonlySet<SettingsPath> = new Set([
  */
 export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
+  "/settings/notifications": "Notifications",
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
   "/settings/projects": "Projects",
@@ -120,6 +122,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     label: "Workspace",
     paths: [
       "/settings/general",
+      "/settings/notifications",
       "/settings/appearance",
       "/settings/keybindings",
       "/settings/projects",
@@ -175,6 +178,18 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
  * here once instead of separately in the panel and the index.
  */
 export const SETTINGS_SEARCH_ITEMS = [
+  { id: "thread-alerts", title: "Thread alerts", to: "/settings/notifications" },
+  {
+    id: "alert-project-overrides",
+    title: "Project alert overrides",
+    to: "/settings/notifications",
+  },
+  {
+    id: "alert-device",
+    title: "Notification sound, permissions, and test alert",
+    to: "/settings/notifications",
+  },
+  { id: "alert-quiet-hours", title: "Notification quiet hours", to: "/settings/notifications" },
   {
     id: "company-members",
     title: "Members and invitations",

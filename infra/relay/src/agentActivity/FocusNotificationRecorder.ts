@@ -50,6 +50,9 @@ export const make = Effect.gen(function* () {
           threadId: input.event.threadId,
           projectKey: input.event.projectKey,
           eventKind: input.event.eventKind,
+          ...(input.event.alertProjectKey !== undefined
+            ? { alertProjectKey: input.event.alertProjectKey }
+            : {}),
         })
         .pipe(
           Effect.mapError(

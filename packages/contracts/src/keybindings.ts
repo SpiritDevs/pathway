@@ -87,6 +87,7 @@ export const BUILT_IN_KEYBINDING_COMMANDS = [
   "projectSearch.toggle",
   "themeEditor.toggle",
   "focus.cycle",
+  "threadAlerts.toggle",
   "composer.stash",
   "chat.new",
   "chat.newLocal",

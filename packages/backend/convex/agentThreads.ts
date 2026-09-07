@@ -6,6 +6,7 @@ import type { Doc } from "./_generated/dataModel.js";
 import { mutation, type MutationCtx } from "./_generated/server.js";
 import { appendCompanyChanges, encodeAgentThread } from "./lib/companyApply.ts";
 import { backendError } from "./lib/errors.ts";
+import { deleteThreadAlertPolicies } from "./lib/threadAlertPolicy.ts";
 import {
   actorRecord,
   requireCompanyActor,
@@ -239,6 +240,7 @@ async function removeRows(
   const changes = [];
   for (const row of rows) {
     const project = await ctx.db.get(row.cloudProjectId);
+    await deleteThreadAlertPolicies(ctx, row.environmentId, row.threadId);
     await ctx.db.delete(row._id);
     changes.push({
       entityKind: "agentThread" as const,
@@ -274,6 +276,7 @@ export const remove = mutation({
           .eq("threadId", threadId),
       )
       .unique();
+    if (row === null) await deleteThreadAlertPolicies(ctx, environmentId, threadId);
     await removeRows(ctx, actor, row === null ? [] : [row]);
     return null;
   },

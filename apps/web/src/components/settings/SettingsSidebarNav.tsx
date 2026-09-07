@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import {
+  BellIcon,
   ActivityIcon,
   ArchiveIcon,
   ArrowLeftIcon,
@@ -79,6 +80,7 @@ import {
 const SETTINGS_SECTION_ICONS: Readonly<
   Record<SettingsPath, ComponentType<{ className?: string }>>
 > = {
+  "/settings/notifications": BellIcon,
   "/settings/general": Settings2Icon,
   "/settings/appearance": PaletteIcon,
   "/settings/keybindings": KeyboardIcon,

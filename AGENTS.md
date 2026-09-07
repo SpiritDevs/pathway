@@ -52,6 +52,14 @@ We need to be on the same page with terminology. When communicating, use this la
 - **turn** means one user-to-agent cycle, including follow-up work such as checkpointing.
 - **Pathway home** means the base data directory. Runtime state normally lives below its userdata directory.
 
+## Pathway Cloud is required
+
+Users must sign in to Pathway Cloud before they can use the app. Pathway has no unsigned or
+local-only product mode. In this repo, **local** means the environment or server runs on the user's
+machine. It does not mean the client works without a cloud account. Do not build fallback identity,
+preference, or feature paths for signed-out use unless the maintainers explicitly change this
+requirement.
+
 ## The three ways to hurt yourself
 
 1. **Killing by pattern.** Never `pkill -f`, `pgrep | kill`, or `kill` a PID you found by matching a name, path, or worktree string. Your own agent process has this worktree's path in its argv, and this machine runs several other dev servers at once. Kill only a PID you captured at spawn, or the owner of your port from `ss -H -ltnp` after confirming `/proc/<pid>/cwd` is your worktree.
