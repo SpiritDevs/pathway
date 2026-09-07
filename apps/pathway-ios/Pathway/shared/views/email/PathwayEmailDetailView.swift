@@ -87,7 +87,7 @@ struct PathwayEmailDetailView: View {
 #if canImport(WebKit) && canImport(UIKit)
 /// Captured HTML is untrusted mail. Scripts, forms, frames and remote resources stay blocked
 /// unless the reader explicitly enables images/styles for this message.
-private struct PathwayEmailHTMLView: UIViewRepresentable {
+struct PathwayEmailHTMLView: UIViewRepresentable {
     let html: String
     let allowRemote: Bool
     @Environment(\.openURL) private var openURL

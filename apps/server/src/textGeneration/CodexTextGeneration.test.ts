@@ -55,6 +55,8 @@ function makeFakeCodexBinary(
       codexPath,
       [
         "#!/bin/sh",
+        'case "$*" in *"mcp list --json"*) printf \'%s\\n\' \'[{"name":"private-tools"}]\'; exit 0 ;; esac',
+
         'original_args="$*"',
         'output_path=""',
         "image_count=0",
@@ -711,6 +713,23 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
             .pipe(Effect.ensuring(fs.remove(imagePath).pipe(Effect.catch(() => Effect.void))));
 
           expect(generated.text).toContain("The reconnect path drops the queued turn.");
+        }),
+    ),
+  );
+
+  it.effect("disables configured MCP servers and shell tools for private mail analysis", () =>
+    withFakeCodexEnv(
+      {
+        output: '{"bucket":"noise","reason":"Newsletter"}',
+        requireArg: String.raw`mcp_servers.\"private-tools\".enabled=false`,
+        forbidArg: "features.shell_tool=true",
+      },
+      (generation) =>
+        generation.investigate({
+          cwd: process.cwd(),
+          prompt: "Classify this email.",
+          contentOnly: true,
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
         }),
     ),
   );

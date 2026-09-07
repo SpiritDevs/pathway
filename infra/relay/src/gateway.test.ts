@@ -55,3 +55,24 @@ describe("relay gateway", () => {
     });
   });
 });
+
+it("permits the OAuth state cookie only on mail credentialed CORS responses", async () => {
+  const fetch = vi.fn().mockResolvedValue(new Response("ok"));
+  const response = await relayGateway.fetch(
+    new Request("https://relay.example.test/v1/mail/oauth/start", {
+      method: "POST",
+      headers: { origin: "https://app.example.test" },
+    }),
+    { API: { fetch } as never },
+  );
+  expect(response.headers.get("access-control-allow-origin")).toBe("https://app.example.test");
+  expect(response.headers.get("access-control-allow-credentials")).toBe("true");
+  expect(response.headers.get("vary")).toBe("Origin");
+  const normal = await relayGateway.fetch(
+    new Request("https://relay.example.test/v1/environments", {
+      headers: { origin: "https://app.example.test" },
+    }),
+    { API: { fetch: vi.fn().mockResolvedValue(new Response("ok")) } as never },
+  );
+  expect(normal.headers.get("access-control-allow-credentials")).toBeNull();
+});

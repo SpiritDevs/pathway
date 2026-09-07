@@ -10,12 +10,23 @@ const CORS_PREFLIGHT_HEADERS = {
   "access-control-max-age": "86400",
 } as const;
 
-const withCors = (response: Response): Response => {
+const mailCors = (request: Request) => {
+  const origin = request.headers.get("origin");
+  return new URL(request.url).pathname.startsWith("/v1/mail/") && origin && origin !== "null"
+    ? {
+        "access-control-allow-origin": origin,
+        "access-control-allow-credentials": "true",
+        vary: "Origin",
+      }
+    : {};
+};
+const withCors = (response: Response, request: Request): Response => {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(CORS_PREFLIGHT_HEADERS)) {
     if (name === "access-control-max-age") continue;
     headers.set(name, value);
   }
+  for (const [name, value] of Object.entries(mailCors(request))) headers.set(name, value);
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -47,13 +58,13 @@ export const relayGateway = {
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
-        headers: CORS_PREFLIGHT_HEADERS,
+        headers: { ...CORS_PREFLIGHT_HEADERS, ...mailCors(request) },
       });
     }
     try {
-      return withCors(await environment.API.fetch(request));
+      return withCors(await environment.API.fetch(request), request);
     } catch {
-      return withCors(relayUnavailableResponse());
+      return withCors(relayUnavailableResponse(), request);
     }
   },
 } satisfies ExportedHandler<RelayGatewayEnvironment>;

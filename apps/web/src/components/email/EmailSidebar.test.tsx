@@ -2,7 +2,12 @@ import { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { EmailEnvironmentSelect, EmailSourceToggle } from "./EmailSidebar";
+import {
+  ConnectedMailSidebarItems,
+  EmailEnvironmentSelect,
+  EmailSourceToggle,
+} from "./EmailSidebar";
+import { SidebarProvider } from "../ui/sidebar";
 import { buildEmailSidebarProjects } from "./emailSidebar.logic";
 
 describe("buildEmailSidebarProjects", () => {
@@ -124,5 +129,29 @@ describe("EmailSourceToggle", () => {
 
     expect(markup).toMatch(/<button[^>]*aria-pressed="true"[^>]*>Gmail<\/button>/);
     expect(markup).toContain("translate-x-full");
+  });
+});
+
+describe("connected mail sidebar", () => {
+  it("shows actual mailbox views and settings without capture controls or a placeholder", () => {
+    const markup = renderToStaticMarkup(
+      <SidebarProvider>
+        <ConnectedMailSidebarItems bucket="noise" onBucket={() => {}} onSettings={() => {}} />
+      </SidebarProvider>,
+    );
+    for (const label of ["Priority", "Noise", "All mail", "Drafts", "Mail settings"])
+      expect(markup).toContain(label);
+    for (const capturedOnly of [
+      "Environments",
+      "Projects",
+      "Capture toasts",
+      "Unassigned",
+      "not available yet",
+    ])
+      expect(markup).not.toContain(capturedOnly);
+    const noiseButton = [...markup.matchAll(/<button[\s\S]*?<\/button>/g)].find(([button]) =>
+      button.includes("<span>Noise</span>"),
+    )?.[0];
+    expect(noiseButton).toContain('data-active="true"');
   });
 });

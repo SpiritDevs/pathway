@@ -87,6 +87,8 @@ export interface ThreadTitleGenerationResult {
  */
 export interface InvestigationGenerationInput {
   cwd: string;
+  /** Disable tools for untrusted supplied content such as connected mail. */
+  contentOnly?: boolean | undefined;
   /** The whole instruction set. Built by the caller: this module knows nothing about issues. */
   prompt: string;
   /**

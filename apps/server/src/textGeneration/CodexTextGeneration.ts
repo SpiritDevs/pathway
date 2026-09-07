@@ -48,6 +48,9 @@ type CodexTextGenerationOperation =
   | "generateThreadTitle"
   | "investigate";
 
+const decodeCodexMcpList = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Array(Schema.Struct({ name: Schema.String }))),
+);
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 /**
  * Build a Codex text-generation closure bound to a specific `CodexSettings`
@@ -368,6 +371,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
    */
   const runCodexInvestigation = Effect.fn("runCodexInvestigation")(function* (input: {
     cwd: string;
+    contentOnly?: boolean | undefined;
     prompt: string;
     onOutput: ((chunk: string) => Effect.Effect<void>) | undefined;
     imagePaths: ReadonlyArray<string>;
@@ -383,6 +387,90 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort") ??
         DEFAULT_TEXT_GENERATION_REASONING_EFFORT;
       const serviceTier = getCodexServiceTierOptionValue(input.modelSelection);
+      const contentConfig: string[] = [];
+      if (input.contentOnly) {
+        // Enumerate names only in memory; config may contain credentials and is never logged.
+        const listCommand = yield* resolveSpawnCommand(
+          codexConfig.binaryPath || "codex",
+          [...codexExecLaunchArgs(launchArgs), "mcp", "list", "--json"],
+          { env: resolvedEnvironment },
+        );
+        const listing = yield* commandSpawner
+          .spawn(
+            ChildProcess.make(listCommand.command, listCommand.args, {
+              env: {
+                ...resolvedEnvironment,
+                ...(codexConfig.homePath
+                  ? { CODEX_HOME: expandHomePath(codexConfig.homePath) }
+                  : {}),
+              },
+              cwd: input.cwd,
+              shell: listCommand.shell,
+            }),
+          )
+          .pipe(
+            Effect.mapError(
+              () =>
+                new TextGenerationError({
+                  operation,
+                  detail: "Could not isolate Codex mail tools.",
+                }),
+            ),
+          );
+        yield* Effect.addFinalizer(() => listing.kill().pipe(Effect.ignore));
+        const [raw, , code] = yield* Effect.all(
+          [
+            readStreamAsString(operation, listing.stdout),
+            readStreamAsString(operation, listing.stderr),
+            listing.exitCode,
+          ],
+          { concurrency: "unbounded" },
+        ).pipe(
+          Effect.mapError(
+            () =>
+              new TextGenerationError({
+                operation,
+                detail: "Could not inspect Codex tool configuration.",
+              }),
+          ),
+        );
+        if (code !== 0)
+          return yield* new TextGenerationError({
+            operation,
+            detail: "Could not inspect Codex tool configuration.",
+          });
+        const servers = yield* decodeCodexMcpList(raw).pipe(
+          Effect.mapError(
+            () =>
+              new TextGenerationError({
+                operation,
+                detail: "Codex returned an unsupported tool configuration.",
+              }),
+          ),
+        );
+        contentConfig.push(
+          ...servers.map(({ name }) => `mcp_servers.${JSON.stringify(name)}.enabled=false`),
+        );
+        contentConfig.push(
+          "features.shell_tool=false",
+          "features.shell_snapshot=false",
+          "features.multi_agent=false",
+          "features.multi_agent_v2=false",
+          "agents.enabled=false",
+          "features.apps=false",
+          "features.plugins=false",
+          "features.hooks=false",
+          "features.computer_use=false",
+          "features.in_app_browser=false",
+          "features.tool_suggest=false",
+          "features.code_mode=false",
+          "features.code_mode_host=false",
+          "features.view_image_tool=false",
+          "include_apply_patch_tool=false",
+          'web_search="disabled"',
+          "project_doc_max_bytes=0",
+        );
+      }
       const spawnCommand = yield* resolveSpawnCommand(
         codexConfig.binaryPath || "codex",
         [
@@ -397,6 +485,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           "--config",
           `model_reasoning_effort="${reasoningEffort}"`,
           ...(serviceTier ? ["--config", `service_tier="${serviceTier}"`] : []),
+          ...contentConfig.flatMap((setting) => ["--config", setting]),
           "--output-last-message",
           outputPath,
           ...imagePaths.flatMap((imagePath) => ["--image", imagePath]),
@@ -590,6 +679,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     // Scoped here rather than inside: the temp file holding the model's answer has to outlive the
     // process that wrote it and die with the call that reads it.
     const text = yield* runCodexInvestigation({
+      contentOnly: input.contentOnly,
       cwd: input.cwd,
       prompt: input.prompt,
       onOutput: input.onOutput,

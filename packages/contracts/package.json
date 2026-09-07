@@ -46,6 +46,10 @@
     "./legacy-orchestration": {
       "types": "./src/orchestration.ts",
       "import": "./src/orchestration.ts"
+    },
+    "./mail": {
+      "types": "./src/mail.ts",
+      "import": "./src/mail.ts"
     }
   },
   "scripts": {

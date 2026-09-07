@@ -103,7 +103,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/issues-import": "Import",
   "/settings/issues-enrichment": "Enrichment",
   "/settings/integrations": "Integrations",
-  "/settings/email": "Capture",
+  "/settings/email": "Email",
   "/settings/archived": "Archive",
   "/settings/diagnostics": "Diagnostics",
 };

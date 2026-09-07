@@ -296,6 +296,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
    */
   const runClaudeInvestigation = Effect.fn("runClaudeInvestigation")(function* (input: {
     cwd: string;
+    contentOnly?: boolean | undefined;
     prompt: string;
     onOutput: ((chunk: string) => Effect.Effect<void>) | undefined;
     modelSelection: ModelSelection;
@@ -316,6 +317,18 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           "text",
           "--permission-mode",
           "plan",
+          ...(input.contentOnly
+            ? [
+                "--tools",
+                "",
+                "--strict-mcp-config",
+                "--mcp-config",
+                '{"mcpServers":{}}',
+                "--setting-sources",
+                "",
+                "--no-session-persistence",
+              ]
+            : []),
           "--model",
           resolveClaudeApiModelId(input.modelSelection),
           ...(cliEffort ? ["--effort", cliEffort] : []),
@@ -485,6 +498,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     "ClaudeTextGeneration.investigate",
   )(function* (input) {
     const text = yield* runClaudeInvestigation({
+      contentOnly: input.contentOnly,
       cwd: input.cwd,
       prompt: input.prompt,
       onOutput: input.onOutput,

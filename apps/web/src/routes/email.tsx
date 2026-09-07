@@ -1,6 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 
+import { isCapturedEmailSearch } from "../components/email/connectedMail.logic";
+import { ConnectedMailView } from "../components/email/ConnectedMailView";
 import { EmailView } from "../components/email/EmailView";
 import {
   parseEmailSearch,
@@ -23,7 +25,12 @@ function EmailRoute() {
     [navigate],
   );
 
-  return <EmailView onSearch={onSearch} search={search} />;
+  const captured = isCapturedEmailSearch(search);
+  return captured ? (
+    <EmailView onSearch={onSearch} search={search} />
+  ) : (
+    <ConnectedMailView key={search.source ?? "mail"} onSearch={onSearch} search={search} />
+  );
 }
 
 export const Route = createFileRoute("/email")({

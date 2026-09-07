@@ -1,6 +1,6 @@
 # Pathway Mail — connected mailboxes
 
-Status: design in progress. Successor to `local-smtp-capture.md`, which explicitly deferred this
+Status: Gmail baseline implemented locally; external configuration and live verification remain. Successor to `local-smtp-capture.md`, which explicitly deferred this
 work: *"The Gmail side keeps rendering its placeholder. Direct mailbox integration (Gmail,
 Outlook, self-hosted) is separate work and will land in the Email settings group this plan
 creates."*
@@ -9,6 +9,24 @@ Revision 4 — 2026-08-21. Corey ruled out BYO OAuth and required instant cross-
 asked whether an environment should host the mail connection so its agent CLIs can do the agentic
 work. Answer: split by availability requirement — the relay ingests, the environment thinks. Bytes
 go to UploadThing, which is already wired for issue attachments.
+
+## Accepted implementation decisions, 2026-09-08
+
+The current implementation follows the decisions below. The revision 4 proposal retained afterward is historical context; where it disagrees, these decisions take precedence.
+
+- This work is the connected email system only.
+- Pathway Connect and a signed-in membership are required. Mail accounts belong to their connecting member within a workspace. Other members and company administrators do not gain mailbox access.
+- Gmail comes first. Bring-your-own Google OAuth web client is the first connection mode; a Pathway-owned client uses the same relay credential-source interface when configured.
+- The relay owns ingestion, OAuth refresh, Gmail cursors, watch renewal and fallback reconciliation. Environments never fetch Gmail directly. Clients subscribe to bounded cloud queries.
+- Credentials use authenticated envelope encryption. Attachment and raw-message bytes use private storage and authorized downloads. Secrets and bodies are excluded from broad company feeds.
+- A primary environment processes each message with an explicitly selected provider instance and model. An optional backup has its own instance selection because provider instance identities are environment-local. Leased jobs reject results from stale workers. Work waits visibly when neither environment is available.
+- Every message has a Priority or Noise bucket and a reason. Priority messages receive a briefing. A Noise-to-Priority correction saves a sender rule and queues a briefing immediately. Manual corrections take precedence over in-flight model results.
+- Sender history is private accumulated mailbox knowledge. Saving a contact is an explicit action with the destination directory's existing shared visibility made clear. Existing company contacts are reused.
+- Agent replies are drafts. Only an explicit Send action creates an outbound operation. Uncertain sends must not be retried blindly.
+- Existing SMTP capture remains available. Connected mail uses the web/desktop email entry point, dedicated mail settings and native Apple client integration.
+- Google credentials, Pub/Sub delivery identity, encryption keys, private storage and deployment are external setup requirements. Local fixtures prove implementation behavior; they do not prove production delivery.
+
+Implementation ownership: backend contracts/storage/job fencing; relay OAuth/ingestion/storage/delivery; client inbox/settings/drafts; environment model worker; native integration and documentation. Unrelated secret-store migrations, SMTP query rewrites, and software-update work are outside this change.
 
 ## Context
 

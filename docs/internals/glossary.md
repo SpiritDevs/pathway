@@ -2,6 +2,26 @@
 
 Project-specific vocabulary beyond the small glossary in `AGENTS.md`. Be opinionated: one canonical word per concept; alternates go under _Avoid_.
 
+## Connected mail
+
+**Mail account**:
+One member's connected Gmail mailbox within a workspace. Its messages, drafts and sender knowledge are private to that member. The relay owns synchronization and encrypted OAuth credentials. See [connected mail architecture](connected-mail.md).
+
+**Mail brain**:
+The selected environment, provider instance and model that analyze a mail account. An optional backup environment has its own provider selection. Ingestion continues while analysis environments are offline.
+
+**Bucket**:
+A message's Priority or Noise classification, accompanied by a reason. A pending analysis status distinguishes provisional placement from completed analysis.
+
+**Briefing**:
+The model's concise summary of a Priority message, including concrete actions or deadlines. Promoting Noise to Priority requests a briefing.
+
+**Sender rule**:
+The owner's remembered bucket choice for an address within one mail account. Removing it lets subsequent analysis choose the bucket again.
+
+**Sender knowledge**:
+Private accumulated information about a sender within a mail account. It is separate from the shared contact directory; saving a contact copies only the explicitly confirmed contact fields.
+
 ## Agent questions
 
 The following terms support the [Astra design record](../adr/0014-astra-questions-and-browser-scope.md). They describe the design under discussion, not shipped support.

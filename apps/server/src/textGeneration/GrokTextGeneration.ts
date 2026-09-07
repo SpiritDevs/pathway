@@ -292,6 +292,14 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
   const investigate: TextGeneration.TextGeneration["Service"]["investigate"] = Effect.fn(
     "GrokTextGeneration.investigate",
   )(function* (input) {
+    if (input.contentOnly) {
+      return yield* new TextGenerationError({
+        operation: "investigate",
+        detail:
+          "Grok does not support tool-free mail analysis. Select Codex, Claude or OpenCode for this mailbox.",
+      });
+    }
+
     const text = yield* runGrokText({
       operation: "investigate",
       cwd: input.cwd,
