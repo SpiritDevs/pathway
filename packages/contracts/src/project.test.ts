@@ -3,6 +3,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ProjectReadFileError,
+  ProjectReadFileResult,
+  ProjectWriteFileInput,
+  ProjectWriteFileResult,
   ProjectInspectDirectoryInput,
   ProjectMutation,
   ProjectSearchContentsError,
@@ -15,6 +18,10 @@ import {
 const decodeSearchEntriesInput = Schema.decodeUnknownSync(ProjectSearchEntriesInput);
 const decodeSearchContentsInput = Schema.decodeUnknownSync(ProjectSearchContentsInput);
 const decodeInspectDirectoryInput = Schema.decodeUnknownSync(ProjectInspectDirectoryInput);
+const decodeFileWrite = Schema.decodeUnknownSync(ProjectWriteFileInput);
+const decodeFileRead = Schema.decodeUnknownSync(ProjectReadFileResult);
+const decodeFileWriteResult = Schema.decodeUnknownSync(ProjectWriteFileResult);
+const decodeFileWriteError = Schema.decodeUnknownSync(ProjectWriteFileError);
 
 describe("project search inputs", () => {
   it("accepts a concrete directory for repository inspection", () => {
@@ -170,5 +177,38 @@ describe("project RPC errors", () => {
     expect(writeError.message).toBe("Legacy project write failure.");
     expect(writeError.relativePath).toBeUndefined();
     expect(writeError.failure).toBeUndefined();
+  });
+});
+
+describe("workspace file revisions", () => {
+  it("accepts legacy file requests and responses during rolling upgrades", () => {
+    const input = { cwd: "/workspace", relativePath: "a.txt", contents: "edit" };
+    expect(decodeFileWrite(input)).toEqual(input);
+    const read = { relativePath: "a.txt", contents: "original", byteLength: 8, truncated: false };
+    expect(decodeFileRead(read)).toEqual(read);
+    expect(decodeFileWriteResult({ relativePath: "a.txt" })).toEqual({
+      relativePath: "a.txt",
+    });
+  });
+
+  it("preserves an expected revision and exposes conflicts as actionable typed errors", () => {
+    expect(
+      decodeFileWrite({
+        cwd: "/workspace",
+        relativePath: "a.txt",
+        contents: "edit",
+        expectedRevision: "abc123",
+      }).expectedRevision,
+    ).toBe("abc123");
+    const error = new ProjectWriteFileError({
+      cwd: "/workspace",
+      relativePath: "a.txt",
+      failure: "revision_conflict",
+    });
+    const decoded = decodeFileWriteError(error);
+    expect(decoded.failure).toBe("revision_conflict");
+    expect(decoded.message).toBe(
+      "Workspace file 'a.txt' changed. Reload it before saving your edits.",
+    );
   });
 });

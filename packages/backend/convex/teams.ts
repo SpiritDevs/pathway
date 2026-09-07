@@ -296,6 +296,34 @@ export const archive = mutation({
   },
 });
 
+export const restore = mutation({
+  args: { companyId: domainIdArg, teamId: domainIdArg },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    requireOrganizationWorkspace(actor);
+    requirePermission(actor, "teams.manage");
+    const team = await requireTeam(ctx, actor.company._id, args.teamId);
+    if (team.archivedAt === null) return null;
+    const patch = { archivedAt: null, updatedAt: Date.now() };
+    await ctx.db.patch(team._id, patch);
+    await appendCompanyChanges(ctx, {
+      companyId: actor.company._id,
+      actor: actorRecord(actor),
+      changes: [
+        {
+          entityKind: "team",
+          entityId: team.id,
+          changeKind: "upsert",
+          versionDocId: team._id,
+          payload: encodeTeam({ ...team, ...patch }),
+        },
+      ],
+    });
+    return null;
+  },
+});
+
 export const addMember = mutation({
   args: { companyId: domainIdArg, teamId: domainIdArg, membershipId: domainIdArg },
   returns: v.null(),

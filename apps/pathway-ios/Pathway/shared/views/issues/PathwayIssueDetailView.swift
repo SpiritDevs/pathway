@@ -164,7 +164,9 @@ struct PathwayIssueDetailView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 28)
                 }
+                #if !os(visionOS)
                 .scrollDismissesKeyboard(.interactively)
+                #endif
                 .accessibilityIdentifier("issue-detail-content")
             } else {
                 List {

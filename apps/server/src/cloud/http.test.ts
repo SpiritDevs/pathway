@@ -17,7 +17,14 @@ import {
 } from "effect/unstable/http";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { EnvironmentId } from "@spiritdevs/contracts";
+import {
+  AuthRelayReadScope,
+  AuthRelayWriteScope,
+  AuthSessionId,
+  EnvironmentAuthenticatedPrincipal,
+  EnvironmentId,
+  type EnvironmentSessionPrincipalShape,
+} from "@spiritdevs/contracts";
 import type {
   RelayCloudMintCredentialProofPayload,
   RelayValidatedConnectGrantIdentity,
@@ -52,6 +59,7 @@ import {
 } from "./config.ts";
 import {
   applyCloudRelayConfig,
+  authorizeCloudLinkOrigin,
   type CloudHttpDependencies,
   cloudMintCredentialHandler,
   consumeCloudReplayGuards,
@@ -992,5 +1000,125 @@ describe("cloud relay config replacement", () => {
         managedTunnelLocalPort: null,
       });
     }),
+  );
+});
+
+describe("paired remote account linking", () => {
+  const principal = (overrides: Partial<EnvironmentSessionPrincipalShape> = {}) =>
+    ({
+      sessionId: AuthSessionId.make("paired-mobile-session"),
+      subject: "paired-user",
+      method: "dpop-access-token",
+      scopes: new Set([AuthRelayReadScope, AuthRelayWriteScope]),
+      proofKeyThumbprint: "verified-device-proof-key",
+      ...overrides,
+    }) satisfies EnvironmentSessionPrincipalShape;
+
+  const request = (
+    url = "http://192.168.1.50:3800/api/connect/link-proof",
+    headers: Record<string, string> = {},
+  ) => HttpServerRequest.fromWeb(new Request(url, { headers }));
+
+  it.effect("uses the configured listener for an administrator paired over LAN", () =>
+    Effect.gen(function* () {
+      const origin = yield* authorizeCloudLinkOrigin(3_800).pipe(
+        Effect.provideService(EnvironmentAuthenticatedPrincipal, principal()),
+        Effect.provideService(HttpServerRequest.HttpServerRequest, request()),
+      );
+      expect(origin).toEqual({ localHttpHost: "127.0.0.1", localHttpPort: 3_800 });
+    }),
+  );
+
+  it.effect("never chooses a DPoP tunnel target from attacker-controlled Host or port", () =>
+    Effect.gen(function* () {
+      for (const url of [
+        "http://127.0.0.1:9222/api/connect/link-proof",
+        "https://attacker.test:444/api/connect/link-proof",
+      ]) {
+        const origin = yield* authorizeCloudLinkOrigin(3_800).pipe(
+          Effect.provideService(EnvironmentAuthenticatedPrincipal, principal()),
+          Effect.provideService(HttpServerRequest.HttpServerRequest, request(url)),
+        );
+        expect(origin).toEqual({ localHttpHost: "127.0.0.1", localHttpPort: 3_800 });
+      }
+    }),
+  );
+
+  it.effect("rejects supplied origins naming other services before issuing a link proof", () =>
+    Effect.gen(function* () {
+      for (const origin of [
+        { localHttpHost: "127.0.0.1", localHttpPort: 9_222 },
+        { localHttpHost: "attacker.test", localHttpPort: 3_800 },
+      ]) {
+        const result = yield* Effect.result(
+          authorizeCloudLinkOrigin(3_800, origin).pipe(
+            Effect.provideService(EnvironmentAuthenticatedPrincipal, principal()),
+            Effect.provideService(HttpServerRequest.HttpServerRequest, request()),
+          ),
+        );
+        expect(result._tag).toBe("Failure");
+      }
+    }),
+  );
+
+  it.effect("rejects non-admin and unbound remote sessions", () =>
+    Effect.gen(function* () {
+      for (const actor of [
+        principal({ scopes: new Set([AuthRelayReadScope]) }),
+        principal({ method: "bearer-access-token", proofKeyThumbprint: "" }),
+        principal({ method: "browser-session-cookie", proofKeyThumbprint: "" }),
+        principal({ proofKeyThumbprint: "" }),
+      ]) {
+        const result = yield* Effect.result(
+          authorizeCloudLinkOrigin(3_800).pipe(
+            Effect.provideService(EnvironmentAuthenticatedPrincipal, actor),
+            Effect.provideService(HttpServerRequest.HttpServerRequest, request()),
+          ),
+        );
+        expect(result._tag).toBe("Failure");
+      }
+    }),
+  );
+
+  it.effect("rejects forwarded authorities and an unavailable configured listener", () =>
+    Effect.gen(function* () {
+      for (const header of ["x-forwarded-host", "x-forwarded-proto", "forwarded"]) {
+        const result = yield* Effect.result(
+          authorizeCloudLinkOrigin(3_800).pipe(
+            Effect.provideService(EnvironmentAuthenticatedPrincipal, principal()),
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              request(undefined, { [header]: "attacker.test:9222" }),
+            ),
+          ),
+        );
+        expect(result._tag).toBe("Failure");
+      }
+      for (const port of [undefined, 0, 65_536, 3.5]) {
+        const result = yield* Effect.result(
+          authorizeCloudLinkOrigin(port).pipe(
+            Effect.provideService(EnvironmentAuthenticatedPrincipal, principal()),
+            Effect.provideService(HttpServerRequest.HttpServerRequest, request()),
+          ),
+        );
+        expect(result._tag).toBe("Failure");
+      }
+    }),
+  );
+
+  it.effect("preserves existing local desktop browser sessions", () =>
+    authorizeCloudLinkOrigin(3_800).pipe(
+      Effect.provideService(
+        EnvironmentAuthenticatedPrincipal,
+        principal({ method: "browser-session-cookie", proofKeyThumbprint: "" }),
+      ),
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        request("http://localhost:3000/api/connect/link-proof"),
+      ),
+      Effect.map((origin) =>
+        expect(origin).toEqual({ localHttpHost: "127.0.0.1", localHttpPort: 3_000 }),
+      ),
+    ),
   );
 });

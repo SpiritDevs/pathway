@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { SelectWebauthnAccountDetails } from "electron";
+import { dialog, type Session, type SelectWebauthnAccountDetails } from "electron";
 vi.mock("electron", () => ({ dialog: { showMessageBox: vi.fn() } }));
-import { selectPreviewWebAuthnAccount } from "./WebAuthn.ts";
+import { installPreviewWebAuthnAccountPicker, selectPreviewWebAuthnAccount } from "./WebAuthn.ts";
 
 function request() {
   return {
@@ -15,6 +15,34 @@ function request() {
 }
 
 describe("selectPreviewWebAuthnAccount", () => {
+  it("prevents Electron's default choice synchronously before awaiting the account picker", async () => {
+    let listener:
+      | ((
+          event: { preventDefault: () => void },
+          details: SelectWebauthnAccountDetails,
+          callback: (id?: string | null) => void,
+        ) => void)
+      | undefined;
+    const session = {
+      on: vi.fn((_name: string, handler: NonNullable<typeof listener>) => {
+        listener = handler;
+      }),
+    };
+    const choice = Promise.withResolvers<{ response: number; checkboxChecked: boolean }>();
+    vi.mocked(dialog.showMessageBox).mockReturnValueOnce(choice.promise);
+    installPreviewWebAuthnAccountPicker(session as unknown as Session);
+    const event = { preventDefault: vi.fn() };
+    const callback = vi.fn();
+    listener!(event, request(), callback);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(event.preventDefault.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(dialog.showMessageBox).mock.invocationCallOrder[0]!,
+    );
+    expect(callback).not.toHaveBeenCalled();
+    choice.resolve({ response: 2, checkboxChecked: false });
+    await choice.promise;
+    expect(callback).toHaveBeenCalledExactlyOnceWith("private-account-b");
+  });
   it("returns only the explicitly selected account to Electron, with Cancel as default", async () => {
     const choose = vi.fn(async () => ({ response: 2, checkboxChecked: false }));
     const callback = vi.fn();

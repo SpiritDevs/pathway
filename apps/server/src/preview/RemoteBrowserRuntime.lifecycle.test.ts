@@ -37,13 +37,25 @@ function browserFixture() {
       contextEvents.emit("close");
     }),
   };
+  const locator = {
+    click: vi.fn(async (_options?: { timeout?: number }) => undefined),
+    fill: vi.fn(async (_text: string, _options?: { timeout?: number }) => undefined),
+    pressSequentially: vi.fn(async (_text: string, _options?: { timeout?: number }) => undefined),
+    waitFor: vi.fn(async (_options?: { timeout?: number }) => undefined),
+  };
   const page = {
+    locator: () => locator,
+    getByText: () => ({ first: () => locator }),
+    waitForURL: vi.fn(async (_predicate: unknown, _options?: { timeout?: number }) => undefined),
     on: pageEvents.on.bind(pageEvents),
     opener: async () => null,
     isClosed: () => closed,
     url: () => url,
     title: vi.fn(async () => "Example"),
-    screenshot: vi.fn(async () => Buffer.from("jpeg")),
+    screenshot: vi.fn(async (options?: { path?: string }) => {
+      if (options?.path) await NodeFSP.writeFile(options.path, "test-image");
+      return Buffer.from("jpeg");
+    }),
     viewportSize: () => ({ width: 1280, height: 800 }),
     context: () => context,
     goto: vi.fn(async (next: string) => {
@@ -60,7 +72,7 @@ function browserFixture() {
   const launch = vi.fn(
     async () => context as unknown as BrowserContext,
   ) as unknown as typeof chromium.launchPersistentContext;
-  return { page, cdp, cdpEvents, context, launch };
+  return { page, locator, cdp, cdpEvents, context, launch };
 }
 const threadId = ThreadId.make("browser-lifecycle-test");
 
@@ -245,7 +257,219 @@ describe("RemoteBrowserRuntime lifecycle", () => {
     ).rejects.toThrow("Unknown browser recording artifact");
     expect(fixture.launch).toHaveBeenCalledOnce();
     await unsubscribe();
+    await runtime.close();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch, encoder);
+    expect((await runtime.list(threadId)).artifacts).toEqual(state.artifacts);
+    await expect(runtime.automate(read)).resolves.toMatchObject({ totalBytes: 10 });
+    await expect(
+      runtime.automate({ ...read, threadId: ThreadId.make("different-owner") }),
+    ).rejects.toThrow("Unknown browser recording artifact");
+    expect(fixture.launch).toHaveBeenCalledOnce();
   });
+
+  it("recovers saved screenshots without launching a browser and skips retained-index files removed by cleanup", async () => {
+    const fixture = browserFixture();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    const { tabs } = await runtime.command({ action: "open", threadId });
+    const result = await runtime.command({ action: "screenshot", threadId, tabId: tabs[0]!.tabId });
+    const artifact = result.artifact!;
+    await runtime.close();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    expect((await runtime.list(threadId)).artifacts).toEqual([artifact]);
+    expect((await runtime.list("other-owner")).artifacts).toEqual([]);
+    expect(fixture.launch).toHaveBeenCalledOnce();
+    await runtime.close();
+    await NodeFSP.unlink(artifact.path);
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    expect((await runtime.list(threadId)).artifacts).toEqual([]);
+  });
+
+  it("closes a task during startup, frees capacity, and rejects the late-created context", async () => {
+    const first = browserFixture();
+    const started = deferred();
+    const release = deferred();
+    let count = 0;
+    const launch = vi.fn(async () => {
+      if (count++ === 0) {
+        started.resolve();
+        await release.promise;
+        return first.context as unknown as BrowserContext;
+      }
+      return browserFixture().context as unknown as BrowserContext;
+    });
+    runtime = new RemoteBrowserRuntime(directory, directory, launch);
+    const opening = runtime.command({ action: "open", threadId });
+    const failed = expect(opening).rejects.toThrow("stopped");
+    await started.promise;
+    const closing = runtime.closeThread(threadId);
+    expect(runtime.closeThread(threadId)).toBe(closing);
+    for (let index = 0; index < 8; index++)
+      await runtime.command({ action: "open", threadId: ThreadId.make(`replacement-${index}`) });
+    release.resolve();
+    await closing;
+    await failed;
+    expect(first.context.close).toHaveBeenCalledOnce();
+    await expect(runtime.command({ action: "open", threadId })).rejects.toThrow("closed");
+  });
+
+  it("finalizes an active recording when its task closes and retains its durable capture", async () => {
+    const fixture = browserFixture();
+    const encoder = NodePath.join(directory, "closing-encoder");
+    await NodeFSP.writeFile(
+      encoder,
+      `#!/usr/bin/env node\nprocess.stdin.resume();\nprocess.stdin.on("end", () => { require("node:fs").writeFileSync(process.argv.at(-1), "closed-task-video"); });\n`,
+      { mode: 0o700 },
+    );
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch, encoder);
+    const { tabs } = await runtime.command({ action: "open", threadId });
+    await runtime.command({ action: "recordingStart", threadId, tabId: tabs[0]!.tabId });
+    await runtime.closeThread(threadId);
+    expect(fixture.context.close).toHaveBeenCalledOnce();
+    const state = await runtime.list(threadId);
+    expect(state.tabs).toEqual([]);
+    expect(state.artifacts).toHaveLength(1);
+    expect(await NodeFSP.readFile(state.artifacts[0]!.path, "utf8")).toBe("closed-task-video");
+    await runtime.close();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch, encoder);
+    expect((await runtime.list(threadId)).artifacts).toEqual(state.artifacts);
+    expect(fixture.launch).toHaveBeenCalledOnce();
+  });
+
+  it("cancels queued actions when the owning task is closed", async () => {
+    const fixture = browserFixture();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    const { tabs } = await runtime.command({ action: "open", threadId });
+    const started = deferred();
+    const release = deferred();
+    fixture.page.goto.mockImplementation(async () => {
+      started.resolve();
+      await release.promise;
+    });
+    const navigation = runtime.command({
+      action: "navigate",
+      threadId,
+      tabId: tabs[0]!.tabId,
+      url: "https://example.com",
+    });
+    await started.promise;
+    const click = runtime.command({ action: "click", threadId, tabId: tabs[0]!.tabId, x: 1, y: 1 });
+    const rejected = expect(click).rejects.toThrow("closed");
+    await runtime.closeThread(threadId);
+    release.resolve();
+    await navigation;
+    await rejected;
+    expect(fixture.page.mouse.click).not.toHaveBeenCalled();
+    expect(fixture.context.close).toHaveBeenCalledOnce();
+  });
+
+  it("limits queued navigation to the remaining deadline and honors a shorter navigation budget", async () => {
+    const fixture = browserFixture();
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    const { tabs } = await runtime.command({ action: "open", threadId });
+    const started = deferred();
+    const release = deferred();
+    fixture.page.mouse.click.mockImplementation(async () => {
+      started.resolve();
+      await release.promise;
+    });
+    const click = runtime.command({ action: "click", threadId, tabId: tabs[0]!.tabId, x: 1, y: 1 });
+    await started.promise;
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const navigation = runtime.automate({
+      requestId: "queued-navigation",
+      threadId,
+      tabId: tabs[0]!.tabId,
+      operation: "navigate",
+      input: { url: "https://example.com", timeoutMs: 15000 },
+      timeoutMs: 1000,
+    });
+    vi.setSystemTime(1900);
+    release.resolve();
+    await click;
+    await navigation;
+    expect(fixture.page.goto).toHaveBeenLastCalledWith(
+      "https://example.com/",
+      expect.objectContaining({ timeout: 100 }),
+    );
+    await runtime.automate({
+      requestId: "short-navigation",
+      threadId,
+      tabId: tabs[0]!.tabId,
+      operation: "navigate",
+      input: { url: "https://example.com", timeoutMs: 50 },
+      timeoutMs: 1000,
+    });
+    expect(fixture.page.goto).toHaveBeenLastCalledWith(
+      "https://example.com/",
+      expect.objectContaining({ timeout: 50 }),
+    );
+  });
+
+  it.each(["click", "fill", "type", "waitFor"] as const)(
+    "shares the queued request deadline with locator %s",
+    async (operation) => {
+      const fixture = browserFixture();
+      runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+      const { tabs } = await runtime.command({ action: "open", threadId });
+      const started = deferred();
+      const release = deferred();
+      fixture.page.mouse.click.mockImplementation(async () => {
+        started.resolve();
+        await release.promise;
+      });
+      const click = runtime.command({
+        action: "click",
+        threadId,
+        tabId: tabs[0]!.tabId,
+        x: 1,
+        y: 1,
+      });
+      await started.promise;
+      vi.useFakeTimers();
+      vi.setSystemTime(1000);
+      const input =
+        operation === "waitFor"
+          ? { selector: "#login", text: "ready", urlIncludes: "done" }
+          : operation === "click"
+            ? { selector: "#login" }
+            : { selector: "#login", text: "example", clear: operation === "fill" };
+      fixture.locator.waitFor.mockImplementationOnce(async () => {
+        vi.setSystemTime(1750);
+      });
+      fixture.locator.waitFor.mockImplementationOnce(async () => {
+        vi.setSystemTime(1900);
+      });
+      const action = runtime.automate({
+        requestId: "queued-locator",
+        threadId,
+        tabId: tabs[0]!.tabId,
+        operation: operation === "fill" ? "type" : operation,
+        input,
+        timeoutMs: 1000,
+      });
+      vi.setSystemTime(1400);
+      release.resolve();
+      await click;
+      await action;
+      if (operation === "click")
+        expect(fixture.locator.click).toHaveBeenCalledWith({ timeout: 600 });
+      else if (operation === "fill")
+        expect(fixture.locator.fill).toHaveBeenCalledWith("example", { timeout: 600 });
+      else if (operation === "type")
+        expect(fixture.locator.pressSequentially).toHaveBeenCalledWith("example", { timeout: 600 });
+      else {
+        expect(fixture.locator.waitFor).toHaveBeenNthCalledWith(1, {
+          state: "attached",
+          timeout: 600,
+        });
+        expect(fixture.locator.waitFor).toHaveBeenNthCalledWith(2, { timeout: 250 });
+        expect(fixture.page.waitForURL).toHaveBeenCalledWith(expect.any(Function), {
+          timeout: 100,
+        });
+      }
+    },
+  );
 
   it("revalidates takeover after a human action waits in the tab queue", async () => {
     const fixture = browserFixture();

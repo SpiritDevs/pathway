@@ -7,7 +7,7 @@ all use native Pathway identities.
 
 ## Requirements
 
-- Xcode 27 or newer
+- Xcode 26.2 or newer with the iOS and visionOS platform components
 - SwiftFormat and SwiftLint for local checks
 - Pathway's public Clerk, Convex, and relay configuration
 
@@ -50,20 +50,24 @@ Apple App ID prefix before hosted authentication can complete on a signed build.
 
 ## Current product boundary
 
-The native app includes Agent Threads and Issues. Issues reads the company replica, submits
-company-domain operations through cloud sync, and connects to environments for investigation,
-agent work, and intake. See `docs/user/issues-ios.md` and `docs/internals/issues-ios.md` at the
-repository root. Dashboard, Email, Source Control, Calendar, Projects, Contacts, and Time Tracker
-remain placeholders.
+The release targets iOS, iPadOS, and visionOS. Android is outside this version.
+
+Shared native screens include threads and approvals, Issues, Calendar, captured Email, Projects,
+Contacts, Time Tracker, thread-scoped source control and pull requests, files, and remote terminals.
+Administration covers companies, teams, roles, connections, providers, scheduled tasks, and usage.
+Contacts and timers use shared cloud persistence with an explicit desktop import for old local data.
+Backend and relay updates must be deployed together with these clients.
 
 The compact shell uses the floating navigation bar on iPhone and narrow iPad windows. Regular iPad
-windows use a system `NavigationSplitView`, including automatic collapse in narrow multitasking
-layouts. visionOS uses that shared sidebar/detail model in a native resizable window and opens the
-agent orchestrator and Settings as independent windows.
+windows use a system `NavigationSplitView`. visionOS uses the same sidebar/detail model in a native
+resizable window and opens agent creation and Settings as independent windows. The agent button
+opens the real new-thread flow.
 
-The detached chat button in the main bar presents the native Agent Orchestrator sheet. The
-placeholder includes chat history and close controls, prompt suggestions, mentions, attachments,
-and a keyboard-focused composer while agent and workflow contracts are ported.
+The app includes account-scoped shared drafts and App Intents. The iOS-only share extension accepts
+text, URLs and files for review before sending; camera and document capture also remain iOS-only.
+The widget extension includes saved work summaries on iOS/iPadOS and visionOS; its ActivityKit surface is iOS-only. visionOS uses ordinary notifications and the native
+Convex WebSocket/HTTP transport. See `docs/operations/apple-client-release.md` for signing and
+external-service requirements, and `docs/plans/mobile-parity-completion.md` for current verification.
 
 ## Checks
 

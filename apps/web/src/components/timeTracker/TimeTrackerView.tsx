@@ -1,6 +1,13 @@
+import { useBusinessToolsCloud, useBusinessToolsQuery } from "../contacts/businessToolsCloud";
+import type { Value } from "convex/values";
+import { makeFunctionReference } from "convex/server";
+import type {
+  TrackedSessionPage,
+  RecentTrackedTimeTotals,
+} from "@spiritdevs/contracts/businessTools";
 import * as Schema from "effect/Schema";
 import { Clock3Icon, FolderKanbanIcon, PlayIcon, SquareIcon, Trash2Icon } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { randomUUID } from "~/lib/utils";
@@ -14,7 +21,6 @@ import {
   formatTrackedDuration,
   startOfLocalDay,
   startOfLocalWeek,
-  totalDuration,
   type ActiveTimeEntry,
   type TimeEntry,
 } from "./timeTracker.logic";
@@ -62,19 +68,177 @@ function formatEntryDate(value: string): string {
 
 export function TimeTrackerView() {
   const projects = useProjects().filter(({ workspaceRoot }) => workspaceRoot !== null);
-  const [state, setState] = useLocalStorage(
+  const [legacyState] = useLocalStorage(
     TIME_TRACKER_STORAGE_KEY,
     EMPTY_TIME_TRACKER_STATE,
     TimeTrackerStateSchema,
   );
+  const cloud = useBusinessToolsCloud();
+  const result = useBusinessToolsQuery<TrackedSessionPage>(
+    cloud.client,
+    cloud.accountID,
+    "timeTracking:listMine",
+    {},
+  );
+  const state = result.value ?? EMPTY_TIME_TRACKER_STATE;
+  const latestPage = useRef(result.value);
+  useEffect(() => {
+    latestPage.current = result.value;
+    return () => {
+      latestPage.current = undefined;
+    };
+  }, [result.value]);
+  const [day, setDay] = useState(() => startOfLocalDay(new Date()));
+  useEffect(() => {
+    const refreshDay = () => setDay(startOfLocalDay(new Date()));
+    const id = window.setInterval(refreshDay, 60_000);
+    window.addEventListener("focus", refreshDay);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", refreshDay);
+    };
+  }, []);
+  const totals = useBusinessToolsQuery<RecentTrackedTimeTotals>(
+    cloud.client,
+    cloud.accountID,
+    "timeTracking:recentTotals",
+    {
+      todayStart: new Date(day).toISOString(),
+      weekStart: new Date(startOfLocalWeek(new Date(day))).toISOString(),
+    },
+  );
+  const [history, setHistory] = useState<{
+    base: TrackedSessionPage;
+    entries: TrackedSessionPage["entries"];
+    cursor: string | null;
+    isDone: boolean;
+  } | null>(null);
+  // A new live first page invalidates previously fetched pages and outstanding requests.
+  const currentHistory = history?.base === result.value ? history : null;
+  const orderedEntries = currentHistory?.entries ?? state.entries;
+  const nextCursor = currentHistory?.cursor ?? result.value?.cursor;
+  const historyDone = currentHistory?.isDone ?? result.value?.isDone ?? true;
+  const [pageRequest, setPageRequest] = useState<{
+    base: TrackedSessionPage;
+    loading: boolean;
+    error?: string;
+  } | null>(null);
+  const loadingMore =
+    pageRequest !== null && pageRequest.base === result.value && pageRequest.loading;
+  const pageError =
+    pageRequest !== null && pageRequest.base === result.value ? pageRequest.error : undefined;
+  const loadMore = async () => {
+    if (!cloud.client || !result.value || !nextCursor || loadingMore) return;
+    const base = result.value;
+    setPageRequest({ base, loading: true });
+    try {
+      const page = await cloud.client.query(
+        makeFunctionReference<"query", { cursor: string }, TrackedSessionPage>(
+          "timeTracking:listMine",
+        ),
+        { cursor: nextCursor },
+      );
+      if (latestPage.current !== base) return;
+      const ids = new Set(orderedEntries.map((entry) => entry.id));
+      setHistory({
+        base,
+        entries: [...orderedEntries, ...page.entries.filter((entry) => !ids.has(entry.id))],
+        cursor: page.cursor,
+        isDone: page.isDone,
+      });
+      setPageRequest({ base, loading: false });
+    } catch (error) {
+      if (latestPage.current !== base) return;
+      setPageRequest({
+        base,
+        loading: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<{
+    accountID: string;
+    name: "start" | "stop";
+    args: Record<string, Value>;
+  } | null>(null);
+  const [writing, setWriting] = useState(false);
+  const [corruptedRetry, setCorruptedRetry] = useState(false);
+  const [importing, setImporting] = useState(false);
+  useEffect(() => {
+    setPending(null);
+    setError(null);
+    setCorruptedRetry(false);
+    if (!cloud.accountID) return;
+    try {
+      const raw: unknown = JSON.parse(
+        localStorage.getItem(`pathway:time-pending:${cloud.accountID}`) ?? "null",
+      );
+      if (
+        raw &&
+        typeof raw === "object" &&
+        "name" in raw &&
+        (raw.name === "start" || raw.name === "stop") &&
+        "args" in raw &&
+        raw.args &&
+        typeof raw.args === "object" &&
+        "id" in raw.args &&
+        typeof raw.args.id === "string"
+      ) {
+        if (raw.name === "stop")
+          setPending({ accountID: cloud.accountID, name: "stop", args: { id: raw.args.id } });
+        else if (
+          "description" in raw.args &&
+          typeof raw.args.description === "string" &&
+          "projectKey" in raw.args &&
+          typeof raw.args.projectKey === "string" &&
+          "projectName" in raw.args &&
+          typeof raw.args.projectName === "string"
+        )
+          setPending({
+            accountID: cloud.accountID,
+            name: "start",
+            args: {
+              id: raw.args.id,
+              description: raw.args.description,
+              projectKey: raw.args.projectKey,
+              projectName: raw.args.projectName,
+            },
+          });
+      }
+    } catch {
+      setCorruptedRetry(true);
+      setError("The pending timer change could not be read. Its stored data has been preserved.");
+    }
+  }, [cloud.accountID]);
+  const activePending = pending?.accountID === cloud.accountID ? pending : null;
+  const run = async (operation: () => Promise<unknown>) => {
+    setWriting(true);
+    setError(null);
+    try {
+      await operation();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setWriting(false);
+    }
+  };
+  const retryPending = async (command: NonNullable<typeof pending>) => {
+    await cloud.request(`timeTracking:${command.name}`, command.args);
+    localStorage.removeItem(`pathway:time-pending:${command.accountID}`);
+    setPending((current) => (current?.accountID === command.accountID ? null : current));
+  };
+  const command = async (name: "start" | "stop", args: Record<string, Value>) => {
+    if (!cloud.accountID || !cloud.client) throw new Error("Sign in to track time.");
+    if (activePending || corruptedRetry)
+      throw new Error("Retry or discard the pending timer change first.");
+    const next = { accountID: cloud.accountID, name, args };
+    localStorage.setItem(`pathway:time-pending:${cloud.accountID}`, JSON.stringify(next));
+    setPending(next);
+    await retryPending(next);
+  };
   const [description, setDescription] = useState("");
   const [projectKey, setProjectKey] = useState("");
-  const todayTotal = totalDuration(state.entries, startOfLocalDay(new Date()));
-  const weekTotal = totalDuration(state.entries, startOfLocalWeek(new Date()));
-  const orderedEntries = useMemo(
-    () => state.entries.toSorted((left, right) => right.startedAt.localeCompare(left.startedAt)),
-    [state.entries],
-  );
 
   const startTimer = (event: FormEvent) => {
     event.preventDefault();
@@ -83,29 +247,22 @@ export function TimeTrackerView() {
     const project = projects.find(
       ({ environmentId, id }) => `${environmentId}:${id}` === projectKey,
     );
-    setState((current) => ({
-      ...current,
-      active: {
+    void run(async () => {
+      await command("start", {
         id: randomUUID(),
         description: trimmedDescription,
         projectKey,
         projectName: project?.title ?? "No project",
-        startedAt: new Date().toISOString(),
-      },
-    }));
-    setDescription("");
+      });
+      setDescription("");
+    });
   };
 
   const stopTimer = () => {
-    const active = state.active;
-    if (!active) return;
-    const stoppedAt = new Date().toISOString();
-    const entry: TimeEntry = {
-      ...active,
-      stoppedAt,
-      durationMs: Math.max(1_000, Date.parse(stoppedAt) - Date.parse(active.startedAt)),
-    };
-    setState((current) => ({ active: null, entries: [entry, ...current.entries] }));
+    if (state.active) {
+      const id = state.active.id;
+      void run(() => command("stop", { id }));
+    }
   };
 
   return (
@@ -122,15 +279,99 @@ export function TimeTrackerView() {
               </h1>
             </div>
             <p className="max-w-sm text-sm leading-6 text-muted-foreground">
-              Entries stay on this device. Use the project label to keep sessions easy to reconcile.
+              Your sessions sync across devices. Only one timer can run for your account at a time.
             </p>
           </div>
 
+          {error || result.error || totals.error || pageError ? (
+            <p role="alert" className="mt-4 text-sm text-destructive">
+              {error ?? result.error ?? totals.error ?? pageError}
+            </p>
+          ) : null}
+          {!cloud.client ? (
+            <p className="mt-4 text-sm">Sign in to track time across devices.</p>
+          ) : null}
+          {corruptedRetry ? (
+            <Button
+              variant="outline"
+              onClick={() => {
+                localStorage.removeItem(`pathway:time-pending:${cloud.accountID}`);
+                setCorruptedRetry(false);
+                setError(null);
+              }}
+            >
+              Discard unreadable timer retry
+            </Button>
+          ) : null}
+          {activePending ? (
+            <div className="mt-4 flex flex-wrap items-center gap-3 border p-3 text-sm">
+              <span>A timer change is awaiting confirmation.</span>
+              <Button
+                disabled={writing}
+                onClick={() => void run(() => retryPending(activePending))}
+              >
+                Retry change
+              </Button>
+              <Button
+                variant="outline"
+                disabled={writing}
+                onClick={() => {
+                  localStorage.removeItem(`pathway:time-pending:${cloud.accountID}`);
+                  setPending(null);
+                }}
+              >
+                Discard retry
+              </Button>
+              <span className="text-muted-foreground">
+                Discarding a retry does not undo an accepted server change.
+              </span>
+            </div>
+          ) : null}
+          {legacyState.entries.length > 0 || legacyState.active ? (
+            <div className="mt-4 border p-3 text-sm">
+              <p>
+                {legacyState.entries.length} completed sessions remain on this device.
+                {legacyState.active
+                  ? " A local timer is still recorded; importing it finishes that local session at the time you choose Import."
+                  : ""}{" "}
+                Originals are retained and repeated imports do not duplicate sessions.
+              </p>
+              <Button
+                className="mt-2"
+                variant="outline"
+                disabled={!cloud.client || importing}
+                onClick={() => {
+                  setImporting(true);
+                  void run(async () => {
+                    try {
+                      const entries = [...legacyState.entries];
+                      if (legacyState.active) {
+                        const stoppedAt = new Date().toISOString();
+                        entries.push({
+                          ...legacyState.active,
+                          stoppedAt,
+                          durationMs:
+                            Date.parse(stoppedAt) - Date.parse(legacyState.active.startedAt),
+                        });
+                      }
+                      for (let index = 0; index < entries.length; index += 200)
+                        await cloud.request("timeTracking:importLocal", {
+                          entries: entries.slice(index, index + 200).map((entry) => ({ ...entry })),
+                        });
+                    } finally {
+                      setImporting(false);
+                    }
+                  });
+                }}
+              >
+                {importing ? "Importing…" : "Import local sessions into my account"}
+              </Button>
+            </div>
+          ) : null}
           <section className="mt-8 border-y border-border/70 py-5">
             {state.active ? (
               <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
                 <span className="relative flex size-11 shrink-0 items-center justify-center rounded-full bg-red-500/10 text-red-600 dark:text-red-400">
-                  <span className="absolute inset-0 animate-ping rounded-full bg-red-500/10 motion-reduce:animate-none" />
                   <Clock3Icon className="relative size-5" />
                 </span>
                 <div className="min-w-0 flex-1">
@@ -143,7 +384,11 @@ export function TimeTrackerView() {
                 <span className="font-mono text-2xl tracking-tight tabular-nums sm:text-3xl">
                   <LiveDuration startedAt={state.active.startedAt} />
                 </span>
-                <Button variant="destructive" onClick={stopTimer}>
+                <Button
+                  variant="destructive"
+                  onClick={stopTimer}
+                  disabled={writing || !!activePending || corruptedRetry}
+                >
                   <SquareIcon className="fill-current" />
                   Stop timer
                 </Button>
@@ -177,7 +422,16 @@ export function TimeTrackerView() {
                     </option>
                   ))}
                 </select>
-                <Button type="submit">
+                <Button
+                  type="submit"
+                  disabled={
+                    writing ||
+                    !!activePending ||
+                    !cloud.client ||
+                    !result.value ||
+                    !description.trim()
+                  }
+                >
                   <PlayIcon className="fill-current" />
                   Start timer
                 </Button>
@@ -192,22 +446,36 @@ export function TimeTrackerView() {
             <div className="py-6 pr-6">
               <p className="text-xs text-muted-foreground">Today</p>
               <p className="mt-1 font-heading text-2xl font-semibold tabular-nums">
-                {formatTrackedDuration(todayTotal)}
+                {totals.value?.complete
+                  ? formatTrackedDuration(totals.value.todayMs)
+                  : totals.value
+                    ? "Unavailable"
+                    : "…"}
               </p>
             </div>
             <div className="border-l border-border/70 py-6 pl-6">
               <p className="text-xs text-muted-foreground">This week</p>
               <p className="mt-1 font-heading text-2xl font-semibold tabular-nums">
-                {formatTrackedDuration(weekTotal)}
+                {totals.value?.complete
+                  ? formatTrackedDuration(totals.value.weekMs)
+                  : totals.value
+                    ? "Unavailable"
+                    : "…"}
               </p>
             </div>
           </section>
 
+          {totals.value && !totals.value.complete ? (
+            <p role="status" className="mt-3 text-sm text-muted-foreground">
+              This week exceeds 2,000 sessions. Summary totals are unavailable; all sessions remain
+              accessible in history.
+            </p>
+          ) : null}
           <section className="mt-8">
             <div className="flex items-center justify-between gap-4">
               <h2 className="font-heading text-lg font-semibold">Recent entries</h2>
               <span className="text-xs text-muted-foreground tabular-nums">
-                {orderedEntries.length} total
+                {orderedEntries.length} {historyDone ? "total" : "loaded"}
               </span>
             </div>
             {orderedEntries.length === 0 ? (
@@ -251,11 +519,19 @@ export function TimeTrackerView() {
                       variant="ghost"
                       aria-label={`Delete ${entry.description} entry`}
                       className="opacity-70 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+                      disabled={writing}
                       onClick={() =>
-                        setState((current) => ({
-                          ...current,
-                          entries: current.entries.filter(({ id }) => id !== entry.id),
-                        }))
+                        void run(async () => {
+                          await cloud.request("timeTracking:remove", { id: entry.id });
+                          setHistory((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  entries: current.entries.filter((row) => row.id !== entry.id),
+                                }
+                              : current,
+                          );
+                        })
                       }
                     >
                       <Trash2Icon />
@@ -264,6 +540,21 @@ export function TimeTrackerView() {
                 ))}
               </div>
             )}
+            {!historyDone ? (
+              <Button
+                className="mt-4"
+                variant="outline"
+                disabled={loadingMore}
+                onClick={() => void loadMore()}
+              >
+                {loadingMore ? "Loading…" : "Load more sessions"}
+              </Button>
+            ) : null}
+            {currentHistory ? (
+              <Button className="mt-4 ml-2" variant="ghost" onClick={() => setHistory(null)}>
+                Refresh history
+              </Button>
+            ) : null}
           </section>
         </div>
       </ScrollArea>

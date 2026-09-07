@@ -40,10 +40,12 @@ final class PathwayRemoteBrowserModel {
     var selectedID: String?
     private(set) var frame: PathwayRemoteBrowserFrame?
     private(set) var busy = false
+    private(set) var isHostReady = false
     var error: String?
     private(set) var artifactURL: URL?
     private(set) var artifactURLs: [URL] = []
     @ObservationIgnored private let thread: PathwayAgentThreadModel
+    @ObservationIgnored private let injectedRequest: PathwayAgentThreadModel.Request?
     @ObservationIgnored private var commandRPC: PathwayRPCClient?
     @ObservationIgnored private var httpBaseURL: URL?
     @ObservationIgnored private var metadataRevision: Double?
@@ -59,19 +61,29 @@ final class PathwayRemoteBrowserModel {
     }
     var selected: PathwayRemoteBrowserTab? { tabs.first { $0.id == selectedID } ?? tabs.first }
 
-    init(thread: PathwayAgentThreadModel) { self.thread = thread }
+    init(thread: PathwayAgentThreadModel, request: PathwayAgentThreadModel.Request? = nil) {
+        self.thread = thread
+        injectedRequest = request
+    }
 
     func start() async {
-        guard let connect = thread.connect else { error = "Connect to an environment to use its browser."; return }
-        let environment = thread.environment
+        isHostReady = false
+        error = nil
         do {
-            httpBaseURL = try await connect.prepare(environment: environment).httpBaseURL
-            commandRPC = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+            if injectedRequest == nil && commandRPC == nil {
+                guard let connect = thread.connect else { error = "Connect to an environment to use its browser."; return }
+                let environment = thread.environment
+                httpBaseURL = try await connect.prepare(environment: environment).httpBaseURL
+                commandRPC = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+            }
+            guard await command("selectHost", fields: ["host": .string("environment")]), !Task.isCancelled else { return }
+            isHostReady = true
             _ = await command("list")
         } catch { self.error = error.localizedDescription }
     }
 
     func stop() async {
+        isHostReady = false
         let rpc = commandRPC
         commandRPC = nil
         await rpc?.stop()
@@ -79,15 +91,18 @@ final class PathwayRemoteBrowserModel {
 
     @discardableResult
     func command(_ action: String, fields: [String: JSONValue] = [:], tabID: String? = nil) async -> Bool {
-        guard let commandRPC else { return false }
+        guard isHostReady || action == "selectHost", commandRPC != nil || injectedRequest != nil else { return false }
         var payload = fields
         payload["action"] = .string(action)
         payload["threadId"] = .string(thread.threadID)
-        if !["list", "open"].contains(action), let id = tabID ?? selected?.id { payload["tabId"] = .string(id) }
+        if !["selectHost", "list", "open"].contains(action), let id = tabID ?? selected?.id { payload["tabId"] = .string(id) }
         if action != "list" { busy = true; error = nil }
         defer { if action != "list" { busy = false } }
         do {
-            let value = try await commandRPC.request("preview.remote.command", payload: .object(payload))
+            let value: JSONValue
+            if let injectedRequest { value = try await injectedRequest("preview.remote.command", .object(payload)) }
+            else if let commandRPC { value = try await commandRPC.request("preview.remote.command", payload: .object(payload)) }
+            else { return false }
             let result = try JSONDecoder().decode(PathwayRemoteBrowserResult.self, from: JSONEncoder().encode(value))
             tabs = result.tabs
             if action == "open" || !tabs.contains(where: { $0.id == selectedID }) {
@@ -106,7 +121,7 @@ final class PathwayRemoteBrowserModel {
 
     func watchSelectedTab() async {
         frame = nil
-        guard let connect = thread.connect else { return }
+        guard isHostReady, let connect = thread.connect else { return }
         let id = selected?.id
         let environment = thread.environment
         let rpc = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
@@ -149,6 +164,14 @@ struct AgentThreadRemoteBrowser: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 8) {
+                if !browser.isHostReady {
+                    if let error = browser.error {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                        Button("Retry browser connection") { Task { await browser.start() } }
+                    } else {
+                        Text("Connecting to the environment browser…")
+                    }
+                } else {
                 HStack {
                     if browser.takeoverStatus == "active" {
                         Text("You control the browser").font(.caption)
@@ -213,6 +236,7 @@ struct AgentThreadRemoteBrowser: View {
                         }
                     } else if let url = browser.artifactURL { ShareLink("Share capture", item: url) }
                 }.font(.caption).labelStyle(.iconOnly)
+                }
             }
             .padding()
             .disabled(browser.busy)
@@ -229,7 +253,7 @@ struct AgentThreadRemoteBrowser: View {
                 }
             }
             .task { await browser.start() }
-            .task(id: browser.selectedID) { await browser.watchSelectedTab() }
+            .task(id: "\(browser.isHostReady):\(browser.selectedID ?? "")") { await browser.watchSelectedTab() }
             .onDisappear { Task { await browser.stop() } }
             .onChange(of: browser.selected?.url) { _, url in address = url ?? "" }
         }

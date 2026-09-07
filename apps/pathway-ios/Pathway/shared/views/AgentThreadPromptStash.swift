@@ -20,11 +20,9 @@ struct AgentThreadPromptStashEntry: Codable, Identifiable, Equatable, Sendable {
     let attachments: [Attachment]
 }
 
-/// A device-wide stash carries prompts between threads without changing their model selection.
+/// An account-scoped stash carries prompts between threads without changing their model selection.
 /// The index is committed only after attachment bytes are durable.
 actor AgentThreadPromptStash {
-    static let shared = AgentThreadPromptStash(directory: URL.applicationSupportDirectory
-        .appending(path: "Pathway/PromptStash", directoryHint: .isDirectory))
     private let directory: URL
     private let maximumBytes: Int
     private var cachedEntries: [AgentThreadPromptStashEntry]?

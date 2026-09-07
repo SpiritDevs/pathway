@@ -6,6 +6,7 @@ import { COMPANY_PERMISSIONS } from "./company.ts";
 import {
   RELAY_CONVEX_CONNECT_GRANT_PERMISSIONS,
   RelayApi,
+  RelayDeviceRegistrationRequest,
   RelayEnvironmentDpopAccessTokenRequest,
 } from "./relay.ts";
 
@@ -57,5 +58,43 @@ describe("RelayApi security", () => {
         client_id: "pathway-env",
       }),
     ).toThrow();
+  });
+});
+
+describe("native notification device platforms", () => {
+  const preferences = {
+    liveActivitiesEnabled: false,
+    notificationsEnabled: true,
+    notifyOnApproval: true,
+    notifyOnInput: true,
+    notifyOnCompletion: true,
+    notifyOnFailure: true,
+  };
+  const device = {
+    deviceId: "vision-device",
+    label: "Vision Pro",
+    platform: "visionos",
+    iosMajorVersion: 26,
+    pushToken: "notification-token",
+    preferences,
+  };
+
+  it("accepts visionOS notifications while preserving the OS-version wire field", () => {
+    const decode = Schema.decodeUnknownSync(RelayDeviceRegistrationRequest);
+    expect(decode(device)).toMatchObject({ platform: "visionos", iosMajorVersion: 26 });
+    expect(decode({ ...device, platform: "ios", iosMajorVersion: 18 })).toMatchObject({
+      platform: "ios",
+      iosMajorVersion: 18,
+    });
+  });
+
+  it("rejects visionOS Live Activity preferences and push-to-start tokens", () => {
+    const decode = Schema.decodeUnknownSync(RelayDeviceRegistrationRequest);
+    expect(() =>
+      decode({ ...device, preferences: { ...preferences, liveActivitiesEnabled: true } }),
+    ).toThrow("Live Activities are not supported on visionOS");
+    expect(() => decode({ ...device, pushToStartToken: "unsupported" })).toThrow(
+      "Live Activities are not supported on visionOS",
+    );
   });
 });

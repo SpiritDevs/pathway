@@ -102,10 +102,39 @@ function PreviewHostView(props: Props) {
   const selectHost = useAtomCommand(previewEnvironment.remoteCommand);
   const [changingHost, setChangingHost] = useState(false);
   const [hostError, setHostError] = useState<string>();
+  const [environmentHostReady, setEnvironmentHostReady] = useState(!!previewBridge);
+  const [hostAttempt, setHostAttempt] = useState(0);
   const hostChangeVersion = useRef(0);
   useEffect(() => {
-    if (!props.visible || !previewBridge) return;
+    if (!props.visible) return;
     let disposed = false;
+    if (!previewBridge) {
+      setEnvironmentHostReady(false);
+      setHostError(undefined);
+      void selectHost({
+        environmentId: props.threadRef.environmentId,
+        input: { action: "selectHost", threadId: props.threadRef.threadId, host: "environment" },
+      })
+        .then((result) => {
+          if (disposed) return;
+          if (result._tag === "Failure") {
+            const error = squashAtomCommandFailure(result);
+            setHostError(
+              error instanceof Error ? error.message : "Could not select the environment browser.",
+            );
+          } else setEnvironmentHostReady(true);
+        })
+        .catch((error: unknown) => {
+          if (!disposed)
+            setHostError(
+              error instanceof Error ? error.message : "Could not select the environment browser.",
+            );
+        });
+      return () => {
+        disposed = true;
+        setEnvironmentHostReady(false);
+      };
+    }
     const version = hostChangeVersion.current;
     void selectHost({
       environmentId: props.threadRef.environmentId,
@@ -123,7 +152,13 @@ function PreviewHostView(props: Props) {
     return () => {
       disposed = true;
     };
-  }, [props.visible, props.threadRef.environmentId, props.threadRef.threadId, selectHost]);
+  }, [
+    props.visible,
+    props.threadRef.environmentId,
+    props.threadRef.threadId,
+    selectHost,
+    hostAttempt,
+  ]);
   const changeHost = async (next: boolean) => {
     hostChangeVersion.current += 1;
     setChangingHost(true);
@@ -176,7 +211,20 @@ function PreviewHostView(props: Props) {
           {hostError}
         </p>
       )}
-      {remote ? (
+      {!previewBridge && !environmentHostReady ? (
+        <div className="p-3 text-sm text-muted-foreground">
+          {hostError ? (
+            <button
+              className="rounded border px-2 py-1"
+              onClick={() => setHostAttempt((value) => value + 1)}
+            >
+              Retry browser connection
+            </button>
+          ) : (
+            <p role="status">Connecting to the environment browser…</p>
+          )}
+        </div>
+      ) : remote ? (
         <RemoteBrowserView
           key={`${props.threadRef.environmentId}:${props.threadRef.threadId}`}
           threadRef={props.threadRef}

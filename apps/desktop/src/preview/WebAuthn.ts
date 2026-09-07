@@ -41,7 +41,8 @@ export async function selectPreviewWebAuthnAccount(
 }
 
 export function installPreviewWebAuthnAccountPicker(browserSession: Session): void {
-  browserSession.on("select-webauthn-account", (_event, details, callback) => {
+  browserSession.on("select-webauthn-account", (event, details, callback) => {
+    event.preventDefault();
     void selectPreviewWebAuthnAccount(details, callback);
   });
 }

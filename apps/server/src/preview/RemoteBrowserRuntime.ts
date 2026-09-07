@@ -98,10 +98,30 @@ export interface BrowserArtifact {
   createdAt: string;
 }
 
+const BrowserCaptureIndex = Schema.Struct({
+  version: Schema.Literal(1),
+  threadId: Schema.String,
+  captures: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      fileName: Schema.String,
+      mimeType: Schema.Literals(["image/png", "video/mp4"]),
+      sizeBytes: Schema.Number,
+      createdAt: Schema.String,
+    }),
+  ),
+});
+const decodeCaptureIndex = Schema.decodeUnknownSync(Schema.fromJsonString(BrowserCaptureIndex));
+const encodeCaptureIndex = Schema.encodeSync(Schema.fromJsonString(BrowserCaptureIndex));
+
 /** Each task owns its browser profile and pages; client connections never own their lifetime. */
 export class RemoteBrowserRuntime {
   private sessions = new Map<string, Promise<BrowserSession>>();
   private closed = false;
+  private closedThreads = new Set<string>();
+  private threadClosures = new Map<string, Promise<void>>();
+  private artifactLoads = new Map<string, Promise<void>>();
+  private artifactWrites = new Map<string, Promise<void>>();
   private artifacts = new Map<string, BrowserArtifact>();
   private artifactOwners = new Map<string, string>();
   private watchers = new Map<string, Set<(frame: PreviewRemoteFrame) => void>>();
@@ -124,11 +144,17 @@ export class RemoteBrowserRuntime {
     this.encoderExecutable = encoderExecutable;
   }
 
+  private assertThreadOpen(threadId: string) {
+    if (this.closedThreads.has(threadId)) throw new Error("This task browser has been closed.");
+  }
+
   private async session(threadId: string): Promise<BrowserSession> {
+    this.assertThreadOpen(threadId);
     if (this.closed) throw new Error("The environment browser has stopped.");
     const existing = this.sessions.get(threadId);
     if (existing) {
       const session = await existing;
+      this.assertThreadOpen(threadId);
       if (!session.closing) return session;
       await session.closing;
       return this.session(threadId);
@@ -164,7 +190,7 @@ export class RemoteBrowserRuntime {
         "Cannot start the environment browser. Install Chromium on this environment with npx playwright@1.60.0 install chromium (Linux may also need install-deps chromium).",
       );
     });
-    if (this.closed) {
+    if (this.closed || this.closedThreads.has(threadId)) {
       await context.close();
       throw new Error("The environment browser has stopped.");
     }
@@ -184,6 +210,11 @@ export class RemoteBrowserRuntime {
       void this.register(session, page).catch(() => undefined);
     });
     context.on("close", () => {
+      for (const tab of session.tabs.values()) {
+        if (tab.publishTimer) clearTimeout(tab.publishTimer);
+        tab.publishTimer = null;
+        if (tab.recording) void this.stopRecording(tab).catch(() => undefined);
+      }
       session.tabs.clear();
       session.selectedTabId = null;
       void this.forgetSession(session);
@@ -318,6 +349,7 @@ export class RemoteBrowserRuntime {
 
   private serial<T>(tab: Tab, action: () => Promise<T>): Promise<T> {
     const result = tab.tail.then(() => {
+      this.assertThreadOpen(tab.owner.threadId);
       if (tab.page.isClosed()) throw new Error("The browser tab closed before the action ran.");
       return action();
     });
@@ -327,24 +359,109 @@ export class RemoteBrowserRuntime {
 
   async list(threadId: string) {
     const pending = this.sessions.get(threadId);
-    if (!pending) return { tabs: [], selectedTabId: null, artifacts: this.getArtifacts(threadId) };
+    if (!pending)
+      return { tabs: [], selectedTabId: null, artifacts: await this.getArtifacts(threadId) };
     const session = await pending;
     return {
       tabs: await this.tabs(session),
       selectedTabId: session.selectedTabId,
-      artifacts: this.getArtifacts(threadId),
+      artifacts: await this.getArtifacts(threadId),
     };
   }
 
-  getArtifacts(threadId: string): BrowserArtifact[] {
+  private captureIndexPath(threadId: string) {
+    return NodePath.join(
+      this.directory,
+      "captures",
+      `${NodeCrypto.createHash("sha256").update(threadId).digest("hex")}.json`,
+    );
+  }
+
+  private loadArtifacts(threadId: string): Promise<void> {
+    const existing = this.artifactLoads.get(threadId);
+    if (existing) return existing;
+    const load = async () => {
+      let content: string;
+      try {
+        content = await NodeFSP.readFile(this.captureIndexPath(threadId), "utf8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw error;
+      }
+      const index = decodeCaptureIndex(content);
+      if (index.threadId !== threadId)
+        throw new Error("Browser capture index ownership does not match this task.");
+      for (const capture of index.captures) {
+        const extension = capture.mimeType === "image/png" ? "png" : "mp4";
+        if (
+          capture.fileName !== `${capture.id}.${extension}` ||
+          NodePath.basename(capture.fileName) !== capture.fileName
+        )
+          throw new Error("Browser capture index contains an invalid file name.");
+        const path = NodePath.join(this.attachmentsDirectory, capture.fileName);
+        const stat = await NodeFSP.lstat(path).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        // Attachment retention can remove a file independently of this index.
+        if (!stat?.isFile()) continue;
+        const { fileName: _, ...metadata } = capture;
+        this.artifacts.set(path, { ...metadata, path, sizeBytes: stat.size });
+        this.artifactOwners.set(path, threadId);
+      }
+    };
+    const pending = load();
+    this.artifactLoads.set(threadId, pending);
+    void pending.catch(() => {
+      if (this.artifactLoads.get(threadId) === pending) this.artifactLoads.delete(threadId);
+    });
+    return pending;
+  }
+
+  async getArtifacts(threadId: string): Promise<BrowserArtifact[]> {
+    await this.loadArtifacts(threadId);
+    await this.artifactWrites.get(threadId);
     return [...this.artifacts.values()]
       .filter((artifact) => this.artifactOwners.get(artifact.path) === threadId)
       .slice(-50);
   }
 
-  private rememberArtifact(threadId: string, artifact: BrowserArtifact) {
-    this.artifacts.set(artifact.path, artifact);
-    this.artifactOwners.set(artifact.path, threadId);
+  private rememberArtifact(threadId: string, artifact: BrowserArtifact): Promise<void> {
+    const save = async () => {
+      await this.loadArtifacts(threadId);
+      const owned = [...this.artifacts.values()].filter(
+        (candidate) =>
+          this.artifactOwners.get(candidate.path) === threadId && candidate.path !== artifact.path,
+      );
+      const captures = [...owned, artifact].map(({ path, ...metadata }) => ({
+        ...metadata,
+        mimeType: metadata.mimeType as "image/png" | "video/mp4",
+        fileName: NodePath.basename(path),
+      }));
+      const path = this.captureIndexPath(threadId);
+      await NodeFSP.mkdir(NodePath.dirname(path), { recursive: true, mode: 0o700 });
+      const temporary = `${path}.${NodeCrypto.randomUUID()}.tmp`;
+      try {
+        await NodeFSP.writeFile(temporary, encodeCaptureIndex({ version: 1, threadId, captures }), {
+          mode: 0o600,
+        });
+        await NodeFSP.rename(temporary, path);
+      } finally {
+        await NodeFSP.rm(temporary, { force: true });
+      }
+      this.artifacts.set(artifact.path, artifact);
+      this.artifactOwners.set(artifact.path, threadId);
+    };
+    const pending = (this.artifactWrites.get(threadId) ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(save);
+    this.artifactWrites.set(threadId, pending);
+    void pending
+      .finally(() => {
+        if (this.artifactWrites.get(threadId) === pending) this.artifactWrites.delete(threadId);
+      })
+      .catch(() => undefined);
+    return pending;
   }
 
   async command(
@@ -474,6 +591,8 @@ export class RemoteBrowserRuntime {
     if (request.operation === "recordingStop") {
       const reading = decodePreviewAutomationRecordingReadInputOption(request.input);
       if (reading._tag === "Some") {
+        await this.loadArtifacts(request.threadId);
+        await this.artifactWrites.get(request.threadId);
         const artifact = this.artifacts.get(reading.value.path);
         if (!artifact || this.artifactOwners.get(artifact.path) !== request.threadId)
           throw new Error("Unknown browser recording artifact.");
@@ -524,6 +643,11 @@ export class RemoteBrowserRuntime {
       if (Date.now() >= deadline)
         throw new Error("The browser request expired before it could run.");
       const page = tab.page;
+      const remainingTimeout = (limit = 15_000) => {
+        const timeout = Math.min(limit, deadline - Date.now());
+        if (timeout <= 0) throw new Error("The browser request expired before it could run.");
+        return timeout;
+      };
       switch (request.operation) {
         case "status":
           return this.status(tab);
@@ -544,7 +668,7 @@ export class RemoteBrowserRuntime {
                 : input.readiness === "none"
                   ? "commit"
                   : "domcontentloaded",
-            timeout: input.timeoutMs ?? 15_000,
+            timeout: remainingTimeout(input.timeoutMs),
           });
           await this.publishMetadata(session);
           return this.status(tab);
@@ -552,7 +676,7 @@ export class RemoteBrowserRuntime {
         case "click": {
           const input = decodePreviewAutomationClickInput(request.input);
           const locator = input.locator ?? input.selector;
-          if (locator) await page.locator(locator).click();
+          if (locator) await page.locator(locator).click({ timeout: remainingTimeout() });
           else await page.mouse.click(input.x!, input.y!);
           return {};
         }
@@ -560,8 +684,12 @@ export class RemoteBrowserRuntime {
           const input = decodePreviewAutomationTypeInput(request.input);
           const locator = input.locator ?? input.selector;
           if (locator) {
-            if (input.clear) await page.locator(locator).fill(input.text);
-            else await page.locator(locator).pressSequentially(input.text);
+            if (input.clear)
+              await page.locator(locator).fill(input.text, { timeout: remainingTimeout() });
+            else
+              await page
+                .locator(locator)
+                .pressSequentially(input.text, { timeout: remainingTimeout() });
           } else {
             if (input.clear) {
               await page.keyboard.press("ControlOrMeta+A");
@@ -580,12 +708,14 @@ export class RemoteBrowserRuntime {
           const input = decodePreviewAutomationScrollInput(request.input);
           const locator = input.locator ?? input.selector;
           if (locator)
-            await page
-              .locator(locator)
-              .evaluate((element, delta) => element.scrollBy(delta.x, delta.y), {
+            await page.locator(locator).evaluate(
+              (element, delta) => element.scrollBy(delta.x, delta.y),
+              {
                 x: input.deltaX ?? 0,
                 y: input.deltaY ?? 0,
-              });
+              },
+              { timeout: remainingTimeout() },
+            );
           else await page.mouse.wheel(input.deltaX ?? 0, input.deltaY ?? 0);
           return {};
         }
@@ -599,13 +729,20 @@ export class RemoteBrowserRuntime {
         }
         case "waitFor": {
           const input = decodePreviewAutomationWaitForInput(request.input);
-          const timeout = input.timeoutMs ?? 15_000;
+          const waitDeadline = Math.min(deadline, Date.now() + (input.timeoutMs ?? 15_000));
+          const timeout = () => remainingTimeout(waitDeadline - Date.now());
           const locator = input.locator ?? input.selector;
-          if (locator) await page.locator(locator).waitFor({ state: "attached", timeout });
+          if (locator)
+            await page.locator(locator).waitFor({ state: "attached", timeout: timeout() });
           if (input.text)
-            await page.getByText(input.text, { exact: false }).first().waitFor({ timeout });
+            await page
+              .getByText(input.text, { exact: false })
+              .first()
+              .waitFor({ timeout: timeout() });
           if (input.urlIncludes)
-            await page.waitForURL((url) => url.href.includes(input.urlIncludes!), { timeout });
+            await page.waitForURL((url) => url.href.includes(input.urlIncludes!), {
+              timeout: timeout(),
+            });
           return {};
         }
         case "resize": {
@@ -712,7 +849,7 @@ export class RemoteBrowserRuntime {
       sizeBytes: (await NodeFSP.stat(path)).size,
       createdAt: new Date().toISOString(),
     };
-    this.rememberArtifact(threadId, artifact);
+    await this.rememberArtifact(threadId, artifact);
     return artifact;
   }
 
@@ -866,6 +1003,7 @@ export class RemoteBrowserRuntime {
     const id = createAttachmentId(threadId, "mp4");
     if (!id) throw new Error("Invalid task identifier.");
     tab.jpeg = await tab.page.screenshot({ type: "jpeg", quality: 70, timeout: 5_000 });
+    this.assertThreadOpen(threadId);
     await NodeFSP.mkdir(this.attachmentsDirectory, { recursive: true });
     const path = NodePath.join(this.attachmentsDirectory, `${id}.mp4`);
     const encoder = NodeChildProcess.spawn(
@@ -936,6 +1074,10 @@ export class RemoteBrowserRuntime {
         ),
       );
     });
+    if (this.closedThreads.has(threadId) || this.closed) {
+      encoder.kill();
+      throw new Error("This task browser has been closed.");
+    }
     const recording: Recording = {
       process: encoder,
       path,
@@ -996,7 +1138,7 @@ export class RemoteBrowserRuntime {
         };
         if (artifact.sizeBytes === 0) throw new Error("The recording contains no video frames.");
         tab.completedRecording = artifact;
-        this.rememberArtifact(tab.owner.threadId, artifact);
+        await this.rememberArtifact(tab.owner.threadId, artifact);
         return artifact;
       } finally {
         await this.stopUnusedCapture(tab);
@@ -1024,6 +1166,38 @@ export class RemoteBrowserRuntime {
     } finally {
       clearTimeout(forceStop);
     }
+  }
+
+  /** Deletion teardown preserves captures and profile data for the existing retention policy. */
+  closeThread(threadId: string): Promise<void> {
+    const existing = this.threadClosures.get(threadId);
+    if (existing) return existing;
+    this.closedThreads.add(threadId);
+    const pending = this.sessions.get(threadId);
+    this.sessions.delete(threadId);
+    const close = async () => {
+      try {
+        const session = await pending?.catch(() => undefined);
+        if (session) {
+          try {
+            await Promise.allSettled(
+              [...session.tabs.values()].map(async (tab) => {
+                if (tab.recording || tab.recordingFinalization) await this.stopRecording(tab);
+              }),
+            );
+          } finally {
+            await this.closeSession(session);
+            await this.publishMetadata(session, true);
+          }
+        }
+        await this.artifactWrites.get(threadId);
+      } finally {
+        this.watchers.delete(threadId);
+      }
+    };
+    const completion = close();
+    this.threadClosures.set(threadId, completion);
+    return completion;
   }
 
   async close() {

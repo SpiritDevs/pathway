@@ -26,7 +26,12 @@ struct AgentThreadSubagentPicker: View {
                     }
                 }.font(.caption).monospacedDigit()
             }
-            .buttonStyle(.glass).buttonBorderShape(.capsule)
+            #if os(visionOS)
+            .buttonStyle(.bordered)
+            #else
+            .buttonStyle(.glass)
+            #endif
+            .buttonBorderShape(.capsule)
             .accessibilityValue("\(workingCount) working")
             .accessibilityIdentifier("agent-thread-subagents")
             .popover(isPresented: $isPresented, arrowEdge: .bottom) {

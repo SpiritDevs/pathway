@@ -39,6 +39,7 @@ export default defineConfig({
       "**/routeTree.gen.ts",
       "apps/web/public/mockServiceWorker.js",
       "apps/web/src/lib/vendor/qrcodegen.ts",
+      "apps/pathway-ios/Pathway/Resources/PathwayTerminal.bundle/**",
       "*.icon/**",
     ],
     sortPackageJson: {},

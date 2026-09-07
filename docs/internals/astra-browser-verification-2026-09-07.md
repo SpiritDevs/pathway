@@ -62,3 +62,11 @@ The final real-browser script passed with output in `/tmp/pathway-browser-live-p
 The final model/HTTP subset passes 19 tests in four files (`/tmp/pathway-final-assets-models-tests.log`). The normal signed native build log is `/Users/coreybaines/Library/Developer/XcodeBuildMCP/workspaces/pathway-bab91144fc1c/logs/build_run_sim_2026-09-07T03-22-38-413Z_pid86744_5b421388.log`.
 
 Final server package typecheck passes after the RPC authorization and verification-script changes (`/tmp/pathway-live-script-typecheck.log`). The four native subscription tests passed in `/Users/coreybaines/Library/Developer/XcodeBuildMCP/workspaces/pathway-bab91144fc1c/logs/test_sim_2026-09-07T03-25-36-013Z_pid86744_d2f216cd.log`. The worktree development server and separate local Convex process are retained for review; their state remains under `.pathway`.
+
+## PR85 review follow-up
+
+The published PR was updated after merging main at `1d62a8412`. All five review findings were confirmed and addressed: queued browser action deadlines, hosted web/iOS host selection, synchronous prevention of default WebAuthn account selection, durable capture indexing, and deleted-task browser cleanup. The native merge preserves main's synchronized requests, transport deadlines, and unified cloud lifecycle.
+
+Focused verification passed: 21 runtime lifecycle tests, 5 deletion-service tests, 11 web preview tests, 4 desktop WebAuthn tests, and 23 native conversation/subscription tests. Scoped server/web/desktop typechecks pass; desktop retains two existing suggestions. No repository-wide checks were run. Native results are in `/Users/coreybaines/Library/Developer/XcodeBuildMCP/workspaces/pathway-bab91144fc1c/result-bundles/test_sim_2026-09-07T04-43-51-541Z_pid86744_97475b0e.xcresult`.
+
+The model-picker and password-vault screenshots were uploaded to the PR's FileStore group. The Apple Passwords and linked-environment UI boundaries above remain unchanged.

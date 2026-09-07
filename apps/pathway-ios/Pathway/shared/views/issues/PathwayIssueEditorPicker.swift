@@ -67,7 +67,9 @@ struct PathwayIssueEditorPicker: View {
                         if matching.isEmpty { Text("No matches").foregroundStyle(.secondary).padding(.vertical, 18) }
                     }
                 }
+                #if !os(visionOS)
                 .scrollDismissesKeyboard(.never)
+                #endif
                 .frame(maxHeight: .infinity)
             }
         }

@@ -39,6 +39,7 @@ enum CompactAppShellMetrics {
                         }
                     }
                 }
+                .id(activeDestination)
                 .environment(\.compactThreadChrome, threadChrome)
                 .onPreferenceChange(IssueDetailNavigationActiveKey.self) { isIssueDetailActive = $0 }
                 if isNavigationBackdropPresented {

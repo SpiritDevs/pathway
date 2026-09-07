@@ -154,19 +154,25 @@ actor PathwayThreadCache {
 
     private let directory: URL
     private let maximumEntries = 50
+    private let maximumFileBytes: Int
+    private let maximumTotalBytes: Int
+    private let maximumAge: TimeInterval = 30 * 24 * 60 * 60
     private var lastSavedRevision: [String: UInt64] = [:]
 
-    init(directory: URL? = nil) {
+    init(directory: URL? = nil, maximumFileBytes: Int = 16 * 1024 * 1024, maximumTotalBytes: Int = 128 * 1024 * 1024) {
+        self.maximumFileBytes = maximumFileBytes
+        self.maximumTotalBytes = maximumTotalBytes
         self.directory = directory ?? URL.applicationSupportDirectory
             .appending(path: "Pathway", directoryHint: .isDirectory)
             .appending(path: "AgentThreads", directoryHint: .isDirectory)
     }
 
     func load(threadID: String) -> [PathwayTimelineItem]? {
-        guard
-            let data = try? Data(contentsOf: fileURL(threadID: threadID)),
-            let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data)
-        else { return nil }
+        let url = fileURL(threadID: threadID)
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= maximumFileBytes,
+              let data = try? Data(contentsOf: url),
+              let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
+              Date().timeIntervalSince(snapshot.updatedAt) <= maximumAge else { return nil }
         return snapshot.items
     }
 
@@ -179,7 +185,19 @@ actor PathwayThreadCache {
                 withIntermediateDirectories: true
             )
             let data = try JSONEncoder().encode(Snapshot(items: items, updatedAt: Date()))
-            try data.write(to: fileURL(threadID: threadID), options: .atomic)
+            let url = fileURL(threadID: threadID)
+            guard data.count <= maximumFileBytes, data.count <= maximumTotalBytes else {
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
+            #if os(iOS) || os(visionOS)
+            try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            #else
+            try data.write(to: url, options: .atomic)
+            #endif
+            var directoryURL = directory
+            var values = URLResourceValues(); values.isExcludedFromBackup = true
+            try? directoryURL.setResourceValues(values)
             trim()
         } catch {
             return
@@ -193,22 +211,17 @@ actor PathwayThreadCache {
     }
 
     private func trim() {
-        guard
-            let urls = try? FileManager.default.contentsOfDirectory(
-                at: directory,
-                includingPropertiesForKeys: [.contentModificationDateKey]
-            ),
-            urls.count > maximumEntries
-        else { return }
-        let oldest = urls.sorted {
-            let left = try? $0.resourceValues(forKeys: [.contentModificationDateKey])
-                .contentModificationDate
-            let right = try? $1.resourceValues(forKeys: [.contentModificationDateKey])
-                .contentModificationDate
-            return (left ?? .distantPast) < (right ?? .distantPast)
-        }
-        for url in oldest.prefix(urls.count - maximumEntries) {
-            try? FileManager.default.removeItem(at: url)
+        guard let urls = try? FileManager.default.contentsOfDirectory(at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]) else { return }
+        let entries = urls.filter { $0.pathExtension == "json" }.compactMap { url -> (URL, Date, Int)? in
+            guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else { return nil }
+            return (url, values.contentModificationDate ?? .distantPast, values.fileSize ?? 0)
+        }.sorted { $0.1 < $1.1 }
+        var count = entries.count
+        var bytes = entries.reduce(0) { $0 + $1.2 }
+        for (url, date, size) in entries {
+            guard count > maximumEntries || bytes > maximumTotalBytes || Date().timeIntervalSince(date) > maximumAge else { continue }
+            do { try FileManager.default.removeItem(at: url); count -= 1; bytes -= size } catch { continue }
         }
     }
 }
@@ -243,16 +256,22 @@ final class PathwayAgentThreadModel {
     var maximumFileAttachmentBytes: Int? = nil
     var supportsAttachmentUploads = false
     var projectionCollections: [String: [JSONValue]] = [:]
-    var draftAttachments: [PathwayThreadAttachmentDraft] = []
+    var draftAttachments: [PathwayThreadAttachmentDraft] = [] { didSet { saveDraft() } }
     var draft = "" { didSet { saveDraft() } }
     var threadID: String { thread.threadId }
     var environmentLabel: String { environment.environment.label }
     var canSend: Bool {
         (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftAttachments.isEmpty)
             && draft.count <= 120_000 && !isSending && draftAttachments.allSatisfy { $0.state == .ready }
-            && (rpc != nil || injectedRequest != nil)
+            && isSubscriptionReady && (rpc != nil || injectedRequest != nil)
     }
 
+    private(set) var isSubscriptionReady = false
+    @ObservationIgnored let storageDirectory: URL?
+    @ObservationIgnored private let draftStore: PathwayConversationDraftStore?
+    @ObservationIgnored private var draftWriteTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingDraftWrite: PathwayConversationDraftSnapshot?
+    @ObservationIgnored private var didRestoreDraft = false
     @ObservationIgnored let connect: PathwayConnectClient?
     @ObservationIgnored let environment: PathwayCompanyEnvironment
     @ObservationIgnored let thread: PathwayAgentThread
@@ -267,25 +286,31 @@ final class PathwayAgentThreadModel {
     @ObservationIgnored private var lastSequence = 0
     @ObservationIgnored var childRoster: PathwayThreadSubagent?
     @ObservationIgnored var parentModelSelection: PathwayModelSelection?
-    @ObservationIgnored var preparedNewSend: PathwayThreadPreparedNewSend?
-    @ObservationIgnored var preparedSend: PathwayThreadPreparedSend?
-    @ObservationIgnored var attachmentData: [String: Data] = [:]
+    @ObservationIgnored var preparedNewSend: PathwayThreadPreparedNewSend? { didSet { saveDraft() } }
+    @ObservationIgnored var preparedSend: PathwayThreadPreparedSend? { didSet { saveDraft() } }
+    @ObservationIgnored var attachmentData: [String: Data] = [:] { didSet { saveDraft() } }
 
     init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment,
-         connect: PathwayConnectClient, cache: PathwayThreadCache = PathwayThreadCache()) {
-        self.thread = thread; self.environment = environment; self.connect = connect; self.cache = cache
-        persistsLocalState = true; injectedRequest = nil
+         connect: PathwayConnectClient, cache: PathwayThreadCache? = nil, storageDirectory: URL? = nil) {
+        self.thread = thread; self.environment = environment; self.connect = connect
+        self.storageDirectory = storageDirectory
+        self.cache = cache ?? PathwayThreadCache(directory: storageDirectory?.appending(path: "AgentThreads"))
+        draftStore = storageDirectory.map { PathwayConversationDraftStore(directory: $0.appending(path: "ConversationDrafts"), key: thread.id) }
+        persistsLocalState = storageDirectory != nil; injectedRequest = nil
         currentModelSelection = thread.shell.modelSelection; runtimeMode = thread.shell.runtimeMode
         interactionMode = thread.shell.interactionMode; activeRunID = thread.shell.activeRunId
         threadTitle = thread.shell.title
         isParentRosterLoading = thread.shell.lineage?.relationshipToParent == "subagent"
-        draft = UserDefaults.standard.string(forKey: Self.draftKey(thread.id)) ?? ""
+
     }
 
     init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment,
-         request: @escaping Request, persistsLocalState: Bool = false, cache: PathwayThreadCache = PathwayThreadCache()) {
+         request: @escaping Request, persistsLocalState: Bool = false, cache: PathwayThreadCache = PathwayThreadCache(), storageDirectory: URL? = nil) {
         self.thread = thread; self.environment = environment; connect = nil; self.cache = cache
+        self.storageDirectory = storageDirectory
+        draftStore = storageDirectory.map { PathwayConversationDraftStore(directory: $0.appending(path: "ConversationDrafts"), key: thread.id) }
         self.persistsLocalState = persistsLocalState; injectedRequest = request
+        isSubscriptionReady = true
         currentModelSelection = thread.shell.modelSelection; runtimeMode = thread.shell.runtimeMode
         interactionMode = thread.shell.interactionMode; activeRunID = thread.shell.activeRunId
         threadTitle = thread.shell.title
@@ -293,7 +318,8 @@ final class PathwayAgentThreadModel {
     }
 
     deinit {
-        streamTask?.cancel(); configTask?.cancel(); cacheWriteTask?.cancel()
+        streamTask?.cancel(); configTask?.cancel(); cacheWriteTask?.cancel(); draftWriteTask?.cancel()
+        if let pendingDraftWrite, let draftStore { Task { try? await draftStore.save(pendingDraftWrite) } }
         if let pending = pendingCacheWrite {
             let cache = cache; let id = thread.id
             Task { await cache.save(items: pending.items, threadID: id, revision: pending.revision) }
@@ -306,6 +332,7 @@ final class PathwayAgentThreadModel {
         connectionState = .connecting
         streamTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            await restoreDraft()
             if persistsLocalState, let cached = await cache.load(threadID: thread.id), items.isEmpty {
                 items = cached; connectionState = .cached
             }
@@ -331,6 +358,9 @@ final class PathwayAgentThreadModel {
 
     func stop() async {
         streamTask?.cancel(); streamTask = nil; configTask?.cancel(); configTask = nil
+        isSubscriptionReady = false
+        connectionState = items.isEmpty ? .idle : .cached
+        await persistDraftNow()
         let previousRPC = rpc; rpc = nil
         let cacheWrite = takePendingCacheWrite()
         await previousRPC?.stop()
@@ -338,11 +368,12 @@ final class PathwayAgentThreadModel {
     }
 
     func clearActionError() { actionError = nil }
-    func request(_ method: String, payload: JSONValue, reportsErrors: Bool = true) async throws -> JSONValue {
+    func request(_ method: String, payload: JSONValue, reportsErrors: Bool = true, requiresSubscription: Bool = false) async throws -> JSONValue {
         do {
+            if requiresSubscription, !isSubscriptionReady { throw PathwayRPCError.disconnected }
             let result: JSONValue
             if let injectedRequest { result = try await injectedRequest(method, payload) }
-            else if let rpc { result = try await rpc.request(method, payload: payload) }
+            else if let rpc { result = try await rpc.request(method, payload: payload, requiresSubscription: requiresSubscription, waitForSubscription: false) }
             else { throw PathwayThreadConversationError.message("Connect to the environment to use this action.") }
             if reportsErrors { actionError = nil }
             return result
@@ -354,7 +385,7 @@ final class PathwayAgentThreadModel {
         payload["type"] = .string(type)
         if payload["commandId"] == nil { payload["commandId"] = .string(UUID().uuidString) }
         if payload["threadId"] == nil && type != "thread.fork" { payload["threadId"] = .string(threadID) }
-        _ = try await request("orchestration.dispatchCommand", payload: .object(payload))
+        _ = try await request("orchestration.dispatchCommand", payload: .object(payload), requiresSubscription: true)
     }
 
     func send(mode: String = "queue") async {
@@ -371,32 +402,30 @@ final class PathwayAgentThreadModel {
                 preparedNewSend = nil
             }
             let ids = selected.map(\.id)
-            let previous = preparedSend
-            let sameAttempt = previous?.ids == ids && previous?.text == text && previous?.requestedMode == mode
-            var prepared = sameAttempt ? previous : nil
-            if prepared == nil {
-                let messageID = UUID().uuidString
-                var attachmentsByID: [String: JSONValue] = [:]
-                if let previous {
-                    attachmentsByID = Dictionary(uniqueKeysWithValues: zip(previous.ids, previous.attachments))
-                }
-                let missing = selected.filter { attachmentsByID[$0.id] == nil }
-                if !missing.isEmpty {
-                    let result = try await request("assets.persistChatAttachments", payload: .object([
-                        "threadId": .string(threadID), "messageId": .string(messageID),
-                        "attachments": .array(missing.compactMap { $0.attachment?.json })
-                    ]))
-                    let persisted = result.objectValue?["attachments"]?.arrayValue ?? []
-                    guard persisted.count == missing.count else { throw PathwayThreadConversationError.message("The attachments could not be prepared. Try again.") }
-                    for (attachment, value) in zip(missing, persisted) { attachmentsByID[attachment.id] = value }
-                }
+            let sameAttempt = preparedSend?.ids == ids && preparedSend?.text == text && preparedSend?.requestedMode == mode
+            if !sameAttempt {
                 var dispatchMode: [String: JSONValue] = ["type": .string(activeRunID == nil ? "start_immediately" : "queue_after_active")]
                 if mode == "steer", let activeRunID { dispatchMode = ["type": .string("steer_active"), "targetRunId": .string(activeRunID)] }
-                prepared = PathwayThreadPreparedSend(ids: ids, messageID: messageID, text: text, requestedMode: mode,
-                    attachments: ids.compactMap { attachmentsByID[$0] }, dispatchMode: .object(dispatchMode))
-                preparedSend = prepared
+                preparedSend = PathwayThreadPreparedSend(ids: ids, messageID: UUID().uuidString, text: text,
+                    requestedMode: mode, attachments: [], dispatchMode: .object(dispatchMode))
             }
-            guard let prepared else { return }
+            guard let transaction = preparedSend else { return }
+            await persistDraftNow()
+            if !transaction.attachmentsPrepared {
+                var attachments: [JSONValue] = []
+                if !selected.isEmpty {
+                    let result = try await request("assets.persistChatAttachments", payload: .object([
+                        "threadId": .string(threadID), "messageId": .string(transaction.messageID),
+                        "attachments": .array(selected.compactMap { $0.attachment?.json })
+                    ]))
+                    attachments = result.objectValue?["attachments"]?.arrayValue ?? []
+                    guard attachments.count == selected.count else { throw PathwayThreadConversationError.message("The attachments could not be prepared. Try again.") }
+                }
+                preparedSend?.attachments = attachments
+                preparedSend?.attachmentsPrepared = true
+                await persistDraftNow()
+            }
+            guard let prepared = preparedSend else { return }
             try await dispatch("message.dispatch", fields: ["commandId": .string(prepared.messageID), "createdBy": .string("user"), "creationSource": .string("mobile"),
                 "messageId": .string(prepared.messageID), "text": .string(prepared.text), "attachments": .array(prepared.attachments), "dispatchMode": prepared.dispatchMode])
             if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
@@ -404,10 +433,11 @@ final class PathwayAgentThreadModel {
             let sentIDs = Set(selected.map(\.id))
             draftAttachments.removeAll { sentIDs.contains($0.id) }
             for id in sentIDs { attachmentData.removeValue(forKey: id) }
+            await persistDraftNow()
         } catch { actionError = error.localizedDescription }
     }
 
-    func canEdit(_ item: PathwayTimelineItem) -> Bool { activeRunID == nil && canPrepareEdit(item) }
+    func canEdit(_ item: PathwayTimelineItem) -> Bool { isSubscriptionReady && activeRunID == nil && canPrepareEdit(item) }
 
     func canPrepareEdit(_ item: PathwayTimelineItem) -> Bool {
         guard item.isUserMessage, item.messageID != nil, item.fields["createdBy"]?.stringValue == "user",
@@ -498,7 +528,7 @@ final class PathwayAgentThreadModel {
         questionDrafts[item.id] = draft
     }
     func canRespond(to item: PathwayTimelineItem) -> Bool {
-        guard item.requiresResponse, let id = item.requestID else { return false }
+        guard isSubscriptionReady, item.requiresResponse, let id = item.requestID else { return false }
         return runtimeRequests.contains { request in
             let fields = request.objectValue
             let capability = fields?["responseCapability"]?.objectValue?["type"]?.stringValue
@@ -506,7 +536,8 @@ final class PathwayAgentThreadModel {
         }
     }
     func responseUnavailableReason(for item: PathwayTimelineItem) -> String? {
-        canRespond(to: item) ? nil : "This request is no longer connected to a live agent."
+        if !isSubscriptionReady { return "Reconnect and wait for the latest thread state before responding." }
+        return canRespond(to: item) ? nil : "This request is no longer connected to a live agent."
     }
     func respondToApproval(requestID: String, decision: String) async {
         do { try await respond(requestID: requestID, fields: ["decision": .string(decision)]) }
@@ -537,10 +568,15 @@ final class PathwayAgentThreadModel {
         runtimeRequests = object["runtimeRequests"]?.arrayValue ?? []
         checkpoints = object["checkpoints"]?.arrayValue ?? []; plans = object["plans"]?.arrayValue ?? []
         applyThread(object["thread"]); deriveActiveRun()
-        lastSequence = sequence; connectionState = .live; persist()
+        lastSequence = sequence; connectionState = isSubscriptionReady ? .live : .connecting; persist()
     }
     func applySubscriptionValue(_ value: JSONValue) {
         guard let object = value.objectValue else { return }
+        if object["_pathwayTransport"] != nil {
+            isSubscriptionReady = false
+            connectionState = items.isEmpty ? .connecting : .cached
+            return
+        }
         switch object["kind"]?.stringValue {
         case "snapshot": if let projection = object["projection"] { installSnapshot(projection, sequence: object["snapshotSequence"]?.intValue ?? 0) }
         case "event":
@@ -549,8 +585,20 @@ final class PathwayAgentThreadModel {
             lastSequence = sequence
             if type == "turn-item.updated", let item = PathwayTimelineItem(json: payload) {
                 guard !runs.contains(where: { $0.id == item.runID && $0.status == "rolled_back" }) else { return }
-                if let index = items.firstIndex(where: { $0.id == item.id }) { items[index] = item } else { items.append(item) }
-                items.sort(by: Self.order); persist()
+                if let index = items.firstIndex(where: { $0.id == item.id }) {
+                    let previous = items[index]
+                    items[index] = item
+                    // Streaming text updates retain their position; only ordering changes sort.
+                    if Self.order(previous, item) || Self.order(item, previous) { items.sort(by: Self.order) }
+                } else {
+                    var lower = 0, upper = items.count
+                    while lower < upper {
+                        let middle = lower + (upper - lower) / 2
+                        if Self.order(items[middle], item) { lower = middle + 1 } else { upper = middle }
+                    }
+                    items.insert(item, at: lower)
+                }
+                persist()
             } else if type == "run.created" || type == "run.updated", let run = PathwayThreadRun(payload) {
                 if let index = runs.firstIndex(where: { $0.id == run.id }) { runs[index] = run } else { runs.append(run) }
                 deriveActiveRun()
@@ -566,8 +614,8 @@ final class PathwayAgentThreadModel {
                 var values = projectionCollections[collection] ?? []
                 Self.upsert(payload, into: &values); projectionCollections[collection] = values
             }
-            connectionState = .live
-        case "synchronized": connectionState = .live
+            if isSubscriptionReady { connectionState = .live }
+        case "synchronized": isSubscriptionReady = true; connectionState = .live
         default: break
         }
     }
@@ -604,12 +652,50 @@ final class PathwayAgentThreadModel {
         let pending = pendingCacheWrite; pendingCacheWrite = nil
         return pending
     }
-    private func saveDraft() {
-        guard persistsLocalState else { return }
-        let key = Self.draftKey(thread.id)
-        if draft.isEmpty { UserDefaults.standard.removeObject(forKey: key) } else { UserDefaults.standard.set(draft, forKey: key) }
+    func restoreDraft(legacyDefaults: UserDefaults = .standard) async {
+        guard !didRestoreDraft, let draftStore else { return }
+        didRestoreDraft = true
+        let legacyKey = "pathway.agent-thread.draft.\(thread.id)"
+        if draft.isEmpty, draftAttachments.isEmpty, let legacy = legacyDefaults.string(forKey: legacyKey) {
+            do {
+                if try await draftStore.migrateLegacyText(legacy), legacyDefaults.string(forKey: legacyKey) == legacy {
+                    legacyDefaults.removeObject(forKey: legacyKey)
+                }
+            } catch { actionError = "The previous draft could not be saved on this device. " + error.localizedDescription }
+        }
+        guard let restored = await draftStore.load(expirePendingUploads: true) else { return }
+        // Do not overwrite a draft the user already started while disk I/O was pending.
+        guard draft.isEmpty, draftAttachments.isEmpty else { return }
+        draft = restored.text
+        attachmentData = restored.data
+        draftAttachments = restored.attachments
+        preparedSend = restored.preparedSend
+        preparedNewSend = restored.preparedNewSend
     }
-    private static func draftKey(_ id: String) -> String { "pathway.agent-thread.draft.\(id)" }
+
+    private func saveDraft() {
+        guard draftStore != nil else { return }
+        pendingDraftWrite = draftSnapshot()
+        guard draftWriteTask == nil else { return }
+        draftWriteTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            await self?.persistDraftNow()
+        }
+    }
+
+    private func draftSnapshot() -> PathwayConversationDraftSnapshot {
+        PathwayConversationDraftSnapshot(text: draft, attachments: draftAttachments, data: attachmentData,
+            preparedSend: preparedSend, preparedNewSend: preparedNewSend, revision: DispatchTime.now().uptimeNanoseconds)
+    }
+
+    func persistDraftNow() async {
+        draftWriteTask?.cancel(); draftWriteTask = nil
+        guard let draftStore, didRestoreDraft || pendingDraftWrite != nil else { return }
+        let snapshot = draftSnapshot()
+        pendingDraftWrite = nil
+        do { try await draftStore.save(snapshot) }
+        catch { actionError = "The draft could not be saved on this device. " + error.localizedDescription }
+    }
     private static func order(_ left: PathwayTimelineItem, _ right: PathwayTimelineItem) -> Bool {
         left.ordinal == right.ordinal ? left.id < right.id : left.ordinal < right.ordinal
     }

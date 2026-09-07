@@ -383,6 +383,7 @@ function chooseLiveActivityDelivery(input: {
   readonly aggregate: RelayAgentActivityAggregateState | null;
   readonly nowMs: number;
 }): ChosenLiveActivityDelivery | "suppressed" | null {
+  if (input.target.platform !== "ios") return null;
   const preferences = parsePreferences(input.target.preferences_json);
   if (preferences?.liveActivitiesEnabled === false) {
     return input.target.activity_push_token
@@ -599,6 +600,8 @@ function expectedCurrentToken(input: {
   readonly target: LiveActivities.TargetRow;
   readonly kind: RelayDeliveryKind;
 }): string | null {
+  // Revalidate queued work against the device's current platform as well as its token.
+  if (input.kind !== "push_notification" && input.target.platform !== "ios") return null;
   switch (input.kind) {
     case "live_activity_start":
       return input.target.push_to_start_token;
