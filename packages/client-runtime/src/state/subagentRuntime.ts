@@ -718,7 +718,7 @@ export interface AgentPanelModel {
   readonly waitingCount: number;
   readonly idleCount: number;
   readonly settledCount: number;
-  readonly totalTokens: number;
+  readonly totalTokens: number | null;
   readonly hasAgents: boolean;
   readonly liveCount: number;
 }
@@ -753,6 +753,9 @@ export function projectedSubagentsToRuntime(
     readonly childThreadId: ThreadId | null;
     readonly title: string | null;
     readonly prompt: string;
+    readonly usage?: SubagentUsage;
+    readonly activationCount?: number;
+    readonly role?: string;
     readonly model: string | null;
     readonly options?: ReadonlyArray<ProviderOptionSelection> | undefined;
     readonly status:
@@ -791,13 +794,13 @@ export function projectedSubagentsToRuntime(
       title:
         subagent.title ??
         (subagent.prompt.length > 80 ? `${subagent.prompt.slice(0, 77)}...` : subagent.prompt),
-      role: null,
+      role: subagent.role ?? null,
       model: subagent.model,
       effort: typeof effort === "string" ? effort : null,
       options,
       status: subagent.status,
-      activationCount: 1,
-      usage: null,
+      activationCount: subagent.activationCount ?? 1,
+      usage: subagent.usage ?? null,
       progress: subagent.progress ?? null,
       lastToolName: null,
       result: subagent.result,
@@ -928,6 +931,7 @@ export function deriveAgentPanelModel({
   let idleCount = 0;
   let settledCount = 0;
   let totalTokens = 0;
+  let completeUsage = true;
   for (const agent of source) {
     // A workflow coordinator with members is a container for those members, not
     // work of its own: it reports running for the whole run and aggregates their
@@ -938,6 +942,7 @@ export function deriveAgentPanelModel({
     else if (agent.status === "waiting") waitingCount += 1;
     else if (agent.status === "idle") idleCount += 1;
     else settledCount += 1;
+    if (agent.usage === null) completeUsage = false;
     totalTokens += agent.usage?.totalTokens ?? 0;
   }
 
@@ -952,7 +957,7 @@ export function deriveAgentPanelModel({
     waitingCount,
     idleCount,
     settledCount,
-    totalTokens,
+    totalTokens: completeUsage ? totalTokens : null,
     hasAgents: true,
     liveCount: runningCount + waitingCount,
   };
@@ -1032,7 +1037,8 @@ export function formatSubagentModelLabel(
   return effort ? `${compact} · ${effort}` : compact;
 }
 
-export function formatSubagentTokenCount(totalTokens: number): string {
+export function formatSubagentTokenCount(totalTokens: number | null): string {
+  if (totalTokens === null) return "—";
   if (totalTokens < 1000) {
     return `${totalTokens}`;
   }

@@ -347,6 +347,20 @@ describe("foldSubagentActivities", () => {
 });
 
 describe("deriveAgentPanelModel", () => {
+  it("keeps a roster total unknown until every counted agent reports usage", () => {
+    const roster = fold([
+      activity("task.started", { taskId: "known", title: "Known" }),
+      activity("task.progress", { taskId: "known", typedUsage: { totalTokens: 100 } }),
+      activity("task.started", { taskId: "unknown", title: "Unknown" }),
+    ]);
+    expect(deriveAgentPanelModel({ agents: roster }).totalTokens).toBeNull();
+    expect(
+      deriveAgentPanelModel({
+        agents: roster.map((agent) => ({ ...agent, usage: agent.usage ?? { totalTokens: 0 } })),
+      }).totalTokens,
+    ).toBe(100);
+  });
+
   const roster = fold([
     activity("task.started", { taskId: "wf-1", taskType: "local_workflow", title: "audit" }),
     activity("task.progress", {
@@ -586,6 +600,8 @@ describe("timeline predicates", () => {
 
 describe("formatSubagentTokenCount", () => {
   it("formats plain counters", () => {
+    expect(formatSubagentTokenCount(null)).toBe("—");
+    expect(formatSubagentTokenCount(0)).toBe("0");
     expect(formatSubagentTokenCount(950)).toBe("950");
     expect(formatSubagentTokenCount(41200)).toBe("41.2k");
     expect(formatSubagentTokenCount(247000)).toBe("247k");
@@ -630,6 +646,9 @@ describe("model and effort attribution", () => {
         title: null,
         prompt: "Inspect the composer",
         model: "gpt-5.6-sol",
+        activationCount: 3,
+        usage: { totalTokens: 160, inputTokens: 140, outputTokens: 20 },
+        role: "reviewer",
         options: [
           { id: "reasoningEffort", value: "xhigh" },
           { id: "serviceTier", value: "fast" },
@@ -647,6 +666,9 @@ describe("model and effort attribution", () => {
       providerInstanceId: "codex_work",
       childThreadId: "thread-child",
       model: "gpt-5.6-sol",
+      activationCount: 3,
+      usage: { totalTokens: 160, inputTokens: 140, outputTokens: 20 },
+      role: "reviewer",
       effort: "xhigh",
       options: [
         { id: "reasoningEffort", value: "xhigh" },

@@ -74,6 +74,12 @@ export type ProviderAdapterV2SessionStatus = typeof ProviderAdapterV2SessionStat
 
 export const ProviderAdapterV2Event = Schema.Union([
   Schema.Struct({
+    type: Schema.Literal("app_thread.model_reported"),
+    driver: ProviderDriverKind,
+    threadId: ThreadId,
+    modelSelection: ModelSelection,
+  }),
+  Schema.Struct({
     type: Schema.Literal("app_thread.created"),
     driver: ProviderDriverKind,
     appThread: OrchestrationV2AppThread,

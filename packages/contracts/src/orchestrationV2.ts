@@ -46,7 +46,7 @@ import {
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
 import { ThreadLocation } from "./threadLocation.ts";
-import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
+import { RuntimeTaskUsage, ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 
 export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
 export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
@@ -601,6 +601,10 @@ export const OrchestrationV2ExecutionNode = Schema.Struct({
 export type OrchestrationV2ExecutionNode = typeof OrchestrationV2ExecutionNode.Type;
 
 export const OrchestrationV2Subagent = Schema.Struct({
+  usage: Schema.optional(RuntimeTaskUsage),
+  activationCount: Schema.optional(NonNegativeInt),
+  nickname: Schema.optional(Schema.String),
+  role: Schema.optional(Schema.String),
   id: NodeId,
   threadId: ThreadId,
   runId: Schema.NullOr(RunId),
@@ -1270,6 +1274,11 @@ const OrchestrationV2EventBase = Schema.Struct({
 });
 
 export const OrchestrationV2DomainEvent = Schema.Union([
+  Schema.Struct({
+    ...OrchestrationV2EventBase.fields,
+    type: Schema.Literal("thread.model-reported"),
+    payload: Schema.Struct({ modelSelection: ModelSelection }),
+  }),
   Schema.Struct({
     ...OrchestrationV2EventBase.fields,
     type: Schema.Literal("thread.created"),
@@ -2078,6 +2087,11 @@ export const OrchestrationV2RawProviderEventJson = OrchestrationV2RawProviderEve
 export type OrchestrationV2RawProviderEventJson = typeof OrchestrationV2RawProviderEventJson.Type;
 
 export const OrchestrationV2DomainEventJson = Schema.Union([
+  Schema.Struct({
+    ...OrchestrationV2JsonEventBaseFields,
+    type: Schema.Literal("thread.model-reported"),
+    payload: Schema.Struct({ modelSelection: ModelSelection }),
+  }),
   Schema.Struct({
     ...OrchestrationV2JsonEventBaseFields,
     type: Schema.Literal("thread.created"),
