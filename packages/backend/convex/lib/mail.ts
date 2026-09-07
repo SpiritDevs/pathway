@@ -122,13 +122,25 @@ export function assertActive(account: Doc<"mailAccounts">) {
     throw backendError("mail-unavailable", "Reconnect this mailbox first.");
 }
 /** A pending key is canceled by the same transaction that commits its message reference. */
-export async function queueMailBlobCleanup(ctx: MutationCtx, blobKey: string, dueAt = Date.now()) {
+export async function queueMailBlobCleanup(
+  ctx: MutationCtx,
+  blobKey: string,
+  dueAt = Date.now(),
+  reserveUpload = false,
+) {
   const existing = await ctx.db
     .query("mailBlobCleanup")
     .withIndex("by_blob", (q) => q.eq("blobKey", blobKey))
     .unique();
   if (existing) {
-    await ctx.db.patch(existing._id, { dueAt: Math.min(existing.dueAt, dueAt) });
+    if (reserveUpload && existing.leaseToken)
+      throw backendError(
+        "mail-upload-expired",
+        "Private upload cleanup is already running. Retry shortly.",
+      );
+    await ctx.db.patch(existing._id, {
+      dueAt: reserveUpload ? dueAt : Math.min(existing.dueAt, dueAt),
+    });
     return;
   }
   await ctx.db.insert("mailBlobCleanup", {
@@ -153,15 +165,25 @@ export async function disconnectMailAccount(ctx: MutationCtx, account: Doc<"mail
     .query("mailCredentials")
     .withIndex("by_account", (q) => q.eq("accountId", account.id))
     .unique();
-  const cleanup = await ctx.db
+  if (credential) await queueMailAccountCleanup(ctx, account, credential.encryptedCredentials);
+}
+export async function queueMailAccountCleanup(
+  ctx: MutationCtx,
+  account: Doc<"mailAccounts">,
+  encryptedCredentials: string,
+) {
+  const cleanups = await ctx.db
     .query("mailAccountCleanup")
     .withIndex("by_account", (q) => q.eq("accountId", account.id))
-    .unique();
-  if (credential && !cleanup)
+    .take(100);
+  if (!cleanups.some((row) => row.encryptedCredentials === encryptedCredentials))
     await ctx.db.insert("mailAccountCleanup", {
       id: mintDomainId(Date.now()),
       accountId: account.id,
-      encryptedCredentials: credential.encryptedCredentials,
+      ownerSubject: account.ownerSubject,
+      email: account.email,
+      oauthClientId: account.oauthClientId,
+      encryptedCredentials,
       dueAt: Date.now(),
       generation: 0,
     });

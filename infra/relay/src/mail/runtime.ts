@@ -97,11 +97,12 @@ export function makeMailRuntime(input: {
     renew: () => Promise<void> = async () => {},
   ) => {
     const labelToken = randomToken();
-    const labelUpdates = await rpc.mutation<
-      Array<{ id: string; providerMessageId: string; read: boolean; generation: number }>
-    >("claimLabelUpdates", { accountId: account.id, leaseToken: labelToken });
-    for (const update of labelUpdates.slice(0, 10)) {
+    for (let count = 0; count < 10; count++) {
       await renew();
+      const [update] = await rpc.mutation<
+        Array<{ id: string; providerMessageId: string; read: boolean; generation: number }>
+      >("claimLabelUpdates", { accountId: account.id, leaseToken: labelToken });
+      if (!update) break;
       let success = false;
       try {
         await gmail.modify(
@@ -120,6 +121,7 @@ export function makeMailRuntime(input: {
         success,
         ...(success ? {} : { error: "Gmail could not update this message. It will retry." }),
       });
+      if (!success) break;
     }
   };
   const deliverOutbox = async (account: RelayMailAccount, gmail: ReturnType<typeof makeGmail>) => {

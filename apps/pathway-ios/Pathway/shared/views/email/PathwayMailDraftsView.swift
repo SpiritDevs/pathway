@@ -17,6 +17,8 @@ struct PathwayMailDraftsView: View {
       }
       if let account {
         Button("Compose") { compose = true }.disabled(account.status != "active")
+        PathwayMailDraftJobsView(model: model, companyID: companyID, account: account)
+          .id(account.id)
         ForEach(drafts) { draft in
           NavigationLink {
             PathwayMailDraftEditor(
@@ -29,7 +31,7 @@ struct PathwayMailDraftsView: View {
             }
           }
         }
-        if drafts.isEmpty { Text("No drafts.").foregroundStyle(.secondary) }
+        if drafts.isEmpty { Text("No saved drafts.").foregroundStyle(.secondary) }
       }
       if let error { Text(error).foregroundStyle(.red) }
     }
@@ -169,6 +171,85 @@ struct PathwayMailDraftEditor: View {
           saved = true
         }
       } catch { self.error = error.localizedDescription }
+    }
+  }
+}
+
+private struct PathwayMailDraftJob: Decodable, Identifiable {
+  let id: String
+  let subject: String
+  let status: String
+  let lastError: String?
+}
+
+private struct PathwayMailDraftJobPage: Decodable {
+  let jobs: [PathwayMailDraftJob]
+  let nextCursor: String?
+}
+
+private struct PathwayMailDraftJobsView: View {
+  let model: PathwayConnectedMailModel
+  let companyID: String
+  let account: PathwayMailAccount
+  @State private var jobs: [PathwayMailDraftJob] = []
+  @State private var cursors: [String] = []
+  @State private var nextCursor: String?
+  @State private var error: String?
+  @State private var busy: String?
+
+  var body: some View {
+    Section("AI draft requests") {
+      ForEach(jobs) { job in
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Reply to \(job.subject.isEmpty ? "No subject" : job.subject)")
+          Text(
+            job.status == "failed"
+              ? "Draft generation failed"
+              : job.status == "running" ? "Generating reply…" : "Waiting for your mail environment"
+          )
+          .font(.caption).foregroundStyle(.secondary)
+          if let lastError = job.lastError { Text(lastError).font(.caption).foregroundStyle(.red) }
+          if job.status == "failed" {
+            Button(busy == job.id ? "Retrying…" : "Retry draft") {
+              busy = job.id
+              error = nil
+              Task {
+                defer { busy = nil }
+                do {
+                  _ = try await model.mutate(
+                    "mail:retryDraftJob", companyID: companyID, fields: ["jobId": .string(job.id)])
+                } catch { self.error = error.localizedDescription }
+              }
+            }.disabled(busy != nil || account.status != "active")
+          }
+        }
+      }
+      if let error { Text(error).foregroundStyle(.red) }
+      if !cursors.isEmpty || nextCursor != nil {
+        HStack {
+          Button("Previous requests") { cursors.removeLast() }.disabled(cursors.isEmpty)
+          Button("Next requests") { if let nextCursor { cursors.append(nextCursor) } }.disabled(
+            nextCursor == nil)
+        }
+      }
+    }
+    .task(id: "\(companyID):\(account.id):\(cursors.last ?? "")") {
+      jobs = []
+      nextCursor = nil
+      error = nil
+      do {
+        var fields: [String: JSONValue] = ["accountId": .string(account.id)]
+        if let cursor = cursors.last { fields["cursor"] = .string(cursor) }
+        try await model.observe(
+          PathwayMailDraftJobPage.self, name: "mail:listDraftJobs", companyID: companyID,
+          fields: fields
+        ) {
+          jobs = $0.jobs
+          nextCursor = $0.nextCursor
+        }
+      } catch {
+        if !Task.isCancelled { self.error = error.localizedDescription }
+      }
     }
   }
 }

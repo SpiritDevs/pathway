@@ -63,6 +63,9 @@ export const mailTables = {
     id: v.string(),
     accountId: v.string(),
     encryptedCredentials: v.string(),
+    ownerSubject: v.string(),
+    email: v.string(),
+    oauthClientId: v.string(),
     dueAt: v.number(),
     generation: v.number(),
     leaseToken: v.optional(v.string()),
@@ -70,6 +73,7 @@ export const mailTables = {
   })
     .index("by_domain_id", ["id"])
     .index("by_account", ["accountId"])
+    .index("by_grant", ["ownerSubject", "email", "oauthClientId", "leaseExpiresAt"])
     .index("by_due", ["dueAt"]),
   mailLabelUpdates: defineTable({
     id: v.string(),
@@ -232,6 +236,7 @@ export const mailTables = {
     .index("by_message", ["messageId"])
     .index("by_account_status", ["accountId", "status", "createdAt"])
     .index("by_account_status_kind", ["accountId", "status", "kind", "createdAt"])
+    .index("by_account_kind", ["accountId", "kind", "createdAt"])
     .index("by_claimant", ["companyId", "claimedByEnvironmentId", "status"]),
   mailDrafts: defineTable({
     ...scope,

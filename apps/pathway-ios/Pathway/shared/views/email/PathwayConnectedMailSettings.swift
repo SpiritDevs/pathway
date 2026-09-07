@@ -21,6 +21,7 @@ struct PathwayConnectedMailSettings: View {
             if let error = account.lastError { Text(error).font(.caption).foregroundStyle(.red) }
             NavigationLink("Sender rules") {
               PathwayMailSenderRulesView(model: model, companyID: companyID, accountID: account.id)
+                .id("\(companyID):\(account.id)")
             }
             NavigationLink("Mail analysis") {
               PathwayMailBrainSettings(
@@ -237,6 +238,14 @@ private struct PathwayMailSenderRulesView: View {
   @State private var rules: [Rule] = []
   @State private var error: String?
   @State private var busy = false
+  @State private var cursors: [String?] = [nil]
+  @State private var nextCursor: String?
+  @State private var loading = true
+  private var pageID: String { "\(companyID):\(accountID):\((cursors.last ?? nil) ?? "")" }
+  private struct Page: Decodable {
+    let rules: [Rule]
+    let nextCursor: String?
+  }
   private struct Rule: Decodable, Identifiable {
     let email: String
     let bucket: String
@@ -266,19 +275,50 @@ private struct PathwayMailSenderRulesView: View {
           }.disabled(busy)
         }
       }
-      if rules.isEmpty { Text("No sender rules.").foregroundStyle(.secondary) }
+      if loading { ProgressView("Loading sender rules") }
+      if !loading && rules.isEmpty {
+        Text("No sender rules on this page.").foregroundStyle(.secondary)
+      }
+      HStack {
+        Button("Previous") {
+          loading = true
+          cursors.removeLast()
+        }
+        .disabled(busy || cursors.count == 1)
+        Spacer()
+        Text("Page \(cursors.count)")
+        Spacer()
+        Button("Next") {
+          if let nextCursor {
+            loading = true
+            cursors.append(nextCursor)
+          }
+        }
+        .disabled(busy || loading || nextCursor == nil)
+      }
       if let error { Text(error).foregroundStyle(.red) }
     }
     .navigationTitle("Sender rules")
-    .task(id: accountID) {
+    .task(id: pageID) {
+      rules = []
+      nextCursor = nil
+      loading = true
+      error = nil
+      var fields: [String: JSONValue] = ["accountId": .string(accountID)]
+      if let cursor = cursors.last ?? nil { fields["cursor"] = .string(cursor) }
       do {
         try await model.observe(
-          [Rule].self, name: "mail:listSenderRules", companyID: companyID,
-          fields: ["accountId": .string(accountID)]
-        ) { rules = $0 }
+          Page.self, name: "mail:listSenderRules", companyID: companyID,
+          fields: fields
+        ) { page in
+          rules = page.rules
+          nextCursor = page.nextCursor
+          loading = false
+        }
       } catch {
         if !Task.isCancelled {
           rules = []
+          loading = false
           self.error = error.localizedDescription
         }
       }

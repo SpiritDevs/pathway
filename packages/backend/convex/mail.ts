@@ -281,6 +281,63 @@ export const listDrafts = query({
     ).map(publicDraft);
   },
 });
+/** Pending generation and failures stay visible until a reply is produced. */
+export const listDraftJobs = query({
+  args: { ...companyArg, accountId: v.string(), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await ownedMailAccount(ctx, args.companyId, args.accountId);
+    const page = await ctx.db
+      .query("mailJobs")
+      .withIndex("by_account_kind", (q) => q.eq("accountId", args.accountId).eq("kind", "draft"))
+      .order("desc")
+      .paginate({ cursor: args.cursor ?? null, numItems: 25 });
+    const jobs = await Promise.all(
+      page.page
+        .filter((job) => job.status !== "completed")
+        .map(async (job) => {
+          const message = await ctx.db
+            .query("mailMessages")
+            .withIndex("by_domain_id", (q) => q.eq("id", job.messageId))
+            .unique();
+          return {
+            id: job.id,
+            status: job.status,
+            subject: message?.subject ?? "Reply",
+            lastError: job.lastError,
+          };
+        }),
+    );
+    return { jobs, nextCursor: page.isDone ? null : page.continueCursor };
+  },
+});
+export const retryDraftJob = mutation({
+  args: { ...companyArg, jobId: v.string() },
+  handler: async (ctx, args) => {
+    const job = await ctx.db
+      .query("mailJobs")
+      .withIndex("by_domain_id", (q) => q.eq("id", args.jobId))
+      .unique();
+    if (!job || job.kind !== "draft")
+      throw backendError("mail-not-found", "Draft request not found.");
+    const account = await ownedMailAccount(ctx, args.companyId, job.accountId);
+    assertActive(account);
+    if (!account.brain)
+      throw backendError("mail-brain-required", "Choose a mail analysis environment first.");
+    if (job.status !== "failed")
+      throw backendError("mail-draft-not-failed", "This draft request is not failed.");
+    const message = await ownedMailMessage(ctx, args.companyId, job.messageId);
+    await ctx.db.patch(job._id, {
+      status: "pending",
+      attempts: 0,
+      lastError: undefined,
+      claimedByEnvironmentId: undefined,
+      leaseExpiresAt: undefined,
+      classificationRevision: message.classificationRevision,
+      updatedAt: Date.now(),
+    });
+    return null;
+  },
+});
 export const saveDraft = mutation({
   args: {
     ...companyArg,
@@ -477,15 +534,29 @@ export const disableBrain = mutation({
   },
 });
 export const listSenderRules = query({
-  args: { ...companyArg, accountId: v.string() },
+  args: {
+    ...companyArg,
+    accountId: v.string(),
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     await ownedMailAccount(ctx, args.companyId, args.accountId);
-    return (
-      await ctx.db
-        .query("mailSenderRules")
-        .withIndex("by_account", (q) => q.eq("accountId", args.accountId))
-        .take(200)
-    ).map((rule) => ({ email: rule.email, bucket: rule.bucket, updatedAt: rule.updatedAt }));
+    const page = await ctx.db
+      .query("mailSenderRules")
+      .withIndex("by_sender", (q) => q.eq("accountId", args.accountId))
+      .paginate({
+        cursor: args.cursor ?? null,
+        numItems: Math.max(1, Math.min(100, Math.floor(args.limit ?? 50))),
+      });
+    return {
+      rules: page.page.map((rule) => ({
+        email: rule.email,
+        bucket: rule.bucket,
+        updatedAt: rule.updatedAt,
+      })),
+      nextCursor: page.isDone ? null : page.continueCursor,
+    };
   },
 });
 export const removeSenderRule = mutation({

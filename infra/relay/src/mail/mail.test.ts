@@ -369,6 +369,82 @@ it("continues mailbox reconciliation during a storage cleanup outage", async () 
   expect(f.calls.some((c) => c.name === "finishBlobCleanup")).toBe(false);
 });
 
+describe("materialized message attachment limits", () => {
+  it.each([1, 6 * 1024 * 1024])(
+    "bounds attachment metadata and preserves later bodies with %i-byte attachments",
+    async (attachmentSize) => {
+      const fetcher = vi.fn(async () => {
+        throw new Error("Omitted attachments must not be downloaded");
+      }) as typeof fetch;
+      const storage: PrivateMailStorage = {
+        put: vi.fn(async (name) => name),
+        signedUrl: vi.fn(),
+        delete: vi.fn(async () => {}),
+      };
+      const result = await materializeMessage(
+        {
+          id: "many-attachments",
+          threadId: "thread",
+          sizeEstimate: 6 * 1024 * 1024,
+          payload: {
+            mimeType: "multipart/mixed",
+            parts: [
+              ...Array.from({ length: 100 }, (_, index) => ({
+                partId: String(index),
+                filename: `attachment-${index}.txt`,
+                mimeType: "text/plain",
+                body: {
+                  size: attachmentSize,
+                  ...(index < 40 ? { data: encoded("a") } : { attachmentId: String(index) }),
+                },
+              })),
+              { mimeType: "text/plain", body: { data: encoded("Message text") } },
+              { mimeType: "text/html", body: { data: encoded("<p>Message text</p>") } },
+            ],
+          },
+        },
+        makeGmail("token", fetcher),
+        storage,
+      );
+      expect(result).toMatchObject({
+        textBody: "Message text",
+        htmlBody: "<p>Message text</p>",
+        bodyTruncated: true,
+      });
+      expect(result.attachments).toHaveLength(40);
+      expect(storage.put).toHaveBeenCalledTimes(attachmentSize === 1 ? 40 : 0);
+      expect(fetcher).not.toHaveBeenCalled();
+    },
+  );
+
+  it("marks an oversized body incomplete without misrepresenting it as an attachment", async () => {
+    const fetcher = vi.fn(async () => {
+      throw new Error("Oversized bodies must not be downloaded");
+    }) as typeof fetch;
+    const storage: PrivateMailStorage = {
+      put: vi.fn(),
+      signedUrl: vi.fn(),
+      delete: vi.fn(),
+    };
+    const result = await materializeMessage(
+      {
+        id: "oversized-body",
+        threadId: "thread",
+        sizeEstimate: 6 * 1024 * 1024,
+        payload: {
+          mimeType: "text/plain",
+          body: { size: 6 * 1024 * 1024, attachmentId: "body" },
+        },
+      },
+      makeGmail("token", fetcher),
+      storage,
+    );
+    expect(result).toMatchObject({ bodyTruncated: true, attachments: [], textBody: "" });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(storage.put).not.toHaveBeenCalled();
+  });
+});
+
 describe("materialized message upload leases", () => {
   async function largeBodyFixture(loseAfterBody = false) {
     let elapsed = 0;

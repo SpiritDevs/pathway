@@ -555,7 +555,7 @@ describe("connected mail", () => {
       bucket: "priority",
     });
     expect(
-      await human(t).query(api.mail.listSenderRules, { companyId: COMPANY, accountId }),
+      (await human(t).query(api.mail.listSenderRules, { companyId: COMPANY, accountId })).rules,
     ).toHaveLength(1);
     await human(t).mutation(api.mail.removeSenderRule, {
       companyId: COMPANY,
@@ -563,7 +563,7 @@ describe("connected mail", () => {
       email: "sender@example.test",
     });
     expect(
-      await human(t).query(api.mail.listSenderRules, { companyId: COMPANY, accountId }),
+      (await human(t).query(api.mail.listSenderRules, { companyId: COMPANY, accountId })).rules,
     ).toEqual([]);
   });
   it("retains optimistic read state until Gmail acknowledges matching labels", async () => {
@@ -668,6 +668,7 @@ describe("connected mail", () => {
     ).toEqual(["attachment-key", "body-key", "raw-key"]);
   });
   it("integrates OAuth, relay intake, analysis, promotion and explicit send against real Convex functions", async () => {
+    vi.useFakeTimers();
     const t = harness();
     await seed(t);
     const relayClient = relay(t);
@@ -687,6 +688,7 @@ describe("connected mail", () => {
     };
     const enqueued: Array<{ accountId: string }> = [];
     const sentRequests: string[] = [];
+    const modifiedMessages: string[] = [];
     const gmailMessage = {
       id: "gmail-live",
       threadId: "thread-live",
@@ -722,6 +724,10 @@ describe("connected mail", () => {
       else if (url.pathname.endsWith("/messages/send")) {
         sentRequests.push(String(init?.body));
         response = { id: "sent-live", threadId: "thread-live" };
+      } else if (url.pathname.endsWith("/modify")) {
+        modifiedMessages.push(url.pathname);
+        vi.setSystemTime(Date.now() + 25_000);
+        response = {};
       } else if (url.pathname.endsWith("/history")) response = { historyId: "500", history: [] };
       else if (url.pathname.endsWith("/messages")) response = { messages: [{ id: "gmail-live" }] };
       else if (url.pathname.endsWith("/messages/gmail-live"))
@@ -830,6 +836,30 @@ describe("connected mail", () => {
     });
     expect(sent?.status).toBe("sent");
     expect(sent?.providerMessageId).toBe("sent-live");
+    const labelMessages = await intake(
+      t,
+      account.id,
+      Array.from({ length: 10 }, (_, index) => `slow-${index}`),
+    );
+    for (const labelMessage of labelMessages.filter((item) =>
+      item.providerMessageId.startsWith("slow-"),
+    ))
+      await human(t).mutation(api.mail.setRead, {
+        companyId: COMPANY,
+        messageId: labelMessage.id,
+        read: true,
+      });
+    await runtime.process({
+      accountId: account.id,
+      kind: "user-action",
+      companyId: COMPANY,
+      ownerSubject: "owner",
+    });
+    expect(modifiedMessages).toHaveLength(10);
+    await t.run(async (ctx) => {
+      const updates = await ctx.db.query("mailLabelUpdates").collect();
+      expect(updates.filter((update) => update.status === "awaiting_sync")).toHaveLength(10);
+    });
   });
   it("retires mail when its owner leaves and cannot acquire sync or delivery afterward", async () => {
     vi.useFakeTimers();
@@ -1064,5 +1094,190 @@ describe("connected mail", () => {
     expect(differentClient.oauthClientId).toBe("client-b");
     expect(differentClient.id).not.toBe(accountId);
     await t.finishAllScheduledFunctions(vi.runAllTimers);
+  });
+  it.each(["active", "reauth_required"] as const)(
+    "revokes superseded %s grants without deleting the replacement credential",
+    async (status) => {
+      const t = harness();
+      const accountId = await seed(t);
+      await t.run(async (ctx) => {
+        const account = await ctx.db.query("mailAccounts").first();
+        await ctx.db.patch(account!._id, { status });
+      });
+      const replacement = await relay(t).mutation(api.mailRelay.connectAccount, {
+        ownerSubject: "owner",
+        companyId: COMPANY,
+        email: "owner@gmail.test",
+        credentialSource: "byo",
+        oauthClientId: "client-b",
+        encryptedCredentials: "replacement",
+      });
+      expect(replacement.id).toBe(accountId);
+      const [cleanup] = await relay(t).mutation(api.mailRelay.claimAccountCleanup, {
+        leaseToken: "old-grant",
+      });
+      expect(cleanup?.encryptedCredentials).toBe("encrypted-only");
+      expect(cleanup?.revoke).toBe(true);
+      await expect(
+        relay(t).mutation(api.mailRelay.connectAccount, {
+          ownerSubject: "owner",
+          companyId: COMPANY,
+          email: "owner@gmail.test",
+          credentialSource: "byo",
+          oauthClientId: "client-a",
+          encryptedCredentials: "client-a-again",
+        }),
+      ).rejects.toThrow("disconnect is finishing");
+      await relay(t).mutation(api.mailRelay.finishAccountCleanup, {
+        id: cleanup!.id,
+        generation: cleanup!.generation,
+        leaseToken: "old-grant",
+      });
+      await t.run(async (ctx) => {
+        expect((await ctx.db.query("mailCredentials").first())?.encryptedCredentials).toBe(
+          "replacement",
+        );
+        expect(await ctx.db.query("mailAccountCleanup").collect()).toEqual([]);
+      });
+    },
+  );
+  it("claims label writes just before each slow request instead of leasing the whole backlog", async () => {
+    vi.useFakeTimers();
+    const t = harness();
+    const accountId = await seed(t);
+    const messages = await intake(
+      t,
+      accountId,
+      Array.from({ length: 10 }, (_, index) => `label-${index}`),
+    );
+    for (const message of messages)
+      await human(t).mutation(api.mail.setRead, {
+        companyId: COMPANY,
+        messageId: message.id,
+        read: true,
+      });
+    for (let index = 0; index < 10; index++) {
+      const claimed = await relay(t).mutation(api.mailRelay.claimLabelUpdates, {
+        accountId,
+        leaseToken: "slow-labels",
+      });
+      expect(claimed).toHaveLength(1);
+      vi.setSystemTime(Date.now() + 25_000);
+      expect(
+        await relay(t).mutation(api.mailRelay.finishLabelUpdate, {
+          id: claimed[0]!.id,
+          generation: claimed[0]!.generation,
+          leaseToken: "slow-labels",
+          success: true,
+        }),
+      ).toBe(true);
+    }
+    expect(
+      await relay(t).mutation(api.mailRelay.claimLabelUpdates, { accountId, leaseToken: "done" }),
+    ).toEqual([]);
+    await t.run(async (ctx) => {
+      const updates = await ctx.db.query("mailLabelUpdates").collect();
+      expect(updates).toHaveLength(10);
+      expect(updates.every((update) => update.status === "awaiting_sync")).toBe(true);
+    });
+  });
+  it.each(["history", "intake"])(
+    "removes queued label changes when %s deletes the message",
+    async (mode) => {
+      const t = harness();
+      const accountId = await seed(t);
+      const [message] = await intake(t, accountId);
+      await human(t).mutation(api.mail.setRead, {
+        companyId: COMPANY,
+        messageId: message!.id,
+        read: true,
+      });
+      const lease = await relay(t).mutation(api.mailRelay.claimSync, {
+        accountId,
+        leaseToken: "delete",
+      });
+      const fence = { accountId, leaseToken: "delete", generation: lease!.generation };
+      if (mode === "history")
+        await relay(t).mutation(api.mailRelay.deleteMessages, {
+          ...fence,
+          providerMessageIds: [message!.providerMessageId],
+        });
+      else
+        await relay(t).mutation(api.mailRelay.ingestPage, {
+          ...fence,
+          messages: [{ ...sample(), deleted: true }],
+        });
+      await t.run(async (ctx) => {
+        expect(await ctx.db.query("mailLabelUpdates").collect()).toEqual([]);
+        expect(await ctx.db.query("mailMessages").collect()).toEqual([]);
+      });
+    },
+  );
+  it("refreshes retried upload reservations and refuses keys already claimed for deletion", async () => {
+    vi.useFakeTimers();
+    const t = harness();
+    await seed(t);
+    await relay(t).mutation(api.mailRelay.registerBlobCleanup, { blobKeys: ["retry"] });
+    vi.setSystemTime(Date.now() + 3_599_000);
+    await relay(t).mutation(api.mailRelay.registerBlobCleanup, { blobKeys: ["retry"] });
+    vi.setSystemTime(Date.now() + 2_000);
+    expect(
+      await relay(t).mutation(api.mailRelay.claimBlobCleanup, { leaseToken: "too-early" }),
+    ).toEqual([]);
+    vi.setSystemTime(Date.now() + 3_600_000);
+    const [cleanup] = await relay(t).mutation(api.mailRelay.claimBlobCleanup, {
+      leaseToken: "cleanup",
+    });
+    expect(cleanup?.blobKeys).toEqual(["retry"]);
+    await expect(
+      relay(t).mutation(api.mailRelay.registerBlobCleanup, { blobKeys: ["retry"] }),
+    ).rejects.toThrow("cleanup is already running");
+  });
+  it("pages every sender rule and allows the owner to remove a rule beyond the first 200", async () => {
+    const t = harness();
+    const accountId = await seed(t);
+    await t.run(async (ctx) => {
+      const account = (await ctx.db.query("mailAccounts").first())!;
+      for (let index = 0; index < 205; index++)
+        await ctx.db.insert("mailSenderRules", {
+          companyId: account.companyId,
+          ownerMembershipId: account.ownerMembershipId,
+          ownerSubject: account.ownerSubject,
+          accountId,
+          email: `sender-${String(index).padStart(3, "0")}@example.test`,
+          bucket: "noise",
+          updatedAt: Date.now(),
+        });
+    });
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await human(t).query(api.mail.listSenderRules, {
+        companyId: COMPANY,
+        accountId,
+        ...(cursor ? { cursor } : {}),
+        limit: 100,
+      });
+      seen.push(...page.rules.map((rule) => rule.email));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    expect(seen).toHaveLength(205);
+    expect(new Set(seen).size).toBe(205);
+    await human(t).mutation(api.mail.removeSenderRule, {
+      companyId: COMPANY,
+      accountId,
+      email: seen[204]!,
+    });
+    await t.run(async (ctx) => {
+      expect(
+        await ctx.db
+          .query("mailSenderRules")
+          .withIndex("by_sender", (q) => q.eq("accountId", accountId).eq("email", seen[204]!))
+          .unique(),
+      ).toBeNull();
+    });
+    await expect(
+      human(t, "colleague").query(api.mail.listSenderRules, { companyId: COMPANY, accountId }),
+    ).rejects.toThrow("another member");
   });
 });

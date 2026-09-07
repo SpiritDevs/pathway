@@ -121,14 +121,19 @@ export async function materializeMessage(
       const isAttachment =
         Boolean(part.filename) || !["text/plain", "text/html"].includes(part.mimeType ?? "");
       if (!part.body?.data && !part.body?.attachmentId) continue;
-      if ((part.body.size ?? 0) > 5 * 1024 * 1024 || attachments.length >= 40) {
+      if (isAttachment && attachments.length >= 40) {
         contentIncomplete = true;
-        attachments.push({
-          partId: part.partId ?? String(attachments.length),
-          filename: `${part.filename || "attachment"} (open in Gmail: download limit)`,
-          mimeType: part.mimeType || "application/octet-stream",
-          size: part.body.size ?? 0,
-        });
+        continue;
+      }
+      if ((part.body.size ?? 0) > 5 * 1024 * 1024) {
+        contentIncomplete = true;
+        if (isAttachment)
+          attachments.push({
+            partId: part.partId ?? String(attachments.length),
+            filename: `${part.filename || "attachment"} (open in Gmail: download limit)`,
+            mimeType: part.mimeType || "application/octet-stream",
+            size: part.body.size ?? 0,
+          });
         continue;
       }
       const data = part.body.attachmentId

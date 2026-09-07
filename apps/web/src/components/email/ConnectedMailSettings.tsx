@@ -200,12 +200,16 @@ function BrainEditor({
 }
 
 function SenderRules({ cloud, accountId }: { cloud: ConnectedMailCloud; accountId: string }) {
-  const rules = useMailQuery<{ email: string; bucket: "priority" | "noise" }[]>(
-    cloud.client,
-    cloud.scope,
-    "mail:listSenderRules",
-    { companyId: cloud.companyId!, accountId },
-  );
+  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  const cursor = cursors[cursors.length - 1];
+  const rules = useMailQuery<{
+    rules: { email: string; bucket: "priority" | "noise" }[];
+    nextCursor: string | null;
+  }>(cloud.client, cloud.scope, "mail:listSenderRules", {
+    companyId: cloud.companyId!,
+    accountId,
+    ...(cursor ? { cursor } : {}),
+  });
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   return (
@@ -214,7 +218,8 @@ function SenderRules({ cloud, accountId }: { cloud: ConnectedMailCloud; accountI
       <p className="my-2 text-muted-foreground">
         Removing a rule lets the model classify future messages from that sender.
       </p>
-      {rules.value?.map((rule) => (
+      {!rules.value && !rules.error ? <p role="status">Loading sender rules…</p> : null}
+      {rules.value?.rules.map((rule) => (
         <div className="flex items-center gap-2 py-1" key={rule.email}>
           <span className="min-w-0 flex-1 truncate">
             {rule.email} · {rule.bucket}
@@ -238,7 +243,31 @@ function SenderRules({ cloud, accountId }: { cloud: ConnectedMailCloud; accountI
           </Button>
         </div>
       ))}
-      {rules.value?.length === 0 ? <p className="text-muted-foreground">No sender rules.</p> : null}
+      {rules.value?.rules.length === 0 ? (
+        <p className="text-muted-foreground">No sender rules on this page.</p>
+      ) : null}
+      <div className="my-2 flex items-center gap-2">
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={busy || cursors.length === 1}
+          onClick={() => setCursors((previous) => previous.slice(0, -1))}
+        >
+          Previous
+        </Button>
+        <span>Page {cursors.length}</span>
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={busy || !rules.value?.nextCursor}
+          onClick={() => {
+            const next = rules.value?.nextCursor;
+            if (next) setCursors((previous) => [...previous, next]);
+          }}
+        >
+          Next
+        </Button>
+      </div>
       {error || rules.error ? (
         <p role="alert" className="text-destructive">
           {error ?? rules.error}
@@ -444,7 +473,11 @@ export function ConnectedMailSettings() {
                     it.
                   </p>
                 )}
-                <SenderRules cloud={cloud} accountId={account.id} />
+                <SenderRules
+                  key={`${cloud.scope}:${account.id}`}
+                  cloud={cloud}
+                  accountId={account.id}
+                />
                 <BrainEditor
                   key={`${account.id}:${JSON.stringify(account.brain)}`}
                   account={account}

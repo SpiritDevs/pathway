@@ -14,11 +14,13 @@ Every message has a Priority or Noise bucket and a reason. Messages waiting for 
 
 Moving a message from Noise to Priority requests a briefing and remembers your choice for that sender. Moving it back to Noise updates the sender rule. A manual correction takes precedence over analysis already in progress.
 
+Open Sender rules in Mail settings to review or remove saved classifications. Use Next and Previous to browse every rule. Removing a rule lets the model classify future messages from that sender.
+
 ## Reading and replying
 
 Select an account or view mail across your accounts. Priority, Noise and All provide separate views. Messages in the same conversation are linked from the reader. Remote images and styles are blocked until you choose to load them for that message.
 
-Reply yourself or request an AI draft. Review the recipients and content before pressing Send. Saving or generating a draft never sends it. Drafts show their delivery status. If delivery cannot be confirmed, check Gmail Sent before composing another copy.
+Reply yourself or request an AI draft. Review the recipients and content before pressing Send. Saving or generating a draft never sends it. Drafts show queued and running AI requests as well as generation errors. Use Retry draft after checking the selected environment. Use Next requests and Previous requests to browse older requests. Saved drafts show their delivery status. If delivery cannot be confirmed, check Gmail Sent before composing another copy.
 
 Use Discard draft to remove an unsent draft you no longer need. Submitted messages and uncertain deliveries remain visible so you can check their status.
 

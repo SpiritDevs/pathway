@@ -142,10 +142,15 @@ export const claim = mutation({
         if (job.attempts >= 3) {
           await ctx.db.patch(job._id, {
             status: "failed",
-            lastError: "Analysis interrupted repeatedly. Retry when an environment is ready.",
+            lastError:
+              job.kind === "draft"
+                ? "Reply generation interrupted repeatedly. Retry when an environment is ready."
+                : "Analysis interrupted repeatedly. Retry when an environment is ready.",
+            leaseExpiresAt: undefined,
             updatedAt: now,
           });
-          await ctx.db.patch(message._id, { analysisStatus: "failed", updatedAt: now });
+          if (job.kind !== "draft")
+            await ctx.db.patch(message._id, { analysisStatus: "failed", updatedAt: now });
           continue;
         }
         const body = await ctx.db

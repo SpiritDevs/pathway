@@ -16,6 +16,7 @@ import { Textarea } from "../ui/textarea";
 import { WorkspaceViewFrame } from "../workspace/WorkspaceViewFrame";
 import { useConnectedMailCloud, useMailQuery, type ConnectedMailCloud } from "./connectedMailCloud";
 import { canDiscardMailDraft, gmailMessageUrl } from "./connectedMail.logic";
+import { MailDraftJobs } from "./MailDraftJobs";
 import { beginMailAttachmentDownload } from "./mailAttachmentDownload";
 import type { ConnectedDraft, ConnectedMailAccount, ConnectedMessage } from "./connectedMail.types";
 import {
@@ -580,7 +581,7 @@ function MailReader({
           onClick={() =>
             void run(async () => {
               await cloud.request("mail:requestDraft", { messageId });
-              setNotice("A reply draft is queued. It will appear in Drafts after analysis.");
+              setNotice("A reply draft is queued. Check its progress in Drafts.");
             })
           }
         >
@@ -765,6 +766,13 @@ export function ConnectedMailView({
                       Drafts for {selectedAccount.email}. Select an account to view its drafts.
                     </p>
                   ) : null}
+                  {selectedAccount ? (
+                    <MailDraftJobs
+                      key={`${cloud.scope}:${selectedAccount.id}`}
+                      cloud={cloud}
+                      account={selectedAccount}
+                    />
+                  ) : null}
                   {drafts.value?.map((item) => (
                     <button
                       type="button"
@@ -782,7 +790,7 @@ export function ConnectedMailView({
                     </button>
                   ))}
                   {drafts.value?.length === 0 ? (
-                    <p className="p-5 text-sm text-muted-foreground">No drafts.</p>
+                    <p className="p-5 text-sm text-muted-foreground">No saved drafts.</p>
                   ) : null}
                 </>
               ) : (

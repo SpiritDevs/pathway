@@ -13,6 +13,7 @@ import {
   assertActive,
   disconnectMailAccount,
   queueMailBlobCleanup,
+  queueMailAccountCleanup,
 } from "./lib/mail.ts";
 import { mailIntakeMessage } from "./lib/mailSchema.ts";
 import { backendError } from "./lib/errors.ts";
@@ -137,27 +138,21 @@ export const connectAccount = mutation({
     if (!args.oauthClientId.trim() || args.oauthClientId.length > 1000)
       throw backendError("invalid-oauth-client", "A valid Google OAuth client id is required.");
     const email = args.email.trim().toLowerCase();
-    const sameEmail = await ctx.db
-      .query("mailAccounts")
-      .withIndex("by_email", (q) => q.eq("email", email))
-      .take(100);
-    for (const previous of sameEmail) {
-      if (
-        previous.ownerSubject !== args.ownerSubject ||
-        previous.oauthClientId !== args.oauthClientId ||
-        previous.status !== "disconnected"
+    const runningGrantCleanup = await ctx.db
+      .query("mailAccountCleanup")
+      .withIndex("by_grant", (q) =>
+        q
+          .eq("ownerSubject", args.ownerSubject)
+          .eq("email", email)
+          .eq("oauthClientId", args.oauthClientId)
+          .gt("leaseExpiresAt", now),
       )
-        continue;
-      const cleanup = await ctx.db
-        .query("mailAccountCleanup")
-        .withIndex("by_account", (q) => q.eq("accountId", previous.id))
-        .unique();
-      if (cleanup && (cleanup.leaseExpiresAt ?? 0) > now)
-        throw backendError(
-          "mail-disconnect-running",
-          "Mailbox disconnect is finishing. Try connecting again shortly.",
-        );
-    }
+      .first();
+    if (runningGrantCleanup)
+      throw backendError(
+        "mail-disconnect-running",
+        "Mailbox disconnect is finishing. Try connecting again shortly.",
+      );
     const matches = await ctx.db
       .query("mailAccounts")
       .withIndex("by_owner_email", (q) =>
@@ -199,6 +194,8 @@ export const connectAccount = mutation({
       .query("mailCredentials")
       .withIndex("by_account", (q) => q.eq("accountId", id))
       .unique();
+    if (existing && credential && existing.oauthClientId !== args.oauthClientId)
+      await queueMailAccountCleanup(ctx, existing, credential.encryptedCredentials);
     if (credential)
       await ctx.db.patch(credential._id, { encryptedCredentials: args.encryptedCredentials });
     else
@@ -287,6 +284,11 @@ export const ingestPage = mutation({
             .withIndex("by_message", (q) => q.eq("messageId", existing.id))
             .take(100);
           for (const job of jobs) await ctx.db.delete(job._id);
+          const labelUpdate = await ctx.db
+            .query("mailLabelUpdates")
+            .withIndex("by_message", (q) => q.eq("messageId", existing.id))
+            .unique();
+          if (labelUpdate) await ctx.db.delete(labelUpdate._id);
           await ctx.db.delete(existing._id);
         }
         continue;
@@ -494,6 +496,11 @@ export const deleteMessages = mutation({
       for (const job of jobs) await ctx.db.delete(job._id);
       for (const attachment of message.attachments)
         if (attachment.blobKey) await queueMailBlobCleanup(ctx, attachment.blobKey);
+      const labelUpdate = await ctx.db
+        .query("mailLabelUpdates")
+        .withIndex("by_message", (q) => q.eq("messageId", message.id))
+        .unique();
+      if (labelUpdate) await ctx.db.delete(labelUpdate._id);
       await ctx.db.delete(message._id);
     }
     return null;
@@ -684,7 +691,8 @@ export const registerBlobCleanup = mutation({
     await requireRelayControlPlane(ctx);
     if (args.blobKeys.length > 100)
       throw backendError("mail-page-too-large", "Register at most 100 blobs.");
-    for (const key of args.blobKeys) await queueMailBlobCleanup(ctx, key, Date.now() + 60 * 60_000);
+    for (const key of args.blobKeys)
+      await queueMailBlobCleanup(ctx, key, Date.now() + 60 * 60_000, true);
     return null;
   },
 });
@@ -736,16 +744,14 @@ export const claimAccountCleanup = mutation({
     const result = [];
     for (const row of rows) {
       if ((row.leaseExpiresAt ?? 0) > Date.now()) continue;
-      const account = await mailAccount(ctx, row.accountId);
       const matchingAccounts = await ctx.db
         .query("mailAccounts")
-        .withIndex("by_email", (q) => q.eq("email", account.email))
+        .withIndex("by_email", (q) => q.eq("email", row.email))
         .take(100);
       const revoke = !matchingAccounts.some(
         (a) =>
-          a.id !== account.id &&
-          a.ownerSubject === account.ownerSubject &&
-          a.oauthClientId === account.oauthClientId &&
+          a.ownerSubject === row.ownerSubject &&
+          a.oauthClientId === row.oauthClientId &&
           a.status !== "disconnected",
       );
       const generation = row.generation + 1;
@@ -758,8 +764,8 @@ export const claimAccountCleanup = mutation({
       result.push({
         id: row.id,
         accountId: row.accountId,
-        ownerSubject: account.ownerSubject,
-        email: account.email,
+        ownerSubject: row.ownerSubject,
+        email: row.email,
         encryptedCredentials: row.encryptedCredentials,
         generation,
         revoke,
@@ -782,7 +788,12 @@ export const finishAccountCleanup = mutation({
       .query("mailCredentials")
       .withIndex("by_account", (q) => q.eq("accountId", row.accountId))
       .unique();
-    if (credential) await ctx.db.delete(credential._id);
+    const account = await mailAccount(ctx, row.accountId);
+    if (
+      account.status === "disconnected" &&
+      credential?.encryptedCredentials === row.encryptedCredentials
+    )
+      await ctx.db.delete(credential._id);
     await ctx.db.delete(row._id);
     return true;
   },
@@ -808,7 +819,7 @@ export const claimLabelUpdates = mutation({
     const rows = [
       ...running.filter((row) => (row.leaseExpiresAt ?? 0) <= Date.now()),
       ...pending,
-    ].slice(0, 10);
+    ].slice(0, 1);
     const result = [];
     for (const row of rows) {
       if (
