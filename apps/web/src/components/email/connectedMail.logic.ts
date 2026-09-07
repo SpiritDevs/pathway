@@ -38,3 +38,14 @@ export async function readMailRelayResponse(response: Response): Promise<unknown
   }
   return result;
 }
+
+export function gmailMessageUrl(accountEmail: string, providerMessageId: string): string {
+  const url = new URL("https://mail.google.com/mail/u/");
+  url.searchParams.set("authuser", accountEmail);
+  url.hash = `all/${encodeURIComponent(providerMessageId)}`;
+  return url.toString();
+}
+
+export function canDiscardMailDraft(status: string | undefined): boolean {
+  return status === undefined || status === "draft" || status === "failed";
+}

@@ -105,7 +105,15 @@ export async function materializeMessage(
     name: string,
     mimeType: string,
     bytes: Uint8Array<ArrayBuffer>,
-  ) => storage.put(name, mimeType, bytes, await hashToken(`${accountId}:${message.id}:${partId}`));
+  ) => {
+    await renew();
+    return storage.put(
+      name,
+      mimeType,
+      bytes,
+      await hashToken(`${accountId}:${message.id}:${partId}`),
+    );
+  };
   try {
     for (const part of parts) {
       await renew();
@@ -181,6 +189,7 @@ export async function materializeMessage(
       textBody = textBody.slice(0, 16_000);
       htmlBody = "";
     }
+    await renew();
     return {
       ...messageMetadata(message),
       textBody,

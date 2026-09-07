@@ -279,6 +279,7 @@ export function makeMailRuntime(input: {
         companyId: pending.companyId,
         email: profile.emailAddress,
         credentialSource: pending.credentialSource,
+        oauthClientId: pending.clientId,
         encryptedCredentials,
       });
       await enqueue({ accountId: account.id });

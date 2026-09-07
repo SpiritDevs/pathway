@@ -83,7 +83,7 @@ struct PathwayMailDraftEditor: View {
   @State private var error: String?
   @State private var saved = false
   @State private var initialized = false
-  private var locked: Bool { draft.map { !["draft", "failed"].contains($0.status) } ?? false }
+  private var locked: Bool { draft.map { !$0.isEditable } ?? false }
   var body: some View {
     Form {
       LabeledContent("From", value: account.email)
@@ -107,6 +107,9 @@ struct PathwayMailDraftEditor: View {
         locked || busy || to.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
           || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
           || account.status != "active")
+      if draftID != nil && !locked {
+        Button("Discard draft", role: .destructive) { discard() }.disabled(busy)
+      }
     }
     .disabled(busy || locked)
     .navigationTitle(replyTo == nil ? "Draft" : "Reply")
@@ -121,6 +124,18 @@ struct PathwayMailDraftEditor: View {
           $0.subject.lowercased().hasPrefix("re:") ? $0.subject : "Re: \($0.subject)"
         } ?? ""
       text = draft?.text ?? ""
+    }
+  }
+  private func discard() {
+    guard !locked, !busy, let draftID else { return }
+    busy = true
+    error = nil
+    Task {
+      defer { busy = false }
+      do {
+        try await model.discardDraft(companyID: companyID, draftID: draftID)
+        dismiss()
+      } catch { self.error = error.localizedDescription }
     }
   }
   private func save(send: Bool) {

@@ -8,7 +8,7 @@ import {
   hasOAuthBrowserCookie,
 } from "./crypto.ts";
 import { draftMime, mailboxList, decodeText, makeGmail } from "./gmail.ts";
-import { makePrivateMailStorage, type PrivateMailStorage } from "./storage.ts";
+import { makePrivateMailStorage, materializeMessage, type PrivateMailStorage } from "./storage.ts";
 import { makeMailRuntime, type MailRpc } from "./runtime.ts";
 const key = encodeBase64Url(new Uint8Array(32).fill(7));
 const config = {
@@ -242,6 +242,7 @@ describe("mail credentials and MIME", () => {
     expect(f.calls.find((c) => c.name === "connectAccount")?.args).toMatchObject({
       ownerSubject: "owner",
       companyId: "company",
+      oauthClientId: "id",
     });
     await expect(f.runtime.finishOAuth(url.searchParams.get("state")!, "code")).rejects.toThrow(
       "expired",
@@ -366,4 +367,60 @@ it("continues mailbox reconciliation during a storage cleanup outage", async () 
   await f.runtime.reconcile();
   expect(f.enqueue).toHaveBeenCalledWith({ accountId: "account" });
   expect(f.calls.some((c) => c.name === "finishBlobCleanup")).toBe(false);
+});
+
+describe("materialized message upload leases", () => {
+  async function largeBodyFixture(loseAfterBody = false) {
+    let elapsed = 0;
+    let expiresAt = 120_000;
+    let lost = false;
+    const renew = async () => {
+      if (lost || elapsed >= expiresAt) throw new Error("Sync lease lost");
+      expiresAt = elapsed + 120_000;
+    };
+    const fetcher = vi.fn(async () => {
+      elapsed += 25_000;
+      return Response.json({ raw: encoded("raw message") });
+    }) as typeof fetch;
+    const storage: PrivateMailStorage = {
+      put: vi.fn(async (name) => {
+        elapsed += 85_000;
+        if (elapsed >= expiresAt) throw new Error("Upload outlasted sync lease");
+        if (name.endsWith("-body.json")) lost = loseAfterBody;
+        return name;
+      }),
+      signedUrl: vi.fn(),
+      delete: vi.fn(async () => {}),
+    };
+    const result = materializeMessage(
+      {
+        id: "large-body",
+        threadId: "thread",
+        sizeEstimate: 100_000,
+        payload: { mimeType: "text/plain", body: { data: encoded("x".repeat(97_000)) } },
+      },
+      makeGmail("token", fetcher),
+      storage,
+      renew,
+      "account",
+    );
+    return { result, storage, remainingLease: () => expiresAt - elapsed };
+  }
+
+  it("keeps sequential raw and large-body uploads within a renewed sync lease", async () => {
+    const f = await largeBodyFixture();
+    await expect(f.result).resolves.toMatchObject({
+      rawBlobKey: "large-body.eml",
+      bodyBlobKey: "large-body-body.json",
+      bodyTruncated: true,
+    });
+    expect(f.remainingLease()).toBe(120_000);
+    expect(f.storage.delete).not.toHaveBeenCalled();
+  });
+
+  it("rejects materialization and cleans up uploads when the final renewal loses ownership", async () => {
+    const f = await largeBodyFixture(true);
+    await expect(f.result).rejects.toThrow("Sync lease lost");
+    expect(f.storage.delete).toHaveBeenCalledWith(["large-body.eml", "large-body-body.json"]);
+  });
 });

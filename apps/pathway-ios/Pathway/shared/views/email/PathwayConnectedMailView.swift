@@ -216,9 +216,8 @@ private struct PathwayConnectedMailDetail: View {
             || message.attachments.contains(where: { $0.blobKey == nil })
           {
             Text("This preview or its attachments are incomplete.").foregroundStyle(.secondary)
-            if let id = message.providerMessageId?.addingPercentEncoding(
-              withAllowedCharacters: .urlPathAllowed),
-              let url = URL(string: "https://mail.google.com/mail/u/0/#all/\(id)")
+            if let id = message.providerMessageId,
+              let url = account?.gmailMessageURL(providerMessageID: id)
             {
               Link("View the full message in Gmail", destination: url)
             }

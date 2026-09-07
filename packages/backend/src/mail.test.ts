@@ -107,6 +107,7 @@ async function seed(t: Harness) {
     ownerSubject: "owner",
     email: "owner@gmail.test",
     encryptedCredentials: "encrypted-only",
+    oauthClientId: "client-a",
     credentialSource: "byo",
   });
   await human(t).mutation(api.mail.configureBrain, {
@@ -444,6 +445,7 @@ describe("connected mail", () => {
       ownerSubject: "owner",
       email: "owner@gmail.test",
       encryptedCredentials: "fresh-encrypted",
+      oauthClientId: "client-a",
       credentialSource: "byo",
     });
     expect(fresh.id).not.toBe(accountId);
@@ -901,6 +903,7 @@ describe("connected mail", () => {
         email: "owner@gmail.test",
         credentialSource: "byo",
         encryptedCredentials: "fresh",
+        oauthClientId: "client-a",
       }),
     ).rejects.toThrow("disconnect is finishing");
     await relay(t).mutation(api.mailRelay.finishAccountCleanup, {
@@ -916,6 +919,7 @@ describe("connected mail", () => {
           email: "owner@gmail.test",
           credentialSource: "byo",
           encryptedCredentials: "fresh",
+          oauthClientId: "client-a",
         })
       ).id,
     ).not.toBe(accountId);
@@ -964,5 +968,101 @@ describe("connected mail", () => {
     expect((await environment(t).mutation(api.mailJobs.claim, { companyId: COMPANY }))?.kind).toBe(
       "analyze",
     );
+  });
+  it("allows only the owner to discard editable drafts and retains every submitted state", async () => {
+    const t = harness();
+    const accountId = await seed(t);
+    for (const status of ["draft", "failed", "queued", "sending", "sent", "unknown"] as const) {
+      const draftId = await human(t).mutation(api.mail.saveDraft, {
+        companyId: COMPANY,
+        accountId,
+        to: ["sender@example.test"],
+        subject: `Draft ${status}`,
+        text: "Saved text",
+      });
+      await t.run(async (ctx) => {
+        const draft = await ctx.db
+          .query("mailDrafts")
+          .withIndex("by_domain_id", (q) => q.eq("id", draftId))
+          .unique();
+        await ctx.db.patch(draft!._id, { status });
+      });
+      await expect(
+        human(t, "colleague").mutation(api.mail.discardDraft, { companyId: COMPANY, draftId }),
+      ).rejects.toThrow("another member");
+      if (status === "draft" || status === "failed") {
+        expect(
+          await human(t).mutation(api.mail.discardDraft, { companyId: COMPANY, draftId }),
+        ).toBeNull();
+        expect(
+          (await human(t).query(api.mail.listDrafts, { companyId: COMPANY, accountId })).some(
+            (draft) => draft.id === draftId,
+          ),
+        ).toBe(false);
+      } else {
+        await expect(
+          human(t).mutation(api.mail.discardDraft, { companyId: COMPANY, draftId }),
+        ).rejects.toThrow("cannot be discarded");
+        expect(
+          (await human(t).query(api.mail.listDrafts, { companyId: COMPANY, accountId })).find(
+            (draft) => draft.id === draftId,
+          )?.status,
+        ).toBe(status);
+      }
+    }
+  });
+  it("revokes a disconnected grant when the same mailbox reconnects with a different OAuth client", async () => {
+    vi.useFakeTimers();
+    const t = harness();
+    const accountId = await seed(t);
+    await human(t).mutation(api.mail.disconnectAccount, { companyId: COMPANY, accountId });
+    const separateGrant = await relay(t).mutation(api.mailRelay.connectAccount, {
+      ownerSubject: "owner",
+      companyId: COMPANY,
+      email: "owner@gmail.test",
+      credentialSource: "byo",
+      oauthClientId: "client-b",
+      encryptedCredentials: "different-client-credentials",
+    });
+    const [cleanup] = await relay(t).mutation(api.mailRelay.claimAccountCleanup, {
+      leaseToken: "revoke-client-a",
+    });
+    expect(cleanup?.accountId).toBe(accountId);
+    expect(cleanup?.revoke).toBe(true);
+    await relay(t).mutation(api.mailRelay.finishAccountCleanup, {
+      id: cleanup!.id,
+      generation: cleanup!.generation,
+      leaseToken: "revoke-client-a",
+    });
+    await t.run(async (ctx) => {
+      const remaining = await ctx.db.query("mailCredentials").collect();
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]?.accountId).toBe(separateGrant.id);
+      expect(remaining[0]?.encryptedCredentials).toBe("different-client-credentials");
+    });
+    const visible = await human(t).query(api.mail.listAccounts, { companyId: COMPANY });
+    expect(JSON.stringify(visible)).not.toContain("oauthClientId");
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+  });
+  it("allows a different OAuth client to connect while an older client's grant revocation is leased", async () => {
+    vi.useFakeTimers();
+    const t = harness();
+    const accountId = await seed(t);
+    await human(t).mutation(api.mail.disconnectAccount, { companyId: COMPANY, accountId });
+    const [cleanup] = await relay(t).mutation(api.mailRelay.claimAccountCleanup, {
+      leaseToken: "revoke-client-a",
+    });
+    expect(cleanup?.revoke).toBe(true);
+    const differentClient = await relay(t).mutation(api.mailRelay.connectAccount, {
+      ownerSubject: "owner",
+      companyId: COMPANY,
+      email: "owner@gmail.test",
+      credentialSource: "byo",
+      oauthClientId: "client-b",
+      encryptedCredentials: "different-client",
+    });
+    expect(differentClient.oauthClientId).toBe("client-b");
+    expect(differentClient.id).not.toBe(accountId);
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
   });
 });

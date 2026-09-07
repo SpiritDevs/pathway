@@ -92,6 +92,8 @@ export const mailTables = {
     ...scope,
     id: v.string(),
     email: v.string(),
+    /** Relay-only, nonsecret Google OAuth client id used to distinguish authorization grants. */
+    oauthClientId: v.string(),
     credentialSource: v.union(v.literal("byo"), v.literal("hosted")),
     status: v.union(v.literal("active"), v.literal("reauth_required"), v.literal("disconnected")),
     brain: v.optional(mailBrain),

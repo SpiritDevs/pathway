@@ -109,6 +109,7 @@ export const connectAccount = mutation({
     ownerSubject: v.string(),
     companyId: v.string(),
     email: v.string(),
+    oauthClientId: v.string(),
     encryptedCredentials: v.string(),
     credentialSource: v.union(v.literal("byo"), v.literal("hosted")),
   },
@@ -133,13 +134,19 @@ export const connectAccount = mutation({
       .unique();
     if (!membership || membership.state !== "active")
       throw backendError("permission-denied", "Active workspace membership is required.");
+    if (!args.oauthClientId.trim() || args.oauthClientId.length > 1000)
+      throw backendError("invalid-oauth-client", "A valid Google OAuth client id is required.");
     const email = args.email.trim().toLowerCase();
     const sameEmail = await ctx.db
       .query("mailAccounts")
       .withIndex("by_email", (q) => q.eq("email", email))
       .take(100);
     for (const previous of sameEmail) {
-      if (previous.ownerSubject !== args.ownerSubject || previous.status !== "disconnected")
+      if (
+        previous.ownerSubject !== args.ownerSubject ||
+        previous.oauthClientId !== args.oauthClientId ||
+        previous.status !== "disconnected"
+      )
         continue;
       const cleanup = await ctx.db
         .query("mailAccountCleanup")
@@ -163,6 +170,7 @@ export const connectAccount = mutation({
     const fields = {
       email,
       credentialSource: args.credentialSource,
+      oauthClientId: args.oauthClientId,
       status: "active" as const,
       nextSyncAt: 0,
       updatedAt: now,
@@ -737,6 +745,7 @@ export const claimAccountCleanup = mutation({
         (a) =>
           a.id !== account.id &&
           a.ownerSubject === account.ownerSubject &&
+          a.oauthClientId === account.oauthClientId &&
           a.status !== "disconnected",
       );
       const generation = row.generation + 1;

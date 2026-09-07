@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { isCapturedEmailSearch, readMailRelayResponse } from "./connectedMail.logic";
+import {
+  canDiscardMailDraft,
+  gmailMessageUrl,
+  isCapturedEmailSearch,
+  readMailRelayResponse,
+} from "./connectedMail.logic";
 import { parseEmailSearch } from "./emailView.logic";
 
 describe("connected and captured mail navigation", () => {
@@ -63,4 +68,28 @@ describe("mail relay response handling", () => {
       readMailRelayResponse(Response.json({ error: "Reconnect Gmail." }, { status: 401 })),
     ).rejects.toThrow("Reconnect Gmail.");
   });
+});
+
+describe("Gmail fallback links", () => {
+  it("selects the connected Google account and retains the provider message fragment", () => {
+    const url = new URL(gmailMessageUrl("second+mail@example.test", "provider/message id"));
+    expect(url.pathname).toBe("/mail/u/");
+    expect(url.searchParams.get("authuser")).toBe("second+mail@example.test");
+    expect(url.hash).toBe("#all/provider%2Fmessage%20id");
+  });
+});
+
+describe("discardable drafts", () => {
+  it.each([undefined, "draft", "failed"])(
+    "allows editable or unsaved drafts, status=%s",
+    (status) => {
+      expect(canDiscardMailDraft(status)).toBe(true);
+    },
+  );
+  it.each(["queued", "sending", "sent", "unknown", "unsupported"])(
+    "locks a submitted or uncertain draft, status=%s",
+    (status) => {
+      expect(canDiscardMailDraft(status)).toBe(false);
+    },
+  );
 });

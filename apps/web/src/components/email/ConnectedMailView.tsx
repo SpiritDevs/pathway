@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { Link } from "@tanstack/react-router";
 import { ArrowLeftIcon, MailIcon, SettingsIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { companyListAtom } from "../../cloud/activeCompany";
 import {
   companyRegistryMembershipIdsAtom,
@@ -15,6 +15,8 @@ import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { WorkspaceViewFrame } from "../workspace/WorkspaceViewFrame";
 import { useConnectedMailCloud, useMailQuery, type ConnectedMailCloud } from "./connectedMailCloud";
+import { canDiscardMailDraft, gmailMessageUrl } from "./connectedMail.logic";
+import { beginMailAttachmentDownload } from "./mailAttachmentDownload";
 import type { ConnectedDraft, ConnectedMailAccount, ConnectedMessage } from "./connectedMail.types";
 import {
   buildEmailPreviewDocument,
@@ -49,11 +51,21 @@ function DraftEditor({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const locked =
-    draft?.status === "queued" ||
-    draft?.status === "sending" ||
-    draft?.status === "sent" ||
-    draft?.status === "unknown";
+  const locked = !canDiscardMailDraft(draft?.status);
+  const discard = async () => {
+    if (busy || locked) return;
+    setBusy(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      if (draftId) await cloud.request("mail:discardDraft", { draftId });
+      onClose();
+    } catch (cause) {
+      setError(problem(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
   const save = async (send: boolean) => {
     setBusy(true);
     setError(undefined);
@@ -91,7 +103,7 @@ function DraftEditor({
     <section className="space-y-3 rounded-lg border p-4" aria-label="Email draft">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium">{replyTo ? "Reply" : "Draft"}</h3>
-        <Button size="xs" variant="ghost" onClick={onClose}>
+        <Button size="xs" variant="ghost" disabled={busy} onClick={onClose}>
           Close
         </Button>
       </div>
@@ -134,6 +146,15 @@ function DraftEditor({
             : "Mail is sent only when you press Send."}
       </p>
       <div className="flex justify-end gap-2">
+        <Button
+          className="mr-auto"
+          size="sm"
+          variant="outline"
+          disabled={busy || locked}
+          onClick={() => void discard()}
+        >
+          Discard draft
+        </Button>
         <Button
           size="sm"
           variant="outline"
@@ -281,6 +302,14 @@ function MailReader({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
   const [body, setBody] = useState<{ htmlBody?: string; textBody?: string }>();
+  const downloads = useRef(new Set<ReturnType<typeof beginMailAttachmentDownload>>());
+  useEffect(() => {
+    const activeDownloads = downloads.current;
+    return () => {
+      for (const download of activeDownloads) download.cancel();
+      activeDownloads.clear();
+    };
+  }, [cloud.scope, messageId]);
   const htmlBody = body?.htmlBody ?? message?.htmlBody ?? null;
   const textBody = body?.textBody ?? message?.textBody ?? null;
   const preview = useMemo(
@@ -421,7 +450,7 @@ function MailReader({
           This preview is incomplete.{" "}
           <a
             className="underline"
-            href={`https://mail.google.com/mail/u/0/#all/${encodeURIComponent(message.providerMessageId)}`}
+            href={gmailMessageUrl(account.email, message.providerMessageId)}
             target="_blank"
             rel="noreferrer"
           >
@@ -433,7 +462,7 @@ function MailReader({
       {message.attachments.some((item) => !item.blobKey) ? (
         <a
           className="mb-3 text-xs underline"
-          href={`https://mail.google.com/mail/u/0/#all/${encodeURIComponent(message.providerMessageId)}`}
+          href={gmailMessageUrl(account.email, message.providerMessageId)}
           target="_blank"
           rel="noreferrer"
         >
@@ -498,15 +527,29 @@ function MailReader({
               size="xs"
               variant="outline"
               disabled={!attachment.blobKey || busy}
-              onClick={() =>
+              onClick={() => {
+                const download = beginMailAttachmentDownload({
+                  openWindow: () => window.open("about:blank", "_blank"),
+                  ...(window.desktopBridge
+                    ? { openExternal: (url: string) => ensureLocalApi().shell.openExternal(url) }
+                    : {}),
+                  resolveUrl: async () => {
+                    const { url } = await cloud.relay<{ url: string }>("download", {
+                      messageId,
+                      blobKey: attachment.blobKey!,
+                    });
+                    return url;
+                  },
+                });
+                downloads.current.add(download);
                 void run(async () => {
-                  const { url } = await cloud.relay<{ url: string }>("download", {
-                    messageId,
-                    blobKey: attachment.blobKey!,
-                  });
-                  await ensureLocalApi().shell.openExternal(url);
-                })
-              }
+                  try {
+                    await download.completed;
+                  } finally {
+                    downloads.current.delete(download);
+                  }
+                });
+              }}
             >
               {attachment.filename} · {Math.ceil(attachment.size / 1024)} KB
             </Button>
@@ -852,7 +895,9 @@ export function ConnectedMailView({
                     cloud={cloud}
                     account={selectedAccount}
                     draft={draft}
-                    onClose={() => setDraftId(undefined)}
+                    onClose={() =>
+                      setDraftId((current) => (current === draft.id ? undefined : current))
+                    }
                   />
                 </div>
               ) : search.mailMessage && accounts.value ? (

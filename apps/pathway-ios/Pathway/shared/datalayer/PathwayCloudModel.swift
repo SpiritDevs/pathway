@@ -81,7 +81,10 @@ final class PathwayCloudModel {
     )
 
     @ObservationIgnored private let client: (any PathwayCloudSyncClient)?
-    @ObservationIgnored lazy var connectedMail = PathwayConnectedMailModel(
+    @ObservationIgnored lazy var connectedMail = makeConnectedMailModel()
+
+    private func makeConnectedMailModel() -> PathwayConnectedMailModel {
+        PathwayConnectedMailModel(
         request: { [weak self] kind, name, arguments in
             guard let self else { throw CancellationError() }
             return try await request(kind: kind, name: name, arguments: arguments)
@@ -95,6 +98,7 @@ final class PathwayCloudModel {
             return try await environmentRequest(environment: environment, method: "server.getConfig", payload: .object([:]))
         }
     )
+    }
 
     @ObservationIgnored lazy var contacts = PathwayContactsModel(
         request: { [weak self] kind, name, arguments in

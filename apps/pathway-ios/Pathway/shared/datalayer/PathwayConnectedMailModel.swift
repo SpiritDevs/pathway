@@ -9,6 +9,19 @@ struct PathwayMailAccount: Decodable, Identifiable, Equatable {
   let brain: JSONValue?
   let lastSyncAt: Double?
   let lastError: String?
+
+  func gmailMessageURL(providerMessageID: String) -> URL? {
+    guard !providerMessageID.isEmpty else { return nil }
+    var components = URLComponents()
+    components.scheme = "https"
+    components.host = "mail.google.com"
+    components.path = "/mail/u/"
+    components.queryItems = [URLQueryItem(name: "authuser", value: email)]
+    components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(
+      of: "+", with: "%2B")
+    components.fragment = "all/\(providerMessageID)"
+    return components.url
+  }
 }
 
 struct PathwayMailAddress: Codable, Equatable {
@@ -58,6 +71,7 @@ struct PathwayMailDraft: Decodable, Identifiable, Equatable {
   let text: String
   let status: String
   let lastError: String?
+  var isEditable: Bool { status == "draft" || status == "failed" }
 }
 struct PathwayMailSender: Decodable {
   let summary: String
@@ -83,7 +97,8 @@ final class PathwayConnectedMailModel {
   @ObservationIgnored private let environmentRequest: EnvironmentRequest
   @ObservationIgnored private var generation = 0
   @ObservationIgnored private var pageGeneration = 0
-  @ObservationIgnored private var snapshotGeneration = 0
+  @ObservationIgnored private var firstPageIDs: Set<String> = []
+  @ObservationIgnored private var hasLoadedAdditionalPages = false
   @ObservationIgnored private var accountID = ""
   @ObservationIgnored private var bucket = "priority"
   @ObservationIgnored private var cursor: String?
@@ -102,6 +117,8 @@ final class PathwayConnectedMailModel {
     pageGeneration += 1
     accounts = []
     messages = []
+    firstPageIDs = []
+    hasLoadedAdditionalPages = false
     companyID = ""
     cursor = nil
     hasMore = false
@@ -133,6 +150,8 @@ final class PathwayConnectedMailModel {
     self.accountID = accountID
     self.bucket = bucket
     messages = []
+    firstPageIDs = []
+    hasLoadedAdditionalPages = false
     cursor = nil
     hasMore = false
     loadingMore = false
@@ -148,10 +167,7 @@ final class PathwayConnectedMailModel {
           return
         }
         let page = try decodePathwayPayload(PathwayMailPage.self, from: value)
-        snapshotGeneration += 1
-        messages = page.messages
-        cursor = page.nextCursor
-        hasMore = cursor != nil
+        applyFirstPage(page)
         loading = false
       }
     } catch {
@@ -162,6 +178,28 @@ final class PathwayConnectedMailModel {
       errorMessage = error.localizedDescription
       loading = false
     }
+  }
+  private func applyFirstPage(_ page: PathwayMailPage) {
+    let refreshedIDs = Set(page.messages.map(\.id))
+    if page.nextCursor == nil {
+      messages = page.messages
+      hasLoadedAdditionalPages = false
+      cursor = nil
+    } else {
+      let preserveBoundary = hasLoadedAdditionalPages || loadingMore
+      let boundary = page.messages.last
+      let retained = messages.filter { message in
+        guard !refreshedIDs.contains(message.id) else { return false }
+        if !firstPageIDs.contains(message.id) { return true }
+        guard preserveBoundary, let boundary else { return false }
+        return message.receivedAt < boundary.receivedAt
+          || (message.receivedAt == boundary.receivedAt && message.id < boundary.id)
+      }
+      messages = page.messages + retained
+      if !hasLoadedAdditionalPages { cursor = page.nextCursor }
+    }
+    firstPageIDs = refreshedIDs
+    hasMore = cursor != nil
   }
   private func listArguments(companyID: String, cursor: String? = nil) -> JSONValue {
     var fields: [String: JSONValue] = ["companyId": .string(companyID), "limit": .number(50)]
@@ -174,8 +212,6 @@ final class PathwayConnectedMailModel {
     guard !loadingMore, hasMore, let cursor, !companyID.isEmpty else { return }
     let current = generation
     let pageVersion = pageGeneration
-    let snapshotVersion = snapshotGeneration
-    let existingIDs = Set(messages.map(\.id))
     loadingMore = true
     defer { if current == generation, pageVersion == pageGeneration { loadingMore = false } }
     let value: JSONValue
@@ -183,16 +219,14 @@ final class PathwayConnectedMailModel {
       value = try await request(
         "query", "mail:listMessages", listArguments(companyID: companyID, cursor: cursor))
     } catch {
-      guard !Task.isCancelled, current == generation, pageVersion == pageGeneration,
-        snapshotVersion == snapshotGeneration
-      else { return }
+      guard !Task.isCancelled, current == generation, pageVersion == pageGeneration else { return }
       throw error
     }
-    guard !Task.isCancelled, current == generation, pageVersion == pageGeneration,
-      snapshotVersion == snapshotGeneration
-    else { return }
+    guard !Task.isCancelled, current == generation, pageVersion == pageGeneration else { return }
     let page = try decodePathwayPayload(PathwayMailPage.self, from: value)
-    messages += page.messages.filter { !existingIDs.contains($0.id) }
+    var existingIDs = Set(messages.map(\.id))
+    messages += page.messages.filter { existingIDs.insert($0.id).inserted }
+    hasLoadedAdditionalPages = true
     self.cursor = page.nextCursor
     hasMore = page.nextCursor != nil
   }
@@ -221,6 +255,10 @@ final class PathwayConnectedMailModel {
     var args = fields
     args["companyId"] = .string(companyID)
     return try await request("mutation", name, .object(args))
+  }
+  func discardDraft(companyID: String, draftID: String) async throws {
+    _ = try await mutate(
+      "mail:discardDraft", companyID: companyID, fields: ["draftId": .string(draftID)])
   }
   func relay(_ path: String, companyID: String, fields: [String: JSONValue]) async throws
     -> JSONValue

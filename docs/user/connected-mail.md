@@ -20,6 +20,8 @@ Select an account or view mail across your accounts. Priority, Noise and All pro
 
 Reply yourself or request an AI draft. Review the recipients and content before pressing Send. Saving or generating a draft never sends it. Drafts show their delivery status. If delivery cannot be confirmed, check Gmail Sent before composing another copy.
 
+Use Discard draft to remove an unsent draft you no longer need. Submitted messages and uncertain deliveries remain visible so you can check their status.
+
 Sender knowledge stays private with your mailbox. Save contact adds the sender's name and address to the selected workspace's shared contact directory after confirmation. It does not copy private sender notes.
 
 ## Disconnecting

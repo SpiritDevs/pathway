@@ -334,6 +334,25 @@ export const saveDraft = mutation({
     return id;
   },
 });
+/** Only editable unsent drafts can be discarded; uncertain deliveries remain visible. */
+export const discardDraft = mutation({
+  args: { ...companyArg, draftId: v.string() },
+  handler: async (ctx, args) => {
+    const draft = await ctx.db
+      .query("mailDrafts")
+      .withIndex("by_domain_id", (q) => q.eq("id", args.draftId))
+      .unique();
+    if (!draft) throw backendError("mail-not-found", "Draft not found.");
+    await ownedMailAccount(ctx, args.companyId, draft.accountId);
+    if (draft.status !== "draft" && draft.status !== "failed")
+      throw backendError(
+        "mail-send-locked",
+        "Submitted messages cannot be discarded. Check Gmail for uncertain deliveries.",
+      );
+    await ctx.db.delete(draft._id);
+    return null;
+  },
+});
 export const requestDraft = mutation({
   args: { ...companyArg, messageId: v.string(), instructions: v.optional(v.string()) },
   handler: async (ctx, args) => {
