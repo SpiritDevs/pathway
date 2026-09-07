@@ -69,6 +69,7 @@ import {
   IssueColor,
   IssueCycleId,
   IssueDate,
+  IssueCompositionTime,
   IssueId,
   IssueKey,
   IssueKeyPrefix,
@@ -833,6 +834,7 @@ export type IssueWorkflowOwner = typeof IssueWorkflowOwner.Type;
  * {@link ISSUE_KEY_DRAFT_PLACEHOLDER} is only ever shown, never stored.
  */
 export const SyncIssueCreateArgs = Schema.Struct({
+  timeTracking: Schema.optional(IssueCompositionTime),
   key: Schema.optional(IssueKey),
   title: IssueTitleArg,
   description: Schema.optional(IssueDescriptionArg),

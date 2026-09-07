@@ -4,6 +4,8 @@ import {
   formatTrackedDuration,
   startOfLocalWeek,
   totalDuration,
+  trackedActivityDuration,
+  trackedActivityDayBoundaries,
   type TimeEntry,
 } from "./timeTracker.logic";
 
@@ -43,5 +45,45 @@ describe("time entry totals", () => {
 
   it("starts weeks on Monday", () => {
     expect(startOfLocalWeek(new Date(2026, 7, 16, 10)).getDate()).toBe(10);
+  });
+});
+
+describe("tracked activity clocks", () => {
+  const session = {
+    source: "agent" as const,
+    state: "running" as const,
+    startedAt: "2026-09-08T00:00:00.000Z",
+    durationMs: 120_000,
+    runningSince: 1_000,
+    observedAt: 20_000,
+  };
+
+  it("adds current work to completed intervals without adding blocked time", () => {
+    expect(trackedActivityDuration(session, 31_000)).toBe(150_000);
+    expect(
+      trackedActivityDuration({ ...session, state: "paused", runningSince: null }, 999_000),
+    ).toBe(120_000);
+  });
+
+  it("stops an agent clock growing after its observation lease", () => {
+    expect(trackedActivityDuration(session, 999_000)).toBe(229_000);
+    expect(trackedActivityDuration({ ...session, source: "manual" }, 999_000)).toBe(1_118_000);
+  });
+});
+
+describe("local activity days", () => {
+  it("uses local midnight boundaries across daylight saving", () => {
+    const previous = process.env.TZ;
+    process.env.TZ = "Australia/Sydney";
+    try {
+      const days = trackedActivityDayBoundaries(new Date(2026, 9, 3), new Date(2026, 9, 6));
+      expect(days.map((day) => day.date)).toEqual(["2026-10-03", "2026-10-04", "2026-10-05"]);
+      expect(days.map((day) => (day.end - day.start) / 3_600_000)).toEqual([24, 23, 24]);
+      expect(days[0]?.end).toBe(days[1]?.start);
+      expect(days[1]?.end).toBe(days[2]?.start);
+    } finally {
+      if (previous === undefined) delete process.env.TZ;
+      else process.env.TZ = previous;
+    }
   });
 });

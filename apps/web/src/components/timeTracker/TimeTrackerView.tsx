@@ -3,7 +3,7 @@ import type { Value } from "convex/values";
 import { makeFunctionReference } from "convex/server";
 import type {
   TrackedSessionPage,
-  RecentTrackedTimeTotals,
+  ActiveTrackedActivities,
 } from "@spiritdevs/contracts/businessTools";
 import * as Schema from "effect/Schema";
 import { Clock3Icon, FolderKanbanIcon, PlayIcon, SquareIcon, Trash2Icon } from "lucide-react";
@@ -12,18 +12,20 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { randomUUID } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
+import {
+  useSyncedCloudProjects,
+  useSyncedEnvironmentBindings,
+} from "../../cloud/issueDomainReadModel";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { WorkspaceViewFrame } from "../workspace/WorkspaceViewFrame";
-import {
-  formatTrackedDuration,
-  startOfLocalDay,
-  startOfLocalWeek,
-  type ActiveTimeEntry,
-  type TimeEntry,
-} from "./timeTracker.logic";
+import { formatTrackedDuration, type ActiveTimeEntry, type TimeEntry } from "./timeTracker.logic";
+
+import { TimeTrackerAnalytics } from "./TimeTrackerAnalytics";
+import { ActiveAgentTimers } from "./TimeTrackerIndicator";
+import { useTimeTrackerClock } from "./useTimeTrackerClock";
 
 const TIME_TRACKER_STORAGE_KEY = "pathway:time-tracker";
 const ActiveTimeEntrySchema = Schema.Struct({
@@ -48,12 +50,8 @@ const EMPTY_TIME_TRACKER_STATE: {
 } = { active: null, entries: [] };
 
 function LiveDuration({ startedAt }: { startedAt: string }) {
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const id = window.setInterval(() => setTick((value) => value + 1), 1_000);
-    return () => window.clearInterval(id);
-  }, []);
-  return <>{formatTrackedDuration(Date.now() - Date.parse(startedAt), true)}</>;
+  const now = useTimeTrackerClock(true, 1_000);
+  return <>{formatTrackedDuration(now - Date.parse(startedAt), true)}</>;
 }
 
 function formatEntryDate(value: string): string {
@@ -67,7 +65,26 @@ function formatEntryDate(value: string): string {
 }
 
 export function TimeTrackerView() {
-  const projects = useProjects().filter(({ workspaceRoot }) => workspaceRoot !== null);
+  const localProjects = useProjects().filter(({ workspaceRoot }) => workspaceRoot !== null);
+  const cloudProjects = useSyncedCloudProjects();
+  const bindings = useSyncedEnvironmentBindings();
+  const projectOptions = new Map(
+    cloudProjects.map((project) => [
+      String(project.id),
+      { key: String(project.id), title: project.name },
+    ]),
+  );
+  for (const project of localProjects) {
+    const binding = bindings.find(
+      (row) =>
+        row.status === "active" &&
+        row.environmentId === project.environmentId &&
+        row.localProjectId === project.id,
+    );
+    const key = binding?.cloudProjectId ?? `${project.environmentId}:${project.id}`;
+    if (!projectOptions.has(key)) projectOptions.set(key, { key, title: project.title });
+  }
+  const projects = [...projectOptions.values()];
   const [legacyState] = useLocalStorage(
     TIME_TRACKER_STORAGE_KEY,
     EMPTY_TIME_TRACKER_STATE,
@@ -88,25 +105,14 @@ export function TimeTrackerView() {
       latestPage.current = undefined;
     };
   }, [result.value]);
-  const [day, setDay] = useState(() => startOfLocalDay(new Date()));
-  useEffect(() => {
-    const refreshDay = () => setDay(startOfLocalDay(new Date()));
-    const id = window.setInterval(refreshDay, 60_000);
-    window.addEventListener("focus", refreshDay);
-    return () => {
-      window.clearInterval(id);
-      window.removeEventListener("focus", refreshDay);
-    };
-  }, []);
-  const totals = useBusinessToolsQuery<RecentTrackedTimeTotals>(
+  const activeActivities = useBusinessToolsQuery<ActiveTrackedActivities>(
     cloud.client,
     cloud.accountID,
-    "timeTracking:recentTotals",
-    {
-      todayStart: new Date(day).toISOString(),
-      weekStart: new Date(startOfLocalWeek(new Date(day))).toISOString(),
-    },
+    "timeTracking:listActive",
+    {},
   );
+  const automaticSessions =
+    activeActivities.value?.sessions.filter((session) => session.source === "agent") ?? [];
   const [history, setHistory] = useState<{
     base: TrackedSessionPage;
     entries: TrackedSessionPage["entries"];
@@ -115,7 +121,7 @@ export function TimeTrackerView() {
   } | null>(null);
   // A new live first page invalidates previously fetched pages and outstanding requests.
   const currentHistory = history?.base === result.value ? history : null;
-  const orderedEntries = currentHistory?.entries ?? state.entries;
+  const orderedEntries = currentHistory?.entries ?? result.value?.entries ?? [];
   const nextCursor = currentHistory?.cursor ?? result.value?.cursor;
   const historyDone = currentHistory?.isDone ?? result.value?.isDone ?? true;
   const [pageRequest, setPageRequest] = useState<{
@@ -244,9 +250,7 @@ export function TimeTrackerView() {
     event.preventDefault();
     const trimmedDescription = description.trim();
     if (!trimmedDescription || state.active) return;
-    const project = projects.find(
-      ({ environmentId, id }) => `${environmentId}:${id}` === projectKey,
-    );
+    const project = projects.find(({ key }) => key === projectKey);
     void run(async () => {
       await command("start", {
         id: randomUUID(),
@@ -272,20 +276,21 @@ export function TimeTrackerView() {
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div>
               <p className="text-[11px] font-semibold tracking-[0.15em] text-muted-foreground uppercase">
-                Focus ledger
+                Time Tracker
               </p>
               <h1 className="mt-2 font-heading text-2xl font-semibold tracking-tight sm:text-3xl">
-                Make the work visible.
+                A clear view of your work.
               </h1>
             </div>
             <p className="max-w-sm text-sm leading-6 text-muted-foreground">
-              Your sessions sync across devices. Only one timer can run for your account at a time.
+              Manual time, agent work, and issue creation, together. Concurrent sessions each
+              contribute to your project totals.
             </p>
           </div>
 
-          {error || result.error || totals.error || pageError ? (
+          {error || result.error || activeActivities.error || pageError ? (
             <p role="alert" className="mt-4 text-sm text-destructive">
-              {error ?? result.error ?? totals.error ?? pageError}
+              {error ?? result.error ?? activeActivities.error ?? pageError}
             </p>
           ) : null}
           {!cloud.client ? (
@@ -414,10 +419,7 @@ export function TimeTrackerView() {
                 >
                   <option value="">No project</option>
                   {projects.map((project) => (
-                    <option
-                      key={`${project.environmentId}:${project.id}`}
-                      value={`${project.environmentId}:${project.id}`}
-                    >
+                    <option key={project.key} value={project.key}>
                       {project.title}
                     </option>
                   ))}
@@ -439,38 +441,8 @@ export function TimeTrackerView() {
             )}
           </section>
 
-          <section
-            aria-label="Tracked time summary"
-            className="grid grid-cols-2 border-b border-border/70"
-          >
-            <div className="py-6 pr-6">
-              <p className="text-xs text-muted-foreground">Today</p>
-              <p className="mt-1 font-heading text-2xl font-semibold tabular-nums">
-                {totals.value?.complete
-                  ? formatTrackedDuration(totals.value.todayMs)
-                  : totals.value
-                    ? "Unavailable"
-                    : "…"}
-              </p>
-            </div>
-            <div className="border-l border-border/70 py-6 pl-6">
-              <p className="text-xs text-muted-foreground">This week</p>
-              <p className="mt-1 font-heading text-2xl font-semibold tabular-nums">
-                {totals.value?.complete
-                  ? formatTrackedDuration(totals.value.weekMs)
-                  : totals.value
-                    ? "Unavailable"
-                    : "…"}
-              </p>
-            </div>
-          </section>
-
-          {totals.value && !totals.value.complete ? (
-            <p role="status" className="mt-3 text-sm text-muted-foreground">
-              This week exceeds 2,000 sessions. Summary totals are unavailable; all sessions remain
-              accessible in history.
-            </p>
-          ) : null}
+          <ActiveAgentTimers sessions={automaticSessions} />
+          <TimeTrackerAnalytics cloud={cloud} projects={projects} />
           <section className="mt-8">
             <div className="flex items-center justify-between gap-4">
               <h2 className="font-heading text-lg font-semibold">Recent entries</h2>
@@ -486,7 +458,8 @@ export function TimeTrackerView() {
                   </EmptyMedia>
                   <EmptyTitle>No time tracked yet</EmptyTitle>
                   <EmptyDescription>
-                    Start the timer above. Finished sessions will collect here.
+                    Start a manual timer or work in a thread. Completed agent, manual, and issue
+                    sessions collect here.
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
@@ -499,6 +472,13 @@ export function TimeTrackerView() {
                   >
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium">{entry.description}</p>
+                      <span className="mt-1 inline-flex rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        {entry.source === "agent"
+                          ? "Agent"
+                          : entry.source === "issue"
+                            ? "Issue creation"
+                            : "Manual"}
+                      </span>
                       <p className="mt-1 text-xs text-muted-foreground sm:hidden">
                         {entry.projectName}
                       </p>

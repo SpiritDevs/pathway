@@ -36,6 +36,10 @@ vi.mock("../ProviderUpdateLaunchNotification", () => ({
   ),
 }));
 
+vi.mock("../timeTracker/TimeTrackerIndicator", () => ({
+  TimeTrackerIndicator: () => <button data-testid="time-tracker">Timers</button>,
+}));
+
 import { WorkspaceTopBar } from "./WorkspaceTopBar";
 
 describe("WorkspaceTopBar", () => {
@@ -45,6 +49,10 @@ describe("WorkspaceTopBar", () => {
     expect(markup).toContain('data-workspace-top-bar=""');
     expect(markup).toContain('data-testid="provider-update-notice"');
     expect(markup).toContain('data-testid="profile-button"');
+    expect(markup).toContain('data-testid="time-tracker"');
+    expect(markup.indexOf('data-testid="time-tracker"')).toBeLessThan(
+      markup.indexOf('data-testid="profile-button"'),
+    );
     // History controls sit on the left, so the bar spreads its two children and
     // the profile button lands at the right edge.
     expect(markup).toContain('aria-label="History navigation"');

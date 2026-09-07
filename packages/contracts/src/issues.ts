@@ -1160,7 +1160,18 @@ const IssueLabelIdsInput = Schema.Array(IssueLabelId).check(
   Schema.isMaxLength(ISSUE_LABELS_MAX_PER_ISSUE),
 );
 
+/** Foreground composer intervals; the creation transaction derives credited duration. */
+export const IssueCompositionTime = Schema.Struct({
+  intervals: Schema.Array(
+    Schema.Struct({
+      start: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      end: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    }),
+  ).check(Schema.isMaxLength(256)),
+});
+
 export const IssueCreateInput = Schema.Struct({
+  timeTracking: Schema.optional(IssueCompositionTime),
   title: IssueTitleInput,
   description: Schema.optional(IssueDescriptionInput),
   /** Absent takes the first status by position, except on a triage item, which has none yet. */

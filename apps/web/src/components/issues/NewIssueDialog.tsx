@@ -123,6 +123,7 @@ import {
   resolveIssueProjectOptionId,
 } from "./newIssueDialog.logic";
 import type { IssueProjectOption } from "./useIssueProjectOptions";
+import { useIssueComposerTime } from "./useIssueComposerTime";
 
 const PICKER_CLASS =
   "flex min-h-7 items-center gap-1.5 rounded-full border border-input bg-input/30 px-2.5 text-xs text-foreground shadow-xs/5 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
@@ -362,6 +363,7 @@ export function NewIssueDialog({
   const [showMore, setShowMore] = useState(false);
   const [createMore, setCreateMore] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const composerTime = useIssueComposerTime(open, submitting);
   const [quickCreateProjectOpen, setQuickCreateProjectOpen] = useState(false);
   const [attachments, setAttachments] = useState<ReadonlyArray<NewIssueAttachmentDraft>>([]);
   const [isDropTarget, setIsDropTarget] = useState(false);
@@ -648,6 +650,7 @@ export function NewIssueDialog({
       }
     }
     const input: IssueCreateInput = {
+      timeTracking: composerTime.capture(),
       title: trimmed,
       ...(description.length > 0 ? { description } : {}),
       ...(statusId === null ? {} : { statusId }),
@@ -783,6 +786,7 @@ export function NewIssueDialog({
     clearAttachments();
     setSubmitting(false);
     if (createMore) {
+      composerTime.reset();
       setTitle("");
       setDescription("");
       titleRef.current?.focus();
@@ -816,6 +820,7 @@ export function NewIssueDialog({
         open={open}
       >
         <DialogPopup
+          {...composerTime.interactionProps}
           className={cn(
             "min-h-[min(16.25rem,90dvh)] w-[calc(100vw-2rem)] max-w-[47rem] overflow-hidden max-h-[90dvh] max-sm:h-[90dvh]",
             isMaximized && "h-[90dvh]",

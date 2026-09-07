@@ -22,6 +22,19 @@ The owner's remembered bucket choice for an address within one mail account. Rem
 **Sender knowledge**:
 Private accumulated information about a sender within a mail account. It is separate from the shared contact directory; saving a contact copies only the explicitly confirmed contact fields.
 
+## Time tracking
+
+These terms describe [concurrent agent tracking](../adr/0032-concurrent-agent-time-adds-to-project-totals.md).
+
+**Agent work time**:
+The sum of tracked agent durations. Concurrent agents each contribute their own duration to the project total.
+
+**Elapsed activity time**:
+The duration covered by tracked activity, counting overlapping intervals once within the selected scope. Eight agents working simultaneously for 30 minutes yield 30 minutes of elapsed activity and four hours of agent work.
+
+**Issue creation credit**:
+The greater of one minute or measured active composer time, recorded when a human issue creation succeeds. Any minimum credit above measured time does not add elapsed activity.
+
 ## Agent questions
 
 The following terms support the [Astra design record](../adr/0014-astra-questions-and-browser-scope.md). They describe the design under discussion, not shipped support.

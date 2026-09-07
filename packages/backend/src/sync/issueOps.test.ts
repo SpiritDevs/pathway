@@ -50,6 +50,30 @@ describe("parseIssueCyclePatchArgs", () => {
 });
 
 describe("parseIssueCreateArgs", () => {
+  it("validates composer intervals before accepting an offline create", () => {
+    expect(
+      parseIssueCreateArgs({
+        title: "Draft",
+        timeTracking: { intervals: [{ start: 10, end: 20 }] },
+      }),
+    ).toMatchObject({ ok: true, args: { timeTracking: { intervals: [{ start: 10, end: 20 }] } } });
+    for (const intervals of [
+      [{ start: -1, end: 20 }],
+      [{ start: 20, end: 10 }],
+      [
+        { start: 10, end: 30 },
+        { start: 20, end: 40 },
+      ],
+      [{ start: 0, end: 86_400_001 }],
+      [{ start: 0, end: Infinity }],
+    ]) {
+      expectRejected(
+        parseIssueCreateArgs({ title: "Draft", timeTracking: { intervals } }),
+        "args.timeTracking",
+      );
+    }
+  });
+
   it("accepts a minimal create and leaves every optional field undefined", () => {
     const result = parseIssueCreateArgs({ title: "Fix the crash" });
     expect(result).toMatchObject({ ok: true, args: { title: "Fix the crash" } });

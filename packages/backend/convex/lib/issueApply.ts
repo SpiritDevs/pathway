@@ -97,6 +97,7 @@ import {
 import { scheduleReviewAuditsForTransition } from "./automationJobs.ts";
 import { scheduleSlackOutbound } from "./slackOutbound.ts";
 import { syncOperationActorRecord, type CompanyActor } from "./identity.ts";
+import { recordIssueSession } from "./trackedTime.ts";
 
 type FeedActor = ReturnType<typeof syncOperationActorRecord>;
 
@@ -1023,6 +1024,24 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
     version: 0,
   });
   const doc = await mustGet(ctx, docId);
+
+  if (actor.kind === "member") {
+    const activeIntervals = (args.timeTracking?.intervals ?? [])
+      .map(({ start, end }) => ({
+        start: Math.max(now - 30 * 86_400_000, Math.min(start, now)),
+        end: Math.min(end, now),
+      }))
+      .filter(({ start, end }) => end > start);
+    await recordIssueSession(ctx, {
+      userId: actor.user._id,
+      companyId: company._id,
+      issueId: doc.id,
+      description: `${key}: ${args.title}`,
+      projectKey: project?.id ?? "",
+      projectName: project?.name ?? "No project",
+      activeIntervals,
+    });
+  }
 
   return applied(
     upsert("issue", doc.id, doc.teamIds, docId, encodeIssue(company, doc)),
