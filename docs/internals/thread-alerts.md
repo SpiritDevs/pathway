@@ -47,22 +47,24 @@ contracts, client-runtime, backend, server, relay, web, and desktop. Targeted li
 `git diff --check` passed. Server and desktop reported existing suggestions in unrelated code.
 The production web build passed with chunk-size and dynamic-import warnings.
 
-A Chrome pass on 2026-09-08 paired an isolated server, reused the development test account, opened
-Notifications settings, and changed the local sound switch. The development Convex deployment
-returned "Could not find public function" for `threadAlertPolicies:list`, so synced policy and event
-delivery could not be verified. Chrome reported notification permission as blocked. Further UI
-checks paused because another session was controlling Chrome; subsequent attempts to reconnect to
-Chrome timed out. The resulting cloud-load error message has focused test coverage: both updated
-settings and subscription test files passed, 16 tests total, along with web typecheck and scoped lint.
-The final desktop review added account ownership to queued click targets. A listener for a different
-account cannot consume an old account's target, while same-account remounts retain pending clicks.
-
 An anonymous local Convex deployment passed live global, project, and thread policy writes, scoped
-reads, account isolation, and reset checks. This used synthetic test identities on loopback port 3215. The shared development backend was not changed. Pathway's built-in browser paired and signed
-in with the dedicated Clerk test account, but computer-use timeouts prevented completing the UI
-pass. An earlier maximum-update-depth error during hot reload could not be attributed from its
-truncated stack and has not recurred in the fresh server log. Packaged desktop notification checks
-have not run.
+reads, account isolation, and reset checks. This used synthetic test identities on loopback port 3215. The shared development backend was not changed.
+
+A Playwright browser paired with an isolated server and signed in with the dedicated Clerk test
+account. Global choices, quiet hours, and sound selection survived reload. A custom WAV decoded,
+saved, survived reload, previewed, and was removed with System default restored. The settings page
+fit a 390-pixel viewport without horizontal overflow. The final settings pass emitted no page
+errors. Screenshots show default settings, configured settings, and the narrow layout.
+
+Browser notification permission remained denied, including after a test-context permission grant.
+The shared development relay could not be reached from the test browser. Full relay-to-OS delivery,
+packaged desktop notification presentation, and live sidebar bell interaction remain unverified;
+their adapters, policy and delivery decisions, and bell interactions have focused test coverage.
+Earlier computer-use attempts timed out. An update-depth error during hot reload had a truncated
+stack and did not recur after a fresh server start.
+
+Queued native click targets carry account ownership. A different account's listener cannot consume
+an old target, while same-account remounts retain pending clicks.
 
 Packaged OS behavior still requires a signed macOS build, the installed Windows AppUserModelID and
 shortcut path, and a supported Linux notification service. Electron exposes limited permission
