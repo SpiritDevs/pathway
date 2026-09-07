@@ -6,13 +6,15 @@ This change addresses the lifecycle and reporting findings from the September 20
 
 `CodexAdapterV2` handles every `subAgentActivity` kind explicitly. Completion or interruption from the parent settles the linked card and execution nodes. A registered child turn uses the same finalization path as native `turn/completed`. Repeated terminal activity cannot overwrite a failure or interruption, or stop a later activation. Resumed turns reopen the parent execution node and clear the previous result.
 
-A completed parent retains its context while its children or background commands are running. That allows parent-side completion activity to arrive after the parent turn ends. The context is released when its last outstanding child or command settles.
+A completed parent retains its context while its children or background commands are running, or child turns await registration. Until registration supplies a parent link, pending child turns conservatively keep completed contexts eligible for late activity. Child and command completion handlers preserve that context while registration is pending.
 
 Early child notifications are buffered until registration supplies their projection context. Registration drains them in order, including when a buffered notification registers a nested child. The buffer holds at most 256 notifications and 1 MiB of encoded payload. Oversized payloads are discarded; overflow evicts the oldest notifications and logs a warning. Ordinary token deltas do not scan or drain the registration buffer.
 
 ## Reported configuration and usage
 
-`thread/settings/updated` supplies authoritative model and effort values. Before a report arrives, a child thread uses its immediate parent's configuration as a default; activity-based roster records leave unreported model and options unset. Late spawn metadata can fill missing configuration, nickname, role, and prompt without resetting lifecycle state.
+`thread/settings/updated` supplies authoritative model and effort values. Updating or clearing effort preserves non-effort options such as service tier. Before a report arrives, a child thread uses its immediate parent's configuration as a default; activity-based roster records leave unreported model and options unset. Late spawn metadata can fill missing configuration, nickname, role, and prompt without resetting lifecycle state. The shared runtime mapper prefers a nonblank nickname for the Agents panel title.
+
+Metadata exclusion applies only while a native thread has a pending or active foreground turn. A child that finishes a foreground turn can report settings and usage when its parent reactivates it as a subagent.
 
 The adapter emits `app_thread.model_reported`, normalized to the narrow `thread.model-reported` domain event. Its payload contains only `modelSelection`. Server and shared client projections patch that field without replacing a thread's title, archive state, or other user-owned metadata. The existing native Apple client thread-patch handler accepts this payload shape.
 

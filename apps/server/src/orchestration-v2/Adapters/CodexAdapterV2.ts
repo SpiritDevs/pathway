@@ -1657,7 +1657,6 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
         const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
         const pendingNotifications = makeCodexPendingNotifications();
         const finishedNativeTurns = new Set<string>();
-        const rootNativeThreadIds = new Set<string>();
         const completedSubagentActivityIds = new Set<string>();
         const activeTurns = yield* Ref.make(new Map<string, ActiveCodexTurnContext>());
         const pendingRootTurns = yield* Ref.make(new Map<string, ProviderAdapterV2TurnInput>());
@@ -1752,8 +1751,6 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           readonly startedAt: DateTime.Utc;
         }) =>
           Effect.gen(function* () {
-            const rootNativeId = input.turnInput.providerThread.nativeThreadRef?.nativeId;
-            if (rootNativeId != null) rootNativeThreadIds.add(rootNativeId);
             const existing = (yield* Ref.get(activeTurns)).get(input.nativeTurnId);
             if (existing !== undefined) {
               return existing;
@@ -2015,6 +2012,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               );
               if (
                 !liveSibling &&
+                (yield* Ref.get(pendingSubagentTurns)).size === 0 &&
                 ((yield* Ref.get(runningCommandItemsByTurn)).get(parent.nativeTurnId)?.size ??
                   0) === 0
               ) {
@@ -2249,7 +2247,12 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           const modelSelection: ModelSelection = {
             instanceId: subagent.task.providerInstanceId,
             model,
-            options: effort ? [{ id: CODEX_REASONING_EFFORT_OPTION_ID, value: effort }] : [],
+            options: [
+              ...(subagent.childThread.modelSelection.options ?? []).filter(
+                (selection) => selection.id !== CODEX_REASONING_EFFORT_OPTION_ID,
+              ),
+              ...(effort ? [{ id: CODEX_REASONING_EFFORT_OPTION_ID, value: effort }] : []),
+            ],
           };
           subagent.childThread = { ...subagent.childThread, modelSelection };
           subagent.task = { ...subagent.task, model, options: modelSelection.options };
@@ -3616,7 +3619,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           handle: (subagent: CodexSubagentThreadContext) => Effect.Effect<void>,
         ): Effect.Effect<void> =>
           Effect.gen(function* () {
-            if (rootNativeThreadIds.has(nativeId)) return;
+            if ((yield* Ref.get(pendingRootTurns)).has(nativeId)) return;
+            const foregroundTurn = yield* findActiveTurnByNativeThreadId(nativeId);
+            if (foregroundTurn?.subagent === null) return;
             const subagent = (yield* Ref.get(subagentThreads)).get(nativeId);
             if (subagent !== undefined) {
               yield* turnTerminalizationPermit.withPermits(1)(handle(subagent));
@@ -4084,7 +4089,11 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   (subagent) =>
                     subagent.parentContext === context && subagent.task.completedAt === null,
                 );
-                if (turnDrained && !hasLiveSubagents) {
+                if (
+                  turnDrained &&
+                  !hasLiveSubagents &&
+                  (yield* Ref.get(pendingSubagentTurns)).size === 0
+                ) {
                   yield* Ref.update(settledTurns, (current) => {
                     const updated = new Map(current);
                     updated.delete(payload.turnId);
@@ -4993,7 +5002,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             );
             const retainSettledContext =
               input.status === "completed" &&
-              ((runningItems !== undefined && runningItems.size > 0) || hasLiveSubagents);
+              ((runningItems !== undefined && runningItems.size > 0) ||
+                hasLiveSubagents ||
+                (yield* Ref.get(pendingSubagentTurns)).size > 0);
             if (retainSettledContext) {
               yield* Ref.update(settledTurns, (current) => {
                 const updated = new Map(current);

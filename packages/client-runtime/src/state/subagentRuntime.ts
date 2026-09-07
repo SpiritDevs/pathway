@@ -755,6 +755,7 @@ export function projectedSubagentsToRuntime(
     readonly prompt: string;
     readonly usage?: SubagentUsage | undefined;
     readonly activationCount?: number | undefined;
+    readonly nickname?: string | undefined;
     readonly role?: string | undefined;
     readonly model: string | null;
     readonly options?: ReadonlyArray<ProviderOptionSelection> | undefined;
@@ -792,6 +793,7 @@ export function projectedSubagentsToRuntime(
       providerInstanceId: subagent.providerInstanceId,
       childThreadId: subagent.childThreadId,
       title:
+        asString(subagent.nickname) ??
         subagent.title ??
         (subagent.prompt.length > 80 ? `${subagent.prompt.slice(0, 77)}...` : subagent.prompt),
       role: subagent.role ?? null,

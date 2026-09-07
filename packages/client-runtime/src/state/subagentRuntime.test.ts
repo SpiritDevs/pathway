@@ -705,6 +705,34 @@ describe("model and effort attribution", () => {
       ],
     });
   });
+
+  it.each([
+    ["Ada", "Audit server", "Ada"],
+    [undefined, "Audit server", "Audit server"],
+    ["   ", "Audit server", "Audit server"],
+    [undefined, null, "Inspect the composer"],
+  ])("maps nickname %j and title %j to %j", (nickname, title, expected) => {
+    const now = DateTime.makeUnsafe("2026-08-14T00:00:00.000Z");
+    const [subagent] = projectedSubagentsToRuntime([
+      {
+        id: "named-subagent",
+        origin: "provider_native",
+        driver: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex_work"),
+        childThreadId: null,
+        nickname: nickname ?? undefined,
+        title: title ?? null,
+        prompt: "Inspect the composer",
+        model: null,
+        status: "running",
+        result: null,
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      },
+    ]);
+    expect(subagent?.title).toBe(expected);
+  });
 });
 
 describe("background task exclusion", () => {

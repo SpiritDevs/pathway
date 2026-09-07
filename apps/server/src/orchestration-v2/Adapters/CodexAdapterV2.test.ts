@@ -955,6 +955,7 @@ function codexReplayPreamble(input: {
   readonly nativeTurnId: string;
   readonly prompt: string;
   readonly serverVersion?: string;
+  readonly turnOptions?: Readonly<Record<string, string>>;
 }): Array<CodexReplay.CodexAppServerReplayEntry> {
   const serverVersion = input.serverVersion ?? "0.144.0";
   return [
@@ -1042,6 +1043,7 @@ function codexReplayPreamble(input: {
           approvalPolicy: "never",
           approvalsReviewer: "user",
           sandboxPolicy: { type: "dangerFullAccess" },
+          ...input.turnOptions,
         },
       },
     },
@@ -4666,7 +4668,12 @@ describe("CodexAdapterV2 subagent audit regressions", () => {
       tokenUsage: { total, last: total, modelContextWindow: null },
     });
   };
-  const run = (scenario: string, entries: ReadonlyArray<CodexReplay.CodexAppServerReplayEntry>) =>
+  const run = (
+    scenario: string,
+    entries: ReadonlyArray<CodexReplay.CodexAppServerReplayEntry>,
+    modelSelection: ModelSelection = CODEX_TEST_MODEL_SELECTION,
+    turnOptions: Readonly<Record<string, string>> = {},
+  ) =>
     Effect.gen(function* () {
       const harness = yield* makeCodexReplayHarness(
         makeCodexReplayTranscript({
@@ -4676,6 +4683,7 @@ describe("CodexAdapterV2 subagent audit regressions", () => {
               nativeThreadId: root,
               nativeTurnId: rootTurn,
               prompt: "Audit subagents",
+              turnOptions,
             }),
             ...entries,
             notification("turn/completed", {
@@ -4685,20 +4693,83 @@ describe("CodexAdapterV2 subagent audit regressions", () => {
           ],
         }),
       );
-      yield* harness.runtime.startTurn(
-        makeCodexTestTurnInput({
+      yield* harness.runtime.startTurn({
+        ...makeCodexTestTurnInput({
           threadId: harness.threadId,
           providerThread: harness.providerThread,
           now: yield* DateTime.now,
           attemptId: RunAttemptId.make(`attempt-${scenario}`),
           text: "Audit subagents",
         }),
-      );
+        modelSelection,
+      });
       yield* harness.awaitEvent((event) => event.type === "turn.terminal");
       return harness;
     });
   const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.scoped(effect.pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))));
+
+  it.effect("preserves inherited session options when reported effort changes or clears", () =>
+    provide(
+      Effect.gen(function* () {
+        const harness = yield* run(
+          "audit-reported-session-options",
+          [
+            activity("started"),
+            settings("gpt-6-astra", "high"),
+            settings("gpt-6-astra", null),
+            activity("completed"),
+          ],
+          {
+            ...CODEX_TEST_MODEL_SELECTION,
+            options: [
+              { id: "serviceTier", value: "fast" },
+              { id: "reasoningEffort", value: "low" },
+            ],
+          },
+          { effort: "low", serviceTier: "fast" },
+        );
+        const reports = harness.events.filter(
+          (event) => event.type === "app_thread.model_reported",
+        );
+        assert.deepEqual(
+          reports.map((event) => event.modelSelection.options),
+          [
+            [
+              { id: "serviceTier", value: "fast" },
+              { id: "reasoningEffort", value: "high" },
+            ],
+            [{ id: "serviceTier", value: "fast" }],
+          ],
+        );
+        assert.deepEqual(harness.subagentUpdates().at(-1)!.subagent.options, [
+          { id: "serviceTier", value: "fast" },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("registers an early child after its parent completes and releases pending work", () =>
+    provide(
+      Effect.gen(function* () {
+        const harness = yield* run("audit-pending-registration-after-parent", [
+          turn("turn/started", "inProgress"),
+          notification("turn/completed", {
+            threadId: root,
+            turn: makeCodexReplayTurn({ id: rootTurn, status: "completed" }),
+          }),
+          answer("Early child result"),
+          turn("turn/completed", "completed"),
+          activity("started"),
+        ]);
+        yield* harness.awaitEvent(
+          (event) => event.type === "subagent.updated" && event.subagent.status === "completed",
+        );
+        assert.equal(harness.subagentUpdates().at(-1)!.subagent.result, "Early child result");
+        assert.isFalse(yield* harness.hasPendingBackgroundWork);
+      }),
+    ),
+  );
 
   it.effect("settles the card and both execution nodes from parent completion alone", () =>
     provide(
@@ -4722,6 +4793,126 @@ describe("CodexAdapterV2 subagent audit regressions", () => {
           );
           assert.equal(last?.type === "node.updated" ? last.node.status : null, "completed");
         }
+      }),
+    ),
+  );
+
+  it.effect("accepts subagent reports after the child finishes a foreground turn", () =>
+    provide(
+      Effect.gen(function* () {
+        const foregroundTurn = "foreground-child-turn";
+        const resumedTurn = "resumed-child-turn";
+        const nextParentTurn = "next-parent-turn";
+        const nextTurn = (
+          threadId: string,
+          turnId: string,
+          id: number,
+        ): Array<CodexReplay.CodexAppServerReplayEntry> => [
+          {
+            type: "expect_outbound",
+            frame: {
+              id,
+              method: "turn/start",
+              params: {
+                threadId,
+                input: [{ type: "text", text: "Continue" }],
+                cwd: "/workspace",
+                model: "gpt-5.4",
+                approvalPolicy: "never",
+                approvalsReviewer: "user",
+                sandboxPolicy: { type: "dangerFullAccess" },
+              },
+            },
+          },
+          {
+            type: "emit_inbound",
+            frame: {
+              id,
+              result: { turn: makeCodexReplayTurn({ id: turnId, status: "inProgress" }) },
+            },
+          },
+          notification("turn/started", {
+            threadId,
+            turn: makeCodexReplayTurn({ id: turnId, status: "inProgress" }),
+          }),
+        ];
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({
+            scenario: "audit-child-foreground-return",
+            entries: [
+              ...codexReplayPreamble({
+                nativeThreadId: root,
+                nativeTurnId: rootTurn,
+                prompt: "Audit subagents",
+              }),
+              activity("started"),
+              turn("turn/started", "inProgress"),
+              turn("turn/completed", "completed"),
+              notification("turn/completed", {
+                threadId: root,
+                turn: makeCodexReplayTurn({ id: rootTurn, status: "completed" }),
+              }),
+              ...nextTurn(child, foregroundTurn, 4),
+              settings("foreground-model", "low"),
+              usage(100, foregroundTurn),
+              turn("turn/completed", "completed", foregroundTurn),
+              ...nextTurn(root, nextParentTurn, 5),
+              turn("turn/started", "inProgress", resumedTurn),
+              settings("gpt-6-astra", "high"),
+              usage(200, resumedTurn),
+              turn("turn/completed", "completed", resumedTurn),
+              notification("turn/completed", {
+                threadId: root,
+                turn: makeCodexReplayTurn({ id: nextParentTurn, status: "completed" }),
+              }),
+            ],
+          }),
+        );
+        const now = yield* DateTime.now;
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("audit-parent-first"),
+            text: "Audit subagents",
+          }),
+        );
+        yield* harness.awaitEvent((event) => event.type === "turn.terminal");
+        const childProviderThread = harness.events.find(
+          (event) =>
+            event.type === "provider_thread.updated" &&
+            event.providerThread.nativeThreadRef?.nativeId === child,
+        );
+        assert(childProviderThread?.type === "provider_thread.updated");
+        const task = harness.subagentUpdates().at(-1)!.subagent;
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: task.childThreadId!,
+            providerThread: childProviderThread.providerThread,
+            now,
+            attemptId: RunAttemptId.make("audit-child-foreground"),
+            text: "Continue",
+          }),
+        );
+        yield* harness.awaitEvent((event) => event.type === "turn.terminal");
+        assert.isFalse(harness.events.some((event) => event.type === "app_thread.model_reported"));
+        assert.isUndefined(harness.subagentUpdates().at(-1)!.subagent.usage);
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now,
+            attemptId: RunAttemptId.make("audit-parent-second"),
+            text: "Continue",
+          }),
+        );
+        yield* harness.awaitEvent((event) => event.type === "turn.terminal");
+        const resumed = harness.subagentUpdates().at(-1)!.subagent;
+        assert.equal(resumed.model, "gpt-6-astra");
+        assert.equal(resumed.usage?.totalTokens, 200);
+        assert.equal(resumed.activationCount, 2);
+        assert.equal(resumed.status, "completed");
       }),
     ),
   );
