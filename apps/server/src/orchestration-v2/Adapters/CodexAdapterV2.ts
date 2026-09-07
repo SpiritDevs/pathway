@@ -925,6 +925,18 @@ export function parseCodexRetryProgress(
   return { attempt, maxAttempts };
 }
 
+/** Converts a Codex task path into the display name shared by the card and child thread. */
+export function codexSubagentTitle(agentPath: string): string | null {
+  const name = agentPath
+    .split("/")
+    .map((segment) => segment.trim())
+    .findLast((segment) => segment.length > 0)
+    ?.replace(/[_-]+/g, " ")
+    .trim();
+  if (!name) return null;
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 /** Maps the native CollabAgentStatus union onto subagent task status. */
 export function mapCodexCollabAgentStatus(status: string): OrchestrationV2Subagent["status"] {
   switch (status) {
@@ -2411,7 +2423,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 nativeItemId: `${input.item.id}:${input.item.agentThreadId}`,
                 nativeToolCallId: input.item.id,
                 prompt: "",
-                title: input.item.agentPath,
+                title: codexSubagentTitle(input.item.agentPath),
                 model: null,
                 reasoningEffort: null,
                 ordinal,
@@ -3513,6 +3525,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           }).pipe(Effect.orDie),
         );
 
+        const providerUsageScope = yield* Effect.scope;
         yield* client.handleServerNotification("account/rateLimits/updated", (notification) =>
           ingestCodexRateLimitsUpdated({
             instanceId: adapterOptions.instanceId,
@@ -3520,7 +3533,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             ...(adapterOptions.ingestProviderUsage === undefined
               ? {}
               : { ingest: adapterOptions.ingestProviderUsage }),
-          }).pipe(Effect.asVoid),
+          }).pipe(Effect.forkIn(providerUsageScope), Effect.asVoid),
         );
 
         yield* client.handleServerNotification("turn/started", (payload) =>

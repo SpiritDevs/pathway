@@ -2,6 +2,8 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
+import * as Option from "effect/Option";
+import * as ElectronWindow from "../electron/ElectronWindow.ts";
 
 import type * as Electron from "electron";
 
@@ -16,6 +18,7 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 describe("DesktopLifecycle", () => {
   for (const platform of ["darwin", "win32", "linux"] satisfies ReadonlyArray<NodeJS.Platform>) {
     it.effect(`lets the updater's quit event proceed on ${platform}`, () => {
+      let windowsDestroyed = false;
       const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
 
       const electronAppLayer = Layer.succeed(ElectronApp.ElectronApp, {
@@ -90,6 +93,22 @@ describe("DesktopLifecycle", () => {
         Layer.provideMerge(electronAppLayer),
         Layer.provideMerge(electronThemeLayer),
         Layer.provideMerge(desktopWindowLayer),
+        Layer.provideMerge(
+          Layer.succeed(ElectronWindow.ElectronWindow, {
+            create: () => Effect.die("unexpected BrowserWindow creation"),
+            main: Effect.succeed(Option.none()),
+            currentMainOrFirst: Effect.succeed(Option.none()),
+            focusedMainOrFirst: Effect.succeed(Option.none()),
+            setMain: () => Effect.void,
+            clearMain: () => Effect.void,
+            reveal: () => Effect.void,
+            sendAll: () => Effect.void,
+            destroyAll: Effect.sync(() => {
+              windowsDestroyed = true;
+            }),
+            syncAllAppearance: () => Effect.void,
+          }),
+        ),
         Layer.provideMerge(environmentLayer),
         Layer.provideMerge(DesktopShutdown.layer),
         Layer.provideMerge(DesktopState.layer),
@@ -101,6 +120,7 @@ describe("DesktopLifecycle", () => {
           yield* lifecycle.register;
 
           appListeners.get("before-quit-for-update")?.();
+          yield* Effect.yieldNow;
 
           let prevented = false;
           const event = {
@@ -114,6 +134,7 @@ describe("DesktopLifecycle", () => {
             prevented,
             "cancelling this event prevents the updater from completing its relaunch",
           );
+          assert.isTrue(windowsDestroyed);
 
           const state = yield* DesktopState.DesktopState;
           assert.isTrue(yield* Ref.get(state.quitting));

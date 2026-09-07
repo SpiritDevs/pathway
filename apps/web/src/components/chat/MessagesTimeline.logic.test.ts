@@ -1,3 +1,6 @@
+import { MessageId, RunId, ThreadId } from "@spiritdevs/contracts";
+import * as DateTime from "effect/DateTime";
+import { withOptimisticWorkspacePreparation, type TimelineEntry } from "../../session-logic";
 import { describe, expect, it } from "vite-plus/test";
 import {
   computeStableMessagesTimelineRows,
@@ -1804,6 +1807,161 @@ describe("deriveMessagesTimelineRows waiting-background", () => {
         taskCount: 2,
         label: "Waiting on 2 background tasks: first, …",
       },
+    ]);
+  });
+});
+
+describe("workspace preparation before provider work", () => {
+  const runId = RunId.make("worktree-run");
+  const submittedAt = "2026-01-01T00:00:00.000Z";
+  const readyAt = "2026-01-01T00:01:00.000Z";
+  const optimistic = () =>
+    withOptimisticWorkspacePreparation([], {
+      threadId: ThreadId.make("worktree-thread"),
+      startedAt: submittedAt,
+    });
+  function rows(entries: TimelineEntry[], startedAt: string | null = null) {
+    return deriveMessagesTimelineRows({
+      timelineEntries: entries,
+      latestRun: { runId, status: "running", startedAt, completedAt: null },
+      isWorking: true,
+      activeTurnStartedAt: submittedAt,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+  }
+  function prepared(status: "running" | "completed" | "failed" | "interrupted") {
+    return optimistic().map(
+      (entry): TimelineEntry =>
+        entry.kind !== "event"
+          ? entry
+          : {
+              ...entry,
+              projectedItem: {
+                ...entry.projectedItem,
+                item: {
+                  ...entry.projectedItem.item,
+                  runId,
+                  status,
+                  completedAt: status === "running" ? null : DateTime.makeUnsafe(readyAt),
+                },
+              },
+            },
+    );
+  }
+  it("shows preparation immediately and suppresses Working while checkout runs", () => {
+    expect(rows(optimistic()).map((row) => row.kind)).toEqual(["event"]);
+    expect(rows(prepared("running")).map((row) => row.kind)).toEqual(["event"]);
+  });
+  it("hands off to the server item without duplicating the card", () => {
+    const entries = prepared("running");
+    expect(
+      withOptimisticWorkspacePreparation(entries, {
+        threadId: ThreadId.make("worktree-thread"),
+        startedAt: submittedAt,
+      }),
+    ).toBe(entries);
+    expect(withOptimisticWorkspacePreparation([], null)).toEqual([]);
+  });
+  it("removes successful setup and starts Working at readiness, never submission", () => {
+    expect(rows(prepared("completed"))).toMatchObject([{ kind: "working", createdAt: readyAt }]);
+    const providerStartedAt = "2026-01-01T00:01:02.000Z";
+    expect(rows(prepared("completed"), providerStartedAt)).toMatchObject([
+      { kind: "working", createdAt: providerStartedAt },
+    ]);
+  });
+  it.each(["failed", "interrupted"] as const)("retains %s preparation for recovery", (status) => {
+    expect(rows(prepared(status))[0]?.kind).toBe("event");
+  });
+});
+
+describe("prepared turn history and connection recovery", () => {
+  const runId = RunId.make("prepared-history-run");
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const common = {
+    isWorking: false,
+    activeTurnStartedAt: createdAt,
+    turnDiffSummaryByAssistantMessageId: new Map(),
+    revertTurnCountByUserMessageId: new Map(),
+  };
+  const preparation = withOptimisticWorkspacePreparation([], {
+    threadId: ThreadId.make("prepared-history-thread"),
+    startedAt: createdAt,
+  });
+  it.each(["connecting", "connecting-stopped"] as const)(
+    "keeps %s recovery accessible during optimistic preparation",
+    (workingPresentation) => {
+      const rows = deriveMessagesTimelineRows({
+        ...common,
+        timelineEntries: preparation,
+        workingPresentation,
+      });
+      expect(rows.map((row) => row.kind)).toEqual(["event", "working"]);
+      expect(rows[1]).toMatchObject({ presentation: workingPresentation });
+    },
+  );
+  it("keeps the settled work fold expandable after removing its preparation card", () => {
+    const message = (id: string, role: "user" | "assistant", text: string): TimelineEntry => ({
+      kind: "message",
+      id,
+      createdAt,
+      message: {
+        id: MessageId.make(id),
+        role,
+        text,
+        runId,
+        createdAt,
+        updatedAt: createdAt,
+        streaming: false,
+      },
+    });
+    const timelineEntries: TimelineEntry[] = [
+      message("prepared-user", "user", "Do the work"),
+      ...preparation.map(
+        (entry): TimelineEntry =>
+          entry.kind !== "event"
+            ? entry
+            : {
+                ...entry,
+                projectedItem: {
+                  ...entry.projectedItem,
+                  item: {
+                    ...entry.projectedItem.item,
+                    runId,
+                    status: "completed",
+                    completedAt: DateTime.makeUnsafe(createdAt),
+                  },
+                },
+              },
+      ),
+      message("prepared-commentary", "assistant", "Inspecting the project"),
+      {
+        kind: "work",
+        id: "prepared-tool",
+        createdAt,
+        entry: { id: "prepared-tool", createdAt, runId, label: "Read files", tone: "tool" },
+      },
+      message("prepared-final", "assistant", "Done"),
+    ];
+    const input = {
+      ...common,
+      timelineEntries,
+      latestRun: {
+        runId,
+        status: "completed" as const,
+        startedAt: createdAt,
+        completedAt: createdAt,
+      },
+    };
+    const collapsed = deriveMessagesTimelineRows(input);
+    expect(collapsed.map((row) => row.kind)).toEqual(["message", "turn-fold", "message"]);
+    const expanded = deriveMessagesTimelineRows({ ...input, expandedRunIds: new Set([runId]) });
+    expect(expanded.map((row) => row.id)).toEqual([
+      "prepared-user",
+      `turn-fold:${runId}`,
+      "prepared-commentary",
+      "prepared-tool",
+      "prepared-final",
     ]);
   });
 });

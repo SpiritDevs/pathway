@@ -8,7 +8,7 @@ import {
   type ServerProviderUsageSnapshot,
 } from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { visitElements } from "../../test/reactElementTree";
@@ -54,8 +54,16 @@ vi.mock("react/compiler-runtime", async () => {
 });
 
 vi.mock("@effect/atom-react", () => ({
-  useAtomValue: (atom: unknown) =>
-    atom === atoms.serverConfigsAtom ? atoms.serverConfigs : atoms.providers,
+  useAtomValue: (atom: unknown) => {
+    if (atom === atoms.serverConfigsAtom) return atoms.serverConfigs;
+    if (atom === atoms.providersAtom) return atoms.providers;
+    const registry = AtomRegistry.make();
+    try {
+      return registry.get(atom as Atom.Atom<unknown>);
+    } finally {
+      registry.dispose();
+    }
+  },
 }));
 
 vi.mock("~/state/environments", () => ({
@@ -69,7 +77,12 @@ vi.mock("~/state/server", () => ({
   environmentServerConfigsAtom: atoms.serverConfigsAtom,
   serverEnvironment: {
     providersValueAtom: () => atoms.providersAtom,
-    providerUsageLive: (target: unknown) => target,
+    providerUsageLive: () =>
+      Atom.make(
+        testState.listLoaded
+          ? AsyncResult.success(Array.from(testState.queries.values()))
+          : AsyncResult.initial(),
+      ),
     refreshProviderUsage: atoms.refreshProviderUsage,
   },
 }));
@@ -460,6 +473,71 @@ describe("provider usage panel refresh", () => {
     });
     hooks.beginRender();
     expect(renderRow(row.props)).toBeNull();
+  });
+
+  it("keeps both usage views loading until the initial usage subscription arrives", () => {
+    setConnectedProviders(
+      [environmentId, EnvironmentId.make("laptop")].map((id) => ({
+        environmentId: id,
+        label: String(id),
+        providers: [provider("codex", codexId)],
+      })),
+    );
+    testState.listLoaded = false;
+    hooks.beginRender();
+    const menu = ConnectedProviderUsageMenu() as ReactElement<Record<string, unknown>>;
+    expect(visitElements(menu, (element) => Boolean(element.props.account))).toBeNull();
+    expect(
+      visitElements(menu, (element) => element.props.children === "Loading provider accounts…"),
+    ).not.toBeNull();
+    hooks.reset();
+    hooks.beginRender();
+    const settings = ProviderUsageSettingsSection() as ReactElement<Record<string, unknown>>;
+    expect(visitElements(settings, (element) => element.props.loading === true)).not.toBeNull();
+    expect(
+      visitElements(settings, (element) => element.props["aria-label"] === "Refresh provider usage")
+        ?.props.disabled,
+    ).toBe(true);
+  });
+
+  it("groups matching subscriptions in the menu and refreshes each account once in settings", async () => {
+    const laptopId = EnvironmentId.make("usage-laptop");
+    const workId = ProviderInstanceId.make("work");
+    setConnectedProviders(
+      [environmentId, laptopId].map((id) => ({
+        environmentId: id,
+        label: String(id),
+        providers: [provider("codex", codexId), provider("codex", workId, { displayName: "Work" })],
+      })),
+    );
+    testState.queries.set(String(codexId), {
+      ...snapshot(codexId, "codex", 20),
+      accountKey: "personal",
+    });
+    testState.queries.set(String(workId), { ...snapshot(workId, "codex", 40), accountKey: "work" });
+    hooks.beginRender();
+    const menu = ConnectedProviderUsageMenu() as ReactElement<Record<string, unknown>>;
+    const rows: Array<ReactElement<Record<string, unknown>>> = [];
+    visitElements(menu, (element) => {
+      if (element.props.account) rows.push(element);
+      return false;
+    });
+    expect(rows).toHaveLength(2);
+
+    hooks.reset();
+    hooks.beginRender();
+    testState.refresh.mockResolvedValue(AsyncResult.success(snapshot(codexId, "codex", 20)));
+    const settings = ProviderUsageSettingsSection() as ReactElement<Record<string, unknown>>;
+    const cards = visitElements(settings, (element) => Array.isArray(element.props.accounts));
+    expect(cards?.props.accounts).toHaveLength(2);
+    const button = visitElements(
+      settings,
+      (element) => element.props["aria-label"] === "Refresh provider usage",
+    );
+    expect(button).not.toBeNull();
+    (button?.props.onClick as (() => void) | undefined)?.();
+    await flushPromises();
+    expect(testState.refresh).toHaveBeenCalledTimes(2);
   });
 
   it("shows each configured account even when emails match", () => {

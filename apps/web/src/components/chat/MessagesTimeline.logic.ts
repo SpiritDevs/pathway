@@ -1,3 +1,5 @@
+import * as DateTime from "effect/DateTime";
+import { turnItemIsWorkspacePreparation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
 import * as Equal from "effect/Equal";
 import {
   formatDuration,
@@ -583,6 +585,26 @@ export function deriveMessagesTimelineRows(input: {
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
+  const preparationItems = input.timelineEntries.flatMap((entry) =>
+    entry.kind === "event" && turnItemIsWorkspacePreparation(entry.projectedItem.item)
+      ? [entry.projectedItem.item]
+      : [],
+  );
+  const isPreparingWorkspace = preparationItems.some((item) => item.status === "running");
+  const completedPreparation = preparationItems.findLast(
+    (item) =>
+      item.runId === input.latestRun?.runId &&
+      item.status === "completed" &&
+      (input.latestRun.status === "starting" ||
+        input.latestRun.status === "running" ||
+        input.latestRun.status === "waiting"),
+  );
+  const workStartedAt = completedPreparation
+    ? (input.latestRun?.startedAt ??
+      (completedPreparation.completedAt
+        ? DateTime.formatIso(completedPreparation.completedAt)
+        : null))
+    : input.activeTurnStartedAt;
   const durationStartByMessageId = computeMessageDurationStart(
     input.timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
   );
@@ -638,6 +660,13 @@ export function deriveMessagesTimelineRows(input: {
         expanded: input.expandedRunIds?.has(turnFold.runId) ?? false,
       });
     }
+
+    if (
+      timelineEntry.kind === "event" &&
+      turnItemIsWorkspacePreparation(timelineEntry.projectedItem.item) &&
+      timelineEntry.projectedItem.item.status === "completed"
+    )
+      continue;
 
     if (collapsedEntryIds.has(timelineEntry.id)) {
       continue;
@@ -748,11 +777,14 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  if (input.isWorking || (input.workingPresentation ?? "activity") !== "activity") {
+  if (
+    (input.isWorking && !isPreparingWorkspace) ||
+    (input.workingPresentation ?? "activity") !== "activity"
+  ) {
     nextRows.push({
       kind: "working",
       id: "working-indicator-row",
-      createdAt: input.activeTurnStartedAt,
+      createdAt: workStartedAt,
       presentation: input.workingPresentation ?? "activity",
     });
   } else if (input.pendingBackgroundTasks && input.pendingBackgroundTasks.length > 0) {

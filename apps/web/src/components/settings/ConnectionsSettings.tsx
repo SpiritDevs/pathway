@@ -120,6 +120,7 @@ import { useUiStateStore } from "~/uiStateStore";
 import {
   resolveServerConfigVersionMismatch,
   resolveServerSelfUpdateCapability,
+  supportsDesktopAppUpdate,
 } from "~/versionSkew";
 import { authEnvironment } from "~/state/auth";
 import { environmentCatalog } from "~/connection/catalog";
@@ -1676,6 +1677,9 @@ function SavedBackendListRow({
   );
   const versionMismatch = resolveServerConfigVersionMismatch(environment.serverConfig);
   const serverUpdateState = useAtomValue(serverEnvironment.updateStateAtom(environmentId));
+  const updateTargetVersion =
+    versionMismatch?.clientVersion ??
+    (serverUpdateState.status === "failed" ? serverUpdateState.targetVersion : null);
   const resumingServerUpdate =
     serverUpdateState.status === "running" && serverUpdateState.stage === "resuming";
   const sshTarget =
@@ -1834,13 +1838,14 @@ function SavedBackendListRow({
           ) : null}
         </div>
         <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
-          {versionMismatch &&
+          {updateTargetVersion !== null &&
           (serverUpdateState.status === "idle" || serverUpdateState.status === "failed") ? (
             <ServerUpdateAction
               environmentId={environmentId}
               serverLabel={`${environment.label} server`}
               selfUpdate={resolveServerSelfUpdateCapability(environment.serverConfig)}
-              targetVersion={versionMismatch.clientVersion}
+              desktopAppUpdate={supportsDesktopAppUpdate(environment.serverConfig)}
+              targetVersion={updateTargetVersion}
               label={serverUpdateState.status === "failed" ? "Retry" : "Update"}
             />
           ) : null}
@@ -2225,6 +2230,9 @@ export function EnvironmentConnectionSettings({
   const primaryServerUpdateState = useAtomValue(
     serverEnvironment.updateStateAtom(primaryEnvironmentId),
   );
+  const primaryUpdateTargetVersion =
+    primaryVersionMismatch?.clientVersion ??
+    (primaryServerUpdateState.status === "failed" ? primaryServerUpdateState.targetVersion : null);
   const defaultAdvertisedEndpointKey = useUiStateStore(
     (state) => state.defaultAdvertisedEndpointKey,
   );
@@ -3553,14 +3561,15 @@ export function EnvironmentConnectionSettings({
                   ) : null
                 }
                 control={
-                  primaryVersionMismatch &&
+                  primaryUpdateTargetVersion !== null &&
                   primaryEnvironmentId !== null &&
                   primaryServerUpdateState.status !== "running" ? (
                     <ServerUpdateAction
                       environmentId={primaryEnvironmentId}
                       serverLabel={primaryEnvironment?.label ?? "this server"}
                       selfUpdate={resolveServerSelfUpdateCapability(primaryServerConfig)}
-                      targetVersion={primaryVersionMismatch.clientVersion}
+                      desktopAppUpdate={supportsDesktopAppUpdate(primaryServerConfig)}
+                      targetVersion={primaryUpdateTargetVersion}
                       label={primaryServerUpdateState.status === "failed" ? "Retry" : "Update"}
                     />
                   ) : undefined

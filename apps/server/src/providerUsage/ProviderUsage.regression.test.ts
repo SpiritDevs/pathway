@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import {
   ingestPushedSnapshot,
   mapCodexRateLimitsUpdated,
@@ -381,5 +382,190 @@ it.effect("preserves only metadata pushed after an HTTP refresh started", () =>
         field === "credits" ? "$50.00 remaining" : "$10.00 remaining",
       );
     }
+  }),
+);
+
+it.effect(
+  "keeps account grouping through token rotation and failures, but clears it on a login switch",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* Effect.promise(() => import("node:fs/promises"));
+        const os = yield* Effect.promise(() => import("node:os"));
+        const path = yield* Effect.promise(() => import("node:path"));
+        const home = yield* Effect.acquireRelease(
+          Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "pathway-usage-identity-"))),
+          (directory) => Effect.promise(() => fs.rm(directory, { recursive: true, force: true })),
+        );
+        let httpStatus = 200;
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(
+            async () =>
+              new Response(
+                JSON.stringify({
+                  rate_limit: {
+                    primary_window: { used_percent: 20, limit_window_seconds: 18000 },
+                    secondary_window: { used_percent: 40, limit_window_seconds: 604800 },
+                  },
+                }),
+                { status: httpStatus },
+              ),
+          ),
+        );
+        const input = {
+          instanceId,
+          provider: "codex" as const,
+          nowMs,
+          providerHomePath: home,
+          homeDir: home,
+        };
+        const writeAuth = (accountId: string | undefined, token = "token") =>
+          fs.writeFile(
+            path.join(home, "auth.json"),
+            JSON.stringify({ tokens: { access_token: token, account_id: accountId } }),
+          );
+        const first = yield* Effect.promise(async () => {
+          await writeAuth("account-a", "token-a");
+          const first = await providerUsageTestKit.fetchCodex(input);
+          await writeAuth("account-a", "token-b");
+          expect((await providerUsageTestKit.fetchCodex(input)).snapshot.accountKey).toBe(
+            first.snapshot.accountKey,
+          );
+          expect(first.snapshot.accountKey).toMatch(/^[a-f0-9]{64}$/);
+          for (const status of [401, 403, 500]) {
+            httpStatus = status;
+            const result = await providerUsageTestKit.fetchCodex(input);
+            expect(result.snapshot.accountKey).toBe(first.snapshot.accountKey);
+            expect(result.snapshot.status).toBe(status === 500 ? "error" : "needs-auth");
+          }
+          httpStatus = 200;
+          const expired = `header.${Buffer.from('{"exp":1}').toString("base64url")}.signature`;
+          await writeAuth("account-a", expired);
+          expect((await providerUsageTestKit.fetchCodex(input)).snapshot).toMatchObject({
+            status: "needs-auth",
+            accountKey: first.snapshot.accountKey,
+          });
+          await writeAuth(undefined);
+          expect(
+            (await providerUsageTestKit.fetchCodex(input)).snapshot.accountKey,
+          ).toBeUndefined();
+          await writeAuth("account-a");
+          await providerUsageTestKit.resolve(input, async () => first);
+          return first;
+        });
+        const push = mapCodexRateLimitsUpdated({
+          instanceId,
+          rateLimits: { primary: { usedPercent: 30, windowDurationMins: 300 } },
+        });
+        const pushed = yield* ingestPushedSnapshot(push, nowMs + 1);
+        expect(pushed.accountKey).toBe(first.snapshot.accountKey);
+        expect(pushed.limits).toHaveLength(2);
+        yield* Effect.promise(() => writeAuth("account-b"));
+        const switched = yield* ingestPushedSnapshot(push, nowMs + 2);
+        expect(switched.accountKey).toBeUndefined();
+        expect(switched.limits).toHaveLength(1);
+        const other = yield* Effect.promise(() => providerUsageTestKit.fetchCodex(input));
+        expect(other.snapshot.accountKey).not.toBe(first.snapshot.accountKey);
+      }),
+    ),
+);
+
+it.effect("preserves a new-login refresh that starts while a push checks the old login", () =>
+  Effect.gen(function* () {
+    const initial = {
+      ...parseCodexUsage({
+        instanceId,
+        nowMs,
+        json: { rate_limit: { primary_window: { used_percent: 10 } } },
+      }),
+      accountKey: "account-a",
+    };
+    yield* Effect.promise(() =>
+      providerUsageTestKit.resolve(
+        { instanceId, provider: "codex", nowMs, providerHomePath: "/synthetic/a" },
+        async () => ({ snapshot: initial }),
+      ),
+    );
+    const readerStarted = Promise.withResolvers<void>();
+    const identity = Promise.withResolvers<string>();
+    providerUsageTestKit.setCodexAccountKeyReader(instanceId, () => {
+      readerStarted.resolve();
+      return identity.promise;
+    });
+    const push = yield* ingestPushedSnapshot(
+      mapCodexRateLimitsUpdated({ instanceId, rateLimits: { primary: { usedPercent: 30 } } }),
+      nowMs + 2,
+    ).pipe(Effect.forkChild);
+    yield* Effect.promise(() => readerStarted.promise);
+    const response = Promise.withResolvers<{ snapshot: typeof initial }>();
+    const refreshStarted = Promise.withResolvers<void>();
+    const input = {
+      instanceId,
+      provider: "codex" as const,
+      nowMs: nowMs + 1,
+      providerHomePath: "/synthetic/b",
+    };
+    const refresh = providerUsageTestKit.resolve(input, () => {
+      refreshStarted.resolve();
+      return response.promise;
+    });
+    yield* Effect.promise(() => refreshStarted.promise);
+    identity.resolve("account-b");
+    yield* Fiber.join(push);
+    response.resolve({ snapshot: { ...initial, accountKey: "account-b" } });
+    yield* Effect.promise(() => refresh);
+    const cached = yield* Effect.promise(() =>
+      providerUsageTestKit.resolve(input, async () => {
+        throw new Error("The completed refresh should remain cached");
+      }),
+    );
+    expect(cached.accountKey).toBe("account-b");
+  }),
+);
+
+it.effect("serializes sparse pushes while a credential read is pending", () =>
+  Effect.gen(function* () {
+    const initial = {
+      ...parseCodexUsage({
+        instanceId,
+        nowMs,
+        json: {
+          rate_limit: {
+            primary_window: { used_percent: 10 },
+            secondary_window: { used_percent: 20 },
+          },
+        },
+      }),
+      accountKey: "account-a",
+    };
+    yield* Effect.promise(() =>
+      providerUsageTestKit.resolve({ instanceId, provider: "codex", nowMs }, async () => ({
+        snapshot: initial,
+      })),
+    );
+    const readerStarted = Promise.withResolvers<void>();
+    const identity = Promise.withResolvers<string>();
+    let reads = 0;
+    providerUsageTestKit.setCodexAccountKeyReader(instanceId, () => {
+      reads += 1;
+      readerStarted.resolve();
+      return reads === 1 ? identity.promise : Promise.resolve("account-a");
+    });
+    const first = yield* ingestPushedSnapshot(
+      mapCodexRateLimitsUpdated({ instanceId, rateLimits: { primary: { usedPercent: 25 } } }),
+      nowMs + 1,
+    ).pipe(Effect.forkChild);
+    yield* Effect.promise(() => readerStarted.promise);
+    const second = yield* ingestPushedSnapshot(
+      mapCodexRateLimitsUpdated({ instanceId, rateLimits: { secondary: { usedPercent: 90 } } }),
+      nowMs + 2,
+    ).pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    expect(reads).toBe(1);
+    identity.resolve("account-a");
+    yield* Fiber.join(first);
+    const result = yield* Fiber.join(second);
+    expect(result.limits.map((limit) => limit.usedPercent)).toEqual([25, 90]);
   }),
 );

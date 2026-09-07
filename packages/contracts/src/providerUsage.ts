@@ -39,6 +39,8 @@ export const ServerProviderUsageSnapshot = Schema.Struct({
   usageLines: Schema.Array(ServerProviderUsageLine),
   source: TrimmedNonEmptyString,
   status: ProviderUsageStatus,
+  /** Stable provider account identity, hashed by the environment for cross-environment grouping. */
+  accountKey: Schema.optional(TrimmedNonEmptyString),
   planName: Schema.optional(TrimmedNonEmptyString),
   detail: Schema.optional(TrimmedNonEmptyString),
   rateLimitedUntil: Schema.optional(IsoDateTime),

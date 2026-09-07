@@ -12,6 +12,8 @@ import {
   type ServerProvider,
   type ServerProviderUsageSnapshot,
 } from "@spiritdevs/contracts";
+import * as Option from "effect/Option";
+import { Atom } from "effect/unstable/reactivity";
 import { ChevronDownIcon, RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
@@ -41,6 +43,7 @@ import {
   type ProviderUsageDisplayLimit,
 } from "./providerUsageDisplay";
 import {
+  createProviderUsageArrivalTracker,
   deriveConnectedProviderUsageAccounts,
   isProviderUsageDriver,
   type ConnectedProviderUsageAccount,
@@ -653,7 +656,9 @@ function ProviderUsageCard({ account }: { account: ConnectedProviderUsageAccount
           </span>
           <div className="min-w-0">
             <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
-            <p className="truncate text-[11px] text-muted-foreground">{account.environmentLabel}</p>
+            <p className="truncate text-[11px] text-muted-foreground">
+              {[account.provider.auth.email, account.environmentLabel].filter(Boolean).join(" · ")}
+            </p>
             {displayName !== providerName(usageProvider) ? (
               <p className="text-[11px] text-muted-foreground">{providerName(usageProvider)}</p>
             ) : null}
@@ -731,7 +736,7 @@ function ConnectedProviderUsageRow({ account }: { account: ConnectedProviderUsag
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
           {displayName}
           <span className="ml-1 font-normal text-muted-foreground">
-            · {account.environmentLabel}
+            · {[account.provider.auth.email, account.environmentLabel].filter(Boolean).join(" · ")}
           </span>
         </span>
         {usage.data?.status === "ok" && usage.data.planName ? (
@@ -755,23 +760,62 @@ function useConnectedProviderUsageAccounts() {
     () => environments.filter((environment) => environment.connection.phase === "connected"),
     [environments],
   );
+  const usageAtom = useMemo(
+    () =>
+      Atom.make(
+        (get) =>
+          new Map(
+            connected.map((environment) => {
+              const result = get(
+                serverEnvironment.providerUsageLive({
+                  environmentId: environment.environmentId,
+                  input: {},
+                }),
+              );
+              const success =
+                result._tag === "Success"
+                  ? result
+                  : result._tag === "Failure"
+                    ? Option.getOrNull(result.previousSuccess)
+                    : null;
+              return [
+                environment.environmentId,
+                {
+                  data: success?.value ?? [],
+                  receivedAt: success?.timestamp ?? 0,
+                  loading: result._tag === "Initial",
+                },
+              ];
+            }),
+          ),
+      ),
+    [connected],
+  );
+  const usage = useAtomValue(usageAtom);
+  const trackArrivals = useMemo(createProviderUsageArrivalTracker, []);
   const accounts = useMemo(
     () =>
       deriveConnectedProviderUsageAccounts(
-        connected.map((environment) => ({
-          environmentId: environment.environmentId,
-          environmentLabel: environment.label,
-          providers: serverConfigs.get(environment.environmentId)?.providers ?? null,
-        })),
+        trackArrivals(
+          connected.map((environment) => ({
+            environmentId: environment.environmentId,
+            environmentLabel: environment.label,
+            providers: serverConfigs.get(environment.environmentId)?.providers ?? null,
+            usage: usage.get(environment.environmentId)?.data ?? [],
+            receivedAt: usage.get(environment.environmentId)?.receivedAt ?? 0,
+          })),
+        ),
       ),
-    [connected, serverConfigs],
+    [connected, serverConfigs, usage, trackArrivals],
   );
   const loading =
     !isReady ||
-    (connected.length > 0 &&
-      accounts.length === 0 &&
-      connected.some((environment) => !serverConfigs.has(environment.environmentId)));
-  return { accounts, connectedCount: connected.length, loading };
+    connected.some(
+      (environment) =>
+        !serverConfigs.has(environment.environmentId) ||
+        usage.get(environment.environmentId)?.loading,
+    );
+  return { accounts: loading ? [] : accounts, connectedCount: connected.length, loading };
 }
 
 export function ConnectedProviderUsageMenu() {

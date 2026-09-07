@@ -127,6 +127,7 @@ import { cloudAgentThreadPublisherLayer } from "./cloud/cloudAgentThreadPublishe
 import { capturedEmailPublisherLayer } from "./cloud/capturedEmailPublisher.ts";
 import { cloudSyncEngineRegistryLayer } from "./cloud/CloudSyncEngineRegistry.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
+import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -196,6 +197,12 @@ const ResourceTelemetryLayerLive = ResourceTelemetry.layer.pipe(
 );
 
 const HostPowerMonitorLayerLive = HostPowerMonitor.layer.pipe(
+  Layer.provide(DesktopTelemetryReceiverLayerLive),
+);
+
+// Reuses DesktopTelemetryReceiverLayerLive: a fresh receiver layer here
+// would open a second reader on the desktop telemetry fd.
+const DesktopAppUpdateLayerLive = DesktopAppUpdate.layer.pipe(
   Layer.provide(DesktopTelemetryReceiverLayerLive),
 );
 
@@ -625,7 +632,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   Layer.provide(PullRequestServiceLive),
   Layer.provide(RemoteBrowser.layer),
   Layer.provide(previewAutomationBrokerLayer),
-  Layer.provide(ServerSelfUpdate.layer),
+  Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
   Layer.provide(commandReadinessLayer),
   Layer.provide(browserApiCorsLayer),
   Layer.provide(httpCompressionLayer),
