@@ -13,7 +13,7 @@ import {
   type ServerProviderUsageSnapshot,
 } from "@spiritdevs/contracts";
 import * as Option from "effect/Option";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/unstable/reactivity";
 import { ChevronDownIcon, RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
