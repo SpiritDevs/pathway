@@ -1,5 +1,6 @@
 import {
   DesktopPreviewAnnotationThemeInputSchema,
+  DesktopPreviewAutofillLoginInputSchema,
   DesktopPreviewArtifactInputSchema,
   DesktopPreviewAutomationClickInputSchema,
   DesktopPreviewAutomationEvaluateInputSchema,
@@ -23,6 +24,7 @@ import {
   PreviewAutomationStatus,
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as NodeURL from "node:url";
 
@@ -369,7 +371,21 @@ export const readRecording = DesktopIpc.makeIpcMethod({
   }),
 });
 
+const decodeAutofillLogin = Schema.decodeUnknownOption(DesktopPreviewAutofillLoginInputSchema);
+// Schema errors can retain their input. Discard malformed sensitive payloads before IPC tracing.
+export const autofillLogin = {
+  channel: IpcChannels.PREVIEW_AUTOFILL_LOGIN_CHANNEL,
+  handler: Effect.fn("desktop.ipc.preview.autofillLogin")(function* (raw: unknown) {
+    const decoded = decodeAutofillLogin(raw);
+    if (Option.isNone(decoded))
+      return yield* new PreviewManager.PreviewAutofillError({ reason: "failed" });
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.autofillLogin(decoded.value.tabId, decoded.value.input);
+  }),
+};
+
 export const methods = [
+  autofillLogin,
   createTab,
   closeTab,
   registerWebview,

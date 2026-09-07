@@ -67,6 +67,39 @@ struct PathwayThreadConversationTests {
         #expect(!model.canRespond(to: item))
     }
 
+    @Test func asyncQuestionsRemainActionableAfterCompletionAndKeepDraftOnReconnect() async throws {
+        var calls: [JSONValue] = []
+        let model = makeModel { _, value in calls.append(value); return .object([:]) }
+        let question: JSONValue = .object([
+            "id": .string("async-item"), "type": .string("user_input_request"),
+            "status": .string("waiting"), "requestId": .string("async-request"),
+            "questions": .array([.object([
+                "id": .string("q1"), "header": .string("Approach"), "question": .string("Which approach?"),
+                "options": .array([.object(["label": .string("First"), "description": .string("")])])])])
+        ])
+        let runtime: JSONValue = .object([
+            "id": .string("async-request"), "status": .string("pending"), "isBlocking": .bool(false),
+            "responseCapability": .object(["type": .string("message"), "providerThreadId": .string("provider-thread")])
+        ])
+        let projection: JSONValue = .object([
+            "runs": .array([run(status: "completed")]),
+            "visibleTurnItems": .array([.object(["item": question])]), "runtimeRequests": .array([runtime])
+        ])
+        model.installSnapshot(projection)
+        let item = try #require(model.pendingAsyncQuestions.first)
+        #expect(model.activeRunID == nil)
+        #expect(model.canRespond(to: item))
+        model.prepareQuestionDraft(for: item)
+        #expect(model.questionDrafts[item.id]?.selected["q1"] == ["First"])
+        #expect(calls.isEmpty)
+        model.questionDrafts[item.id]?.custom["q1"] = "My answer"
+        model.installSnapshot(projection)
+        model.prepareQuestionDraft(for: item)
+        #expect(model.questionDrafts[item.id]?.custom["q1"] == "My answer")
+        try await model.respondToQuestions(requestID: "async-request", answers: ["q1": .string("My answer")])
+        #expect(calls.last?.objectValue?["answers"] == .object(["q1": .string("My answer")]))
+    }
+
     @Test func failedSendRetainsDraftAndPreparedAttachmentsForRetry() async throws {
         var persistenceCalls = 0
         var dispatchCalls = 0

@@ -7,6 +7,7 @@ import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";
 
+import { toastManager } from "~/components/ui/toast";
 import { previewBridge } from "~/components/preview/previewBridge";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useBrowserSurfaceStore } from "./browserSurfaceStore";
@@ -100,6 +101,8 @@ interface ActiveRecording {
   frameSequence: number;
   lastDrawnFrameSequence: number;
   lifecycle: BrowserRecordingLifecycle;
+  accumulatedBytes: number;
+  limitTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export interface ActiveBrowserRecordingTarget {
@@ -121,6 +124,9 @@ export function useActiveBrowserRecordingTabIds(): ReadonlySet<string> {
 
 const activeRecordings = new Map<string, ActiveRecording>();
 let unsubscribeFrames: (() => void) | null = null;
+
+export const BROWSER_RECORDING_MAX_DURATION_MS = 10 * 60 * 1_000;
+export const BROWSER_RECORDING_MAX_BYTES = 100 * 1024 * 1024;
 
 export const BROWSER_RECORDING_STARTUP_SETTLE_TIMEOUT_MS = 5_000;
 export const BROWSER_RECORDING_FIRST_FRAME_SIZE_TIMEOUT_MS = 5_000;
@@ -222,6 +228,8 @@ const stopMediaRecorder = async (recorder: MediaRecorder | null): Promise<void> 
 
 const clearActiveRecording = (recording: ActiveRecording): void => {
   if (activeRecordings.get(recording.tabId) !== recording) return;
+  if (recording.limitTimer !== null) clearTimeout(recording.limitTimer);
+  recording.limitTimer = null;
   recording.settleFirstFrameSize("cancelled");
   activeRecordings.delete(recording.tabId);
   if (activeRecordings.size === 0) {
@@ -310,6 +318,37 @@ const waitForRecordingStartupToSettle = async (recording: ActiveRecording): Prom
 const isStartupWaitTimeout = (error: unknown): error is BrowserRecordingOperationError =>
   isBrowserRecordingOperationError(error) && error.operation === "wait-startup";
 
+const stopAtRecordingLimit = (recording: ActiveRecording): void => {
+  if (
+    activeRecordings.get(recording.tabId) !== recording ||
+    recording.lifecycle.phase === "stopping"
+  )
+    return;
+  void stopBrowserRecording(recording.tabId).then(
+    (artifact) => {
+      if (!artifact) return;
+      toastManager.add({
+        type: "success",
+        title: "Recording saved",
+        description: "The clip reached its ten-minute or 100 MiB limit.",
+        actionProps: {
+          children: "Show file",
+          onClick: () => {
+            void previewBridge?.revealArtifact(artifact.path);
+          },
+        },
+      });
+    },
+    () => {
+      toastManager.add({
+        type: "error",
+        title: "Unable to save recording",
+        description: "The clip reached its limit, but could not be saved.",
+      });
+    },
+  );
+};
+
 export async function startBrowserRecording(
   tabId: string,
   threadRef: ScopedThreadRef | null = null,
@@ -375,6 +414,8 @@ export async function startBrowserRecording(
     frameSequence: 0,
     lastDrawnFrameSequence: 0,
     lifecycle: { phase: "starting" },
+    accumulatedBytes: 0,
+    limitTimer: null,
   };
   activeRecordings.set(tabId, recording);
   try {
@@ -443,14 +484,19 @@ export async function startBrowserRecording(
     let recorder: MediaRecorder;
     try {
       mimeType = preferredMimeType();
-      recorder = new MediaRecorder(canvas.captureStream(12), {
+      recorder = new MediaRecorder(canvas.captureStream(30), {
         mimeType,
-        videoBitsPerSecond: 4_000_000,
+        videoBitsPerSecond: 6_000_000,
       });
       recording.mimeType = mimeType;
       recording.recorder = recorder;
       recorder.addEventListener("dataavailable", (event) => {
-        if (event.data.size > 0) chunks.push(event.data);
+        if (event.data.size > 0) {
+          chunks.push(event.data);
+          recording.accumulatedBytes += event.data.size;
+          if (recording.accumulatedBytes >= BROWSER_RECORDING_MAX_BYTES)
+            stopAtRecordingLimit(recording);
+        }
       });
     } catch (cause) {
       const cleanupCause = await cleanupFailedRecordingStart(bridge, recording);
@@ -486,6 +532,10 @@ export async function startBrowserRecording(
     }
     if (recording.lifecycle.phase === "starting") {
       recording.lifecycle = { phase: "recording" };
+      recording.limitTimer = setTimeout(
+        () => stopAtRecordingLimit(recording),
+        BROWSER_RECORDING_MAX_DURATION_MS,
+      );
     }
     appAtomRegistry.set(activeBrowserRecordingTabIdsAtom, {
       tabIds: new Set(activeRecordings.keys()),
@@ -610,6 +660,8 @@ export function stopBrowserRecording(
   if (!bridge || !recording) return Promise.resolve(null);
   if (recording.lifecycle.phase === "stopping") return recording.lifecycle.stopPromise;
 
+  if (recording.limitTimer !== null) clearTimeout(recording.limitTimer);
+  recording.limitTimer = null;
   const stopPromise = Promise.resolve()
     .then(() => finalizeBrowserRecording(bridge, recording))
     .catch((error) => {

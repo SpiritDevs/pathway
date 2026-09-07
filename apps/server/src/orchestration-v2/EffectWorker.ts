@@ -17,6 +17,7 @@ import {
   orchestrationEffectClaimsTotal,
   orchestrationEffectQueueWait,
 } from "../observability/Metrics.ts";
+import { QuestionAnswerDelivery } from "./QuestionAnswerDelivery.ts";
 import { RunFinalizationService } from "./RunFinalizationService.ts";
 import { ResourceCleanupService } from "./ResourceCleanupService.ts";
 import {
@@ -163,6 +164,7 @@ export const executorLayer: Layer.Layer<
                 providerThreadId: effect.request.providerThreadId,
                 providerTurnId: effect.request.providerTurnId,
                 messageId: effect.request.messageId,
+                answerCommandId: effect.commandId,
               })
               .pipe(
                 Effect.mapError(
@@ -446,6 +448,7 @@ export const layerWithOptions = (
     Effect.gen(function* () {
       const outbox = yield* EffectOutboxV2;
       const executor = yield* OrchestrationEffectExecutorV2;
+      const questionDelivery = yield* Effect.serviceOption(QuestionAnswerDelivery);
       const workerId =
         options.workerId ??
         `orchestration-v2:${NodeOS.hostname()}:${process.pid}:${NodeCrypto.randomUUID()}`;
@@ -631,6 +634,17 @@ export const layerWithOptions = (
                   delayMs: Math.min(30_000, 100 * 2 ** Math.max(0, effect.attemptCount - 1)),
                 })
                 .pipe(Effect.onError((cause) => requeueClaim(effect, cause)));
+        if (
+          updated &&
+          !nonRetryable &&
+          effect.attemptCount >= maxAttempts &&
+          Option.isSome(questionDelivery)
+        ) {
+          yield* questionDelivery.value.failed({
+            threadId: effect.threadId,
+            commandId: effect.commandId,
+          });
+        }
         if (!updated) {
           if (yield* wasCancelled(effect.id)) return true;
           return yield* new OrchestrationEffectWorkerError({

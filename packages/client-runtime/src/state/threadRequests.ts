@@ -22,13 +22,16 @@ export interface ThreadUserInputQuestion {
     readonly description: string;
   }>;
   readonly multiSelect: boolean;
+  readonly isSecret?: boolean | undefined;
+  readonly isOther?: boolean | undefined;
 }
 
 export interface ThreadPendingUserInput {
   readonly requestId: RuntimeRequestId;
   readonly createdAt: string;
   readonly questions: ReadonlyArray<ThreadUserInputQuestion>;
-  readonly responseCapability: "live" | "not_resumable";
+  readonly responseCapability: "live" | "message" | "not_resumable";
+  readonly isBlocking?: boolean;
 }
 
 export interface PendingThreadRequests {
@@ -55,7 +58,11 @@ export function derivePendingThreadRequests(
       userInputs.push({
         requestId: request.id,
         createdAt: DateTime.formatIso(request.createdAt),
-        questions: item.questions.map((question) => ({ ...question, multiSelect: false })),
+        questions: item.questions.map((question) => ({
+          ...question,
+          multiSelect: question.multiSelect ?? false,
+        })),
+        isBlocking: request.isBlocking ?? true,
         responseCapability,
       });
       continue;
@@ -70,7 +77,7 @@ export function derivePendingThreadRequests(
       requestKind: request.kind,
       createdAt: DateTime.formatIso(request.createdAt),
       ...(item?.type === "approval_request" && item.prompt ? { detail: item.prompt } : {}),
-      responseCapability,
+      responseCapability: responseCapability === "live" ? "live" : "not_resumable",
     });
   }
 

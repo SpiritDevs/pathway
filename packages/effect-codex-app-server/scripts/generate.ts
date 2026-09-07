@@ -294,6 +294,29 @@ function preserveProtocolCompatibility(value: Schema.Json): Schema.Json {
   ) as Record<string, Schema.Json>;
   const properties = next.properties;
   const required = next.required;
+  // Preserve the additive async question payload with older app-server schemas.
+  if (
+    properties !== null &&
+    typeof properties === "object" &&
+    !Array.isArray(properties) &&
+    "delivery" in properties &&
+    "text" in properties &&
+    "phase" in properties &&
+    "type" in properties
+  ) {
+    properties.questions ??= {
+      type: ["array", "null"],
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          options: { type: ["array", "null"], items: { type: "string" } },
+        },
+        required: ["title"],
+      },
+    };
+  }
+
   if (
     properties !== null &&
     typeof properties === "object" &&

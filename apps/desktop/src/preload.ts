@@ -211,6 +211,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
           ipcRenderer.removeListener(IpcChannels.PREVIEW_RECORDING_FRAME_CHANNEL, wrappedListener);
       },
     },
+    autofillLogin: (tabId, input) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOFILL_LOGIN_CHANNEL, { tabId, input }),
     automation: {
       status: (tabId) =>
         ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_STATUS_CHANNEL, { tabId }),

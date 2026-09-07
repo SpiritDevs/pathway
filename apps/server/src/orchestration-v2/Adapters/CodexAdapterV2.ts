@@ -1,10 +1,10 @@
 import {
   CodexSettings,
+  RuntimeRequestId,
   defaultInstanceIdForDriver,
   ProviderDriverKind,
 } from "@spiritdevs/contracts";
 import { HostProcessEnvironment } from "@spiritdevs/shared/hostProcess";
-import { getModelSelectionStringOptionValue } from "@spiritdevs/shared/model";
 import { resolveSpawnCommand } from "@spiritdevs/shared/shell";
 import type {
   ChatAttachment,
@@ -12,6 +12,7 @@ import type {
   OrchestrationV2ConversationMessage,
   OrchestrationV2ExecutionNode,
   ModelSelection,
+  ModelCapabilities,
   OrchestrationV2PlanArtifact,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ProviderFailure,
@@ -31,7 +32,6 @@ import type {
   ProviderTurnId,
   ProviderInstanceId,
   RuntimeMode,
-  RuntimeRequestId,
   ThreadId,
 } from "@spiritdevs/contracts";
 import * as CodexClient from "effect-codex-app-server/client";
@@ -55,7 +55,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { appendFileAttachmentPromptText } from "../../attachmentPrompt.ts";
-import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
+import { CodexModelCatalog, resolveCodexTurnOptions } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
@@ -632,6 +632,7 @@ export function buildCodexTurnStartParams(input: {
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
   readonly modelSelection: ModelSelection;
   readonly hasPathwayMcp?: boolean;
+  readonly modelCapabilities?: ModelCapabilities;
 }) {
   return Effect.gen(function* () {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
@@ -643,13 +644,10 @@ export function buildCodexTurnStartParams(input: {
       input.runtimePolicy.sandboxPolicy === undefined
         ? runtimeModeDefaults.sandboxPolicy
         : yield* decodeTurnSandboxPolicy(input.runtimePolicy.sandboxPolicy);
-    const selectedEffort = getModelSelectionStringOptionValue(
-      input.modelSelection,
-      "reasoningEffort",
-    );
+    const selected = resolveCodexTurnOptions(input.modelSelection, input.modelCapabilities);
     const effort =
-      selectedEffort === undefined ? undefined : yield* decodeTurnReasoningEffort(selectedEffort);
-    const serviceTier = getCodexServiceTierOptionValue(input.modelSelection);
+      selected.effort === undefined ? undefined : yield* decodeTurnReasoningEffort(selected.effort);
+    const serviceTier = selected.serviceTier;
     const developerInstructions =
       input.hasPathwayMcp !== true
         ? undefined
@@ -663,7 +661,7 @@ export function buildCodexTurnStartParams(input: {
             mode: input.runtimePolicy.interactionMode === "plan" ? "plan" : "default",
             settings: {
               model: input.modelSelection.model,
-              reasoning_effort: effort ?? "medium",
+              reasoning_effort: effort ?? (input.modelCapabilities === undefined ? "medium" : null),
               ...(developerInstructions === undefined
                 ? {}
                 : { developer_instructions: developerInstructions }),
@@ -680,8 +678,16 @@ export function buildCodexTurnStartParams(input: {
       approvalsReviewer: runtimeModeDefaults.approvalsReviewer,
       ...(approvalPolicy === undefined ? {} : { approvalPolicy }),
       ...(sandboxPolicy === undefined ? {} : { sandboxPolicy }),
-      ...(effort === undefined ? {} : { effort }),
-      ...(serviceTier === undefined ? {} : { serviceTier }),
+      ...(effort === undefined
+        ? input.modelCapabilities === undefined
+          ? {}
+          : { effort: null }
+        : { effort }),
+      ...(serviceTier === undefined
+        ? input.modelCapabilities === undefined
+          ? {}
+          : { serviceTier: null }
+        : { serviceTier }),
       ...(collaborationMode === undefined ? {} : { collaborationMode }),
     });
   });
@@ -1482,6 +1488,7 @@ export const CodexAdapterV2Driver: ProviderAdapterDriver<CodexSettings, CodexAda
   defaultConfig: (): CodexSettings => DEFAULT_CODEX_SETTINGS,
   create: ({ instanceId, environment, enabled, config }) =>
     Effect.gen(function* () {
+      const modelCatalog = yield* Effect.serviceOption(CodexModelCatalog);
       const clientFactory = yield* CodexAppServerClientFactory;
       const continuationRequests = yield* ProviderContinuationRequests;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1517,6 +1524,7 @@ export const CodexAdapterV2Driver: ProviderAdapterDriver<CodexSettings, CodexAda
         idAllocator,
         serverConfig,
         continuationRequests,
+        ...(Option.isSome(modelCatalog) ? { modelCatalog: modelCatalog.value } : {}),
       });
     }),
 };
@@ -1549,6 +1557,7 @@ export const layer: Layer.Layer<
 );
 
 export interface CodexAdapterV2Options {
+  readonly modelCatalog?: CodexModelCatalog["Service"];
   readonly instanceId: ProviderInstanceId;
   readonly settings: CodexSettings;
   readonly environment: NodeJS.ProcessEnv;
@@ -3297,14 +3306,21 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           readonly nativeItemId: string;
           readonly nativeRequestId: string;
           readonly questions: ReadonlyArray<CodexSchema.ToolRequestUserInputParams__ToolRequestUserInputQuestion>;
+          readonly isBlocking?: boolean;
+          readonly responseMode?: "message";
         }) =>
           Effect.gen(function* () {
             const createdAt = yield* DateTime.now;
-            const requestId = yield* idAllocator.allocate.runtimeRequest({
-              driver: CODEX_PROVIDER,
-              providerTurnId: input.context.providerTurnId,
-              nativeRequestId: input.nativeRequestId,
-            });
+            const requestId =
+              input.responseMode === "message"
+                ? RuntimeRequestId.make(
+                    `runtime-request:codex:async:${input.context.providerThread.id}:${input.nativeRequestId}`,
+                  )
+                : yield* idAllocator.allocate.runtimeRequest({
+                    driver: CODEX_PROVIDER,
+                    providerTurnId: input.context.providerTurnId,
+                    nativeRequestId: input.nativeRequestId,
+                  });
             const providerSessionId = input.context.input.providerThread.providerSessionId;
             if (providerSessionId === null) {
               return yield* toProtocolError(
@@ -3313,6 +3329,8 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }
             const questions = input.questions.map((question, index) => ({
               id: nonEmptyText(question.id, `question-${index + 1}`),
+              isSecret: question.isSecret,
+              isOther: question.isOther,
               header: nonEmptyText(question.header, "Question"),
               question: nonEmptyText(question.question, "Choose an answer."),
               options:
@@ -3358,10 +3376,11 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               },
               kind: "user_input",
               status: "pending",
-              responseCapability: {
-                type: "live",
-                providerSessionId,
-              },
+              isBlocking: input.isBlocking ?? true,
+              responseCapability:
+                input.responseMode === "message"
+                  ? { type: "message", providerThreadId: input.context.providerThread.id }
+                  : { type: "live", providerSessionId },
               createdAt,
               resolvedAt: null,
             };
@@ -3635,6 +3654,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }
 
             if (payload.item.type === "agentMessage") {
+              if (payload.item.delivery === "async") return;
               if (payload.item.phase !== "commentary") {
                 yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
                   const updated = new Map(current);
@@ -3918,6 +3938,46 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               return;
             }
 
+            if (
+              payload.item.delivery === "async" &&
+              payload.item.questions != null &&
+              payload.item.questions.length > 0
+            ) {
+              const artifacts = yield* buildUserInputRequestArtifacts({
+                context,
+                nativeItemId: `async:${context.providerThread.id}:${payload.item.id}`,
+                nativeRequestId: payload.item.id,
+                responseMode: "message",
+                isBlocking: false,
+                questions: payload.item.questions.map((question, index) => ({
+                  id: `question-${index + 1}`,
+                  header: "Question",
+                  question: question.title,
+                  isSecret: false,
+                  isOther: true,
+                  options:
+                    question.options?.map((label) => ({ label, description: label })) ?? null,
+                })),
+              });
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: artifacts.node,
+              });
+              yield* emitProviderEvent({
+                type: "runtime_request.updated",
+                driver: CODEX_PROVIDER,
+                threadId: artifacts.node.threadId,
+                runtimeRequest: artifacts.request,
+              });
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: artifacts.turnItem,
+              });
+              return;
+            }
+
             const finalAnswer = payload.item.phase !== "commentary";
             if (finalAnswer) {
               yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
@@ -3965,192 +4025,266 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           }).pipe(Effect.orDie, turnTerminalizationPermit.withPermits(1)),
         );
 
-        yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
+        const requestLifecyclePermit = yield* Semaphore.make(1);
+        const providerResolvedRequests = new Set<string>();
+        const requestCancellations = new Map<string, Effect.Effect<void>>();
+        const rpcRequestKey = (threadId: string, requestId: string | number) =>
+          JSON.stringify([threadId, requestId]);
+        const registerRuntimeRequest = (input: {
+          readonly rpcRequestId: string | number;
+          readonly nativeThreadId: string;
+          readonly artifacts: {
+            readonly request: OrchestrationV2RuntimeRequest;
+            readonly node: OrchestrationV2ExecutionNode;
+            readonly turnItem: OrchestrationV2TurnItem;
+          };
+          readonly pending: PendingCodexRuntimeRequest;
+        }) =>
           Effect.gen(function* () {
-            const context = yield* awaitActiveTurn(payload.turnId);
-            if (context === undefined) {
-              return yield* toProtocolError(
-                `No active Codex turn context for approval turn ${payload.turnId}.`,
-                payload,
-              );
-            }
-
-            const nativeRequestId = payload.approvalId ?? payload.itemId;
-            const artifacts = yield* buildApprovalRequestArtifacts({
-              context,
-              nativeItemId: payload.itemId,
-              nativeRequestId,
-              requestKind: "command",
-              ...((payload.reason ?? payload.command) === undefined
-                ? {}
-                : { prompt: payload.reason ?? payload.command }),
+            const { artifacts, pending } = input;
+            const key = rpcRequestKey(input.nativeThreadId, input.rpcRequestId);
+            const request = {
+              ...artifacts.request,
+              nativeRequestRef: {
+                driver: CODEX_PROVIDER,
+                nativeId: String(input.rpcRequestId),
+                strength: "strong" as const,
+              },
+            };
+            const cancel = Effect.gen(function* () {
+              const stillPending = (yield* Ref.get(pendingRuntimeRequests)).has(String(request.id));
+              if (!stillPending) return;
+              const alreadyAnswered = yield* pending.type === "user_input"
+                ? Deferred.isDone(pending.answers)
+                : Deferred.isDone(pending.decision);
+              if (alreadyAnswered) return;
+              const now = yield* DateTime.now;
+              yield* emitProviderEvent({
+                type: "runtime_request.updated",
+                driver: CODEX_PROVIDER,
+                threadId: artifacts.node.threadId,
+                runtimeRequest: {
+                  ...request,
+                  status: "cancelled",
+                  resolvedAt: now,
+                  responseCapability: {
+                    type: "not_resumable",
+                    reason: "This request was resolved by Codex.",
+                  },
+                },
+              });
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: { ...artifacts.node, status: "cancelled", completedAt: now },
+              });
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: {
+                  ...artifacts.turnItem,
+                  status: "cancelled",
+                  completedAt: now,
+                  updatedAt: now,
+                },
+              });
+              // Interrupt the suspended RPC handler: no empty answer or second response is sent.
+              yield* pending.type === "user_input"
+                ? Deferred.interrupt(pending.answers)
+                : Deferred.interrupt(pending.decision);
+              requestCancellations.delete(key);
             });
-            const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
-            yield* Ref.update(pendingRuntimeRequests, (current) => {
-              const updated = new Map(current);
-              updated.set(String(artifacts.request.id), {
-                type: "approval",
-                requestId: artifacts.request.id,
+            yield* Ref.update(pendingRuntimeRequests, (current) =>
+              new Map(current).set(String(request.id), pending),
+            );
+            requestCancellations.set(key, cancel);
+            yield* emitProviderEvent({
+              type: "node.updated",
+              driver: CODEX_PROVIDER,
+              node: artifacts.node,
+            });
+            yield* emitProviderEvent({
+              type: "runtime_request.updated",
+              driver: CODEX_PROVIDER,
+              threadId: artifacts.node.threadId,
+              runtimeRequest: request,
+            });
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CODEX_PROVIDER,
+              turnItem: artifacts.turnItem,
+            });
+            if (providerResolvedRequests.delete(key)) yield* cancel;
+          }).pipe(requestLifecyclePermit.withPermits(1));
+
+        yield* client.handleServerNotification("serverRequest/resolved", (payload) =>
+          Effect.gen(function* () {
+            const key = rpcRequestKey(payload.threadId, payload.requestId);
+            const cancel = requestCancellations.get(key);
+            if (cancel !== undefined) {
+              yield* cancel;
+              requestCancellations.delete(key);
+              return;
+            }
+            // The notification can arrive while its forked request handler is still finding a turn.
+            providerResolvedRequests.add(key);
+            if (providerResolvedRequests.size > 256) {
+              const oldest = providerResolvedRequests.values().next().value;
+              if (oldest !== undefined) providerResolvedRequests.delete(oldest);
+            }
+          }).pipe(requestLifecyclePermit.withPermits(1)),
+        );
+
+        yield* client.handleServerRequest(
+          "item/commandExecution/requestApproval",
+          (payload, rpcRequestId) =>
+            Effect.gen(function* () {
+              const context = yield* awaitActiveTurn(payload.turnId);
+              if (context === undefined) {
+                return yield* toProtocolError(
+                  `No active Codex turn context for approval turn ${payload.turnId}.`,
+                  payload,
+                );
+              }
+
+              const nativeRequestId = payload.approvalId ?? payload.itemId;
+              const artifacts = yield* buildApprovalRequestArtifacts({
+                context,
+                nativeItemId: payload.itemId,
+                nativeRequestId,
                 requestKind: "command",
-                decision,
+                ...((payload.reason ?? payload.command) === undefined
+                  ? {}
+                  : { prompt: payload.reason ?? payload.command }),
               });
-              return updated;
-            });
-            yield* emitProviderEvent({
-              type: "node.updated",
-              driver: CODEX_PROVIDER,
-              node: artifacts.node,
-            });
-            yield* emitProviderEvent({
-              type: "runtime_request.updated",
-              driver: CODEX_PROVIDER,
-              threadId: artifacts.node.threadId,
-              runtimeRequest: artifacts.request,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem: artifacts.turnItem,
-            });
+              const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
+              yield* registerRuntimeRequest({
+                rpcRequestId,
+                nativeThreadId: payload.threadId,
+                artifacts,
+                pending: {
+                  type: "approval",
+                  requestId: artifacts.request.id,
+                  requestKind: "command",
+                  decision,
+                },
+              });
 
-            const resolved = yield* Deferred.await(decision).pipe(
-              Effect.ensuring(
-                Ref.update(pendingRuntimeRequests, (current) => {
-                  const updated = new Map(current);
-                  updated.delete(String(artifacts.request.id));
-                  return updated;
-                }),
-              ),
-            );
-            return {
-              decision: resolved,
-            } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
-          }).pipe(Effect.orDie),
+              const resolved = yield* Deferred.await(decision).pipe(
+                Effect.ensuring(
+                  Ref.update(pendingRuntimeRequests, (current) => {
+                    const updated = new Map(current);
+                    updated.delete(String(artifacts.request.id));
+                    requestCancellations.delete(rpcRequestKey(payload.threadId, rpcRequestId));
+                    return updated;
+                  }),
+                ),
+              );
+              return {
+                decision: resolved,
+              } satisfies CodexSchema.CommandExecutionRequestApprovalResponse;
+            }).pipe(Effect.orDie),
         );
 
-        yield* client.handleServerRequest("item/fileChange/requestApproval", (payload) =>
-          Effect.gen(function* () {
-            const context = yield* awaitActiveTurn(payload.turnId);
-            if (context === undefined) {
-              return yield* toProtocolError(
-                `No active Codex turn context for file change approval turn ${payload.turnId}.`,
-                payload,
-              );
-            }
+        yield* client.handleServerRequest(
+          "item/fileChange/requestApproval",
+          (payload, rpcRequestId) =>
+            Effect.gen(function* () {
+              const context = yield* awaitActiveTurn(payload.turnId);
+              if (context === undefined) {
+                return yield* toProtocolError(
+                  `No active Codex turn context for file change approval turn ${payload.turnId}.`,
+                  payload,
+                );
+              }
 
-            const artifacts = yield* buildApprovalRequestArtifacts({
-              context,
-              nativeItemId: payload.itemId,
-              nativeRequestId: payload.itemId,
-              requestKind: "file-change",
-              ...(payload.reason === undefined ? {} : { prompt: payload.reason }),
-            });
-            const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
-            yield* Ref.update(pendingRuntimeRequests, (current) => {
-              const updated = new Map(current);
-              updated.set(String(artifacts.request.id), {
-                type: "approval",
-                requestId: artifacts.request.id,
+              const artifacts = yield* buildApprovalRequestArtifacts({
+                context,
+                nativeItemId: payload.itemId,
+                nativeRequestId: payload.itemId,
                 requestKind: "file-change",
-                decision,
+                ...(payload.reason === undefined ? {} : { prompt: payload.reason }),
               });
-              return updated;
-            });
-            yield* emitProviderEvent({
-              type: "node.updated",
-              driver: CODEX_PROVIDER,
-              node: artifacts.node,
-            });
-            yield* emitProviderEvent({
-              type: "runtime_request.updated",
-              driver: CODEX_PROVIDER,
-              threadId: artifacts.node.threadId,
-              runtimeRequest: artifacts.request,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem: artifacts.turnItem,
-            });
+              const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
+              yield* registerRuntimeRequest({
+                rpcRequestId,
+                nativeThreadId: payload.threadId,
+                artifacts,
+                pending: {
+                  type: "approval",
+                  requestId: artifacts.request.id,
+                  requestKind: "file-change",
+                  decision,
+                },
+              });
 
-            const resolved = yield* Deferred.await(decision).pipe(
-              Effect.ensuring(
-                Ref.update(pendingRuntimeRequests, (current) => {
-                  const updated = new Map(current);
-                  updated.delete(String(artifacts.request.id));
-                  return updated;
-                }),
-              ),
-            );
-            return {
-              decision: resolved,
-            } satisfies CodexSchema.FileChangeRequestApprovalResponse;
-          }).pipe(Effect.orDie),
-        );
-
-        yield* client.handleServerRequest("item/permissions/requestApproval", (payload) =>
-          Effect.gen(function* () {
-            const context = yield* awaitActiveTurn(payload.turnId);
-            if (context === undefined) {
-              return yield* toProtocolError(
-                `No active Codex turn context for permissions approval turn ${payload.turnId}.`,
-                payload,
+              const resolved = yield* Deferred.await(decision).pipe(
+                Effect.ensuring(
+                  Ref.update(pendingRuntimeRequests, (current) => {
+                    const updated = new Map(current);
+                    updated.delete(String(artifacts.request.id));
+                    requestCancellations.delete(rpcRequestKey(payload.threadId, rpcRequestId));
+                    return updated;
+                  }),
+                ),
               );
-            }
-
-            const requestKind = providerRequestKindFromPermissions(payload.permissions);
-            const artifacts = yield* buildApprovalRequestArtifacts({
-              context,
-              nativeItemId: payload.itemId,
-              nativeRequestId: payload.itemId,
-              requestKind,
-              ...(payload.reason === undefined ? {} : { prompt: payload.reason }),
-            });
-            const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
-            yield* Ref.update(pendingRuntimeRequests, (current) => {
-              const updated = new Map(current);
-              updated.set(String(artifacts.request.id), {
-                type: "approval",
-                requestId: artifacts.request.id,
-                requestKind,
-                decision,
-              });
-              return updated;
-            });
-            yield* emitProviderEvent({
-              type: "node.updated",
-              driver: CODEX_PROVIDER,
-              node: artifacts.node,
-            });
-            yield* emitProviderEvent({
-              type: "runtime_request.updated",
-              driver: CODEX_PROVIDER,
-              threadId: artifacts.node.threadId,
-              runtimeRequest: artifacts.request,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem: artifacts.turnItem,
-            });
-
-            const resolved = yield* Deferred.await(decision).pipe(
-              Effect.ensuring(
-                Ref.update(pendingRuntimeRequests, (current) => {
-                  const updated = new Map(current);
-                  updated.delete(String(artifacts.request.id));
-                  return updated;
-                }),
-              ),
-            );
-            return permissionsResponseFromDecision({
-              decision: resolved,
-              permissions: payload.permissions,
-            });
-          }).pipe(Effect.orDie),
+              return {
+                decision: resolved,
+              } satisfies CodexSchema.FileChangeRequestApprovalResponse;
+            }).pipe(Effect.orDie),
         );
 
-        yield* client.handleServerRequest("execCommandApproval", (payload) =>
+        yield* client.handleServerRequest(
+          "item/permissions/requestApproval",
+          (payload, rpcRequestId) =>
+            Effect.gen(function* () {
+              const context = yield* awaitActiveTurn(payload.turnId);
+              if (context === undefined) {
+                return yield* toProtocolError(
+                  `No active Codex turn context for permissions approval turn ${payload.turnId}.`,
+                  payload,
+                );
+              }
+
+              const requestKind = providerRequestKindFromPermissions(payload.permissions);
+              const artifacts = yield* buildApprovalRequestArtifacts({
+                context,
+                nativeItemId: payload.itemId,
+                nativeRequestId: payload.itemId,
+                requestKind,
+                ...(payload.reason === undefined ? {} : { prompt: payload.reason }),
+              });
+              const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
+              yield* registerRuntimeRequest({
+                rpcRequestId,
+                nativeThreadId: payload.threadId,
+                artifacts,
+                pending: {
+                  type: "approval",
+                  requestId: artifacts.request.id,
+                  requestKind,
+                  decision,
+                },
+              });
+
+              const resolved = yield* Deferred.await(decision).pipe(
+                Effect.ensuring(
+                  Ref.update(pendingRuntimeRequests, (current) => {
+                    const updated = new Map(current);
+                    updated.delete(String(artifacts.request.id));
+                    requestCancellations.delete(rpcRequestKey(payload.threadId, rpcRequestId));
+                    return updated;
+                  }),
+                ),
+              );
+              return permissionsResponseFromDecision({
+                decision: resolved,
+                permissions: payload.permissions,
+              });
+            }).pipe(Effect.orDie),
+        );
+
+        yield* client.handleServerRequest("execCommandApproval", (payload, rpcRequestId) =>
           Effect.gen(function* () {
             const context = yield* findActiveTurnByNativeThreadId(payload.conversationId);
             if (context === undefined) {
@@ -4169,31 +4303,16 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               prompt: payload.reason ?? payload.command.join(" "),
             });
             const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
-            yield* Ref.update(pendingRuntimeRequests, (current) => {
-              const updated = new Map(current);
-              updated.set(String(artifacts.request.id), {
+            yield* registerRuntimeRequest({
+              rpcRequestId,
+              nativeThreadId: payload.conversationId,
+              artifacts,
+              pending: {
                 type: "approval",
                 requestId: artifacts.request.id,
                 requestKind: "command",
                 decision,
-              });
-              return updated;
-            });
-            yield* emitProviderEvent({
-              type: "node.updated",
-              driver: CODEX_PROVIDER,
-              node: artifacts.node,
-            });
-            yield* emitProviderEvent({
-              type: "runtime_request.updated",
-              driver: CODEX_PROVIDER,
-              threadId: artifacts.node.threadId,
-              runtimeRequest: artifacts.request,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem: artifacts.turnItem,
+              },
             });
 
             const resolved = yield* Deferred.await(decision).pipe(
@@ -4201,6 +4320,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 Ref.update(pendingRuntimeRequests, (current) => {
                   const updated = new Map(current);
                   updated.delete(String(artifacts.request.id));
+                  requestCancellations.delete(rpcRequestKey(payload.conversationId, rpcRequestId));
                   return updated;
                 }),
               ),
@@ -4214,7 +4334,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           }).pipe(Effect.orDie),
         );
 
-        yield* client.handleServerRequest("applyPatchApproval", (payload) =>
+        yield* client.handleServerRequest("applyPatchApproval", (payload, rpcRequestId) =>
           Effect.gen(function* () {
             const context = yield* findActiveTurnByNativeThreadId(payload.conversationId);
             if (context === undefined) {
@@ -4232,31 +4352,16 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               prompt: payload.reason ?? Object.keys(payload.fileChanges).join(", "),
             });
             const decision = yield* Deferred.make<ProviderApprovalDecision, never>();
-            yield* Ref.update(pendingRuntimeRequests, (current) => {
-              const updated = new Map(current);
-              updated.set(String(artifacts.request.id), {
+            yield* registerRuntimeRequest({
+              rpcRequestId,
+              nativeThreadId: payload.conversationId,
+              artifacts,
+              pending: {
                 type: "approval",
                 requestId: artifacts.request.id,
                 requestKind: "file-change",
                 decision,
-              });
-              return updated;
-            });
-            yield* emitProviderEvent({
-              type: "node.updated",
-              driver: CODEX_PROVIDER,
-              node: artifacts.node,
-            });
-            yield* emitProviderEvent({
-              type: "runtime_request.updated",
-              driver: CODEX_PROVIDER,
-              threadId: artifacts.node.threadId,
-              runtimeRequest: artifacts.request,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem: artifacts.turnItem,
+              },
             });
 
             const resolved = yield* Deferred.await(decision).pipe(
@@ -4264,6 +4369,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 Ref.update(pendingRuntimeRequests, (current) => {
                   const updated = new Map(current);
                   updated.delete(String(artifacts.request.id));
+                  requestCancellations.delete(rpcRequestKey(payload.conversationId, rpcRequestId));
                   return updated;
                 }),
               ),
@@ -4277,7 +4383,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           }).pipe(Effect.orDie),
         );
 
-        yield* client.handleServerRequest("item/tool/requestUserInput", (payload) =>
+        yield* client.handleServerRequest("item/tool/requestUserInput", (payload, rpcRequestId) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
             if (context === undefined) {
@@ -4292,32 +4398,18 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               nativeItemId: payload.itemId,
               nativeRequestId: payload.itemId,
               questions: payload.questions,
+              isBlocking: payload.isBlocking ?? true,
             });
             const answers = yield* Deferred.make<ProviderUserInputAnswers, never>();
-            yield* Ref.update(pendingRuntimeRequests, (current) => {
-              const updated = new Map(current);
-              updated.set(String(artifacts.request.id), {
+            yield* registerRuntimeRequest({
+              rpcRequestId,
+              nativeThreadId: payload.threadId,
+              artifacts,
+              pending: {
                 type: "user_input",
                 requestId: artifacts.request.id,
                 answers,
-              });
-              return updated;
-            });
-            yield* emitProviderEvent({
-              type: "node.updated",
-              driver: CODEX_PROVIDER,
-              node: artifacts.node,
-            });
-            yield* emitProviderEvent({
-              type: "runtime_request.updated",
-              driver: CODEX_PROVIDER,
-              threadId: artifacts.node.threadId,
-              runtimeRequest: artifacts.request,
-            });
-            yield* emitProviderEvent({
-              type: "turn_item.updated",
-              driver: CODEX_PROVIDER,
-              turnItem: artifacts.turnItem,
+              },
             });
 
             const resolved = yield* Deferred.await(answers).pipe(
@@ -4325,6 +4417,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 Ref.update(pendingRuntimeRequests, (current) => {
                   const updated = new Map(current);
                   updated.delete(String(artifacts.request.id));
+                  requestCancellations.delete(rpcRequestKey(payload.threadId, rpcRequestId));
                   return updated;
                 }),
               ),
@@ -4769,12 +4862,19 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             Effect.gen(function* () {
               const threadId = yield* getNativeThreadId(turnInput.providerThread);
 
+              const discoveredModel = yield* (
+                adapterOptions.modelCatalog?.getModel(turnInput.modelSelection.model) ??
+                  Effect.succeed(undefined)
+              );
               const codexInput = yield* toCodexInput(turnInput);
               const turnStartParams = yield* buildCodexTurnStartParams({
                 nativeThreadId: threadId,
                 codexInput,
                 runtimePolicy: turnInput.runtimePolicy,
                 modelSelection: turnInput.modelSelection,
+                ...(discoveredModel === undefined || discoveredModel.isCustom
+                  ? {}
+                  : { modelCapabilities: discoveredModel.capabilities ?? {} }),
                 hasPathwayMcp:
                   McpProviderSession.readMcpProviderSession(turnInput.threadId) !== undefined,
               });

@@ -51,6 +51,26 @@ export interface PreviewAutomationInvokeInput {
   readonly timeoutMs?: number;
 }
 
+export class PreviewAutomationHostSelectionError extends Schema.TaggedErrorClass<PreviewAutomationHostSelectionError>()(
+  "PreviewAutomationHostSelectionError",
+  {
+    reason: Schema.Literals(["no_live_host", "action_in_progress", "takeover_active"]),
+    environmentId: Schema.String,
+    threadId: Schema.String,
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "no_live_host":
+        return "The selected browser is not connected to this environment.";
+      case "action_in_progress":
+        return "Wait for the current browser action to finish before switching browsers.";
+      case "takeover_active":
+        return "Release browser takeover before switching browsers.";
+    }
+  }
+}
+
 export class PreviewAutomationBroker extends Context.Service<
   PreviewAutomationBroker,
   {
@@ -58,6 +78,15 @@ export class PreviewAutomationBroker extends Context.Service<
       host: PreviewAutomationHost,
     ) => Effect.Effect<Stream.Stream<PreviewAutomationStreamEvent>>;
     readonly focusHost: (host: PreviewAutomationHostFocus) => Effect.Effect<void>;
+    readonly selectHostForThread: (input: {
+      readonly environmentId: EnvironmentId;
+      readonly threadId: ThreadId;
+      readonly clientId: string | null;
+    }) => Effect.Effect<void, PreviewAutomationHostSelectionError>;
+    readonly getSelectedHostForThread: (input: {
+      readonly environmentId: EnvironmentId;
+      readonly threadId: ThreadId;
+    }) => Effect.Effect<string | null>;
     readonly respond: (
       response: PreviewAutomationResponse,
     ) => Effect.Effect<void, PreviewAutomationError>;
@@ -91,7 +120,7 @@ interface PendingRequest {
 }
 
 /**
- * A lease pinning one provider session to one desktop runtime. It lives exactly
+ * A lease pinning a thread and provider session to one browser runtime. It lives exactly
  * as long as the connection it names: `connectionId`/`queue` identity is what
  * makes a lease valid, so a disconnected or replaced host is dropped on the next
  * lookup. The lease deliberately has no clock of its own — it used to inherit
@@ -154,6 +183,7 @@ type InvokeRoute =
 interface BrokerState {
   readonly clients: ReadonlyMap<string, ClientConnection>;
   readonly assignments: ReadonlyMap<string, HostAssignment>;
+  readonly preferredHosts: ReadonlyMap<string, string>;
   readonly pending: ReadonlyMap<string, PendingRequest>;
   readonly fences: ReadonlyMap<string, TakeoverFence>;
   readonly requestSequence: number;
@@ -198,7 +228,7 @@ const selectorDiagnosticsFromInput = (
 };
 
 const hostAssignmentKey = (scope: McpInvocationContext.McpInvocationScope): string =>
-  `${scope.environmentId}\u0000${scope.providerSessionId}`;
+  `${scope.environmentId}\u0000${scope.threadId}\u0000${scope.providerSessionId}`;
 
 /** Takeovers and preview activity are keyed per thread, not per provider session. */
 const threadKey = (environmentId: EnvironmentId, threadId: ThreadId): string =>
@@ -374,6 +404,7 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
   const state = yield* SynchronizedRef.make<BrokerState>({
     clients: new Map(),
     assignments: new Map(),
+    preferredHosts: new Map(),
     pending: new Map(),
     fences: new Map(),
     requestSequence: 0,
@@ -522,6 +553,83 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
     }
   });
 
+  const getSelectedHostForThread = Effect.fn("PreviewAutomationBroker.getSelectedHostForThread")(
+    function* (
+      input: Parameters<PreviewAutomationBroker["Service"]["getSelectedHostForThread"]>[0],
+    ) {
+      const current = yield* SynchronizedRef.get(state);
+      const preferred = current.preferredHosts.get(threadKey(input.environmentId, input.threadId));
+      if (preferred !== undefined) return preferred;
+      let latest: HostAssignment | undefined;
+      for (const assignment of current.assignments.values()) {
+        if (
+          assignment.threadId !== input.threadId ||
+          !isConnectionLive(current, assignment) ||
+          current.clients.get(assignment.clientId)?.environmentId !== input.environmentId
+        )
+          continue;
+        if (latest === undefined || assignment.sequence > latest.sequence) latest = assignment;
+      }
+      return latest?.clientId ?? null;
+    },
+  );
+
+  const selectHostForThread = Effect.fn("PreviewAutomationBroker.selectHostForThread")(function* (
+    input: Parameters<PreviewAutomationBroker["Service"]["selectHostForThread"]>[0],
+  ) {
+    yield* SynchronizedRef.modifyEffect(state, (current) =>
+      Effect.gen(function* () {
+        const key = threadKey(input.environmentId, input.threadId);
+        if (
+          current.preferredHosts.get(key) === input.clientId ||
+          (input.clientId === null && !current.preferredHosts.has(key))
+        )
+          return [undefined, current] as const;
+        if (
+          input.clientId !== null &&
+          current.clients.get(input.clientId)?.environmentId !== input.environmentId
+        ) {
+          return yield* new PreviewAutomationHostSelectionError({
+            ...input,
+            reason: "no_live_host",
+          });
+        }
+        const fence = current.fences.get(key);
+        if (fence && fence.hostClientId !== input.clientId) {
+          return yield* new PreviewAutomationHostSelectionError({
+            ...input,
+            reason: "takeover_active",
+          });
+        }
+        if (
+          Array.from(current.pending.values()).some(
+            (request) =>
+              request.context.environmentId === input.environmentId &&
+              request.context.threadId === input.threadId &&
+              request.context.clientId !== input.clientId,
+          )
+        ) {
+          return yield* new PreviewAutomationHostSelectionError({
+            ...input,
+            reason: "action_in_progress",
+          });
+        }
+        const preferredHosts = new Map(current.preferredHosts);
+        if (input.clientId === null) preferredHosts.delete(key);
+        else preferredHosts.set(key, input.clientId);
+        const assignments = new Map(
+          Array.from(current.assignments).filter(
+            ([, assignment]) =>
+              assignment.threadId !== input.threadId ||
+              assignment.clientId === input.clientId ||
+              current.clients.get(assignment.clientId)?.environmentId !== input.environmentId,
+          ),
+        );
+        return [undefined, { ...current, preferredHosts, assignments }] as const;
+      }),
+    );
+  });
+
   const invoke = Effect.fn("PreviewAutomationBroker.invoke")(function* <A = unknown>(
     input: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0],
   ): Effect.fn.Return<A, PreviewAutomationError> {
@@ -554,29 +662,39 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
         const assigned = assignments.get(assignmentKey);
         const assignedConnection = assigned ? current.clients.get(assigned.clientId) : undefined;
         const hasLiveAssignment = assignedConnection?.environmentId === input.scope.environmentId;
-        // Keep one provider session on one physical desktop runtime so a
+        // Keep a thread and provider session on one browser runtime so a
         // multi-step browser interaction cannot jump between independent
-        // Electron cookie/DOM state. A live assignment that predates an
+        // browser cookie/DOM state. A live assignment that predates an
         // operation is not silently moved to a newer client: the caller gets a
         // capability failure and can deliberately start a fresh provider
         // session. A dead lease is pruned above and may fail over.
+        const preferredClientId = current.preferredHosts.get(
+          threadKey(input.scope.environmentId, input.scope.threadId),
+        );
+        const preferredConnection =
+          preferredClientId === undefined ? undefined : current.clients.get(preferredClientId);
         const connection =
-          hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
-            ? assignedConnection
-            : hasLiveAssignment
-              ? undefined
-              : Array.from(current.clients.values())
-                  .filter(
-                    (host) =>
-                      host.environmentId === input.scope.environmentId &&
-                      supportsOperation(host, input.operation),
-                  )
-                  .sort(
-                    (left, right) =>
-                      right.supportedOperations.size - left.supportedOperations.size ||
-                      Number(right.focused) - Number(left.focused) ||
-                      right.focusOrder - left.focusOrder,
-                  )[0];
+          preferredClientId !== undefined
+            ? preferredConnection?.environmentId === input.scope.environmentId &&
+              supportsOperation(preferredConnection, input.operation)
+              ? preferredConnection
+              : undefined
+            : hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
+              ? assignedConnection
+              : hasLiveAssignment
+                ? undefined
+                : Array.from(current.clients.values())
+                    .filter(
+                      (host) =>
+                        host.environmentId === input.scope.environmentId &&
+                        supportsOperation(host, input.operation),
+                    )
+                    .sort(
+                      (left, right) =>
+                        right.supportedOperations.size - left.supportedOperations.size ||
+                        Number(right.focused) - Number(left.focused) ||
+                        right.focusOrder - left.focusOrder,
+                    )[0];
         if (!connection) {
           if (!hasLiveAssignment) assignments.delete(assignmentKey);
           return [undefined, { ...current, assignments }] as const;
@@ -873,7 +991,14 @@ export const makeServices = Effect.gen(function* PreviewAutomationBrokerMake() {
   });
 
   return {
-    broker: PreviewAutomationBroker.of({ connect, focusHost, respond, invoke }),
+    broker: PreviewAutomationBroker.of({
+      connect,
+      focusHost,
+      selectHostForThread,
+      getSelectedHostForThread,
+      respond,
+      invoke,
+    }),
     fence: PreviewAutomationTakeoverFence.of({ acquire, release, rearm }),
   };
 }).pipe(Effect.withSpan("PreviewAutomationBroker.make"));

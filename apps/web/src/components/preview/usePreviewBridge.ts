@@ -16,6 +16,7 @@ import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { previewBridge } from "./previewBridge";
+import { toastManager } from "~/components/ui/toast";
 
 /**
  * Mirrors low-latency desktop state into the store and reflects navigation
@@ -74,6 +75,14 @@ export function usePreviewBridge(input: {
     if (!bridge || typeof window === "undefined") return;
     return bridge.onOpenInNewTab((event) => {
       if (event.tabId !== runtimeTabId) return;
+      if (event.blockedReason) {
+        toastManager.add({
+          type: "warning",
+          title: "Sign-in popup could not open",
+          description: event.blockedReason,
+        });
+        return;
+      }
       recordVisitForThread(threadRef, event.url);
       void openUrlInPreview({ threadRef, url: event.url, openPreview });
     });

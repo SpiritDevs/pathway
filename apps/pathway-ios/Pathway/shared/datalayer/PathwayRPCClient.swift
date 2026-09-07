@@ -103,6 +103,7 @@ actor PathwayRPCClient {
     private var subscriptionRequestID: Int?
     private var subscriptionGate = PathwayRPCSubscriptionGate()
     private var subscriptionContinuation: AsyncThrowingStream<JSONValue, Error>.Continuation?
+    private var subscriptionBufferingPolicy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy = .bufferingOldest(256)
 
     init(
         session: URLSession = .shared,
@@ -130,12 +131,14 @@ actor PathwayRPCClient {
 
     func subscribe(
         _ tag: String,
-        payload: JSONValue
+        payload: JSONValue,
+        bufferingPolicy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy = .bufferingOldest(256)
     ) -> AsyncThrowingStream<JSONValue, Error> {
         subscriptionContinuation?.finish()
         subscriptionTag = tag
         subscriptionPayload = payload
-        let stream = AsyncThrowingStream<JSONValue, Error>(bufferingPolicy: .bufferingOldest(256)) { continuation in
+        subscriptionBufferingPolicy = bufferingPolicy
+        let stream = AsyncThrowingStream<JSONValue, Error>(bufferingPolicy: bufferingPolicy) { continuation in
             subscriptionContinuation = continuation
             continuation.onTermination = { @Sendable _ in
                 Task { await self.removeSubscription() }
@@ -275,7 +278,8 @@ actor PathwayRPCClient {
                 for id in pending.keys { Task { await self.sendPending(id) } }
             }
             for value in response.values ?? [] {
-                if case .dropped = subscriptionContinuation?.yield(value) {
+                if let result = subscriptionContinuation?.yield(value),
+                   pathwayRPCBufferOverflowIsFatal(result, policy: subscriptionBufferingPolicy) {
                     throw PathwayRPCError.protocolViolation(
                         "The live thread produced events faster than the app could display them."
                     )
@@ -434,6 +438,16 @@ actor PathwayRPCClient {
         exit.cause?.compactMap { $0.error?.displayString ?? $0.defect?.displayString }.first
             ?? "The Pathway environment rejected the request."
     }
+}
+
+/// Frame streams deliberately replace old images; conversation streams must recover lost events.
+func pathwayRPCBufferOverflowIsFatal(
+    _ result: AsyncThrowingStream<JSONValue, Error>.Continuation.YieldResult,
+    policy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy
+) -> Bool {
+    guard case .dropped = result else { return false }
+    if case .bufferingNewest = policy { return false }
+    return true
 }
 
 // swiftlint:enable type_body_length

@@ -9,6 +9,8 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
+import { installPreviewWebAuthnAccountPicker } from "./WebAuthn.ts";
+
 const PREVIEW_PARTITION_PREFIX = "persist:pathway-preview-";
 
 // Permissions granted to preview web content. `clipboard-sanitized-write` is the
@@ -132,6 +134,7 @@ export const make = Effect.gen(function* BrowserSessionMake() {
       return Effect.try({
         try: () => {
           const browserSession = session.fromPartition(partition);
+          installPreviewWebAuthnAccountPicker(browserSession);
           const userAgent = browserSession
             .getUserAgent()
             .replace(/Electron\/[\d.]+ /, "")

@@ -25,6 +25,12 @@ struct PathwayThreadQuestion: Codable, Equatable, Identifiable, Sendable {
     var multiSelect: Bool? = nil
 }
 
+struct PathwayQuestionDraft {
+    var selected: [String: Set<String>] = [:]
+    var custom: [String: String] = [:]
+    var questionIndex = 0
+}
+
 struct PathwayMessageAttachment: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let type: String
@@ -213,6 +219,7 @@ final class PathwayAgentThreadModel {
     typealias Request = @MainActor (String, JSONValue) async throws -> JSONValue
     private(set) var connectionState: PathwayThreadConnectionState = .idle
     private(set) var items: [PathwayTimelineItem] = []
+    var questionDrafts: [String: PathwayQuestionDraft] = [:]
     var serverConfig: [String: JSONValue] = [:]
     var providers: [PathwayServerProvider] = []
     var modelCatalog: [PathwayServerProvider] = []
@@ -224,6 +231,7 @@ final class PathwayAgentThreadModel {
     private(set) var runs: [PathwayThreadRun] = []
     private(set) var subagents: [PathwayThreadSubagent] = []
     private(set) var runtimeRequests: [JSONValue] = []
+    private(set) var browserTakeover: [String: JSONValue]?
     private(set) var checkpoints: [JSONValue] = []
     private(set) var plans: [JSONValue] = []
     var isSending = false
@@ -467,9 +475,35 @@ final class PathwayAgentThreadModel {
         guard !isConfigurationLocked else { throw PathwayThreadConversationError.message("This subagent is managed by its parent thread.") }
         try await dispatch("thread.interaction-mode.set", fields: ["interactionMode": .string(value)]); interactionMode = value
     }
+    var pendingAsyncQuestions: [PathwayTimelineItem] {
+        items.filter { item in
+            item.type == "user_input_request" && isNonBlockingQuestion(item) && runtimeRequests.contains {
+                $0.objectValue?["id"]?.stringValue == item.requestID && $0.objectValue?["status"]?.stringValue == "pending"
+            }
+        }
+    }
+    func isNonBlockingQuestion(_ item: PathwayTimelineItem) -> Bool {
+        guard let id = item.requestID else { return false }
+        return runtimeRequests.contains { request in
+            let fields = request.objectValue
+            return fields?["id"]?.stringValue == id && fields?["isBlocking"]?.boolValue == false
+        }
+    }
+    func prepareQuestionDraft(for item: PathwayTimelineItem) {
+        guard questionDrafts[item.id] == nil, isNonBlockingQuestion(item) else { return }
+        var draft = PathwayQuestionDraft()
+        for question in item.questions {
+            if let first = question.options.first { draft.selected[question.id] = [first.label] }
+        }
+        questionDrafts[item.id] = draft
+    }
     func canRespond(to item: PathwayTimelineItem) -> Bool {
         guard item.requiresResponse, let id = item.requestID else { return false }
-        return runtimeRequests.contains { $0.objectValue?["id"]?.stringValue == id && $0.objectValue?["status"]?.stringValue == "pending" && $0.objectValue?["responseCapability"]?.objectValue?["type"]?.stringValue == "live" }
+        return runtimeRequests.contains { request in
+            let fields = request.objectValue
+            let capability = fields?["responseCapability"]?.objectValue?["type"]?.stringValue
+            return fields?["id"]?.stringValue == id && fields?["status"]?.stringValue == "pending" && (capability == "live" || capability == "message")
+        }
     }
     func responseUnavailableReason(for item: PathwayTimelineItem) -> String? {
         canRespond(to: item) ? nil : "This request is no longer connected to a live agent."
@@ -539,6 +573,7 @@ final class PathwayAgentThreadModel {
     }
     private func applyThread(_ value: JSONValue?) {
         guard let object = value?.objectValue else { return }
+        if let value = object["browserTakeover"] { browserTakeover = value.objectValue }
         if let value = object["title"]?.stringValue { threadTitle = value }
         if let value = object["runtimeMode"]?.stringValue { runtimeMode = value }
         if let value = object["interactionMode"]?.stringValue { interactionMode = value }

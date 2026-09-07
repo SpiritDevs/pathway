@@ -71,6 +71,33 @@ const requestsFrom = (
     }),
   );
 
+const connectRespondingHost = (
+  broker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  clientId: string,
+) =>
+  Effect.gen(function* () {
+    const connected = yield* Deferred.make<void>();
+    const events = (yield* broker.connect(makeHost({ clientId }))).pipe(
+      Stream.tap((event) =>
+        event.type === "connected" ? Deferred.succeed(connected, undefined) : Effect.void,
+      ),
+    );
+    const fiber = yield* requestsFrom(events).pipe(
+      Stream.runForEach((request) =>
+        broker.respond({
+          clientId,
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: clientId,
+        }),
+      ),
+      Effect.forkScoped,
+    );
+    yield* Deferred.await(connected);
+    return fiber;
+  });
+
 it.effect("atomically registers a connected host and correlates its response", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1531,6 +1558,173 @@ it.effect("publishes activity for browser use but not preview status probes", ()
       expect(blocked).toBeInstanceOf(PreviewAutomationTakeoverActiveError);
       yield* Effect.yieldNow;
       expect(records).toHaveLength(3);
+    }),
+  ),
+);
+
+it.effect(
+  "explicit thread host selection replaces its sticky desktop without moving sibling tasks",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const broker = yield* makeBroker;
+        for (const clientId of ["environment-browser:environment-1", "desktop"]) {
+          yield* connectRespondingHost(broker, clientId);
+        }
+        const sibling = { ...scope, threadId: ThreadId.make("sibling-task") };
+        expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toBe("desktop");
+        expect(yield* broker.getSelectedHostForThread(scope)).toBe("desktop");
+        expect(yield* broker.invoke({ scope: sibling, operation: "status", input: {} })).toBe(
+          "desktop",
+        );
+        yield* broker.selectHostForThread({
+          environmentId: scope.environmentId,
+          threadId: scope.threadId,
+          clientId: "environment-browser:environment-1",
+        });
+        expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toBe(
+          "environment-browser:environment-1",
+        );
+        expect(
+          yield* broker.invoke({
+            scope: { ...scope, providerSessionId: "replacement-provider" },
+            operation: "status",
+            input: {},
+          }),
+        ).toBe("environment-browser:environment-1");
+        expect(yield* broker.invoke({ scope: sibling, operation: "status", input: {} })).toBe(
+          "desktop",
+        );
+        yield* broker.selectHostForThread({
+          environmentId: scope.environmentId,
+          threadId: scope.threadId,
+          clientId: null,
+        });
+        expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toBe("desktop");
+      }),
+    ),
+);
+
+it.effect("refuses to switch browsers while an action is in flight", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      yield* Stream.runDrain(
+        yield* broker.connect(makeHost({ clientId: "environment-browser:environment-1" })),
+      ).pipe(Effect.forkScoped);
+      const received = yield* Deferred.make<RoutedRequest>();
+      yield* requestsFrom(yield* broker.connect(makeHost({ clientId: "desktop" }))).pipe(
+        Stream.runForEach((request) => Deferred.succeed(received, request)),
+        Effect.forkScoped,
+      );
+      const invocation = yield* broker
+        .invoke({ scope, operation: "status", input: {} })
+        .pipe(Effect.forkScoped);
+      const request = yield* Deferred.await(received);
+      const failure = yield* broker
+        .selectHostForThread({
+          environmentId: scope.environmentId,
+          threadId: scope.threadId,
+          clientId: "environment-browser:environment-1",
+        })
+        .pipe(Effect.flip);
+      expect(failure.reason).toBe("action_in_progress");
+      yield* broker.selectHostForThread({
+        environmentId: scope.environmentId,
+        threadId: scope.threadId,
+        clientId: "desktop",
+      });
+      yield* broker.respond({
+        clientId: "desktop",
+        connectionId: request.connectionId,
+        requestId: request.requestId,
+        ok: true,
+        result: "finished",
+      });
+      expect(yield* Fiber.join(invocation)).toBe("finished");
+      yield* broker.selectHostForThread({
+        environmentId: scope.environmentId,
+        threadId: scope.threadId,
+        clientId: "environment-browser:environment-1",
+      });
+    }),
+  ),
+);
+
+it.effect(
+  "retains explicit host choice across disconnects and never falls back to a different browser",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const broker = yield* makeBroker;
+        const selected = "environment-browser:environment-1";
+        const attach = (clientId: string) => connectRespondingHost(broker, clientId);
+        const first = yield* attach(selected);
+        yield* attach("desktop");
+        yield* broker.selectHostForThread({
+          environmentId: scope.environmentId,
+          threadId: scope.threadId,
+          clientId: selected,
+        });
+        expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toBe(selected);
+        yield* Fiber.interrupt(first);
+        expect(yield* broker.getSelectedHostForThread(scope)).toBe(selected);
+        const unavailable = yield* broker
+          .invoke<string>({ scope, operation: "status", input: {} })
+          .pipe(Effect.flip);
+        expect(unavailable).toBeInstanceOf(PreviewAutomationNoAvailableHostError);
+        yield* attach(selected);
+        expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toBe(selected);
+      }),
+    ),
+);
+
+it.effect("host selection respects takeover and environment boundaries", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, fence } = yield* makeBrokerWithFence;
+      yield* connectRespondingHost(broker, "environment-browser:environment-1");
+      yield* connectRespondingHost(broker, "desktop");
+      yield* broker.invoke({ scope, operation: "status", input: {} });
+      yield* fence.acquire({
+        environmentId: scope.environmentId,
+        threadId: scope.threadId,
+        takeoverId: "selected-host-takeover",
+      });
+      yield* broker.selectHostForThread({
+        environmentId: scope.environmentId,
+        threadId: scope.threadId,
+        clientId: "desktop",
+      });
+      const blocked = yield* broker
+        .selectHostForThread({
+          environmentId: scope.environmentId,
+          threadId: scope.threadId,
+          clientId: "environment-browser:environment-1",
+        })
+        .pipe(Effect.flip);
+      expect(blocked.reason).toBe("takeover_active");
+      yield* fence.release({
+        environmentId: scope.environmentId,
+        threadId: scope.threadId,
+        takeoverId: "selected-host-takeover",
+      });
+      const wrongEnvironment = yield* broker
+        .selectHostForThread({
+          environmentId: EnvironmentId.make("other-environment"),
+          threadId: scope.threadId,
+          clientId: "desktop",
+        })
+        .pipe(Effect.flip);
+      expect(wrongEnvironment.reason).toBe("no_live_host");
+      yield* broker.selectHostForThread({
+        environmentId: scope.environmentId,
+        threadId: scope.threadId,
+        clientId: "environment-browser:environment-1",
+      });
+      expect(yield* broker.invoke({ scope, operation: "status", input: {} })).toBe(
+        "environment-browser:environment-1",
+      );
     }),
   ),
 );

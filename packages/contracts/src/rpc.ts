@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import { PreviewRemoteCommand, PreviewRemoteError, PreviewRemoteFrame, PreviewRemoteFrameInput, PreviewRemoteResult } from "./previewRemote.ts";
 
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
@@ -406,6 +407,8 @@ export const WS_METHODS = {
   terminalClose: "terminal.close",
 
   // Preview methods
+  previewRemoteCommand: "preview.remote.command",
+  subscribePreviewRemoteFrames: "preview.remote.frames",
   previewOpen: "preview.open",
   previewNavigate: "preview.navigate",
   previewResize: "preview.resize",
@@ -1033,6 +1036,18 @@ export const WsPreviewOpenRpc = Rpc.make(WS_METHODS.previewOpen, {
   payload: PreviewOpenInput,
   success: PreviewSessionSnapshot,
   error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsPreviewRemoteCommandRpc = Rpc.make(WS_METHODS.previewRemoteCommand, {
+  payload: PreviewRemoteCommand,
+  success: PreviewRemoteResult,
+  error: Schema.Union([PreviewRemoteError, EnvironmentAuthorizationError]),
+});
+export const WsPreviewRemoteFramesRpc = Rpc.make(WS_METHODS.subscribePreviewRemoteFrames, {
+  payload: PreviewRemoteFrameInput,
+  success: PreviewRemoteFrame,
+  error: Schema.Union([PreviewRemoteError, EnvironmentAuthorizationError]),
+  stream: true,
 });
 
 export const WsPreviewNavigateRpc = Rpc.make(WS_METHODS.previewNavigate, {
@@ -1944,6 +1959,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeTerminalEventsRpc,
   WsSubscribeTerminalMetadataRpc,
   WsPreviewOpenRpc,
+  WsPreviewRemoteCommandRpc,
+  WsPreviewRemoteFramesRpc,
   WsPreviewNavigateRpc,
   WsPreviewResizeRpc,
   WsPreviewRefreshRpc,

@@ -83,6 +83,18 @@
             return message
         }
 
+        func browserPasswordRequest(_ operation: String, arguments: JSONValue) async throws -> JSONValue {
+            guard let client else { throw URLError(.notConnectedToInternet) }
+            let kind: String
+            switch operation {
+            case "list": kind = "query"
+            case "save", "getForAutofill": kind = "action"
+            case "remove": kind = "mutation"
+            default: throw URLError(.unsupportedURL)
+            }
+            return try await client.issueRequest(kind: kind, name: "browserPasswords:\(operation)", arguments: arguments)
+        }
+
         func start() async {
             guard let client else { return }
             guard connectionState != .connecting, connectionState != .syncing else { return }

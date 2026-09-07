@@ -107,7 +107,6 @@ export function HostedBrowserWebview(props: {
 
   const setWebviewRef = useCallback((node: HTMLElement | null) => {
     webviewRef.current = node as ElectronWebview | null;
-    if (node && !node.hasAttribute("allowpopups")) node.setAttribute("allowpopups", "true");
   }, []);
 
   useEffect(() => {
@@ -274,6 +273,8 @@ export function HostedBrowserWebview(props: {
         <webview
           key={webviewGeneration}
           ref={setWebviewRef}
+          // Electron reads this attribute at attachment; React drops unknown boolean attributes.
+          {...({ allowpopups: "true" } as unknown as { readonly allowpopups?: boolean })}
           src={webviewGeneration === 0 ? initialSrc : recoverySrc}
           partition={config.partition}
           webpreferences={config.webPreferences}

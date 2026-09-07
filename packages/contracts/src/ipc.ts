@@ -601,12 +601,14 @@ export interface DesktopPreviewOpenInNewTabEvent {
   /** The tab whose guest page requested the popup. */
   tabId: string;
   url: string;
+  blockedReason?: string | undefined;
 }
 
 export const DesktopPreviewOpenInNewTabEventSchema: Schema.Codec<DesktopPreviewOpenInNewTabEvent> =
   Schema.Struct({
     tabId: DesktopPreviewTabIdSchema,
     url: Schema.String,
+    blockedReason: Schema.optional(Schema.String),
   });
 
 /**
@@ -999,6 +1001,17 @@ export const DesktopPreviewAutomationClickInputSchema = Schema.Struct({
   input: PreviewAutomationClickInput,
 });
 
+export const DesktopPreviewAutofillLoginInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  input: Schema.Struct({
+    origin: Schema.String,
+    username: Schema.String,
+    password: Schema.String,
+  }),
+});
+export type DesktopPreviewAutofillLoginInput =
+  typeof DesktopPreviewAutofillLoginInputSchema.Type.input;
+
 export const DesktopPreviewAutomationTypeInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   input: PreviewAutomationTypeInput,
@@ -1153,6 +1166,7 @@ export interface DesktopPreviewBridge {
     ) => Promise<DesktopPreviewRecordingReadResult>;
     onFrame: (listener: (frame: DesktopPreviewRecordingFrame) => void) => () => void;
   };
+  autofillLogin?: (tabId: string, input: DesktopPreviewAutofillLoginInput) => Promise<void>;
   automation: {
     status: (tabId: string) => Promise<PreviewAutomationStatus>;
     snapshot: (tabId: string) => Promise<PreviewAutomationSnapshot>;

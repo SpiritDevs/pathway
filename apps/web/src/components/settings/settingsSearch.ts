@@ -279,6 +279,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
   },
   {
+    id: "browser-passwords",
+    title: "Passwords and saved website logins",
+    to: "/settings/general",
+    targetId: "browser-passwords",
+  },
+  {
     id: "project-grouping",
     title: "Project grouping",
     to: "/settings/general",

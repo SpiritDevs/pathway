@@ -54,9 +54,18 @@ struct AgentTranscriptApproval: View {
 struct AgentTranscriptQuestions: View {
     let item: PathwayTimelineItem
     let model: PathwayAgentThreadModel
-    @State private var selected: [String: Set<String>] = [:]
-    @State private var custom: [String: String] = [:]
-    @State private var questionIndex = 0
+    private var selected: [String: Set<String>] {
+        get { model.questionDrafts[item.id]?.selected ?? [:] }
+        nonmutating set { model.questionDrafts[item.id, default: PathwayQuestionDraft()].selected = newValue }
+    }
+    private var custom: [String: String] {
+        get { model.questionDrafts[item.id]?.custom ?? [:] }
+        nonmutating set { model.questionDrafts[item.id, default: PathwayQuestionDraft()].custom = newValue }
+    }
+    private var questionIndex: Int {
+        get { model.questionDrafts[item.id]?.questionIndex ?? 0 }
+        nonmutating set { model.questionDrafts[item.id, default: PathwayQuestionDraft()].questionIndex = newValue }
+    }
     @State private var responding = false
     @State private var submitted = false
     @State private var errorMessage: String?
@@ -136,6 +145,7 @@ struct AgentTranscriptQuestions: View {
         .disabled(responding)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("thread-questions-\(item.id)")
+        .onAppear { model.prepareQuestionDraft(for: item) }
     }
 
     private func optionRow(_ option: PathwayThreadQuestion.Option, index: Int, question: PathwayThreadQuestion) -> some View {

@@ -11,6 +11,7 @@ const { fromPartition, sessions } = vi.hoisted(() => ({
   sessions: new Map<
     string,
     {
+      readonly on: ReturnType<typeof vi.fn>;
       readonly clearCache: ReturnType<typeof vi.fn>;
       readonly clearStorageData: ReturnType<typeof vi.fn>;
       readonly getUserAgent: ReturnType<typeof vi.fn>;
@@ -37,6 +38,7 @@ describe("BrowserSession", () => {
     fromPartition.mockReset();
     fromPartition.mockImplementation((partition: string) => {
       const browserSession = {
+        on: vi.fn(),
         clearCache: vi.fn(() => Promise.resolve()),
         clearStorageData: vi.fn(() => Promise.resolve()),
         getUserAgent: vi.fn(() => "Mozilla/5.0 Electron/41.5.0 pathway/0.0.27"),

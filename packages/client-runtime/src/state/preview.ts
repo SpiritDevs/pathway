@@ -29,6 +29,17 @@ export function createPreviewEnvironmentAtoms<R, E>(
       JSON.stringify([environmentId, input.threadId]),
   };
   return {
+    remoteCommand: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:remote-command",
+      tag: WS_METHODS.previewRemoteCommand,
+      scheduler: lifecycleScheduler,
+      concurrency: lifecycleConcurrency,
+    }),
+    remoteFrames: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:preview:remote-frames",
+      tag: WS_METHODS.subscribePreviewRemoteFrames,
+      idleTtlMs: 0,
+    }),
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:preview:list",
       tag: WS_METHODS.previewList,

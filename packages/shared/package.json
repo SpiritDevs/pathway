@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./browserPasswordAutofill": {
+      "types": "./src/browserPasswordAutofill.ts",
+      "import": "./src/browserPasswordAutofill.ts"
+    },
     "./Array": {
       "types": "./src/Array.ts",
       "import": "./src/Array.ts"

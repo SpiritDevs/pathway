@@ -1,3 +1,4 @@
+import { BrowserPasswordsSettings } from "./BrowserPasswordsSettings";
 import { ArchiveIcon, ArchiveX, ChevronRightIcon, LoaderIcon, SettingsIcon } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
@@ -2585,6 +2586,8 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      <BrowserPasswordsSettings />
 
       <SettingsSection title="About">
         {isElectron || HOSTED_APP_CHANNEL ? (

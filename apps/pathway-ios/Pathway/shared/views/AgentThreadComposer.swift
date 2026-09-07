@@ -25,6 +25,8 @@ struct AgentThreadComposer: View {
     @State private var errorMessage: String?
     @State private var isChangingModel = false
     @State private var isInterrupting = false
+    @State private var showsBrowser = false
+    @State private var showsQuestions = false
     @State private var showsStash = false
     @State private var stashCount = 0
     @State private var isStashing = false
@@ -34,7 +36,21 @@ struct AgentThreadComposer: View {
     @ScaledMetric(relativeTo: .body) private var controlDiameter: CGFloat = 36
 
     var body: some View {
-        Group {
+        VStack(spacing: 8) {
+            if !model.pendingAsyncQuestions.isEmpty {
+                HStack {
+                    Button {
+                        showsQuestions = true
+                    } label: {
+                        Label("Questions \(model.pendingAsyncQuestions.reduce(0) { $0 + $1.questions.count })", systemImage: "questionmark.bubble")
+                            .font(.subheadline)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("thread-async-questions")
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+            }
             if usesCompactPresentation && !isExpanded {
                 collapsedComposer
                     .transition(.opacity)
@@ -72,6 +88,32 @@ struct AgentThreadComposer: View {
                     } catch { errorMessage = error.localizedDescription }
                 }
             }
+        }
+        .sheet(isPresented: $showsBrowser) {
+            AgentThreadRemoteBrowser(model: model)
+        }
+        .sheet(isPresented: $showsQuestions) {
+            NavigationStack {
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(model.pendingAsyncQuestions) { item in
+                            AgentTranscriptQuestions(item: item, model: model)
+                        }
+                        if model.pendingAsyncQuestions.isEmpty {
+                            Text("No unanswered questions").foregroundStyle(.secondary)
+                        }
+                    }.padding()
+                }
+                .navigationTitle("Questions")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close", role: .cancel) { showsQuestions = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showsSettings) {
             AgentThreadComposerSettings(model: model)
@@ -172,6 +214,14 @@ struct AgentThreadComposer: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Composer options")
             .accessibilityIdentifier("agent-thread-composer-options")
+            Button { showsBrowser = true } label: {
+                Image(systemName: "globe")
+                    .frame(width: controlDiameter, height: controlDiameter)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Environment browser")
+            .accessibilityIdentifier("agent-thread-browser")
             Spacer(minLength: 0)
             if model.activeRunID != nil { stopButton }
             if model.activeRunID == nil || hasContent { sendButton }

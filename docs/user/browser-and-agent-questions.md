@@ -1,0 +1,35 @@
+# Browser work and agent questions
+
+## Questions while work continues
+
+Some Codex models can ask a question while continuing their work. A Questions button beside the message composer shows how many answers are waiting. New questions do not open the picker or move your typing focus.
+
+Open the button to review a question group. A suggested answer can be selected initially, but nothing is sent until you submit. You can write your own answer. Closing the picker keeps the question available. Submit the complete group together.
+
+Pending questions survive reconnects. An answer sent after the agent finishes starts a follow-up in the same task. If a question came from a subagent, its answer returns to that conversation. If delivery fails, the question becomes available for retry.
+
+Blocking questions still pause the agent and use their existing response flow. Other providers keep the question features their runtimes support.
+
+## Choose a browser
+
+The environment browser runs beside your agent. You can view it from the web app or iOS without keeping Pathway desktop connected. Its tabs and website sessions stay on that environment when your client disconnects.
+
+On desktop, the browser panel lets you choose between This desktop and Environment browser. They have separate website sessions. A task keeps its browser host while it works. Wait for an action to finish before switching hosts.
+
+Use the tab bar to open, select, and close pages. Websites can open additional tabs for links and sign-in flows. Closing the final environment-browser tab stops its browser process. Opening the browser later reuses the task's saved website profile.
+
+Take browser control before interacting while the agent is working. Resume the agent when you are finished.
+
+## Saved logins
+
+Settings → General → Passwords stores website logins in your Pathway account. On iOS, open Passwords from the browser to manage saved logins. The vault uses encryption on Pathway's servers and synchronizes through your account.
+
+The browser's Saved logins picker lists accounts for the current website. Select an account and fill it, then submit the website's sign-in form when ready. Filling does not put the password in the conversation. Browser tools can inspect the page, so only fill accounts you intend the task to use.
+
+You can replace or delete a saved login. Passkey private keys remain with their authenticator; the password vault does not store them. Apple Passwords and iCloud-synced passkeys are not yet connected to this vault. Supported signed macOS builds can offer device-bound Touch ID credentials separately.
+
+## Screenshots and recordings
+
+Capture a screenshot or record the selected tab. Environment recordings are silent MP4 files. They stop after ten minutes or about 500 MiB; desktop recordings stop after ten minutes or about 100 MiB. Completed captures appear in the browser panel or in a saved-recording notification.
+
+Your environment needs Chromium for browser work and full FFmpeg for MP4 recording. If either is missing, Pathway shows a setup message. A recording follows its selected tab; changing tabs does not change what is being recorded.

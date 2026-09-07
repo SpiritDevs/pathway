@@ -30,6 +30,7 @@ import { OtlpTracer } from "effect/unstable/observability";
 
 import * as ServerConfig from "./config.ts";
 import { ASSET_ROUTE_PREFIX, resolveAsset } from "./assets/AssetAccess.ts";
+import { resolveByteRange } from "./assets/ByteRange.ts";
 import {
   ATTACHMENT_UPLOAD_ROUTE_PREFIX,
   storeAttachmentUpload,
@@ -303,18 +304,45 @@ export const assetRouteLayer = HttpRouter.add(
     if (!asset) {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
-    return yield* HttpServerResponse.file(asset.path, {
-      status: 200,
-      headers: assetResponseHeaders(
-        asset.path,
-        asset.download
-          ? {
-              download: true,
-              ...(asset.fileName !== undefined ? { fileName: asset.fileName } : {}),
-              ...(asset.mimeType !== undefined ? { mimeType: asset.mimeType } : {}),
-            }
-          : undefined,
-      ),
+    return yield* Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const size = Number((yield* fs.stat(asset.path)).size);
+      // An If-Range request can always fall back to the complete representation.
+      const range = resolveByteRange(
+        request.headers["if-range"] ? undefined : request.headers.range,
+        size,
+      );
+      if (range.status === 416) {
+        return HttpServerResponse.empty({
+          status: 416,
+          headers: {
+            "content-range": `bytes */${size}`,
+            "accept-ranges": "bytes",
+          },
+        });
+      }
+      return yield* HttpServerResponse.file(asset.path, {
+        status: range.status,
+        ...(range.status === 206 ? { offset: range.start, bytesToRead: range.length } : {}),
+        headers: {
+          ...assetResponseHeaders(
+            asset.path,
+            asset.download
+              ? {
+                  download: true,
+                  ...(asset.fileName !== undefined ? { fileName: asset.fileName } : {}),
+                  ...(asset.mimeType !== undefined ? { mimeType: asset.mimeType } : {}),
+                }
+              : undefined,
+          ),
+          "accept-ranges": "bytes",
+          ...(range.status === 206
+            ? {
+                "content-range": `bytes ${range.start}-${range.start + range.length - 1}/${size}`,
+              }
+            : {}),
+        },
+      });
     }).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );

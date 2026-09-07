@@ -21,6 +21,9 @@
         var isConnected: Bool { false }
         var errorMessage: String? { nil }
 
+        func browserPasswordRequest(_ operation: String, arguments: JSONValue) async throws -> JSONValue {
+            throw PathwayThreadConversationError.message("Account passwords are unavailable on this device.")
+        }
         func start() async {}
         func retry() async {}
         func stop(clearContent _: Bool = true) async {}

@@ -155,7 +155,9 @@ export const make = Effect.gen(function* () {
         }
         runs.push(run);
       }
-      const requests = projection.runtimeRequests.filter((request) => request.status === "pending");
+      const requests = projection.runtimeRequests.filter(
+        (request) => request.status === "pending" && request.responseCapability.type !== "message",
+      );
       const detail = `Cancelled because the server ${trigger === "startup" ? "restarted" : "shut down"} before the provider work completed.`;
       const commandId = CommandId.make(
         `command:runtime-reconcile:${trigger}:${projection.thread.id}:${DateTime.formatIso(now)}`,
@@ -219,6 +221,12 @@ export const make = Effect.gen(function* () {
         for (const node of projection.nodes.filter(
           (candidate) =>
             candidate.runId === run.id &&
+            !projection.runtimeRequests.some(
+              (request) =>
+                request.nodeId === candidate.id &&
+                request.responseCapability.type === "message" &&
+                request.status === "pending",
+            ) &&
             (candidate.status === "pending" ||
               candidate.status === "running" ||
               candidate.status === "waiting"),
@@ -289,6 +297,15 @@ export const make = Effect.gen(function* () {
         for (const item of projection.turnItems.filter(
           (candidate) =>
             candidate.runId === run.id &&
+            !(
+              candidate.type === "user_input_request" &&
+              projection.runtimeRequests.some(
+                (request) =>
+                  request.id === candidate.requestId &&
+                  request.responseCapability.type === "message" &&
+                  request.status === "pending",
+              )
+            ) &&
             (candidate.status === "pending" ||
               candidate.status === "running" ||
               candidate.status === "waiting"),
@@ -304,6 +321,63 @@ export const make = Effect.gen(function* () {
             payload: { ...item, status: "cancelled", completedAt: now, updatedAt: now },
           });
         }
+      }
+      for (const request of projection.runtimeRequests) {
+        if (
+          request.status !== "resolved" ||
+          request.responseCapability.type !== "message" ||
+          request.responseCommandId === undefined
+        )
+          continue;
+        const deliveryEffects = yield* outbox
+          .listByCommandId(request.responseCommandId)
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderRuntimeRecoveryError({
+                  operation: "reconcile",
+                  threadId: projection.thread.id,
+                  cause,
+                }),
+            ),
+          );
+        const delivery = deliveryEffects.filter(
+          (effect) =>
+            effect.request.type === "provider-turn.start" ||
+            effect.request.type === "provider-turn.steer",
+        );
+        if (delivery.length === 0 || delivery.every((effect) => effect.status === "succeeded"))
+          continue;
+        events.push({
+          id: yield* allocateEventId(),
+          type: "runtime-request.updated",
+          threadId: projection.thread.id,
+          nodeId: request.nodeId,
+          occurredAt: now,
+          payload: { ...request, status: "pending", resolvedAt: null },
+        });
+        const node = projection.nodes.find((candidate) => candidate.id === request.nodeId);
+        if (node !== undefined)
+          events.push({
+            id: yield* allocateEventId(),
+            type: "node.updated",
+            threadId: projection.thread.id,
+            nodeId: node.id,
+            occurredAt: now,
+            payload: { ...node, status: "waiting", completedAt: null },
+          });
+        const item = projection.turnItems.find(
+          (candidate) =>
+            candidate.type === "user_input_request" && candidate.requestId === request.id,
+        );
+        if (item !== undefined)
+          events.push({
+            id: yield* allocateEventId(),
+            type: "turn-item.updated",
+            threadId: projection.thread.id,
+            occurredAt: now,
+            payload: { ...item, status: "waiting", completedAt: null, updatedAt: now },
+          });
       }
       // Process loss also orphans background-capable turn items on already-
       // settled runs (e.g. post-settle Waiting work). Skip items already

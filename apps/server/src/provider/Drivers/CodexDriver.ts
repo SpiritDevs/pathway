@@ -38,6 +38,7 @@ import {
   CodexAdapterV2Driver,
   type CodexAdapterV2DriverEnv,
 } from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import { CodexModelCatalog } from "../../codexModelOptions.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   makeCodexAuthenticationClient,
@@ -46,6 +47,7 @@ import {
 import { ProviderDriverError } from "../Errors.ts";
 import { checkCodexProviderStatus, makePendingCodexProvider } from "../Layers/CodexProvider.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { classifyModels, ModelManifest } from "../ModelManifest.ts";
 import { makeProviderAuthentication } from "../ProviderAuthentication.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
@@ -129,6 +131,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const httpClient = yield* HttpClient.HttpClient;
       const { cwd } = yield* ServerConfig;
       const serverSettings = yield* ServerSettingsService;
+      const manifest = yield* ModelManifest;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const homeLayout = yield* resolveCodexHomeLayout(config);
       const continuationIdentity = codexContinuationIdentity(homeLayout);
@@ -159,24 +162,6 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         env: processEnv,
       });
 
-      const orchestrationAdapter = yield* CodexAdapterV2Driver.create({
-        instanceId,
-        displayName,
-        accentColor,
-        environment,
-        enabled,
-        config,
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProviderDriverError({
-              driver: DRIVER_KIND,
-              instanceId,
-              detail: "Failed to build Codex orchestration adapter.",
-              cause,
-            }),
-        ),
-      );
       const textGeneration = yield* makeCodexTextGeneration(effectiveConfig, processEnv);
       const authentication = yield* makeProviderAuthentication(
         makeCodexAuthenticationClient({
@@ -199,6 +184,14 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       // updates. Pre-provide `ChildProcessSpawner` so the check fits
       // `makeManagedServerProvider.checkProvider`'s `R = never`.
       const checkProvider = checkCodexProviderStatus(effectiveConfig, undefined, processEnv).pipe(
+        Effect.flatMap((snapshot) =>
+          manifest.current.pipe(
+            Effect.map((metadata) => ({
+              ...snapshot,
+              models: classifyModels(snapshot.models, metadata, "codex"),
+            })),
+          ),
+        ),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
@@ -212,9 +205,16 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
           makePendingCodexProvider(settings.provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
         enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
-          enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
-            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-          }).pipe(
+          manifest.refresh.pipe(
+            Effect.flatMap((metadata) =>
+              enrichProviderSnapshotWithVersionAdvisory(
+                { ...snapshot, models: classifyModels(snapshot.models, metadata, "codex") },
+                maintenanceCapabilities,
+                {
+                  enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+                },
+              ),
+            ),
             Effect.provideService(HttpClient.HttpClient, httpClient),
             Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
           ),
@@ -225,6 +225,33 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
               driver: DRIVER_KIND,
               instanceId,
               detail: `Failed to build Codex snapshot: ${cause.message ?? String(cause)}`,
+              cause,
+            }),
+        ),
+      );
+
+      const orchestrationAdapter = yield* CodexAdapterV2Driver.create({
+        instanceId,
+        displayName,
+        accentColor,
+        environment,
+        enabled,
+        config,
+      }).pipe(
+        Effect.provideService(CodexModelCatalog, {
+          getModel: (model) =>
+            snapshot.getSnapshot.pipe(
+              Effect.map((current) =>
+                current.models.find((entry) => entry.slug === model && !entry.isCustom),
+              ),
+            ),
+        }),
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: "Failed to build Codex orchestration adapter.",
               cause,
             }),
         ),

@@ -834,6 +834,7 @@ export function threadShellFromProjection(
       .filter((request) => request.status === "pending")
       .toSorted(
         (left, right) =>
+          Number(left.isBlocking === false) - Number(right.isBlocking === false) ||
           DateTime.toEpochMillis(right.createdAt) - DateTime.toEpochMillis(left.createdAt),
       )[0] ?? null;
   const latestVisibleMessage =
@@ -895,6 +896,9 @@ export function threadShellFromProjection(
         ? null
         : {
             id: pendingRuntimeRequest.id,
+            ...(pendingRuntimeRequest.isBlocking === undefined
+              ? {}
+              : { isBlocking: pendingRuntimeRequest.isBlocking }),
             kind: pendingRuntimeRequest.kind,
             createdAt: pendingRuntimeRequest.createdAt,
           },

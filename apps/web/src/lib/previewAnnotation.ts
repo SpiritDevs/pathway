@@ -103,7 +103,9 @@ export async function previewAnnotationScreenshotFile(
   annotation: PreviewAnnotationPayload,
 ): Promise<File | null> {
   if (!annotation.screenshot) return null;
-  const response = await fetch(annotation.screenshot.dataUrl);
+  const response = await fetch(annotation.screenshot.dataUrl, {
+    signal: AbortSignal.timeout(5_000),
+  });
   const blob = await response.blob();
   return new File([blob], `preview-annotation-${annotation.id}.png`, {
     type: blob.type || "image/png",

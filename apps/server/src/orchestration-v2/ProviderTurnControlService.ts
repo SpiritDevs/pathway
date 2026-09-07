@@ -1,5 +1,6 @@
 import {
   MessageId,
+  CommandId,
   type OrchestrationV2DomainEvent,
   ProviderSessionId,
   ProviderThreadId,
@@ -7,12 +8,14 @@ import {
   RunAttemptId,
   ThreadId,
 } from "@spiritdevs/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import { QuestionAnswerDelivery } from "./QuestionAnswerDelivery.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { EventSinkV2 } from "./EventSink.ts";
@@ -56,6 +59,7 @@ export interface ProviderTurnControlServiceV2Shape {
     readonly providerThreadId: ProviderThreadId;
     readonly providerTurnId: ProviderTurnId;
     readonly messageId: MessageId;
+    readonly answerCommandId?: CommandId;
   }) => Effect.Effect<void, ProviderTurnControlError>;
   readonly interruptAndAwaitTerminal: (input: {
     readonly threadId: ThreadId;
@@ -85,6 +89,7 @@ export const layer: Layer.Layer<
     const sessions = yield* ProviderSessionManagerV2;
     const eventSink = yield* EventSinkV2;
     const ids = yield* IdAllocatorV2;
+    const questionDelivery = yield* Effect.serviceOption(QuestionAnswerDelivery);
 
     const awaitTerminalOrForceInterrupt = Effect.fn(
       "ProviderTurnControlService.awaitTerminalOrForceInterrupt",
@@ -396,14 +401,53 @@ export const layer: Layer.Layer<
       steer: (input) =>
         Effect.gen(function* () {
           const loaded = yield* load({ ...input, operation: "steer" });
-          if (Option.isNone(loaded.session)) return;
+          const isQuestionAnswer = loaded.projection.runtimeRequests.some(
+            (request) =>
+              request.responseMessageId === input.messageId &&
+              request.responseCapability.type === "message",
+          );
+          const followUp = () =>
+            Option.isSome(questionDelivery) && input.answerCommandId !== undefined
+              ? questionDelivery.value
+                  .followUp({
+                    threadId: input.threadId,
+                    providerThreadId: input.providerThreadId,
+                    messageId: input.messageId,
+                    commandId: input.answerCommandId,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ProviderTurnControlError({
+                          threadId: input.threadId,
+                          providerTurnId: input.providerTurnId,
+                          operation: "steer",
+                          cause,
+                        }),
+                    ),
+                  )
+              : Effect.fail(
+                  new ProviderTurnControlError({
+                    threadId: input.threadId,
+                    providerTurnId: input.providerTurnId,
+                    operation: "steer",
+                    cause: "The turn completed before the question answer could be delivered.",
+                  }),
+                );
+          if (Option.isNone(loaded.session)) {
+            if (isQuestionAnswer) yield* followUp();
+            return;
+          }
+
           const message = loaded.projection.messages.find(
             (candidate) => candidate.id === input.messageId,
           );
           const run = loaded.projection.runs.find(
             (candidate) => candidate.activeAttemptId === loaded.providerTurn.runAttemptId,
           );
-          if (message === undefined || run === undefined) {
+          const isNativeQuestionAnswer =
+            isQuestionAnswer && loaded.providerTurn.runAttemptId === null;
+          if (message === undefined || (run === undefined && !isNativeQuestionAnswer)) {
             return yield* new ProviderTurnControlError({
               threadId: input.threadId,
               operation: "steer",
@@ -411,19 +455,38 @@ export const layer: Layer.Layer<
               cause: "The persisted steering message or target run is missing.",
             });
           }
-          yield* loaded.session.value.steerTurn({
-            threadId: input.threadId,
-            runId: run.id,
-            providerThread: loaded.providerThread,
-            providerTurnId: loaded.providerTurn.id,
-            message: {
-              messageId: message.id,
-              text: message.text,
-              attachments: message.attachments,
-              createdBy: message.createdBy,
-              creationSource: message.creationSource,
-            },
-          });
+          yield* loaded.session.value
+            .steerTurn({
+              threadId: input.threadId,
+              runId: run?.id ?? null,
+              providerThread: loaded.providerThread,
+              providerTurnId: loaded.providerTurn.id,
+              message: {
+                messageId: message.id,
+                text: message.text,
+                attachments: message.attachments,
+                createdBy: message.createdBy,
+                creationSource: message.creationSource,
+              },
+            })
+            .pipe(
+              Effect.catch((cause) => {
+                const detail = Cause.pretty(Cause.fail(cause));
+                return isQuestionAnswer &&
+                  /is not active and cannot be steered|no active turn|expected.*turn.*(?:mismatch|does not match)/i.test(
+                    detail,
+                  )
+                  ? followUp()
+                  : Effect.fail(
+                      new ProviderTurnControlError({
+                        threadId: input.threadId,
+                        providerTurnId: input.providerTurnId,
+                        operation: "steer",
+                        cause,
+                      }),
+                    );
+              }),
+            );
         }).pipe(
           Effect.mapError((cause) =>
             isProviderTurnControlError(cause)

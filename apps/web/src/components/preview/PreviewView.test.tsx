@@ -107,7 +107,7 @@ vi.mock("~/state/preview", () => ({
 }));
 
 vi.mock("~/state/use-atom-command", () => ({
-  useAtomCommand: () => vi.fn(),
+  useAtomCommand: () => vi.fn(async () => ({ _tag: "Success", value: {} })),
 }));
 
 vi.mock("~/browser/browserRecording", () => ({
@@ -209,6 +209,8 @@ vi.mock("./PreviewUnreachable", () => ({ PreviewUnreachable: () => null }));
 vi.mock("./ZoomIndicator", () => ({ ZoomIndicator: () => null }));
 vi.mock("./AgentBrowserCursor", () => ({ AgentBrowserCursor: () => null }));
 vi.mock("~/browser/BrowserSurfaceSlot", () => ({ BrowserSurfaceSlot: () => null }));
+vi.mock("~/browser/RemoteBrowserView", () => ({ RemoteBrowserView: () => null }));
+vi.mock("~/browser/BrowserSavedLoginPicker", () => ({ BrowserSavedLoginPicker: () => null }));
 vi.mock("./usePreviewSession", () => ({ usePreviewSession: vi.fn() }));
 
 import { PreviewView } from "./PreviewView";
@@ -261,6 +263,10 @@ class TestNode {
   addEventListener() {}
   removeEventListener() {}
   setAttribute() {}
+  removeAttribute() {}
+  get options() {
+    return this.childNodes;
+  }
 }
 
 function installTestDom() {
