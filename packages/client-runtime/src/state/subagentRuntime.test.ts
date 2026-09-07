@@ -634,6 +634,35 @@ describe("model and effort attribution", () => {
     expect(formatSubagentModelLabel(null, "high")).toBeNull();
   });
 
+  it.each([undefined, { totalTokens: 160, inputTokens: undefined }])(
+    "accepts undefined optional fields from projected subagents with usage %j",
+    (usage) => {
+      const now = DateTime.makeUnsafe("2026-08-14T00:00:00.000Z");
+      const [subagent] = projectedSubagentsToRuntime([
+        {
+          id: "optional-fields",
+          origin: "provider_native",
+          driver: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex_work"),
+          childThreadId: null,
+          title: null,
+          prompt: "Inspect the composer",
+          model: null,
+          usage,
+          activationCount: undefined,
+          role: undefined,
+          status: "running",
+          result: null,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+        },
+      ]);
+
+      expect(subagent).toMatchObject({ usage: usage ?? null, activationCount: 1, role: null });
+    },
+  );
+
   it("preserves child linkage and provider options from projected subagents", () => {
     const now = DateTime.makeUnsafe("2026-08-14T00:00:00.000Z");
     const [subagent] = projectedSubagentsToRuntime([
