@@ -8,6 +8,7 @@ import {
   XCircleIcon,
   LaptopIcon,
   XIcon,
+  RotateCcwIcon,
 } from "lucide-react";
 import type { EnvironmentId, OrchestrationV2TurnItem } from "@spiritdevs/contracts";
 import { workspacePreparationPresentation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
@@ -77,18 +78,21 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
 }: {
   item: PreparationItem;
   environmentId: EnvironmentId;
-  onControl?: (action: "cancel" | "work_locally") => Promise<void>;
+  onControl?: (action: "cancel" | "work_locally" | "retry") => Promise<void>;
 }) {
   const presentation = workspacePreparationPresentation(item);
   const preparation = item.workspacePreparation;
   const [expanded, setExpanded] = useState(false);
-  const [pending, setPending] = useState<"cancel" | "work_locally" | null>(null);
+  const [pending, setPending] = useState<"cancel" | "work_locally" | "retry" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const pendingAction =
     pending ?? (item.status === "running" ? (preparation?.controlAction ?? null) : null);
+  const canRecover = item.status === "failed" && preparation?.phase !== "setup";
   const canControl =
-    item.status === "running" && preparation?.workspaceKind === "worktree" && onControl;
-  async function control(action: "cancel" | "work_locally") {
+    (item.status === "running" || canRecover) &&
+    preparation?.workspaceKind === "worktree" &&
+    onControl;
+  async function control(action: "cancel" | "work_locally" | "retry") {
     if (pending || !onControl) return;
     setPending(action);
     setError(null);
@@ -112,7 +116,7 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
       </div>
       <div
         className={cn(
-          "rounded-xl border border-border/70 p-4",
+          "flow-root rounded-xl border border-border/70 p-4",
           presentation.failed && "border-destructive/40",
         )}
       >
@@ -211,17 +215,29 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
             <button
               type="button"
               disabled={pendingAction !== null}
-              onClick={() => void control("cancel")}
+              onClick={() => void control(canRecover ? "retry" : "cancel")}
               className="flex items-center gap-2 rounded py-1 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
             >
-              <XIcon className="size-4" aria-hidden />
-              {pendingAction === "cancel" ? "Cancelling…" : "Cancel"}
+              {canRecover ? (
+                <RotateCcwIcon className="size-4" aria-hidden />
+              ) : (
+                <XIcon className="size-4" aria-hidden />
+              )}
+              {canRecover
+                ? pendingAction === "retry"
+                  ? "Retrying…"
+                  : "Retry"
+                : pendingAction === "cancel"
+                  ? "Cancelling…"
+                  : "Cancel"}
             </button>
           </div>
         ) : null}
         {pendingAction ? (
           <p className="clear-both pt-2 text-xs text-muted-foreground" role="status">
-            Waiting for the current operation to stop safely and cleaning up the worktree…
+            {canRecover
+              ? "Restarting workspace preparation…"
+              : "Waiting for the current operation to stop safely and cleaning up the worktree…"}
           </p>
         ) : null}
         {error ? (

@@ -262,7 +262,7 @@ export interface PromoteQueuedRunInput extends ThreadCommandInput {
 
 export interface ControlWorkspacePreparationInput extends ThreadCommandInput {
   readonly runId: RunId;
-  readonly action: "cancel" | "work_locally";
+  readonly action: "cancel" | "work_locally" | "retry";
 }
 
 export interface CancelQueuedRunInput extends ThreadCommandInput {

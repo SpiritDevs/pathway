@@ -3255,7 +3255,7 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
   const onControlWorkspacePreparation = useCallback(
-    async (runId: RunId, action: "cancel" | "work_locally") => {
+    async (runId: RunId, action: "cancel" | "work_locally" | "retry") => {
       if (!activeProject || !serverProjection) throw new Error("This thread is unavailable.");
       const message = serverProjection.messages.find(
         (message) => message.runId === runId && message.role === "user",

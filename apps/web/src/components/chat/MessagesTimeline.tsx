@@ -214,7 +214,7 @@ interface TimelineRowSharedState {
   onRemoveMissingThread: () => void;
   removingMissingThread: boolean;
   onControlWorkspacePreparation?:
-    | ((runId: RunId, action: "cancel" | "work_locally") => Promise<void>)
+    | ((runId: RunId, action: "cancel" | "work_locally" | "retry") => Promise<void>)
     | undefined;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   onDetachPullRequest: (pullRequest: { readonly number: number; readonly url: string }) => void;
@@ -300,7 +300,7 @@ interface MessagesTimelineProps {
   onRemoveMissingThread?: () => void;
   removingMissingThread?: boolean;
   onControlWorkspacePreparation?:
-    | ((runId: RunId, action: "cancel" | "work_locally") => Promise<void>)
+    | ((runId: RunId, action: "cancel" | "work_locally" | "retry") => Promise<void>)
     | undefined;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   parentThreadLink?: {
@@ -2045,11 +2045,15 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
       ? questions?.prompts.find((prompt) => prompt.requestId === item.requestId)
       : undefined;
   if (turnItemIsWorkspacePreparation(item)) {
+    const runOrdinal = ctx.runs.find((run) => run.id === item.runId)?.ordinal ?? -1;
     return (
       <WorkspacePreparationCard
         item={item}
         environmentId={ctx.activeThreadEnvironmentId}
-        {...(item.runId && ctx.onControlWorkspacePreparation
+        {...(visibility === "local" &&
+        item.runId &&
+        ctx.onControlWorkspacePreparation &&
+        !ctx.runs.some((run) => run.ordinal > runOrdinal)
           ? { onControl: (action) => ctx.onControlWorkspacePreparation!(item.runId!, action) }
           : {})}
       />

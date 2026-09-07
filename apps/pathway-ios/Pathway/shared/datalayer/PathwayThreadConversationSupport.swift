@@ -294,10 +294,22 @@ extension PathwayAgentThreadModel {
             "attachments": .array([]), "dispatchMode": .object(["type": .string("start_immediately")]),
             "sourcePlanRef": .object(["threadId": .string(threadID), "planId": .string(planID)])])
     }
-    func controlWorkspacePreparation(action: String) async throws {
-        guard let activeRunID, ["cancel", "work_locally"].contains(action) else { return }
+    func canRecoverWorkspacePreparation(_ item: PathwayTimelineItem) -> Bool {
+        guard item.type == "command_execution", item.status == "failed",
+              item.fields["threadId"]?.stringValue == threadID,
+              let runID = item.runID, let run = runs.max(by: { $0.ordinal < $1.ordinal }),
+              run.id == runID, run.status == "failed",
+              let preparation = item.fields["workspacePreparation"]?.objectValue else { return false }
+        return preparation["workspaceKind"]?.stringValue == "worktree"
+            && ["preparing", "worktree"].contains(preparation["phase"]?.stringValue ?? "")
+    }
+
+    func controlWorkspacePreparation(action: String, runID: String? = nil) async throws {
+        guard let targetRunID = runID ?? activeRunID, ["cancel", "work_locally", "retry"].contains(action) else {
+            throw PathwayThreadConversationError.message("This workspace preparation is unavailable.")
+        }
         _ = try await request("orchestration.controlWorkspacePreparation", payload: .object([
-            "commandId": .string(UUID().uuidString), "threadId": .string(threadID), "runId": .string(activeRunID), "action": .string(action)]), requiresSubscription: true)
+            "commandId": .string(UUID().uuidString), "threadId": .string(threadID), "runId": .string(targetRunID), "action": .string(action)]), requiresSubscription: true)
     }
 }
 

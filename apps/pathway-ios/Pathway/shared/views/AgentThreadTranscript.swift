@@ -370,12 +370,15 @@ struct AgentTranscriptEventRow: View {
                         }
                         Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption)
                     }
-                    .font(.subheadline).foregroundStyle(item.status == "failed" || item.type == "error" ? Color.red : Color.secondary)
+                    .font(.subheadline).foregroundStyle(item.status == "failed" || (item.type == "error" && item.status != "completed") ? Color.red : Color.secondary)
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("thread-activity-\(item.id)")
                 .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            }
+            if model.canRecoverWorkspacePreparation(item) {
+                WorkspacePreparationRecoveryActions(item: item, model: model)
             }
             if expanded {
                 AgentTranscriptEventContent(item: item, model: model)
@@ -410,6 +413,43 @@ struct AgentTranscriptEventRow: View {
         case "checkpoint": "clock.arrow.circlepath"
         case "todo_list": "checklist"
         default: "square.stack.3d.up"
+        }
+    }
+}
+
+private struct WorkspacePreparationRecoveryActions: View {
+    let item: PathwayTimelineItem
+    let model: PathwayAgentThreadModel
+    @State private var pending: String?
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            HStack {
+                Spacer()
+                Button { recover("work_locally") } label: {
+                    Label(pending == "work_locally" ? "Switching to local…" : "Work locally", systemImage: "laptopcomputer")
+                }
+                Button { recover("retry") } label: {
+                    Label(pending == "retry" ? "Retrying…" : "Retry", systemImage: "arrow.clockwise")
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(pending != nil || !model.isSubscriptionReady)
+            if let errorMessage {
+                Text(errorMessage).font(.caption).foregroundStyle(.red)
+            }
+        }
+    }
+
+    private func recover(_ action: String) {
+        guard pending == nil, model.canRecoverWorkspacePreparation(item), let runID = item.runID else { return }
+        pending = action
+        errorMessage = nil
+        Task { @MainActor in
+            defer { pending = nil }
+            do { try await model.controlWorkspacePreparation(action: action, runID: runID) }
+            catch { errorMessage = error.localizedDescription }
         }
     }
 }

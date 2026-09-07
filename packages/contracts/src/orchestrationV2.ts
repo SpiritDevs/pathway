@@ -1036,6 +1036,7 @@ export const OrchestrationV2WorkspacePreparation = Schema.Struct({
     Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
   ),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  requestedBranch: Schema.optional(Schema.String),
   baseRef: Schema.optional(Schema.String),
   cwd: Schema.optional(Schema.String),
   branch: Schema.optional(Schema.String),
@@ -2487,6 +2488,12 @@ export const OrchestrationV2Command = Schema.Union([
     text: Schema.String,
   }),
   Schema.Struct({
+    type: Schema.Literal("prepared-run.retry"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    runId: RunId,
+  }),
+  Schema.Struct({
     type: Schema.Literal("prepared-run.release"),
     commandId: CommandId,
     threadId: ThreadId,
@@ -2758,7 +2765,7 @@ export const OrchestrationV2WorkspacePreparationControlInput = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   runId: RunId,
-  action: Schema.Literals(["cancel", "work_locally"]),
+  action: Schema.Literals(["cancel", "work_locally", "retry"]),
 });
 export type OrchestrationV2WorkspacePreparationControlInput =
   typeof OrchestrationV2WorkspacePreparationControlInput.Type;
