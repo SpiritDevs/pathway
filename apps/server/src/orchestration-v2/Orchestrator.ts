@@ -266,6 +266,7 @@ function commandThreadId(command: OrchestrationV2Command): ThreadId {
     case "provider-session.detach":
     case "message.dispatch":
     case "message.edit-and-restart":
+    case "prepared-run.retry":
     case "prepared-run.release":
     case "prepared-run.progress":
     case "prepared-run.fail":
@@ -6413,7 +6414,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     command: Extract<
       OrchestrationV2Command,
       {
-        readonly type: "prepared-run.release" | "prepared-run.progress" | "prepared-run.fail";
+        readonly type:
+          | "prepared-run.retry"
+          | "prepared-run.release"
+          | "prepared-run.progress"
+          | "prepared-run.fail";
       }
     >,
     projection: OrchestrationV2ThreadProjection,
@@ -6433,7 +6438,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         candidate.input === WORKSPACE_PREPARATION_INPUT,
     );
     if (
-      run?.status !== "preparing" ||
+      run === undefined ||
+      (command.type === "prepared-run.retry"
+        ? run?.status !== "failed"
+        : run?.status !== "preparing") ||
       attempt === undefined ||
       rootNode === undefined ||
       providerThread === undefined ||
@@ -6443,6 +6451,76 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     return { run, attempt, rootNode, providerThread, preparationItem } as const;
   };
+
+  const dispatchPreparedRunRetry = (
+    command: Extract<OrchestrationV2Command, { readonly type: "prepared-run.retry" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+  ) =>
+    Effect.gen(function* () {
+      const projection = yield* loadProjectionForCommand(command);
+      const state = preparedRunState(command, projection);
+      if (
+        !state ||
+        state.preparationItem.status !== "failed" ||
+        state.preparationItem.workspacePreparation?.workspaceKind !== "worktree" ||
+        state.preparationItem.workspacePreparation.phase === "setup" ||
+        projection.thread.archivedAt !== null ||
+        projection.thread.deletedAt !== null ||
+        projection.thread.worktreePath !== null ||
+        projection.runs.some((run) => run.ordinal > state.run.ordinal) ||
+        state.attempt.providerTurnId !== null ||
+        state.rootNode.checkpointScopeId !== null
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Only the latest failed worktree creation can be retried.",
+        });
+      }
+      const now = yield* DateTime.now;
+      const emitEvent = emit(events, command);
+      const common = {
+        threadId: command.threadId,
+        runId: state.run.id,
+        nodeId: state.rootNode.id,
+        providerInstanceId: state.run.providerInstanceId,
+        occurredAt: now,
+      };
+      yield* emitEvent({
+        ...common,
+        type: "run-attempt.updated",
+        payload: { ...state.attempt, status: "pending", completedAt: null },
+      });
+      yield* emitEvent({
+        ...common,
+        type: "node.updated",
+        payload: { ...state.rootNode, status: "pending", completedAt: null },
+      });
+      yield* emitEvent({
+        ...common,
+        type: "turn-item.updated",
+        payload: {
+          ...state.preparationItem,
+          status: "running",
+          title: "Preparing workspace",
+          output: "",
+          exitCode: undefined,
+          completedAt: null,
+          updatedAt: now,
+          workspacePreparation: {
+            ...state.preparationItem.workspacePreparation,
+            phase: "preparing",
+            controlAction: undefined,
+            checkoutPercent: undefined,
+          },
+        },
+      });
+      yield* emitEvent({
+        ...common,
+        type: "run.updated",
+        payload: { ...state.run, status: "preparing", completedAt: null },
+      });
+    });
 
   const dispatchPreparedRunProgress = (
     command: Extract<OrchestrationV2Command, { readonly type: "prepared-run.progress" }>,
@@ -8030,6 +8108,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "message.edit-and-restart":
         yield* dispatchMessageEditAndRestart(command, events, effects);
+        break;
+      case "prepared-run.retry":
+        yield* dispatchPreparedRunRetry(command, events);
         break;
       case "prepared-run.release":
         yield* dispatchPreparedRunRelease(command, events, effects);

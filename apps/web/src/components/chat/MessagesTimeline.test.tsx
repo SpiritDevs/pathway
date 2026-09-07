@@ -2217,3 +2217,73 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('aria-label="Tool call failed"');
   });
 });
+
+it("offers workspace recovery only on the latest local run", async () => {
+  const { MessagesTimeline } = await import("./MessagesTimeline");
+  for (const scenario of ["latest", "older", "inherited"] as const) {
+    const item = {
+      id: "failed-workspace",
+      threadId: "thread-1",
+      runId: "run-1",
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "failed",
+      title: "Workspace setup failed",
+      startedAt: null,
+      completedAt: null,
+      updatedAt: {},
+      type: "command_execution",
+      input: "Preparing workspace",
+      output: "Checkout failed",
+      workspacePreparation: { phase: "worktree", workspaceKind: "worktree", baseRef: "main" },
+    };
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        onControlWorkspacePreparation={async () => {}}
+        runs={
+          [
+            {
+              id: "run-1",
+              ordinal: 1,
+              providerInstanceId: "codex",
+              modelSelection: { instanceId: "codex", model: "gpt-5.1-codex" },
+            },
+            ...(scenario === "older"
+              ? [
+                  {
+                    id: "run-2",
+                    ordinal: 2,
+                    providerInstanceId: "codex",
+                    modelSelection: { instanceId: "codex", model: "gpt-5.1-codex" },
+                  },
+                ]
+              : []),
+          ] as never
+        }
+        timelineEntries={
+          [
+            {
+              id: item.id,
+              kind: "event",
+              createdAt: MESSAGE_CREATED_AT,
+              projectedItem: {
+                position: 0,
+                visibility: scenario === "inherited" ? "inherited" : "local",
+                sourceThreadId: "thread-1",
+                sourceItemId: item.id,
+                item,
+              },
+            },
+          ] as never
+        }
+      />,
+    );
+    expect(markup.includes(">Retry</button>")).toBe(scenario === "latest");
+    expect(markup.includes("Work locally")).toBe(scenario === "latest");
+  }
+});

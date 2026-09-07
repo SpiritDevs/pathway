@@ -1482,3 +1482,70 @@ it.effect("does not delete a follow-up that arrives while cancellation is cleani
     }).pipe(Effect.provide(harness.layer));
   }),
 );
+
+for (const action of ["retry", "work_locally"] as const) {
+  it.effect(
+    `recovers failed worktree creation with ${action} without duplicating the message`,
+    () =>
+      Effect.gen(function* () {
+        const failed = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
+        let attempts = 0;
+        const harness = makeHarness({
+          createWorktree: (input) =>
+            ++attempts === 1
+              ? Effect.fail(new Error("checkout failed") as never)
+              : Effect.succeed({
+                  worktree: {
+                    path: "/repo-worktrees/retry",
+                    refName: input.newRefName,
+                    headSha: "abc",
+                  },
+                } as never),
+          onDispatch: (command) =>
+            command.type === "prepared-run.fail"
+              ? Deferred.succeed(failed, undefined).pipe(Effect.asVoid)
+              : command.type === "prepared-run.release"
+                ? Deferred.succeed(released, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+        });
+        yield* Effect.gen(function* () {
+          const launches = yield* ThreadLaunch.ThreadLaunchService;
+          const threads = yield* ThreadManagement.ThreadManagementService;
+          const launched = yield* launches.launch(
+            launchInput({
+              command: `launch:${action}`,
+              thread: `thread:${action}`,
+              message: "Keep this request",
+              workspace: { type: "worktree", baseRef: "main" },
+            }),
+          );
+          yield* Deferred.await(failed);
+          const runId = launched.projection.runs[0]!.id;
+          const control = {
+            commandId: CommandId.make(`recover:${action}`),
+            threadId: launched.threadId,
+            runId,
+            action,
+          };
+          yield* launches.controlPreparation(control);
+          yield* Deferred.await(released);
+          yield* launches.controlPreparation(control);
+          const projection = yield* threads.getThreadProjection(launched.threadId);
+          assert.equal(projection.messages.length, 1);
+          assert.equal(projection.messages[0]?.text, "Keep this request");
+          assert.equal(projection.runs.length, 1);
+          assert.equal(projection.runs[0]?.status, "starting");
+          assert.equal(
+            projection.thread.worktreePath,
+            action === "retry" ? "/repo-worktrees/retry" : null,
+          );
+          assert.equal(harness.createWorktree.mock.calls.length, action === "retry" ? 2 : 1);
+          const stale = yield* launches
+            .controlPreparation({ ...control, commandId: CommandId.make(`stale:${action}`) })
+            .pipe(Effect.exit);
+          assert.isTrue(Exit.isFailure(stale));
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+}

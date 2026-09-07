@@ -283,8 +283,9 @@ export const make = Effect.gen(function* () {
       Option.isSome(receipt) &&
       receipt.value.status === "accepted" &&
       receipt.value.threadId === control.threadId &&
-      receipt.value.commandType ===
-        (control.action === "cancel" ? "thread.delete" : "prepared-run.release")
+      (receipt.value.commandType ===
+        (control.action === "cancel" ? "thread.delete" : "prepared-run.release") ||
+        (control.action !== "cancel" && receipt.value.commandType === "prepared-run.retry"))
     )
       return { threadId: control.threadId };
     const entry = activePreparations.get(control.runId);
@@ -298,6 +299,64 @@ export const make = Effect.gen(function* () {
       });
     if (Option.isSome(receipt))
       return yield* rejected("This request identifier has already been used.");
+    if (control.action !== "cancel") {
+      const current = yield* threads
+        .getThreadProjection(control.threadId)
+        .pipe(Effect.mapError(() => rejected("Could not read this thread.")));
+      const run = current.runs.find((run) => run.id === control.runId);
+      if (run?.status === "failed") {
+        // Let the old worker finish its finalizers before replacing its preparation entry.
+        if (entry) yield* Deferred.await(entry.done).pipe(Effect.ignore);
+        const item = current.turnItems.find(
+          (item) =>
+            item.runId === control.runId &&
+            item.type === "command_execution" &&
+            item.workspacePreparation,
+        );
+        const preparation =
+          item?.type === "command_execution" ? item.workspacePreparation : undefined;
+        const message = current.messages.find((message) => message.id === run.userMessageId);
+        if (!message || !preparation?.baseRef)
+          return yield* rejected("The original workspace request is unavailable.");
+        const input: ThreadLaunchInput = {
+          commandId: control.commandId,
+          threadId: control.threadId,
+          projectId: current.thread.projectId,
+          title: current.thread.title,
+          modelSelection: run.modelSelection,
+          runtimeMode: current.thread.runtimeMode,
+          interactionMode: current.thread.interactionMode,
+          createdBy: message.createdBy,
+          creationSource: message.creationSource,
+          initialMessage: {
+            messageId: message.id,
+            text: message.text,
+            attachments: message.attachments,
+          },
+          workspaceStrategy:
+            control.action === "work_locally"
+              ? { type: "root" }
+              : {
+                  type: "worktree",
+                  baseRef: preparation.baseRef,
+                  startFromOrigin: preparation.startFromOrigin,
+                },
+        };
+        yield* threads
+          .dispatch({
+            type: "prepared-run.retry",
+            commandId: control.commandId,
+            threadId: control.threadId,
+            runId: control.runId,
+          })
+          .pipe(Effect.mapError(mapError(input, "control-preparation", control.threadId)));
+        if (yield* reservePreparation(input.commandId))
+          yield* schedulePreparation(input, control.threadId, control.runId);
+        return { threadId: control.threadId };
+      }
+    }
+    if (control.action === "retry")
+      return yield* rejected("Only a failed worktree creation can be retried.");
     if (!entry || entry.input.workspaceStrategy.type !== "worktree")
       return yield* rejected("Worktree preparation is no longer active.");
     const projection = yield* threads
@@ -675,7 +734,8 @@ export const make = Effect.gen(function* () {
       ),
       Effect.ensuring(
         Effect.gen(function* () {
-          if (runId !== null) activePreparations.delete(runId);
+          if (runId !== null && activePreparations.get(runId) === entry)
+            activePreparations.delete(runId);
           yield* releasePreparation(input.commandId);
         }),
       ),

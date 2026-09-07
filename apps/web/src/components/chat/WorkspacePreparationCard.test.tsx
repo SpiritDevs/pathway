@@ -106,7 +106,7 @@ describe("WorkspacePreparationCard", () => {
   });
 });
 
-it("offers both controls only while a new worktree is running", () => {
+it("offers recovery after failure and cancellation while running", () => {
   for (const status of ["running", "completed", "failed", "interrupted"] as const) {
     const html = renderToStaticMarkup(
       <WorkspacePreparationCard
@@ -116,7 +116,8 @@ it("offers both controls only while a new worktree is running", () => {
       />,
     );
     expect(html.includes(">Cancel</button>")).toBe(status === "running");
-    expect(html.includes("Work locally")).toBe(status === "running");
+    expect(html.includes("Work locally")).toBe(status === "running" || status === "failed");
+    expect(html.includes(">Retry</button>")).toBe(status === "failed");
   }
 });
 it("disables both controls when another client has already requested cancellation", () => {
@@ -136,4 +137,20 @@ it("disables both controls when another client has already requested cancellatio
   );
   expect(html).toContain("Cancelling…");
   expect(html.match(/disabled=""/g)).toHaveLength(2);
+});
+
+it("does not offer creation recovery when setup failed after checkout", () => {
+  const html = renderToStaticMarkup(
+    <WorkspacePreparationCard
+      item={{
+        ...item,
+        status: "failed",
+        workspacePreparation: { phase: "setup", workspaceKind: "worktree" },
+      }}
+      environmentId={EnvironmentId.make("env")}
+      onControl={async () => {}}
+    />,
+  );
+  expect(html).not.toContain("Work locally");
+  expect(html).not.toContain(">Retry</button>");
 });
