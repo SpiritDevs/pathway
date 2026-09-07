@@ -27,6 +27,7 @@ import { useAtomCommand } from "../state/use-atom-command";
 import {
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsSettlement,
+  readEnvironmentSupportsForceSettlement,
   readEnvironmentSupportsSettleAfterCompletion,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsTitleRegeneration,
@@ -121,6 +122,7 @@ export function useThreadActionMenu(input: {
         const now = new Date();
         const supports = {
           settlement: readEnvironmentSupportsSettlement(threadRef.environmentId),
+          forceSettlement: readEnvironmentSupportsForceSettlement(threadRef.environmentId),
           settleAfterCompletion: readEnvironmentSupportsSettleAfterCompletion(
             threadRef.environmentId,
           ),
@@ -212,6 +214,11 @@ export function useThreadActionMenu(input: {
             }
             return;
           }
+          case "force-settle":
+            await reportFailure("Failed to force settle thread", () =>
+              settleThread(threadRef, { force: true }),
+            );
+            return;
           case "settle":
             await reportFailure("Failed to settle thread", () => settleThread(threadRef));
             return;

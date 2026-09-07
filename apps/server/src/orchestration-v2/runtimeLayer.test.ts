@@ -13,7 +13,9 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderThreadId,
+  ProviderSessionId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
@@ -799,7 +801,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("rejects settling a thread while a run is active", () =>
+  it.effect("rejects ordinary settle but force settle cancels active and queued work", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
       const threadId = ThreadId.make("runtime-layer-active-settle-thread");
@@ -849,6 +851,128 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.equal(projection.runs[0]?.status, "starting");
       assert.isNull(projection.thread.settledOverride);
       assert.isNull(projection.thread.settledAt);
+
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("force-settle-queued-message"),
+        threadId,
+        messageId: MessageId.make("force-settle-queued-message"),
+        text: "Queued work must not start.",
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+      });
+      const eventSink = yield* EventSinkV2;
+      const now = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("force-settle-pending-request"),
+            type: "runtime-request.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: RuntimeRequestId.make("force-settle-pending-request"),
+              nodeId: projection.nodes[0]!.id,
+              providerTurnId: null,
+              nativeRequestRef: null,
+              kind: "user_input",
+              status: "pending",
+              responseCapability: { type: "not_resumable", reason: "Stale request" },
+              createdAt: now,
+              resolvedAt: null,
+            },
+          },
+        ],
+      });
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("force-settle-attached-session"),
+            type: "provider-session.attached",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: ProviderSessionId.make("force-settle-session"),
+              driver: ProviderDriverKind.make("codex"),
+              providerInstanceId: modelSelection.instanceId,
+              status: "running",
+              cwd: "/tmp/runtime-layer-active-settle",
+              model: modelSelection.model,
+              capabilities: CodexProviderCapabilitiesV2,
+              createdAt: now,
+              updatedAt: now,
+              lastError: null,
+            },
+          },
+        ],
+      });
+      const commandId = CommandId.make("force-settle-active-and-queued");
+      yield* orchestrator.dispatch({ type: "thread.settle", commandId, threadId, force: true });
+      const settled = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(settled.thread.settledOverride, "settled");
+      assert.isNotNull(settled.thread.settledAt);
+      assert.lengthOf(settled.runs, 2);
+      assert.equal(settled.runtimeRequests[0]?.status, "cancelled");
+      assert.isTrue(settled.runs.every((run) => run.status === "cancelled"));
+      assert.isTrue(settled.attempts.every((attempt) => attempt.status === "cancelled"));
+      assert.isTrue(settled.nodes.every((node) => node.status === "cancelled"));
+      const outbox = yield* EffectOutboxV2;
+      const startEffects = yield* outbox.listByCommandId(
+        CommandId.make("runtime-layer-active-settle-message"),
+      );
+      assert.equal(startEffects[0]?.status, "cancelled");
+      const cleanup = yield* outbox.listByCommandId(commandId);
+      assert.include(
+        cleanup.map((effect) => effect.request.type),
+        "provider-session.detach",
+      );
+      assert.include(
+        cleanup.map((effect) => effect.request.type),
+        "terminal.cleanup",
+      );
+      yield* orchestrator.dispatch({ type: "thread.settle", commandId, threadId, force: true });
+      yield* orchestrator.dispatch({
+        type: "thread.unsettle",
+        commandId: CommandId.make("force-settle-reopen"),
+        threadId,
+        reason: "user",
+      });
+      const reopened = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(reopened.thread.settledOverride, "active");
+      assert.isTrue(reopened.runs.every((run) => run.status === "cancelled"));
+
+      // Older bugs could leave a child working after its parent run finished.
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("force-settle-stale-completed-run"),
+            type: "run.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...reopened.runs[0]!, status: "completed" },
+          },
+          {
+            id: EventId.make("force-settle-stale-working-node"),
+            type: "node.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...reopened.nodes[0]!, status: "running", completedAt: null },
+          },
+        ],
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("force-settle-stale-child"),
+        threadId,
+        force: true,
+      });
+      const recovered = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(recovered.runs[0]?.status, "completed");
+      assert.isTrue(recovered.nodes.every((node) => node.status === "cancelled"));
+      assert.equal(recovered.thread.settledOverride, "settled");
     }),
   );
 

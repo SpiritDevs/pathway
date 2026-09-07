@@ -111,6 +111,9 @@ export const executorLayer: Layer.Layer<
                 providerSessionId: effect.request.providerSessionId,
                 threadId: effect.threadId,
                 ...(effect.request.detail === undefined ? {} : { detail: effect.request.detail }),
+                ...(effect.request.interruptTurnIds === undefined
+                  ? {}
+                  : { interruptTurnIds: effect.request.interruptTurnIds }),
                 ...(effect.request.revokeMcpCredential === undefined
                   ? {}
                   : { revokeMcpCredential: effect.request.revokeMcpCredential }),

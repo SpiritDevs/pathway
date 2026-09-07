@@ -31,6 +31,7 @@ import {
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsPinReorder,
   readEnvironmentSupportsSettlement,
+  readEnvironmentSupportsForceSettlement,
   readEnvironmentSupportsSettleAfterCompletion,
   readEnvironmentSupportsSnooze,
   readEnvironmentSupportsVisitedTracking,
@@ -512,10 +513,14 @@ export function useThreadActions() {
   );
 
   const settleThread = useCallback(
-    async (target: ScopedThreadRef) => {
+    async (target: ScopedThreadRef, opts: { force?: boolean } = {}) => {
       // Version skew: never send the command to a server that predates it —
       // the raw protocol rejection would read as a random failure.
-      if (!readEnvironmentSupportsSettlement(target.environmentId)) {
+      if (
+        !(opts.force
+          ? readEnvironmentSupportsForceSettlement(target.environmentId)
+          : readEnvironmentSupportsSettlement(target.environmentId))
+      ) {
         return AsyncResult.failure(
           Cause.fail(
             new ThreadSettlementUnsupportedError({
@@ -529,7 +534,11 @@ export function useThreadActions() {
       // Settle may only target what effectiveSettled could classify as
       // settled: not starting/running sessions, not threads waiting on
       // approvals or user input. Anything else would hide live work.
-      if (resolved && !canSettle(resolved.thread, { now: new Date().toISOString() })) {
+      if (
+        !opts.force &&
+        resolved &&
+        !canSettle(resolved.thread, { now: new Date().toISOString() })
+      ) {
         return AsyncResult.failure(
           Cause.fail(
             new ThreadSettleBlockedError({
@@ -546,7 +555,7 @@ export function useThreadActions() {
       // toast.
       const result = await settleThreadMutation({
         environmentId: target.environmentId,
-        input: { threadId: target.threadId },
+        input: { threadId: target.threadId, ...(opts.force ? { force: true } : {}) },
       });
       if (result._tag === "Success" && wokeAt !== null) {
         markThreadVisited(scopedThreadKey(target), wokeAt);

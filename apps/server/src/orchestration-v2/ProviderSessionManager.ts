@@ -6,6 +6,7 @@ import {
   type ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
+  type ProviderTurnId,
   ThreadId,
 } from "@spiritdevs/contracts";
 import * as Cause from "effect/Cause";
@@ -161,6 +162,7 @@ export interface ProviderSessionManagerV2Shape {
      * potential re-attach.
      */
     readonly revokeMcpCredential?: boolean;
+    readonly interruptTurnIds?: ReadonlyArray<ProviderTurnId>;
   }) => Effect.Effect<void, ProviderSessionManagerV2Error>;
 }
 
@@ -1569,7 +1571,10 @@ export const layerWithOptions = (
                     .map((thread) => [thread.id, thread] as const),
                 );
                 const activeTurns = projection.value.providerTurns.filter(
-                  (turn) => turn.status === "running" && providerThreads.has(turn.providerThreadId),
+                  (turn) =>
+                    (turn.status === "running" ||
+                      input.interruptTurnIds?.includes(turn.id) === true) &&
+                    providerThreads.has(turn.providerThreadId),
                 );
                 yield* Effect.forEach(
                   activeTurns,
@@ -1648,7 +1653,8 @@ export const layerWithOptions = (
             }
             if (
               detached.value.attachedThreadIds.size === 0 &&
-              !detached.value.supportsMultipleProviderThreads
+              (!detached.value.supportsMultipleProviderThreads ||
+                input.interruptTurnIds !== undefined)
             ) {
               yield* releaseEntry({
                 providerSessionId: input.providerSessionId,

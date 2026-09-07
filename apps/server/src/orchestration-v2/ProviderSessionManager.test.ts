@@ -2087,164 +2087,184 @@ it.effect(
     }),
 );
 
-it.effect(
-  "ProviderSessionManagerV2 opens one shared runtime, broadcasts events, and detaches threads independently",
-  () =>
-    Effect.gen(function* () {
-      const state = yield* Ref.make(emptyState);
-      const effect = Effect.gen(function* () {
-        const eventSink = yield* EventSinkV2;
-        const idAllocator = yield* IdAllocatorV2;
-        const manager = yield* ProviderSessionManagerV2;
-        const now = yield* DateTime.now;
-        const projectId = yield* idAllocator.allocate.project({
-          fixtureName: "provider-session-manager-shared-runtime",
-        });
-        const firstThreadId = yield* idAllocator.allocate.thread({
-          fixtureName: "provider-session-manager-shared-runtime-a",
-          projectId,
-        });
-        const secondThreadId = yield* idAllocator.allocate.thread({
-          fixtureName: "provider-session-manager-shared-runtime-b",
-          projectId,
-        });
-        const providerSessionId = idAllocator.derive.providerSession({
-          providerInstanceId: modelSelection.instanceId,
-        });
+for (const force of [false, true]) {
+  it.effect(
+    `ProviderSessionManagerV2 detaches shared threads independently (force: ${force})`,
+    () =>
+      Effect.gen(function* () {
+        const state = yield* Ref.make(emptyState);
+        const effect = Effect.gen(function* () {
+          const eventSink = yield* EventSinkV2;
+          const idAllocator = yield* IdAllocatorV2;
+          const manager = yield* ProviderSessionManagerV2;
+          const now = yield* DateTime.now;
+          const projectId = yield* idAllocator.allocate.project({
+            fixtureName: "provider-session-manager-shared-runtime",
+          });
+          const firstThreadId = yield* idAllocator.allocate.thread({
+            fixtureName: "provider-session-manager-shared-runtime-a",
+            projectId,
+          });
+          const secondThreadId = yield* idAllocator.allocate.thread({
+            fixtureName: "provider-session-manager-shared-runtime-b",
+            projectId,
+          });
+          const providerSessionId = idAllocator.derive.providerSession({
+            providerInstanceId: modelSelection.instanceId,
+          });
 
-        yield* eventSink.write({
-          events: [
-            yield* makeThreadCreatedEvent({ idAllocator, threadId: firstThreadId, now }),
-            yield* makeThreadCreatedEvent({ idAllocator, threadId: secondThreadId, now }),
-          ],
-        });
-        const firstProviderThread = makeProviderThread({
-          idAllocator,
-          threadId: firstThreadId,
-          providerSessionId,
-          now,
-        });
-        const secondProviderThread = makeProviderThread({
-          idAllocator,
-          threadId: secondThreadId,
-          providerSessionId,
-          now,
-        });
-        const firstRunId = idAllocator.derive.run({ threadId: firstThreadId, ordinal: 1 });
-        yield* eventSink.write({
-          events: [
-            {
-              id: yield* idAllocator.allocate.event({ threadId: firstThreadId }),
-              type: "provider-thread.updated",
-              threadId: firstThreadId,
-              driver: CODEX_DRIVER,
-              occurredAt: now,
-              payload: firstProviderThread,
-            },
-            {
-              id: yield* idAllocator.allocate.event({ threadId: firstThreadId }),
-              type: "provider-turn.updated",
-              threadId: firstThreadId,
-              runId: firstRunId,
-              driver: CODEX_DRIVER,
-              occurredAt: now,
-              payload: {
-                id: idAllocator.derive.providerTurn({
-                  driver: CODEX_DRIVER,
-                  nativeTurnId: "native-turn-shared-runtime-a",
-                }),
-                providerThreadId: firstProviderThread.id,
-                nodeId: idAllocator.derive.rootNode({ runId: firstRunId }),
-                runAttemptId: null,
-                nativeTurnRef: null,
-                ordinal: 1,
-                status: "running",
-                startedAt: now,
-                completedAt: null,
+          yield* eventSink.write({
+            events: [
+              yield* makeThreadCreatedEvent({ idAllocator, threadId: firstThreadId, now }),
+              yield* makeThreadCreatedEvent({ idAllocator, threadId: secondThreadId, now }),
+            ],
+          });
+          const firstProviderThread = makeProviderThread({
+            idAllocator,
+            threadId: firstThreadId,
+            providerSessionId,
+            now,
+          });
+          const secondProviderThread = makeProviderThread({
+            idAllocator,
+            threadId: secondThreadId,
+            providerSessionId,
+            now,
+          });
+          const firstRunId = idAllocator.derive.run({ threadId: firstThreadId, ordinal: 1 });
+          yield* eventSink.write({
+            events: [
+              {
+                id: yield* idAllocator.allocate.event({ threadId: firstThreadId }),
+                type: "provider-thread.updated",
+                threadId: firstThreadId,
+                driver: CODEX_DRIVER,
+                occurredAt: now,
+                payload: firstProviderThread,
               },
-            },
-          ],
-        });
-        const firstRuntime = yield* manager.open({
-          threadId: firstThreadId,
-          providerSessionId,
-          modelSelection,
-          runtimePolicy,
-        });
-        const secondRuntime = yield* manager.open({
-          threadId: secondThreadId,
-          providerSessionId,
-          modelSelection,
-          runtimePolicy,
+              {
+                id: yield* idAllocator.allocate.event({ threadId: firstThreadId }),
+                type: "provider-turn.updated",
+                threadId: firstThreadId,
+                runId: firstRunId,
+                driver: CODEX_DRIVER,
+                occurredAt: now,
+                payload: {
+                  id: idAllocator.derive.providerTurn({
+                    driver: CODEX_DRIVER,
+                    nativeTurnId: "native-turn-shared-runtime-a",
+                  }),
+                  providerThreadId: firstProviderThread.id,
+                  nodeId: idAllocator.derive.rootNode({ runId: firstRunId }),
+                  runAttemptId: null,
+                  nativeTurnRef: null,
+                  ordinal: 1,
+                  status: force ? "cancelled" : "running",
+                  startedAt: now,
+                  completedAt: null,
+                },
+              },
+            ],
+          });
+          const firstRuntime = yield* manager.open({
+            threadId: firstThreadId,
+            providerSessionId,
+            modelSelection,
+            runtimePolicy,
+          });
+          const secondRuntime = yield* manager.open({
+            threadId: secondThreadId,
+            providerSessionId,
+            modelSelection,
+            runtimePolicy,
+          });
+
+          assert.strictEqual(firstRuntime, secondRuntime);
+          assert.equal((yield* Ref.get(state)).openCount, 1);
+          const resumeSecondThread = secondRuntime.resumeThread({
+            providerThread: secondProviderThread,
+            threadId: secondThreadId,
+            modelSelection,
+            runtimePolicy,
+          });
+          yield* resumeSecondThread;
+          yield* resumeSecondThread;
+          assert.equal((yield* Ref.get(state)).resumeCount, 1);
+          yield* secondRuntime.resumeThread({
+            providerThread: secondProviderThread,
+            threadId: secondThreadId,
+            modelSelection: { ...modelSelection, model: "gpt-5.4-mini" },
+            runtimePolicy,
+          });
+          assert.equal((yield* Ref.get(state)).resumeCount, 2);
+          yield* resumeSecondThread;
+          assert.equal((yield* Ref.get(state)).resumeCount, 3);
+          const subscribe = firstRuntime.subscribeEvents;
+          assert.isDefined(subscribe);
+          if (subscribe === undefined) return;
+          const firstSubscription = yield* subscribe;
+          const secondSubscription = yield* subscribe;
+          const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
+          assert.isDefined(queue);
+          yield* Queue.offer(queue!, {
+            type: "provider_session.updated",
+            driver: CODEX_DRIVER,
+            providerSession: firstRuntime.providerSession,
+          });
+          const received = yield* Effect.all([
+            firstSubscription.events.pipe(Stream.runHead),
+            secondSubscription.events.pipe(Stream.runHead),
+          ]);
+          assert.isTrue(received.every(Option.isSome));
+          assert.isTrue(
+            received.every(
+              (event) => Option.isSome(event) && event.value.type === "provider_session.updated",
+            ),
+          );
+
+          yield* manager.detach({ providerSessionId, threadId: secondThreadId });
+          yield* manager.open({
+            threadId: secondThreadId,
+            providerSessionId,
+            modelSelection,
+            runtimePolicy,
+          });
+          yield* resumeSecondThread;
+          assert.equal((yield* Ref.get(state)).resumeCount, 4);
+
+          yield* manager.detach({
+            providerSessionId,
+            threadId: firstThreadId,
+            ...(force
+              ? {
+                  interruptTurnIds: [
+                    idAllocator.derive.providerTurn({
+                      driver: CODEX_DRIVER,
+                      nativeTurnId: "native-turn-shared-runtime-a",
+                    }),
+                  ],
+                }
+              : {}),
+          });
+          assert.isTrue(Option.isSome(yield* manager.get(providerSessionId)));
+          assert.equal((yield* Ref.get(state)).closeCount, 0);
+          assert.equal((yield* Ref.get(state)).interruptCount, 1);
+
+          yield* manager.detach({
+            providerSessionId,
+            threadId: secondThreadId,
+            ...(force ? { interruptTurnIds: [] } : {}),
+          });
+          if (force) assert.equal((yield* Ref.get(state)).closeCount, 1);
+          yield* TestClock.adjust("1 second");
+          yield* Effect.yieldNow;
+          assert.equal((yield* Ref.get(state)).closeCount, 1);
         });
 
-        assert.strictEqual(firstRuntime, secondRuntime);
-        assert.equal((yield* Ref.get(state)).openCount, 1);
-        const resumeSecondThread = secondRuntime.resumeThread({
-          providerThread: secondProviderThread,
-          threadId: secondThreadId,
-          modelSelection,
-          runtimePolicy,
-        });
-        yield* resumeSecondThread;
-        yield* resumeSecondThread;
-        assert.equal((yield* Ref.get(state)).resumeCount, 1);
-        yield* secondRuntime.resumeThread({
-          providerThread: secondProviderThread,
-          threadId: secondThreadId,
-          modelSelection: { ...modelSelection, model: "gpt-5.4-mini" },
-          runtimePolicy,
-        });
-        assert.equal((yield* Ref.get(state)).resumeCount, 2);
-        yield* resumeSecondThread;
-        assert.equal((yield* Ref.get(state)).resumeCount, 3);
-        const subscribe = firstRuntime.subscribeEvents;
-        assert.isDefined(subscribe);
-        if (subscribe === undefined) return;
-        const firstSubscription = yield* subscribe;
-        const secondSubscription = yield* subscribe;
-        const queue = (yield* Ref.get(state)).eventQueues.get(String(providerSessionId));
-        assert.isDefined(queue);
-        yield* Queue.offer(queue!, {
-          type: "provider_session.updated",
-          driver: CODEX_DRIVER,
-          providerSession: firstRuntime.providerSession,
-        });
-        const received = yield* Effect.all([
-          firstSubscription.events.pipe(Stream.runHead),
-          secondSubscription.events.pipe(Stream.runHead),
-        ]);
-        assert.isTrue(received.every(Option.isSome));
-        assert.isTrue(
-          received.every(
-            (event) => Option.isSome(event) && event.value.type === "provider_session.updated",
-          ),
-        );
-
-        yield* manager.detach({ providerSessionId, threadId: secondThreadId });
-        yield* manager.open({
-          threadId: secondThreadId,
-          providerSessionId,
-          modelSelection,
-          runtimePolicy,
-        });
-        yield* resumeSecondThread;
-        assert.equal((yield* Ref.get(state)).resumeCount, 4);
-
-        yield* manager.detach({ providerSessionId, threadId: firstThreadId });
-        assert.isTrue(Option.isSome(yield* manager.get(providerSessionId)));
-        assert.equal((yield* Ref.get(state)).closeCount, 0);
-        assert.equal((yield* Ref.get(state)).interruptCount, 1);
-
-        yield* manager.detach({ providerSessionId, threadId: secondThreadId });
-        yield* TestClock.adjust("1 second");
-        yield* Effect.yieldNow;
-        assert.equal((yield* Ref.get(state)).closeCount, 1);
-      });
-
-      yield* effect.pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 1000 })));
-    }),
-);
+        yield* effect.pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 1000 })));
+      }),
+  );
+}
 
 it.effect(
   "ProviderSessionManagerV2 rejects a second thread when the provider runtime is exclusive",
