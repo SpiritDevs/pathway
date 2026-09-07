@@ -11,6 +11,7 @@ export type ThreadActionMenuId =
   | "pin"
   | "unpin"
   | "settle"
+  | "force-settle"
   | "settle-after-completion"
   | "unsettle"
   | "snooze"
@@ -38,6 +39,7 @@ export interface ThreadActionMenuState {
   readonly isRunning: boolean;
   readonly supports: {
     readonly settlement: boolean;
+    readonly forceSettlement?: boolean;
     readonly settleAfterCompletion: boolean;
     readonly snooze: boolean;
     readonly pinning: boolean;
@@ -79,6 +81,9 @@ export function buildThreadActionMenuItems(
             ? { id: "unsettle" as const, label: "Un-settle thread" }
             : { id: "settle" as const, label: "Settle thread" },
         ]
+      : []),
+    ...(!state.isSettled && state.supports.forceSettlement
+      ? [{ id: "force-settle" as const, label: "Force settle thread" }]
       : []),
     ...(!state.isSettled && state.supports.settleAfterCompletion
       ? [

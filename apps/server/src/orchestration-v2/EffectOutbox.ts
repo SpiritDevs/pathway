@@ -30,6 +30,8 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     detail: Schema.optional(Schema.String),
     /** Set on terminal detaches (thread archive/delete): revoke the thread's MCP credentials. */
     revokeMcpCredential: Schema.optional(Schema.Boolean),
+    /** Turns terminalized by force settle that still need a runtime interrupt. */
+    interruptTurnIds: Schema.optional(Schema.Array(ProviderTurnId)),
   }),
   Schema.Struct({
     type: Schema.Literal("provider-turn.start"),

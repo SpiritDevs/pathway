@@ -1698,6 +1698,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
     const thread = projection.thread;
+    const forceSettle = command.type === "thread.settle" && command.force === true;
     if (thread.deletedAt !== null && command.type !== "thread.delete") {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
@@ -1788,6 +1789,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     if (
       command.type === "thread.settle" &&
+      !forceSettle &&
       (projection.runs.some((run) =>
         ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
       ) ||
@@ -2132,7 +2134,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ]);
     }
 
-    if (command.type === "thread.archive" || command.type === "thread.delete") {
+    if (command.type === "thread.archive" || command.type === "thread.delete" || forceSettle) {
       const emitEvent = emit(events, command);
       const activeRunIds = new Set(
         projection.runs
@@ -2156,7 +2158,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       for (const attempt of projection.attempts.filter(
         (candidate) =>
-          activeRunIds.has(candidate.runId) &&
+          (forceSettle || activeRunIds.has(candidate.runId)) &&
           (candidate.status === "pending" || candidate.status === "running"),
       )) {
         const run = projection.runs.find((candidate) => candidate.id === attempt.runId)!;
@@ -2172,22 +2174,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       for (const node of projection.nodes.filter(
         (candidate) =>
-          candidate.runId !== null &&
-          activeRunIds.has(candidate.runId) &&
+          (forceSettle || (candidate.runId !== null && activeRunIds.has(candidate.runId))) &&
           ["pending", "running", "waiting"].includes(candidate.status),
       )) {
-        const run = projection.runs.find((candidate) => candidate.id === node.runId)!;
+        const run = projection.runs.find((candidate) => candidate.id === node.runId);
         yield* emitEvent({
           type: "node.updated",
           threadId: command.threadId,
-          runId: run.id,
+          ...(run ? { runId: run.id, providerInstanceId: run.providerInstanceId } : {}),
           nodeId: node.id,
-          providerInstanceId: run.providerInstanceId,
           occurredAt: now,
           payload: { ...node, status: "cancelled", completedAt: now },
         });
       }
-      if (command.type === "thread.delete") {
+      if (command.type === "thread.delete" || forceSettle) {
         for (const request of projection.runtimeRequests.filter(
           (candidate) => candidate.status === "pending",
         )) {
@@ -2201,10 +2201,67 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               status: "cancelled",
               responseCapability: {
                 type: "not_resumable",
-                reason: "The thread was deleted.",
+                reason: forceSettle ? "The thread was force settled." : "The thread was deleted.",
               },
               resolvedAt: now,
             },
+          });
+        }
+      }
+
+      if (forceSettle) {
+        for (const providerThread of projection.providerThreads) {
+          yield* emitEvent({
+            type: "provider-thread.updated",
+            threadId: command.threadId,
+            occurredAt: now,
+            payload: {
+              ...providerThread,
+              status: "closed",
+              pendingBackgroundTasks: [],
+              updatedAt: now,
+            },
+          });
+        }
+        for (const subagent of projection.subagents.filter((candidate) =>
+          ["pending", "running", "waiting"].includes(candidate.status),
+        )) {
+          yield* emitEvent({
+            type: "subagent.updated",
+            threadId: command.threadId,
+            ...(subagent.runId === null ? {} : { runId: subagent.runId }),
+            nodeId: subagent.id,
+            occurredAt: now,
+            payload: { ...subagent, status: "cancelled", completedAt: now, updatedAt: now },
+          });
+        }
+        for (const turn of projection.providerTurns.filter((candidate) =>
+          ["pending", "running"].includes(candidate.status),
+        )) {
+          yield* emitEvent({
+            type: "provider-turn.updated",
+            threadId: command.threadId,
+            nodeId: turn.nodeId,
+            occurredAt: now,
+            payload: { ...turn, status: "cancelled", completedAt: now },
+          });
+        }
+        for (const item of projection.turnItems.filter((candidate) =>
+          ["pending", "running", "waiting"].includes(candidate.status),
+        )) {
+          yield* emitEvent({
+            type: "turn-item.updated",
+            threadId: command.threadId,
+            occurredAt: now,
+            payload: { ...item, status: "cancelled", completedAt: now, updatedAt: now },
+          });
+        }
+        for (const message of projection.messages.filter((candidate) => candidate.streaming)) {
+          yield* emitEvent({
+            type: "message.updated",
+            threadId: command.threadId,
+            occurredAt: now,
+            payload: { ...message, streaming: false, updatedAt: now },
           });
         }
       }
@@ -2221,9 +2278,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // Settle joins archive/delete here: all three mean "done with this
     // thread", so a live provider session must not keep running background
     // work (PR monitors, dev servers, subagent fleets) after any of them
-    // lands. The settle guard above already rejects active or blocked runs,
-    // so for settle this only ever stops an idle session; commands are
-    // decided serially against the projection, so a turn start that
+    // lands. Ordinary settle rejects active work; force settle cancels it.
+    // Commands are decided serially against the projection, so a turn start that
     // re-engages the thread cannot race this detach.
     const detachSessionIds = new Set(
       command.type === "thread.archive" ||
@@ -2246,8 +2302,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const liveSessions = projection.providerSessions.filter(
         (session) =>
           detachSessionIds.has(session.id) &&
-          session.status !== "stopped" &&
-          session.status !== "error",
+          (forceSettle || (session.status !== "stopped" && session.status !== "error")),
       );
       yield* Effect.forEach(
         liveSessions,
@@ -2301,7 +2356,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 // Terminal detaches revoke the thread's MCP credentials; other
                 // detach reasons keep them so a re-attaching provider process
                 // stays authorized.
-                ...(command.type === "thread.archive" || command.type === "thread.delete"
+                ...(forceSettle
+                  ? {
+                      interruptTurnIds: projection.providerTurns
+                        .filter((turn) => ["pending", "running"].includes(turn.status))
+                        .map((turn) => turn.id),
+                    }
+                  : {}),
+                ...(command.type === "thread.archive" ||
+                command.type === "thread.delete" ||
+                forceSettle
                   ? { revokeMcpCredential: true }
                   : {}),
               },
@@ -2312,7 +2376,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
     }
 
-    if (command.type === "thread.archive" || command.type === "thread.delete") {
+    if (command.type === "thread.archive" || command.type === "thread.delete" || forceSettle) {
       yield* Ref.update(effects, (existing) => [
         ...existing,
         {
@@ -7936,6 +8000,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.model-selection.set":
       case "provider.switch":
         yield* dispatchThreadMutation(command, events, effects);
+        if (command.type === "thread.settle" && command.force === true) {
+          cancelUnsettledEffects = {
+            effectTypes: [
+              "provider-turn.start",
+              "provider-turn.restart",
+              "provider-turn.steer",
+              "runtime-request.respond",
+              "provider-thread.rollback-and-start",
+            ],
+            reason: "Thread was force settled.",
+          };
+        }
         break;
       case "thread.browser-takeover.request":
       case "thread.browser-takeover.transition":

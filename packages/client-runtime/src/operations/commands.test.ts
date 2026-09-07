@@ -864,6 +864,11 @@ describe("V2 environment commands", () => {
         commandId: CommandId.make("settle-command"),
         threadId: ThreadId.make("thread-1"),
       }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      yield* settleThread({
+        commandId: CommandId.make("force-settle-command"),
+        threadId: ThreadId.make("thread-1"),
+        force: true,
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
       yield* unsettleThread({
         commandId: CommandId.make("unsettle-command"),
         threadId: ThreadId.make("thread-1"),
@@ -880,6 +885,12 @@ describe("V2 environment commands", () => {
           type: "thread.settle",
           commandId: "settle-command",
           threadId: "thread-1",
+        },
+        {
+          type: "thread.settle",
+          commandId: "force-settle-command",
+          threadId: "thread-1",
+          force: true,
         },
         {
           type: "thread.unsettle",

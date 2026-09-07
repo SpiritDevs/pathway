@@ -259,6 +259,13 @@ export function readEnvironmentSupportsSettlement(environmentId: EnvironmentId):
   );
 }
 
+export function readEnvironmentSupportsForceSettlement(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadForceSettlement === true
+  );
+}
+
 /** Whether the environment can persist and complete one-shot settlement
     requests. This is a separate capability because older settlement servers
     would reject the new command. */

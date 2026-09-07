@@ -81,7 +81,9 @@ export interface DeleteThreadInput extends ThreadCommandInput {
 }
 export type ArchiveThreadInput = ThreadCommandInput;
 export type UnarchiveThreadInput = ThreadCommandInput;
-export type SettleThreadInput = ThreadCommandInput;
+export interface SettleThreadInput extends ThreadCommandInput {
+  readonly force?: boolean;
+}
 
 export interface SettleAfterCompletionInput extends ThreadCommandInput {
   readonly enabled: boolean;
@@ -450,7 +452,12 @@ export const unarchiveThread = Effect.fn("EnvironmentCommands.unarchiveThread")(
 export const settleThread = Effect.fn("EnvironmentCommands.settleThread")(function* (
   input: SettleThreadInput,
 ) {
-  return yield* simpleThreadCommand("thread.settle", input);
+  return yield* dispatch({
+    type: "thread.settle",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    ...(input.force === undefined ? {} : { force: input.force }),
+  });
 });
 
 export const attachPullRequest = Effect.fn("EnvironmentCommands.attachPullRequest")(function* (

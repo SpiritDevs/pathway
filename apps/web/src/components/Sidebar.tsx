@@ -2858,14 +2858,17 @@ export default function Sidebar() {
   );
 
   const attemptSettle = useCallback(
-    (threadRef: ScopedThreadRef, opts: { coSettlingKeys?: ReadonlySet<string> } = {}) => {
+    (
+      threadRef: ScopedThreadRef,
+      opts: { coSettlingKeys?: ReadonlySet<string>; force?: boolean } = {},
+    ) => {
       void (async () => {
         const threadKey = scopedThreadKey(threadRef);
         if (settlingThreadKeysRef.current.has(threadKey)) return;
         settlingThreadKeysRef.current.add(threadKey);
         try {
           const navigateAfterSettle = planForwardNavigation(threadKey, opts.coSettlingKeys);
-          const result = await settleThread(threadRef);
+          const result = await settleThread(threadRef, opts);
           if (result._tag === "Failure") {
             // Never navigate away from a thread that did not settle.
             if (!isAtomCommandInterrupted(result)) {
@@ -3504,6 +3507,9 @@ export default function Sidebar() {
               isRunning: threadRuntimeIsActive(thread.runtime),
               supports: {
                 settlement: supportsSettlement,
+                forceSettlement:
+                  serverConfigs.get(threadRef.environmentId)?.environment.capabilities
+                    .threadForceSettlement === true,
                 settleAfterCompletion: supportsSettleAfterCompletion,
                 snooze: supportsSnooze,
                 pinning: supportsPinning,
@@ -3546,6 +3552,9 @@ export default function Sidebar() {
             }
             return;
           }
+          case "force-settle":
+            attemptSettle(threadRef, { force: true });
+            return;
           case "settle":
             attemptSettle(threadRef);
             return;

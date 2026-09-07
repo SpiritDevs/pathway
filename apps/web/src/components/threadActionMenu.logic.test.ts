@@ -29,6 +29,16 @@ function ids(state: ThreadActionMenuState): string[] {
 }
 
 describe("buildThreadActionMenuItems", () => {
+  it("offers force settle for active threads only on supporting servers", () => {
+    const supported = {
+      ...baseState,
+      isRunning: true,
+      supports: { ...baseState.supports, forceSettlement: true },
+    };
+    expect(ids(supported)).toContain("force-settle");
+    expect(ids(baseState)).not.toContain("force-settle");
+    expect(ids({ ...supported, isSettled: true })).not.toContain("force-settle");
+  });
   it("hides lifecycle items when the environment lacks the capabilities", () => {
     expect(
       ids({
