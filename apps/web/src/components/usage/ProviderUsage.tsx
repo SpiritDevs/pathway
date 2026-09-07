@@ -12,6 +12,8 @@ import {
   type ServerProvider,
   type ServerProviderUsageSnapshot,
 } from "@spiritdevs/contracts";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { ChevronDownIcon, RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 
@@ -653,7 +655,9 @@ function ProviderUsageCard({ account }: { account: ConnectedProviderUsageAccount
           </span>
           <div className="min-w-0">
             <p className="truncate text-sm font-medium text-foreground">{displayName}</p>
-            <p className="truncate text-[11px] text-muted-foreground">{account.environmentLabel}</p>
+            <p className="truncate text-[11px] text-muted-foreground">
+              {account.provider.auth.email ?? account.environmentLabel}
+            </p>
             {displayName !== providerName(usageProvider) ? (
               <p className="text-[11px] text-muted-foreground">{providerName(usageProvider)}</p>
             ) : null}
@@ -731,7 +735,7 @@ function ConnectedProviderUsageRow({ account }: { account: ConnectedProviderUsag
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
           {displayName}
           <span className="ml-1 font-normal text-muted-foreground">
-            · {account.environmentLabel}
+            · {account.provider.auth.email ?? account.environmentLabel}
           </span>
         </span>
         {usage.data?.status === "ok" && usage.data.planName ? (
@@ -755,6 +759,29 @@ function useConnectedProviderUsageAccounts() {
     () => environments.filter((environment) => environment.connection.phase === "connected"),
     [environments],
   );
+  const usageAtom = useMemo(
+    () =>
+      Atom.make(
+        (get) =>
+          new Map(
+            connected.map((environment) => [
+              environment.environmentId,
+              Option.getOrNull(
+                AsyncResult.value(
+                  get(
+                    serverEnvironment.providerUsageLive({
+                      environmentId: environment.environmentId,
+                      input: {},
+                    }),
+                  ),
+                ),
+              ),
+            ]),
+          ),
+      ),
+    [connected],
+  );
+  const usage = useAtomValue(usageAtom);
   const accounts = useMemo(
     () =>
       deriveConnectedProviderUsageAccounts(
@@ -762,9 +789,10 @@ function useConnectedProviderUsageAccounts() {
           environmentId: environment.environmentId,
           environmentLabel: environment.label,
           providers: serverConfigs.get(environment.environmentId)?.providers ?? null,
+          usage: usage.get(environment.environmentId) ?? [],
         })),
       ),
-    [connected, serverConfigs],
+    [connected, serverConfigs, usage],
   );
   const loading =
     !isReady ||

@@ -383,3 +383,64 @@ it.effect("preserves only metadata pushed after an HTTP refresh started", () =>
     }
   }),
 );
+
+it.effect(
+  "groups Codex credentials by account across token rotation and preserves identity on pushes",
+  () =>
+    Effect.gen(function* () {
+      const first = yield* Effect.promise(async () => {
+        const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+        const { tmpdir } = await import("node:os");
+        const { join } = await import("node:path");
+        const home = await mkdtemp(join(tmpdir(), "pathway-usage-identity-"));
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(
+            async () =>
+              new Response(
+                JSON.stringify({
+                  rate_limit: { primary_window: { used_percent: 20, limit_window_seconds: 18000 } },
+                }),
+              ),
+          ),
+        );
+        const input = {
+          instanceId,
+          provider: "codex" as const,
+          nowMs,
+          providerHomePath: home,
+          homeDir: home,
+        };
+        const fetchAccount = async (accountId: string | undefined, token: string) => {
+          await writeFile(
+            join(home, "auth.json"),
+            JSON.stringify({ tokens: { access_token: token, account_id: accountId } }),
+          );
+          return providerUsageTestKit.fetchCodex(input);
+        };
+        try {
+          const first = await fetchAccount("account-a", "token-a");
+          const rotated = await fetchAccount("account-a", "token-b");
+          const other = await fetchAccount("account-b", "token-c");
+          expect(first.snapshot.accountKey).toMatch(/^[a-f0-9]{64}$/);
+          expect(rotated.snapshot.accountKey).toBe(first.snapshot.accountKey);
+          expect(other.snapshot.accountKey).not.toBe(first.snapshot.accountKey);
+          expect((await fetchAccount(undefined, "token-d")).snapshot.accountKey).toBeUndefined();
+          return first;
+        } finally {
+          await rm(home, { recursive: true, force: true });
+        }
+      });
+      yield* Effect.promise(() =>
+        providerUsageTestKit.resolve({ instanceId, provider: "codex", nowMs }, async () => first),
+      );
+      const pushed = yield* ingestPushedSnapshot(
+        mapCodexRateLimitsUpdated({
+          instanceId,
+          rateLimits: { primary: { usedPercent: 30, windowDurationMins: 300 } },
+        }),
+        nowMs + 1,
+      );
+      expect(pushed.accountKey).toBe(first.snapshot.accountKey);
+    }),
+);

@@ -1,5 +1,7 @@
 import {
   EnvironmentId,
+  IsoDateTime,
+  type ServerProviderUsageSnapshot,
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerProvider,
@@ -105,5 +107,73 @@ describe("connected provider usage accounts", () => {
         { environmentId: laptopId, providers: [laptopCodex] },
       ]),
     ).toHaveLength(2);
+  });
+});
+
+function usage(
+  instanceId: string,
+  accountKey: string,
+  updatedAt = "2026-09-08T00:00:00Z",
+  stale = false,
+): ServerProviderUsageSnapshot {
+  return {
+    instanceId: ProviderInstanceId.make(instanceId),
+    provider: "codex",
+    accountKey,
+    updatedAt: IsoDateTime.make(updatedAt),
+    status: "ok",
+    source: "test",
+    limits: [],
+    usageLines: [],
+    stale,
+  };
+}
+
+describe("grouping Codex subscriptions", () => {
+  const personal = provider({
+    driver: "codex",
+    instanceId: "codex",
+    displayName: "Codex",
+    email: "same@example.com",
+  });
+  const work = provider({
+    driver: "codex",
+    instanceId: "work",
+    displayName: "Work",
+    email: "same@example.com",
+  });
+  const environments = [studioId, laptopId, EnvironmentId.make("studio-2")].map(
+    (environmentId, index) => ({
+      environmentId,
+      providers: [personal, work],
+      usage: [usage("codex", "personal", `2026-09-08T0${index}:00:00Z`), usage("work", "work")],
+    }),
+  );
+
+  it("shows two subscriptions across three environments, even with the same email", () => {
+    const accounts = deriveConnectedProviderUsageAccounts(environments);
+    expect(accounts).toHaveLength(2);
+    expect(accounts.map((account) => account.displayName)).toEqual(["Codex", "Work"]);
+    expect(accounts[0]?.environmentId).toBe(environments[2]?.environmentId);
+  });
+
+  it("prefers live usage over a newer stale reading", () => {
+    const accounts = deriveConnectedProviderUsageAccounts([
+      environments[0]!,
+      { ...environments[1]!, usage: [usage("codex", "personal", "2026-09-08T05:00:00Z", true)] },
+    ]);
+    expect(accounts.find((account) => account.displayName === "Codex")?.environmentId).toBe(
+      studioId,
+    );
+  });
+
+  it("uses a remaining environment after a disconnect and separates an account switch", () => {
+    expect(deriveConnectedProviderUsageAccounts(environments.slice(1))).toHaveLength(2);
+    expect(
+      deriveConnectedProviderUsageAccounts([
+        environments[0]!,
+        { ...environments[1]!, usage: [usage("codex", "new-login"), usage("work", "work")] },
+      ]),
+    ).toHaveLength(3);
   });
 });

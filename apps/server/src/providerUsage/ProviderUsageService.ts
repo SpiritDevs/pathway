@@ -937,14 +937,17 @@ async function fetchCodexUsage(ctx: ProviderContext): Promise<ProviderFetchResul
     if (!result.ok) {
       return failedFetchResult(ctx, "codex-wham-usage", "Codex", result);
     }
-    return fetched(
-      parseCodexUsage({
+    return fetched({
+      ...parseCodexUsage({
         instanceId: ctx.instanceId,
         json: result.json,
         headers: Object.fromEntries(result.headers),
         nowMs: ctx.nowMs,
       }),
-    );
+      ...(auth.accountId
+        ? { accountKey: NodeCrypto.createHash("sha256").update(auth.accountId).digest("hex") }
+        : {}),
+    });
   } catch {
     return fetched(
       errorSnapshot(ctx, "codex-wham-usage", "Could not reach the Codex usage endpoint."),
@@ -1482,6 +1485,7 @@ function mergePushedSnapshot(
   const planName = snapshotInput.planName ?? current.planName;
   return {
     ...snapshotInput,
+    ...(current.accountKey ? { accountKey: current.accountKey } : {}),
     limits,
     usageLines: updatesUsageLines === true ? snapshotInput.usageLines : current.usageLines,
     ...(planName === undefined ? {} : { planName }),
