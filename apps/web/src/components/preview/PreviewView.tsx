@@ -48,6 +48,7 @@ import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 import { PreviewUnreachable } from "./PreviewUnreachable";
 import { revealInFileExplorerLabel } from "./fileExplorerLabel";
 import { shouldShowPreviewEmptyState } from "./previewEmptyStateLogic";
+import { useNativePreviewPopupStore } from "~/browser/nativePreviewPopupStore";
 import { BrowserSavedLoginPicker } from "~/browser/BrowserSavedLoginPicker";
 import { RemoteBrowserView } from "~/browser/RemoteBrowserView";
 import { BrowserSurfaceSlot } from "~/browser/BrowserSurfaceSlot";
@@ -300,7 +301,10 @@ function DesktopPreviewView({
   const canGoForward = desktopOverlay?.canGoForward ?? snapshot?.canGoForward ?? false;
   const refreshDisabled = navStatus._tag === "Idle";
   const isUnreachable = navStatus._tag === "LoadFailed";
-  const showEmptyState = shouldShowPreviewEmptyState(snapshot);
+  const nativePopup = useNativePreviewPopupStore(
+    (state) => tabId !== null && state.tabIds.has(tabId),
+  );
+  const showEmptyState = shouldShowPreviewEmptyState(snapshot, nativePopup);
   const viewport = snapshot?.viewport ?? FILL_PREVIEW_VIEWPORT;
   const panelRect = useBrowserSurfaceStore((state) =>
     runtimeTabId ? (state.byTabId[runtimeTabId]?.rect ?? null) : null,
@@ -907,7 +911,7 @@ function DesktopPreviewView({
             onOpenUrl={(next) => void handleOpenServerUrl(next)}
           />
         ) : null}
-        {snapshot && desktopOverlay ? (
+        {snapshot && desktopOverlay && !nativePopup ? (
           <ZoomIndicator zoomFactor={desktopOverlay.zoomFactor} />
         ) : null}
         {navStatus._tag === "LoadFailed" ? (

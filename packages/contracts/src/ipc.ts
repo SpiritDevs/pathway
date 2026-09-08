@@ -956,6 +956,55 @@ export const DesktopPreviewNavigateInputSchema = Schema.Struct({
   url: Schema.String,
 });
 
+export const DesktopPreviewPopupDispositionSchema = Schema.Literals([
+  "default",
+  "foreground-tab",
+  "background-tab",
+  "new-window",
+  "other",
+]);
+export type DesktopPreviewPopupDisposition = typeof DesktopPreviewPopupDispositionSchema.Type;
+
+export const DesktopPreviewPopupRequestSchema = Schema.Struct({
+  sourceRuntimeTabId: DesktopPreviewTabIdSchema,
+  popupId: DesktopPreviewTabIdSchema,
+  url: Schema.String.check(Schema.isMaxLength(2048)),
+  disposition: DesktopPreviewPopupDispositionSchema,
+  frameName: Schema.String.check(Schema.isMaxLength(512)),
+});
+export type DesktopPreviewPopupRequest = typeof DesktopPreviewPopupRequestSchema.Type;
+
+export const DesktopPreviewPopupClosedEventSchema = Schema.Struct({
+  runtimeTabId: DesktopPreviewTabIdSchema,
+});
+export type DesktopPreviewPopupClosedEvent = typeof DesktopPreviewPopupClosedEventSchema.Type;
+
+export const DesktopPreviewAdoptPopupInputSchema = Schema.Struct({
+  popupId: DesktopPreviewTabIdSchema,
+  runtimeTabId: DesktopPreviewTabIdSchema,
+});
+
+export const DesktopPreviewDiscardPopupInputSchema = Schema.Struct({
+  popupId: DesktopPreviewTabIdSchema,
+});
+
+export const DesktopPreviewPresentationBoundsSchema = Schema.Struct({
+  x: Schema.Int,
+  y: Schema.Int,
+  width: Schema.Int.check(Schema.isGreaterThan(0)),
+  height: Schema.Int.check(Schema.isGreaterThan(0)),
+  scale: Schema.optional(
+    Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1)),
+  ),
+  focus: Schema.optional(Schema.Boolean),
+});
+export type DesktopPreviewPresentationBounds = typeof DesktopPreviewPresentationBoundsSchema.Type;
+
+export const DesktopPreviewPresentNativeTabInputSchema = Schema.Struct({
+  runtimeTabId: DesktopPreviewTabIdSchema,
+  bounds: Schema.NullOr(DesktopPreviewPresentationBoundsSchema),
+});
+
 export const DesktopPreviewConfigInputSchema = Schema.Struct({
   environmentId: EnvironmentId,
 });
@@ -1108,6 +1157,14 @@ export interface DesktopPreviewBridge {
   createTab: (tabId: string) => Promise<void>;
   closeTab: (tabId: string) => Promise<void>;
   registerWebview: (tabId: string, webContentsId: number) => Promise<void>;
+  adoptPopup: (popupId: string, runtimeTabId: string) => Promise<void>;
+  discardPopup: (popupId: string) => Promise<void>;
+  presentNativeTab: (
+    runtimeTabId: string,
+    bounds: DesktopPreviewPresentationBounds | null,
+  ) => Promise<void>;
+  onPopupRequest: (listener: (request: DesktopPreviewPopupRequest) => void) => () => void;
+  onPopupClosed: (listener: (event: DesktopPreviewPopupClosedEvent) => void) => () => void;
   navigate: (tabId: string, url: string) => Promise<void>;
   goBack: (tabId: string) => Promise<void>;
   goForward: (tabId: string) => Promise<void>;

@@ -102,7 +102,7 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "thread">,
   ) => void;
-  openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
+  openBrowser: (ref: ScopedThreadRef, tabId: string | null, activate?: boolean) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   openPullRequest: (
     ref: ScopedThreadRef,
@@ -237,7 +237,7 @@ const upsertSurface = (
   surface: RightPanelSurface,
   activate = true,
 ): ThreadRightPanelState => ({
-  isOpen: true,
+  isOpen: activate || current.isOpen,
   surfaces: current.surfaces.some((entry) => entry.id === surface.id)
     ? current.surfaces
     : [...current.surfaces, surface],
@@ -480,14 +480,14 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             return upsertSurface(current, singletonSurface(kind));
           }),
         ),
-      openBrowser: (ref, tabId) =>
+      openBrowser: (ref, tabId, activate = true) =>
         set((state) =>
           updateThread(state, ref, (current) => {
             const surface = browserSurface(tabId);
             const withoutPlaceholder = tabId
               ? current.surfaces.filter((entry) => entry.id !== "browser:new")
               : current.surfaces;
-            return upsertSurface({ ...current, surfaces: withoutPlaceholder }, surface);
+            return upsertSurface({ ...current, surfaces: withoutPlaceholder }, surface, activate);
           }),
         ),
       openPullRequest: (ref, target) =>

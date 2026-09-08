@@ -617,6 +617,26 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("adds a background browser surface without stealing the active tab", () => {
+    useRightPanelStore.getState().openBrowser(refA, "tab-a");
+    useRightPanelStore.getState().openBrowser(refA, "tab-b", false);
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual(["browser:tab-a", "browser:tab-b"]);
+    expect(state.activeSurfaceId).toBe("browser:tab-a");
+  });
+
+  it("does not reopen a panel closed while a background tab was being created", () => {
+    useRightPanelStore.getState().openBrowser(refA, "tab-a");
+    useRightPanelStore.getState().close(refA);
+    useRightPanelStore.getState().openBrowser(refA, "tab-b", false);
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.isOpen).toBe(false);
+    expect(state.activeSurfaceId).toBe("browser:tab-a");
+    expect(state.surfaces.map((surface) => surface.id)).toContain("browser:tab-b");
+  });
+
   it("tracks one surface per pull request", () => {
     const first = { projectId: "project-a", repository: "coreybain/pathway", number: 4909 };
     const second = { projectId: "project-a", repository: "coreybain/pathway", number: 4910 };
