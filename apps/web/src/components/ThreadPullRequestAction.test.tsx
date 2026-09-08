@@ -49,6 +49,34 @@ describe("ThreadPullRequestAction", () => {
     expect(html).toContain("text-amber-600");
   });
 
+  it("leaves the matching branch PR to the existing PR row", () => {
+    const branchPullRequest = {
+      ...attachment,
+      state: "open" as const,
+      title: "PR",
+      baseRef: "main",
+      headRef: "feature",
+    };
+    expect(
+      renderToStaticMarkup(
+        <ThreadPullRequestAction thread={thread} isPanel branchPullRequest={branchPullRequest} />,
+      ),
+    ).toBe("");
+    expect(mocks.query).toHaveBeenCalledWith(thread, { poll: true });
+    expect(
+      renderToStaticMarkup(
+        <ThreadPullRequestAction
+          thread={thread}
+          isPanel
+          branchPullRequest={{
+            ...branchPullRequest,
+            url: attachment.url.replace("pathway", "another"),
+          }}
+        />,
+      ),
+    ).toContain("PR #110");
+  });
+
   it("removes the row when the PR is detached", () => {
     expect(
       renderToStaticMarkup(

@@ -61,7 +61,10 @@ import {
   ChangeRequestStatusIcon,
   prStatusIndicator,
   resolveThreadPr,
+  resolveThreadPrBadge,
 } from "./ThreadStatusIndicators";
+import { ThreadPullRequestAction } from "./ThreadPullRequestAction";
+import { sameAttachedPullRequest, useAttachedPullRequest } from "../state/threadPullRequest";
 import { Button } from "./ui/button";
 import { Switch } from "./ui/switch";
 import {
@@ -737,7 +740,19 @@ export function BranchToolbarBranchSelector({
     }),
     gitStatus: branchStatusQuery.data ?? null,
   });
-  const branchPrStatus = prStatusIndicator(branchPr, branchStatusQuery.data?.sourceControlProvider);
+  const attachedQuery = useAttachedPullRequest(serverThread, { poll: true });
+  const branchPrStatus =
+    branchPr &&
+    serverThread?.attachedPullRequest &&
+    sameAttachedPullRequest(serverThread.attachedPullRequest, branchPr)
+      ? resolveThreadPrBadge({
+          attachedPullRequest: serverThread.attachedPullRequest,
+          attachedDetail: attachedQuery.data,
+          attachedError: attachedQuery.error,
+          branchPullRequest: branchPr,
+          provider: branchStatusQuery.data?.sourceControlProvider,
+        })?.status
+      : prStatusIndicator(branchPr, branchStatusQuery.data?.sourceControlProvider);
   // Action-oriented tooltip (the pill opens the PR), distinct from the sidebar's
   // state-description tooltip.
   const branchPrTooltip = branchPr
@@ -853,6 +868,13 @@ export function BranchToolbarBranchSelector({
         )}
         data-composer-context-control
       >
+        {serverThread?.attachedPullRequest && (
+          <ThreadPullRequestAction
+            thread={serverThread}
+            isPanel={displayMode === "panel"}
+            branchPullRequest={branchPr}
+          />
+        )}
         {displayMode !== "panel" && branchPr && branchPrStatus ? (
           <Tooltip>
             <TooltipTrigger

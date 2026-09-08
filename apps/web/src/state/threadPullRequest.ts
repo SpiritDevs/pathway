@@ -8,6 +8,7 @@ import { Atom } from "effect/unstable/reactivity";
 import { parseChangeRequestUrl } from "../lib/openPullRequestLink";
 import { pullRequestEnvironment } from "./pullRequests";
 import { useEnvironmentQuery } from "./query";
+import { useEnvironment } from "./environments";
 
 export interface ThreadPullRequestTarget {
   readonly environmentId: EnvironmentId;
@@ -41,8 +42,35 @@ export function sameAttachedPullRequest(
   );
 }
 
-// One refresh timer per attached PR, shared by the sidebar and action panel.
-// Removing the last observer stops refreshes while the ordinary detail cache remains reusable.
+export interface ThreadChangeRequestState {
+  readonly source: string;
+  readonly state: "open" | "closed" | "merged" | null;
+}
+
+export function threadChangeRequestSource(
+  thread: Pick<ThreadPullRequestTarget, "projectId" | "attachedPullRequest"> & {
+    readonly branch: string | null;
+    readonly worktreePath: string | null;
+  },
+) {
+  return JSON.stringify([
+    thread.projectId,
+    thread.branch,
+    thread.worktreePath,
+    thread.attachedPullRequest?.url,
+    thread.attachedPullRequest?.number,
+  ]);
+}
+
+export function currentThreadChangeRequestState(
+  thread: Parameters<typeof threadChangeRequestSource>[0],
+  cached: ThreadChangeRequestState | undefined,
+) {
+  return cached?.source === threadChangeRequestSource(thread) ? cached.state : null;
+}
+
+// Only focused-thread observers opt into a timer. Other rows reuse the detail cache.
+// Removing the last focused observer stops refreshes even while sidebar rows remain mounted.
 const liveDetail = Atom.family((key: string) => {
   const target = JSON.parse(key) as { environmentId: EnvironmentId; input: PullRequestRef };
   return pullRequestEnvironment
@@ -55,9 +83,20 @@ export const liveAttachedPullRequestDetail = (target: {
   input: PullRequestRef;
 }) => liveDetail(JSON.stringify(target));
 
-export function useAttachedPullRequest(thread: ThreadPullRequestTarget | null) {
+export function useAttachedPullRequest(
+  thread: ThreadPullRequestTarget | null,
+  { poll = false }: { poll?: boolean } = {},
+) {
+  const environment = useEnvironment(thread?.environmentId ?? null);
+  const supported = environment?.descriptor?.capabilities?.pullRequests === true;
   const target = attachedPullRequestQueryTarget(thread);
-  const query = useEnvironmentQuery(target ? liveAttachedPullRequestDetail(target) : null);
+  const query = useEnvironmentQuery(
+    supported && target
+      ? poll
+        ? liveAttachedPullRequestDetail(target)
+        : pullRequestEnvironment.detail(target)
+      : null,
+  );
   const attachment = thread?.attachedPullRequest;
   const matches = attachment && query.data && sameAttachedPullRequest(attachment, query.data);
   return {
@@ -65,7 +104,7 @@ export function useAttachedPullRequest(thread: ThreadPullRequestTarget | null) {
     data: matches ? query.data : null,
     error:
       query.error ??
-      (attachment && !target
+      (supported && attachment && !target
         ? "Live pull request status is unavailable for this attachment."
         : query.data && !matches
           ? "The environment returned a different pull request."

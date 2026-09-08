@@ -255,7 +255,7 @@ struct AgentThreadsView: View {
 
     private var lifecycleRefreshKey: String {
         appModel.cloud.threads.map { thread in
-            "\(thread.id):\(thread.shell.branch ?? ""):\(thread.shell.worktreePath ?? ""):\(thread.isRunning):\(thread.shell.latestRunCompletedAt ?? "")"
+            "\(thread.id):\(thread.shell.branch ?? ""):\(thread.shell.worktreePath ?? ""):\(thread.shell.projectId ?? ""):\(thread.shell.attachedPullRequest?.url ?? ""):\(thread.shell.attachedPullRequest?.number ?? 0):\(thread.isRunning):\(thread.shell.latestRunCompletedAt ?? "")"
         }.joined(separator: "|")
     }
 
@@ -550,7 +550,7 @@ private struct CompactAgentThreadRow: View {
             Spacer(minLength: 8)
 
             if let pullRequest = thread.shell.attachedPullRequest {
-                AgentThreadPullRequestBadge(pullRequest: pullRequest)
+                AgentThreadPullRequestBadge(thread: thread, pullRequest: pullRequest)
             }
 
             Text(PathwayGeneralPreferences.shared.absoluteTimestamps ? thread.lifecycleSortDate.formatted(date: .abbreviated, time: .shortened) : thread.lifecycleSortDate.formatted(.relative(presentation: .named)))
@@ -610,9 +610,8 @@ private struct AgentThreadRow: View {
                 statusIndicator
 
                 if let pullRequest = thread.shell.attachedPullRequest {
-                    AgentThreadPullRequestBadge(pullRequest: pullRequest)
+                    AgentThreadPullRequestBadge(thread: thread, pullRequest: pullRequest)
                         .labelStyle(.titleOnly)
-                        .foregroundStyle(.purple)
                         .fixedSize()
                 }
 
@@ -743,12 +742,27 @@ private struct AgentThreadRow: View {
 }
 
 private struct AgentThreadPullRequestBadge: View {
+    @Environment(PathwayAppModel.self) private var appModel
+    let thread: PathwayAgentThread
     let pullRequest: PathwayPullRequestAttachment
+
+    private var status: PathwayThreadChangeRequestStatus {
+        appModel.cloud.changeRequestStatuses[thread.id] ?? .init()
+    }
+
+    private var color: Color {
+        if status.state == .merged { return .purple }
+        if status.state == .closed || status.checksFailed { return .red }
+        if status.unavailable || status.checksPending { return .orange }
+        if status.state == .open && !status.isDraft { return .green }
+        return .secondary
+    }
 
     var body: some View {
         Label("#\(pullRequest.number)", systemImage: "arrow.triangle.pull")
+            .foregroundStyle(color)
             .lineLimit(1)
-            .accessibilityLabel("Attached pull request \(pullRequest.number)")
+            .accessibilityLabel("\(pullRequest.url.contains("/-/merge_requests/") ? "Merge request" : "Pull request") \(pullRequest.number), \(status.label)")
     }
 }
 

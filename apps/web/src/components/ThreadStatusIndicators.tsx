@@ -200,7 +200,7 @@ export function resolveThreadPrBadge(input: {
       status: attachedError
         ? {
             ...status,
-            label: "PR status unavailable",
+            label: `${getChangeRequestTerminologyFromUrl(attachedPullRequest.url).shortLabel} status unavailable`,
             colorClass: "text-amber-600 dark:text-amber-300/90",
             tooltip: attachedError,
             tooltipTitle: attachedError,

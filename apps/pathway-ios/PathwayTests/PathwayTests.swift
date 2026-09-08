@@ -320,7 +320,9 @@ func makeAgentThread(
     pinnedAt: String? = nil,
     pendingRequestKind: String? = nil,
     relationshipToParent: String? = nil,
-    attachedPullRequest: PathwayPullRequestAttachment? = nil
+    attachedPullRequest: PathwayPullRequestAttachment? = nil,
+    branch: String? = nil,
+    worktreePath: String? = nil
 ) -> PathwayAgentThread {
     PathwayAgentThread(
         companyId: "company-1",
@@ -344,8 +346,8 @@ func makeAgentThread(
                 relationshipToParent: relationshipToParent
             ),
             locations: ["agents"],
-            branch: nil,
-            worktreePath: nil,
+            branch: branch,
+            worktreePath: worktreePath,
             latestRunRequestedAt: latestRunCompletedAt,
             latestRunStartedAt: latestRunCompletedAt,
             latestRunCompletedAt: latestRunCompletedAt,

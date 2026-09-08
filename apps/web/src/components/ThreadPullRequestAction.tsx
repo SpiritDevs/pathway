@@ -3,13 +3,14 @@ import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/sh
 import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceControl";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { cn } from "../lib/utils";
-import { useAttachedPullRequest } from "../state/threadPullRequest";
+import { sameAttachedPullRequest, useAttachedPullRequest } from "../state/threadPullRequest";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   ChangeRequestStatusIcon,
   PrStatusTooltipContent,
   resolveThreadPrBadge,
+  type ThreadPr,
 } from "./ThreadStatusIndicators";
 import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
@@ -19,11 +20,13 @@ import {
 export function ThreadPullRequestAction({
   thread,
   isPanel,
+  branchPullRequest = null,
 }: {
   thread: EnvironmentThreadShell;
   isPanel: boolean;
+  branchPullRequest?: ThreadPr;
 }) {
-  const query = useAttachedPullRequest(thread);
+  const query = useAttachedPullRequest(thread, { poll: true });
   const openPrLink = useOpenPrLink(scopeThreadRef(thread.environmentId, thread.id));
   const badge = resolveThreadPrBadge({
     attachedPullRequest: thread.attachedPullRequest,
@@ -32,7 +35,12 @@ export function ThreadPullRequestAction({
     branchPullRequest: null,
     provider: undefined,
   });
-  if (!badge) return null;
+  if (
+    !badge ||
+    (branchPullRequest && sameAttachedPullRequest(badge.pullRequest, branchPullRequest))
+  ) {
+    return null;
+  }
   const terminology = getChangeRequestTerminologyFromUrl(badge.pullRequest.url);
   const stateLabel = badge.status.label.replace(/^(PR|MR) /, "");
   return (

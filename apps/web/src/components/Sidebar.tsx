@@ -146,7 +146,12 @@ import {
 } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
-import { useAttachedPullRequest } from "../state/threadPullRequest";
+import {
+  currentThreadChangeRequestState,
+  threadChangeRequestSource,
+  useAttachedPullRequest,
+  type ThreadChangeRequestState,
+} from "../state/threadPullRequest";
 import { threadEnvironment } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
 import { useStartWorkIssuesByThread } from "../state/issues";
@@ -865,7 +870,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
-  onChangeRequestState: (threadKey: string, state: "open" | "closed" | "merged" | null) => void;
+  onChangeRequestState: (threadKey: string, value: ThreadChangeRequestState) => void;
   onOpenIssue: (issueKey: string) => void;
   onOpenSideChat: (parentRef: ScopedThreadRef, sideChatThreadId: ThreadId) => void;
 }) {
@@ -921,7 +926,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
   });
-  const attachedQuery = useAttachedPullRequest(thread);
+  const attachedQuery = useAttachedPullRequest(thread, { poll: props.isActive });
   const displayedPrBadge = resolveThreadPrBadge({
     branchPullRequest: pr,
     attachedPullRequest: thread.attachedPullRequest,
@@ -932,6 +937,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const displayedPr = displayedPrBadge?.pullRequest ?? null;
   const displayedPrStatus = displayedPrBadge?.status ?? null;
   const prState = displayedPrBadge?.changeRequestState ?? null;
+  const prSource = threadChangeRequestSource(thread);
 
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
@@ -1027,8 +1033,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Report the PR state up: the parent partitions rows with effectiveSettled,
   // and a merged PR auto-settles a thread. Only data rows have that state.
   useEffect(() => {
-    onChangeRequestState(threadKey, prState);
-  }, [onChangeRequestState, prState, threadKey]);
+    onChangeRequestState(threadKey, { source: prSource, state: prState });
+  }, [onChangeRequestState, prSource, prState, threadKey]);
 
   const modelInstanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
@@ -2237,18 +2243,15 @@ export default function Sidebar() {
   // PR states stream in per-row (rows own the VCS subscriptions); a merged
   // PR auto-settles its thread on the next partition.
   const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
-    ReadonlyMap<string, "open" | "closed" | "merged">
+    ReadonlyMap<string, ThreadChangeRequestState>
   >(() => new Map());
   const handleChangeRequestState = useCallback(
-    (threadKey: string, state: "open" | "closed" | "merged" | null) => {
+    (threadKey: string, value: ThreadChangeRequestState) => {
       setChangeRequestStateByKey((current) => {
-        if ((current.get(threadKey) ?? null) === state) return current;
+        const previous = current.get(threadKey);
+        if (previous?.source === value.source && previous.state === value.state) return current;
         const next = new Map(current);
-        if (state === null) {
-          next.delete(threadKey);
-        } else {
-          next.set(threadKey, state);
-        }
+        next.set(threadKey, value);
         return next;
       });
     },
@@ -2403,7 +2406,10 @@ export default function Sidebar() {
       const supportsSnooze =
         serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      const changeRequestState = changeRequestStateByKey.get(threadKey) ?? null;
+      const changeRequestState = currentThreadChangeRequestState(
+        thread,
+        changeRequestStateByKey.get(threadKey),
+      );
       // Snooze outranks everything, including a pin: "hide until Tuesday"
       // temporarily suspends "keep on top". The pin survives underneath —
       // and so does its pinOrderKey, so on wake the thread reappears at

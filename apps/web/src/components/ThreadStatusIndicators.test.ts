@@ -292,3 +292,13 @@ describe("settledPrHoverColorClass", () => {
     expect(settledPrHoverColorClass(state)).toContain(`group-hover/v2-row:${colorClass}`);
   });
 });
+
+it("keeps GitLab terminology when attachment lookup fails", () => {
+  const badge = resolveThreadPrBadge({
+    attachedPullRequest: { number: 47, url: "https://gitlab.com/group/repo/-/merge_requests/47" },
+    attachedError: "Permission denied",
+    branchPullRequest: null,
+    provider: undefined,
+  });
+  expect(badge?.status.label).toBe("MR status unavailable");
+});
