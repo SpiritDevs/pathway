@@ -40,6 +40,7 @@ import {
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveEditableV2UserMessageId,
+  resolveDraftEnvironmentProjectRef,
   resolveRetryableV2UserMessageId,
   resolveThreadProjectionWorkingPresentation,
   resolveThreadStopAction,
@@ -57,6 +58,40 @@ const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
 const now = "2026-03-29T00:00:00.000Z";
+
+describe("resolveDraftEnvironmentProjectRef", () => {
+  const activeProject = { environmentId, id: projectId };
+  const otherCheckout = { environmentId, projectId: ProjectId.make("other-checkout") };
+  const remote = {
+    environmentId: EnvironmentId.make("remote"),
+    projectId: ProjectId.make("remote-checkout"),
+  };
+
+  it("keeps the active checkout when the only machine's group representative is another checkout", () => {
+    expect(
+      resolveDraftEnvironmentProjectRef(activeProject, environmentId, [otherCheckout]),
+    ).toEqual({
+      environmentId,
+      projectId,
+    });
+  });
+
+  it("uses the destination checkout when selecting another machine", () => {
+    expect(
+      resolveDraftEnvironmentProjectRef(activeProject, remote.environmentId, [
+        otherCheckout,
+        remote,
+      ]),
+    ).toEqual(remote);
+  });
+
+  it("ignores a missing destination or active project", () => {
+    expect(
+      resolveDraftEnvironmentProjectRef(activeProject, remote.environmentId, [otherCheckout]),
+    ).toBeNull();
+    expect(resolveDraftEnvironmentProjectRef(null, environmentId, [otherCheckout])).toBeNull();
+  });
+});
 
 describe("resolveThreadStopAction", () => {
   it("interrupts a live thread", () => {

@@ -635,6 +635,26 @@ describe("useLoadBalancedDraft", () => {
     expect(render(input).blocked).toBe(false);
   });
 
+  it("retains branch and worktree context when overriding Auto on the current checkout", () => {
+    const input = { ...base(), environments: [environments[0]!], projects: [local] };
+    render(input);
+    flushEffects();
+    store().setDraftThreadContext(draftId, {
+      branch: "feature",
+      worktreePath: "/local/feature-worktree",
+      envMode: "worktree",
+    });
+    render(input).selectEnvironment(scopeProjectRef(local.environmentId, local.id));
+    expect(readDraft()).toMatchObject({
+      environmentId: local.environmentId,
+      projectId: local.id,
+      branch: "feature",
+      worktreePath: "/local/feature-worktree",
+      envMode: "worktree",
+      placement: { mode: "manual" },
+    });
+  });
+
   it("calculates a separate recommendation when another new draft opens", () => {
     render();
     flushEffects();

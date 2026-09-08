@@ -426,6 +426,7 @@ import {
   readFileAsDataUrl,
   loadQueuedComposerImages,
   reconcileMountedTerminalThreadIds,
+  resolveDraftEnvironmentProjectRef,
   resolveEditableV2UserMessageId,
   resolveRetryableV2UserMessageId,
   resolvePanelSurfaceOwnerThreadRef,
@@ -3716,13 +3717,16 @@ function ChatViewContent(props: ChatViewProps) {
   const onEnvironmentChange = useCallback(
     (nextEnvironmentId: EnvironmentId) => {
       if (envLocked || !draftId || draftPlacement.locked) return;
-      const target = logicalProjectEnvironments.find(
-        (env) => env.environmentId === nextEnvironmentId,
+      const target = resolveDraftEnvironmentProjectRef(
+        activeProject,
+        nextEnvironmentId,
+        logicalProjectEnvironments,
       );
       if (!target) return;
-      draftPlacement.selectEnvironment(scopeProjectRef(target.environmentId, target.projectId));
+      draftPlacement.selectEnvironment(target);
     },
     [
+      activeProject,
       draftId,
       draftPlacement.locked,
       draftPlacement.selectEnvironment,
