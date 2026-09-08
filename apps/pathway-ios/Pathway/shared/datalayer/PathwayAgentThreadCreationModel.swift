@@ -213,7 +213,7 @@ final class PathwayAgentThreadCreationModel {
         connectionState = .connecting
         let environment = environment
         let rpc = PathwayRPCClient {
-            try await connect.prepare(environment: environment).webSocketURL
+            try await connect.prepare(environment: environment).threadOperationWebSocketURL()
         }
         self.rpc = rpc
         streamTask = Task { @MainActor [weak self] in

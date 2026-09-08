@@ -180,6 +180,8 @@ interface StartThreadBootstrap {
 }
 
 export interface StartThreadTurnInput extends ThreadCommandInput {
+  /** Local notification after preparation, immediately before a launch request can reach the server. */
+  readonly onLaunchDispatch?: () => void;
   readonly message: {
     readonly messageId: MessageId;
     readonly role: "user";
@@ -728,6 +730,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
                 ? {}
                 : { branch: bootstrap.branch }),
             };
+    if (input.onLaunchDispatch) yield* Effect.sync(input.onLaunchDispatch);
     return yield* request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
       commandId,
       creationSource: input.creationSource ?? "web",

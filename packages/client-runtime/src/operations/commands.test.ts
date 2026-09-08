@@ -23,9 +23,11 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as Schema from "effect/Schema";
 
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -59,6 +61,10 @@ import {
   updateThreadMetadata,
 } from "./commands.ts";
 
+class LaunchTestError extends Schema.TaggedErrorClass<LaunchTestError>()("LaunchTestError", {
+  phase: Schema.Literals(["attachments", "launch"]),
+}) {}
+
 const TEST_CRYPTO_LAYER = Layer.succeed(
   Crypto.Crypto,
   Crypto.make({
@@ -78,6 +84,8 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly commands: OrchestrationV2Command[];
   readonly projects: ProjectMutation[];
   readonly launches?: OrchestrationV2ThreadLaunchInput[];
+  readonly launchCalls?: string[];
+  readonly launchFailure?: "attachments" | "launch";
   readonly continuationLaunches?: OrchestrationV2ContinuationLaunchInput[];
   readonly projection?: OrchestrationV2ThreadProjection;
   readonly resolvedPullRequest?: {
@@ -97,9 +105,19 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
       }),
     [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: () =>
       Effect.succeed(input.projection ?? v2Projection),
+    [WS_METHODS.assetsPersistChatAttachments]: () =>
+      Effect.gen(function* () {
+        input.launchCalls?.push("attachments");
+        if (input.launchFailure === "attachments")
+          return yield* new LaunchTestError({ phase: "attachments" });
+        return { attachments: [] };
+      }),
     [ORCHESTRATION_V2_WS_METHODS.launchThread]: (launchInput: OrchestrationV2ThreadLaunchInput) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
+        input.launchCalls?.push("launch");
         input.launches?.push(launchInput);
+        if (input.launchFailure === "launch")
+          return yield* new LaunchTestError({ phase: "launch" });
         return {
           threadId: launchInput.threadId ?? v2ThreadId,
           projection: input.projection ?? v2Projection,
@@ -617,6 +635,96 @@ describe("V2 environment commands", () => {
         sourcePlanRef: { threadId: "thread-plan", planId: "plan-1" },
         dispatchMode: { type: "start_immediately" },
       });
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  for (const failure of ["attachments", "launch", undefined] as const) {
+    it.effect(`notifies dispatch only after preparation (${failure ?? "success"})`, () =>
+      Effect.gen(function* () {
+        const calls: string[] = [];
+        const launches: OrchestrationV2ThreadLaunchInput[] = [];
+        let pinned = false;
+        const supervisor = yield* makeSupervisor({
+          commands: [],
+          projects: [],
+          launches,
+          launchCalls: calls,
+          ...(failure === undefined ? {} : { launchFailure: failure }),
+        });
+        const result = yield* startThreadTurn({
+          commandId: CommandId.make("launch-boundary"),
+          threadId: v2ThreadId,
+          message: {
+            messageId: MessageId.make("launch-boundary-message"),
+            role: "user",
+            text: "Start here",
+            attachments: [
+              {
+                type: "image",
+                name: "example.png",
+                mimeType: "image/png",
+                sizeBytes: 1,
+                dataUrl: "data:image/png;base64,AQ==",
+              },
+            ],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          bootstrap: {
+            createThread: {
+              projectId: ProjectId.make("project-1"),
+              title: "Thread",
+              modelSelection: v2Projection.thread.modelSelection,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+              createdAt: "2026-06-20T00:00:00.000Z",
+            },
+          },
+          onLaunchDispatch: () => {
+            pinned = true;
+            calls.push("pin");
+          },
+        }).pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.exit,
+        );
+
+        expect(Exit.isFailure(result)).toBe(failure !== undefined);
+        expect(calls).toEqual(
+          failure === "attachments" ? ["attachments"] : ["attachments", "pin", "launch"],
+        );
+        expect(pinned).toBe(failure !== "attachments");
+        expect(launches).toHaveLength(failure === "attachments" ? 0 : 1);
+        if (launches[0]) expect(launches[0]).not.toHaveProperty("onLaunchDispatch");
+      }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+    );
+  }
+
+  it.effect("does not notify launch dispatch for an existing thread message", () =>
+    Effect.gen(function* () {
+      let notified = false;
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      yield* startThreadTurn({
+        commandId: CommandId.make("existing-message"),
+        threadId: v2ThreadId,
+        message: {
+          messageId: MessageId.make("existing-message"),
+          role: "user",
+          text: "Continue",
+          attachments: [],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        onLaunchDispatch: () => {
+          notified = true;
+        },
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      expect(notified).toBe(false);
+      expect(commands[0]).toMatchObject({ type: "message.dispatch" });
+      expect(commands[0]).not.toHaveProperty("onLaunchDispatch");
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 

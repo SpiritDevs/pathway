@@ -2515,6 +2515,29 @@ describe("draft automatic placement persistence", () => {
     },
   );
 
+  it("allows placement changes after preparation fails before dispatch", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(local, draftId);
+    store.setDraftThreadContext(draftId, {
+      placement: { mode: "auto", providerPinned: false, resolvedKey: "resolved-model" },
+    });
+    store.setDraftPendingSend(draftId, {
+      messageId: MessageId.make("failed-preparation"),
+      text: "Keep this work",
+      title: "Keep this work",
+      createdAt: "2026-09-08T00:00:00.000Z",
+    });
+    store.setPrompt(draftId, "Keep this work");
+    store.setDraftPendingSend(draftId, null);
+    store.setDraftThreadContext(draftId, {
+      projectRef: remote,
+      placement: { mode: "auto", providerPinned: false, resolvedKey: null },
+    });
+    expect(store.getDraftSession(draftId)?.environmentId).toBe(remote.environmentId);
+    expect(store.getDraftSession(draftId)?.placement?.dispatched).not.toBe(true);
+    expect(store.getComposerDraft(draftId)?.prompt).toBe("Keep this work");
+  });
+
   it("does not move a dispatched draft when a failed launch has cleared pendingSend", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(local, draftId);

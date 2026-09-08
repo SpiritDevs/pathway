@@ -82,7 +82,7 @@ final class PathwayIssueEnvironmentClient {
     static func placementSnapshot(
         environment: PathwayCompanyEnvironment, connect: PathwayConnectClient,
         makeClient: ClientFactory = { environment, connect in
-            PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+            PathwayRPCClient { try await connect.prepare(environment: environment).threadOperationWebSocketURL() }
         }
     ) async throws -> PathwayEnvironmentPlacementSnapshot {
         let rpc = makeClient(environment, connect)

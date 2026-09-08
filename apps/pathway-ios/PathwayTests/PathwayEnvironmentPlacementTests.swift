@@ -55,6 +55,51 @@ struct PathwayEnvironmentPlacementTests {
         #expect(await rpc.subscriptions.isEmpty)
     }
 
+    @Test(arguments: [Set<String>(), Set(["orchestration:read", "relay:read"]), Set(["orchestration:read", "relay:write"])])
+    func readOnlyConnectionsCannotProvideThreadOperationEndpoints(scopes: Set<String>) {
+        let connection = preparedConnection(scopes: scopes)
+        do {
+            _ = try connection.threadOperationWebSocketURL()
+            Issue.record("A connection without orchestration:operate must not be eligible")
+        } catch { if case PathwayConnectError.scopeMismatch = error {} else { Issue.record("Unexpected error: \(error)") } }
+    }
+
+    @Test func operateConnectionRetainsItsAuthenticatedEndpoint() throws {
+        let connection = preparedConnection(scopes: ["orchestration:read", "orchestration:operate"])
+        #expect(try connection.threadOperationWebSocketURL() == connection.webSocketURL)
+    }
+
+    @Test func readOnlyPlacementProbeClosesBeforeReadingResources() async {
+        let rpc = PlacementProbeRPC(operationConnection: preparedConnection(scopes: ["orchestration:read"]))
+        let connect = PathwayConnectClient(relayURL: URL(string: "https://relay.test")!, clerkTokenProvider: { "unused" })
+        do {
+            _ = try await PathwayIssueEnvironmentClient.placementSnapshot(environment: option("origin").environment,
+                connect: connect, makeClient: { _, _ in rpc })
+            Issue.record("Read-only connections cannot participate in Auto placement")
+        } catch { if case PathwayConnectError.scopeMismatch = error {} else { Issue.record("Unexpected error: \(error)") } }
+        #expect(await rpc.methods.isEmpty)
+        #expect(await rpc.subscriptions.isEmpty)
+        #expect(await rpc.didStop)
+    }
+
+    @Test func freshValidationRejectsReadOnlyConnectionBeforePreparingALaunch() async {
+        var launches = 0
+        let model = creation { _, _ in launches += 1; throw PathwayRPCError.disconnected }
+        model.applySubscriptionValue(.object(["type": .string("snapshot"), "config": config]))
+        model.prompt = "Do not launch through a downgraded connection"
+        model.isAutomaticPlacement = true
+        let rpc = PlacementProbeRPC(operationConnection: preparedConnection(scopes: ["orchestration:read"]))
+        let connect = PathwayConnectClient(relayURL: URL(string: "https://relay.test")!, clerkTokenProvider: { "unused" })
+        model.validatePlacement = {
+            _ = try await PathwayIssueEnvironmentClient.placementSnapshot(environment: self.option("origin").environment,
+                connect: connect, makeClient: { _, _ in rpc })
+        }
+        #expect(await model.launch() == nil)
+        #expect(launches == 0)
+        #expect(!model.hasPendingLaunch)
+        #expect(await rpc.didStop)
+    }
+
     @Test func preferencesDefaultOffAndPersistOnlyValidWeights() throws {
         let suite = "placement-tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -292,6 +337,12 @@ struct PathwayEnvironmentPlacementTests {
         #expect(requests == 1)
     }
 
+    private func preparedConnection(scopes: Set<String>) -> PathwayPreparedEnvironmentConnection {
+        .init(environmentID: "origin", label: "Origin", httpBaseURL: URL(string: "https://environment.test")!,
+            webSocketURL: URL(string: "wss://environment.test/ws?wsTicket=test")!, accessToken: "test",
+            proofKeyThumbprint: "test", scopes: scopes)
+    }
+
     private func option(_ id: String, project: String = "project", status: String = "active",
                         environmentID: String? = nil, localProjectID: String? = nil, workspaceRoot: String? = nil) -> PathwayNewThreadBindingOption {
         let environmentID = environmentID ?? id
@@ -330,6 +381,7 @@ struct PathwayEnvironmentPlacementTests {
 
 private actor PlacementProbeRPC: PathwayIssueRPCClient {
     private let failingMethod: String?
+    private let operationConnection: PathwayPreparedEnvironmentConnection?
     private let stream: AsyncThrowingStream<JSONValue, Error>
     private let continuation: AsyncThrowingStream<JSONValue, Error>.Continuation
     private(set) var methods: [String] = []
@@ -337,13 +389,15 @@ private actor PlacementProbeRPC: PathwayIssueRPCClient {
     private(set) var timeouts: [Duration] = []
     private(set) var didStop = false
 
-    init(failingMethod: String? = nil) {
+    init(failingMethod: String? = nil, operationConnection: PathwayPreparedEnvironmentConnection? = nil) {
         self.failingMethod = failingMethod
+        self.operationConnection = operationConnection
         (stream, continuation) = AsyncThrowingStream.makeStream()
     }
     func subscribe(_ tag: String, payload: JSONValue) async -> AsyncThrowingStream<JSONValue, Error> { subscriptions.append(tag); return stream }
     func request(_ tag: String, payload: JSONValue, requiresSubscription: Bool, waitForSubscription: Bool, timeout: Duration) async throws -> JSONValue {
         #expect(!requiresSubscription && !waitForSubscription)
+        if let operationConnection { _ = try operationConnection.threadOperationWebSocketURL() }
         methods.append(tag)
         timeouts.append(timeout)
         if tag == failingMethod { throw PathwayRPCError.disconnected }

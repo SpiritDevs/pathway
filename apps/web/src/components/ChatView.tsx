@@ -7268,23 +7268,6 @@ function ChatViewContent(props: ChatViewProps) {
       store.setModelSelection(pendingDraftTarget, ctxSelectedModelSelection);
     }
     if (pendingDraftTarget !== null) {
-      const store = useComposerDraftStore.getState();
-      const currentPlacement = (
-        typeof pendingDraftTarget === "string"
-          ? store.getDraftSession(pendingDraftTarget)
-          : store.getDraftThreadByRef(pendingDraftTarget)
-      )?.placement;
-      if (settings.loadBalancingEnabled || currentPlacement) {
-        store.setDraftThreadContext(pendingDraftTarget, {
-          placement: {
-            mode: "manual",
-            providerPinned: false,
-            resolvedKey: null,
-            ...currentPlacement,
-            dispatched: true,
-          },
-        });
-      }
       useComposerDraftStore.getState().setDraftPendingSend(pendingDraftTarget, {
         messageId: messageIdForSend,
         text: promptForSend,
@@ -7587,6 +7570,25 @@ function ChatViewContent(props: ChatViewProps) {
       const startResult = await startThreadTurn({
         environmentId,
         input: {
+          onLaunchDispatch: () => {
+            if (pendingDraftTarget !== null) {
+              const store = useComposerDraftStore.getState();
+              const currentPlacement = (
+                typeof pendingDraftTarget === "string"
+                  ? store.getDraftSession(pendingDraftTarget)
+                  : store.getDraftThreadByRef(pendingDraftTarget)
+              )?.placement;
+              store.setDraftThreadContext(pendingDraftTarget, {
+                placement: {
+                  mode: "manual",
+                  providerPinned: false,
+                  resolvedKey: null,
+                  ...currentPlacement,
+                  dispatched: true,
+                },
+              });
+            }
+          },
           threadId: threadIdForSend,
           message: {
             messageId: messageIdForSend,
