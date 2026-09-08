@@ -4,6 +4,7 @@ import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import type { CompanyRegistryReplicaState } from "@spiritdevs/client-runtime/connection";
 import { EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
 import type { CompanyId } from "@spiritdevs/contracts/company";
+import { createModelSelection } from "@spiritdevs/shared/model";
 import {
   AuthOrchestrationOperateScope,
   type EnvironmentId,
@@ -18,6 +19,7 @@ import type { Project } from "../types";
 import type { EnvironmentPresentation } from "../state/environments";
 import { serverEnvironment } from "../state/server";
 import { environmentSession } from "../state/session";
+import { getComposerProviderState } from "../components/chat/composerProviderState";
 import {
   draftAttachmentsAllowEnvironment,
   draftPlacementIsLocked,
@@ -352,14 +354,29 @@ export function useLoadBalancedDraft(input: {
           : "Auto: no available machine",
     selectAuto,
     selectEnvironment,
-    validate: (sendSelection: ModelSelection) =>
-      !automatic ||
-      locked ||
-      Boolean(
-        eligible &&
-        draft &&
-        draft.projectId !== null &&
-        placementSelectionKey(draft.environmentId, draft.projectId, sendSelection) === key,
-      ),
+    validate: (sendSelection: ModelSelection) => {
+      if (!automatic || locked) return true;
+      if (!eligible || !draft || draft.projectId === null || !selection) return false;
+      const provider = environments
+        .find((environment) => environment.environmentId === draft.environmentId)
+        ?.serverConfig?.providers.find((provider) => provider.instanceId === selection.instanceId);
+      if (!provider) return false;
+      // Sending materializes descriptor defaults that may be absent from the
+      // saved selection. Compare the same dispatch options as the composer.
+      const { modelOptionsForDispatch } = getComposerProviderState({
+        provider: provider.driver,
+        model: selection.model,
+        models: provider.models,
+        modelOptions: selection.options,
+      });
+      return (
+        placementSelectionKey(draft.environmentId, draft.projectId, sendSelection) ===
+        placementSelectionKey(
+          draft.environmentId,
+          draft.projectId,
+          createModelSelection(selection.instanceId, selection.model, modelOptionsForDispatch),
+        )
+      );
+    },
   };
 }
