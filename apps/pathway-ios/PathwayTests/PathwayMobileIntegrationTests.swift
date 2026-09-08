@@ -35,8 +35,8 @@ struct PathwayMobileIntegrationTests {
     @Test func notificationAndProductURLsResolveSameThread() throws {
         let route = try #require(PathwayProductLink(url: URL(string: "pathway://threads/env-1/thread-1")!))
         #expect(route == PathwayProductLink(notification: ["environmentId": "env-1", "threadId": "thread-1"]))
-        #expect(route == PathwayProductLink(url: URL(string: "https://app.spiritdevs.com/threads/env-1/thread-1")!, allowedWebHost: "app.spiritdevs.com"))
-        #expect(PathwayProductLink(url: URL(string: "https://untrusted.example/threads/env-1/thread-1")!, allowedWebHost: "app.spiritdevs.com") == nil)
+        #expect(route == PathwayProductLink(url: URL(string: "https://app.pathwayos.dev/threads/env-1/thread-1")!, allowedWebHost: "app.pathwayos.dev"))
+        #expect(PathwayProductLink(url: URL(string: "https://untrusted.example/threads/env-1/thread-1")!, allowedWebHost: "app.pathwayos.dev") == nil)
         #expect(PathwayProductLink(url: URL(string: "pathway://callback")!) == nil)
         #expect(PathwayProductLink(url: URL(string: "pathway://threads/one/two/three")!) == nil)
     }

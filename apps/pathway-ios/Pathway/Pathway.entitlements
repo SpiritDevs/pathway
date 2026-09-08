@@ -8,7 +8,7 @@
     <string>$(APS_ENVIRONMENT)</string>
 	<key>com.apple.developer.associated-domains</key>
     <array>
-        <string>applinks:app.spiritdevs.com</string>
+        <string>applinks:app.pathwayos.dev</string>
 		<string>applinks:clerk.spiritdevs.com</string>
 		<string>webcredentials:clerk.spiritdevs.com</string>
 	</array>

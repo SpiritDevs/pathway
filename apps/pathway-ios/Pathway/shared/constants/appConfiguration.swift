@@ -5,8 +5,8 @@ enum AppConfiguration {
     static let clerkJWTTemplate = nonemptyString(forInfoKey: "PATHWAY_CLERK_JWT_TEMPLATE")
     static let convexDeploymentURL = optionalURL(forInfoKey: "PATHWAY_CONVEX_URL")
     static let relayURL = optionalURL(forInfoKey: "PATHWAY_RELAY_URL")
-    static let mailSetupURL = optionalURL(forInfoKey: "PATHWAY_SITE_URL")?
-        .appending(path: "settings/email")
+    static let siteURL = optionalURL(forInfoKey: "PATHWAY_SITE_URL")
+    static let mailSetupURL = siteURL?.appending(path: "settings/email")
     static let convexJWTTemplate = "convex"
     static var missingRequiredKeys: [String] {
         [

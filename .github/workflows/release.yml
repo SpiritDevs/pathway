@@ -229,7 +229,7 @@ jobs:
       PATHWAY_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
       PATHWAY_CONVEX_URL: ${{ needs.relay_public_config.outputs.convex_url }}
       CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
-      PATHWAY_HOSTED_APP_URL: https://${{ needs.preflight.outputs.release_channel == 'nightly' && (vars.PATHWAY_WEB_NIGHTLY_DOMAIN || 'app.pathwayos.dev') || (vars.PATHWAY_WEB_LATEST_DOMAIN || 'app.pathway.app') }}
+      PATHWAY_HOSTED_APP_URL: https://${{ needs.preflight.outputs.release_channel == 'nightly' && (vars.PATHWAY_WEB_NIGHTLY_DOMAIN || 'app.pathwayos.dev') || (vars.PATHWAY_WEB_LATEST_DOMAIN || 'app.pathwayos.dev') }}
     strategy:
       fail-fast: false
       matrix:

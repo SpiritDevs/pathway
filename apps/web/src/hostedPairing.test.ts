@@ -10,6 +10,13 @@ import {
 } from "./hostedPairing";
 
 describe("hostedPairing", () => {
+  it("defaults mail setup and pairing to the Pathway hosted domain", () => {
+    vi.stubEnv("VITE_HOSTED_APP_URL", "");
+    expect(buildHostedMailSetupUrl()).toBe("https://app.pathwayos.dev/settings/email");
+    expect(
+      new URL(buildHostedPairingUrl({ host: "desktop.example.com", token: "pairing" })).origin,
+    ).toBe("https://app.pathwayos.dev");
+  });
   it("opens Gmail setup on the configured release website", () => {
     vi.stubEnv("VITE_HOSTED_APP_URL", "https://app.pathwayos.dev");
     expect(buildHostedMailSetupUrl()).toBe("https://app.pathwayos.dev/settings/email");
@@ -19,7 +26,7 @@ describe("hostedPairing", () => {
   });
 
   it("reads hosted pairing host and query token parameters", () => {
-    const url = new URL("https://app.pathway.app/pair?host=100.64.1.2:3773&token=ABCD1234");
+    const url = new URL("https://app.pathwayos.dev/pair?host=100.64.1.2:3773&token=ABCD1234");
 
     expect(readHostedPairingRequest(url)).toEqual({
       host: "100.64.1.2:3773",
@@ -50,18 +57,18 @@ describe("hostedPairing", () => {
 
   it("builds hosted channel selection URLs against the channel domains", () => {
     expect(new URL(buildHostedChannelSelectionUrl({ channel: "nightly" })).origin).toBe(
-      "https://app.pathway.dev",
+      "https://app.pathwayos.dev",
     );
     expect(new URL(buildHostedChannelSelectionUrl({ channel: "latest" })).origin).toBe(
-      "https://app.pathway.app",
+      "https://app.pathwayos.dev",
     );
   });
 
   it("ignores incomplete hosted pairing requests", () => {
     expect(
-      hasHostedPairingRequest(new URL("https://app.pathway.app/pair?host=backend.example.com")),
+      hasHostedPairingRequest(new URL("https://app.pathwayos.dev/pair?host=backend.example.com")),
     ).toBe(false);
-    expect(hasHostedPairingRequest(new URL("https://app.pathway.app/pair?token=ABCD1234"))).toBe(
+    expect(hasHostedPairingRequest(new URL("https://app.pathwayos.dev/pair?token=ABCD1234"))).toBe(
       false,
     );
   });
@@ -80,14 +87,14 @@ describe("hostedPairing", () => {
   });
 
   it("detects hosted channel aliases as static apps", () => {
-    vi.stubEnv("VITE_HOSTED_APP_URL", "https://app.pathway.app");
+    vi.stubEnv("VITE_HOSTED_APP_URL", "https://app.pathwayos.dev");
     vi.stubEnv("VITE_HOSTED_APP_CHANNEL", "nightly");
     vi.stubEnv("VITE_HTTP_URL", "");
     vi.stubEnv("VITE_WS_URL", "");
 
-    expect(isHostedStaticApp(new URL("https://app.pathway.dev/"))).toBe(true);
+    expect(isHostedStaticApp(new URL("https://app.pathwayos.dev/"))).toBe(true);
 
     vi.stubEnv("VITE_HTTP_URL", "https://backend.example.com");
-    expect(isHostedStaticApp(new URL("https://app.pathway.dev/"))).toBe(false);
+    expect(isHostedStaticApp(new URL("https://app.pathwayos.dev/"))).toBe(false);
   });
 });
