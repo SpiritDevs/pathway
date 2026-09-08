@@ -1336,6 +1336,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const userAttachments = row.message.attachments ?? [];
+  const questionReply = useMemo(() => parseAsyncQuestionReply(row.message), [row.message]);
   const {
     issueContextState,
     displayedUserMessage,
@@ -1526,6 +1527,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           <InlineUserMessageEditor messageId={row.message.id} originalText={row.message.text} />
         ) : (
           <CollapsibleUserMessageBody
+            questionReply={questionReply}
             text={elementContextState.promptText}
             terminalContexts={terminalContexts}
             skills={ctx.skills}
@@ -2768,6 +2770,7 @@ function shouldCollapseUserMessage(text: string): boolean {
 }
 
 const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(props: {
+  questionReply: ReturnType<typeof parseAsyncQuestionReply>;
   text: string;
   terminalContexts: ParsedTerminalContextEntry[];
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
@@ -2776,7 +2779,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
 }) {
   const [expanded, setExpanded] = useState(false);
   const hasVisibleBody = props.text.trim().length > 0 || props.terminalContexts.length > 0;
-  const questionReply = useMemo(() => parseAsyncQuestionReply(props.text), [props.text]);
+  const questionReply = props.questionReply;
   const visibleText = questionReply
     ? questionReply.map(({ question, answer }) => `${question}\n${answer}`).join("\n\n")
     : props.text;

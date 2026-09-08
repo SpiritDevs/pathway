@@ -894,8 +894,11 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
 /** Recognize the provider's async reply envelope without changing the stored message. */
 export function parseAsyncQuestionReply(
-  text: string,
+  message: Pick<ChatMessage, "id" | "creationSource" | "text">,
 ): Array<{ question: string; answer: string }> | null {
+  if (message.creationSource !== "server" || !message.id.startsWith("message:question-answer:"))
+    return null;
+  const text = message.text;
   if (!text.trimStart().startsWith("{") || !text.includes('"request_user_input_async"'))
     return null;
   try {

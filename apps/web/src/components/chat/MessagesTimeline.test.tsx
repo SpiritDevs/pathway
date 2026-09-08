@@ -238,6 +238,19 @@ function buildUserTimelineEntry(text: string) {
   };
 }
 
+function buildQuestionReplyTimelineEntry(text: string) {
+  const entry = buildUserTimelineEntry(text);
+  return {
+    ...entry,
+    message: {
+      ...entry.message,
+      id: MessageId.make("message:question-answer:request-1"),
+      createdBy: "user" as const,
+      creationSource: "server" as const,
+    },
+  };
+}
+
 function buildAssistantTimelineEntry(text: string) {
   const entry = buildUserTimelineEntry(text);
   return {
@@ -536,7 +549,7 @@ describe("MessagesTimeline", () => {
       <MessagesTimeline
         {...buildProps()}
         timelineEntries={[
-          buildUserTimelineEntry(
+          buildQuestionReplyTimelineEntry(
             JSON.stringify({
               request_user_input_async: "call-example",
               answers: [
@@ -565,10 +578,48 @@ describe("MessagesTimeline", () => {
     '{"request_user_input_async":"call","answers":[{"question":"Question","answer":{"unexpected":true}}]}',
   ])("keeps unrecognized reply content visible: %s", (text) => {
     const markup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={[buildUserTimelineEntry(text)]} />,
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildQuestionReplyTimelineEntry(text)]}
+      />,
     );
     expect(markup).not.toContain('data-question-reply="true"');
     expect(markup).toContain('data-user-message-body="true"');
+  });
+
+  it.each([
+    { id: "message-1", creationSource: "web" as const },
+    { id: "message:question-answer:request-1", creationSource: "web" as const },
+    { id: "message-1", creationSource: "server" as const },
+    { id: "message:question-answer:request-1", creationSource: undefined },
+  ])("preserves protocol JSON without generated reply metadata: %j", ({ id, creationSource }) => {
+    const entry = buildUserTimelineEntry(
+      JSON.stringify({
+        request_user_input_async: "call-pasted-document",
+        answers: [{ question: "Which region?", answer: "Sydney" }],
+        additionalField: "keep-this-visible",
+      }),
+    );
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            ...entry,
+            message: {
+              ...entry.message,
+              id: MessageId.make(id),
+              ...(creationSource ? { creationSource } : {}),
+            },
+          },
+        ]}
+      />,
+    );
+    expect(markup).not.toContain('data-question-reply="true"');
+    expect(markup).toContain("request_user_input_async");
+    expect(markup).toContain("call-pasted-document");
+    expect(markup).toContain("additionalField");
+    expect(markup).toContain("keep-this-visible");
   });
 
   it("renders collapse controls for long user messages", () => {
