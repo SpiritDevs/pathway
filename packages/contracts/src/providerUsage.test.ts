@@ -16,6 +16,19 @@ const legacySnapshot = {
 };
 
 describe("provider usage contracts", () => {
+  it("decodes reset credit expiries and rejects invalid counts", () => {
+    const resetCredits = {
+      availableCount: 1,
+      credits: [{ id: "credit-a", expiresAt: "2026-09-10T00:00:00.000Z" }],
+    };
+    expect(decodeSnapshot({ ...legacySnapshot, resetCredits }).resetCredits).toEqual(resetCredits);
+    for (const availableCount of [-1, 1.5]) {
+      expect(() =>
+        decodeSnapshot({ ...legacySnapshot, resetCredits: { ...resetCredits, availableCount } }),
+      ).toThrow();
+    }
+  });
+
   it("continues to decode snapshots without v2 metadata", () => {
     expect(decodeSnapshot(legacySnapshot)).toEqual(legacySnapshot);
   });

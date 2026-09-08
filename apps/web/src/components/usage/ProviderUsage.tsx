@@ -45,9 +45,12 @@ import {
 import {
   createProviderUsageArrivalTracker,
   deriveConnectedProviderUsageAccounts,
+  deriveConnectedProviderResetCreditAccounts,
   isProviderUsageDriver,
   type ConnectedProviderUsageAccount,
 } from "./providerUsageAccounts";
+
+import { ProviderResetCredits, type ResetCreditSelection } from "./ProviderResetCredits";
 
 const SLOW_REFRESH_SPIN_CLASS = "animate-spin [animation-duration:2s] motion-reduce:animate-none";
 
@@ -793,20 +796,26 @@ function useConnectedProviderUsageAccounts() {
   );
   const usage = useAtomValue(usageAtom);
   const trackArrivals = useMemo(createProviderUsageArrivalTracker, []);
-  const accounts = useMemo(
+  const trackedEnvironments = useMemo(
     () =>
-      deriveConnectedProviderUsageAccounts(
-        trackArrivals(
-          connected.map((environment) => ({
-            environmentId: environment.environmentId,
-            environmentLabel: environment.label,
-            providers: serverConfigs.get(environment.environmentId)?.providers ?? null,
-            usage: usage.get(environment.environmentId)?.data ?? [],
-            receivedAt: usage.get(environment.environmentId)?.receivedAt ?? 0,
-          })),
-        ),
+      trackArrivals(
+        connected.map((environment) => ({
+          environmentId: environment.environmentId,
+          environmentLabel: environment.label,
+          providers: serverConfigs.get(environment.environmentId)?.providers ?? null,
+          usage: usage.get(environment.environmentId)?.data ?? [],
+          receivedAt: usage.get(environment.environmentId)?.receivedAt ?? 0,
+        })),
       ),
     [connected, serverConfigs, usage, trackArrivals],
+  );
+  const accounts = useMemo(
+    () => deriveConnectedProviderUsageAccounts(trackedEnvironments),
+    [trackedEnvironments],
+  );
+  const resetCreditAccounts = useMemo(
+    () => deriveConnectedProviderResetCreditAccounts(trackedEnvironments),
+    [trackedEnvironments],
   );
   const loading =
     !isReady ||
@@ -815,12 +824,20 @@ function useConnectedProviderUsageAccounts() {
         !serverConfigs.has(environment.environmentId) ||
         usage.get(environment.environmentId)?.loading,
     );
-  return { accounts: loading ? [] : accounts, connectedCount: connected.length, loading };
+  return {
+    accounts: loading ? [] : accounts,
+    resetCreditAccounts: loading ? [] : resetCreditAccounts,
+    connectedCount: connected.length,
+    loading,
+  };
 }
 
-export function ConnectedProviderUsageMenu() {
+export function ConnectedProviderUsageMenu({
+  onRequestRedeem,
+}: { onRequestRedeem?: (selection: ResetCreditSelection) => void } = {}) {
   const {
     accounts: connectedAccounts,
+    resetCreditAccounts,
     connectedCount,
     loading,
   } = useConnectedProviderUsageAccounts();
@@ -850,6 +867,7 @@ export function ConnectedProviderUsageMenu() {
           {accounts.map((account) => (
             <ConnectedProviderUsageRow key={account.key} account={account} />
           ))}
+          <ProviderResetCredits accounts={resetCreditAccounts} onRequestRedeem={onRequestRedeem} />
         </div>
       )}
     </div>
@@ -857,16 +875,22 @@ export function ConnectedProviderUsageMenu() {
 }
 
 export function ProviderUsageSettingsSection() {
-  const { accounts, loading } = useConnectedProviderUsageAccounts();
+  const { accounts, resetCreditAccounts, loading } = useConnectedProviderUsageAccounts();
   const refreshTargets = useMemo(
-    () =>
-      accounts.map((account) => ({
-        environmentId: account.environmentId,
-        instanceId: account.provider.instanceId,
-        provider: account.provider.driver as ProviderUsageDriver,
-        label: account.displayName,
-      })),
-    [accounts],
+    () => [
+      ...new Map(
+        [...accounts, ...resetCreditAccounts].map((account) => [
+          JSON.stringify([account.environmentId, account.provider.instanceId]),
+          {
+            environmentId: account.environmentId,
+            instanceId: account.provider.instanceId,
+            provider: account.provider.driver as ProviderUsageDriver,
+            label: account.displayName,
+          },
+        ]),
+      ).values(),
+    ],
+    [accounts, resetCreditAccounts],
   );
   const usageRefresh = useForcedProviderUsageRefresh(refreshTargets);
 
@@ -896,6 +920,7 @@ export function ProviderUsageSettingsSection() {
         </p>
         <div className="space-y-5">
           <ConnectedProviderUsageCards accounts={accounts} loading={loading} />
+          <ProviderResetCredits accounts={resetCreditAccounts} />
         </div>
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           Pathway reads each CLI&apos;s stored sign-in on its connected environment and sends only

@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { IsoDateTime, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
 /** Provider drivers with a stable first-party quota endpoint. */
@@ -30,6 +30,13 @@ export type ServerProviderUsageLine = typeof ServerProviderUsageLine.Type;
 export const ProviderUsageStatus = Schema.Literals(["ok", "needs-auth", "unsupported", "error"]);
 export type ProviderUsageStatus = typeof ProviderUsageStatus.Type;
 
+export const ServerProviderResetCredits = Schema.Struct({
+  availableCount: NonNegativeInt,
+  credits: Schema.Array(Schema.Struct({ id: TrimmedNonEmptyString, expiresAt: IsoDateTime })),
+  nextExpiresAt: Schema.optional(IsoDateTime),
+});
+export type ServerProviderResetCredits = typeof ServerProviderResetCredits.Type;
+
 export const ServerProviderUsageSnapshot = Schema.Struct({
   instanceId: ProviderInstanceId,
   provider: ProviderUsageDriver,
@@ -41,6 +48,7 @@ export const ServerProviderUsageSnapshot = Schema.Struct({
   status: ProviderUsageStatus,
   /** Stable provider account identity, hashed by the environment for cross-environment grouping. */
   accountKey: Schema.optional(TrimmedNonEmptyString),
+  resetCredits: Schema.optional(ServerProviderResetCredits),
   planName: Schema.optional(TrimmedNonEmptyString),
   detail: Schema.optional(TrimmedNonEmptyString),
   rateLimitedUntil: Schema.optional(IsoDateTime),
@@ -54,3 +62,30 @@ export const ServerGetProviderUsageInput = Schema.Struct({
   forceRefresh: Schema.optional(Schema.Boolean),
 });
 export type ServerGetProviderUsageInput = typeof ServerGetProviderUsageInput.Type;
+
+export const ProviderConsumeResetCreditInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  accountKey: TrimmedNonEmptyString,
+  creditId: TrimmedNonEmptyString,
+});
+export type ProviderConsumeResetCreditInput = typeof ProviderConsumeResetCreditInput.Type;
+export const ProviderConsumeResetCreditOutcome = Schema.Literals([
+  "reset",
+  "nothingToReset",
+  "noCredit",
+  "alreadyRedeemed",
+]);
+export type ProviderConsumeResetCreditOutcome = typeof ProviderConsumeResetCreditOutcome.Type;
+export const ProviderConsumeResetCreditResult = Schema.Struct({
+  outcome: ProviderConsumeResetCreditOutcome,
+  warning: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderConsumeResetCreditResult = typeof ProviderConsumeResetCreditResult.Type;
+export class ProviderResetCreditError extends Schema.TaggedErrorClass<ProviderResetCreditError>()(
+  "ProviderResetCreditError",
+  { detail: Schema.String },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}

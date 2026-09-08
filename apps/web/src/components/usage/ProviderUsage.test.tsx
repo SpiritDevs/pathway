@@ -112,6 +112,8 @@ import {
   ProviderUsageSettingsSection,
 } from "./ProviderUsage";
 
+import { ProviderResetCredits } from "./ProviderResetCredits";
+
 const environmentId = EnvironmentId.make("usage-environment");
 const codexId = ProviderInstanceId.make("codex");
 const claudeId = ProviderInstanceId.make("claudeAgent");
@@ -585,5 +587,44 @@ describe("provider usage panel refresh", () => {
     ]);
     expect(visitElements(menu, (element) => element.props.children === "Studio")).toBeNull();
     expect(visitElements(menu, (element) => element.props.children === "Laptop")).toBeNull();
+  });
+  it("places reset credits below all meters in settings and the profile submenu", () => {
+    setConnectedProviders([
+      { environmentId, label: "Studio", providers: [provider("codex", codexId)] },
+    ]);
+    testState.queries.set(String(codexId), {
+      ...snapshot(codexId, "codex", 20),
+      accountKey: "account",
+      resetCredits: {
+        availableCount: 1,
+        credits: [{ id: "reset", expiresAt: "2099-01-01T00:00:00.000Z" }],
+      },
+    });
+    const onRequestRedeem = vi.fn();
+    hooks.beginRender();
+    const menu = ConnectedProviderUsageMenu({ onRequestRedeem }) as ReactElement<
+      Record<string, unknown>
+    >;
+    const menuOrder: string[] = [];
+    visitElements(menu, (element) => {
+      if (element.props.account) menuOrder.push("usage");
+      if (element.type === ProviderResetCredits) {
+        menuOrder.push("resets");
+        expect(element.props.onRequestRedeem).toBe(onRequestRedeem);
+        expect(element.props.accounts).toHaveLength(1);
+      }
+      return false;
+    });
+    expect(menuOrder).toEqual(["usage", "resets"]);
+    hooks.reset();
+    hooks.beginRender();
+    const settings = ProviderUsageSettingsSection() as ReactElement<Record<string, unknown>>;
+    const settingsOrder: string[] = [];
+    visitElements(settings, (element) => {
+      if (Array.isArray(element.props.accounts))
+        settingsOrder.push(element.type === ProviderResetCredits ? "resets" : "usage");
+      return false;
+    });
+    expect(settingsOrder).toEqual(["usage", "resets"]);
   });
 });

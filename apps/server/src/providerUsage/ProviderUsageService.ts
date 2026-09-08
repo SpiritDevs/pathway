@@ -16,6 +16,9 @@ import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 
 import type {
+  ProviderConsumeResetCreditInput,
+  ProviderConsumeResetCreditResult,
+  ServerProviderResetCredits,
   ProviderInstanceEnvironment,
   ProviderUsageDriver,
   ServerGetProviderUsageInput,
@@ -26,6 +29,7 @@ import type {
   ServerProviderUsageSnapshot,
 } from "@spiritdevs/contracts";
 import {
+  ProviderResetCreditError,
   defaultInstanceIdForDriver,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -925,7 +929,138 @@ async function fetchCodexUsage(ctx: ProviderContext): Promise<ProviderFetchResul
   }
   const result = await fetchCodexUsageWithAuth(ctx, auth);
   const accountKey = codexAccountKey(auth);
+  if (result.snapshot.status === "ok" && accountKey) {
+    const resetCredits = await fetchCodexResetCredits(auth, ctx.nowMs).catch(() => undefined);
+    return {
+      ...result,
+      snapshot: { ...result.snapshot, accountKey, ...(resetCredits ? { resetCredits } : {}) },
+    };
+  }
   return accountKey ? { ...result, snapshot: { ...result.snapshot, accountKey } } : result;
+}
+
+const isProviderResetCreditError = Schema.is(ProviderResetCreditError);
+const CODEX_RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+
+function codexResetHeaders(auth: CodexAuth): Record<string, string> {
+  return {
+    Authorization: `Bearer ${auth.accessToken}`,
+    "Content-Type": "application/json",
+    "OpenAI-Beta": "codex-1",
+    Originator: "Codex Desktop",
+    ...(auth.accountId ? { "ChatGPT-Account-Id": auth.accountId } : {}),
+  };
+}
+
+export function parseCodexResetCredits(
+  json: unknown,
+  nowMs: number,
+): ServerProviderResetCredits | undefined {
+  const rows = asRecord(json)?.credits;
+  if (!Array.isArray(rows)) return undefined;
+  const credits = rows
+    .flatMap((row) => {
+      const record = asRecord(row);
+      const id = asString(record?.id);
+      const expiry = asString(record?.expires_at);
+      if (
+        !id ||
+        !expiry ||
+        record?.status !== "available" ||
+        record.reset_type !== "codex_rate_limits" ||
+        !(Date.parse(expiry) > nowMs)
+      )
+        return [];
+      return [{ id, expiresAt: new Date(expiry).toISOString() }];
+    })
+    .sort((a, b) => Date.parse(a.expiresAt) - Date.parse(b.expiresAt));
+  return {
+    availableCount: credits.length,
+    credits,
+    ...(credits[0] ? { nextExpiresAt: credits[0].expiresAt } : {}),
+  };
+}
+
+async function fetchCodexResetCredits(auth: CodexAuth, nowMs: number) {
+  const result = await fetchJson({
+    url: CODEX_RESET_CREDITS_URL,
+    headers: codexResetHeaders(auth),
+  });
+  return result.ok ? parseCodexResetCredits(result.json, nowMs) : undefined;
+}
+
+/** Stable across instances, environments and retries of the displayed credit. */
+export function resetCreditRequestId(accountKey: string, creditId: string): string {
+  const bytes = NodeCrypto.createHash("sha256")
+    .update(JSON.stringify(["pathway-reset-credit", accountKey, creditId]))
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+const resetCreditRequests = new Map<
+  string,
+  { creditId: string; promise: Promise<ProviderConsumeResetCreditResult> }
+>();
+async function redeemCodexResetCredit(
+  ctx: ProviderContext,
+  input: ProviderConsumeResetCreditInput,
+): Promise<ProviderConsumeResetCreditResult> {
+  const auth = await resolveCodexAuth(ctx);
+  if (!auth || auth === "api-key" || codexAccountKey(auth) !== input.accountKey) {
+    throw new ProviderResetCreditError({
+      detail: "The Codex account changed. Refresh usage before redeeming a reset.",
+    });
+  }
+  const key = input.accountKey;
+  const pending = resetCreditRequests.get(key);
+  if (pending) {
+    if (pending.creditId !== input.creditId)
+      throw new ProviderResetCreditError({
+        detail: "A reset is already being redeemed for this account.",
+      });
+    return pending.promise;
+  }
+  const request = (async (): Promise<ProviderConsumeResetCreditResult> => {
+    const response = await fetchJson({
+      url: `${CODEX_RESET_CREDITS_URL}/consume`,
+      method: "POST",
+      headers: codexResetHeaders(auth),
+      body: {
+        credit_id: input.creditId,
+        redeem_request_id: resetCreditRequestId(input.accountKey, input.creditId),
+      },
+    });
+    if (!response.ok)
+      throw new ProviderResetCreditError({
+        detail: `Codex could not redeem the reset credit (HTTP ${response.status}).`,
+      });
+    const code = asString(asRecord(response.json)?.code);
+    switch (code) {
+      case "reset":
+        return { outcome: "reset" };
+      case "nothing_to_reset":
+        return { outcome: "nothingToReset" };
+      case "no_credit":
+        return { outcome: "noCredit" };
+      case "already_redeemed":
+        return { outcome: "alreadyRedeemed" };
+      default:
+        throw new ProviderResetCreditError({
+          detail:
+            "Codex returned an unexpected reset response. Retry to check the same credit safely.",
+        });
+    }
+  })();
+  resetCreditRequests.set(key, { creditId: input.creditId, promise: request });
+  try {
+    return await request;
+  } finally {
+    if (resetCreditRequests.get(key)?.promise === request) resetCreditRequests.delete(key);
+  }
 }
 
 function codexAccountKey(auth: CodexAuth | "api-key" | null): string | undefined {
@@ -1504,6 +1639,7 @@ function mergePushedSnapshot(
   return {
     ...snapshotInput,
     ...(current.accountKey ? { accountKey: current.accountKey } : {}),
+    ...(current.resetCredits ? { resetCredits: current.resetCredits } : {}),
     limits,
     usageLines: updatesUsageLines === true ? snapshotInput.usageLines : current.usageLines,
     ...(planName === undefined ? {} : { planName }),
@@ -1845,6 +1981,90 @@ export const getProviderUsage = Effect.fn("ProviderUsage.get")(function* (
   );
 });
 
+export const consumeProviderResetCredit = Effect.fn("ProviderUsage.consumeResetCredit")(function* (
+  input: ProviderConsumeResetCreditInput,
+) {
+  const settings = yield* (yield* ServerSettingsService).getSettings;
+  const instance = settings.providerInstances[input.instanceId];
+  const legacyCodex =
+    !instance &&
+    input.instanceId === defaultInstanceIdForDriver(ProviderDriverKind.make("codex")) &&
+    settings.providers.codex !== undefined;
+  if (!legacyCodex && (!instance || instance.enabled === false || instance.driver !== "codex")) {
+    return yield* new ProviderResetCreditError({
+      detail: "This Codex provider is missing or disabled.",
+    });
+  }
+  const environment = yield* HostProcessEnvironment;
+  const platform = yield* HostProcessPlatform;
+  const ctx = buildContext(
+    settings,
+    { instanceId: input.instanceId, provider: "codex" },
+    environment,
+    platform,
+    null,
+  );
+  const result = yield* Effect.tryPromise({
+    try: () => redeemCodexResetCredit(ctx, input),
+    catch: (cause) =>
+      isProviderResetCreditError(cause)
+        ? cause
+        : new ProviderResetCreditError({
+            detail: "Could not confirm redemption. Retry to check the same credit safely.",
+          }),
+  });
+  const targets = new Set<ProviderInstanceId>([input.instanceId]);
+  const targetKey = cacheKeyFor({ instanceId: input.instanceId, provider: "codex" });
+  inFlightFetches.delete(targetKey);
+  retryAfterGates.delete(targetKey);
+  cancelScheduledRateLimitRefresh(targetKey);
+  for (const [key, cached] of snapshotCache) {
+    if (cached.snapshot.provider !== "codex" || cached.snapshot.accountKey !== input.accountKey)
+      continue;
+    targets.add(cached.snapshot.instanceId);
+    // Detach reads started before redemption so they cannot republish spent credits.
+    inFlightFetches.delete(key);
+    retryAfterGates.delete(key);
+    cancelScheduledRateLimitRefresh(key);
+    const credits = cached.snapshot.resetCredits?.credits.filter(
+      (credit) => credit.id !== input.creditId,
+    );
+    const resetCredits =
+      credits && result.outcome !== "nothingToReset"
+        ? {
+            availableCount: credits.length,
+            credits,
+            ...(credits[0] ? { nextExpiresAt: credits[0].expiresAt } : {}),
+          }
+        : cached.snapshot.resetCredits;
+    snapshotCache.set(key, {
+      ...cached,
+      fetchedAtMs: null,
+      snapshot: { ...cached.snapshot, stale: true, ...(resetCredits ? { resetCredits } : {}) },
+    });
+  }
+  yield* PubSub.publish(snapshotChanges, undefined);
+  const refreshed = yield* Effect.forEach(
+    [...targets],
+    (instanceId) =>
+      getProviderUsage({ instanceId, provider: "codex", forceRefresh: true }).pipe(Effect.result),
+    { concurrency: 4 },
+  );
+  const confirmedResult = refreshed.find(
+    (snapshot) => snapshot._tag === "Success" && snapshot.success.instanceId === input.instanceId,
+  );
+  const confirmed = confirmedResult?._tag === "Success" ? confirmedResult.success : undefined;
+  return {
+    ...result,
+    ...(confirmed?.status === "ok" && !confirmed.stale && confirmed.resetCredits !== undefined
+      ? {}
+      : {
+          warning:
+            "Codex responded, but the latest usage could not be loaded. Refresh usage to check.",
+        }),
+  };
+});
+
 function isProviderUsageDriver(driver: string): driver is ProviderUsageDriver {
   return driver === "codex" || driver === "claudeAgent" || driver === "cursor";
 }
@@ -1984,6 +2204,10 @@ function testingContext(input: {
 }
 
 export const providerUsageTestKit = {
+  redeemCodex: (
+    input: Parameters<typeof testingContext>[0],
+    credit: ProviderConsumeResetCreditInput,
+  ) => redeemCodexResetCredit(testingContext(input), credit),
   setCodexAccountKeyReader: (
     instanceId: ProviderInstanceId,
     read: () => Promise<string | undefined>,
@@ -2030,6 +2254,7 @@ export const providerUsageTestKit = {
 export function resetProviderUsageCache(): void {
   for (const scheduled of scheduledRateLimitRefreshes.values()) scheduled.controller.abort();
   readKeychainPassword = defaultReadKeychainPassword;
+  resetCreditRequests.clear();
   contextIdentities.clear();
   pushSemaphores.clear();
   codexAccountKeyReaders.clear();

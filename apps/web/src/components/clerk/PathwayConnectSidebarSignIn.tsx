@@ -10,7 +10,7 @@ import {
   SmartphoneIcon,
   UserRoundIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { useNavigate } from "@tanstack/react-router";
 
@@ -33,6 +33,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/menu";
 import { ConnectedProviderUsageMenu } from "../usage/ProviderUsage";
+import { AccountResetCredits, type ResetCreditSelection } from "../usage/ProviderResetCredits";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { MobileClientsUserProfilePage } from "./MobileClientsUserProfilePage";
 import { usePathwayConnectAuthPrompt } from "./usePathwayConnectAuthPrompt";
@@ -75,6 +76,7 @@ export function PathwayConnectProfileButton() {
 }
 
 function ConfiguredPathwayConnectProfileButton() {
+  const [resetSelection, setResetSelection] = useState<ResetCreditSelection | null>(null);
   const { openUserProfile, signOut } = useClerk();
   const { isLoaded, isSignedIn, user } = useUser();
   const navigate = useNavigate();
@@ -195,7 +197,7 @@ function ConfiguredPathwayConnectProfileButton() {
               <span>Provider usage</span>
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="w-80">
-              <ConnectedProviderUsageMenu />
+              <ConnectedProviderUsageMenu onRequestRedeem={setResetSelection} />
             </DropdownMenuSubContent>
           </DropdownMenuSub>
           <DropdownMenuItem
@@ -214,6 +216,14 @@ function ConfiguredPathwayConnectProfileButton() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      {resetSelection ? (
+        <AccountResetCredits
+          key={`${resetSelection.account.key}:${resetSelection.creditId}`}
+          account={resetSelection.account}
+          selection={resetSelection}
+          onClose={() => setResetSelection(null)}
+        />
+      ) : null}
     </>
   );
 }
