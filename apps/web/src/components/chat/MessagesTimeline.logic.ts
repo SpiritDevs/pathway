@@ -915,17 +915,29 @@ export function parseAsyncQuestionReply(
       return null;
     const answers: Array<{ question: string; answer: string }> = [];
     for (const entry of value.answers) {
-      if (
-        typeof entry !== "object" ||
-        entry === null ||
-        typeof entry.question !== "string" ||
-        typeof entry.answer !== "string"
-      )
+      if (typeof entry !== "object" || entry === null || typeof entry.question !== "string")
         return null;
-      answers.push({ question: entry.question, answer: entry.answer });
+      const answer: unknown = entry.answer;
+      if (typeof answer === "string") {
+        answers.push({ question: entry.question, answer });
+      } else if (
+        Array.isArray(answer) &&
+        answer.length > 0 &&
+        answer.every((value) => typeof value === "string" && value.trim().length > 0)
+      ) {
+        answers.push({ question: entry.question, answer: answer.join("\n") });
+      } else {
+        return null;
+      }
     }
     return answers;
   } catch {
     return null;
   }
+}
+
+export function formatAsyncQuestionReplyText(
+  reply: ReadonlyArray<{ question: string; answer: string }>,
+): string {
+  return reply.map(({ question, answer }) => `${question}\n${answer}`).join("\n\n");
 }

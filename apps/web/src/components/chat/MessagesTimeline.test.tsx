@@ -134,6 +134,17 @@ vi.mock("@pierre/diffs/react", () => {
   return { FileDiff: MockFileDiff };
 });
 
+const { copiedMessageTexts } = vi.hoisted(() => ({ copiedMessageTexts: [] as string[] }));
+vi.mock("./MessageCopyButton", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./MessageCopyButton")>();
+  return {
+    MessageCopyButton: (props: React.ComponentProps<typeof actual.MessageCopyButton>) => {
+      copiedMessageTexts.push(props.text);
+      return <actual.MessageCopyButton {...props} />;
+    },
+  };
+});
+
 function matchMedia() {
   return {
     matches: false,
@@ -545,6 +556,7 @@ describe("MessagesTimeline", () => {
   });
 
   it("renders async question replies as question and answer pairs", () => {
+    copiedMessageTexts.length = 0;
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -570,9 +582,39 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Which region?");
     expect(markup).toContain("Sydney");
     expect(markup).not.toContain("request_user_input_async");
+    expect(copiedMessageTexts).toContain(
+      "Do you have an instance?\nNo instance yet.\nPrepare the setup.\n\nWhich region?\nSydney",
+    );
+  });
+
+  it("renders and copies accepted array-valued answers", () => {
+    copiedMessageTexts.length = 0;
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          buildQuestionReplyTimelineEntry(
+            JSON.stringify({
+              request_user_input_async: "call-multi",
+              answers: [
+                { question: "Which regions?", answer: ["Sydney", "Melbourne"] },
+                { question: "When?", answer: "Today" },
+              ],
+            }),
+          ),
+        ]}
+      />,
+    );
+    expect(markup).toContain('data-question-reply="true"');
+    expect(markup).toMatch(/<dd[^>]*>Sydney\nMelbourne<\/dd>/);
+    expect(markup).not.toContain("request_user_input_async");
+    expect(copiedMessageTexts).toContain("Which regions?\nSydney\nMelbourne\n\nWhen?\nToday");
   });
 
   it.each([
+    '{"request_user_input_async":"call","answers":[{"question":"Question","answer":[]}]}',
+    '{"request_user_input_async":"call","answers":[{"question":"Question","answer":[" "]}]}',
+    '{"request_user_input_async":"call","answers":[{"question":"Question","answer":["Sydney",42]}]}',
     '{"request_user_input_async":',
     '{"answers":[{"question":"Question","answer":"Answer"}]}',
     '{"request_user_input_async":"call","answers":[{"question":"Question","answer":{"unexpected":true}}]}',
