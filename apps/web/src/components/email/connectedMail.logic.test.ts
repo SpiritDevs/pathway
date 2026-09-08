@@ -4,6 +4,7 @@ import {
   gmailMessageUrl,
   isCapturedEmailSearch,
   readMailRelayResponse,
+  mailConnectionErrorMessage,
 } from "./connectedMail.logic";
 import { parseEmailSearch } from "./emailView.logic";
 
@@ -55,6 +56,25 @@ describe("connected and captured mail navigation", () => {
 });
 
 describe("mail relay response handling", () => {
+  it("preserves missing-attachment errors outside the connection check", async () => {
+    await expect(
+      readMailRelayResponse(Response.json({ error: "Attachment not found." }, { status: 404 })),
+    ).rejects.toThrow("Attachment not found.");
+  });
+  it.each([
+    [404, "update the mail service"],
+    [503, "finish email setup"],
+  ])("explains relay setup failures with HTTP %s", async (status, message) => {
+    const error = await readMailRelayResponse(new Response(null, { status })).catch(
+      (cause: unknown) => cause,
+    );
+    expect(mailConnectionErrorMessage(error)).toContain(message);
+  });
+  it("keeps network failures recoverable without exposing raw transport errors", () => {
+    expect(mailConnectionErrorMessage(new TypeError("Failed to fetch"))).toContain(
+      "Check your connection and try again",
+    );
+  });
   it("accepts an empty disconnect or wake confirmation", async () => {
     await expect(readMailRelayResponse(new Response(null, { status: 204 }))).resolves.toBeNull();
   });

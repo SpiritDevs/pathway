@@ -4,6 +4,8 @@ Mail connects a Gmail account to your signed-in Pathway workspace. Your mailbox 
 
 Open Email and choose Mail. Connect Gmail from Email settings in the signed-in Pathway web app. Desktop and native apps provide a link to web setup, then use the connected account. Bring-your-own Google OAuth credentials are supported first; a Pathway-managed connection is available when your relay operator has configured it. The connection page shows the callback address to register with Google. You may need to reconnect when Google authorization expires.
 
+If Email settings says mail is not available or not enabled on Pathway Connect, your workspace administrator needs to finish setting up the mail service. Retrying the connection cannot enable it. Use Retry connection after setup is complete, or when a temporary connection problem has cleared.
+
 Mail keeps arriving while your environments are offline. The initial import covers the last twelve months, excluding Spam and Trash. Synced attachments and message bodies are available from your other devices through the same account. Very large messages and attachments may remain available only in Gmail; the reader identifies incomplete content. Attachments over 5 MiB are not copied into Pathway.
 
 ## Analysis and briefings

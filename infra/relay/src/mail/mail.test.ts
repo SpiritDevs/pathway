@@ -32,6 +32,7 @@ async function fixture(
     cleanupFails?: boolean;
     draft?: boolean;
     ingestFails?: boolean;
+    withoutPubsub?: boolean;
   } = {},
 ) {
   const encryptedCredentials = await makeEnvelopeCipher(key).seal(
@@ -169,7 +170,9 @@ async function fixture(
   const enqueue = vi.fn(async () => {});
   return {
     runtime: makeMailRuntime({
-      config,
+      config: options.withoutPubsub
+        ? { ...config, pubsubTopic: "", pubsubServiceAccount: "" }
+        : config,
       origin: "https://connect.example",
       rpc,
       fetcher,
@@ -184,6 +187,44 @@ async function fixture(
   };
 }
 describe("mail credentials and MIME", () => {
+  it.each(["byo", "hosted"] as const)(
+    "connects a %s mailbox without Pub/Sub and leaves watch setup disabled",
+    async (credentialSource) => {
+      const f = await fixture({ withoutPubsub: true });
+      const { authorizationUrl } = await f.runtime.startOAuth({
+        ownerSubject: "owner",
+        companyId: "company",
+        credentialSource,
+        clientId: "id",
+        clientSecret: "secret",
+        ...(credentialSource === "hosted" ? { pubsubTopic: "projects/untrusted/topics/mail" } : {}),
+      });
+      await f.runtime.finishOAuth(new URL(authorizationUrl).searchParams.get("state")!, "code");
+      const credentials = f.calls.find((call) => call.name === "connectAccount")?.args
+        .encryptedCredentials;
+      expect(typeof credentials).toBe("string");
+      const decoded = await makeEnvelopeCipher(key).open<Record<string, unknown>>(
+        credentials as string,
+        "credentials:owner:me@example.com",
+      );
+      expect(decoded).not.toHaveProperty("pubsubTopic");
+    },
+  );
+
+  it("rejects a push topic when no delivery identity is configured", async () => {
+    const f = await fixture({ withoutPubsub: true });
+    await expect(
+      f.runtime.startOAuth({
+        ownerSubject: "owner",
+        companyId: "company",
+        credentialSource: "byo",
+        clientId: "id",
+        clientSecret: "secret",
+        pubsubTopic: "projects/project/topics/mail",
+      }),
+    ).rejects.toThrow("Leave the Pub/Sub topic empty");
+    expect(f.calls.some((call) => call.name === "putOAuthState")).toBe(false);
+  });
   it("binds encrypted records to the owner", async () => {
     const cipher = makeEnvelopeCipher(key);
     const sealed = await cipher.seal({ refreshToken: "sensitive" }, "owner-a");

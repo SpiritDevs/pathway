@@ -3,6 +3,7 @@ import type { EnvironmentId, ModelSelection } from "@spiritdevs/contracts";
 import { createModelSelection } from "@spiritdevs/shared/model";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { ensureLocalApi } from "../../localApi";
+import { buildHostedMailSetupUrl } from "../../hostedPairing";
 import {
   getCustomModelOptionsByInstance,
   resolveAppModelSelectionState,
@@ -19,6 +20,7 @@ import { Input } from "../ui/input";
 import { SettingsPageContainer, SettingsSection } from "../settings/settingsLayout";
 import { useConnectedMailCloud, useMailQuery, type ConnectedMailCloud } from "./connectedMailCloud";
 import type { ConnectedMailAccount, MailBrain } from "./connectedMail.types";
+import { mailConnectionErrorMessage } from "./connectedMail.logic";
 
 const modelValue = (selection: ModelSelection) => ({
   instanceId: selection.instanceId,
@@ -291,11 +293,13 @@ export function ConnectedMailSettings() {
   const [hostedEnabled, setHostedEnabled] = useState(false);
   const [configStatus, setConfigStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [configRetry, setConfigRetry] = useState(0);
+  const [configError, setConfigError] = useState<string>();
   const [credentialSource, setCredentialSource] = useState<"byo" | "hosted">("byo");
   useEffect(() => {
     let cancelled = false;
     setHostedEnabled(false);
     setConfigStatus("loading");
+    setConfigError(undefined);
     setCredentialSource("byo");
     if (cloud.ready)
       void cloud
@@ -306,8 +310,11 @@ export function ConnectedMailSettings() {
             setConfigStatus("ready");
           }
         })
-        .catch(() => {
-          if (!cancelled) setConfigStatus("failed");
+        .catch((cause: unknown) => {
+          if (!cancelled) {
+            setConfigStatus("failed");
+            setConfigError(mailConnectionErrorMessage(cause));
+          }
         });
     return () => {
       cancelled = true;
@@ -378,8 +385,7 @@ export function ConnectedMailSettings() {
             {configStatus === "failed" ? (
               <div className="mb-3 space-y-2">
                 <p role="alert" className="text-sm text-destructive">
-                  Mail service is unavailable. Check your connection and try again. If this
-                  continues, ask your workspace administrator to check Pathway Connect.
+                  {configError}
                 </p>
                 <Button
                   size="sm"
@@ -508,11 +514,7 @@ export function ConnectedMailSettings() {
                 </p>
                 <Button
                   onClick={() =>
-                    void run(() =>
-                      ensureLocalApi().shell.openExternal(
-                        "https://app.spiritdevs.com/settings/email",
-                      ),
-                    )
+                    void run(() => ensureLocalApi().shell.openExternal(buildHostedMailSetupUrl()))
                   }
                 >
                   Open Gmail setup on web

@@ -49,9 +49,12 @@ struct PathwayConnectedMailSettings: View {
         }
       }
       Section("Connect Gmail") {
-        Link(
-          "Open Gmail setup on web",
-          destination: URL(string: "https://app.spiritdevs.com/settings/email")!)
+        if let setupURL = AppConfiguration.mailSetupURL {
+          Link("Open Gmail setup on web", destination: setupURL)
+        } else {
+          Text("The mail setup website is not configured for this app.")
+            .foregroundStyle(.secondary)
+        }
         Text(
           "Open Email settings on Pathway web and select the same workspace to connect or reconnect Gmail. Once connected, mail appears here automatically."
         )

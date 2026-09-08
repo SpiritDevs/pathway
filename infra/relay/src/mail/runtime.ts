@@ -204,6 +204,13 @@ export function makeMailRuntime(input: {
           : request.clientSecret;
       if (!clientId || !clientSecret || clientId.length > 1000 || clientSecret.length > 2000)
         throw new Error("Google OAuth credentials are required");
+      if (
+        (request.credentialSource === "hosted" ? config.pubsubTopic : request.pubsubTopic) &&
+        !config.pubsubServiceAccount
+      )
+        throw new Error(
+          "Instant mail delivery is not configured. Leave the Pub/Sub topic empty to use five-minute synchronization.",
+        );
       const state = randomToken(),
         verifier = randomToken();
       const stateHash = await hashToken(state);
@@ -217,7 +224,9 @@ export function makeMailRuntime(input: {
           clientSecret,
           verifier,
           expiresAt,
-          ...(request.pubsubTopic ? { pubsubTopic: request.pubsubTopic } : {}),
+          ...(request.credentialSource === "byo" && request.pubsubTopic
+            ? { pubsubTopic: request.pubsubTopic }
+            : {}),
         } satisfies OAuthState,
         `oauth:${stateHash}`,
       );
@@ -269,7 +278,9 @@ export function makeMailRuntime(input: {
           clientSecret: pending.clientSecret,
           refreshToken: tokens.refresh_token,
           ...(pending.credentialSource === "hosted"
-            ? { pubsubTopic: config.pubsubTopic }
+            ? config.pubsubTopic
+              ? { pubsubTopic: config.pubsubTopic }
+              : {}
             : pending.pubsubTopic
               ? { pubsubTopic: pending.pubsubTopic }
               : {}),

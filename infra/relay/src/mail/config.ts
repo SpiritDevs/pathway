@@ -8,8 +8,10 @@ export const loadMailConfiguration = Effect.gen(function* () {
   return {
     encryptionKey: yield* Config.redacted("MAIL_ENCRYPTION_KEY"),
     uploadThingApiKey: yield* Config.redacted("MAIL_UPLOADTHING_API_KEY"),
-    pubsubTopic: yield* Config.nonEmptyString("MAIL_GOOGLE_PUBSUB_TOPIC"),
-    pubsubServiceAccount: yield* Config.nonEmptyString("MAIL_GOOGLE_PUBSUB_SERVICE_ACCOUNT"),
+    pubsubTopic: yield* Config.string("MAIL_GOOGLE_PUBSUB_TOPIC").pipe(Config.withDefault("")),
+    pubsubServiceAccount: yield* Config.string("MAIL_GOOGLE_PUBSUB_SERVICE_ACCOUNT").pipe(
+      Config.withDefault(""),
+    ),
     hostedClientId: yield* Config.string("MAIL_GOOGLE_CLIENT_ID").pipe(Config.withDefault("")),
     hostedClientSecret: yield* Config.redacted("MAIL_GOOGLE_CLIENT_SECRET").pipe(
       Config.withDefault(Redacted.make("")),

@@ -4,21 +4,29 @@ Connected mail runs in the Pathway Connect relay. Convex stores workspace/member
 
 ## Configuration
 
-The existing relay Alchemy deployment provisions `RelayMailQueue` and `RelayMailDeadLetterQueue` alongside the APNs queues. Mail remains disabled until `MAIL_ENABLED=true`; deploying source alone does not connect Google or configure UploadThing. Use the existing `infra/relay` deployment workflow after deploying the Convex schema/functions. No live deployment was performed during implementation.
+The existing relay Alchemy deployment provisions `RelayMailQueue` and `RelayMailDeadLetterQueue` alongside the APNs queues. Mail remains disabled until `MAIL_ENABLED=true`; deploying source alone does not connect Google or configure UploadThing. Use the existing `infra/relay` deployment workflow after deploying the Convex schema/functions.
+
+For GitHub deployments, set `MAIL_ENABLED`, `MAIL_GOOGLE_PUBSUB_TOPIC`, `MAIL_GOOGLE_PUBSUB_SERVICE_ACCOUNT`, and the optional `MAIL_GOOGLE_CLIENT_ID` as repository or production-environment variables. Store `MAIL_ENCRYPTION_KEY`, `MAIL_UPLOADTHING_API_KEY`, and the optional `MAIL_GOOGLE_CLIENT_SECRET` as secrets in the same scope. The relay deployment workflow passes these values to Alchemy. Local deployments can use the corresponding entries in `infra/relay/.env.example`.
+
+Desktop releases use `PATHWAY_WEB_NIGHTLY_DOMAIN` or `PATHWAY_WEB_LATEST_DOMAIN` for the Gmail setup website. Local web and desktop builds can set `PATHWAY_HOSTED_APP_URL`, which is shared with CLI sign-in. Native builds read `PATHWAY_SITE_URL`; `scripts/configure-pathway-ios.ts` derives it from `PATHWAY_HOSTED_APP_URL`. The chosen domain must resolve and allow signed-in Pathway users to reach `/settings/email` without a separate deployment-provider access gate.
+
+Before testing Google consent, check the deployed `/v1/mail/config` endpoint. A missing route returns 404; the current relay returns 503 when mail is disabled, 401 without a valid Clerk token, and 200 with its capabilities after authentication. Credentialed mail preflights must echo the request origin and include `Access-Control-Allow-Credentials: true`. A successful desktop release does not establish that the relay deployment succeeded.
 
 | Variable                             | Purpose                                                                                                                                         |
 | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `MAIL_ENABLED`                       | Defaults to `false`. Enables mail routes, queue processing and reconciliation.                                                                  |
 | `MAIL_ENCRYPTION_KEY`                | Base64url encoding of 32 cryptographically random bytes; relay key-encryption key. Store in deployment secrets and retain a protected backup.   |
 | `MAIL_UPLOADTHING_API_KEY`           | UploadThing REST API key for the private mail storage app. This is the API key accepted by `x-uploadthing-api-key`, not a serialized SDK token. |
-| `MAIL_GOOGLE_PUBSUB_TOPIC`           | Hosted OAuth topic, `projects/PROJECT_ID/topics/TOPIC_ID`.                                                                                      |
-| `MAIL_GOOGLE_PUBSUB_SERVICE_ACCOUNT` | Exact service-account email allowed to authenticate Pub/Sub push.                                                                               |
+| `MAIL_GOOGLE_PUBSUB_TOPIC`           | Optional hosted OAuth topic, `projects/PROJECT_ID/topics/TOPIC_ID`. Omit to use five-minute reconciliation.                                     |
+| `MAIL_GOOGLE_PUBSUB_SERVICE_ACCOUNT` | Exact service-account email allowed to authenticate Pub/Sub push. Required only when using a hosted or BYO topic.                               |
 | `MAIL_GOOGLE_CLIENT_ID`              | Optional Pathway-owned Google web OAuth client ID.                                                                                              |
 | `MAIL_GOOGLE_CLIENT_SECRET`          | Optional corresponding secret. Both hosted values are needed to expose hosted OAuth.                                                            |
 
 The existing `CLERK_SECRET_KEY`, `CLERK_JWT_AUDIENCE`, `CONVEX_URL`, relay signing key and public relay origin remain required. Web mail requests use `getToken(resolveRelayClerkTokenOptions())`, the same relay JWT template used by Connect. Configure the template selected by `VITE_CLERK_JWT_TEMPLATE` to emit the audience accepted by relay `CLERK_JWT_AUDIENCE`; the separately named `convex` template is for the Convex socket. Mail routes retain the gateway's bearer-token CORS behavior.
 
 ## Google OAuth and push
+
+For a first connection, enable mail with its encryption and private-storage keys, then enter a Google OAuth web client in Email settings. Leave Pub/Sub blank to use five-minute synchronization. Google Auth Platform requires Branding and Audience configuration, the `https://www.googleapis.com/auth/gmail.modify` scope, and the mailbox owner as a test user for an External app in Testing. Testing-mode refresh tokens expire after seven days; see [Google's token expiration rules](https://developers.google.com/identity/protocols/oauth2#expiration). No Google service account is needed for polling.
 
 1. Enable the Gmail API in the OAuth client's Google Cloud project and configure its OAuth consent screen. Create a **web application** OAuth client. Register exactly `https://YOUR_RELAY_ORIGIN/v1/mail/oauth/callback` as an authorized redirect URI.
 2. For BYO mode, the mailbox owner enters that client's ID and secret in Email settings. Hosted mode uses the deployment variables. Both request `https://www.googleapis.com/auth/gmail.modify`, offline access and consent; this scope permits both message access and explicit sending. Production distribution must satisfy Google's applicable consent and restricted-scope requirements.
