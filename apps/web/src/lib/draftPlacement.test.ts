@@ -6,6 +6,7 @@ import {
   type ServerProvider,
 } from "@spiritdevs/contracts";
 import { CompanyId } from "@spiritdevs/contracts/company";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import { EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
@@ -15,12 +16,12 @@ import {
   resolvePlacementModel,
 } from "./draftPlacement";
 
-const source = {
+const source: Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot"> = {
   environmentId: EnvironmentId.make("local"),
   id: ProjectId.make("project-local"),
   workspaceRoot: "/local/repo",
 };
-const target = {
+const target: typeof source = {
   environmentId: EnvironmentId.make("remote"),
   id: ProjectId.make("project-remote"),
   workspaceRoot: "/remote/repo",
