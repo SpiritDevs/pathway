@@ -1,8 +1,7 @@
 name: PR Size
 
 on:
-  pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+  workflow_dispatch:
 
 permissions:
   contents: read
