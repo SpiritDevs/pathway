@@ -9184,7 +9184,7 @@ function ChatViewContent(props: ChatViewProps) {
               type="button"
               aria-label="Temporary conversation"
               aria-pressed={activeThread.temporary ?? false}
-              className="inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground [-webkit-app-region:no-drag] hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:text-foreground"
+              className="me-2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground [-webkit-app-region:no-drag] hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:text-foreground"
               onClick={() => handleTemporaryChange(!(activeThread.temporary ?? false))}
             >
               <svg
