@@ -349,3 +349,10 @@ export function shouldIncludeBranchPickerItem(input: {
     lowerItemValue.includes(sanitizedQuery)
   );
 }
+
+export interface AutoPlacementOption {
+  readonly active: boolean;
+  readonly disabled: boolean;
+  readonly label: string;
+  readonly onSelect: () => void;
+}

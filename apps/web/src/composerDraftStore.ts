@@ -254,12 +254,22 @@ const PendingDraftSend = Schema.Struct({
 });
 const isPendingDraftSend = Schema.is(PendingDraftSend);
 
+export const DraftPlacement = Schema.Struct({
+  mode: Schema.Literals(["auto", "manual"]),
+  resolvedKey: Schema.NullOr(Schema.String),
+  providerPinned: Schema.Boolean,
+  dispatched: Schema.optionalKey(Schema.Boolean),
+});
+export type DraftPlacement = typeof DraftPlacement.Type;
+const isDraftPlacement = Schema.is(DraftPlacement);
+
 const PersistedDraftThreadState = Schema.Struct({
   threadId: ThreadId,
   environmentId: Schema.String,
   projectId: ProjectId,
   logicalProjectKey: Schema.optionalKey(Schema.String),
   pendingSend: Schema.optionalKey(Schema.NullOr(PendingDraftSend)),
+  placement: Schema.optionalKey(DraftPlacement),
   createdAt: Schema.String,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
@@ -365,6 +375,7 @@ export function composerDraftHasUserContent(
  * environment/worktree configuration before the first send.
  */
 export interface DraftSessionState {
+  placement?: DraftPlacement;
   pendingSend?: typeof PendingDraftSend.Type | null;
   /** Hydration has no live request to finish this send; reconcile with a live shell. */
   pendingSendNeedsReconciliation?: boolean;
@@ -471,6 +482,7 @@ interface ComposerDraftStoreState {
     options: {
       branch?: string | null;
       worktreePath?: string | null;
+      placement?: DraftPlacement;
       projectRef?: ScopedProjectRef;
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
@@ -1578,6 +1590,7 @@ function createDraftThreadState(
     existingThread !== undefined &&
     (existingThread.environmentId !== projectRef.environmentId ||
       existingThread.projectId !== projectRef.projectId);
+  if (projectChanged && existingThread?.placement?.dispatched) return existingThread;
   const nextWorktreePath =
     options?.worktreePath === undefined
       ? projectChanged
@@ -1610,6 +1623,14 @@ function createDraftThreadState(
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
     startFromOrigin: nextStartFromOrigin,
     promotedTo: null,
+    ...(existingThread?.placement
+      ? {
+          placement: {
+            ...existingThread.placement,
+            resolvedKey: projectChanged ? null : existingThread.placement.resolvedKey,
+          },
+        }
+      : {}),
     pendingSend: existingThread?.pendingSend ?? null,
     pendingSendNeedsReconciliation: existingThread?.pendingSendNeedsReconciliation ?? false,
   };
@@ -1778,6 +1799,9 @@ function normalizePersistedDraftThreads(
           typeof createdAt === "string" && createdAt.length > 0
             ? createdAt
             : new Date().toISOString(),
+        ...(isDraftPlacement(candidateDraftThread.placement)
+          ? { placement: candidateDraftThread.placement }
+          : {}),
         runtimeMode: isRuntimeMode(candidateDraftThread.runtimeMode)
           ? candidateDraftThread.runtimeMode
           : DEFAULT_RUNTIME_MODE,
@@ -2492,6 +2516,7 @@ function toHydratedDraftThreadState(
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    ...(persistedDraftThread.placement ? { placement: persistedDraftThread.placement } : {}),
     pendingSend: persistedDraftThread.pendingSend ?? null,
     pendingSendNeedsReconciliation: persistedDraftThread.pendingSend != null,
     promotedTo: persistedDraftThread.promotedTo
@@ -2712,6 +2737,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const projectChanged =
               nextProjectRef.environmentId !== existing.environmentId ||
               nextProjectRef.projectId !== existing.projectId;
+            if (projectChanged && existing.placement?.dispatched) return state;
             const nextWorktreePath =
               options.worktreePath === undefined
                 ? projectChanged
@@ -2746,10 +2772,26 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
               startFromOrigin: nextStartFromOrigin,
               promotedTo: existing.promotedTo ?? null,
+              ...(options.placement
+                ? {
+                    placement: {
+                      ...options.placement,
+                      ...(existing.placement?.dispatched ? { dispatched: true } : {}),
+                    },
+                  }
+                : existing.placement
+                  ? {
+                      placement: {
+                        ...existing.placement,
+                        resolvedKey: projectChanged ? null : existing.placement.resolvedKey,
+                      },
+                    }
+                  : {}),
               pendingSend: existing.pendingSend ?? null,
               pendingSendNeedsReconciliation: existing.pendingSendNeedsReconciliation ?? false,
             };
             const isUnchanged =
+              Equal.equals(nextDraftThread.placement, existing.placement) &&
               nextDraftThread.environmentId === existing.environmentId &&
               nextDraftThread.projectId === existing.projectId &&
               nextDraftThread.logicalProjectKey === existing.logicalProjectKey &&

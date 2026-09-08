@@ -324,6 +324,7 @@ import {
   ServerUpsertKeybindingResult,
 } from "./server.ts";
 import {
+  HostResourcesSnapshot,
   ResourceTelemetryHistory,
   ResourceTelemetryHistoryInput,
   ResourceTelemetryRetryResult,
@@ -447,6 +448,7 @@ export const WS_METHODS = {
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
+  serverGetHostResources: "server.getHostResources",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
   serverSignalProcess: "server.signalProcess",
@@ -635,6 +637,12 @@ export const WsServerGetProcessResourceHistoryRpc = Rpc.make(
     error: EnvironmentAuthorizationError,
   },
 );
+
+export const WsServerGetHostResourcesRpc = Rpc.make(WS_METHODS.serverGetHostResources, {
+  payload: Schema.Struct({}),
+  success: HostResourcesSnapshot,
+  error: EnvironmentAuthorizationError,
+});
 
 export const WsServerGetResourceTelemetryHistoryRpc = Rpc.make(
   WS_METHODS.serverGetResourceTelemetryHistory,
@@ -1902,6 +1910,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetProcessResourceHistoryRpc,
+  WsServerGetHostResourcesRpc,
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
   WsServerGetUsageSummaryRpc,

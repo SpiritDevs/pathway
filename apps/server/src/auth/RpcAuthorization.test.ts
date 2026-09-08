@@ -15,6 +15,12 @@ describe("RPC authorization scopes", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });
 
+  it("requires orchestration read access for host headroom", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverGetHostResources)).toBe(
+      AuthOrchestrationReadScope,
+    );
+  });
+
   it("requires operation access to prepare and commit remote desktop updates", () => {
     for (const method of [
       WS_METHODS.serverUpdateServer,

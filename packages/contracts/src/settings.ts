@@ -150,7 +150,14 @@ export const ActionPaletteSectionPreference = Schema.Struct({
 });
 export type ActionPaletteSectionPreference = typeof ActionPaletteSectionPreference.Type;
 
+export const LoadBalancingWeights = Schema.Record(
+  TrimmedNonEmptyString,
+  Schema.Number.check(Schema.isFinite(), Schema.isBetween({ minimum: 0, maximum: 100 })),
+);
+
 export const ClientSettingsSchema = Schema.Struct({
+  loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  loadBalancingWeights: LoadBalancingWeights.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   threadAlerts: AlertDeliverySettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ALERT_DELIVERY_SETTINGS)),
   ),
@@ -1001,6 +1008,8 @@ export const ServerSettingsPatch = Schema.Struct({
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
+  loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
+  loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),
   threadAlerts: Schema.optionalKey(AlertDeliverySettings),
   activeTurnSendMode: Schema.optionalKey(ActiveTurnSendMode),
   actionPaletteSections: Schema.optionalKey(Schema.Array(ActionPaletteSectionPreference)),

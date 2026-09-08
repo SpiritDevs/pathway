@@ -45,6 +45,36 @@ final class PathwayAgentThreadCreationModel {
     private(set) var isImportingCapture = false
     private(set) var isTransferringDraft = false
     private(set) var errorMessage: String?
+    var placementPinned = false { didSet { saveDraft() } }
+    var isAutomaticPlacement = false
+    @ObservationIgnored var automaticModelChoice: PathwayPlacementModelChoice?
+    @ObservationIgnored var validatePlacement: (@MainActor () async throws -> Void)?
+
+    var hasPendingLaunch: Bool { launchAttempt?.attachments != nil }
+    var usesAutomaticPlacement: Bool {
+        isAutomaticPlacement && !placementPinned && initialImageUploads.isEmpty && attachments.drafts.isEmpty
+    }
+    var canAutomaticallyPlace: Bool {
+        !placementPinned && prompt.isEmpty && initialImageUploads.isEmpty && attachments.drafts.isEmpty
+            && workspaceMode == "local" && branch.isEmpty && launchAttempt == nil
+            && !isLaunching && !isImportingCapture && !isTransferringDraft
+    }
+    var placementModelChoice: PathwayPlacementModelChoice? {
+        guard let selectedProvider, let selectedModel else { return nil }
+        return PathwayPlacementModelChoice(driver: selectedProvider.driver, model: selectedModel.id,
+            options: optionValues, interactionMode: interactionMode)
+    }
+    func activateAutomaticPlacement(choice: PathwayPlacementModelChoice?) {
+        isAutomaticPlacement = true
+        automaticModelChoice = choice
+        if choice == nil { selectedProviderID = "" }
+        applySubscriptionValue(.object(["type": .string("snapshot"), "config": .object(serverConfig)]))
+    }
+    func pinPlacement() {
+        placementPinned = true
+        isAutomaticPlacement = false
+        automaticModelChoice = nil
+    }
 
     /// Images are persisted in the launch namespace before the initial turn references them.
     var initialImageUploads: [JSONValue] = [] {
@@ -155,6 +185,7 @@ final class PathwayAgentThreadCreationModel {
     var canLaunch: Bool {
         (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !initialImageUploads.isEmpty || !attachments.drafts.isEmpty)
             && prompt.count <= 120_000 && attachments.isReady && initialImageUploads.count + attachments.drafts.count <= 8
+            && automaticModelChoice == nil
             && selectedProvider != nil
             && selectedModel != nil
             && connectionState == .live
@@ -217,6 +248,8 @@ final class PathwayAgentThreadCreationModel {
             options: options.isEmpty ? nil : options
         )
         do {
+            if usesAutomaticPlacement, launchAttempt == nil { try await validatePlacement?() }
+            try Task.checkCancellation()
             let userUploads = attachments.uploads
             let selectedAttachmentIDs = Set(attachments.drafts.map(\.id))
             let initialUploads = initialImageUploads
@@ -269,6 +302,7 @@ final class PathwayAgentThreadCreationModel {
             if prompt.trimmingCharacters(in: .whitespacesAndNewlines) == draft.prompt { prompt = "" }
             if initialImageUploads == initialUploads { initialImageUploads = [] }
             launchAttempt = nil
+            placementPinned = false
             sentAttachmentIDs = Array(selectedAttachmentIDs)
             // Record accepted attachment IDs before clearing their separate local byte store.
             // Relaunch can finish this cleanup without exposing already-sent files as a new draft.
@@ -310,8 +344,22 @@ final class PathwayAgentThreadCreationModel {
             return
         }
 
-        providers = providerValues.compactMap(PathwayAgentThreadModel.provider).filter { $0.unavailableReason == nil && !$0.models.isEmpty }
-        preserveOrSelectDefaults()
+        providers = isAutomaticPlacement ? PathwayEnvironmentPlacement.availableProviders(.object(serverConfig))
+            : providerValues.compactMap(PathwayAgentThreadModel.provider).filter { $0.unavailableReason == nil && !$0.models.isEmpty }
+        if let choice = automaticModelChoice {
+            if let provider = choice.provider(in: providers) {
+                selectedProviderID = provider.id
+                selectedModelID = choice.model
+                optionValues = choice.options
+                interactionMode = choice.interactionMode
+                automaticModelChoice = nil
+                errorMessage = nil
+            } else {
+                errorMessage = "The requested model is no longer available. Choose an environment or model manually."
+            }
+        } else if !isAutomaticPlacement || selectedProviderID.isEmpty {
+            preserveOrSelectDefaults()
+        }
         connectionState = .live
         attachments.isConnected = true
     }
@@ -341,6 +389,7 @@ final class PathwayAgentThreadCreationModel {
             optionValues = stored.optionValues; runtimeMode = stored.runtimeMode; interactionMode = stored.interactionMode
             workspaceMode = stored.workspaceMode; baseReference = stored.baseReference
             branch = stored.branch; startFromOrigin = stored.startFromOrigin; launchAttempt = stored.attempt
+            placementPinned = stored.placementPinned ?? false
             sentIDs = stored.sentAttachmentIDs ?? []
         }
         // The byte store needs the launch receipt before deciding whether an old upload is reusable.
@@ -394,7 +443,7 @@ final class PathwayAgentThreadCreationModel {
         PathwayThreadCreationDraft(prompt: prompt, initialImageUploads: initialImageUploads,
             selectedProviderID: selectedProviderID, selectedModelID: selectedModelID, optionValues: optionValues,
             runtimeMode: runtimeMode, interactionMode: interactionMode, workspaceMode: workspaceMode,
-            baseReference: baseReference, branch: branch, startFromOrigin: startFromOrigin, attempt: launchAttempt, sentAttachmentIDs: sentAttachmentIDs.isEmpty ? nil : sentAttachmentIDs, importedCaptureIDs: importedCaptureIDs.isEmpty ? nil : importedCaptureIDs)
+            baseReference: baseReference, branch: branch, startFromOrigin: startFromOrigin, attempt: launchAttempt, sentAttachmentIDs: sentAttachmentIDs.isEmpty ? nil : sentAttachmentIDs, importedCaptureIDs: importedCaptureIDs.isEmpty ? nil : importedCaptureIDs, placementPinned: placementPinned ? true : nil)
     }
 
     private func saveDraft() {

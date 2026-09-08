@@ -28,7 +28,8 @@ final class PathwayIssueEnvironmentClient {
         environment: PathwayCompanyEnvironment,
         connect: PathwayConnectClient,
         method: String,
-        payload: JSONValue
+        payload: JSONValue,
+        timeout: Duration = .seconds(30)
     ) async throws -> JSONValue {
         let key = environment.id
         let rpc: any PathwayIssueRPCClient
@@ -72,9 +73,30 @@ final class PathwayIssueEnvironmentClient {
         }
         // Reconnect repeats this gate because protocol negotiation belongs to the socket.
         let result = try await rpc.request(method, payload: payload, requiresSubscription: true,
-                                           waitForSubscription: true, timeout: .seconds(30))
+                                           waitForSubscription: true, timeout: timeout)
         guard clientIDs[key] == clientID, !Task.isCancelled else { throw CancellationError() }
         return result
+    }
+
+    /// The temporary subscription is scoped to one placement probe, including failed reads.
+    static func placementSnapshot(
+        environment: PathwayCompanyEnvironment, connect: PathwayConnectClient,
+        makeProbe: @MainActor () -> PathwayIssueEnvironmentClient = { PathwayIssueEnvironmentClient() }
+    ) async throws -> PathwayEnvironmentPlacementSnapshot {
+        let probe = makeProbe()
+        do {
+            let config = try await probe.request(environment: environment, connect: connect,
+                method: "server.getConfig", payload: .object([:]), timeout: .seconds(5))
+            let resources = try await probe.request(environment: environment, connect: connect,
+                method: "server.getHostResources", payload: .object([:]), timeout: .seconds(5))
+            let receivedAt = ProcessInfo.processInfo.systemUptime
+            await probe.stop()
+            try Task.checkCancellation()
+            return PathwayEnvironmentPlacementSnapshot(config: config, resources: resources, receivedAt: receivedAt)
+        } catch {
+            await probe.stop()
+            throw error
+        }
     }
 
     func stop() async {

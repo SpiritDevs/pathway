@@ -37,6 +37,8 @@ const clientSettings: ClientSettings = {
   fontSizeTerminal: 12,
   fontSmoothing: true,
   glassOpacity: 80,
+  loadBalancingEnabled: true,
+  loadBalancingWeights: { "environment-1": 100, "environment-2": 0 },
   planModeEnabled: false,
   persistComposerContextStrip: true,
   primaryNavigationViewOrder: [

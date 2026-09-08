@@ -1,3 +1,4 @@
+import type { AutoPlacementOption } from "../BranchToolbar.logic";
 import type {
   EditorId,
   EnvironmentId,
@@ -64,6 +65,8 @@ export interface ThreadDetailsPanelProps {
   showOpenInPicker: boolean;
   gitCwd: string | null;
   isGitRepo: boolean;
+  autoPlacement?: AutoPlacementOption | undefined;
+  environmentLocked?: boolean | undefined;
   envLocked: boolean;
   availableEnvironments: readonly EnvironmentOption[];
   onEnvironmentChange: (environmentId: EnvironmentId) => void;
@@ -237,8 +240,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             <div className="flex flex-col px-2 pb-2.5">
               {props.availableEnvironments.length > 0 ? (
                 <BranchToolbarEnvironmentSelector
+                  autoPlacement={props.autoPlacement}
                   displayMode="panel"
-                  envLocked={props.envLocked}
+                  envLocked={props.environmentLocked ?? props.envLocked}
                   environmentId={props.environmentId}
                   availableEnvironments={props.availableEnvironments}
                   onEnvironmentChange={props.onEnvironmentChange}
