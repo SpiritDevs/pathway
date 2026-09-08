@@ -11,7 +11,7 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 import {
   placementSelectionKey,
-  projectsSharePlacementBinding,
+  selectPlacementProjects,
   resolvePlacementModel,
 } from "./draftPlacement";
 
@@ -80,31 +80,34 @@ const selection = {
 
 describe("automatic draft placement eligibility", () => {
   it("uses explicit bindings within the same company and cloud project", () => {
-    expect(projectsSharePlacementBinding(source, target, [binding(source), binding(target)])).toBe(
-      true,
-    );
     expect(
-      projectsSharePlacementBinding(source, target, [
-        binding(source),
-        binding(target, "company-b"),
-      ]),
-    ).toBe(false);
+      selectPlacementProjects(source, [source, target], [binding(source), binding(target)]),
+    ).toEqual([source, target]);
     expect(
-      projectsSharePlacementBinding(source, target, [
-        binding(source),
-        binding(target, "company-a", "other-project"),
-      ]),
-    ).toBe(false);
-    expect(projectsSharePlacementBinding(source, target, [])).toBe(false);
+      selectPlacementProjects(
+        source,
+        [source, target],
+        [binding(source), binding(target, "company-b")],
+      ),
+    ).toEqual([source]);
+    expect(
+      selectPlacementProjects(
+        source,
+        [source, target],
+        [binding(source), binding(target, "company-a", "other-project")],
+      ),
+    ).toEqual([source]);
+    expect(selectPlacementProjects(source, [source, target], [])).toEqual([source]);
   });
   it("retains the current checkout and excludes rootless projects", () => {
-    expect(projectsSharePlacementBinding(source, source, [])).toBe(true);
+    expect(selectPlacementProjects(source, [source, target], [])).toEqual([source]);
     expect(
-      projectsSharePlacementBinding({ ...source, workspaceRoot: null }, target, [
-        binding(source),
-        binding(target),
-      ]),
-    ).toBe(false);
+      selectPlacementProjects(
+        { ...source, workspaceRoot: null },
+        [target],
+        [binding(source), binding(target)],
+      ),
+    ).toEqual([]);
   });
   it("maps a driver and model to the target environment's distinct instance ID", () => {
     const remote = { ...provider, instanceId: ProviderInstanceId.make("codex-remote") };

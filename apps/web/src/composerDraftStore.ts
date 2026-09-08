@@ -258,10 +258,16 @@ export const DraftPlacement = Schema.Struct({
   mode: Schema.Literals(["auto", "manual"]),
   resolvedKey: Schema.NullOr(Schema.String),
   providerPinned: Schema.Boolean,
+  automaticProviderInstanceId: Schema.optionalKey(ProviderInstanceId),
   dispatched: Schema.optionalKey(Schema.Boolean),
 });
 export type DraftPlacement = typeof DraftPlacement.Type;
 const isDraftPlacement = Schema.is(DraftPlacement);
+
+function invalidateDraftPlacement(placement: DraftPlacement): DraftPlacement {
+  const { automaticProviderInstanceId: _automaticProviderInstanceId, ...rest } = placement;
+  return { ...rest, resolvedKey: null };
+}
 
 const PersistedDraftThreadState = Schema.Struct({
   threadId: ThreadId,
@@ -1625,10 +1631,9 @@ function createDraftThreadState(
     promotedTo: null,
     ...(existingThread?.placement
       ? {
-          placement: {
-            ...existingThread.placement,
-            resolvedKey: projectChanged ? null : existingThread.placement.resolvedKey,
-          },
+          placement: projectChanged
+            ? invalidateDraftPlacement(existingThread.placement)
+            : existingThread.placement,
         }
       : {}),
     pendingSend: existingThread?.pendingSend ?? null,
@@ -2781,10 +2786,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                   }
                 : existing.placement
                   ? {
-                      placement: {
-                        ...existing.placement,
-                        resolvedKey: projectChanged ? null : existing.placement.resolvedKey,
-                      },
+                      placement: projectChanged
+                        ? invalidateDraftPlacement(existing.placement)
+                        : existing.placement,
                     }
                   : {}),
               pendingSend: existing.pendingSend ?? null,

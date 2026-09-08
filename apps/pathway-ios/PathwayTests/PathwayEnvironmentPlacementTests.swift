@@ -31,28 +31,28 @@ struct PathwayEnvironmentPlacementTests {
         }
     }
 
-    @Test func placementProbeClosesItsSubscriptionAfterBothReads() async throws {
+    @Test func placementProbeReadsWithoutSubscriptionsAndClosesConnection() async throws {
         let rpc = PlacementProbeRPC()
-        let probe = PathwayIssueEnvironmentClient { _, _ in rpc }
         let connect = PathwayConnectClient(relayURL: URL(string: "https://relay.test")!, clerkTokenProvider: { "unused" })
         _ = try await PathwayIssueEnvironmentClient.placementSnapshot(environment: option("origin").environment,
-            connect: connect, makeProbe: { probe })
+            connect: connect, makeClient: { _, _ in rpc })
         #expect(await rpc.methods == ["server.getConfig", "server.getHostResources"])
         #expect(await rpc.timeouts == [.seconds(5), .seconds(5)])
         #expect(await rpc.didStop)
+        #expect(await rpc.subscriptions.isEmpty)
     }
 
     @Test(arguments: ["server.getConfig", "server.getHostResources"])
-    func placementProbeClosesItsSubscriptionWhenAReadFails(method: String) async throws {
+    func placementProbeClosesConnectionWhenAReadFails(method: String) async throws {
         let rpc = PlacementProbeRPC(failingMethod: method)
-        let probe = PathwayIssueEnvironmentClient { _, _ in rpc }
         let connect = PathwayConnectClient(relayURL: URL(string: "https://relay.test")!, clerkTokenProvider: { "unused" })
         do {
             _ = try await PathwayIssueEnvironmentClient.placementSnapshot(environment: option("origin").environment,
-                connect: connect, makeProbe: { probe })
+                connect: connect, makeClient: { _, _ in rpc })
             Issue.record("Expected a failed probe")
         } catch { #expect(error is PathwayRPCError) }
         #expect(await rpc.didStop)
+        #expect(await rpc.subscriptions.isEmpty)
     }
 
     @Test func preferencesDefaultOffAndPersistOnlyValidWeights() throws {
@@ -111,6 +111,95 @@ struct PathwayEnvironmentPlacementTests {
         }
         #expect(winner == option("replica").id)
         #expect(Set(requests) == Set(["origin", "replica"]))
+    }
+
+    @Test func resolverPreservesPreferredCheckoutAndRejectsAmbiguousRemoteCheckouts() async throws {
+        let suite = "placement-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = PathwayEnvironmentPlacementPreferences(defaults: defaults)
+        preferences.enabled = true
+        let origin = option("origin", environmentID: "current-host")
+        var requested: [String] = []
+        let winner = await PathwayEnvironmentPlacement.resolve(bindings: [
+            option("alternate-checkout", environmentID: "current-host"), origin,
+            option("remote-a", environmentID: "ambiguous-host"), option("remote-b", environmentID: "ambiguous-host"),
+            option("replica")
+        ], preferredBindingID: origin.id, choice: nil, preferences: preferences, directory: nil) { environment in
+            requested.append(environment.environment.environmentId)
+            return .init(config: self.config, resources: self.resources(cpuCount: environment.environment.environmentId == "current-host" ? 16 : 4),
+                receivedAt: ProcessInfo.processInfo.systemUptime)
+        }
+        #expect(winner == origin.id)
+        #expect(Set(requested) == Set(["current-host", "replica"]))
+        #expect(requested.count == 2)
+    }
+
+    @Test func resolverCollapsesDuplicateRegistrationsOfOneRemoteCheckout() async throws {
+        let suite = "placement-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = PathwayEnvironmentPlacementPreferences(defaults: defaults)
+        preferences.enabled = true
+        var requested: [String] = []
+        let winner = await PathwayEnvironmentPlacement.resolve(bindings: [option("origin"),
+            option("replica-a", environmentID: "replica", localProjectID: "same", workspaceRoot: "/same"),
+            option("replica-b", environmentID: "replica", localProjectID: "same", workspaceRoot: "/same")
+        ], preferredBindingID: option("origin").id, choice: nil, preferences: preferences, directory: nil) { environment in
+            requested.append(environment.environment.environmentId)
+            return .init(config: self.config, resources: self.resources(cpuCount: environment.environment.environmentId == "replica" ? 16 : 4),
+                receivedAt: ProcessInfo.processInfo.systemUptime)
+        }
+        #expect(winner == "company:replica-a")
+        #expect(requested.count == 2)
+    }
+
+    @Test func explicitAutoClearsAndPersistsAHistoricalPinWhenDraftIsEmpty() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = creation(directory: directory)
+        await model.restoreDraft()
+        model.applySubscriptionValue(.object(["type": .string("snapshot"), "config": config]))
+        model.pinPlacement()
+        model.workspaceMode = "worktree"
+        model.workspaceMode = "local"
+        model.runtimeMode = "approval-required"
+        await model.persistDraftNow()
+        #expect(await PathwayEnvironmentPlacement.hasSavedDraft(bindingID: model.bindingID, directory: directory))
+        #expect(model.canAutomaticallyPlace)
+        #expect(await model.prepareAutomaticPlacement())
+        #expect(!model.placementPinned)
+        #expect(!(await PathwayEnvironmentPlacement.hasSavedDraft(bindingID: model.bindingID, directory: directory)))
+        let destination = creation()
+        destination.isAutomaticPlacement = true
+        destination.automaticModelChoice = model.placementModelChoice
+        destination.applySubscriptionValue(.object(["type": .string("snapshot"), "config": config]))
+        #expect(destination.runtimeMode == "approval-required")
+        await model.stop()
+    }
+
+    @Test func explicitAutoCannotReleaseDraftContentWorkspaceOrPendingLaunch() async {
+        let model = creation { _, _ in throw PathwayRPCError.disconnected }
+        model.applySubscriptionValue(.object(["type": .string("snapshot"), "config": config]))
+        model.pinPlacement()
+        model.prompt = "Keep this draft"
+        #expect(!(await model.prepareAutomaticPlacement()))
+        model.prompt = ""
+        model.initialImageUploads = [.object(["id": .string("bound-upload")])]
+        #expect(!(await model.prepareAutomaticPlacement()))
+        model.initialImageUploads = []
+        model.workspaceMode = "worktree"
+        #expect(!(await model.prepareAutomaticPlacement()))
+        model.workspaceMode = "local"
+        model.branch = "existing-branch"
+        #expect(!(await model.prepareAutomaticPlacement()))
+        model.branch = ""
+        model.prompt = "Launch then lose the response"
+        #expect(await model.launch() == nil)
+        model.prompt = ""
+        #expect(model.hasPendingLaunch)
+        #expect(!(await model.prepareAutomaticPlacement()))
+        #expect(model.placementPinned)
     }
 
     @Test func savedDraftPinsEnvironmentBeforeAnyProbe() async throws {
@@ -203,11 +292,14 @@ struct PathwayEnvironmentPlacementTests {
         #expect(requests == 1)
     }
 
-    private func option(_ id: String, project: String = "project", status: String = "active") -> PathwayNewThreadBindingOption {
-        .init(binding: .init(companyId: "company", binding: .init(id: id, cloudProjectId: project,
-            environmentId: id, localProjectId: "local-\(id)", localWorkspaceRoot: "/\(id)", status: status, lastSeenAt: nil)),
-            environment: .init(companyId: "company", environment: .init(id: id, environmentId: id,
-                descriptor: .init(environmentId: id, label: id, serverVersion: "test"), relayLinkState: "linked",
+    private func option(_ id: String, project: String = "project", status: String = "active",
+                        environmentID: String? = nil, localProjectID: String? = nil, workspaceRoot: String? = nil) -> PathwayNewThreadBindingOption {
+        let environmentID = environmentID ?? id
+        return .init(binding: .init(companyId: "company", binding: .init(id: id, cloudProjectId: project,
+            environmentId: environmentID, localProjectId: localProjectID ?? "local-\(id)",
+            localWorkspaceRoot: workspaceRoot ?? "/\(id)", status: status, lastSeenAt: nil)),
+            environment: .init(companyId: "company", environment: .init(id: environmentID, environmentId: environmentID,
+                descriptor: .init(environmentId: environmentID, label: environmentID, serverVersion: "test"), relayLinkState: "linked",
                 managedEndpointAvailable: true, lastSeenAt: nil, state: "active")),
             projectID: project, projectName: project, companyName: "Company")
     }
@@ -241,6 +333,7 @@ private actor PlacementProbeRPC: PathwayIssueRPCClient {
     private let stream: AsyncThrowingStream<JSONValue, Error>
     private let continuation: AsyncThrowingStream<JSONValue, Error>.Continuation
     private(set) var methods: [String] = []
+    private(set) var subscriptions: [String] = []
     private(set) var timeouts: [Duration] = []
     private(set) var didStop = false
 
@@ -248,8 +341,9 @@ private actor PlacementProbeRPC: PathwayIssueRPCClient {
         self.failingMethod = failingMethod
         (stream, continuation) = AsyncThrowingStream.makeStream()
     }
-    func subscribe(_ tag: String, payload: JSONValue) async -> AsyncThrowingStream<JSONValue, Error> { stream }
+    func subscribe(_ tag: String, payload: JSONValue) async -> AsyncThrowingStream<JSONValue, Error> { subscriptions.append(tag); return stream }
     func request(_ tag: String, payload: JSONValue, requiresSubscription: Bool, waitForSubscription: Bool, timeout: Duration) async throws -> JSONValue {
+        #expect(!requiresSubscription && !waitForSubscription)
         methods.append(tag)
         timeouts.append(timeout)
         if tag == failingMethod { throw PathwayRPCError.disconnected }

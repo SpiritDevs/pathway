@@ -2483,20 +2483,37 @@ describe("draft automatic placement persistence", () => {
   );
   beforeEach(() => resetComposerDraftStore());
 
-  it("persists automatic resolution and invalidates it when project context changes", () => {
-    const store = useComposerDraftStore.getState();
-    store.setProjectDraftThreadId(local, draftId);
-    store.setDraftThreadContext(draftId, {
-      placement: { mode: "auto", providerPinned: false, resolvedKey: "resolved-model" },
-    });
-    expect(store.getDraftSession(draftId)?.placement?.resolvedKey).toBe("resolved-model");
-    store.setDraftThreadContext(draftId, { projectRef: remote });
-    expect(store.getDraftSession(draftId)?.placement).toEqual({
-      mode: "auto",
-      providerPinned: false,
-      resolvedKey: null,
-    });
-  });
+  it.each(["context", "project"] as const)(
+    "persists Auto provenance and clears it when %s remaps the project",
+    (remap) => {
+      const store = useComposerDraftStore.getState();
+      const automaticProviderInstanceId = ProviderInstanceId.make("codex-placed");
+      store.setProjectDraftThreadId(local, draftId);
+      store.setDraftThreadContext(draftId, {
+        placement: {
+          mode: "auto",
+          providerPinned: false,
+          resolvedKey: "resolved-model",
+          automaticProviderInstanceId,
+        },
+      });
+      const merge = useComposerDraftStore.persist.getOptions().merge!;
+      useComposerDraftStore.setState(
+        merge(flushComposerDraftStorage(), useComposerDraftStore.getState()),
+      );
+      expect(store.getDraftSession(draftId)?.placement?.resolvedKey).toBe("resolved-model");
+      expect(store.getDraftSession(draftId)?.placement?.automaticProviderInstanceId).toBe(
+        automaticProviderInstanceId,
+      );
+      if (remap === "context") store.setDraftThreadContext(draftId, { projectRef: remote });
+      else store.setProjectDraftThreadId(remote, draftId);
+      expect(store.getDraftSession(draftId)?.placement).toEqual({
+        mode: "auto",
+        providerPinned: false,
+        resolvedKey: null,
+      });
+    },
+  );
 
   it("does not move a dispatched draft when a failed launch has cleared pendingSend", () => {
     const store = useComposerDraftStore.getState();

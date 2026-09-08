@@ -20,6 +20,7 @@ struct NewAgentThreadView: View {
     @State private var pendingPlacementChoice: PathwayPlacementModelChoice?
     @State private var placementMessage: String?
     @State private var placementUnavailable = false
+    @State private var placementResetsPin = false
 
     var body: some View {
         NavigationStack {
@@ -43,7 +44,7 @@ struct NewAgentThreadView: View {
                         isResolvingPlacement: isResolvingPlacement,
                         placementMessage: placementMessage,
                         placementUnavailable: placementUnavailable,
-                        chooseAutomaticPlacement: requestAutomaticPlacement,
+                        chooseAutomaticPlacement: { requestAutomaticPlacement(resetPin: true) },
                         chooseEnvironment: { id in
                             automaticBindingID = nil
                             pendingPlacementChoice = nil
@@ -161,8 +162,9 @@ struct NewAgentThreadView: View {
         if placementPreferences.enabled, project.bindings.count > 1 { requestAutomaticPlacement() }
     }
 
-    private func requestAutomaticPlacement() {
+    private func requestAutomaticPlacement(resetPin: Bool = false) {
         guard model?.hasPendingLaunch != true, model?.isLaunching != true else { return }
+        placementResetsPin = resetPin
         isResolvingPlacement = true
         placementMessage = nil
         placementRequestID = UUID()
@@ -173,6 +175,14 @@ struct NewAgentThreadView: View {
         let projectID = selectedProjectID
         let preferred = selectedBindingID
         guard let project = selectedProject else { isResolvingPlacement = false; return }
+        if placementResetsPin, let model, model.bindingID == preferred {
+            guard await model.prepareAutomaticPlacement() else {
+                guard !Task.isCancelled, requestID == placementRequestID, projectID == selectedProjectID else { return }
+                isResolvingPlacement = false
+                return
+            }
+        }
+        guard !Task.isCancelled, requestID == placementRequestID, projectID == selectedProjectID else { return }
         let choice = model?.bindingID == preferred ? model?.placementModelChoice : nil
         let hasSavedDraft = await PathwayEnvironmentPlacement.hasSavedDraft(bindingID: preferred, directory: appModel.localStorageDirectory)
         let winner = await PathwayEnvironmentPlacement.resolve(bindings: project.bindings,
@@ -403,6 +413,9 @@ private struct NewAgentThreadComposer: View {
             if automaticPlacementEnabled {
                 Button("Auto", action: chooseAutomaticPlacement)
                     .disabled(model?.canAutomaticallyPlace == false)
+                if model?.placementPinned == true, model?.canAutomaticallyPlace == true {
+                    Text("Auto may choose a compatible account on another machine.")
+                }
             }
             ForEach(project.bindings) { binding in
                 Button {

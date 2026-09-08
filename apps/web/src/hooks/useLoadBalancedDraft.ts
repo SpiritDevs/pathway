@@ -17,7 +17,8 @@ import {
   draftPlacementIsPinned,
   draftPlacementHasMachineBinding,
   placementSelectionKey,
-  projectsSharePlacementBinding,
+  selectPlacementProjects,
+  draftPlacementPinsProvider,
   resolvePlacementModel,
 } from "../lib/draftPlacement";
 
@@ -37,12 +38,18 @@ export function useLoadBalancedDraft(input: {
   const { draftId, enabled, weights, project, projects, environments, replicas, selection } = input;
   const registry = useContext(RegistryContext);
   const draft = useComposerDraftStore((store) => (draftId ? store.getDraftSession(draftId) : null));
-  const pinned = useComposerDraftStore((store) => {
+  const sourceProviders =
+    environments.find((environment) => environment.environmentId === draft?.environmentId)
+      ?.serverConfig?.providers ?? [];
+  const inheritedProviderPinned =
+    draft !== null && draftPlacementPinsProvider(draft, selection, sourceProviders);
+  const contextPinned = useComposerDraftStore((store) => {
     const session = draftId ? store.getDraftSession(draftId) : null;
     return session && draftId
       ? draftPlacementIsPinned(session, store.getComposerDraft(draftId))
       : true;
   });
+  const pinned = contextPinned || inheritedProviderPinned;
   const machinePinned = useComposerDraftStore((store) => {
     const session = draftId ? store.getDraftSession(draftId) : null;
     return session && draftId
@@ -71,6 +78,10 @@ export function useLoadBalancedDraft(input: {
         : [],
     [automatic, replicas],
   );
+  const placementProjects = useMemo(
+    () => (automatic && project ? selectPlacementProjects(project, projects, bindings) : []),
+    [automatic, project, projects, bindings],
+  );
   const placementEnvironments = useMemo(
     () =>
       automatic && project
@@ -78,14 +89,12 @@ export function useLoadBalancedDraft(input: {
             (environment) =>
               environment.connection.phase === "connected" &&
               (weights[environment.environmentId] ?? 50) > 0 &&
-              projects.some(
-                (target) =>
-                  target.environmentId === environment.environmentId &&
-                  projectsSharePlacementBinding(project, target, bindings),
+              placementProjects.some(
+                (target) => target.environmentId === environment.environmentId,
               ),
           )
         : [],
-    [automatic, project, environments, weights, projects, bindings],
+    [automatic, project, environments, weights, placementProjects],
   );
   const accessAtom = useMemo(
     () =>
@@ -106,13 +115,7 @@ export function useLoadBalancedDraft(input: {
       .find((environment) => environment.environmentId === project.environmentId)
       ?.serverConfig?.providers.find((provider) => provider.instanceId === selection.instanceId);
     if (!source) return [];
-    const seen = new Set<string>();
-    return projects.flatMap((target) => {
-      if (
-        seen.has(target.environmentId) ||
-        !projectsSharePlacementBinding(project, target, bindings)
-      )
-        return [];
+    return placementProjects.flatMap((target) => {
       const session = sessions.find(
         (entry) => entry.environmentId === target.environmentId,
       )?.session;
@@ -131,14 +134,17 @@ export function useLoadBalancedDraft(input: {
         (weights[target.environmentId] ?? 50) <= 0
       )
         return [];
-      const providers = [...environment.serverConfig.providers].sort(
+      const providers = (
+        target.environmentId === project.environmentId
+          ? [source]
+          : [...environment.serverConfig.providers]
+      ).sort(
         (a, b) =>
           Number(b.instanceId === selection.instanceId) -
           Number(a.instanceId === selection.instanceId),
       );
       const modelSelection = resolvePlacementModel(selection, source, providers);
       if (!modelSelection) return [];
-      seen.add(target.environmentId);
       return [
         {
           environmentId: target.environmentId,
@@ -148,7 +154,7 @@ export function useLoadBalancedDraft(input: {
         },
       ];
     });
-  }, [automatic, project, selection, environments, projects, bindings, weights, sessions]);
+  }, [automatic, project, selection, environments, placementProjects, weights, sessions]);
   const measurementsAtom = useMemo(
     () =>
       Atom.make((get) =>
@@ -220,6 +226,7 @@ export function useLoadBalancedDraft(input: {
       placement: {
         mode: "auto",
         providerPinned: false,
+        automaticProviderInstanceId: destination.modelSelection.instanceId,
         resolvedKey: placementSelectionKey(
           destination.environmentId,
           destination.projectId,
@@ -233,15 +240,27 @@ export function useLoadBalancedDraft(input: {
     if (!draftId) return;
     const store = useComposerDraftStore.getState();
     const current = store.getDraftSession(draftId);
-    if (!current || draftPlacementIsPinned(current, store.getComposerDraft(draftId))) return;
+    const composer = store.getComposerDraft(draftId);
+    const currentSelection = composer?.activeProvider
+      ? composer.modelSelectionByProvider[composer.activeProvider]
+      : selection;
+    const currentProviders =
+      environments.find((environment) => environment.environmentId === current?.environmentId)
+        ?.serverConfig?.providers ?? [];
+    if (
+      !current ||
+      draftPlacementIsPinned(current, composer) ||
+      draftPlacementPinsProvider(current, currentSelection, currentProviders)
+    )
+      return;
     for (const candidate of candidates)
       registry.refresh(
         serverEnvironment.hostResources({ environmentId: candidate.environmentId, input: {} }),
       );
     useComposerDraftStore.getState().setDraftThreadContext(draftId, {
-      placement: { mode: "auto", providerPinned: false, resolvedKey: null },
+      placement: { ...current.placement, mode: "auto", providerPinned: false, resolvedKey: null },
     });
-  }, [draftId, pinned, registry, candidates]);
+  }, [draftId, selection, environments, registry, candidates]);
   const useManual = useCallback(() => {
     if (!draftId) return;
     useComposerDraftStore.getState().setDraftThreadContext(draftId, {

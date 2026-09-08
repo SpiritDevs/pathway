@@ -55,14 +55,28 @@ final class PathwayAgentThreadCreationModel {
         isAutomaticPlacement && !placementPinned && initialImageUploads.isEmpty && attachments.drafts.isEmpty
     }
     var canAutomaticallyPlace: Bool {
-        !placementPinned && prompt.isEmpty && initialImageUploads.isEmpty && attachments.drafts.isEmpty
+        connectionState == .live && prompt.isEmpty && initialImageUploads.isEmpty && attachments.drafts.isEmpty
             && workspaceMode == "local" && branch.isEmpty && launchAttempt == nil
             && !isLaunching && !isImportingCapture && !isTransferringDraft
     }
     var placementModelChoice: PathwayPlacementModelChoice? {
         guard let selectedProvider, let selectedModel else { return nil }
         return PathwayPlacementModelChoice(driver: selectedProvider.driver, model: selectedModel.id,
-            options: optionValues, interactionMode: interactionMode)
+            options: optionValues, interactionMode: interactionMode, runtimeMode: runtimeMode)
+    }
+    /// Explicit Auto can release an old manual choice only before this draft is tied to a host.
+    func prepareAutomaticPlacement() async -> Bool {
+        guard canAutomaticallyPlace else { return false }
+        let wasPinned = placementPinned
+        placementPinned = false
+        do {
+            try await persistDraftChecked()
+            return true
+        } catch {
+            placementPinned = wasPinned
+            errorMessage = "The placement preference could not be saved. " + error.localizedDescription
+            return false
+        }
     }
     func activateAutomaticPlacement(choice: PathwayPlacementModelChoice?) {
         isAutomaticPlacement = true
@@ -352,6 +366,7 @@ final class PathwayAgentThreadCreationModel {
                 selectedModelID = choice.model
                 optionValues = choice.options
                 interactionMode = choice.interactionMode
+                runtimeMode = choice.runtimeMode
                 automaticModelChoice = nil
                 errorMessage = nil
             } else {

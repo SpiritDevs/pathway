@@ -233,7 +233,7 @@ final class PathwayCloudModel {
         return try await issueEnvironmentClient.request(environment: environment, connect: connect, method: method, payload: payload)
     }
 
-    /// Placement probes own their protocol subscription and close it after the two reads.
+    /// Placement probes open a temporary connection for the two reads, without subscribing to app data.
     func environmentPlacementSnapshot(environment: PathwayCompanyEnvironment) async throws -> PathwayEnvironmentPlacementSnapshot {
         guard let connect, environments.contains(where: { $0.id == environment.id }) else {
             throw URLError(.notConnectedToInternet)

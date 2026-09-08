@@ -78,23 +78,25 @@ final class PathwayIssueEnvironmentClient {
         return result
     }
 
-    /// The temporary subscription is scoped to one placement probe, including failed reads.
+    /// Placement reads do not require an issue or conversation subscription.
     static func placementSnapshot(
         environment: PathwayCompanyEnvironment, connect: PathwayConnectClient,
-        makeProbe: @MainActor () -> PathwayIssueEnvironmentClient = { PathwayIssueEnvironmentClient() }
+        makeClient: ClientFactory = { environment, connect in
+            PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
+        }
     ) async throws -> PathwayEnvironmentPlacementSnapshot {
-        let probe = makeProbe()
+        let rpc = makeClient(environment, connect)
         do {
-            let config = try await probe.request(environment: environment, connect: connect,
-                method: "server.getConfig", payload: .object([:]), timeout: .seconds(5))
-            let resources = try await probe.request(environment: environment, connect: connect,
-                method: "server.getHostResources", payload: .object([:]), timeout: .seconds(5))
+            let config = try await rpc.request("server.getConfig", payload: .object([:]),
+                requiresSubscription: false, waitForSubscription: false, timeout: .seconds(5))
+            let resources = try await rpc.request("server.getHostResources", payload: .object([:]),
+                requiresSubscription: false, waitForSubscription: false, timeout: .seconds(5))
             let receivedAt = ProcessInfo.processInfo.systemUptime
-            await probe.stop()
+            await rpc.stop()
             try Task.checkCancellation()
             return PathwayEnvironmentPlacementSnapshot(config: config, resources: resources, receivedAt: receivedAt)
         } catch {
-            await probe.stop()
+            await rpc.stop()
             throw error
         }
     }

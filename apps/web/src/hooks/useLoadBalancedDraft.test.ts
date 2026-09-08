@@ -60,7 +60,7 @@ vi.mock("../composerDraftStore", async (importOriginal) => {
 
 const draftId = DraftId.make("placement-hook-draft");
 const provider: ServerProvider = {
-  instanceId: ProviderInstanceId.make("codex-local"),
+  instanceId: ProviderInstanceId.make("codex"),
   driver: ProviderDriverKind.make("codex"),
   enabled: true,
   installed: true,
@@ -92,30 +92,33 @@ function project(id: string): Project {
 const local = project("local");
 const remote = project("remote");
 const decodeBinding = Schema.decodeUnknownSync(EnvironmentBindingEntity);
-const replicas = new Map([
-  [
-    CompanyId.make("company"),
-    {
-      view: new Map(
-        [local, remote].map((project) => [
-          project.id,
-          decodeBinding({
-            entityKind: "environmentBinding",
-            id: `binding-${project.id}`,
-            cloudProjectId: "cloud-project",
-            environmentId: project.environmentId,
-            localProjectId: project.id,
-            localWorkspaceRoot: project.workspaceRoot,
-            status: "active",
-            lastSeenAt: null,
-            createdAt: 1,
-            updatedAt: 1,
-          }),
-        ]),
-      ),
-    },
-  ],
-]);
+function projectReplicas(projects: ReadonlyArray<Project>) {
+  return new Map([
+    [
+      CompanyId.make("company"),
+      {
+        view: new Map(
+          projects.map((project) => [
+            project.id,
+            decodeBinding({
+              entityKind: "environmentBinding",
+              id: `binding-${project.id}`,
+              cloudProjectId: "cloud-project",
+              environmentId: project.environmentId,
+              localProjectId: project.id,
+              localWorkspaceRoot: project.workspaceRoot,
+              status: "active",
+              lastSeenAt: null,
+              createdAt: 1,
+              updatedAt: 1,
+            }),
+          ]),
+        ),
+      },
+    ],
+  ]);
+}
+const replicas = projectReplicas([local, remote]);
 // The hook reads only connection phase and providers from these presentations.
 const environments = [local, remote].map((project) => ({
   environmentId: project.environmentId,
@@ -234,6 +237,116 @@ describe("useLoadBalancedDraft", () => {
     });
     expect(disconnected.blocked).toBe(true);
     expect(disconnected.validate(selected)).toBe(false);
+  });
+  it("preserves the exact source checkout when another local binding is listed first", () => {
+    const other = { ...local, id: ProjectId.make("other-local"), workspaceRoot: "/local/other" };
+    render({
+      ...base(),
+      projects: [other, remote, local],
+      replicas: projectReplicas([other, remote, local]),
+      weights: { local: 100, remote: 0 },
+    });
+    flushEffects();
+    expect(readDraft().projectId).toBe(local.id);
+    expect(readDraft().environmentId).toBe(local.environmentId);
+  });
+  it.each([true, false])(
+    "excludes a remote environment with ambiguous bindings (both checkouts loaded: %s)",
+    (bothLoaded) => {
+      const other = {
+        ...remote,
+        id: ProjectId.make("other-remote"),
+        workspaceRoot: "/remote/other",
+      };
+      render({
+        ...base(),
+        projects: bothLoaded ? [other, remote, local] : [local, remote],
+        replicas: projectReplicas([local, remote, other]),
+      });
+      flushEffects();
+      expect(readDraft().environmentId).toBe(local.environmentId);
+      expect(
+        mocks.resources.mock.calls.every(([input]) => input.environmentId === local.environmentId),
+      ).toBe(true);
+    },
+  );
+  it.each(["sticky", "project"] as const)(
+    "pins an inherited custom account from %s defaults",
+    (origin) => {
+      const custom = { ...provider, instanceId: ProviderInstanceId.make("codex-personal") };
+      const customSelection = { ...selection, instanceId: custom.instanceId };
+      if (origin === "sticky") {
+        store().setStickyModelSelection(customSelection);
+        store().applyStickyState(draftId);
+      } else {
+        store().applyStickyState(draftId, customSelection);
+      }
+      const result = render({
+        ...base(),
+        project: {
+          ...local,
+          defaultModelSelection: origin === "project" ? customSelection : selection,
+        },
+        selection: customSelection,
+        environments: environments.map((environment) =>
+          environment.environmentId === local.environmentId
+            ? {
+                ...environment,
+                serverConfig: { ...environment.serverConfig!, providers: [provider, custom] },
+              }
+            : environment,
+        ),
+      });
+      flushEffects();
+      expect(result.pinned).toBe(true);
+      expect(result.automatic).toBe(false);
+      expect(result.machinePinned).toBe(false);
+      expect(mocks.resources).not.toHaveBeenCalled();
+      result.recheck();
+      expect(readDraft().placement).toBeUndefined();
+      expect(store().getComposerDraft(draftId)?.activeProvider).toBe(custom.instanceId);
+    },
+  );
+  it("keeps Auto provenance across a recheck and model change after mapping a custom instance", () => {
+    render();
+    flushEffects();
+    const selected = { ...selection, instanceId: remoteProvider.instanceId };
+    const result = render({ ...base(), project: remote, selection: selected });
+    expect(result.pinned).toBe(false);
+    result.recheck();
+    expect(readDraft().placement?.automaticProviderInstanceId).toBe(remoteProvider.instanceId);
+    store().setModelSelection(draftId, { ...selected, model: "other" });
+    const changed = render({
+      ...base(),
+      project: remote,
+      selection: { ...selected, model: "other" },
+    });
+    expect(changed.automatic).toBe(true);
+    expect(changed.pinned).toBe(false);
+    flushEffects();
+    expect(readDraft().placement?.automaticProviderInstanceId).toBe(remoteProvider.instanceId);
+  });
+  it("does not use another account on the source machine when its selected instance is unavailable", () => {
+    const other = { ...provider, instanceId: ProviderInstanceId.make("codex-other") };
+    const result = render({
+      ...base(),
+      weights: { remote: 0 },
+      environments: environments.map((environment) =>
+        environment.environmentId === local.environmentId
+          ? {
+              ...environment,
+              serverConfig: {
+                ...environment.serverConfig!,
+                providers: [{ ...provider, auth: { status: "unauthenticated" as const } }, other],
+              },
+            }
+          : environment,
+      ),
+    });
+    flushEffects();
+    expect(result.blocked).toBe(true);
+    expect(mocks.resources).not.toHaveBeenCalled();
+    expect(store().getComposerDraft(draftId)?.activeProvider).toBe(provider.instanceId);
   });
   it("discards a late measurement when the model changes before its effect commits", () => {
     render();

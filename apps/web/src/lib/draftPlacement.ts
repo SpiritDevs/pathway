@@ -1,4 +1,9 @@
-import type { EnvironmentId, ModelSelection, ServerProvider } from "@spiritdevs/contracts";
+import {
+  defaultInstanceIdForDriver,
+  type EnvironmentId,
+  type ModelSelection,
+  type ServerProvider,
+} from "@spiritdevs/contracts";
 import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import type { EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
 import type { CompanyId } from "@spiritdevs/contracts/company";
@@ -9,29 +14,65 @@ export interface PlacementBinding {
   readonly binding: EnvironmentBindingEntity;
 }
 
-/** Automatic placement needs explicit company project bindings, never sidebar grouping. */
-export function projectsSharePlacementBinding(
-  source: Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot">,
-  target: Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot">,
+/** Retain the selected checkout; an ambiguous remote binding needs a manual choice. */
+export function selectPlacementProjects<
+  T extends Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot">,
+>(
+  source: T,
+  projects: ReadonlyArray<T>,
   bindings: ReadonlyArray<PlacementBinding>,
-): boolean {
-  if (source.workspaceRoot === null || target.workspaceRoot === null) return false;
-  if (source.environmentId === target.environmentId && source.id === target.id) return true;
+): ReadonlyArray<T> {
+  if (source.workspaceRoot === null) return [];
   const sourceBindings = bindings.filter(
     ({ binding }) =>
       binding.status === "active" &&
       binding.environmentId === source.environmentId &&
       binding.localProjectId === source.id,
   );
-  return sourceBindings.some((sourceBinding) =>
-    bindings.some(
-      ({ companyId, binding }) =>
-        companyId === sourceBinding.companyId &&
-        binding.status === "active" &&
-        binding.cloudProjectId === sourceBinding.binding.cloudProjectId &&
-        binding.environmentId === target.environmentId &&
-        binding.localProjectId === target.id,
-    ),
+  const remoteProjectIds = new Map<EnvironmentId, Set<string>>();
+  for (const { companyId, binding } of bindings) {
+    if (
+      binding.status !== "active" ||
+      binding.environmentId === source.environmentId ||
+      !sourceBindings.some(
+        (entry) =>
+          entry.companyId === companyId && entry.binding.cloudProjectId === binding.cloudProjectId,
+      )
+    )
+      continue;
+    const ids = remoteProjectIds.get(binding.environmentId) ?? new Set<string>();
+    ids.add(binding.localProjectId);
+    remoteProjectIds.set(binding.environmentId, ids);
+  }
+  const destinations: T[] = [source];
+  for (const [environmentId, ids] of remoteProjectIds) {
+    if (ids.size !== 1) continue;
+    const target = projects.find(
+      (project) =>
+        project.environmentId === environmentId &&
+        ids.has(project.id) &&
+        project.workspaceRoot !== null,
+    );
+    if (target) destinations.push(target);
+  }
+  return destinations;
+}
+
+/** Inherited custom instances select an account, just like an explicit picker choice. */
+export function draftPlacementPinsProvider(
+  draft: DraftSessionState,
+  selection: ModelSelection | null | undefined,
+  providers: ReadonlyArray<ServerProvider>,
+): boolean {
+  if (draft.placement?.providerPinned) return true;
+  const source = providers.find((provider) => provider.instanceId === selection?.instanceId);
+  return (
+    source !== undefined &&
+    source.instanceId !== defaultInstanceIdForDriver(source.driver) &&
+    !(
+      draft.placement?.mode === "auto" &&
+      source.instanceId === draft.placement.automaticProviderInstanceId
+    )
   );
 }
 
