@@ -892,12 +892,17 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
   }
 }
 
+export function isGeneratedQuestionReply(
+  message: Pick<ChatMessage, "id" | "creationSource">,
+): boolean {
+  return message.creationSource === "server" && message.id.startsWith("message:question-answer:");
+}
+
 /** Recognize the provider's async reply envelope without changing the stored message. */
 export function parseAsyncQuestionReply(
   message: Pick<ChatMessage, "id" | "creationSource" | "text">,
 ): Array<{ question: string; answer: string }> | null {
-  if (message.creationSource !== "server" || !message.id.startsWith("message:question-answer:"))
-    return null;
+  if (!isGeneratedQuestionReply(message)) return null;
   const text = message.text;
   if (!text.trimStart().startsWith("{") || !text.includes('"request_user_input_async"'))
     return null;

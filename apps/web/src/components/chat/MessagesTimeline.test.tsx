@@ -587,6 +587,25 @@ describe("MessagesTimeline", () => {
     );
   });
 
+  it("keeps generated answers out of the raw message editor", () => {
+    const entry = buildQuestionReplyTimelineEntry(
+      JSON.stringify({
+        request_user_input_async: "call-edit",
+        answers: [{ question: "Which region?", answer: "Sydney" }],
+      }),
+    );
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        editableUserMessageId={entry.message.id}
+        timelineEntries={[entry]}
+      />,
+    );
+    expect(markup).toContain('data-question-reply="true"');
+    expect(markup).not.toContain('aria-label="Edit message"');
+    expect(markup).not.toContain('aria-label="Edit message text"');
+  });
+
   it("renders and copies accepted array-valued answers", () => {
     copiedMessageTexts.length = 0;
     const markup = renderToStaticMarkup(

@@ -109,6 +109,7 @@ import {
   replaceEditableUserMessageText,
   splitEditableUserMessageText,
   parseAsyncQuestionReply,
+  isGeneratedQuestionReply,
   formatAsyncQuestionReplyText,
   shouldPreserveAssistantLineBreaks,
   type StableMessagesTimelineRowsState,
@@ -1395,10 +1396,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   );
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
   const canEditMessage =
+    !isGeneratedQuestionReply(row.message) &&
     row.message.createdBy === "user" &&
     ctx.editableUserMessageId === row.message.id &&
     hasEditableText;
-  const isEditingMessage = ctx.editingUserMessageId === row.message.id;
+  const isEditingMessage = canEditMessage && ctx.editingUserMessageId === row.message.id;
   const canRetryMessage =
     row.message.createdBy === "user" &&
     ctx.retryableUserMessageId === row.message.id &&

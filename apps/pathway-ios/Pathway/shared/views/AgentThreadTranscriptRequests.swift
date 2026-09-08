@@ -210,6 +210,7 @@ struct AgentTranscriptQuestions: View {
 struct AgentTranscriptQueueActions: View {
     let run: PathwayThreadRun
     let model: PathwayAgentThreadModel
+    let canEdit: Bool
     let edit: () -> Void
     @State private var busy = false
     @State private var errorMessage: String?
@@ -219,7 +220,7 @@ struct AgentTranscriptQueueActions: View {
             Spacer()
             if let errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.red) }
             Menu {
-                Button("Edit queued message", systemImage: "pencil", action: edit)
+                if canEdit { Button("Edit queued message", systemImage: "pencil", action: edit) }
                 Button("Steer current turn", systemImage: "arrow.turn.up.right") { perform { try await model.steerQueuedRun(run.id) } }
                     .disabled(model.activeRunID == nil)
                 Button("Move up", systemImage: "arrow.up") { move(-1) }.disabled(model.queuedRuns.first?.id == run.id)

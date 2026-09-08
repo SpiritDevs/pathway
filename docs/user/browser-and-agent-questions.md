@@ -6,7 +6,7 @@ Some Codex models can ask a question while continuing their work. A **Question**
 
 Open the button to review a question group. A suggested answer can be selected initially, but nothing is sent until you submit. You can write your own answer. Closing the panel keeps the question and your answer draft available. Submit the complete group together.
 
-In web and desktop conversations, submitted replies show each question above your answer in the message bubble. This also applies when viewing earlier replies.
+In web, desktop, and iOS conversations, submitted replies show each question above your answer in the message bubble. This also applies when viewing earlier replies. Copy includes the questions and answers. Submitted question replies cannot be opened in the message editor.
 
 Pending questions survive reconnects. An answer sent after the agent finishes starts a follow-up in the same task. If a question came from a subagent, its answer returns to that conversation. If delivery fails, the question becomes available for retry.
 
