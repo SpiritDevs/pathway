@@ -10,6 +10,7 @@ import {
   ALL_FOCUS_ID,
   focusIsVisible,
   groupSearchResultsByFocus,
+  nextFocusId,
   resolveActiveFocusId,
   scopedProjectKeysForFocus,
   visibleFocuses,
@@ -35,6 +36,50 @@ const assignment = (focusId: FocusId, projectKey: FocusProjectKey): FocusAssignm
   projectKey,
   createdAt: 1,
   updatedAt: 1,
+});
+
+describe("Focus carousel", () => {
+  const shown = [focus(WORK, "a"), focus(PERSONAL, "b")];
+
+  it("wraps through All in both directions", () => {
+    expect(nextFocusId({ activeFocusId: ALL_FOCUS_ID, visibleFocuses: shown })).toBe(WORK);
+    expect(nextFocusId({ activeFocusId: PERSONAL, visibleFocuses: shown })).toBe(ALL_FOCUS_ID);
+    expect(nextFocusId({ activeFocusId: ALL_FOCUS_ID, visibleFocuses: shown, direction: -1 })).toBe(
+      PERSONAL,
+    );
+    expect(nextFocusId({ activeFocusId: PERSONAL, visibleFocuses: shown, direction: -1 })).toBe(
+      WORK,
+    );
+    expect(nextFocusId({ activeFocusId: WORK, visibleFocuses: shown, direction: -1 })).toBe(
+      ALL_FOCUS_ID,
+    );
+  });
+
+  it("handles no custom focuses and stale selections", () => {
+    expect(nextFocusId({ activeFocusId: ALL_FOCUS_ID, visibleFocuses: [], direction: -1 })).toBe(
+      ALL_FOCUS_ID,
+    );
+    expect(nextFocusId({ activeFocusId: WORK, visibleFocuses: [], direction: -1 })).toBe(
+      ALL_FOCUS_ID,
+    );
+  });
+
+  it("follows the visible strip order after reordering and company filtering", () => {
+    const shown = visibleFocuses({
+      focuses: [focus(WORK, "b"), focus(PERSONAL, "a")],
+      assignments: [],
+      visibleProjectKeys: new Set(),
+    });
+    expect(nextFocusId({ activeFocusId: ALL_FOCUS_ID, visibleFocuses: shown })).toBe(PERSONAL);
+    const filtered = visibleFocuses({
+      focuses: shown,
+      assignments: [assignment(PERSONAL, PERSONAL_PROJECT)],
+      visibleProjectKeys: new Set([WORK_PROJECT]),
+    });
+    expect(
+      nextFocusId({ activeFocusId: ALL_FOCUS_ID, visibleFocuses: filtered, direction: -1 }),
+    ).toBe(WORK);
+  });
 });
 
 describe("Focus project scoping", () => {

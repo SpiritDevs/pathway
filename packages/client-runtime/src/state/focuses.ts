@@ -89,6 +89,21 @@ export function visibleFocuses(input: {
   );
 }
 
+/** Cycle in strip order, including All at either end of the carousel. */
+export function nextFocusId(input: {
+  readonly activeFocusId: ActiveFocusId;
+  readonly visibleFocuses: ReadonlyArray<Pick<Focus, "id">>;
+  readonly direction?: -1 | 1;
+}): ActiveFocusId {
+  const ids: ReadonlyArray<ActiveFocusId> = [
+    ALL_FOCUS_ID,
+    ...input.visibleFocuses.map((focus) => focus.id),
+  ];
+  const index = ids.indexOf(input.activeFocusId);
+  if (index === -1) return ALL_FOCUS_ID;
+  return ids[(index + (input.direction ?? 1) + ids.length) % ids.length]!;
+}
+
 export function resolveActiveFocusId(input: {
   readonly preferredId: ActiveFocusId;
   readonly focuses: ReadonlyArray<Pick<Focus, "id">>;

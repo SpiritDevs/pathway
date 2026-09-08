@@ -43,7 +43,12 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@spiritdevs/client-runtime/environment";
-import { ALL_FOCUS_ID, groupSearchResultsByFocus } from "@spiritdevs/client-runtime/state/focuses";
+import {
+  ALL_FOCUS_ID,
+  groupSearchResultsByFocus,
+  visibleFocuses,
+} from "@spiritdevs/client-runtime/state/focuses";
+import { useFocusSwipe } from "../hooks/useFocusSwipe";
 import {
   threadIsVisibleAt,
   type Issue,
@@ -1913,6 +1918,20 @@ export default function Sidebar() {
   const focusNotifications = useAtomValue(focusNotificationsAtom);
   const focusUnreadCount = useAtomValue(focusUnreadCountAtom);
   const [activeFocusId, setActiveFocusId] = useAtom(activeFocusIdAtom);
+  const shownFocuses = useMemo(
+    () =>
+      visibleFocuses({
+        focuses,
+        assignments: focusAssignments,
+        visibleProjectKeys: visibleFocusProjectKeys,
+      }),
+    [focuses, focusAssignments, visibleFocusProjectKeys],
+  );
+  const focusSwipe = useFocusSwipe({
+    activeFocusId,
+    visibleFocuses: shownFocuses,
+    onActiveFocusChange: setActiveFocusId,
+  });
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const threadTitlesByKey = useThreadTitlesByKey();
@@ -3800,7 +3819,8 @@ export default function Sidebar() {
 
   const attachListAutoAnimateRef = useCallback((node: HTMLUListElement | null) => {
     if (!node) return;
-    autoAnimate(node, { duration: 150, easing: "ease-out" });
+    const animation = autoAnimate(node, { duration: 150, easing: "ease-out" });
+    return () => animation.destroy?.();
   }, []);
 
   // New threads open directly in the current thread's project, falling back
@@ -3828,7 +3848,8 @@ export default function Sidebar() {
       <SidebarChromeHeader isElectron={isElectron} />
       <DraftSendReconciliation activeDraftId={routeDraftIdForRows} />
       <SidebarContent
-        className="gap-0"
+        scrollAreaRef={focusSwipe.viewportRef}
+        className="gap-0 overflow-x-clip"
         fixedHeader={
           // Lifted above the stage backdrop, whose fade bleeds below the
           // header and would otherwise paint across the search row's outline.
@@ -4084,7 +4105,10 @@ export default function Sidebar() {
           </SidebarGroup>
         }
       >
-        <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0">
+        <SidebarGroup
+          ref={focusSwipe.contentRef}
+          className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0"
+        >
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider
@@ -4193,7 +4217,12 @@ export default function Sidebar() {
               closeDelay={0}
               timeout={400}
             >
-              <ul ref={attachListAutoAnimateRef} role="list" className="flex flex-col gap-px">
+              <ul
+                key={activeFocusId}
+                ref={attachListAutoAnimateRef}
+                role="list"
+                className="flex flex-col gap-px"
+              >
                 {(() => {
                   const renderThreadRow = (
                     thread: EnvironmentThreadShell,

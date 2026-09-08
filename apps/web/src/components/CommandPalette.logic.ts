@@ -1,8 +1,4 @@
-import {
-  ALL_FOCUS_ID,
-  visibleFocuses,
-  type ActiveFocusId,
-} from "@spiritdevs/client-runtime/state/focuses";
+import { visibleFocuses } from "@spiritdevs/client-runtime/state/focuses";
 import {
   type FilesystemBrowseEntry,
   type KeybindingCommand,
@@ -17,6 +13,8 @@ import { sortThreads } from "../lib/threadSort";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 
+export { nextFocusId } from "@spiritdevs/client-runtime/state/focuses";
+
 export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
@@ -27,19 +25,6 @@ export function visibleFocusesForProjectKeys(input: {
   readonly visibleProjectKeys: ReadonlySet<string>;
 }): ReadonlyArray<Focus> {
   return visibleFocuses(input);
-}
-
-export function nextFocusId(input: {
-  readonly activeFocusId: ActiveFocusId;
-  readonly visibleFocuses: ReadonlyArray<Pick<Focus, "id">>;
-}): ActiveFocusId {
-  if (input.activeFocusId === ALL_FOCUS_ID) {
-    return input.visibleFocuses[0]?.id ?? ALL_FOCUS_ID;
-  }
-  const activeIndex = input.visibleFocuses.findIndex((focus) => focus.id === input.activeFocusId);
-  return activeIndex === -1 || activeIndex === input.visibleFocuses.length - 1
-    ? ALL_FOCUS_ID
-    : input.visibleFocuses[activeIndex + 1]!.id;
 }
 
 export function browseInputEndPaddingClass(input: {
