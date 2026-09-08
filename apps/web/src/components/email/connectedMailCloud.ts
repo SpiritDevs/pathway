@@ -48,6 +48,25 @@ export function useConnectedMailCloud() {
       if (!companyId) return Promise.reject(new Error("Select a workspace to use Mail."));
       return cloud.request(name, { ...args, companyId });
     },
+    connectGmail: async (popup: Window, args: Record<string, string>) => {
+      if (!relayUrl || !companyId)
+        throw new Error("Sign in and select a Pathway Connect workspace.");
+      const token = await getToken(resolveRelayClerkTokenOptions());
+      if (!token) throw new Error("Sign in to connect your mailbox.");
+      if (popup.closed) throw new Error("The Gmail connection window was closed. Try again.");
+      const form = popup.document.createElement("form");
+      form.method = "POST";
+      form.action = `${relayUrl}/v1/mail/oauth/start`;
+      for (const [name, value] of Object.entries({ ...args, companyId, accessToken: token })) {
+        const input = popup.document.createElement("input");
+        input.type = "hidden";
+        input.name = name;
+        input.value = value;
+        form.append(input);
+      }
+      popup.document.body.replaceChildren(form);
+      form.submit();
+    },
     relay: async <Result>(
       path: string,
       args: Record<string, Value>,

@@ -48,9 +48,10 @@ const required = (value: unknown, name: string, max = 1000): string => {
     throw new MailHttpError(400, `Invalid ${name}`);
   return value;
 };
-async function json(request: Request) {
+async function readBody(request: Request, form = false) {
   const text = await request.text();
   if (text.length > 16_384) throw new MailHttpError(413, "Request too large");
+  if (form) return Object.fromEntries(new URLSearchParams(text));
   try {
     return record(JSON.parse(text));
   } catch (error) {
@@ -93,12 +94,21 @@ const mailHandler = Effect.gen(function* () {
               "cache-control": "no-store",
               "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
               "referrer-policy": "no-referrer",
-              "set-cookie": `${browserCookie.name}=; Path=/; Secure; HttpOnly; SameSite=None; Max-Age=0`,
+              "set-cookie": `${browserCookie.name}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`,
             },
           },
         );
       }
-      const bearer = webRequest.headers.get("authorization")?.match(/^Bearer (.+)$/)?.[1];
+      // A top-level form submission sets the cookie on the relay itself, even when
+      // the app is on another site and the browser blocks third-party cookies.
+      const browserStart =
+        path === "/v1/mail/oauth/start" &&
+        webRequest.headers.get("content-type")?.split(";")[0]?.trim() ===
+          "application/x-www-form-urlencoded";
+      const formBody = browserStart ? await readBody(webRequest, true) : undefined;
+      const bearer = browserStart
+        ? required(formBody?.accessToken, "access token", 12_000)
+        : webRequest.headers.get("authorization")?.match(/^Bearer (.+)$/)?.[1];
       if (!bearer) throw new MailHttpError(401, "Sign in to continue");
       if (path === "/v1/mail/notify") {
         if (!mailConfig.pubsubServiceAccount)
@@ -112,7 +122,7 @@ const mailHandler = Effect.gen(function* () {
         } catch {
           throw new MailHttpError(401, "Invalid notification identity");
         }
-        const body = await json(webRequest);
+        const body = await readBody(webRequest);
         const message = record(body.message);
         let payload: Record<string, unknown>;
         try {
@@ -141,7 +151,7 @@ const mailHandler = Effect.gen(function* () {
           ),
           redirectUri: `${config.relayIssuer}/v1/mail/oauth/callback`,
         });
-      const body = await json(webRequest);
+      const body = formBody ?? (await readBody(webRequest));
       const companyId = required(body.companyId, "company");
       if (path === "/v1/mail/oauth/start") {
         if (body.credentialSource !== "byo" && body.credentialSource !== "hosted")
@@ -162,6 +172,16 @@ const mailHandler = Effect.gen(function* () {
         });
         const state = new URL(result.authorizationUrl).searchParams.get("state")!;
         const browserCookie = await oauthBrowserCookie(state);
+        if (browserStart)
+          return HttpServerResponse.empty({
+            status: 303,
+            headers: {
+              location: result.authorizationUrl,
+              "cache-control": "no-store",
+              "referrer-policy": "no-referrer",
+              "set-cookie": `${browserCookie.name}=${browserCookie.value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=600`,
+            },
+          });
         return HttpServerResponse.jsonUnsafe(result, {
           headers: {
             "cache-control": "no-store",

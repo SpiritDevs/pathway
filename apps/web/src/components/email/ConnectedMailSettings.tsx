@@ -348,23 +348,19 @@ export function ConnectedMailSettings() {
     popup.opener = null;
     void run(async () => {
       try {
-        const { authorizationUrl } = await cloud.relay<{ authorizationUrl: string }>(
-          "oauth/start",
-          {
-            credentialSource,
-            ...(credentialSource === "byo"
-              ? {
-                  clientId: String(fields.get("clientId") ?? "").trim(),
-                  clientSecret: String(fields.get("clientSecret") ?? "").trim(),
-                }
-              : {}),
-            ...(String(fields.get("pubsubTopic") ?? "").trim()
-              ? { pubsubTopic: String(fields.get("pubsubTopic")).trim() }
-              : {}),
-          },
-        );
+        await cloud.connectGmail(popup, {
+          credentialSource,
+          ...(credentialSource === "byo"
+            ? {
+                clientId: String(fields.get("clientId") ?? "").trim(),
+                clientSecret: String(fields.get("clientSecret") ?? "").trim(),
+              }
+            : {}),
+          ...(String(fields.get("pubsubTopic") ?? "").trim()
+            ? { pubsubTopic: String(fields.get("pubsubTopic")).trim() }
+            : {}),
+        });
         form.reset();
-        popup.location.replace(authorizationUrl);
       } catch (cause) {
         popup.close();
         throw cause;

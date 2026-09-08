@@ -30,6 +30,8 @@ Use Discard draft to remove an unsent draft you no longer need. Submitted messag
 
 Sender knowledge stays private with your mailbox. Save contact adds the sender's name and address to the selected workspace's shared contact directory after confirmation. It does not copy private sender notes.
 
+If connection reports missing browser authorization state, close the Google connection window and start a fresh connection from Email settings. Keep the new popup open until Gmail is connected.
+
 ## Disconnecting
 
 Disconnect removes Pathway's copy of the mailbox and schedules removal of its private stored files and Google authorization. It does not delete your messages from Gmail. Reconnecting starts a fresh import.
