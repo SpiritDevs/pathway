@@ -69,6 +69,7 @@ import {
   splitWorkingTreeFilesByThread,
 } from "./GitActionsControl.logic";
 import { AnimatedHeight } from "./AnimatedHeight";
+import { ThreadPullRequestAction } from "./ThreadPullRequestAction";
 import { StartTruncatedPath } from "./StartTruncatedPath";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
@@ -1833,6 +1834,9 @@ export default function GitActionsControl({
 
   return (
     <>
+      {activeServerThread?.attachedPullRequest && (
+        <ThreadPullRequestAction thread={activeServerThread} isPanel={isPanel} />
+      )}
       {!isRepo ? (
         <Button
           size="xs"

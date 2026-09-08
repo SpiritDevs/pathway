@@ -146,6 +146,7 @@ import {
 } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
+import { useAttachedPullRequest } from "../state/threadPullRequest";
 import { threadEnvironment } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
 import { useStartWorkIssuesByThread } from "../state/issues";
@@ -920,9 +921,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
   });
+  const attachedQuery = useAttachedPullRequest(thread);
   const displayedPrBadge = resolveThreadPrBadge({
     branchPullRequest: pr,
     attachedPullRequest: thread.attachedPullRequest,
+    attachedDetail: attachedQuery.data,
+    attachedError: attachedQuery.error,
     provider: gitStatus.data?.sourceControlProvider,
   });
   const displayedPr = displayedPrBadge?.pullRequest ?? null;
@@ -1019,7 +1023,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     activeThreadBranch: thread.branch,
     currentGitBranch: gitStatus.data?.refName ?? null,
   });
-  const settledPrHoverClass = pr ? settledPrHoverColorClass(pr.state) : undefined;
+  const settledPrHoverClass = prState ? settledPrHoverColorClass(prState) : undefined;
   // Report the PR state up: the parent partitions rows with effectiveSettled,
   // and a merged PR auto-settles a thread. Only data rows have that state.
   useEffect(() => {

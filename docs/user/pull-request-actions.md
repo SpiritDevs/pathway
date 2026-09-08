@@ -7,3 +7,7 @@ Choosing Merge, Squash, or Rebase from the row menu asks you to confirm that mer
 Click a row to open its detail panel. Hold Ctrl or Cmd while clicking to open the pull request in your default external browser, using the same action as Open on GitHub. The current detail panel stays in place.
 
 These shortcuts are available in the web and desktop pull request list.
+
+On web and desktop, right-click a pull request link in a conversation and choose **Attach PR to thread** to track it from that thread. The Version Control section shows a row that opens the attached pull request. Its status and the sidebar badge refresh automatically, even when the thread's checkout is on a different branch. Open pull requests are green, pending checks are amber, failed checks are red, and merged pull requests are purple. If a status refresh fails, its tooltip explains the error.
+
+A merged attached pull request settles an idle thread automatically. Running work, pending approvals or input, and an explicit choice to keep the thread active take precedence. Attaching a pull request does not switch the checkout or redirect commit and push actions. Detaching it returns the thread to tracking its checkout's pull request.
