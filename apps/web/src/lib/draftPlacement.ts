@@ -1,5 +1,4 @@
 import {
-  defaultInstanceIdForDriver,
   type EnvironmentId,
   type ModelSelection,
   type ServerProvider,
@@ -7,7 +6,7 @@ import {
 import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import type { EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import type { DraftSessionState, ComposerThreadDraftState } from "../composerDraftStore";
+import type { ComposerAttachment, DraftSessionState } from "../composerDraftStore";
 
 export interface PlacementBinding {
   readonly companyId: CompanyId;
@@ -58,24 +57,6 @@ export function selectPlacementProjects<
   return destinations;
 }
 
-/** Inherited custom instances select an account, just like an explicit picker choice. */
-export function draftPlacementPinsProvider(
-  draft: DraftSessionState,
-  selection: ModelSelection | null | undefined,
-  providers: ReadonlyArray<ServerProvider>,
-): boolean {
-  if (draft.placement?.providerPinned) return true;
-  const source = providers.find((provider) => provider.instanceId === selection?.instanceId);
-  return (
-    source !== undefined &&
-    source.instanceId !== defaultInstanceIdForDriver(source.driver) &&
-    !(
-      draft.placement?.mode === "auto" &&
-      source.instanceId === draft.placement.automaticProviderInstanceId
-    )
-  );
-}
-
 /** Instance IDs are local; require the same driver, model and supported option values. */
 export function resolvePlacementModel(
   selection: ModelSelection,
@@ -112,33 +93,22 @@ export function resolvePlacementModel(
   return null;
 }
 
-export function draftPlacementIsPinned(
-  draft: DraftSessionState,
-  composer: ComposerThreadDraftState | null | undefined,
-): boolean {
-  return (
-    Boolean(draft.placement?.providerPinned) || draftPlacementHasMachineBinding(draft, composer)
-  );
+/** Once sending starts, retries must keep the same destination. */
+export function draftPlacementIsLocked(draft: DraftSessionState): boolean {
+  return Boolean(draft.pendingSend || draft.promotedTo || draft.placement?.dispatched);
 }
 
-/** Machine-owned context prevents even an explicit move until its binding is removed. */
-export function draftPlacementHasMachineBinding(
-  draft: DraftSessionState,
-  composer: ComposerThreadDraftState | null | undefined,
+/** Restored uploads without local bytes can only be used on their upload environment. */
+export function draftAttachmentsAllowEnvironment(
+  attachments: ReadonlyArray<ComposerAttachment> | undefined,
+  environmentId: EnvironmentId,
 ): boolean {
-  return Boolean(
-    draft.pendingSend ||
-    draft.promotedTo ||
-    draft.branch ||
-    draft.envMode === "worktree" ||
-    draft.worktreePath ||
-    draft.placement?.dispatched ||
-    composer?.images.length ||
-    composer?.persistedAttachments.length ||
-    composer?.terminalContexts.length ||
-    composer?.elementContexts.length ||
-    composer?.previewAnnotations.length ||
-    composer?.reviewComments.length,
+  return (attachments ?? []).every(
+    (attachment) =>
+      attachment.type !== "file" ||
+      attachment.file !== null ||
+      attachment.uploadedAttachmentId === undefined ||
+      attachment.uploadEnvironmentId === environmentId,
   );
 }
 

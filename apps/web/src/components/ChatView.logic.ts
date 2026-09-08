@@ -22,7 +22,7 @@ import { presentThreadShell } from "@spiritdevs/client-runtime/state/shell";
 import type { EnvironmentThreadState } from "@spiritdevs/client-runtime/state/threads";
 import { modelSelectionsEqual } from "@spiritdevs/shared/model";
 import { resolveThreadForkKind } from "@spiritdevs/client-runtime/state/thread-relationships";
-import { type ChatMessage, type SessionPhase, type Thread } from "../types";
+import { type ChatMessage, type Project, type SessionPhase, type Thread } from "../types";
 import { type ComposerAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -88,6 +88,19 @@ export function startNewThreadForProject(
   void handleNewThread(projectRef);
 
   return true;
+}
+
+/** Choosing the current machine changes placement mode without changing its checkout. */
+export function resolveDraftEnvironmentProjectRef(
+  activeProject: Pick<Project, "environmentId" | "id"> | null,
+  environmentId: EnvironmentId,
+  projectEnvironments: ReadonlyArray<ScopedProjectRef>,
+): ScopedProjectRef | null {
+  if (!activeProject) return null;
+  if (environmentId === activeProject.environmentId) {
+    return { environmentId, projectId: activeProject.id };
+  }
+  return projectEnvironments.find((target) => target.environmentId === environmentId) ?? null;
 }
 
 /** A stopped first turn can be replaced until the agent has written into the conversation. */

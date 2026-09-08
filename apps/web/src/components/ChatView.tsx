@@ -426,6 +426,7 @@ import {
   readFileAsDataUrl,
   loadQueuedComposerImages,
   reconcileMountedTerminalThreadIds,
+  resolveDraftEnvironmentProjectRef,
   resolveEditableV2UserMessageId,
   resolveRetryableV2UserMessageId,
   resolvePanelSurfaceOwnerThreadRef,
@@ -2372,7 +2373,6 @@ function ChatViewContent(props: ChatViewProps) {
     });
     return envs;
   }, [activeProject, allProjects, projectGroupingSettings, primaryEnvironmentId, environmentById]);
-  const hasMultipleEnvironments = logicalProjectEnvironments.length > 1;
   // The environment picker stays usable with a single environment: its last row
   // opens the same "add a connection" flow as project settings, so linking a
   // second machine does not require leaving the composer.
@@ -3521,9 +3521,9 @@ function ChatViewContent(props: ChatViewProps) {
   const autoPlacement = draftPlacement.visible
     ? {
         active: draftPlacement.automatic,
-        disabled: draftPlacement.pinned,
+        disabled: draftPlacement.locked,
         label: draftPlacement.label,
-        onSelect: draftPlacement.recheck,
+        onSelect: draftPlacement.selectAuto,
       }
     : undefined;
   const activeProviderThread = useMemo(() => {
@@ -3716,30 +3716,22 @@ function ChatViewContent(props: ChatViewProps) {
   // project in that environment while keeping the same logical project.
   const onEnvironmentChange = useCallback(
     (nextEnvironmentId: EnvironmentId) => {
-      if (
-        envLocked ||
-        !draftId ||
-        (settings.loadBalancingEnabled && draftPlacement.machinePinned) ||
-        draftThread?.placement?.dispatched
-      )
-        return;
-      const target = logicalProjectEnvironments.find(
-        (env) => env.environmentId === nextEnvironmentId,
+      if (envLocked || !draftId || draftPlacement.locked) return;
+      const target = resolveDraftEnvironmentProjectRef(
+        activeProject,
+        nextEnvironmentId,
+        logicalProjectEnvironments,
       );
       if (!target) return;
-      setDraftThreadContext(draftId, {
-        projectRef: scopeProjectRef(target.environmentId, target.projectId),
-        placement: { mode: "manual", providerPinned: false, resolvedKey: null },
-      });
+      draftPlacement.selectEnvironment(target);
     },
     [
+      activeProject,
       draftId,
-      draftPlacement.machinePinned,
-      draftThread?.placement?.dispatched,
-      settings.loadBalancingEnabled,
+      draftPlacement.locked,
+      draftPlacement.selectEnvironment,
       envLocked,
       logicalProjectEnvironments,
-      setDraftThreadContext,
     ],
   );
 
@@ -7227,7 +7219,7 @@ function ChatViewContent(props: ChatViewProps) {
     if (!draftPlacement.validate(sendCtx.selectedModelSelection)) {
       setThreadError(
         activeThread.id,
-        "Choose an available machine or recheck Auto placement before sending.",
+        "Choose an available environment from the location dropdown before sending.",
       );
       return;
     }
@@ -8891,11 +8883,6 @@ function ChatViewContent(props: ChatViewProps) {
         scheduleComposerFocus();
         return;
       }
-      if (draftId && !isServerThread && instanceId !== activeProviderStatus?.instanceId) {
-        setDraftThreadContext(draftId, {
-          placement: { mode: "manual", providerPinned: true, resolvedKey: null },
-        });
-      }
       setComposerDraftModelSelection(
         scopeThreadRef(activeThread.environmentId, activeThread.id),
         nextModelSelection,
@@ -8913,10 +8900,6 @@ function ChatViewContent(props: ChatViewProps) {
       setStickyComposerModelSelection,
       providerStatuses,
       settings,
-      draftId,
-      isServerThread,
-      setDraftThreadContext,
-      activeProviderStatus?.instanceId,
     ],
   );
   const onEnvModeChange = useCallback(
@@ -9137,10 +9120,7 @@ function ChatViewContent(props: ChatViewProps) {
     gitCwd,
     isGitRepo,
     envLocked,
-    environmentLocked:
-      envLocked ||
-      (settings.loadBalancingEnabled && draftPlacement.machinePinned) ||
-      Boolean(draftThread?.placement?.dispatched),
+    environmentLocked: envLocked || draftPlacement.locked,
     availableEnvironments: logicalProjectEnvironments,
     autoPlacement,
     onEnvironmentChange,
@@ -9590,16 +9570,12 @@ function ChatViewContent(props: ChatViewProps) {
                                     }
                                   : {})}
                                 envLocked={envLocked}
-                                environmentLocked={
-                                  envLocked ||
-                                  (settings.loadBalancingEnabled && draftPlacement.machinePinned) ||
-                                  Boolean(draftThread?.placement?.dispatched)
-                                }
+                                environmentLocked={envLocked || draftPlacement.locked}
                                 onComposerFocusRequest={scheduleComposerFocus}
                                 {...(canCheckoutPullRequestIntoThread
                                   ? { onCheckoutPullRequestRequest: openPullRequestDialog }
                                   : {})}
-                                {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
+                                onEnvironmentChange={onEnvironmentChange}
                                 onLinkEnvironmentRequest={onLinkEnvironmentRequest}
                                 autoPlacement={autoPlacement}
                                 availableEnvironments={logicalProjectEnvironments}
@@ -9612,37 +9588,6 @@ function ChatViewContent(props: ChatViewProps) {
                     <div className="chat-composer-glass-shell chat-composer-glass-shell-with-context chat-composer-content-sized-shell relative mx-auto w-full max-w-3xl">
                       <div className="relative z-10 w-full">
                         <div className="relative z-10">
-                          {draftPlacement.visible && (
-                            <div
-                              className="flex flex-wrap items-center gap-2 px-3 pt-2 text-xs text-muted-foreground"
-                              aria-live="polite"
-                            >
-                              <span title={draftPlacement.detail}>{draftPlacement.label}</span>
-                              {draftPlacement.automatic ? (
-                                <>
-                                  <Button
-                                    variant="ghost"
-                                    size="xs"
-                                    onClick={draftPlacement.recheck}
-                                    disabled={draftPlacement.pending}
-                                  >
-                                    Recheck
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="xs"
-                                    onClick={draftPlacement.useManual}
-                                  >
-                                    Use selected machine
-                                  </Button>
-                                </>
-                              ) : !draftPlacement.pinned ? (
-                                <Button variant="ghost" size="xs" onClick={draftPlacement.recheck}>
-                                  Auto
-                                </Button>
-                              ) : null}
-                            </div>
-                          )}
                           <ChatComposer
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
