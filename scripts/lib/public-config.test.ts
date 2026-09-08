@@ -15,6 +15,19 @@ afterEach(() => {
 });
 
 describe("loadRepoEnv", () => {
+  it("passes the configured hosted website through to the web build", () => {
+    const repoRoot = makeTemporaryDirectory();
+    NodeFS.writeFileSync(
+      NodePath.join(repoRoot, ".env"),
+      "PATHWAY_HOSTED_APP_URL=https://root.example.test\n",
+    );
+    expect(
+      loadRepoEnv({ repoRoot, baseEnv: { VITE_HOSTED_APP_URL: "https://nightly.example.test" } }),
+    ).toMatchObject({
+      PATHWAY_HOSTED_APP_URL: "https://nightly.example.test",
+      VITE_HOSTED_APP_URL: "https://nightly.example.test",
+    });
+  });
   it("does not project cloud configuration for an unconfigured clone", () => {
     const env = loadRepoEnv({ baseEnv: {}, repoRoot: makeTemporaryDirectory() });
 

@@ -1,8 +1,6 @@
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { ConvexHttpClient } from "convex/browser";
-import { makeFunctionReference } from "convex/server";
-import type { DefaultFunctionArgs } from "convex/server";
 import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -58,7 +56,8 @@ import {
   RelayMailDeadLetterQueue,
 } from "./queues.ts";
 import { loadMailConfiguration, MailQueueError } from "./mail/config.ts";
-import { makeMailRuntime, type MailRpc, type MailQueueJob } from "./mail/runtime.ts";
+import { makeMailRuntime, type MailQueueJob } from "./mail/runtime.ts";
+import { makeMailRpc } from "./mail/rpc.ts";
 import { ConnectedMail, mailRoutes } from "./mail/routes.ts";
 import * as RelayConfiguration from "./Config.ts";
 import * as AgentActivityPublisher from "./agentActivity/AgentActivityPublisher.ts";
@@ -246,26 +245,9 @@ export const ApiLive = Api.make(
       Layer.provideMerge(webcryptoLayer),
     );
 
-    const mailConvexClient = yield* RelayDb.RelayConvexClient.pipe(
-      Effect.provide(cloudSyncRuntimeLayer),
-      Effect.orDie,
+    const mailRpc = yield* makeMailRpc(
+      RelayDb.RelayConvexClient.pipe(Effect.provide(cloudSyncRuntimeLayer), Effect.orDie),
     );
-    const mailRpc: MailRpc = {
-      query: <T>(name: string, args: Record<string, unknown>) =>
-        Effect.runPromise(
-          mailConvexClient.query(
-            makeFunctionReference<"query", DefaultFunctionArgs, T>(`mailRelay:${name}`),
-            args as DefaultFunctionArgs,
-          ),
-        ),
-      mutation: <T>(name: string, args: Record<string, unknown>) =>
-        Effect.runPromise(
-          mailConvexClient.mutation(
-            makeFunctionReference<"mutation", DefaultFunctionArgs, T>(`mailRelay:${name}`),
-            args as DefaultFunctionArgs,
-          ),
-        ),
-    };
     const mailRuntime = mailConfiguration
       ? makeMailRuntime({
           config: mailConfiguration,

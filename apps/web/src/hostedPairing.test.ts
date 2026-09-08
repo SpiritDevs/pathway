@@ -3,12 +3,17 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   buildHostedChannelSelectionUrl,
   buildHostedPairingUrl,
+  buildHostedMailSetupUrl,
   hasHostedPairingRequest,
   isHostedStaticApp,
   readHostedPairingRequest,
 } from "./hostedPairing";
 
 describe("hostedPairing", () => {
+  it("opens Gmail setup on the configured release website", () => {
+    vi.stubEnv("VITE_HOSTED_APP_URL", "https://app.pathwayos.dev");
+    expect(buildHostedMailSetupUrl()).toBe("https://app.pathwayos.dev/settings/email");
+  });
   afterEach(() => {
     vi.unstubAllEnvs();
   });

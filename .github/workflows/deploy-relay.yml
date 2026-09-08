@@ -35,6 +35,10 @@ jobs:
       APNS_TEAM_ID: ${{ vars.APNS_TEAM_ID }}
       APNS_KEY_ID: ${{ vars.APNS_KEY_ID }}
       APNS_BUNDLE_ID: ${{ vars.APNS_BUNDLE_ID }}
+      MAIL_ENABLED: ${{ vars.MAIL_ENABLED || 'false' }}
+      MAIL_GOOGLE_PUBSUB_TOPIC: ${{ vars.MAIL_GOOGLE_PUBSUB_TOPIC }}
+      MAIL_GOOGLE_PUBSUB_SERVICE_ACCOUNT: ${{ vars.MAIL_GOOGLE_PUBSUB_SERVICE_ACCOUNT }}
+      MAIL_GOOGLE_CLIENT_ID: ${{ vars.MAIL_GOOGLE_CLIENT_ID }}
       ALCHEMY_TELEMETRY_DISABLED: "1"
     steps:
       - name: Checkout
@@ -62,6 +66,9 @@ jobs:
           AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
+          MAIL_ENCRYPTION_KEY: ${{ secrets.MAIL_ENCRYPTION_KEY }}
+          MAIL_UPLOADTHING_API_KEY: ${{ secrets.MAIL_UPLOADTHING_API_KEY }}
+          MAIL_GOOGLE_CLIENT_SECRET: ${{ secrets.MAIL_GOOGLE_CLIENT_SECRET }}
 
       - name: Publish relay deploy commit status
         uses: actions/github-script@v8

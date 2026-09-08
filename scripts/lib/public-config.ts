@@ -5,6 +5,7 @@ import * as NodeURL from "node:url";
 import * as NodeUtil from "node:util";
 
 export interface PathwayPublicConfig {
+  readonly hostedAppUrl: string | undefined;
   readonly clerkPublishableKey: string | undefined;
   readonly clerkJwtTemplate: string | undefined;
   readonly clerkCliOAuthClientId: string | undefined;
@@ -65,6 +66,12 @@ export function loadRepoEnv({
     ...productionEnv,
     ...localEnv,
     ...baseEnv,
+    ...(config.hostedAppUrl
+      ? {
+          PATHWAY_HOSTED_APP_URL: config.hostedAppUrl,
+          VITE_HOSTED_APP_URL: config.hostedAppUrl,
+        }
+      : {}),
     ...(config.clerkPublishableKey
       ? {
           PATHWAY_CLERK_PUBLISHABLE_KEY: config.clerkPublishableKey,
@@ -118,6 +125,7 @@ export function loadRepoEnv({
 
 export function resolvePublicConfig(...sources: readonly Environment[]): PathwayPublicConfig {
   return {
+    hostedAppUrl: firstNonEmpty(sources, "PATHWAY_HOSTED_APP_URL", "VITE_HOSTED_APP_URL"),
     clerkPublishableKey: firstNonEmpty(
       sources,
       "PATHWAY_CLERK_PUBLISHABLE_KEY",

@@ -20,11 +20,9 @@ export async function readMailRelayResponse(response: Response): Promise<unknown
   try {
     result = raw ? JSON.parse(raw) : null;
   } catch {
-    throw new Error(
-      response.ok
-        ? "The mail server returned an invalid response."
-        : "Mail request failed. Please retry.",
-    );
+    if (!response.ok)
+      throw new MailRelayError("Mail request failed. Please retry.", response.status);
+    throw new Error("The mail server returned an invalid response.");
   }
   if (!response.ok) {
     const fields = result && typeof result === "object" ? result : null;
@@ -34,9 +32,30 @@ export async function readMailRelayResponse(response: Response): Promise<unknown
         : fields && "error" in fields && typeof fields.error === "string"
           ? fields.error
           : "Mail request failed. Please retry.";
-    throw new Error(message);
+    throw new MailRelayError(message, response.status);
   }
   return result;
+}
+
+class MailRelayError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+export function mailConnectionErrorMessage(error: unknown): string {
+  if (error instanceof MailRelayError) {
+    if (error.status === 404)
+      return "Mail is not available on this Pathway Connect server yet. Ask your workspace administrator to update the mail service.";
+    if (error.status === 503)
+      return "Mail is not enabled on Pathway Connect. Ask your workspace administrator to finish email setup.";
+  }
+  return error instanceof MailRelayError
+    ? error.message
+    : "Mail service is unavailable. Check your connection and try again. If this continues, ask your workspace administrator to check Pathway Connect.";
 }
 
 export function gmailMessageUrl(accountEmail: string, providerMessageId: string): string {

@@ -101,6 +101,8 @@ const mailHandler = Effect.gen(function* () {
       const bearer = webRequest.headers.get("authorization")?.match(/^Bearer (.+)$/)?.[1];
       if (!bearer) throw new MailHttpError(401, "Sign in to continue");
       if (path === "/v1/mail/notify") {
+        if (!mailConfig.pubsubServiceAccount)
+          throw new MailHttpError(503, "Gmail push notifications are not configured");
         try {
           await verifyPubsubToken(
             bearer,
