@@ -40,6 +40,11 @@ switches to its Focus and opens the thread.
 Open the command palette and choose **Switch Focus…** to select a visible Focus or **All**. Use
 `Mod+Alt+G` to cycle through visible Focuses and back to **All**. On macOS, the shortcut is `⌥⌘G`.
 
+On web and desktop, use a two-finger horizontal trackpad swipe over the sidebar's thread list to
+slide between Focuses in strip order. The carousel wraps in both directions, including **All**.
+Each swipe moves one Focus, even when the trackpad keeps scrolling with momentum. Vertical
+scrolling still scrolls the thread list. The slide animation respects reduced-motion settings.
+
 ## Notifications
 
 The bell in the Focus Strip opens the notification tray. Pathway adds an attention event when:

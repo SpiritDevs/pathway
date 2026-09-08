@@ -158,6 +158,11 @@ export function FocusStrip(props: {
   const [trayUnreadCount, setTrayUnreadCount] = useState(0);
   const [trayNotifications, setTrayNotifications] = useState<ReadonlyArray<FocusNotification>>([]);
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    stripElement
+      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [stripElement, props.activeFocusId]);
   const orderedFocuses = useMemo(() => sortFocuses(props.focuses), [props.focuses]);
   const shownFocuses = useMemo(
     () =>
