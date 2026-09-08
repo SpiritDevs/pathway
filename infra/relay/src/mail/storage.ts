@@ -11,11 +11,28 @@ import { decodeBase64Url, hashToken } from "./crypto.ts";
 export class MailStorageError extends Error {
   readonly status: number;
   readonly operation: "prepare upload" | "upload" | "download" | "delete";
-  constructor(status: number, operation: MailStorageError["operation"]) {
+  readonly privateFilesUnavailable: boolean;
+  constructor(
+    status: number,
+    operation: MailStorageError["operation"],
+    privateFilesUnavailable = false,
+  ) {
     super(`Mail storage ${operation} failed (${status})`);
     this.status = status;
     this.operation = operation;
+    this.privateFilesUnavailable = privateFilesUnavailable;
   }
+}
+
+async function storageResponseError(response: Response, operation: MailStorageError["operation"]) {
+  const body: unknown = response.status === 400 ? await response.json().catch(() => null) : null;
+  const privateFilesUnavailable =
+    body !== null &&
+    typeof body === "object" &&
+    "error" in body &&
+    typeof body.error === "string" &&
+    body.error.startsWith("Private files are not allowed for free apps.");
+  return new MailStorageError(response.status, operation, privateFilesUnavailable);
 }
 
 export interface PrivateMailStorage {
@@ -65,7 +82,7 @@ export function makePrivateMailStorage(
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(25_000),
     });
-    if (!response.ok) throw new MailStorageError(response.status, operation);
+    if (!response.ok) throw await storageResponseError(response, operation);
     return (await response.json()) as T;
   };
   return {
@@ -94,7 +111,7 @@ export function makePrivateMailStorage(
         body: form,
         signal: AbortSignal.timeout(60_000),
       });
-      if (!response.ok) throw new MailStorageError(response.status, "upload");
+      if (!response.ok) throw await storageResponseError(response, "upload");
       return prepared.key;
     },
     async signedUrl(key) {

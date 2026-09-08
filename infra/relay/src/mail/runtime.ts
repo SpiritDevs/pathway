@@ -551,9 +551,11 @@ export function makeMailRuntime(input: {
         const errorMessage = needsReauth
           ? "Google authorization expired. Reconnect this mailbox."
           : error instanceof MailStorageError
-            ? error.status === 401 || error.status === 403
-              ? `Private mail storage rejected access (HTTP ${error.status}). Ask your workspace administrator to check the storage API key and private-file permissions.`
-              : `Private mail storage could not ${error.operation} (HTTP ${error.status}); synchronization will retry.`
+            ? error.privateFilesUnavailable
+              ? "Private mail storage requires a paid UploadThing app. Ask your workspace administrator to enable private files."
+              : error.status === 401 || error.status === 403
+                ? `Private mail storage rejected access (HTTP ${error.status}). Ask your workspace administrator to check the storage API key and private-file permissions.`
+                : `Private mail storage could not ${error.operation} (HTTP ${error.status}); synchronization will retry.`
             : error instanceof GmailError
               ? `Google rejected mailbox synchronization (HTTP ${error.status}); it will retry.`
               : `Mailbox synchronization failed while ${syncStep}; it will retry.`;

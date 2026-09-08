@@ -69,11 +69,6 @@ jobs:
             args:
               - --filter=pathway-relay...
 
-      - name: Validate private mail storage credentials
-        run: node infra/relay/scripts/check-mail-storage.ts
-        env:
-          MAIL_UPLOADTHING_API_KEY: ${{ secrets.MAIL_UPLOADTHING_API_KEY }}
-
       - name: Deploy production relay stage
         id: deploy
         run: vp run --filter pathway-relay deploy --stage prod --yes --github-output

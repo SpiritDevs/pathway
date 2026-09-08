@@ -40,6 +40,7 @@ async function fixture(
     ingestFails?: boolean;
     withoutPubsub?: boolean;
     privateStorageStatus?: number;
+    privateFilesUnavailable?: boolean;
     tokenStatus?: number;
   } = {},
 ) {
@@ -126,6 +127,19 @@ async function fixture(
       return options.tokenStatus
         ? new Response(null, { status: options.tokenStatus })
         : Response.json({ access_token: "access", refresh_token: "refresh" });
+    if (text === "https://api.uploadthing.com/v7/prepareUpload" && options.privateFilesUnavailable)
+      return Response.json({
+        key: "test-key",
+        url: "https://sea1.ingest.uploadthing.com/test-key",
+      });
+    if (text === "https://sea1.ingest.uploadthing.com/test-key")
+      return Response.json(
+        {
+          error:
+            "Private files are not allowed for free apps. Upgrade your app to a paid tier to enable private files.",
+        },
+        { status: 400 },
+      );
     if (text === "https://api.uploadthing.com/v7/prepareUpload")
       return Response.json(
         { error: "provider response with private details" },
@@ -625,5 +639,18 @@ describe("UploadThing deployment credentials", () => {
     (credential) => {
       expect(mailStorageApiKey(credential)).toBe(credential);
     },
+  );
+});
+
+it("explains a free-tier private upload rejection without suggesting Google reconnection", async () => {
+  const f = await fixture({ privateStorageStatus: 400, privateFilesUnavailable: true });
+  await expect(f.runtime.process({ accountId: "account" })).rejects.toThrow("paid UploadThing app");
+  expect(f.calls.find((call) => call.name === "failSync")?.args).toMatchObject({
+    needsReauth: false,
+    error:
+      "Private mail storage requires a paid UploadThing app. Ask your workspace administrator to enable private files.",
+  });
+  expect(f.calls.some((call) => call.name === "ingestPage" || call.name === "finishSync")).toBe(
+    false,
   );
 });
