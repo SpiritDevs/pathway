@@ -29,6 +29,11 @@ struct PathwayQuestionDraft {
     var selected: [String: Set<String>] = [:]
     var custom: [String: String] = [:]
     var questionIndex = 0
+    var implicitSelections: Set<String> = []
+
+    func selectedOptions(for questionID: String, hasAttachments: Bool) -> Set<String> {
+        hasAttachments && implicitSelections.contains(questionID) ? [] : selected[questionID, default: []]
+    }
 }
 
 struct PathwayMessageAttachment: Codable, Equatable, Identifiable, Sendable {
@@ -240,6 +245,13 @@ final class PathwayAgentThreadModel {
     private(set) var connectionState: PathwayThreadConnectionState = .idle
     private(set) var items: [PathwayTimelineItem] = []
     var questionDrafts: [String: PathwayQuestionDraft] = [:]
+    var questionAttachmentStores: [String: PathwayNewThreadAttachments] = [:]
+    var restoringQuestionAttachments: Set<String> = []
+    var preparingQuestionAttachments: Set<String> = []
+    private var restoredQuestionAttachments: Set<String> = []
+    private var questionAttachmentItems: [String: PathwayTimelineItem] = [:]
+    private var retiredQuestionAttachmentItems: Set<String> = []
+    @ObservationIgnored private(set) var questionAttachmentCleanupTask: Task<Void, Never>?
     var serverConfig: [String: JSONValue] = [:]
     var providers: [PathwayServerProvider] = []
     var modelCatalog: [PathwayServerProvider] = []
@@ -327,7 +339,7 @@ final class PathwayAgentThreadModel {
         isParentRosterLoading = thread.shell.lineage?.relationshipToParent == "subagent"
     }
 
-    deinit {
+    isolated deinit {
         streamTask?.cancel(); configTask?.cancel(); cacheWriteTask?.cancel(); draftWriteTask?.cancel()
         if let pendingDraftWrite, let draftStore { Task { try? await draftStore.save(pendingDraftWrite) } }
         if let pending = pendingCacheWrite {
@@ -533,10 +545,22 @@ final class PathwayAgentThreadModel {
         }
     }
     func prepareQuestionDraft(for item: PathwayTimelineItem) {
+        guard item.requiresResponse, !retiredQuestionAttachmentItems.contains(item.id) else { return }
+        if supportsQuestionAttachments && !restoredQuestionAttachments.contains(item.id) {
+            restoredQuestionAttachments.insert(item.id)
+            restoringQuestionAttachments.insert(item.id)
+            Task {
+                defer { restoringQuestionAttachments.remove(item.id) }
+                for question in item.questions { await questionAttachments(item: item, questionID: question.id).restore() }
+            }
+        }
         guard questionDrafts[item.id] == nil, isNonBlockingQuestion(item) else { return }
         var draft = PathwayQuestionDraft()
         for question in item.questions {
-            if let first = question.options.first { draft.selected[question.id] = [first.label] }
+            if let first = question.options.first {
+                draft.selected[question.id] = [first.label]
+                draft.implicitSelections.insert(question.id)
+            }
         }
         questionDrafts[item.id] = draft
     }
@@ -561,7 +585,100 @@ final class PathwayAgentThreadModel {
         catch { actionError = error.localizedDescription }
     }
     func respondToQuestions(requestID: String, answers: [String: JSONValue]) async throws {
-        try await respond(requestID: requestID, fields: ["answers": .object(answers)])
+        guard let item = items.first(where: { $0.requestID == requestID }), questionAttachmentsReady(item) else {
+            throw PathwayThreadConversationError.message("Wait for answer attachments to finish uploading.")
+        }
+        let stores = item.questions.map { ($0.id, questionAttachments(item: item, questionID: $0.id)) }
+        let uploads = stores.flatMap { $0.1.uploads }
+        guard uploads.count <= 8 else { throw PathwayThreadConversationError.message("You can attach up to 8 files across these answers.") }
+        var fields: [String: JSONValue] = ["answers": .object(answers)]
+        if !uploads.isEmpty {
+            let persisted = try await request("assets.persistChatAttachments", payload: .object([
+                "threadId": .string(threadID), "messageId": .string("question:\(UUID().uuidString)"), "attachments": .array(uploads)
+            ]))
+            guard let saved = persisted.objectValue?["attachments"]?.arrayValue, saved.count == uploads.count else {
+                throw PathwayThreadConversationError.message("The answer attachments could not be saved.")
+            }
+            var offset = 0
+            var byQuestion: [String: JSONValue] = [:]
+            for (questionID, store) in stores {
+                let count = store.uploads.count
+                if count > 0 { byQuestion[questionID] = .array(Array(saved[offset..<(offset + count)])) }
+                offset += count
+            }
+            fields["attachmentsByQuestionId"] = .object(byQuestion)
+        }
+        try await respond(requestID: requestID, fields: fields)
+        for (_, store) in stores {
+            for draft in store.drafts { await store.remove(id: draft.id) }
+        }
+    }
+
+    var supportsQuestionAttachments: Bool {
+        serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue?["questionAttachments"]?.boolValue == true
+    }
+
+    func questionAttachments(item: PathwayTimelineItem, questionID: String) -> PathwayNewThreadAttachments {
+        let key = "\(item.id):\(questionID)"
+        questionAttachmentItems[item.id] = item
+        let store = questionAttachmentStores[key] ?? PathwayNewThreadAttachments(directory: storageDirectory?.appending(path: "QuestionAttachments"), key: "\(thread.id):\(key)")
+        if questionAttachmentStores[key] == nil { questionAttachmentStores[key] = store }
+        store.supportsUploads = supportsQuestionAttachments && !retiredQuestionAttachmentItems.contains(item.id)
+        store.maximumFileBytes = maximumFileAttachmentBytes
+        store.isConnected = isSubscriptionReady
+        store.request = { [weak self] method, payload in
+            guard let self else { throw PathwayRPCError.disconnected }
+            return try await self.request(method, payload: payload)
+        }
+        store.uploadRequest = { [weak self] path in
+            guard let self, let connect = self.connect else { throw PathwayRPCError.disconnected }
+            return try await connect.authenticatedRequest(environment: self.environment, method: "PUT", path: path)
+        }
+        return store
+    }
+
+    private func reconcileQuestionAttachments(snapshot: Bool = false) {
+        for item in items where item.type == "user_input_request" { questionAttachmentItems[item.id] = item }
+        let requestStatuses = Dictionary(uniqueKeysWithValues: runtimeRequests.compactMap { value -> (String, String)? in
+            guard let fields = value.objectValue, let id = fields["id"]?.stringValue, let status = fields["status"]?.stringValue else { return nil }
+            return (id, status)
+        })
+        let closed = questionAttachmentItems.values.filter { item in
+            guard !retiredQuestionAttachmentItems.contains(item.id) else { return false }
+            let status = item.requestID.flatMap { requestStatuses[$0] }
+            if let status, status != "pending" { return true }
+            return !item.requiresResponse || (snapshot && status == nil)
+        }
+        guard !closed.isEmpty else { return }
+        let groups = closed.map { item in
+            retiredQuestionAttachmentItems.insert(item.id)
+            return (item, item.questions.map { ($0.id, questionAttachments(item: item, questionID: $0.id)) })
+        }
+        let previous = questionAttachmentCleanupTask
+        questionAttachmentCleanupTask = Task {
+            await previous?.value
+            for (item, stores) in groups {
+                do {
+                    for (_, store) in stores { try await store.discard() }
+                    for (questionID, _) in stores { questionAttachmentStores.removeValue(forKey: "\(item.id):\(questionID)") }
+                    questionAttachmentItems.removeValue(forKey: item.id)
+                    questionDrafts.removeValue(forKey: item.id)
+                    restoredQuestionAttachments.remove(item.id)
+                } catch {
+                    retiredQuestionAttachmentItems.remove(item.id)
+                    actionError = "The resolved question's attachment drafts could not be removed. " + error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func questionAttachmentCount(_ item: PathwayTimelineItem) -> Int {
+        item.questions.reduce(0) { $0 + (questionAttachmentStores["\(item.id):\($1.id)"]?.drafts.count ?? 0) }
+    }
+
+    func questionAttachmentsReady(_ item: PathwayTimelineItem) -> Bool {
+        !restoringQuestionAttachments.contains(item.id) && !preparingQuestionAttachments.contains(item.id) &&
+        item.questions.allSatisfy { questionAttachmentStores["\(item.id):\($0.id)"]?.isReady ?? true }
     }
     private func respond(requestID: String, fields: [String: JSONValue]) async throws {
         guard let item = items.first(where: { $0.requestID == requestID }), canRespond(to: item) else {
@@ -581,6 +698,7 @@ final class PathwayAgentThreadModel {
         runtimeRequests = object["runtimeRequests"]?.arrayValue ?? []
         checkpoints = object["checkpoints"]?.arrayValue ?? []; plans = object["plans"]?.arrayValue ?? []
         applyThread(object["thread"]); deriveActiveRun()
+        reconcileQuestionAttachments(snapshot: true)
         lastSequence = sequence; connectionState = isSubscriptionReady ? .live : .connecting; persist()
     }
     func applySubscriptionValue(_ value: JSONValue) {
@@ -626,6 +744,9 @@ final class PathwayAgentThreadModel {
             if let prefix = type.split(separator: ".").first, let collection = collectionByEvent[String(prefix)] {
                 var values = projectionCollections[collection] ?? []
                 Self.upsert(payload, into: &values); projectionCollections[collection] = values
+            }
+            if (type == "turn-item.updated" && payload.objectValue?["type"]?.stringValue == "user_input_request") || type.hasPrefix("runtime-request.") {
+                reconcileQuestionAttachments()
             }
             if isSubscriptionReady { connectionState = .live }
         case "synchronized": isSubscriptionReady = true; connectionState = .live

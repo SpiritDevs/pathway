@@ -6,6 +6,7 @@ import {
   PersistChatAttachmentsInput,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   UploadChatAttachment,
+  UserInputAttachments,
 } from "./chatAttachment.ts";
 
 const decodeChatAttachment = Schema.decodeUnknownSync(ChatAttachment);
@@ -13,6 +14,29 @@ const decodeUploadChatAttachment = Schema.decodeUnknownSync(UploadChatAttachment
 const decodePersistChatAttachmentsInput = Schema.decodeUnknownSync(PersistChatAttachmentsInput);
 
 describe("chat file attachments", () => {
+  it("limits question attachments across the whole response", () => {
+    const decode = Schema.decodeUnknownSync(UserInputAttachments);
+    const attachment = {
+      type: "image",
+      id: "thread-image",
+      name: "layout.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+    };
+    expect(
+      decode({
+        first: Array.from({ length: 4 }, () => ({ ...attachment })),
+        second: Array.from({ length: 4 }, () => ({ ...attachment })),
+      }).second,
+    ).toHaveLength(4);
+    expect(() =>
+      decode({
+        first: Array.from({ length: 4 }, () => ({ ...attachment })),
+        second: Array.from({ length: 5 }, () => ({ ...attachment })),
+      }),
+    ).toThrow();
+    expect(() => decode({ first: [{ ...attachment, type: "unknown" }] })).toThrow();
+  });
   it("decodes stored and upload file variants", () => {
     expect(
       decodeChatAttachment({

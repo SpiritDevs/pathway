@@ -124,6 +124,9 @@ private struct AgentTranscriptMessage<Actions: View>: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(reply.question).fontWeight(.medium).foregroundStyle(.secondary)
                                 Text(reply.answer)
+                                ForEach(item.attachments.filter { reply.attachmentIDs.contains($0.id) }) { attachment in
+                                    AgentTranscriptAttachment(attachment: attachment, model: model)
+                                }
                             }
                             .textSelection(.enabled)
                             .accessibilityElement(children: .combine)
@@ -134,7 +137,7 @@ private struct AgentTranscriptMessage<Actions: View>: View {
                         AgentTranscriptMarkdown(markdown: text).equatable()
                     }
                 }
-                ForEach(item.attachments) { attachment in
+                ForEach(item.attachments.filter { attachment in !(questionReply?.answers.contains { $0.attachmentIDs.contains(attachment.id) } ?? false) }) { attachment in
                     AgentTranscriptAttachment(attachment: attachment, model: model)
                 }
                 if questionReply == nil, item.isUserMessage, let text = item.text, AgentTranscriptMessageEditor.editableText(text) != text {

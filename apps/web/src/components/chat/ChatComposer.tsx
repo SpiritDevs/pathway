@@ -11,6 +11,8 @@ import type {
   ThreadId,
   RuntimeRequestId,
 } from "@spiritdevs/contracts";
+import { QuestionAttachmentStrip } from "./QuestionAttachmentStrip";
+import type { QuestionAttachmentDraft } from "../../questionAttachmentDrafts";
 import {
   ProviderDriverKind,
   ProviderInstanceId,
@@ -522,6 +524,13 @@ export interface ChatComposerProps {
   activePendingApproval: PendingApproval | null;
   pendingApprovals: PendingApproval[];
   pendingUserInputs: PendingUserInput[];
+  questionAttachments: {
+    enabled: boolean;
+    drafts: readonly QuestionAttachmentDraft[];
+    add: (files: File[]) => void;
+    remove: (id: string) => void;
+    retry: (id: string) => void;
+  };
   onDismissAsyncQuestion?: (() => void) | undefined;
   activePendingProgress: {
     questionIndex: number;
@@ -639,6 +648,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activePendingApproval,
     pendingApprovals,
     pendingUserInputs,
+    questionAttachments,
     onDismissAsyncQuestion,
     activePendingProgress,
     activePendingResolvedAnswers,
@@ -2506,10 +2516,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const addComposerImages = async (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
     if (pendingUserInputs.length > 0) {
-      toastManager.add({
-        type: "error",
-        title: "Attach files after answering plan questions.",
-      });
+      if (questionAttachments.enabled && !activePendingIsResponding) questionAttachments.add(files);
+      else toastManager.add({ type: "error", title: "This question does not accept attachments." });
       return;
     }
     // Captured before the awaits below: the user may switch threads while a
@@ -2907,6 +2915,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       focusComposer,
       isConnecting,
       isComposerApprovalState,
+      questionAttachments,
+      activePendingIsResponding,
       pendingUserInputs.length,
       projectSelectionRequired,
       applyPromptReplacement,
@@ -2934,7 +2944,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             variant="ghost"
             className="shrink-0 rounded-full text-muted-foreground/80"
             aria-label="Attach files"
-            disabled={isConnecting || projectSelectionRequired}
+            disabled={
+              isConnecting ||
+              projectSelectionRequired ||
+              (pendingUserInputs.length > 0 &&
+                (!questionAttachments.enabled || activePendingIsResponding))
+            }
             onClick={() => attachmentInputRef.current?.click()}
           >
             <PaperclipIcon className="size-4" />
@@ -3087,6 +3102,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               data-chat-composer-attachments="true"
               className="max-h-[min(8rem,18dvh)] overflow-y-auto overscroll-contain"
             >
+              {pendingUserInputs.length > 0 && questionAttachments.drafts.length > 0 ? (
+                <QuestionAttachmentStrip
+                  environmentId={environmentId}
+                  drafts={questionAttachments.drafts}
+                  disabled={activePendingIsResponding}
+                  onRemove={questionAttachments.remove}
+                  onRetry={questionAttachments.retry}
+                />
+              ) : null}
               {!isComposerApprovalState &&
                 pendingUserInputs.length === 0 &&
                 composerPreviewAnnotations.length > 0 && (

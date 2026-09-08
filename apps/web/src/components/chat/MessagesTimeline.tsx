@@ -1382,16 +1382,24 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const copyText = questionReply
     ? formatAsyncQuestionReplyText(questionReply)
     : displayedUserMessage.copyText;
-  const previewImages = userAttachments.filter(
+  const answerAttachmentIds = new Set(
+    questionReply?.flatMap(
+      (reply) => reply.attachments?.map((attachment) => attachment.id) ?? [],
+    ) ?? [],
+  );
+  const genericAttachments = userAttachments.filter(
+    (attachment) => !answerAttachmentIds.has(attachment.id),
+  );
+  const previewImages = genericAttachments.filter(
     (attachment) =>
       attachment.type === "image" && attachment.name.startsWith("preview-annotation-"),
   );
-  const regularImages = userAttachments.filter(
+  const regularImages = genericAttachments.filter(
     (attachment) =>
       attachment.type === "image" && !attachment.name.startsWith("preview-annotation-"),
   );
-  const fileAttachments = userAttachments.filter((attachment) => attachment.type === "file");
-  const unknownAttachments = userAttachments.filter(
+  const fileAttachments = genericAttachments.filter((attachment) => attachment.type === "file");
+  const unknownAttachments = genericAttachments.filter(
     (attachment) => attachment.type !== "image" && attachment.type !== "file",
   );
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
@@ -1534,6 +1542,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         ) : (
           <CollapsibleUserMessageBody
             questionReply={questionReply}
+            attachments={userAttachments}
             text={elementContextState.promptText}
             terminalContexts={terminalContexts}
             skills={ctx.skills}
@@ -2775,6 +2784,7 @@ function shouldCollapseUserMessage(text: string): boolean {
 
 const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(props: {
   questionReply: ReturnType<typeof parseAsyncQuestionReply>;
+  attachments: NonNullable<TimelineMessage["attachments"]>;
   text: string;
   terminalContexts: ParsedTerminalContextEntry[];
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
@@ -2808,14 +2818,44 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
         >
           {questionReply ? (
             <dl className="space-y-4 text-sm leading-relaxed" data-question-reply="true">
-              {questionReply.map(({ question, answer }, index) => (
+              {questionReply.map(({ question, answer, attachments }, index) => (
                 // Replies are immutable and questions may repeat, so their position is stable.
                 // eslint-disable-next-line react/no-array-index-key
                 <div key={index} className="space-y-1.5">
                   <dt className="whitespace-pre-wrap wrap-break-word font-medium text-muted-foreground">
                     {question}
                   </dt>
-                  <dd className="whitespace-pre-wrap wrap-break-word text-foreground">{answer}</dd>
+                  <dd className="whitespace-pre-wrap wrap-break-word text-foreground">
+                    {answer}
+                    {attachments?.map((attachment) => {
+                      const url = props.attachments.find(
+                        (item) => item.id === attachment.id,
+                      )?.previewUrl;
+                      return (
+                        <div key={attachment.id} className="mt-1 text-xs">
+                          {url ? (
+                            <a
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-primary underline"
+                            >
+                              {attachment.type === "image" ? (
+                                <img
+                                  src={url}
+                                  alt={attachment.name}
+                                  className="mb-1 block max-h-[220px] max-w-full rounded-lg object-contain"
+                                />
+                              ) : null}
+                              {attachment.name}
+                            </a>
+                          ) : (
+                            attachment.name
+                          )}
+                        </div>
+                      );
+                    })}
+                  </dd>
                 </div>
               ))}
             </dl>

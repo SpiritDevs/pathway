@@ -1,4 +1,15 @@
 import { useLoadBalancedDraft } from "../hooks/useLoadBalancedDraft";
+import {
+  addQuestionAttachments,
+  clearQuestionAttachments,
+  EMPTY_QUESTION_ATTACHMENTS,
+  questionAttachmentDraftKey,
+  readyQuestionAttachments,
+  revalidateQuestionAttachments,
+  removeQuestionAttachment,
+  retryQuestionAttachment,
+  useQuestionAttachmentDrafts,
+} from "../questionAttachmentDrafts";
 import { initialAsyncQuestionAnswers } from "./chat/ComposerAsyncQuestions";
 import {
   DEFAULT_MODEL,
@@ -2814,13 +2825,36 @@ function ChatViewContent(props: ChatViewProps) {
   }, [allPendingUserInputs, asyncUserInputs, selectedAsyncQuestionId]);
   const closeAsyncQuestion = useCallback(() => setSelectedAsyncQuestionId(null), []);
   const activePendingUserInput = pendingUserInputs[0] ?? null;
+  const questionAttachmentsKey = questionAttachmentDraftKey(
+    environmentId,
+    activeThreadId ?? "",
+    activePendingUserInput?.requestId ?? "",
+  );
+  const questionAttachmentDrafts = useQuestionAttachmentDrafts(
+    (state) => state.byRequest[questionAttachmentsKey] ?? EMPTY_QUESTION_ATTACHMENTS,
+  );
+  const questionAttachmentsReady = readyQuestionAttachments(questionAttachmentDrafts) !== null;
+  useEffect(() => {
+    void revalidateQuestionAttachments(environmentId, questionAttachmentsKey);
+  }, [environmentId, questionAttachmentsKey]);
   const activePendingDraftAnswers = useMemo(
     () =>
       activePendingUserInput
-        ? (pendingUserInputAnswersByRequestId[activePendingUserInput.requestId] ??
-          EMPTY_PENDING_USER_INPUT_ANSWERS)
+        ? Object.fromEntries(
+            activePendingUserInput.questions.map((question) => [
+              question.id,
+              {
+                ...pendingUserInputAnswersByRequestId[activePendingUserInput.requestId]?.[
+                  question.id
+                ],
+                attachmentCount: questionAttachmentDrafts.filter(
+                  (draft) => draft.questionId === question.id,
+                ).length,
+              },
+            ]),
+          )
         : EMPTY_PENDING_USER_INPUT_ANSWERS,
-    [activePendingUserInput, pendingUserInputAnswersByRequestId],
+    [activePendingUserInput, pendingUserInputAnswersByRequestId, questionAttachmentDrafts],
   );
   const activePendingQuestionIndex = activePendingUserInput
     ? (pendingUserInputQuestionIndexByRequestId[activePendingUserInput.requestId] ?? 0)
@@ -2828,13 +2862,21 @@ function ChatViewContent(props: ChatViewProps) {
   const activePendingProgress = useMemo(
     () =>
       activePendingUserInput
-        ? derivePendingUserInputProgress(
-            activePendingUserInput.questions,
-            activePendingDraftAnswers,
-            activePendingQuestionIndex,
-          )
+        ? {
+            ...derivePendingUserInputProgress(
+              activePendingUserInput.questions,
+              activePendingDraftAnswers,
+              activePendingQuestionIndex,
+            ),
+            ...(!questionAttachmentsReady ? { canAdvance: false, isComplete: false } : {}),
+          }
         : null,
-    [activePendingDraftAnswers, activePendingQuestionIndex, activePendingUserInput],
+    [
+      activePendingDraftAnswers,
+      activePendingQuestionIndex,
+      activePendingUserInput,
+      questionAttachmentsReady,
+    ],
   );
   const activePendingResolvedAnswers = useMemo(
     () =>
@@ -8331,6 +8373,11 @@ function ChatViewContent(props: ChatViewProps) {
       if (!activeThreadId) return;
       const request = allPendingUserInputs.find((input) => input.requestId === requestId);
       if (!request || request.responseCapability === "not_resumable") return;
+      const draftKey = questionAttachmentDraftKey(environmentId, activeThreadId, requestId);
+      const attachmentsByQuestionId = readyQuestionAttachments(
+        useQuestionAttachmentDrafts.getState().byRequest[draftKey] ?? [],
+      );
+      if (attachmentsByQuestionId === null) return;
 
       const resumeCompactionDismissed = allPendingUserInputs
         .find((input) => input.requestId === requestId)
@@ -8352,6 +8399,7 @@ function ChatViewContent(props: ChatViewProps) {
           threadId: activeThreadId,
           requestId,
           answers,
+          attachmentsByQuestionId,
         },
       });
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -8362,6 +8410,7 @@ function ChatViewContent(props: ChatViewProps) {
         );
       }
       setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
+      if (result._tag === "Success") clearQuestionAttachments(environmentId, draftKey);
       return result;
     },
     [
@@ -8408,7 +8457,15 @@ function ChatViewContent(props: ChatViewProps) {
             ...existing[activePendingUserInput.requestId],
             [questionId]: togglePendingUserInputOptionSelection(
               question,
-              existing[activePendingUserInput.requestId]?.[questionId],
+              {
+                ...existing[activePendingUserInput.requestId]?.[questionId],
+                attachmentCount:
+                  useQuestionAttachmentDrafts
+                    .getState()
+                    .byRequest[questionAttachmentsKey]?.filter(
+                      (draft) => draft.questionId === questionId,
+                    ).length ?? 0,
+              },
               optionLabel,
             ),
           },
@@ -8417,7 +8474,12 @@ function ChatViewContent(props: ChatViewProps) {
       promptRef.current = "";
       composerRef.current?.resetCursorState({ cursor: 0 });
     },
-    [activePendingProgress?.activeQuestion, activePendingUserInput, composerRef],
+    [
+      activePendingProgress?.activeQuestion,
+      activePendingUserInput,
+      composerRef,
+      questionAttachmentsKey,
+    ],
   );
 
   const timelineAsyncQuestions = useMemo(
@@ -8454,7 +8516,15 @@ function ChatViewContent(props: ChatViewProps) {
         [activePendingUserInput.requestId]: {
           ...existing[activePendingUserInput.requestId],
           [questionId]: setPendingUserInputCustomAnswer(
-            existing[activePendingUserInput.requestId]?.[questionId],
+            {
+              ...existing[activePendingUserInput.requestId]?.[questionId],
+              attachmentCount:
+                useQuestionAttachmentDrafts
+                  .getState()
+                  .byRequest[questionAttachmentsKey]?.filter(
+                    (draft) => draft.questionId === questionId,
+                  ).length ?? 0,
+            },
             value,
           ),
         },
@@ -8468,13 +8538,20 @@ function ChatViewContent(props: ChatViewProps) {
         composerRef.current?.focusAt(nextCursor);
       }
     },
-    [activePendingUserInput, composerRef],
+    [activePendingUserInput, composerRef, questionAttachmentsKey],
   );
 
   const onAdvanceActivePendingUserInput = useCallback(() => {
     if (!activePendingUserInput || activePendingIsResponding || !activePendingProgress) {
       return;
     }
+    if (
+      !activePendingProgress.canAdvance ||
+      readyQuestionAttachments(
+        useQuestionAttachmentDrafts.getState().byRequest[questionAttachmentsKey] ?? [],
+      ) === null
+    )
+      return;
     if (activePendingProgress.isLastQuestion) {
       if (activePendingResolvedAnswers) {
         void onRespondToUserInput(activePendingUserInput.requestId, activePendingResolvedAnswers);
@@ -8489,6 +8566,7 @@ function ChatViewContent(props: ChatViewProps) {
     activePendingIsResponding,
     onRespondToUserInput,
     setActivePendingUserInputQuestionIndex,
+    questionAttachmentsKey,
   ]);
 
   const onPreviousActivePendingUserInputQuestion = useCallback(() => {
@@ -9617,6 +9695,40 @@ function ChatViewContent(props: ChatViewProps) {
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}
                             maxFileAttachmentBytes={maxFileAttachmentBytes}
+                            questionAttachments={{
+                              enabled:
+                                serverConfig?.environment.capabilities.questionAttachments ===
+                                  true &&
+                                activePendingProgress?.activeQuestion?.isOther !== false &&
+                                activePendingProgress?.activeQuestion?.isSecret !== true,
+                              drafts: questionAttachmentDrafts.filter(
+                                (draft) =>
+                                  draft.questionId === activePendingProgress?.activeQuestion?.id,
+                              ),
+                              add: (files) => {
+                                const questionId = activePendingProgress?.activeQuestion?.id;
+                                if (!questionId || activePendingIsResponding) return;
+                                void addQuestionAttachments({
+                                  environmentId,
+                                  key: questionAttachmentsKey,
+                                  questionId,
+                                  files,
+                                  maxFileBytes: maxFileAttachmentBytes,
+                                }).then((error) => {
+                                  if (error && activeThreadId)
+                                    setThreadError(activeThreadId, error);
+                                });
+                              },
+                              remove: (id) =>
+                                removeQuestionAttachment(environmentId, questionAttachmentsKey, id),
+                              retry: (id) => {
+                                void retryQuestionAttachment(
+                                  environmentId,
+                                  questionAttachmentsKey,
+                                  id,
+                                );
+                              },
+                            }}
                             routeKind={routeKind}
                             routeThreadRef={routeThreadRef}
                             draftId={draftId}

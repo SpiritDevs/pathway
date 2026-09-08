@@ -23,9 +23,11 @@ import {
   type ThreadId,
   type ThreadEnvMode,
   type UploadChatAttachment,
+  UserInputAttachments,
 } from "@spiritdevs/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import { request } from "../rpc/client.ts";
 
@@ -232,6 +234,9 @@ export interface RespondToThreadApprovalInput extends ThreadCommandInput {
 export interface RespondToThreadUserInputInput extends ThreadCommandInput {
   readonly requestId: RuntimeRequestId;
   readonly answers: ProviderUserInputAnswers;
+  readonly attachmentsByQuestionId?: Readonly<
+    Record<string, ReadonlyArray<PendingChatAttachment | UploadChatAttachment>>
+  >;
 }
 
 export interface RevertThreadCheckpointInput extends ThreadCommandInput {
@@ -907,14 +912,34 @@ export const respondToThreadApproval = Effect.fn("EnvironmentCommands.respondToT
   },
 );
 
+const decodeQuestionAttachments = Schema.decodeUnknownEffect(UserInputAttachments);
+
 export const respondToThreadUserInput = Effect.fn("EnvironmentCommands.respondToThreadUserInput")(
   function* (input: RespondToThreadUserInputInput) {
+    const commandId = yield* allocateCommandId(input);
+    const entries = Object.entries(input.attachmentsByQuestionId ?? {});
+    const saved = yield* persistAttachments(
+      input.threadId,
+      MessageId.make(`question:${commandId}`),
+      entries.flatMap(([, attachments]) => attachments),
+    );
+    let offset = 0;
+    const attachmentsByQuestionId = yield* decodeQuestionAttachments(
+      Object.fromEntries(
+        entries.map(([id, attachments]) => {
+          const claimed = saved.slice(offset, offset + attachments.length);
+          offset += attachments.length;
+          return [id, claimed];
+        }),
+      ),
+    );
     return yield* dispatch({
       type: "runtime-request.respond",
-      commandId: yield* allocateCommandId(input),
+      commandId,
       threadId: input.threadId,
       requestId: input.requestId,
       answers: input.answers,
+      ...(entries.length > 0 ? { attachmentsByQuestionId } : {}),
     });
   },
 );

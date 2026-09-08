@@ -4,6 +4,7 @@ struct PathwayQuestionReply: Equatable, Sendable {
     struct Answer: Equatable, Sendable {
         let question: String
         let answer: String
+        var attachmentIDs: [String] = []
     }
 
     let answers: [Answer]
@@ -31,7 +32,8 @@ struct PathwayQuestionReply: Equatable, Sendable {
                       values.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
                 answer = values.joined(separator: "\n")
             } else { return nil }
-            answers.append(Answer(question: question, answer: answer))
+            let attachmentIDs = (entry["attachments"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
+            answers.append(Answer(question: question, answer: answer, attachmentIDs: attachmentIDs))
         }
         self.answers = answers
     }

@@ -106,6 +106,7 @@ function uploadBytes(input: {
 
 export async function uploadStandaloneFileAttachment(input: {
   readonly environmentId: EnvironmentId;
+  readonly type?: "image" | "file";
   readonly file: File;
   readonly name: string;
   readonly mimeType: string;
@@ -117,7 +118,7 @@ export async function uploadStandaloneFileAttachment(input: {
     remove: attachmentEnvironment.remove,
     environmentId: input.environmentId,
     upload: {
-      type: "file",
+      type: input.type ?? "file",
       name: input.name,
       mimeType: input.mimeType,
       sizeBytes: input.sizeBytes,
@@ -130,7 +131,7 @@ export async function uploadStandaloneFileAttachment(input: {
   });
   if (result.status === "uploaded") {
     return {
-      type: "file",
+      type: input.type ?? "file",
       id: result.attachmentId,
       name: input.name,
       mimeType: input.mimeType,

@@ -21,3 +21,18 @@ sending.
 Generic files are downloaded instead of rendered as active web content. Unknown attachment types
 from a newer environment remain visible as unsupported, inert rows rather than preventing the chat
 from loading.
+
+## Answering questions with attachments
+
+You can paste a photo, drag a file, or use the paperclip while answering an agent's question.
+On iPhone and iPad, choose **Attach to answer** to select photos or files, or paste an image.
+Each question keeps its own attachments. You can submit a photo by itself or add a written answer.
+Up to eight files can be attached across one set of answers.
+
+Submit waits until every upload finishes. If an upload fails, retry it or remove the attachment.
+Completed uploads survive a reload; an interrupted or expired upload may need to be attached again.
+Submitted photos and file links remain with the answers in conversation history.
+
+The files are uploaded to the environment running your agent, so this works when you connect
+remotely too. Codex and Claude can open the saved files when processing your answer. Attachments
+are available for questions that allow a custom answer, on environments that support this feature.

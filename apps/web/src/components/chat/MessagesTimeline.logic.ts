@@ -1,4 +1,6 @@
 import * as DateTime from "effect/DateTime";
+import * as Schema from "effect/Schema";
+import { ChatAttachment } from "@spiritdevs/contracts";
 import { turnItemIsWorkspacePreparation } from "@spiritdevs/client-runtime/state/turn-item-presentation";
 import * as Equal from "effect/Equal";
 import {
@@ -899,9 +901,11 @@ export function isGeneratedQuestionReply(
 }
 
 /** Recognize the provider's async reply envelope without changing the stored message. */
+const decodeQuestionReplyAttachments = Schema.decodeUnknownSync(Schema.Array(ChatAttachment));
+
 export function parseAsyncQuestionReply(
   message: Pick<ChatMessage, "id" | "creationSource" | "text">,
-): Array<{ question: string; answer: string }> | null {
+): Array<{ question: string; answer: string; attachments?: ReadonlyArray<ChatAttachment> }> | null {
   if (!isGeneratedQuestionReply(message)) return null;
   const text = message.text;
   if (!text.trimStart().startsWith("{") || !text.includes('"request_user_input_async"'))
@@ -918,19 +922,29 @@ export function parseAsyncQuestionReply(
       value.answers.length === 0
     )
       return null;
-    const answers: Array<{ question: string; answer: string }> = [];
+    const answers: Array<{
+      question: string;
+      answer: string;
+      attachments?: ReadonlyArray<ChatAttachment>;
+    }> = [];
     for (const entry of value.answers) {
       if (typeof entry !== "object" || entry === null || typeof entry.question !== "string")
         return null;
       const answer: unknown = entry.answer;
+      const attachments =
+        entry.attachments === undefined
+          ? {}
+          : {
+              attachments: decodeQuestionReplyAttachments(entry.attachments),
+            };
       if (typeof answer === "string") {
-        answers.push({ question: entry.question, answer });
+        answers.push({ question: entry.question, answer, ...attachments });
       } else if (
         Array.isArray(answer) &&
         answer.length > 0 &&
         answer.every((value) => typeof value === "string" && value.trim().length > 0)
       ) {
-        answers.push({ question: entry.question, answer: answer.join("\n") });
+        answers.push({ question: entry.question, answer: answer.join("\n"), ...attachments });
       } else {
         return null;
       }

@@ -20,7 +20,7 @@ struct AgentThreadComposerAttachments: View {
     }
 }
 
-private struct AgentThreadComposerAttachmentChip: View {
+struct AgentThreadComposerAttachmentChip: View {
     let attachment: PathwayThreadAttachmentDraft
     let remove: () -> Void
     let retry: () -> Void

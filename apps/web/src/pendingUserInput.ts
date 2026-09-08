@@ -3,6 +3,8 @@ import type { UserInputQuestion } from "@spiritdevs/contracts";
 export interface PendingUserInputDraftAnswer {
   selectedOptionLabels?: string[];
   customAnswer?: string;
+  attachmentCount?: number;
+  isImplicitSelection?: boolean;
 }
 
 export interface PendingUserInputProgress {
@@ -45,6 +47,12 @@ function normalizeSelectedOptionLabels(value: string[] | undefined): string[] {
   return Array.from(new Set(normalized));
 }
 
+function effectiveSelectedOptionLabels(draft: PendingUserInputDraftAnswer | undefined): string[] {
+  return draft?.isImplicitSelection && (draft.attachmentCount ?? 0) > 0
+    ? []
+    : normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+}
+
 export function resolvePendingUserInputAnswer(
   question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
@@ -54,12 +62,16 @@ export function resolvePendingUserInputAnswer(
     return customAnswer;
   }
 
-  const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+  const selectedOptionLabels = effectiveSelectedOptionLabels(draft);
   if (question.multiSelect) {
-    return selectedOptionLabels.length > 0 ? selectedOptionLabels : null;
+    return selectedOptionLabels.length > 0
+      ? selectedOptionLabels
+      : (draft?.attachmentCount ?? 0) > 0
+        ? ""
+        : null;
   }
 
-  return selectedOptionLabels[0] ?? null;
+  return selectedOptionLabels[0] ?? ((draft?.attachmentCount ?? 0) > 0 ? "" : null);
 }
 
 export function setPendingUserInputCustomAnswer(
@@ -67,9 +79,7 @@ export function setPendingUserInputCustomAnswer(
   customAnswer: string,
 ): PendingUserInputDraftAnswer {
   const selectedOptionLabels =
-    customAnswer.trim().length > 0
-      ? undefined
-      : normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+    customAnswer.trim().length > 0 ? undefined : effectiveSelectedOptionLabels(draft);
 
   return {
     customAnswer,
@@ -83,7 +93,7 @@ export function togglePendingUserInputOptionSelection(
   optionLabel: string,
 ): PendingUserInputDraftAnswer {
   if (question.multiSelect) {
-    const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+    const selectedOptionLabels = effectiveSelectedOptionLabels(draft);
     const nextSelectedOptionLabels = selectedOptionLabels.includes(optionLabel)
       ? selectedOptionLabels.filter((label) => label !== optionLabel)
       : [...selectedOptionLabels, optionLabel];
@@ -110,7 +120,7 @@ export function buildPendingUserInputAnswers(
 
   for (const question of questions) {
     const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
-    if (!answer) {
+    if (answer === null) {
       return null;
     }
     answers[question.id] = answer;
@@ -124,7 +134,9 @@ export function countAnsweredPendingUserInputQuestions(
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): number {
   return questions.reduce((count, question) => {
-    return resolvePendingUserInputAnswer(question, draftAnswers[question.id]) ? count + 1 : count;
+    return resolvePendingUserInputAnswer(question, draftAnswers[question.id]) !== null
+      ? count + 1
+      : count;
   }, 0);
 }
 
@@ -133,7 +145,7 @@ export function findFirstUnansweredPendingUserInputQuestionIndex(
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): number {
   const unansweredIndex = questions.findIndex(
-    (question) => !resolvePendingUserInputAnswer(question, draftAnswers[question.id]),
+    (question) => resolvePendingUserInputAnswer(question, draftAnswers[question.id]) === null,
   );
 
   return unansweredIndex === -1 ? Math.max(questions.length - 1, 0) : unansweredIndex;
@@ -160,13 +172,13 @@ export function derivePendingUserInputProgress(
     questionIndex: normalizedQuestionIndex,
     activeQuestion,
     activeDraft,
-    selectedOptionLabels: normalizeSelectedOptionLabels(activeDraft?.selectedOptionLabels),
+    selectedOptionLabels: effectiveSelectedOptionLabels(activeDraft),
     customAnswer,
     resolvedAnswer,
     usingCustomAnswer: customAnswer.trim().length > 0,
     answeredQuestionCount,
     isLastQuestion,
     isComplete: buildPendingUserInputAnswers(questions, draftAnswers) !== null,
-    canAdvance: Boolean(resolvedAnswer),
+    canAdvance: resolvedAnswer !== null,
   };
 }

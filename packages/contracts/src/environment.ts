@@ -97,6 +97,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   connectionProbe: Schema.optionalKey(Schema.Boolean),
   /** Direct attachment uploads supported by the server. */
   attachmentUploads: Schema.optionalKey(Schema.Boolean),
+  /** Question responses accept saved attachments grouped by question. */
+  questionAttachments: Schema.optionalKey(Schema.Boolean),
   /** Missing on servers that only accept inline image attachments. */
   fileAttachments: Schema.optionalKey(
     Schema.Struct({

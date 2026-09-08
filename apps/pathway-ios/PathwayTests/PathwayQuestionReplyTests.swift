@@ -3,6 +3,13 @@ import Foundation
 import Testing
 
 struct PathwayQuestionReplyTests {
+    @Test func retainsAttachmentOnlyAnswersAndTheirQuestion() {
+        let text = #"{"request_user_input_async":"call","answers":[{"question":"Which layout?","answer":"","attachments":[{"id":"image-1","name":"answer.png"}]},{"question":"Which color?","answer":"Blue"}]}"#
+        let reply = PathwayQuestionReply(text: text, messageID: "message:question-answer:call", creationSource: "server")
+        #expect(reply?.answers.count == 2)
+        #expect(reply?.answers.first?.attachmentIDs == ["image-1"])
+        #expect(reply?.answers.first?.answer == "")
+    }
     private let messageID = "message:question-answer:request-1"
     private let text = #"{"request_user_input_async":"call-1","answers":[{"question":"Which regions?","answer":["Sydney","Melbourne"]},{"question":"When?","answer":"Today"}]}"#
 
