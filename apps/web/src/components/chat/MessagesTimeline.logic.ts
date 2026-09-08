@@ -891,3 +891,58 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     }
   }
 }
+
+export function isGeneratedQuestionReply(
+  message: Pick<ChatMessage, "id" | "creationSource">,
+): boolean {
+  return message.creationSource === "server" && message.id.startsWith("message:question-answer:");
+}
+
+/** Recognize the provider's async reply envelope without changing the stored message. */
+export function parseAsyncQuestionReply(
+  message: Pick<ChatMessage, "id" | "creationSource" | "text">,
+): Array<{ question: string; answer: string }> | null {
+  if (!isGeneratedQuestionReply(message)) return null;
+  const text = message.text;
+  if (!text.trimStart().startsWith("{") || !text.includes('"request_user_input_async"'))
+    return null;
+  try {
+    const value: unknown = JSON.parse(text);
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      !("request_user_input_async" in value) ||
+      typeof value.request_user_input_async !== "string" ||
+      !("answers" in value) ||
+      !Array.isArray(value.answers) ||
+      value.answers.length === 0
+    )
+      return null;
+    const answers: Array<{ question: string; answer: string }> = [];
+    for (const entry of value.answers) {
+      if (typeof entry !== "object" || entry === null || typeof entry.question !== "string")
+        return null;
+      const answer: unknown = entry.answer;
+      if (typeof answer === "string") {
+        answers.push({ question: entry.question, answer });
+      } else if (
+        Array.isArray(answer) &&
+        answer.length > 0 &&
+        answer.every((value) => typeof value === "string" && value.trim().length > 0)
+      ) {
+        answers.push({ question: entry.question, answer: answer.join("\n") });
+      } else {
+        return null;
+      }
+    }
+    return answers;
+  } catch {
+    return null;
+  }
+}
+
+export function formatAsyncQuestionReplyText(
+  reply: ReadonlyArray<{ question: string; answer: string }>,
+): string {
+  return reply.map(({ question, answer }) => `${question}\n${answer}`).join("\n\n");
+}

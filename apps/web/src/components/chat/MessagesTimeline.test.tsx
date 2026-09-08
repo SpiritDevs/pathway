@@ -134,6 +134,17 @@ vi.mock("@pierre/diffs/react", () => {
   return { FileDiff: MockFileDiff };
 });
 
+const { copiedMessageTexts } = vi.hoisted(() => ({ copiedMessageTexts: [] as string[] }));
+vi.mock("./MessageCopyButton", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./MessageCopyButton")>();
+  return {
+    MessageCopyButton: (props: React.ComponentProps<typeof actual.MessageCopyButton>) => {
+      copiedMessageTexts.push(props.text);
+      return <actual.MessageCopyButton {...props} />;
+    },
+  };
+});
+
 function matchMedia() {
   return {
     matches: false,
@@ -234,6 +245,19 @@ function buildUserTimelineEntry(text: string) {
       createdAt: MESSAGE_CREATED_AT,
       updatedAt: MESSAGE_CREATED_AT,
       streaming: false,
+    },
+  };
+}
+
+function buildQuestionReplyTimelineEntry(text: string) {
+  const entry = buildUserTimelineEntry(text);
+  return {
+    ...entry,
+    message: {
+      ...entry.message,
+      id: MessageId.make("message:question-answer:request-1"),
+      createdBy: "user" as const,
+      creationSource: "server" as const,
     },
   };
 }
@@ -529,6 +553,134 @@ describe("MessagesTimeline", () => {
         />,
       ),
     ).not.toContain('data-maintain-scroll-at-end="enabled"');
+  });
+
+  it("renders async question replies as question and answer pairs", () => {
+    copiedMessageTexts.length = 0;
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          buildQuestionReplyTimelineEntry(
+            JSON.stringify({
+              request_user_input_async: "call-example",
+              answers: [
+                {
+                  question: "Do you have an instance?",
+                  answer: "No instance yet.\nPrepare the setup.",
+                },
+                { question: "Which region?", answer: "Sydney" },
+              ],
+            }),
+          ),
+        ]}
+      />,
+    );
+    expect(markup).toContain('data-question-reply="true"');
+    expect(markup).toMatch(/<dt[^>]*>Do you have an instance\?<\/dt>/);
+    expect(markup).toMatch(/<dd[^>]*>No instance yet.\nPrepare the setup.<\/dd>/);
+    expect(markup).toContain("Which region?");
+    expect(markup).toContain("Sydney");
+    expect(markup).not.toContain("request_user_input_async");
+    expect(copiedMessageTexts).toContain(
+      "Do you have an instance?\nNo instance yet.\nPrepare the setup.\n\nWhich region?\nSydney",
+    );
+  });
+
+  it("keeps generated answers out of the raw message editor", () => {
+    const entry = buildQuestionReplyTimelineEntry(
+      JSON.stringify({
+        request_user_input_async: "call-edit",
+        answers: [{ question: "Which region?", answer: "Sydney" }],
+      }),
+    );
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        editableUserMessageId={entry.message.id}
+        timelineEntries={[entry]}
+      />,
+    );
+    expect(markup).toContain('data-question-reply="true"');
+    expect(markup).not.toContain('aria-label="Edit message"');
+    expect(markup).not.toContain('aria-label="Edit message text"');
+  });
+
+  it("renders and copies accepted array-valued answers", () => {
+    copiedMessageTexts.length = 0;
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          buildQuestionReplyTimelineEntry(
+            JSON.stringify({
+              request_user_input_async: "call-multi",
+              answers: [
+                { question: "Which regions?", answer: ["Sydney", "Melbourne"] },
+                { question: "When?", answer: "Today" },
+              ],
+            }),
+          ),
+        ]}
+      />,
+    );
+    expect(markup).toContain('data-question-reply="true"');
+    expect(markup).toMatch(/<dd[^>]*>Sydney\nMelbourne<\/dd>/);
+    expect(markup).not.toContain("request_user_input_async");
+    expect(copiedMessageTexts).toContain("Which regions?\nSydney\nMelbourne\n\nWhen?\nToday");
+  });
+
+  it.each([
+    '{"request_user_input_async":"call","answers":[{"question":"Question","answer":[]}]}',
+    '{"request_user_input_async":"call","answers":[{"question":"Question","answer":[" "]}]}',
+    '{"request_user_input_async":"call","answers":[{"question":"Question","answer":["Sydney",42]}]}',
+    '{"request_user_input_async":',
+    '{"answers":[{"question":"Question","answer":"Answer"}]}',
+    '{"request_user_input_async":"call","answers":[{"question":"Question","answer":{"unexpected":true}}]}',
+  ])("keeps unrecognized reply content visible: %s", (text) => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildQuestionReplyTimelineEntry(text)]}
+      />,
+    );
+    expect(markup).not.toContain('data-question-reply="true"');
+    expect(markup).toContain('data-user-message-body="true"');
+  });
+
+  it.each([
+    { id: "message-1", creationSource: "web" as const },
+    { id: "message:question-answer:request-1", creationSource: "web" as const },
+    { id: "message-1", creationSource: "server" as const },
+    { id: "message:question-answer:request-1", creationSource: undefined },
+  ])("preserves protocol JSON without generated reply metadata: %j", ({ id, creationSource }) => {
+    const entry = buildUserTimelineEntry(
+      JSON.stringify({
+        request_user_input_async: "call-pasted-document",
+        answers: [{ question: "Which region?", answer: "Sydney" }],
+        additionalField: "keep-this-visible",
+      }),
+    );
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            ...entry,
+            message: {
+              ...entry.message,
+              id: MessageId.make(id),
+              ...(creationSource ? { creationSource } : {}),
+            },
+          },
+        ]}
+      />,
+    );
+    expect(markup).not.toContain('data-question-reply="true"');
+    expect(markup).toContain("request_user_input_async");
+    expect(markup).toContain("call-pasted-document");
+    expect(markup).toContain("additionalField");
+    expect(markup).toContain("keep-this-visible");
   });
 
   it("renders collapse controls for long user messages", () => {

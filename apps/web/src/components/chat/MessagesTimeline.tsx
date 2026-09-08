@@ -108,6 +108,9 @@ import {
   resolveActiveAttachedPullRequestItemId,
   replaceEditableUserMessageText,
   splitEditableUserMessageText,
+  parseAsyncQuestionReply,
+  isGeneratedQuestionReply,
+  formatAsyncQuestionReplyText,
   shouldPreserveAssistantLineBreaks,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
@@ -1335,6 +1338,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
   const userAttachments = row.message.attachments ?? [];
+  const questionReply = useMemo(() => parseAsyncQuestionReply(row.message), [row.message]);
   const {
     issueContextState,
     displayedUserMessage,
@@ -1375,6 +1379,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       hasMessageText: row.message.text.trim().length > 0,
     };
   }, [row.message.text]);
+  const copyText = questionReply
+    ? formatAsyncQuestionReplyText(questionReply)
+    : displayedUserMessage.copyText;
   const previewImages = userAttachments.filter(
     (attachment) =>
       attachment.type === "image" && attachment.name.startsWith("preview-annotation-"),
@@ -1389,10 +1396,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   );
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
   const canEditMessage =
+    !isGeneratedQuestionReply(row.message) &&
     row.message.createdBy === "user" &&
     ctx.editableUserMessageId === row.message.id &&
     hasEditableText;
-  const isEditingMessage = ctx.editingUserMessageId === row.message.id;
+  const isEditingMessage = canEditMessage && ctx.editingUserMessageId === row.message.id;
   const canRetryMessage =
     row.message.createdBy === "user" &&
     ctx.retryableUserMessageId === row.message.id &&
@@ -1525,6 +1533,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           <InlineUserMessageEditor messageId={row.message.id} originalText={row.message.text} />
         ) : (
           <CollapsibleUserMessageBody
+            questionReply={questionReply}
             text={elementContextState.promptText}
             terminalContexts={terminalContexts}
             skills={ctx.skills}
@@ -1569,9 +1578,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
               <EditUserMessageButton messageId={row.message.id} text={row.message.text} />
             ) : null}
             {canRevertAgentWork && <RevertUserMessageButton messageId={row.message.id} />}
-            {displayedUserMessage.copyText && (
-              <MessageCopyButton text={displayedUserMessage.copyText} variant="ghost" />
-            )}
+            {copyText && <MessageCopyButton text={copyText} variant="ghost" />}
           </div>
         </div>
       </div>
@@ -2767,6 +2774,7 @@ function shouldCollapseUserMessage(text: string): boolean {
 }
 
 const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(props: {
+  questionReply: ReturnType<typeof parseAsyncQuestionReply>;
   text: string;
   terminalContexts: ParsedTerminalContextEntry[];
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
@@ -2775,7 +2783,9 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
 }) {
   const [expanded, setExpanded] = useState(false);
   const hasVisibleBody = props.text.trim().length > 0 || props.terminalContexts.length > 0;
-  const canCollapse = hasVisibleBody && shouldCollapseUserMessage(props.text);
+  const questionReply = props.questionReply;
+  const visibleText = questionReply ? formatAsyncQuestionReplyText(questionReply) : props.text;
+  const canCollapse = hasVisibleBody && shouldCollapseUserMessage(visibleText);
   const isCollapsed = canCollapse && !expanded;
 
   return (
@@ -2796,12 +2806,27 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
               : undefined
           }
         >
-          <UserMessageBody
-            text={props.text}
-            terminalContexts={props.terminalContexts}
-            skills={props.skills}
-            markdownCwd={props.markdownCwd}
-          />
+          {questionReply ? (
+            <dl className="space-y-4 text-sm leading-relaxed" data-question-reply="true">
+              {questionReply.map(({ question, answer }, index) => (
+                // Replies are immutable and questions may repeat, so their position is stable.
+                // eslint-disable-next-line react/no-array-index-key
+                <div key={index} className="space-y-1.5">
+                  <dt className="whitespace-pre-wrap wrap-break-word font-medium text-muted-foreground">
+                    {question}
+                  </dt>
+                  <dd className="whitespace-pre-wrap wrap-break-word text-foreground">{answer}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <UserMessageBody
+              text={props.text}
+              terminalContexts={props.terminalContexts}
+              skills={props.skills}
+              markdownCwd={props.markdownCwd}
+            />
+          )}
         </div>
       ) : null}
       {canCollapse || props.footer ? (

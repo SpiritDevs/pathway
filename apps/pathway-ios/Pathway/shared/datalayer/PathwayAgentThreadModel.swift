@@ -70,6 +70,13 @@ struct PathwayTimelineItem: Codable, Equatable, Identifiable, Sendable {
     }
 
     var isUserMessage: Bool { type == "user_message" }
+    var isGeneratedQuestionReply: Bool {
+        isUserMessage && PathwayQuestionReply.isGenerated(messageID: messageID, creationSource: fields["creationSource"]?.stringValue)
+    }
+    var questionReply: PathwayQuestionReply? {
+        guard isUserMessage else { return nil }
+        return PathwayQuestionReply(text: text, messageID: messageID, creationSource: fields["creationSource"]?.stringValue)
+    }
     var requiresResponse: Bool {
         status == "waiting" && (type == "approval_request" || type == "user_input_request")
     }

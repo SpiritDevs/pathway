@@ -38,7 +38,7 @@ struct AgentThreadTranscript: View {
         let queued = queuedRun(for: item)
         if item.isConversation {
             AgentTranscriptMessage(item: item, model: model) {
-                if item.isUserMessage && (model.canPrepareEdit(item) || queued != nil) {
+                if item.isUserMessage && !item.isGeneratedQuestionReply && (model.canPrepareEdit(item) || queued != nil) {
                     Button(queued == nil ? "Edit and restart" : "Edit queued message", systemImage: "pencil") { beginEditing(item, queuedRunID: queued?.id) }
                         .accessibilityIdentifier("thread-message-edit-\(item.id)")
                         .disabled(preparingEditID != nil)
@@ -56,7 +56,7 @@ struct AgentThreadTranscript: View {
                 }
             }
             if let run = queued {
-                AgentTranscriptQueueActions(run: run, model: model) { beginEditing(item, queuedRunID: run.id) }
+                AgentTranscriptQueueActions(run: run, model: model, canEdit: !item.isGeneratedQuestionReply) { beginEditing(item, queuedRunID: run.id) }
             }
         } else if item.type == "approval_request" {
             AgentTranscriptApproval(item: item, model: model)
@@ -73,7 +73,7 @@ struct AgentThreadTranscript: View {
     }
 
     private func beginEditing(_ item: PathwayTimelineItem, queuedRunID: String?) {
-        guard preparingEditID == nil else { return }
+        guard preparingEditID == nil, !item.isGeneratedQuestionReply else { return }
         if queuedRunID != nil || model.activeRunID == nil {
             queuedEditingRunID = queuedRunID
             editingItem = item
@@ -114,10 +114,21 @@ private struct AgentTranscriptMessage<Actions: View>: View {
     @State private var showingContext = false
 
     var body: some View {
+        let questionReply = item.questionReply
+        let copyText = questionReply?.copyText ?? item.text ?? ""
         VStack(alignment: item.isUserMessage ? .trailing : .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 12) {
                 if let text = item.text, !text.isEmpty {
-                    if item.isUserMessage {
+                    if let questionReply {
+                        ForEach(Array(questionReply.answers.enumerated()), id: \.offset) { _, reply in
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(reply.question).fontWeight(.medium).foregroundStyle(.secondary)
+                                Text(reply.answer)
+                            }
+                            .textSelection(.enabled)
+                            .accessibilityElement(children: .combine)
+                        }
+                    } else if item.isUserMessage {
                         Text(AgentTranscriptMessageEditor.editableText(text)).textSelection(.enabled)
                     } else {
                         AgentTranscriptMarkdown(markdown: text).equatable()
@@ -126,7 +137,7 @@ private struct AgentTranscriptMessage<Actions: View>: View {
                 ForEach(item.attachments) { attachment in
                     AgentTranscriptAttachment(attachment: attachment, model: model)
                 }
-                if item.isUserMessage, let text = item.text, AgentTranscriptMessageEditor.editableText(text) != text {
+                if questionReply == nil, item.isUserMessage, let text = item.text, AgentTranscriptMessageEditor.editableText(text) != text {
                     DisclosureGroup("Attached context", isExpanded: $showingContext) {
                         Text(String(text.dropFirst(AgentTranscriptMessageEditor.editableText(text).count)))
                             .font(.caption.monospaced()).textSelection(.enabled)
@@ -139,12 +150,12 @@ private struct AgentTranscriptMessage<Actions: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: item.isUserMessage ? .trailing : .leading)
             .contextMenu {
-                Button("Copy message", systemImage: "doc.on.doc") { UIPasteboard.general.string = item.text ?? "" }
+                Button("Copy message", systemImage: "doc.on.doc") { UIPasteboard.general.string = copyText }
                 actions()
             }
             if !item.isUserMessage {
                 HStack(spacing: 18) {
-                    Button("Copy message", systemImage: "doc.on.doc") { UIPasteboard.general.string = item.text ?? "" }
+                    Button("Copy message", systemImage: "doc.on.doc") { UIPasteboard.general.string = copyText }
                         .labelStyle(.iconOnly).accessibilityIdentifier("thread-message-copy-\(item.id)")
                     actions().labelStyle(.iconOnly)
                     if item.streaming {
