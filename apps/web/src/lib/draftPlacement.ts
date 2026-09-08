@@ -6,7 +6,7 @@ import {
 import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/models";
 import type { EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import type { DraftSessionState } from "../composerDraftStore";
+import type { ComposerAttachment, DraftSessionState } from "../composerDraftStore";
 
 export interface PlacementBinding {
   readonly companyId: CompanyId;
@@ -96,6 +96,20 @@ export function resolvePlacementModel(
 /** Once sending starts, retries must keep the same destination. */
 export function draftPlacementIsLocked(draft: DraftSessionState): boolean {
   return Boolean(draft.pendingSend || draft.promotedTo || draft.placement?.dispatched);
+}
+
+/** Restored uploads without local bytes can only be used on their upload environment. */
+export function draftAttachmentsAllowEnvironment(
+  attachments: ReadonlyArray<ComposerAttachment> | undefined,
+  environmentId: EnvironmentId,
+): boolean {
+  return (attachments ?? []).every(
+    (attachment) =>
+      attachment.type !== "file" ||
+      attachment.file !== null ||
+      attachment.uploadedAttachmentId === undefined ||
+      attachment.uploadEnvironmentId === environmentId,
+  );
 }
 
 export function placementSelectionKey(

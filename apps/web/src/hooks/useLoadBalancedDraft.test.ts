@@ -14,7 +14,7 @@ import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import { EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
 import * as Schema from "effect/Schema";
 import { Atom, AtomRegistry, AsyncResult } from "effect/unstable/reactivity";
-import { DraftId, useComposerDraftStore } from "../composerDraftStore";
+import { DraftId, hydrateImagesFromPersisted, useComposerDraftStore } from "../composerDraftStore";
 import type { Project } from "../types";
 import type { EnvironmentPresentation } from "../state/environments";
 import { reactHookHarness } from "../test/reactHookHarness";
@@ -140,6 +140,22 @@ let localResources: Atom.Writable<AsyncResult.AsyncResult<HostResourcesSnapshot>
 let remoteResources: Atom.Writable<AsyncResult.AsyncResult<HostResourcesSnapshot>>;
 const store = () => useComposerDraftStore.getState();
 const readDraft = () => store().getDraftSession(draftId)!;
+function restoreUploadedFile() {
+  store().addImages(
+    draftId,
+    hydrateImagesFromPersisted([
+      {
+        type: "file",
+        id: "document",
+        name: "document.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1,
+        attachmentId: "uploaded-document",
+        environmentId: local.environmentId,
+      },
+    ]),
+  );
+}
 const base = () => ({
   draftId,
   enabled: true,
@@ -428,6 +444,75 @@ describe("useLoadBalancedDraft", () => {
         selection: { ...selection, instanceId: remoteProvider.instanceId },
       }).locked,
     ).toBe(false);
+  });
+  it.each(["enabled", "invalidated"] as const)(
+    "keeps restored file uploads on their environment when Auto is %s",
+    (trigger) => {
+      restoreUploadedFile();
+      if (trigger === "enabled") {
+        render({ ...base(), enabled: false });
+        flushEffects();
+      } else {
+        store().setDraftThreadContext(draftId, {
+          placement: { mode: "auto", providerPinned: false, resolvedKey: "old-selection" },
+        });
+      }
+      const result = render();
+      flushEffects();
+      expect(result.label).toBe("Auto: local");
+      expect(result.locked).toBe(false);
+      expect(readDraft().environmentId).toBe(local.environmentId);
+      expect(render().validate(selection)).toBe(true);
+      expect(store().getComposerDraft(draftId)?.images[0]).toMatchObject({
+        file: null,
+        uploadedAttachmentId: "uploaded-document",
+        uploadEnvironmentId: local.environmentId,
+      });
+    },
+  );
+  it("discards a late recommendation when an uploaded file is restored before it commits", () => {
+    render();
+    restoreUploadedFile();
+    flushEffects();
+    expect(readDraft().environmentId).toBe(local.environmentId);
+    expect(render().label).toBe("Auto: local");
+    flushEffects();
+    expect(render().validate(selection)).toBe(true);
+  });
+  it("replaces a cached manual preview when a restored file requires its original environment", () => {
+    store().setDraftThreadContext(draftId, {
+      placement: { mode: "manual", providerPinned: false, resolvedKey: null },
+    });
+    expect(render().label).toBe("Auto: remote");
+    flushEffects();
+    restoreUploadedFile();
+    const result = render();
+    expect(result.label).toBe("Auto: local");
+    result.selectAuto();
+    render();
+    flushEffects();
+    expect(readDraft().environmentId).toBe(local.environmentId);
+    expect(render().validate(selection)).toBe(true);
+  });
+  it("blocks Auto when a restored file's environment is unavailable instead of moving it", () => {
+    restoreUploadedFile();
+    const result = render({ ...base(), weights: { local: 0 } });
+    flushEffects();
+    expect(result.blocked).toBe(true);
+    expect(result.locked).toBe(false);
+    expect(result.label).toBe("Auto: no available machine");
+    expect(readDraft().environmentId).toBe(local.environmentId);
+  });
+  it("can move an uploaded file when its local bytes are still available", () => {
+    restoreUploadedFile();
+    const attachment = store().getComposerDraft(draftId)!.images[0]!;
+    store().removeImage(draftId, attachment.id);
+    store().addImages(draftId, [
+      { ...attachment, file: new File([new Uint8Array([1])], "document.pdf") },
+    ]);
+    render();
+    flushEffects();
+    expect(readDraft().environmentId).toBe(remote.environmentId);
   });
   it.each(["branch", "worktree", "provider"] as const)(
     "allows Auto for a draft configured with a %s",

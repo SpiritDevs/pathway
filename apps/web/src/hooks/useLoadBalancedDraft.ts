@@ -19,6 +19,7 @@ import type { EnvironmentPresentation } from "../state/environments";
 import { serverEnvironment } from "../state/server";
 import { environmentSession } from "../state/session";
 import {
+  draftAttachmentsAllowEnvironment,
   draftPlacementIsLocked,
   placementSelectionKey,
   selectPlacementProjects,
@@ -41,6 +42,9 @@ export function useLoadBalancedDraft(input: {
   const { draftId, enabled, weights, project, projects, environments, replicas, selection } = input;
   const registry = useContext(RegistryContext);
   const draft = useComposerDraftStore((store) => (draftId ? store.getDraftSession(draftId) : null));
+  const attachments = useComposerDraftStore((store) =>
+    draftId ? store.getComposerDraft(draftId)?.images : undefined,
+  );
   const locked = draft === null || draftPlacementIsLocked(draft);
   const visible = enabled && draft !== null && project?.workspaceRoot != null;
   const canBalance = visible && !locked;
@@ -56,8 +60,14 @@ export function useLoadBalancedDraft(input: {
     key: string;
     environmentId: EnvironmentId;
   } | null>(null);
-  const storedResolution = key !== null && draft?.placement?.resolvedKey === key;
-  const hasRecommendation = recommendation?.draftId === draftId && recommendation?.key === key;
+  const storedResolution =
+    key !== null &&
+    draft?.placement?.resolvedKey === key &&
+    draftAttachmentsAllowEnvironment(attachments, draft.environmentId);
+  const hasRecommendation =
+    recommendation?.draftId === draftId &&
+    recommendation?.key === key &&
+    draftAttachmentsAllowEnvironment(attachments, recommendation.environmentId);
   const resolved = storedResolution || hasRecommendation;
   const recommendedEnvironmentId = storedResolution
     ? draft?.environmentId
@@ -76,8 +86,13 @@ export function useLoadBalancedDraft(input: {
     [canBalance, replicas],
   );
   const placementProjects = useMemo(
-    () => (canBalance && project ? selectPlacementProjects(project, projects, bindings) : []),
-    [canBalance, project, projects, bindings],
+    () =>
+      canBalance && project
+        ? selectPlacementProjects(project, projects, bindings).filter((target) =>
+            draftAttachmentsAllowEnvironment(attachments, target.environmentId),
+          )
+        : [],
+    [canBalance, project, projects, bindings, attachments],
   );
   const placementEnvironments = useMemo(
     () =>
@@ -210,6 +225,7 @@ export function useLoadBalancedDraft(input: {
     )
       return;
     const composer = store.getComposerDraft(draftId);
+    if (!draftAttachmentsAllowEnvironment(composer?.images, recommended.environmentId)) return;
     const currentSelection = composer?.activeProvider
       ? composer.modelSelectionByProvider[composer.activeProvider]
       : null;
