@@ -62,6 +62,8 @@ Backfill requests the last year (`newer_than:1y`), excludes spam/trash, and pagi
 
 Google JSON responses are bounded to 8 MiB. Oversized message content falls back to metadata with an explicit instruction to open Gmail. Attachments above 5 MiB remain in Gmail with a download-limit label; raw messages above the configured inline processing bound are omitted. Text bodies honor MIME charset declarations. Body content above 96,000 UTF-8 bytes is placed in private JSON storage, with a bounded text excerpt in Convex.
 
+Sync errors identify Google or UploadThing HTTP failures and otherwise name the failed step. A storage 401/403 requires checking `MAIL_UPLOADTHING_API_KEY` and private-file permissions; reconnecting Gmail does not repair storage access. Provider response bodies and mailbox content are excluded from these messages.
+
 The five-minute relay cron drives reconciliation, daily watch renewal, cleanup and recovery after missed notifications or queue failure. Queues use one message per batch, five retries and a dedicated dead-letter queue. Inspect that queue when retryable failures persist; configuration/auth errors require correcting the external service or reconnecting the mailbox. Replaying a mailbox job is safe: lease generations and provider identities fence stale and duplicate ingestion. Do not automatically replay an ambiguous outgoing send.
 
 UploadThing references: [REST API](https://docs.uploadthing.com/api-reference/openapi-spec), [server uploads](https://docs.uploadthing.com/uploading-files), [private file access](https://docs.uploadthing.com/working-with-files).

@@ -8,6 +8,16 @@ import {
 } from "./gmail.ts";
 import { decodeBase64Url, hashToken } from "./crypto.ts";
 
+export class MailStorageError extends Error {
+  readonly status: number;
+  readonly operation: "prepare upload" | "upload" | "download" | "delete";
+  constructor(status: number, operation: MailStorageError["operation"]) {
+    super(`Mail storage ${operation} failed (${status})`);
+    this.status = status;
+    this.operation = operation;
+  }
+}
+
 export interface PrivateMailStorage {
   put(
     name: string,
@@ -23,27 +33,35 @@ export function makePrivateMailStorage(
   fetcher: typeof fetch = fetch,
   onPrepared: (key: string) => Promise<void> = async () => {},
 ): PrivateMailStorage {
-  const api = async <T>(path: string, body: unknown): Promise<T> => {
+  const api = async <T>(
+    path: string,
+    body: unknown,
+    operation: MailStorageError["operation"],
+  ): Promise<T> => {
     const response = await fetcher(`https://api.uploadthing.com/${path}`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-uploadthing-api-key": apiKey },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(25_000),
     });
-    if (!response.ok) throw new Error(`Mail storage request failed (${response.status})`);
+    if (!response.ok) throw new MailStorageError(response.status, operation);
     return (await response.json()) as T;
   };
   return {
     async put(name, mimeType, bytes, customId) {
-      const prepared = await api<{ key: string; url: string }>("v7/prepareUpload", {
-        fileName: name.slice(0, 250),
-        fileSize: bytes.byteLength,
-        fileType: mimeType,
-        acl: "private",
-        contentDisposition: "attachment",
-        expiresIn: 300,
-        ...(customId ? { customId } : {}),
-      });
+      const prepared = await api<{ key: string; url: string }>(
+        "v7/prepareUpload",
+        {
+          fileName: name.slice(0, 250),
+          fileSize: bytes.byteLength,
+          fileType: mimeType,
+          acl: "private",
+          contentDisposition: "attachment",
+          expiresIn: 300,
+          ...(customId ? { customId } : {}),
+        },
+        "prepare upload",
+      );
       await onPrepared(prepared.key);
       const url = new URL(prepared.url);
       if (url.protocol !== "https:" || !url.hostname.endsWith(".ingest.uploadthing.com"))
@@ -55,20 +73,24 @@ export function makePrivateMailStorage(
         body: form,
         signal: AbortSignal.timeout(60_000),
       });
-      if (!response.ok) throw new Error(`Mail storage upload failed (${response.status})`);
+      if (!response.ok) throw new MailStorageError(response.status, "upload");
       return prepared.key;
     },
     async signedUrl(key) {
-      const result = await api<{ ufsUrl: string }>("v6/requestFileAccess", {
-        fileKey: key,
-        expiresIn: 60,
-      });
+      const result = await api<{ ufsUrl: string }>(
+        "v6/requestFileAccess",
+        {
+          fileKey: key,
+          expiresIn: 60,
+        },
+        "download",
+      );
       if (typeof result.ufsUrl !== "string" || !result.ufsUrl.startsWith("https://"))
         throw new Error("Invalid mail download URL");
       return result.ufsUrl;
     },
     async delete(keys) {
-      if (keys.length) await api("v6/deleteFiles", { fileKeys: keys });
+      if (keys.length) await api("v6/deleteFiles", { fileKeys: keys }, "delete");
     },
   };
 }

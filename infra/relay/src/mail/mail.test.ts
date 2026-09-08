@@ -8,7 +8,12 @@ import {
   hasOAuthBrowserCookie,
 } from "./crypto.ts";
 import { draftMime, mailboxList, decodeText, makeGmail } from "./gmail.ts";
-import { makePrivateMailStorage, materializeMessage, type PrivateMailStorage } from "./storage.ts";
+import {
+  MailStorageError,
+  makePrivateMailStorage,
+  materializeMessage,
+  type PrivateMailStorage,
+} from "./storage.ts";
 import { makeMailRuntime, type MailRpc } from "./runtime.ts";
 const key = encodeBase64Url(new Uint8Array(32).fill(7));
 const config = {
@@ -33,6 +38,8 @@ async function fixture(
     draft?: boolean;
     ingestFails?: boolean;
     withoutPubsub?: boolean;
+    privateStorageStatus?: number;
+    tokenStatus?: number;
   } = {},
 ) {
   const encryptedCredentials = await makeEnvelopeCipher(key).seal(
@@ -115,7 +122,16 @@ async function fixture(
     const text = String(url);
     requests.push(text);
     if (text.includes("/token"))
-      return Response.json({ access_token: "access", refresh_token: "refresh" });
+      return options.tokenStatus
+        ? new Response(null, { status: options.tokenStatus })
+        : Response.json({ access_token: "access", refresh_token: "refresh" });
+    if (text === "https://api.uploadthing.com/v7/prepareUpload")
+      return Response.json(
+        { error: "provider response with private details" },
+        {
+          status: options.privateStorageStatus ?? 500,
+        },
+      );
     if (text.endsWith("/profile"))
       return Response.json({ emailAddress: "me@example.com", historyId: "baseline" });
     if (text.includes("/history?"))
@@ -176,7 +192,7 @@ async function fixture(
       origin: "https://connect.example",
       rpc,
       fetcher,
-      storage,
+      storage: options.privateStorageStatus ? makePrivateMailStorage("test-key", fetcher) : storage,
       enqueue,
       now: () => 1000,
     }),
@@ -539,5 +555,50 @@ describe("materialized message upload leases", () => {
     const f = await largeBodyFixture(true);
     await expect(f.result).rejects.toThrow("Sync lease lost");
     expect(f.storage.delete).toHaveBeenCalledWith(["large-body.eml", "large-body-body.json"]);
+  });
+});
+
+describe("mail sync failure diagnostics", () => {
+  it.each([400, 401, 403, 500])(
+    "identifies private storage HTTP %i without requiring Google reconnect",
+    async (status) => {
+      const f = await fixture({ privateStorageStatus: status });
+      await expect(f.runtime.process({ accountId: "account" })).rejects.toThrow(
+        "Private mail storage",
+      );
+      const failure = f.calls.find((call) => call.name === "failSync");
+      expect(failure?.args).toMatchObject({ needsReauth: false });
+      expect(failure?.args.error).toContain(`HTTP ${status}`);
+      expect(failure?.args.error).not.toContain("private details");
+      expect(f.calls.some((call) => call.name === "finishSync" || call.name === "ingestPage")).toBe(
+        false,
+      );
+    },
+  );
+
+  it("retries the message after private storage recovers", async () => {
+    const f = await fixture();
+    vi.mocked(f.storage.put).mockRejectedValueOnce(new MailStorageError(503, "upload"));
+    await expect(f.runtime.process({ accountId: "account" })).rejects.toThrow("HTTP 503");
+    await f.runtime.process({ accountId: "account" });
+    expect(f.calls.filter((call) => call.name === "ingestPage")).toHaveLength(1);
+    expect(f.calls.filter((call) => call.name === "finishSync")).toHaveLength(1);
+  });
+
+  it("retains the failed step without exposing unexpected backend error details", async () => {
+    const f = await fixture({ ingestFails: true });
+    await expect(f.runtime.process({ accountId: "account" })).rejects.toThrow("saving a message");
+    expect(f.calls.find((call) => call.name === "failSync")?.args.error).toBe(
+      "Mailbox synchronization failed while saving a message; it will retry.",
+    );
+  });
+
+  it("still requests reconnection when Google authorization expires", async () => {
+    const f = await fixture({ tokenStatus: 400 });
+    await f.runtime.process({ accountId: "account" });
+    expect(f.calls.find((call) => call.name === "failSync")?.args).toMatchObject({
+      needsReauth: true,
+      error: "Google authorization expired. Reconnect this mailbox.",
+    });
   });
 });

@@ -10,7 +10,12 @@ import {
   messageMetadata,
 } from "./gmail.ts";
 import { makeEnvelopeCipher, randomToken, hashToken } from "./crypto.ts";
-import { makePrivateMailStorage, materializeMessage, type PrivateMailStorage } from "./storage.ts";
+import {
+  MailStorageError,
+  makePrivateMailStorage,
+  materializeMessage,
+  type PrivateMailStorage,
+} from "./storage.ts";
 import type { MailConfiguration } from "./config.ts";
 
 export interface MailContinuation {
@@ -394,12 +399,15 @@ export function makeMailRuntime(input: {
       if (!account) return;
       const lease = { accountId: account.id, leaseToken, generation: account.generation };
       let syncFinished = false;
+      let syncStep = "opening saved Google credentials";
       try {
         const credentials = await cipher.open<Credentials>(
           account.encryptedCredentials,
           credentialContext(account.ownerSubject, account.email),
         );
+        syncStep = "refreshing Google authorization";
         const gmail = await gmailFor(account);
+        syncStep = "updating Gmail labels";
         await applyLabels(account, gmail, async () => {
           if ((await rpc.mutation("renewSync", lease)) !== true)
             throw new Error("Mailbox lease expired");
@@ -418,6 +426,7 @@ export function makeMailRuntime(input: {
               "Instant delivery is unavailable; checking Gmail every five minutes. Verify Pub/Sub topic access.";
           }
         }
+        syncStep = "listing Gmail messages";
         let continuation = account.continuation;
         let mode = continuation?.mode ?? (account.cursor ? "history" : "backfill");
         let baselineCursor =
@@ -471,6 +480,7 @@ export function makeMailRuntime(input: {
           try {
             if ((await rpc.mutation("renewSync", lease)) !== true)
               throw new Error("Mailbox lease expired");
+            syncStep = "reading a Gmail message";
             const message = await gmail.message(id);
             const known = await rpc.query<
               Array<{ providerMessageId: string; historyId?: string; rawBlobKey?: string }>
@@ -483,6 +493,7 @@ export function makeMailRuntime(input: {
               });
               continue;
             }
+            syncStep = "copying message content to private storage";
             const materialized = await materializeMessage(
               message,
               gmail,
@@ -493,6 +504,7 @@ export function makeMailRuntime(input: {
               },
               `${account.companyId}:${account.id}`,
             );
+            syncStep = "saving a message";
             await rpc.mutation("ingestPage", { ...lease, messages: [materialized] });
           } catch (error) {
             if (error instanceof GmailError && error.status === 404) {
@@ -502,6 +514,7 @@ export function makeMailRuntime(input: {
             throw error;
           }
         }
+        syncStep = "saving mailbox changes";
         for (let offset = 0; offset < pageDeletedIds.length; offset += 100) {
           await rpc.mutation("deleteMessages", {
             ...lease,
@@ -535,15 +548,22 @@ export function makeMailRuntime(input: {
         const needsReauth =
           error instanceof GmailError &&
           (error.status === 401 || (error.operation === "token" && error.status === 400));
+        const errorMessage = needsReauth
+          ? "Google authorization expired. Reconnect this mailbox."
+          : error instanceof MailStorageError
+            ? error.status === 401 || error.status === 403
+              ? `Private mail storage rejected access (HTTP ${error.status}). Ask your workspace administrator to check the storage API key and private-file permissions.`
+              : `Private mail storage could not ${error.operation} (HTTP ${error.status}); synchronization will retry.`
+            : error instanceof GmailError
+              ? `Google rejected mailbox synchronization (HTTP ${error.status}); it will retry.`
+              : `Mailbox synchronization failed while ${syncStep}; it will retry.`;
         if (!syncFinished)
           await rpc.mutation("failSync", {
             ...lease,
-            error: needsReauth
-              ? "Google authorization expired. Reconnect this mailbox."
-              : "Mailbox synchronization failed; it will retry.",
+            error: errorMessage,
             needsReauth,
           });
-        if (!needsReauth) throw new Error("Mailbox synchronization failed", { cause: error });
+        if (!needsReauth) throw new Error(errorMessage, { cause: error });
       }
     },
   };
