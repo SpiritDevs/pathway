@@ -7,8 +7,10 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type HostResourcesSnapshot,
+  type ModelSelection,
   type ServerProvider,
 } from "@spiritdevs/contracts";
+import { createModelSelection } from "@spiritdevs/shared/model";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import { EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
@@ -18,6 +20,7 @@ import { DraftId, hydrateImagesFromPersisted, useComposerDraftStore } from "../c
 import type { Project } from "../types";
 import type { EnvironmentPresentation } from "../state/environments";
 import { reactHookHarness } from "../test/reactHookHarness";
+import { getComposerProviderState } from "../components/chat/composerProviderState";
 import { useLoadBalancedDraft } from "./useLoadBalancedDraft";
 
 const mocks = vi.hoisted(() => ({
@@ -293,6 +296,95 @@ describe("useLoadBalancedDraft", () => {
     expect(disconnected.blocked).toBe(true);
     expect(disconnected.validate(selected)).toBe(false);
   });
+  it.each([
+    { destination: local, explicitEffort: false },
+    { destination: remote, explicitEffort: false },
+    { destination: local, explicitEffort: true },
+    { destination: remote, explicitEffort: true },
+  ])(
+    "accepts composer defaults on $destination.title with explicit effort $explicitEffort",
+    ({ destination, explicitEffort }) => {
+      const models: ServerProvider["models"] = [
+        {
+          ...provider.models[0]!,
+          capabilities: {
+            optionDescriptors: [
+              {
+                id: "reasoningEffort",
+                label: "Reasoning effort",
+                type: "select",
+                options: [
+                  { id: "medium", label: "Medium", isDefault: true },
+                  { id: "high", label: "High" },
+                ],
+              },
+              { id: "fastMode", label: "Fast mode", type: "boolean", currentValue: false },
+            ],
+          },
+        },
+      ];
+      const initialSelection: ModelSelection = {
+        ...selection,
+        ...(explicitEffort ? { options: [{ id: "reasoningEffort", value: "high" }] } : {}),
+      };
+      store().setModelSelection(draftId, initialSelection);
+      const input = {
+        ...base(),
+        selection: initialSelection,
+        weights: {
+          local: destination === local ? 100 : 0,
+          remote: destination === remote ? 100 : 0,
+        },
+        environments: environments.map((environment) => ({
+          ...environment,
+          serverConfig: {
+            ...environment.serverConfig!,
+            providers: environment.serverConfig!.providers.map((provider) => ({
+              ...provider,
+              models,
+            })),
+          },
+        })),
+      };
+      render(input);
+      flushEffects();
+      const composer = store().getComposerDraft(draftId)!;
+      const selected = composer.modelSelectionByProvider[composer.activeProvider!]!;
+      const placed = render({ ...input, project: destination, selection: selected });
+      const { modelOptionsForDispatch } = getComposerProviderState({
+        provider: provider.driver,
+        model: selected.model,
+        models,
+        modelOptions: selected.options,
+      });
+      const sendSelection = createModelSelection(
+        selected.instanceId,
+        selected.model,
+        modelOptionsForDispatch,
+      );
+      expect(readDraft().environmentId).toBe(destination.environmentId);
+      expect(placed.label).toBe(`Auto: ${destination.title}`);
+      expect(placed.blocked).toBe(false);
+      expect(sendSelection.options).toEqual([
+        { id: "reasoningEffort", value: explicitEffort ? "high" : "medium" },
+        { id: "fastMode", value: false },
+      ]);
+      expect(placed.validate(sendSelection)).toBe(true);
+      expect(placed.validate({ ...sendSelection, model: "other" })).toBe(false);
+      expect(
+        placed.validate({ ...sendSelection, instanceId: ProviderInstanceId.make("other") }),
+      ).toBe(false);
+      expect(
+        placed.validate({
+          ...sendSelection,
+          options: [
+            { id: "reasoningEffort", value: explicitEffort ? "medium" : "high" },
+            { id: "fastMode", value: false },
+          ],
+        }),
+      ).toBe(false);
+    },
+  );
   it("preserves the exact source checkout when another local binding is listed first", () => {
     const other = { ...local, id: ProjectId.make("other-local"), workspaceRoot: "/local/other" };
     render({
