@@ -4,21 +4,24 @@ import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import type { CompanyRegistryReplicaState } from "@spiritdevs/client-runtime/connection";
 import { EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
 import type { CompanyId } from "@spiritdevs/contracts/company";
-import { AuthOrchestrationOperateScope, type ModelSelection } from "@spiritdevs/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  type EnvironmentId,
+  type ModelSelection,
+  type ScopedProjectRef,
+} from "@spiritdevs/contracts";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";
-import { useCallback, useContext, useEffect, useMemo } from "react";
+import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import type { Project } from "../types";
 import type { EnvironmentPresentation } from "../state/environments";
 import { serverEnvironment } from "../state/server";
 import { environmentSession } from "../state/session";
 import {
-  draftPlacementIsPinned,
-  draftPlacementHasMachineBinding,
+  draftPlacementIsLocked,
   placementSelectionKey,
   selectPlacementProjects,
-  draftPlacementPinsProvider,
   resolvePlacementModel,
 } from "../lib/draftPlacement";
 
@@ -38,54 +41,47 @@ export function useLoadBalancedDraft(input: {
   const { draftId, enabled, weights, project, projects, environments, replicas, selection } = input;
   const registry = useContext(RegistryContext);
   const draft = useComposerDraftStore((store) => (draftId ? store.getDraftSession(draftId) : null));
-  const sourceProviders =
-    environments.find((environment) => environment.environmentId === draft?.environmentId)
-      ?.serverConfig?.providers ?? [];
-  const inheritedProviderPinned =
-    draft !== null && draftPlacementPinsProvider(draft, selection, sourceProviders);
-  const contextPinned = useComposerDraftStore((store) => {
-    const session = draftId ? store.getDraftSession(draftId) : null;
-    return session && draftId
-      ? draftPlacementIsPinned(session, store.getComposerDraft(draftId))
-      : true;
-  });
-  const pinned = contextPinned || inheritedProviderPinned;
-  const machinePinned = useComposerDraftStore((store) => {
-    const session = draftId ? store.getDraftSession(draftId) : null;
-    return session && draftId
-      ? draftPlacementHasMachineBinding(session, store.getComposerDraft(draftId))
-      : true;
-  });
+  const locked = draft === null || draftPlacementIsLocked(draft);
+  const visible = enabled && draft !== null && project?.workspaceRoot != null;
+  const canBalance = visible && !locked;
+  const automatic = visible && draft?.placement?.mode !== "manual";
   const key =
-    draft && draft.projectId !== null && selection
+    draft?.projectId != null && selection
       ? placementSelectionKey(draft.environmentId, draft.projectId, selection)
       : null;
-  const automatic =
-    enabled &&
-    project?.workspaceRoot != null &&
-    draft !== null &&
-    draft.projectId !== null &&
-    draft.placement?.mode !== "manual" &&
-    !pinned;
-  const resolved = automatic && key !== null && draft?.placement?.resolvedKey === key;
+  // Keep the recommendation while the user chooses a manual override. Resource
+  // changes alone must not move a draft or change the machine advertised by Auto.
+  const [recommendation, setRecommendation] = useState<{
+    draftId: DraftId;
+    key: string;
+    environmentId: EnvironmentId;
+  } | null>(null);
+  const storedResolution = key !== null && draft?.placement?.resolvedKey === key;
+  const hasRecommendation = recommendation?.draftId === draftId && recommendation?.key === key;
+  const resolved = storedResolution || hasRecommendation;
+  const recommendedEnvironmentId = storedResolution
+    ? draft?.environmentId
+    : hasRecommendation
+      ? recommendation.environmentId
+      : null;
   const bindings = useMemo(
     () =>
-      automatic
+      canBalance
         ? [...replicas].flatMap(([companyId, replica]) =>
             [...replica.view.values()].flatMap((value) =>
               isBinding(value) ? [{ companyId, binding: value }] : [],
             ),
           )
         : [],
-    [automatic, replicas],
+    [canBalance, replicas],
   );
   const placementProjects = useMemo(
-    () => (automatic && project ? selectPlacementProjects(project, projects, bindings) : []),
-    [automatic, project, projects, bindings],
+    () => (canBalance && project ? selectPlacementProjects(project, projects, bindings) : []),
+    [canBalance, project, projects, bindings],
   );
   const placementEnvironments = useMemo(
     () =>
-      automatic && project
+      canBalance && project
         ? environments.filter(
             (environment) =>
               environment.connection.phase === "connected" &&
@@ -95,23 +91,23 @@ export function useLoadBalancedDraft(input: {
               ),
           )
         : [],
-    [automatic, project, environments, weights, placementProjects],
+    [canBalance, project, environments, weights, placementProjects],
   );
   const accessAtom = useMemo(
     () =>
       Atom.make((get) =>
-        automatic
+        canBalance
           ? placementEnvironments.map((environment) => ({
               environmentId: environment.environmentId,
               session: get(environmentSession.sessionStateAtom(environment.environmentId)),
             }))
           : [],
       ),
-    [automatic, placementEnvironments],
+    [canBalance, placementEnvironments],
   );
   const sessions = useAtomValue(accessAtom);
   const candidates = useMemo(() => {
-    if (!automatic || !project || !selection) return [];
+    if (!canBalance || !project || !selection) return [];
     const source = environments
       .find((environment) => environment.environmentId === project.environmentId)
       ?.serverConfig?.providers.find((provider) => provider.instanceId === selection.instanceId);
@@ -155,11 +151,11 @@ export function useLoadBalancedDraft(input: {
         },
       ];
     });
-  }, [automatic, project, selection, environments, placementProjects, weights, sessions]);
+  }, [canBalance, project, selection, environments, placementProjects, weights, sessions]);
   const measurementsAtom = useMemo(
     () =>
       Atom.make((get) =>
-        automatic && !resolved
+        canBalance && !resolved
           ? candidates.map((candidate) => ({
               ...candidate,
               result: get(
@@ -171,11 +167,11 @@ export function useLoadBalancedDraft(input: {
             }))
           : [],
       ),
-    [automatic, resolved, candidates],
+    [canBalance, resolved, candidates],
   );
   const measurements = useAtomValue(measurementsAtom);
   const pending =
-    automatic &&
+    canBalance &&
     !resolved &&
     (sessions.some(
       ({ session }) =>
@@ -184,44 +180,47 @@ export function useLoadBalancedDraft(input: {
       measurements.length !== candidates.length ||
       measurements.some(({ result }) => result.waiting || result._tag === "Initial"));
 
+  const measuredEnvironmentId =
+    !resolved && !pending && draftId
+      ? chooseLoadBalancedEnvironment(
+          measurements.map(({ result, ...candidate }) => ({
+            ...candidate,
+            resources: result._tag === "Success" ? result.value : null,
+            receivedAt: result._tag === "Success" ? result.timestamp : 0,
+          })),
+          Date.now(),
+          draftId,
+        )
+      : null;
+  const recommended = candidates.find(
+    (candidate) =>
+      candidate.environmentId === (resolved ? recommendedEnvironmentId : measuredEnvironmentId),
+  );
+
   useEffect(() => {
-    if (!draftId || !automatic || resolved || pending || !key) return;
-    const environmentId = chooseLoadBalancedEnvironment(
-      measurements.map(({ result, ...candidate }) => ({
-        ...candidate,
-        resources: result._tag === "Success" ? result.value : null,
-        receivedAt: result._tag === "Success" ? result.timestamp : 0,
-      })),
-      Date.now(),
-      draftId,
-    );
-    const destination = candidates.find((candidate) => candidate.environmentId === environmentId);
-    if (!destination) return;
+    if (!draftId || !canBalance || pending || !key || !recommended) return;
     const store = useComposerDraftStore.getState();
     const current = store.getDraftSession(draftId);
-    // Uploads or manual choices may have arrived while measurements were in flight.
-    if (
-      !current ||
-      current.projectId === null ||
-      current.placement?.mode === "manual" ||
-      draftPlacementIsPinned(current, store.getComposerDraft(draftId))
-    )
-      return;
+    if (!current || current.projectId === null || draftPlacementIsLocked(current)) return;
     if (
       current.environmentId !== draft?.environmentId ||
       current.projectId !== draft.projectId ||
+      current.placement?.mode !== draft.placement?.mode ||
       current.placement?.resolvedKey !== draft.placement?.resolvedKey
     )
       return;
-    const currentComposer = store.getComposerDraft(draftId);
-    const currentSelection = currentComposer?.activeProvider
-      ? currentComposer.modelSelectionByProvider[currentComposer.activeProvider]
+    const composer = store.getComposerDraft(draftId);
+    const currentSelection = composer?.activeProvider
+      ? composer.modelSelectionByProvider[composer.activeProvider]
       : null;
     if (
       currentSelection &&
       placementSelectionKey(current.environmentId, current.projectId, currentSelection) !== key
     )
       return;
+    if (!resolved) setRecommendation({ draftId, key, environmentId: recommended.environmentId });
+    const destination = recommended;
+    if (!automatic || storedResolution) return;
     store.setModelSelection(draftId, destination.modelSelection, { replaceOptions: true });
     store.setDraftThreadContext(draftId, {
       projectRef: scopeProjectRef(destination.environmentId, destination.projectId),
@@ -236,46 +235,83 @@ export function useLoadBalancedDraft(input: {
         ),
       },
     });
-  }, [draftId, draft, selection, automatic, resolved, pending, key, measurements, candidates]);
+  }, [
+    draftId,
+    draft,
+    canBalance,
+    automatic,
+    resolved,
+    storedResolution,
+    recommended,
+    pending,
+    key,
+  ]);
 
-  const recheck = useCallback(() => {
+  const selectAuto = useCallback(() => {
     if (!draftId) return;
     const store = useComposerDraftStore.getState();
     const current = store.getDraftSession(draftId);
+    if (!current || current.projectId === null || draftPlacementIsLocked(current)) return;
+    // A manual choice is reversible even when the draft has a branch, a custom
+    // account, or attachments. Selecting Auto explicitly opts into its destination.
     const composer = store.getComposerDraft(draftId);
     const currentSelection = composer?.activeProvider
       ? composer.modelSelectionByProvider[composer.activeProvider]
-      : selection;
-    const currentProviders =
-      environments.find((environment) => environment.environmentId === current?.environmentId)
-        ?.serverConfig?.providers ?? [];
-    if (
-      !current ||
-      current.projectId === null ||
-      draftPlacementIsPinned(current, composer) ||
-      draftPlacementPinsProvider(current, currentSelection, currentProviders)
-    )
-      return;
-    for (const candidate of candidates)
-      registry.refresh(
-        serverEnvironment.hostResources({ environmentId: candidate.environmentId, input: {} }),
-      );
-    useComposerDraftStore.getState().setDraftThreadContext(draftId, {
-      placement: { ...current.placement, mode: "auto", providerPinned: false, resolvedKey: null },
-    });
-  }, [draftId, selection, environments, registry, candidates]);
-  const useManual = useCallback(() => {
-    if (!draftId) return;
-    useComposerDraftStore.getState().setDraftThreadContext(draftId, {
+      : null;
+    const canUseRecommendation =
+      currentSelection &&
+      placementSelectionKey(current.environmentId, current.projectId, currentSelection) === key &&
+      recommended !== undefined;
+    if (!canUseRecommendation) {
+      setRecommendation(null);
+      for (const candidate of candidates)
+        registry.refresh(
+          serverEnvironment.hostResources({ environmentId: candidate.environmentId, input: {} }),
+        );
+    }
+    store.setDraftThreadContext(draftId, {
       placement: {
-        mode: "manual",
-        providerPinned: draft?.placement?.providerPinned ?? false,
-        resolvedKey: null,
+        mode: "auto",
+        providerPinned: false,
+        resolvedKey: canUseRecommendation && storedResolution ? key : null,
       },
     });
-  }, [draftId, draft?.placement?.providerPinned]);
+  }, [draftId, registry, candidates, key, recommended, storedResolution]);
+  const selectEnvironment = useCallback(
+    (target: ScopedProjectRef) => {
+      if (!draftId) return;
+      const store = useComposerDraftStore.getState();
+      const current = store.getDraftSession(draftId);
+      if (!current || draftPlacementIsLocked(current)) return;
+      const source = environments
+        .find((environment) => environment.environmentId === current.environmentId)
+        ?.serverConfig?.providers.find((provider) => provider.instanceId === selection?.instanceId);
+      const providers =
+        environments.find((environment) => environment.environmentId === target.environmentId)
+          ?.serverConfig?.providers ?? [];
+      const nextSelection =
+        source && selection
+          ? resolvePlacementModel(
+              selection,
+              source,
+              [...providers].sort(
+                (a, b) =>
+                  Number(b.instanceId === selection.instanceId) -
+                  Number(a.instanceId === selection.instanceId),
+              ),
+            )
+          : null;
+      if (nextSelection) store.setModelSelection(draftId, nextSelection, { replaceOptions: true });
+      store.setDraftThreadContext(draftId, {
+        projectRef: target,
+        placement: { mode: "manual", providerPinned: false, resolvedKey: null },
+      });
+    },
+    [draftId, environments, selection],
+  );
+
   const eligible =
-    resolved &&
+    storedResolution &&
     candidates.some(
       (candidate) =>
         candidate.environmentId === draft?.environmentId &&
@@ -287,28 +323,22 @@ export function useLoadBalancedDraft(input: {
         ) === key,
     );
   return {
-    visible: enabled && draft !== null && project?.workspaceRoot != null,
+    visible,
     automatic,
-    pinned,
-    machinePinned,
+    locked,
     pending,
-    blocked: automatic && (!resolved || !eligible),
-    label: automatic
-      ? pending
-        ? "Auto · checking machines"
-        : eligible
-          ? `Auto · ${environments.find((environment) => environment.environmentId === draft?.environmentId)?.label ?? "Selected machine"}`
-          : "Auto · choose a machine or recheck"
-      : "Manual placement",
-    detail: pinned
-      ? "This draft is pinned by its account, workspace, attachments, or launch."
-      : candidates.length < 2
-        ? "Balancing needs another connected binding with a matching authenticated provider and model."
-        : "Uses matching providers on your project’s connected machines.",
-    recheck,
-    useManual,
+    blocked: automatic && !locked && !eligible,
+    label:
+      pending || key === null
+        ? "Auto: checking machines"
+        : recommended
+          ? `Auto: ${environments.find((environment) => environment.environmentId === recommended.environmentId)?.label ?? "Selected machine"}`
+          : "Auto: no available machine",
+    selectAuto,
+    selectEnvironment,
     validate: (sendSelection: ModelSelection) =>
       !automatic ||
+      locked ||
       Boolean(
         eligible &&
         draft &&

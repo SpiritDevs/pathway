@@ -51,12 +51,14 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   }, [availableEnvironments, environmentId]);
 
   const environmentItems = useMemo(
-    () =>
-      availableEnvironments.map((env) => ({
+    () => [
+      ...(autoPlacement ? [{ value: "__auto-placement__", label: autoPlacement.label }] : []),
+      ...availableEnvironments.map((env) => ({
         value: env.environmentId,
         label: env.label,
       })),
-    [availableEnvironments],
+    ],
+    [availableEnvironments, autoPlacement],
   );
 
   // The static label carries the xs control's height (h-7 sm:h-6) as well as
@@ -66,7 +68,10 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   // only thing in the strip.
   // A single environment still opens: the popup carries "Link environment",
   // which is the only in-composer way to get a second one.
-  if (envLocked || (onEnvironmentChange === undefined && onLinkEnvironmentRequest === undefined)) {
+  if (
+    envLocked ||
+    (!autoPlacement && onEnvironmentChange === undefined && onLinkEnvironmentRequest === undefined)
+  ) {
     return (
       <span
         className={cn(
@@ -174,9 +179,12 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         <SelectGroup>
           <SelectGroupLabel>Run on</SelectGroupLabel>
           {autoPlacement && (
-            <SelectItem value="__auto-placement__" disabled={autoPlacement.disabled}>
-              Auto · available resources
-            </SelectItem>
+            <>
+              <SelectItem value="__auto-placement__" disabled={autoPlacement.disabled}>
+                {autoPlacement.label}
+              </SelectItem>
+              <SelectSeparator />
+            </>
           )}
           {availableEnvironments.map((env) => (
             <SelectItem key={env.environmentId} value={env.environmentId}>

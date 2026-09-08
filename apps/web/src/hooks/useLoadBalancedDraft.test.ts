@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   AuthOrchestrationOperateScope,
   EnvironmentId,
+  MessageId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -32,6 +33,7 @@ vi.mock("react", async (importOriginal) => {
   return {
     ...actual,
     useMemo: harness.useMemo,
+    useState: harness.useState,
     useCallback: harness.useCallback,
     useContext: mocks.context,
     useEffect: (effect: () => void) => {
@@ -308,7 +310,7 @@ describe("useLoadBalancedDraft", () => {
     },
   );
   it.each(["sticky", "project"] as const)(
-    "pins an inherited custom account from %s defaults",
+    "balances a fresh draft with a custom account inherited from %s defaults",
     (origin) => {
       const custom = { ...provider, instanceId: ProviderInstanceId.make("codex-personal") };
       const customSelection = { ...selection, instanceId: custom.instanceId };
@@ -335,23 +337,19 @@ describe("useLoadBalancedDraft", () => {
         ),
       });
       flushEffects();
-      expect(result.pinned).toBe(true);
-      expect(result.automatic).toBe(false);
-      expect(result.machinePinned).toBe(false);
-      expect(mocks.resources).not.toHaveBeenCalled();
-      result.recheck();
-      expect(readDraft().placement).toBeUndefined();
-      expect(store().getComposerDraft(draftId)?.activeProvider).toBe(custom.instanceId);
+      expect(result.locked).toBe(false);
+      expect(result.automatic).toBe(true);
+      expect(readDraft().environmentId).toBe(remote.environmentId);
+      expect(store().getComposerDraft(draftId)?.activeProvider).toBe(remoteProvider.instanceId);
     },
   );
-  it("keeps Auto provenance across a recheck and model change after mapping a custom instance", () => {
+  it("keeps Auto available after a model change on a mapped custom instance", () => {
     render();
     flushEffects();
     const selected = { ...selection, instanceId: remoteProvider.instanceId };
     const result = render({ ...base(), project: remote, selection: selected });
-    expect(result.pinned).toBe(false);
-    result.recheck();
-    expect(readDraft().placement?.automaticProviderInstanceId).toBe(remoteProvider.instanceId);
+    expect(result.locked).toBe(false);
+    result.selectAuto();
     store().setModelSelection(draftId, { ...selected, model: "other" });
     const changed = render({
       ...base(),
@@ -359,7 +357,7 @@ describe("useLoadBalancedDraft", () => {
       selection: { ...selected, model: "other" },
     });
     expect(changed.automatic).toBe(true);
-    expect(changed.pinned).toBe(false);
+    expect(changed.locked).toBe(false);
     flushEffects();
     expect(readDraft().placement?.automaticProviderInstanceId).toBe(remoteProvider.instanceId);
   });
@@ -407,7 +405,7 @@ describe("useLoadBalancedDraft", () => {
       store().getComposerDraft(draftId)?.modelSelectionByProvider[provider.instanceId]?.options,
     ).toEqual([{ id: "effort", value: "high" }]);
   });
-  it("pins an attachment that arrives before the resource effect commits", () => {
+  it("keeps locally held attachments when initial placement chooses another machine", () => {
     render();
     store().addImages(draftId, [
       {
@@ -421,41 +419,51 @@ describe("useLoadBalancedDraft", () => {
       },
     ]);
     flushEffects();
-    expect(readDraft().environmentId).toBe(local.environmentId);
-    expect(render().pinned).toBe(true);
+    expect(readDraft().environmentId).toBe(remote.environmentId);
+    expect(store().getComposerDraft(draftId)?.images).toHaveLength(1);
+    expect(
+      render({
+        ...base(),
+        project: remote,
+        selection: { ...selection, instanceId: remoteProvider.instanceId },
+      }).locked,
+    ).toBe(false);
   });
-  it.each(["branch", "worktree", "provider", "dispatch"] as const)(
-    "does not move a draft pinned by %s",
-    (pin) => {
-      render();
+  it.each(["branch", "worktree", "provider"] as const)(
+    "allows Auto for a draft configured with a %s",
+    (choice) => {
       store().setDraftThreadContext(
         draftId,
-        pin === "branch"
+        choice === "branch"
           ? { branch: "main" }
-          : pin === "worktree"
+          : choice === "worktree"
             ? { envMode: "worktree" }
-            : {
-                placement: {
-                  mode: "auto",
-                  providerPinned: pin === "provider",
-                  resolvedKey: null,
-                  dispatched: pin === "dispatch",
-                },
-              },
+            : { placement: { mode: "auto", providerPinned: true, resolvedKey: null } },
       );
+      const result = render();
       flushEffects();
-      expect(readDraft().environmentId).toBe(local.environmentId);
-      mocks.resources.mockClear();
-      expect(render().pinned).toBe(true);
-      expect(mocks.resources).not.toHaveBeenCalled();
+      expect(result.locked).toBe(false);
+      expect(readDraft().environmentId).toBe(remote.environmentId);
+      if (choice === "worktree") expect(readDraft().envMode).toBe("worktree");
     },
   );
-  it("does not let a captured recheck callback remove a newly dispatched pin", () => {
+  it("discards a late measurement after dispatch starts", () => {
+    render();
+    store().setDraftThreadContext(draftId, {
+      placement: { mode: "auto", providerPinned: false, resolvedKey: null, dispatched: true },
+    });
+    flushEffects();
+    expect(readDraft().environmentId).toBe(local.environmentId);
+    mocks.resources.mockClear();
+    expect(render().locked).toBe(true);
+    expect(mocks.resources).not.toHaveBeenCalled();
+  });
+  it("does not let a captured Auto callback remove a newly dispatched pin", () => {
     const result = render();
     store().setDraftThreadContext(draftId, {
       placement: { mode: "auto", resolvedKey: null, providerPinned: false, dispatched: true },
     });
-    result.recheck();
+    result.selectAuto();
     flushEffects();
     expect(readDraft().placement?.dispatched).toBe(true);
     expect(readDraft().environmentId).toBe(local.environmentId);
@@ -472,7 +480,137 @@ describe("useLoadBalancedDraft", () => {
     const result = render();
     flushEffects();
     expect(result.blocked).toBe(true);
-    result.useManual();
+    store().setDraftThreadContext(draftId, {
+      placement: { mode: "manual", providerPinned: false, resolvedKey: null },
+    });
     expect(render().blocked).toBe(false);
+  });
+  it("shows the chosen machine in the Auto label on a new draft", () => {
+    render();
+    flushEffects();
+    const result = render({
+      ...base(),
+      project: remote,
+      selection: { ...selection, instanceId: remoteProvider.instanceId },
+    });
+    expect(result.label).toBe("Auto: remote");
+    expect(result.blocked).toBe(false);
+  });
+
+  it("previews Auto while manual and applies the advertised machine when selected", () => {
+    store().setDraftThreadContext(draftId, {
+      branch: "main",
+      placement: { mode: "manual", providerPinned: true, resolvedKey: null },
+    });
+    render();
+    flushEffects();
+    const manual = render();
+    expect(manual.label).toBe("Auto: remote");
+    expect(manual.automatic).toBe(false);
+    expect(manual.blocked).toBe(false);
+    expect(readDraft().environmentId).toBe(local.environmentId);
+    registry.set(
+      localResources,
+      AsyncResult.success({ ...snapshot, cpuCount: 128 }, { timestamp: 20_000 }),
+    );
+    manual.selectAuto();
+    render();
+    flushEffects();
+    expect(readDraft().environmentId).toBe(remote.environmentId);
+    expect(readDraft().placement?.mode).toBe("auto");
+  });
+
+  it("does not overwrite an explicit machine choice with an in-flight automatic result", () => {
+    render();
+    store().setDraftThreadContext(draftId, {
+      placement: { mode: "manual", providerPinned: false, resolvedKey: null },
+    });
+    flushEffects();
+    expect(readDraft().environmentId).toBe(local.environmentId);
+    expect(readDraft().placement?.mode).toBe("manual");
+  });
+
+  it("can choose the only environment manually and return to Auto", () => {
+    const input = { ...base(), environments: [environments[0]!], projects: [local] };
+    render(input);
+    flushEffects();
+    expect(render(input).label).toBe("Auto: local");
+    store().setDraftThreadContext(draftId, {
+      placement: { mode: "manual", providerPinned: false, resolvedKey: null },
+    });
+    render(input);
+    flushEffects();
+    const manual = render(input);
+    expect(manual.automatic).toBe(false);
+    expect(manual.label).toBe("Auto: local");
+    manual.selectAuto();
+    render(input);
+    flushEffects();
+    expect(render(input).automatic).toBe(true);
+    expect(render(input).blocked).toBe(false);
+  });
+
+  it("calculates a separate recommendation when another new draft opens", () => {
+    render();
+    flushEffects();
+    render({
+      ...base(),
+      project: remote,
+      selection: { ...selection, instanceId: remoteProvider.instanceId },
+    });
+    const nextDraftId = DraftId.make("second-draft");
+    store().setProjectDraftThreadId(scopeProjectRef(local.environmentId, local.id), nextDraftId);
+    store().setModelSelection(nextDraftId, selection);
+    registry.set(
+      localResources,
+      AsyncResult.success({ ...snapshot, cpuCount: 128 }, { timestamp: 20_000 }),
+    );
+    render({ ...base(), draftId: nextDraftId });
+    flushEffects();
+    expect(store().getDraftSession(nextDraftId)?.environmentId).toBe(local.environmentId);
+    expect(render({ ...base(), draftId: nextDraftId }).label).toBe("Auto: local");
+  });
+
+  it("maps the model for a manual override and can balance again across different account IDs", () => {
+    render();
+    flushEffects();
+    const selected = { ...selection, instanceId: remoteProvider.instanceId };
+    const auto = render({ ...base(), project: remote, selection: selected });
+    auto.selectEnvironment(scopeProjectRef(local.environmentId, local.id));
+    expect(readDraft().environmentId).toBe(local.environmentId);
+    expect(readDraft().placement?.mode).toBe("manual");
+    expect(store().getComposerDraft(draftId)?.activeProvider).toBe(provider.instanceId);
+    render();
+    flushEffects();
+    const manual = render();
+    expect(manual.label).toBe("Auto: remote");
+    manual.selectAuto();
+    render();
+    flushEffects();
+    expect(readDraft().environmentId).toBe(remote.environmentId);
+    expect(store().getComposerDraft(draftId)?.activeProvider).toBe(remoteProvider.instanceId);
+  });
+
+  it("allows a manual-only environment without applying its automatic weight", () => {
+    const result = render({ ...base(), weights: { remote: 0 } });
+    result.selectEnvironment(scopeProjectRef(remote.environmentId, remote.id));
+    flushEffects();
+    expect(readDraft().environmentId).toBe(remote.environmentId);
+    expect(readDraft().placement?.mode).toBe("manual");
+  });
+
+  it("keeps the dropdown choice fixed while a send is pending", () => {
+    const result = render();
+    store().setDraftPendingSend(draftId, {
+      messageId: MessageId.make("pending-message"),
+      text: "hello",
+      title: "hello",
+      createdAt: "2026-09-08T00:00:00.000Z",
+    });
+    result.selectEnvironment(scopeProjectRef(remote.environmentId, remote.id));
+    result.selectAuto();
+    flushEffects();
+    expect(readDraft().environmentId).toBe(local.environmentId);
+    expect(render().locked).toBe(true);
   });
 });

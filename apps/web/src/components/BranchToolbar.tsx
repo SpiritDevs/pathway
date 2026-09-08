@@ -123,7 +123,7 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
     : effectiveEnvMode === "worktree"
       ? resolveEnvModeLabel("worktree")
       : resolveCurrentWorkspaceLabel(activeWorktreePath);
-  const isLocked = envLocked || envModeLocked;
+  const isLocked = (environmentLocked ?? envLocked) && envModeLocked;
   const EnvironmentIcon = activeEnvironment?.isPrimary ? MonitorIcon : CloudIcon;
   const icon = showEnvironmentIndicator ? (
     // Button's base styles apply `-mx-0.5` to descendant SVGs, which eats 4px
@@ -179,9 +179,12 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
                 }
               >
                 {autoPlacement && (
-                  <MenuRadioItem value="__auto-placement__" disabled={autoPlacement.disabled}>
-                    Auto · available resources
-                  </MenuRadioItem>
+                  <>
+                    <MenuRadioItem value="__auto-placement__" disabled={autoPlacement.disabled}>
+                      {autoPlacement.label}
+                    </MenuRadioItem>
+                    <MenuSeparator />
+                  </>
                 )}
                 {availableEnvironments.map((env) => {
                   const Icon = env.isPrimary ? MonitorIcon : CloudIcon;
@@ -531,12 +534,13 @@ export const BranchToolbar = memo(function BranchToolbar({
     canChangeEnvironment: onEnvironmentChange !== undefined,
     canLinkEnvironment: onLinkEnvironmentRequest !== undefined,
   };
-  const showEnvironmentPicker = canOpenEnvironmentPicker(environmentPickerInput);
+  const showEnvironmentPicker =
+    autoPlacement !== undefined || canOpenEnvironmentPicker(environmentPickerInput);
   const activeEnvironmentOption =
     availableEnvironments?.find((env) => env.environmentId === environmentId) ?? null;
   const showEnvironmentIndicator = shouldShowEnvironmentIndicator({
     activeEnvironment: activeEnvironmentOption,
-    canPickEnvironment: hasEnvironmentChoice(environmentPickerInput),
+    canPickEnvironment: autoPlacement !== undefined || hasEnvironmentChoice(environmentPickerInput),
   });
   const isMobile = useIsMobile();
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
