@@ -8,7 +8,7 @@ This version targets iOS, iPadOS and visionOS. Android is excluded. Code coverag
 2. Register the app and extension identifiers from `apps/pathway-ios/Pathway.xcodeproj/project.pbxproj` with the Apple developer team. Enable the `group.com.spiritdevs.pathway.shared` App Group for the app, widget extension and share extension. Confirm signed entitlements match provisioning profiles.
 3. Enable Push Notifications for the app. Debug uses the development APNs environment; Release uses production. Configure the relay's matching APNs team/key/topic credentials using the existing secret-management process.
 4. Register the bundle identifier and App ID prefix in Clerk's native configuration. Verify the hosted authentication callback and associated domains on a signed device.
-5. Serve the matching Apple App Site Association configuration for `app.spiritdevs.com` thread links and the configured Clerk domain. The checked-in entitlement alone cannot establish universal-link delivery.
+5. Serve the matching Apple App Site Association configuration for `app.pathwayos.dev` thread links and the configured Clerk domain. The checked-in entitlement alone cannot establish universal-link delivery.
 6. Deploy the matching backend and relay changes: shared contacts/time tables, team restoration, and visionOS notification registration/delivery. Deploy source environment updates for remote pairing and revision-protected file writes. Older file servers intentionally remain read-only in the native editor.
 
 ## Build and fixture checks

@@ -167,7 +167,7 @@ struct PathwayApp: App {
             PathwaySystemEntry.shared.request = request
             return
         }
-        if let link = PathwayProductLink(url: url, allowedWebHost: "app.spiritdevs.com") {
+        if let link = PathwayProductLink(url: url, allowedWebHost: AppConfiguration.siteURL?.host()) {
             appModel?.openProductLink(link)
             return
         }

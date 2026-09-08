@@ -6,6 +6,8 @@ Open Email and choose Mail. Connect Gmail from Email settings in the signed-in P
 
 If Email settings says mail is not available or not enabled on Pathway Connect, your workspace administrator needs to finish setting up the mail service. Retrying the connection cannot enable it. Use Retry connection after setup is complete, or when a temporary connection problem has cleared.
 
+If the web app says “Unable to check your account” before Email settings opens, choose Try again. If it continues, ask your workspace administrator to check the website's sign-in configuration.
+
 Mail keeps arriving while your environments are offline. The initial import covers the last twelve months, excluding Spam and Trash. Synced attachments and message bodies are available from your other devices through the same account. Very large messages and attachments may remain available only in Gmail; the reader identifies incomplete content. Attachments over 5 MiB are not copied into Pathway.
 
 ## Analysis and briefings

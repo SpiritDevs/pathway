@@ -145,7 +145,8 @@ struct PathwayIssueRowPropertyMenus: View {
 
 enum PathwayIssueShareLink {
     static func url(_ issue: PathwayIssueRecord) -> URL? {
-        var components = URLComponents(string: "https://app.spiritdevs.com/issues")
+        guard let siteURL = AppConfiguration.siteURL else { return nil }
+        var components = URLComponents(url: siteURL.appending(path: "issues"), resolvingAgainstBaseURL: false)
         components?.queryItems = [URLQueryItem(name: "issue", value: issue.id)]
         return components?.url
     }

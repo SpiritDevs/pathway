@@ -4,7 +4,7 @@ import Testing
 
 @MainActor struct PathwayConnectionOnboardingTests {
     @Test func pairingLinksDiscardCredentialsFromSavedOrigin() throws {
-        let input = try PathwayPairingInput(address: "https://app.spiritdevs.com/pair?host=http%3A%2F%2F192.168.1.10%3A4000&label=Work#token=one%2Btime")
+        let input = try PathwayPairingInput(address: "https://app.pathwayos.dev/pair?host=http%3A%2F%2F192.168.1.10%3A4000&label=Work#token=one%2Btime")
         #expect(input.baseURL.absoluteString == "http://192.168.1.10:4000")
         #expect(input.token == "one+time")
         #expect(try PathwayPairingInput(address: "https://server.test/?token=old", token: "manual").token == "manual")

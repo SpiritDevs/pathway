@@ -1,6 +1,6 @@
 # Pathway
 
-Pathway is an Agentic Business OS. It enables on your machine with a best-in-class mobile app ([iOS and iPadOS](https://apps.apple.com/us/app/pathway-remote-claude-more/id6787819824), with a native visionOS target), [web app](https://app.pathway.app) and [Electron-based desktop app](https://pathway.codes).
+Pathway is an Agentic Business OS. It enables on your machine with a best-in-class mobile app ([iOS and iPadOS](https://apps.apple.com/us/app/pathway-remote-claude-more/id6787819824), with a native visionOS target), [web app](https://app.pathwayos.dev) and [Electron-based desktop app](https://pathway.codes).
 
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, and OpenCode. If they're set up on your computer, Pathway can control them.
 

@@ -17,6 +17,7 @@ import {
   syncDocumentWindowControlsOverlayClass,
 } from "./lib/windowControlsOverlay";
 import { AppRoot } from "./AppRoot";
+import { ClerkStartupBoundary } from "./components/clerk/ClerkStartupBoundary";
 
 // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
 const history = isElectron ? createHashHistory() : createBrowserHistory();
@@ -51,7 +52,9 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
           {configuredApp}
         </ElectronClerkProvider>
       ) : (
-        <ClerkProvider publishableKey={clerkPublishableKey}>{configuredApp}</ClerkProvider>
+        <ClerkProvider publishableKey={clerkPublishableKey}>
+          <ClerkStartupBoundary>{configuredApp}</ClerkStartupBoundary>
+        </ClerkProvider>
       )
     ) : (
       app

@@ -10,6 +10,16 @@ For GitHub deployments, set `MAIL_ENABLED`, `MAIL_GOOGLE_PUBSUB_TOPIC`, `MAIL_GO
 
 Desktop releases use `PATHWAY_WEB_NIGHTLY_DOMAIN` or `PATHWAY_WEB_LATEST_DOMAIN` for the Gmail setup website. Local web and desktop builds can set `PATHWAY_HOSTED_APP_URL`, which is shared with CLI sign-in. Native builds read `PATHWAY_SITE_URL`; `scripts/configure-pathway-ios.ts` derives it from `PATHWAY_HOSTED_APP_URL`. The chosen domain must resolve and allow signed-in Pathway users to reach `/settings/email` without a separate deployment-provider access gate.
 
+### Hosted account sign-in
+
+The app's hosted domain is `app.pathwayos.dev`. CLI sign-in, pairing, Gmail setup and channel links default to that origin. Build-time overrides must point to an owned and configured domain; check GitHub's `PATHWAY_WEB_NIGHTLY_DOMAIN` and `PATHWAY_WEB_LATEST_DOMAIN` variables when publishing releases.
+
+When retiring `spiritdevs.com`, [change the primary domain of the existing production Clerk instance](https://clerk.com/docs/guides/development/deployment/changing-domains) to the Pathway domain. Keeping the same instance preserves the account identity used by shared workspaces. This source change does not migrate Clerk or deploy its DNS records.
+
+Coordinate Clerk's supplied DNS records in Vercel for `pathwayos.dev`, certificate provisioning, the new publishable key in GitHub and local configuration, Convex's `CLERK_JWT_ISSUER_DOMAIN`, external JWT issuer/JWKS consumers, social sign-in callbacks and native associated domains. Rebuild the web, desktop and native clients and redeploy the relay. Existing sessions are invalidated and old installed clients retain their bundled key, so prepare the releases before cutover. Gmail's mail-service callback is separate from Clerk social sign-in; it changes only if the relay's public origin changes.
+
+A `400 origin_invalid` response from `clerk.spiritdevs.com` with the origin `https://app.pathwayos.dev` indicates the web bundle's primary Clerk configuration is incompatible with the website domain. Cookie warnings alone do not identify the cause. The web client shows a retry screen when Clerk reports a startup failure; retrying cannot repair missing domain configuration.
+
 Before testing Google consent, check the deployed `/v1/mail/config` endpoint. A missing route returns 404; the current relay returns 503 when mail is disabled, 401 without a valid Clerk token, and 200 with its capabilities after authentication. Credentialed mail preflights must echo the request origin and include `Access-Control-Allow-Credentials: true`. A successful desktop release does not establish that the relay deployment succeeded.
 
 | Variable                             | Purpose                                                                                                                                         |

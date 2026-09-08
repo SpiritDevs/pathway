@@ -611,10 +611,7 @@ struct PathwayIssueDetailView: View {
     }
 
     private func issueURL(_ issue: PathwayIssueRecord) -> URL? {
-        var components = URLComponents(string: "https://app.spiritdevs.com/issues")
-        // The web route resolves immutable IDs before display keys, which can repeat across companies.
-        components?.queryItems = [URLQueryItem(name: "issue", value: issue.id)]
-        return components?.url
+        PathwayIssueShareLink.url(issue)
     }
 
     private func openIssue(_ id: String) {
