@@ -12,7 +12,7 @@ Attachment is a one-time action. It does not change whether the thread is tempor
 
 ## Temporary threads
 
-Before sending the first message, use **Temporary** at the top right beside the action palette button. Both conversations and project threads can be temporary. A temporary project thread always gets a new dedicated Git worktree; a project that cannot create one cannot host a temporary thread.
+Before sending the first message, use the **Temporary conversation** speech bubble icon at the top right beside the action palette button. A checkmark inside the icon means temporary mode is on; click again to turn it off. Both conversations and project threads can be temporary. A temporary project thread always gets a new dedicated Git worktree; a project that cannot create one cannot host a temporary thread.
 
 Temporary threads skip inactivity settlement. Settling one deletes it immediately and cleans up its owned local working folders, worktree, and branch. A merged pull request can settle it automatically when no work is running or waiting and Git work is finished. Pushing to the default branch alone does not trigger deletion.
 

@@ -9177,14 +9177,38 @@ function ChatViewContent(props: ChatViewProps) {
     supportsConversations && (canChangeTemporary || activeThread.temporary === true);
   const threadRetentionControl = retentionControlVisible ? (
     canChangeTemporary ? (
-      <label className="inline-flex shrink-0 items-center gap-1.5 px-1 text-xs text-muted-foreground">
-        <input
-          type="checkbox"
-          checked={activeThread.temporary ?? false}
-          onChange={(event) => handleTemporaryChange(event.target.checked)}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              aria-label="Temporary conversation"
+              aria-pressed={activeThread.temporary ?? false}
+              className="me-2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground [-webkit-app-region:no-drag] hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:text-foreground"
+              onClick={() => handleTemporaryChange(!(activeThread.temporary ?? false))}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M5.8 4.2a9 9 0 0 1 12.4 0M20.5 7.5a9 9 0 0 1-6 13.1M9 20.5a9 9 0 0 1-2.5-1.1L3 20l.6-3.5A9 9 0 0 1 3.5 7.5" />
+                {activeThread.temporary && <path d="m8 12 3 3 5-6" />}
+              </svg>
+            </button>
+          }
         />
-        Temporary
-      </label>
+        <TooltipPopup side="bottom">
+          Temporary conversation {activeThread.temporary ? "on" : "off"}
+        </TooltipPopup>
+      </Tooltip>
     ) : (
       <button
         type="button"
