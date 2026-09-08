@@ -183,7 +183,7 @@ export const AgentThread = Schema.Struct({
   id: AgentThreadId,
   companyId: CompanyId,
   environmentId: EnvironmentId,
-  cloudProjectId: CloudProjectId,
+  cloudProjectId: Schema.NullOr(CloudProjectId),
   shell: CloudAgentThreadShell,
   updatedAt: CloudTimestamp,
 });

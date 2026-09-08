@@ -1,3 +1,4 @@
+import { CompanyId } from "@spiritdevs/contracts/company";
 import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
@@ -23,7 +24,6 @@ import {
   parseScopedProjectKey,
   parseScopedThreadKey,
   scopedProjectKey,
-  scopeProjectRef,
   scopedThreadKey,
   scopeThreadRef,
 } from "@spiritdevs/client-runtime/environment";
@@ -272,7 +272,9 @@ function invalidateDraftPlacement(placement: DraftPlacement): DraftPlacement {
 const PersistedDraftThreadState = Schema.Struct({
   threadId: ThreadId,
   environmentId: Schema.String,
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
+  temporary: Schema.optionalKey(Schema.Boolean),
+  conversationCompanyId: Schema.optionalKey(Schema.NullOr(CompanyId)),
   logicalProjectKey: Schema.optionalKey(Schema.String),
   pendingSend: Schema.optionalKey(Schema.NullOr(PendingDraftSend)),
   placement: Schema.optionalKey(DraftPlacement),
@@ -374,6 +376,17 @@ export function composerDraftHasUserContent(
   );
 }
 
+export interface DraftProjectRef {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId | null;
+}
+
+export function draftProjectKey(ref: DraftProjectRef): string {
+  return ref.projectId === null
+    ? `${ref.environmentId}:conversations`
+    : projectDraftKey({ environmentId: ref.environmentId, projectId: ref.projectId });
+}
+
 /**
  * Mutable routing and execution context for a pre-thread draft session.
  *
@@ -387,7 +400,9 @@ export interface DraftSessionState {
   pendingSendNeedsReconciliation?: boolean;
   threadId: ThreadId;
   environmentId: EnvironmentId;
-  projectId: ProjectId;
+  projectId: ProjectId | null;
+  temporary?: boolean;
+  conversationCompanyId?: CompanyId | null;
   logicalProjectKey: string;
   createdAt: string;
   runtimeMode: RuntimeMode;
@@ -452,13 +467,15 @@ interface ComposerDraftStoreState {
   /** Creates or updates the draft session tracked for a logical project. */
   setLogicalProjectDraftThreadId: (
     logicalProjectKey: string,
-    projectRef: ScopedProjectRef,
+    projectRef: DraftProjectRef,
     draftId: DraftId,
     options?: {
       threadId?: ThreadId;
       branch?: string | null;
       worktreePath?: string | null;
       createdAt?: string;
+      temporary?: boolean;
+      conversationCompanyId?: CompanyId | null;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
@@ -468,13 +485,15 @@ interface ComposerDraftStoreState {
   ) => void;
   /** Creates or updates the draft session tracked for a concrete project ref. */
   setProjectDraftThreadId: (
-    projectRef: ScopedProjectRef,
+    projectRef: DraftProjectRef,
     draftId: DraftId,
     options?: {
       threadId?: ThreadId;
       branch?: string | null;
       worktreePath?: string | null;
       createdAt?: string;
+      temporary?: boolean;
+      conversationCompanyId?: CompanyId | null;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
@@ -489,8 +508,10 @@ interface ComposerDraftStoreState {
       branch?: string | null;
       worktreePath?: string | null;
       placement?: DraftPlacement;
-      projectRef?: ScopedProjectRef;
+      projectRef?: DraftProjectRef;
       createdAt?: string;
+      temporary?: boolean;
+      conversationCompanyId?: CompanyId | null;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
@@ -1572,7 +1593,7 @@ function toProjectDraftSession(
 }
 
 function createDraftThreadState(
-  projectRef: ScopedProjectRef,
+  projectRef: DraftProjectRef,
   threadId: ThreadId,
   logicalProjectKey: string,
   existingThread: DraftThreadState | undefined,
@@ -1581,6 +1602,8 @@ function createDraftThreadState(
     branch?: string | null;
     worktreePath?: string | null;
     createdAt?: string;
+    temporary?: boolean;
+    conversationCompanyId?: CompanyId | null;
     envMode?: DraftThreadEnvMode;
     startFromOrigin?: boolean;
     runtimeMode?: RuntimeMode;
@@ -1617,6 +1640,14 @@ function createDraftThreadState(
     threadId,
     environmentId: projectRef.environmentId,
     projectId: projectRef.projectId,
+    temporary:
+      existingThread?.pendingSend != null || existingThread?.placement?.dispatched
+        ? (existingThread.temporary ?? false)
+        : (options?.temporary ?? existingThread?.temporary ?? false),
+    conversationCompanyId:
+      options?.conversationCompanyId !== undefined
+        ? options.conversationCompanyId
+        : (existingThread?.conversationCompanyId ?? null),
     logicalProjectKey,
     createdAt: options?.createdAt ?? existingThread?.createdAt ?? new Date().toISOString(),
     runtimeMode: options?.runtimeMode ?? existingThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
@@ -1661,6 +1692,8 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.threadId === right.threadId &&
     left.environmentId === right.environmentId &&
     left.projectId === right.projectId &&
+    left.temporary === right.temporary &&
+    left.conversationCompanyId === right.conversationCompanyId &&
     left.logicalProjectKey === right.logicalProjectKey &&
     left.createdAt === right.createdAt &&
     left.runtimeMode === right.runtimeMode &&
@@ -1785,20 +1818,31 @@ function normalizePersistedDraftThreads(
               promotedToRecord.threadId as ThreadId,
             )
           : null;
-      if (typeof projectId !== "string" || projectId.length === 0 || environmentId === undefined) {
+      if (
+        (projectId !== null && (typeof projectId !== "string" || projectId.length === 0)) ||
+        environmentId === undefined
+      ) {
         continue;
       }
       const normalizedEnvironmentId = environmentId as EnvironmentId;
       draftThreadsByThreadKey[threadKey] = {
         threadId,
         environmentId: normalizedEnvironmentId,
-        projectId: projectId as ProjectId,
+        projectId: projectId as ProjectId | null,
+        temporary: candidateDraftThread.temporary === true,
+        conversationCompanyId:
+          typeof candidateDraftThread.conversationCompanyId === "string"
+            ? CompanyId.make(candidateDraftThread.conversationCompanyId)
+            : null,
         logicalProjectKey:
           typeof candidateDraftThread.logicalProjectKey === "string" &&
           candidateDraftThread.logicalProjectKey.length > 0
             ? candidateDraftThread.logicalProjectKey
             : parsedThreadRef
-              ? projectDraftKey(scopeProjectRef(normalizedEnvironmentId, projectId as ProjectId))
+              ? draftProjectKey({
+                  environmentId: normalizedEnvironmentId,
+                  projectId: projectId as ProjectId | null,
+                })
               : threadKeyOrId,
         createdAt:
           typeof createdAt === "string" && createdAt.length > 0
@@ -2505,14 +2549,14 @@ function toHydratedDraftThreadState(
     threadId: persistedDraftThread.threadId,
     environmentId: persistedDraftThread.environmentId as EnvironmentId,
     projectId: persistedDraftThread.projectId,
+    temporary: persistedDraftThread.temporary ?? false,
+    conversationCompanyId: persistedDraftThread.conversationCompanyId ?? null,
     logicalProjectKey:
       persistedDraftThread.logicalProjectKey ??
-      projectDraftKey(
-        scopeProjectRef(
-          persistedDraftThread.environmentId as EnvironmentId,
-          persistedDraftThread.projectId,
-        ),
-      ),
+      draftProjectKey({
+        environmentId: persistedDraftThread.environmentId as EnvironmentId,
+        projectId: persistedDraftThread.projectId,
+      }),
     createdAt: persistedDraftThread.createdAt,
     runtimeMode: persistedDraftThread.runtimeMode,
     interactionMode: persistedDraftThread.interactionMode,
@@ -2651,6 +2695,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               existingThread,
               options,
             );
+            if (nextDraftThread === existingThread) return state;
             const hasSameLogicalMapping = previousThreadKeyForLogicalProject === draftId;
             if (hasSameLogicalMapping && draftThreadsEqual(existingThread, nextDraftThread)) {
               return state;
@@ -2710,7 +2755,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
         },
         setProjectDraftThreadId: (projectRef, draftId, options) => {
           get().setLogicalProjectDraftThreadId(
-            projectDraftKey(projectRef),
+            draftProjectKey(projectRef),
             projectRef,
             draftId,
             options,
@@ -2731,7 +2776,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               projectId: existing.projectId,
             };
             if (
-              nextProjectRef.projectId.length === 0 ||
+              (nextProjectRef.projectId !== null && nextProjectRef.projectId.length === 0) ||
               nextProjectRef.environmentId.length === 0
             ) {
               return state;
@@ -2763,6 +2808,14 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               threadId: existing.threadId,
               environmentId: nextProjectRef.environmentId,
               projectId: nextProjectRef.projectId,
+              conversationCompanyId:
+                options.conversationCompanyId !== undefined
+                  ? options.conversationCompanyId
+                  : (existing.conversationCompanyId ?? null),
+              temporary:
+                existing.pendingSend != null || existing.placement?.dispatched
+                  ? (existing.temporary ?? false)
+                  : (options.temporary ?? existing.temporary ?? false),
               logicalProjectKey: existing.logicalProjectKey,
               createdAt:
                 options.createdAt === undefined
@@ -2798,6 +2851,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               Equal.equals(nextDraftThread.placement, existing.placement) &&
               nextDraftThread.environmentId === existing.environmentId &&
               nextDraftThread.projectId === existing.projectId &&
+              nextDraftThread.temporary === existing.temporary &&
+              nextDraftThread.conversationCompanyId === existing.conversationCompanyId &&
               nextDraftThread.logicalProjectKey === existing.logicalProjectKey &&
               nextDraftThread.createdAt === existing.createdAt &&
               nextDraftThread.runtimeMode === existing.runtimeMode &&

@@ -140,6 +140,9 @@ const make = Effect.gen(function* () {
       );
 
     const projection = yield* loadThread(scope);
+    if (projection.thread.projectId === null) {
+      return yield* failure("invalid_request", "Attach a project before using worktree tools.");
+    }
     if (projection.thread.worktreePath !== null) {
       return yield* alreadyInWorktree(projection.thread.worktreePath);
     }
@@ -152,7 +155,8 @@ const make = Effect.gen(function* () {
       );
     }
 
-    const project = yield* loadProject(scope, projection.thread.projectId);
+    const projectId = projection.thread.projectId;
+    const project = yield* loadProject(scope, projectId);
     if (project.workspaceRoot === null) {
       return yield* failure(
         "invalid_request",
@@ -371,7 +375,7 @@ const make = Effect.gen(function* () {
               ? Effect.succeed<WorktreeMcpContinuationStatus>({ status: "skipped" })
               : threadManagement
                   .sendToThread({
-                    projectId: projection.thread.projectId,
+                    projectId,
                     commandId: ids.continuationCommandId,
                     threadId: scope.threadId,
                     messageId: ids.continuationMessageId,
@@ -405,7 +409,7 @@ const make = Effect.gen(function* () {
           setupScript = yield* setupScriptRunner
             .runForThread({
               threadId: scope.threadId,
-              projectId: projection.thread.projectId,
+              projectId,
               projectCwd,
               worktreePath,
               project: {
@@ -478,7 +482,11 @@ const make = Effect.gen(function* () {
     function* (scope) {
       yield* requireCapability(scope);
       const projection = yield* loadThread(scope);
-      const project = yield* loadProject(scope, projection.thread.projectId);
+      if (projection.thread.projectId === null) {
+        return yield* failure("invalid_request", "Attach a project before using worktree tools.");
+      }
+      const projectId = projection.thread.projectId;
+      const project = yield* loadProject(scope, projectId);
       if (project.workspaceRoot === null) {
         return yield* failure(
           "invalid_request",

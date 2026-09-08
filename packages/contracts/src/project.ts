@@ -79,6 +79,7 @@ export type ProjectInspectDirectoryInput = typeof ProjectInspectDirectoryInput.T
 
 export const ProjectInspectDirectoryResult = Schema.Struct({
   repositoryIdentity: Schema.NullOr(RepositoryIdentity),
+  repositoryRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
 });
 export type ProjectInspectDirectoryResult = typeof ProjectInspectDirectoryResult.Type;
 

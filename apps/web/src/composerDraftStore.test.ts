@@ -1,3 +1,4 @@
+import { CompanyId } from "@spiritdevs/contracts/company";
 import {
   scopedProjectKey,
   scopedThreadKey,
@@ -2565,5 +2566,95 @@ describe("draft automatic placement persistence", () => {
     });
     expect(store.getDraftSession(draftId)?.environmentId).toBe(local.environmentId);
     expect(store.getDraftSession(draftId)?.placement?.dispatched).toBe(true);
+  });
+});
+
+describe("conversation draft retention", () => {
+  it("keeps a dispatched conversation's retention, company and draft mapping pinned after a failed launch", () => {
+    resetComposerDraftStore();
+    const draftId = DraftId.make("dispatched-conversation");
+    const ref = { environmentId: TEST_ENVIRONMENT_ID, projectId: null };
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(ref, draftId, {
+      temporary: true,
+      conversationCompanyId: CompanyId.make("company-1"),
+    });
+    store.setDraftThreadContext(draftId, {
+      placement: { mode: "manual", providerPinned: false, resolvedKey: null, dispatched: true },
+    });
+    store.setDraftPendingSend(draftId, null);
+    store.setDraftThreadContext(draftId, { temporary: false });
+    store.setProjectDraftThreadId(ref, draftId, { temporary: false });
+    const mapping =
+      useComposerDraftStore.getState().logicalProjectDraftThreadKeyByLogicalProjectKey;
+    store.setProjectDraftThreadId(
+      scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("other-project")),
+      draftId,
+    );
+    expect(store.getDraftSession(draftId)).toMatchObject({
+      projectId: null,
+      temporary: true,
+      conversationCompanyId: "company-1",
+      placement: { dispatched: true },
+    });
+    expect(
+      useComposerDraftStore.getState().logicalProjectDraftThreadKeyByLogicalProjectKey,
+    ).toEqual(mapping);
+  });
+
+  beforeEach(resetComposerDraftStore);
+
+  it("keeps projectless drafts, company ownership and temporary state through persistence", () => {
+    const draftId = DraftId.make("draft-conversation");
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(
+      { environmentId: TEST_ENVIRONMENT_ID, projectId: null },
+      draftId,
+      {
+        conversationCompanyId: CompanyId.make("company-1"),
+        temporary: true,
+      },
+    );
+    store.setPrompt(draftId, "Keep my draft");
+    const persisted = flushComposerDraftStorage();
+    expect(persisted.draftThreadsByThreadKey?.[draftId]).toMatchObject({
+      projectId: null,
+      temporary: true,
+      conversationCompanyId: "company-1",
+    });
+  });
+
+  it("preserves retention and composer contents when a draft acquires a project", () => {
+    const draftId = DraftId.make("draft-attach");
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(
+      { environmentId: TEST_ENVIRONMENT_ID, projectId: null },
+      draftId,
+      { temporary: true },
+    );
+    store.setPrompt(draftId, "Preserve this conversation");
+    store.setProjectDraftThreadId(
+      scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("project-1")),
+      draftId,
+    );
+    expect(store.getDraftSession(draftId)).toMatchObject({
+      projectId: "project-1",
+      temporary: true,
+    });
+    expect(store.getComposerDraft(draftId)?.prompt).toBe("Preserve this conversation");
+  });
+
+  it("locks retention changes while the first message is being submitted", () => {
+    const draftId = DraftId.make("draft-sending");
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId({ environmentId: TEST_ENVIRONMENT_ID, projectId: null }, draftId);
+    store.setDraftPendingSend(draftId, {
+      messageId: MessageId.make("first"),
+      text: "Hello",
+      title: "Hello",
+      createdAt: "2026-09-08T00:00:00Z",
+    });
+    store.setDraftThreadContext(draftId, { temporary: true });
+    expect(store.getDraftSession(draftId)?.temporary).toBe(false);
   });
 });

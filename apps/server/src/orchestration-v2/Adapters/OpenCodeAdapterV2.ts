@@ -610,6 +610,13 @@ export function openCodePermissionRules(
     }
   }
 
+  for (const directory of runtimePolicy.additionalDirectories ?? []) {
+    rules.push({
+      permission: "external_directory",
+      pattern: `${directory.replace(/\/$/, "")}/*`,
+      action: "allow",
+    });
+  }
   return rules;
 }
 
@@ -622,6 +629,19 @@ function permissionRuleEquals(
     left.pattern === right.pattern &&
     left.action === right.action
   );
+}
+
+/** Native sessions retain permissions across process restarts and project attachment. */
+export function openCodeConversationResumePermissions(
+  runtimePolicy: ProviderAdapterV2RuntimePolicy,
+  existing: ReadonlyArray<ReturnType<typeof openCodePermissionRules>[number]>,
+): ReturnType<typeof openCodePermissionRules> | undefined {
+  if (!runtimePolicy.additionalDirectories?.length) return undefined;
+  const desired = openCodePermissionRules(runtimePolicy);
+  return desired.length === existing.length &&
+    desired.every((rule, index) => permissionRuleEquals(rule, existing[index]!))
+    ? undefined
+    : desired;
 }
 
 /**
@@ -2422,6 +2442,15 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
                 client.session.get({ sessionID: sessionId }),
               );
               const nativeSession = unwrapData("session.get", response);
+              const permission = openCodeConversationResumePermissions(
+                threadInput.runtimePolicy ?? input.runtimePolicy,
+                nativeSession.permission ?? [],
+              );
+              if (permission !== undefined) {
+                yield* sdkCall("session.update", { sessionID: sessionId, permission }, () =>
+                  client.session.update({ sessionID: sessionId, permission }),
+                );
+              }
               const resumedAt = yield* DateTime.now;
               const providerThread = {
                 ...threadInput.providerThread,

@@ -3,6 +3,13 @@ import Testing
 @testable import Pathway
 
 struct PathwayLiveActivityTests {
+    @Test func conversationLiveActivityPreservesOwnerAndConversationLabel() throws {
+        let row = try JSONDecoder().decode(PathwayActivityRow.self, from: Data(#"{"environmentId":"env","threadId":"conversation","projectTitle":"Conversation","threadTitle":"Planning","modelTitle":"Codex","phase":"running","status":"Working","updatedAt":"2026-09-08T12:00:00Z","deepLink":"/threads/env/conversation","conversationCompanyId":"company-one"}"#.utf8))
+        #expect(row.conversationCompanyId == "company-one")
+        #expect(row.projectTitle == "Conversation")
+        #expect(row.url?.absoluteString == "pathway://threads/env/conversation")
+    }
+
     // Fixture uses the relay's ApnsClient contentState() shape, including stringified props.
     @Test func decodesRelayAPNsPayloadAndEmptyAttributes() throws {
         let aggregate = try fixture()

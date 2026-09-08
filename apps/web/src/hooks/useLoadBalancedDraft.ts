@@ -57,13 +57,14 @@ export function useLoadBalancedDraft(input: {
       : true;
   });
   const key =
-    draft && selection
+    draft && draft.projectId !== null && selection
       ? placementSelectionKey(draft.environmentId, draft.projectId, selection)
       : null;
   const automatic =
     enabled &&
     project?.workspaceRoot != null &&
     draft !== null &&
+    draft.projectId !== null &&
     draft.placement?.mode !== "manual" &&
     !pinned;
   const resolved = automatic && key !== null && draft?.placement?.resolvedKey === key;
@@ -201,6 +202,7 @@ export function useLoadBalancedDraft(input: {
     // Uploads or manual choices may have arrived while measurements were in flight.
     if (
       !current ||
+      current.projectId === null ||
       current.placement?.mode === "manual" ||
       draftPlacementIsPinned(current, store.getComposerDraft(draftId))
     )
@@ -249,6 +251,7 @@ export function useLoadBalancedDraft(input: {
         ?.serverConfig?.providers ?? [];
     if (
       !current ||
+      current.projectId === null ||
       draftPlacementIsPinned(current, composer) ||
       draftPlacementPinsProvider(current, currentSelection, currentProviders)
     )
@@ -309,6 +312,7 @@ export function useLoadBalancedDraft(input: {
       Boolean(
         eligible &&
         draft &&
+        draft.projectId !== null &&
         placementSelectionKey(draft.environmentId, draft.projectId, sendSelection) === key,
       ),
   };

@@ -1,19 +1,13 @@
+import { activeCompanyIdAtom } from "../cloud/activeCompany";
 import { useAtomValue } from "@effect/atom-react";
-import {
-  scopedProjectKey,
-  scopeProjectRef,
-  scopeThreadRef,
-} from "@spiritdevs/client-runtime/environment";
-import {
-  DEFAULT_RUNTIME_MODE,
-  type ScopedProjectRef,
-  type ThreadId,
-  type ThreadLocation,
-} from "@spiritdevs/contracts";
+import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
+import { DEFAULT_RUNTIME_MODE, type ThreadId, type ThreadLocation } from "@spiritdevs/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import {
   composerDraftHasUserContent,
+  draftProjectKey,
+  type DraftProjectRef,
   markPromotedDraftThreadByRef,
   type DraftId,
   type DraftThreadEnvMode,
@@ -40,6 +34,7 @@ import { useClientSettings } from "./useSettings";
 interface NewThreadWorkspaceOptions {
   branch?: string | null;
   worktreePath?: string | null;
+  temporary?: boolean;
   envMode?: DraftThreadEnvMode;
   startFromOrigin?: boolean;
   locations?: ReadonlyArray<ThreadLocation>;
@@ -54,6 +49,7 @@ interface NewThreadWorkspaceOptions {
 // state. Every reuse path applies exactly this set.
 function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undefined) {
   return {
+    ...(options?.temporary !== undefined ? { temporary: options.temporary } : {}),
     ...(options?.branch !== undefined ? { branch: options.branch } : {}),
     ...(options?.worktreePath !== undefined ? { worktreePath: options.worktreePath } : {}),
     ...(options?.envMode !== undefined ? { envMode: options.envMode } : {}),
@@ -63,6 +59,7 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
 }
 
 export function useNewThreadHandler() {
+  const activeCompanyId = useAtomValue(activeCompanyIdAtom);
   const projects = useProjects();
   const serverConfigs = useServerConfigs();
   // New-thread defaults are a user preference, and the settings UI only ever
@@ -80,10 +77,11 @@ export function useNewThreadHandler() {
 
   return useCallback(
     (
-      projectRef: ScopedProjectRef,
+      projectRef: DraftProjectRef,
       options?: {
         branch?: string | null;
         worktreePath?: string | null;
+        temporary?: boolean;
         envMode?: DraftThreadEnvMode;
         startFromOrigin?: boolean;
         locations?: ReadonlyArray<ThreadLocation>;
@@ -95,6 +93,13 @@ export function useNewThreadHandler() {
       // prepared checkout, a task to write — addresses that one rather than looking the project
       // up again and finding whichever draft it happens to hold.
     ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
+      if (
+        (projectRef.projectId === null || options?.temporary) &&
+        serverConfigs.get(projectRef.environmentId)?.environment.capabilities
+          .threadConversations !== true
+      ) {
+        throw new Error("Update this environment to use conversations and temporary threads.");
+      }
       const {
         getComposerDraft,
         getDraftSessionByLogicalProjectKey,
@@ -147,6 +152,8 @@ export function useNewThreadHandler() {
       // skipped entirely when a higher-priority source decides, and its
       // query atom caches per project after the first call.
       const resolveDefaultEnvMode = async (): Promise<DraftThreadEnvMode> => {
+        if (projectRef.projectId === null) return "local";
+        if (options?.temporary) return "worktree";
         // pathway.json is read out of the project directory; a rootless project has none to read.
         const consultProjectFile =
           project !== undefined &&
@@ -165,11 +172,14 @@ export function useNewThreadHandler() {
       };
       const logicalProjectKey = project
         ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
-        : scopedProjectKey(projectRef);
+        : projectRef.projectId === null
+          ? `${draftProjectKey(projectRef)}:${activeCompanyId ?? "unassigned"}`
+          : draftProjectKey(projectRef);
       const hasBranchOption = options?.branch !== undefined;
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
       const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
+      const hasTemporaryOption = options?.temporary !== undefined;
       const hasLocationsOption = options?.locations !== undefined;
       const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
       const storedDraftThreadRef = storedDraftThread
@@ -205,6 +215,7 @@ export function useNewThreadHandler() {
             currentRouteTarget?.kind === "draft" &&
             currentRouteTarget.draftId === emptyStoredDraftThread.draftId;
           const hasExplicitWorkspaceOption =
+            hasTemporaryOption ||
             hasBranchOption ||
             hasWorktreePathOption ||
             hasEnvModeOption ||
@@ -314,6 +325,7 @@ export function useNewThreadHandler() {
         !composerDraftHasUserContent(getComposerDraft(currentRouteTarget.draftId))
       ) {
         if (
+          hasTemporaryOption ||
           hasBranchOption ||
           hasWorktreePathOption ||
           hasEnvModeOption ||
@@ -382,6 +394,8 @@ export function useNewThreadHandler() {
         setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, draftId, {
           threadId,
           createdAt,
+          temporary: options?.temporary ?? false,
+          conversationCompanyId: projectRef.projectId === null ? activeCompanyId : null,
           branch: options?.branch ?? null,
           worktreePath: options?.worktreePath ?? null,
           envMode: initialEnvMode,
@@ -411,6 +425,7 @@ export function useNewThreadHandler() {
     },
     [
       getCurrentRouteTarget,
+      activeCompanyId,
       primaryServerSettings,
       projectGroupingSettings,
       projects,

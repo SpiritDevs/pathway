@@ -9,6 +9,8 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 
+import { MessageCircleIcon } from "lucide-react";
+
 import { cn } from "~/lib/utils";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -24,6 +26,8 @@ interface ChatHeaderProps {
   projectSelectionEnabled: boolean;
   threadAncestors: ReadonlyArray<ThreadBreadcrumbAncestor>;
   rightPanelOpen: boolean;
+  retentionControlVisible?: boolean;
+  onSelectConversation?: () => void;
   onProjectChange: (projectRef: ScopedProjectRef) => void | Promise<void>;
   onOpenThread: (threadId: ThreadId) => void;
   onRenameThread?: (title: string) => void;
@@ -90,6 +94,8 @@ export const ChatHeader = memo(function ChatHeader({
   onProjectChange,
   onOpenThread,
   onRenameThread,
+  retentionControlVisible = false,
+  onSelectConversation,
 }: ChatHeaderProps) {
   const [renaming, setRenaming] = useState<{ threadId: ThreadId; title: string } | null>(null);
   const renamingTitle = renaming?.threadId === activeThreadId ? renaming.title : null;
@@ -138,7 +144,13 @@ export const ChatHeader = memo(function ChatHeader({
     <div
       className={cn(
         "flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
-        rightPanelOpen ? "pr-10" : "pr-24",
+        retentionControlVisible
+          ? rightPanelOpen
+            ? "pr-40"
+            : "pr-52"
+          : rightPanelOpen
+            ? "pr-10"
+            : "pr-24",
       )}
     >
       <nav aria-label="Thread breadcrumb" className="min-w-0 flex-1 overflow-hidden">
@@ -146,22 +158,35 @@ export const ChatHeader = memo(function ChatHeader({
           {/* The project always leads the header: knowing which project a
               thread lives in is priority zero, and the thread title alone
               doesn't answer it. */}
-          {activeProjectName ? (
+          {activeProjectName || activeProjectRef === null ? (
             <li className="inline-flex shrink-0 items-center gap-2">
               {projectSelectionEnabled ? (
                 <WorkspaceProjectSelector
                   activeProjectRef={activeProjectRef}
-                  activeProjectTitle={activeProjectName}
-                  ariaLabel="Change project"
+                  activeProjectTitle={activeProjectName ?? "Conversation"}
+                  conversationSelected={activeProjectRef === null}
+                  onSelectConversation={onSelectConversation}
+                  {...(activeProjectRef === null && onSelectConversation === undefined
+                    ? { environmentId: activeThreadEnvironmentId }
+                    : {})}
+                  ariaLabel={
+                    activeProjectRef === null && onSelectConversation === undefined
+                      ? "Attach project"
+                      : "Change project"
+                  }
                   triggerClassName="inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                   menuAlign="start"
                   renderTrigger={(displayName) => (
                     <>
-                      <ProjectFavicon
-                        environmentId={activeThreadEnvironmentId}
-                        cwd={activeProjectCwd ?? ""}
-                        className="size-3.5"
-                      />
+                      {activeProjectRef === null ? (
+                        <MessageCircleIcon className="size-3.5" />
+                      ) : (
+                        <ProjectFavicon
+                          environmentId={activeThreadEnvironmentId}
+                          cwd={activeProjectCwd ?? ""}
+                          className="size-3.5"
+                        />
+                      )}
                       <span className="max-w-40 truncate text-sm font-medium">{displayName}</span>
                     </>
                   )}
@@ -172,16 +197,20 @@ export const ChatHeader = memo(function ChatHeader({
                   <TooltipTrigger
                     render={<span className="inline-flex min-w-0 items-center gap-1.5" />}
                   >
-                    <ProjectFavicon
-                      environmentId={activeThreadEnvironmentId}
-                      cwd={activeProjectCwd ?? ""}
-                      className="size-3.5"
-                    />
+                    {activeProjectRef === null ? (
+                      <MessageCircleIcon className="size-3.5" />
+                    ) : (
+                      <ProjectFavicon
+                        environmentId={activeThreadEnvironmentId}
+                        cwd={activeProjectCwd ?? ""}
+                        className="size-3.5"
+                      />
+                    )}
                     <span className="max-w-40 truncate text-sm font-medium text-muted-foreground">
-                      {activeProjectName}
+                      {activeProjectName ?? "Conversation"}
                     </span>
                   </TooltipTrigger>
-                  <TooltipPopup side="top">{activeProjectName}</TooltipPopup>
+                  <TooltipPopup side="top">{activeProjectName ?? "Conversation"}</TooltipPopup>
                 </Tooltip>
               )}
               <span aria-hidden className="text-muted-foreground/40">

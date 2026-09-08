@@ -105,3 +105,12 @@ describe("chatThreadActions", () => {
     expect(handleNewThread).not.toHaveBeenCalled();
   });
 });
+
+it("creates a new conversation in the active conversation's environment", async () => {
+  const handleNewThread = vi.fn(async () => {});
+  const conversation = { environmentId: ENVIRONMENT_ID, projectId: null };
+  const context = createContext({ activeThread: conversation, handleNewThread });
+  expect(resolveThreadActionProjectRef(context)).toBeNull();
+  expect(await startNewThreadFromContext(context)).toBe(true);
+  expect(handleNewThread).toHaveBeenCalledWith(conversation);
+});

@@ -2,7 +2,7 @@ import Foundation
 
 struct PathwayWorkspaceContext: Equatable {
     let threadID: String
-    let projectID: String
+    let projectID: String?
     let cwd: String
     let projectRoot: String
     var supportsPullRequests = false
@@ -30,13 +30,24 @@ struct PathwayWorkspaceClient {
     let request: PathwayWorkspaceRequest
 
     func call<T: Decodable>(_ method: String, _ fields: [String: JSONValue] = [:]) async throws -> T {
+        try await verifyConversationGitRoot(for: method)
         let result = try await request(method, .object(fields))
         return try JSONDecoder().decode(T.self, from: JSONEncoder().encode(result))
     }
 
     func run(_ method: String, _ fields: [String: JSONValue]) async throws -> JSONValue {
         guard context.canMutate else { throw PathwayWorkspaceError.unavailable }
+        try await verifyConversationGitRoot(for: method)
         return try await request(method, .object(fields))
+    }
+
+    private func verifyConversationGitRoot(for method: String) async throws {
+        guard context.projectID == nil,
+              method.hasPrefix("vcs.") || method.hasPrefix("git.") || method.hasPrefix("review.") else { return }
+        let inspected = try await request("projects.inspectDirectory", .object(cwdPayload)).objectValue
+        let root = inspected?["repositoryRoot"]?.stringValue
+            ?? inspected?["repositoryIdentity"]?.objectValue?["rootPath"]?.stringValue
+        guard root == context.cwd else { throw PathwayWorkspaceError.conversationRepository }
     }
 
     var cwdPayload: [String: JSONValue] { ["cwd": .string(context.cwd)] }
@@ -91,13 +102,14 @@ struct PathwayWorkspaceClient {
 }
 
 enum PathwayWorkspaceError: LocalizedError {
-    case unavailable, invalidCommit, fileChanged, revisionUnavailable
+    case unavailable, invalidCommit, fileChanged, revisionUnavailable, conversationRepository
     var errorDescription: String? {
         switch self {
         case .unavailable: "Reconnect and wait for the thread to finish before changing its workspace."
         case .invalidCommit: "Select files and enter a commit message."
         case .revisionUnavailable: "Update the environment server to enable revision-protected file editing."
         case .fileChanged: "This file changed on the environment. Reload it before saving your edit."
+        case .conversationRepository: "Use Files or open a terminal in this folder to review its Git repositories. This folder has no verified repository at its root."
         }
     }
 }

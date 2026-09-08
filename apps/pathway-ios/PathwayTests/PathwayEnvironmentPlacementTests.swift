@@ -4,6 +4,26 @@ import Testing
 
 @MainActor
 struct PathwayEnvironmentPlacementTests {
+    @Test func conversationPlacementPreservesExplicitEnvironmentWithoutProbingProjectLoadBalancing() async throws {
+        let suite = "conversation-placement-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = PathwayEnvironmentPlacementPreferences(defaults: defaults)
+        preferences.enabled = true
+        let conversations = [option("origin"), option("replica")].map {
+            PathwayNewThreadBindingOption(binding: nil, environment: $0.environment,
+                projectID: nil, projectName: "Conversation", companyName: "Company")
+        }
+        var requests = 0
+        let winner = await PathwayEnvironmentPlacement.resolve(bindings: conversations,
+            preferredBindingID: conversations[0].id, choice: nil, preferences: preferences, directory: nil) { _ in
+                requests += 1
+                return .init(config: self.config, resources: self.resources(cpuCount: 16), receivedAt: ProcessInfo.processInfo.systemUptime)
+            }
+        #expect(winner == nil)
+        #expect(requests == 0)
+    }
+
     @Test func sharedSelectionConformanceFixtures() throws {
         struct Fixture: Decodable {
             struct Candidate: Decodable {

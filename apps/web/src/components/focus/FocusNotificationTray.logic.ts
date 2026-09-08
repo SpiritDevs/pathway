@@ -2,6 +2,8 @@ import { scopedThreadKey, scopeThreadRef } from "@spiritdevs/client-runtime/envi
 import {
   ALL_FOCUS_ID,
   sortFocuses,
+  focusIdForThread,
+  focusNotificationProjectKey,
   type ActiveFocusId,
 } from "@spiritdevs/client-runtime/state/focuses";
 import type {
@@ -67,8 +69,14 @@ export function buildFocusNotificationRows(input: {
   const rows = input.notifications
     .toSorted((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id))
     .map((notification, index) => {
-      const assignedFocusId = focusIdByProjectKey.get(notification.projectKey);
-      const focus = assignedFocusId === undefined ? undefined : focusById.get(assignedFocusId);
+      const projectKey = focusNotificationProjectKey(notification);
+      const resolvedFocusId = focusIdForThread({
+        projectKey,
+        activeFocusId: input.activeFocusId,
+        focuses: orderedFocuses,
+        focusIdByProjectKey,
+      });
+      const focus = resolvedFocusId === ALL_FOCUS_ID ? undefined : focusById.get(resolvedFocusId);
       return {
         notification,
         eventLabel: focusNotificationEventLabel(notification.eventKind),
@@ -77,8 +85,10 @@ export function buildFocusNotificationRows(input: {
             scopedThreadKey(scopeThreadRef(notification.environmentId, notification.threadId)),
           ) ?? truncatedId(notification.threadId),
         projectName:
-          input.projectNamesByKey.get(notification.projectKey) ??
-          truncatedId(projectIdFromKey(notification.projectKey)),
+          projectKey === null
+            ? "Conversation"
+            : (input.projectNamesByKey.get(projectKey) ??
+              truncatedId(projectIdFromKey(projectKey))),
         focusId: focus?.id ?? ALL_FOCUS_ID,
         focusName: focus?.name ?? "All",
         unread: notification.isRead === undefined ? index < unreadCount : !notification.isRead,

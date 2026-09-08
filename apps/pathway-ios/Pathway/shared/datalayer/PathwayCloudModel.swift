@@ -418,7 +418,7 @@ final class PathwayCloudModel {
         }?.environment.label
     }
 
-    func projectName(companyId: String, projectId: String) -> String? {
+    func projectName(companyId: String, projectId: String?) -> String? {
         projects.first { $0.companyId == companyId && $0.project.id == projectId }?.project.name
     }
 
@@ -865,7 +865,7 @@ private struct PathwaySyncEntityKey: Hashable {
 
 private struct PathwayAgentThreadPayload: Decodable {
     let environmentId: String
-    let cloudProjectId: String
+    let cloudProjectId: String?
     let shell: PathwayAgentThreadShell
     let updatedAt: Double
 

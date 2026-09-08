@@ -1,3 +1,4 @@
+import { CompanyId } from "./company.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -393,7 +394,14 @@ export type OrchestrationV2WorkspaceMove = typeof OrchestrationV2WorkspaceMove.T
 export const OrchestrationV2AppThread = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
+  conversationCompanyId: Schema.optional(Schema.NullOr(CompanyId)),
+  conversationPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  ownedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  ownedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  temporary: Schema.optional(Schema.Boolean),
+  /** Irreversible retention choice, including before the first message. */
+  keptAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   title: TrimmedNonEmptyString,
   providerInstanceId: ProviderInstanceId,
   modelSelection: ModelSelection,
@@ -1489,7 +1497,14 @@ export type OrchestrationV2LatestVisibleMessageSummary =
 export const OrchestrationV2ThreadShell = Schema.Struct({
   ...OrchestrationV2CreationFields,
   id: ThreadId,
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
+  conversationCompanyId: Schema.optional(Schema.NullOr(CompanyId)),
+  conversationPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  ownedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  ownedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  temporary: Schema.optional(Schema.Boolean),
+  /** Irreversible retention choice, including before the first message. */
+  keptAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   title: Schema.String,
   providerInstanceId: ProviderInstanceId,
   modelSelection: ModelSelection,
@@ -1650,6 +1665,7 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
   createdAt: Schema.DateTimeUtcFromString,
   updatedAt: Schema.DateTimeUtcFromString,
   archivedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  keptAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   settledAt: Schema.NullOr(Schema.DateTimeUtcFromString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -2056,6 +2072,7 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
   createdAt: Schema.DateTimeUtcFromString,
   updatedAt: Schema.DateTimeUtcFromString,
   archivedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  keptAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   settledAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   snoozedUntil: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
@@ -2237,7 +2254,16 @@ export const OrchestrationV2Command = Schema.Union([
     ...OrchestrationV2CreationFields,
     commandId: CommandId,
     threadId: ThreadId,
-    projectId: ProjectId,
+    projectId: Schema.NullOr(ProjectId),
+    conversationCompanyId: Schema.optional(Schema.NullOr(CompanyId)),
+    temporary: Schema.optional(Schema.Boolean),
+    temporaryWorkspace: Schema.optional(
+      Schema.Struct({
+        baseRef: TrimmedNonEmptyString,
+        branch: Schema.optional(TrimmedNonEmptyString),
+        startFromOrigin: Schema.optional(Schema.Boolean),
+      }),
+    ),
     title: TrimmedNonEmptyString,
     modelSelection: ModelSelection,
     runtimeMode: RuntimeMode,
@@ -2245,6 +2271,19 @@ export const OrchestrationV2Command = Schema.Union([
     locations: Schema.optional(Schema.Array(ThreadLocation)),
     branch: Schema.NullOr(TrimmedNonEmptyString),
     worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.project.attach"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    projectId: ProjectId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("thread.temporary.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    temporary: Schema.Boolean,
+    keep: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.archive"),
@@ -2269,6 +2308,8 @@ export const OrchestrationV2Command = Schema.Union([
     type: Schema.Literal("thread.settle"),
     commandId: CommandId,
     threadId: ThreadId,
+    discardChanges: Schema.optional(Schema.Boolean),
+    reason: Schema.optional(Schema.Literals(["user", "merged-pr", "after-completion"])),
     force: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
@@ -2650,10 +2691,27 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   launchContinuation: "orchestration.launchContinuation",
   launchThread: "orchestration.launchThread",
   controlWorkspacePreparation: "orchestration.controlWorkspacePreparation",
+  subscribeWorkspaceCleanup: "orchestration.subscribeWorkspaceCleanup",
+  retryWorkspaceCleanup: "orchestration.retryWorkspaceCleanup",
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
 } as const;
+
+export const OrchestrationV2WorkspaceCleanupNotice = Schema.Struct({
+  effectId: Schema.String,
+  threadId: ThreadId,
+  title: Schema.String,
+  message: Schema.String,
+  nextAttemptAt: Schema.NullOr(Schema.String),
+});
+export type OrchestrationV2WorkspaceCleanupNotice =
+  typeof OrchestrationV2WorkspaceCleanupNotice.Type;
+
+export class OrchestrationV2WorkspaceCleanupError extends Schema.TaggedErrorClass<OrchestrationV2WorkspaceCleanupError>()(
+  "OrchestrationV2WorkspaceCleanupError",
+  { message: Schema.String, cause: Schema.optional(Schema.Defect()) },
+) {}
 
 export const OrchestrationV2WorkspaceMovePreviewInput = Schema.Struct({
   threadId: ThreadId,
@@ -2743,7 +2801,9 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   creationSource: Schema.optional(OrchestrationV2CreationSource),
   threadId: Schema.optional(ThreadId),
   reuseExistingThread: Schema.optional(Schema.Boolean),
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
+  conversationCompanyId: Schema.optional(Schema.NullOr(CompanyId)),
+  temporary: Schema.optional(Schema.Boolean),
   title: TrimmedNonEmptyString,
   generateTitle: Schema.optional(Schema.Boolean),
   modelSelection: ModelSelection,
@@ -2896,7 +2956,7 @@ export class OrchestrationV2ThreadLaunchError extends Schema.TaggedErrorClass<Or
   "OrchestrationV2ThreadLaunchError",
   {
     commandId: CommandId,
-    projectId: ProjectId,
+    projectId: Schema.NullOr(ProjectId),
     message: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   },
@@ -2973,6 +3033,14 @@ export class OrchestrationGetWorkflowScriptError extends Schema.TaggedErrorClass
 }
 
 export const OrchestrationV2RpcSchemas = {
+  subscribeWorkspaceCleanup: {
+    input: Schema.Struct({}),
+    output: Schema.Array(OrchestrationV2WorkspaceCleanupNotice),
+  },
+  retryWorkspaceCleanup: {
+    input: Schema.Struct({ effectId: TrimmedNonEmptyString }),
+    output: Schema.Void,
+  },
   dispatchCommand: {
     input: OrchestrationV2Command,
     output: OrchestrationV2DispatchCommandResult,

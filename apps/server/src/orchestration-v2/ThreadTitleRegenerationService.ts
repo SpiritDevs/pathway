@@ -192,8 +192,11 @@ export const make = Effect.gen(function* () {
         return { type: "stale" as const };
       }
 
-      const project = yield* projects.getById({ projectId: projection.thread.projectId });
-      if (Option.isNone(project)) {
+      const project =
+        projection.thread.projectId === null
+          ? Option.none()
+          : yield* projects.getById({ projectId: projection.thread.projectId });
+      if (projection.thread.projectId !== null && Option.isNone(project)) {
         return { type: "complete" as const };
       }
 
@@ -220,7 +223,11 @@ export const make = Effect.gen(function* () {
       }
 
       const settings = yield* serverSettings.getSettings;
-      const cwd = projection.thread.worktreePath ?? project.value.workspaceRoot;
+      const cwd =
+        projection.thread.worktreePath ??
+        (Option.isSome(project)
+          ? project.value.workspaceRoot
+          : (projection.thread.conversationPath ?? null));
       if (cwd === null) {
         return { type: "complete" as const };
       }

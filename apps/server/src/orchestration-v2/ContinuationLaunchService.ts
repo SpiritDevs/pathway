@@ -226,17 +226,25 @@ export const make = Effect.gen(function* () {
       )(`Source run ${input.sourceRunId} is not completed.`);
     }
 
-    const project = yield* projects.getById(source.thread.projectId).pipe(
-      Effect.mapError(mapError(input, "resolve-project")),
-      Effect.flatMap(
-        Option.match({
-          onNone: () =>
-            Effect.fail(mapError(input, "resolve-project")("Source project was not found.")),
-          onSome: Effect.succeed,
-        }),
-      ),
-    );
-    const sourceCwd = source.thread.worktreePath ?? project.workspaceRoot;
+    const projectId = source.thread.projectId;
+    const project =
+      projectId === null
+        ? null
+        : yield* projects.getById(projectId).pipe(
+            Effect.mapError(mapError(input, "resolve-project")),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(mapError(input, "resolve-project")("Source project was not found.")),
+                onSome: Effect.succeed,
+              }),
+            ),
+          );
+    const sourceCwd =
+      source.thread.worktreePath ??
+      project?.workspaceRoot ??
+      source.thread.conversationPath ??
+      null;
     if (sourceCwd === null) {
       return yield* mapError(input, "resolve-project")("Source project has no workspace.");
     }
@@ -251,6 +259,12 @@ export const make = Effect.gen(function* () {
       readonly worktreePath: string;
       readonly created: boolean;
     } | null = null;
+    if (input.workspaceTarget === "new-worktree" && projectId === null) {
+      return yield* mapError(
+        input,
+        "resolve-project",
+      )("Attach a project before creating a worktree continuation.");
+    }
     if (input.workspaceTarget === "new-worktree") {
       materialized = yield* provisionWorktree({
         launch: input,
@@ -260,11 +274,11 @@ export const make = Effect.gen(function* () {
       }).pipe(Effect.mapError(mapError(input, "provision-worktree")));
     }
 
-    if (materialized?.created === true) {
+    if (materialized?.created === true && project !== null && projectId !== null) {
       const setupExit = yield* Effect.exit(
         setupScripts.runForThread({
           threadId: input.targetThreadId,
-          projectId: source.thread.projectId,
+          projectId,
           projectCwd: project.workspaceRoot ?? sourceCwd,
           worktreePath: materialized.worktreePath,
           project: {
@@ -297,7 +311,7 @@ export const make = Effect.gen(function* () {
         }),
       );
       if (forkExit._tag === "Failure") {
-        if (materialized?.created === true) {
+        if (materialized?.created === true && project !== null && projectId !== null) {
           yield* cleanupWorktree({
             sourceCwd,
             branch: materialized.branch,

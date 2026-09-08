@@ -17,7 +17,12 @@ export function restoreWorkspacePreparationDraft(input: {
   logicalProjectKey: string;
   thread: Pick<
     OrchestrationV2AppThread,
-    "runtimeMode" | "interactionMode" | "locations" | "modelSelection"
+    | "runtimeMode"
+    | "interactionMode"
+    | "locations"
+    | "modelSelection"
+    | "temporary"
+    | "conversationCompanyId"
   >;
   preparation: OrchestrationV2WorkspacePreparation | undefined;
   text: string;
@@ -29,6 +34,8 @@ export function restoreWorkspacePreparationDraft(input: {
     threadId: newThreadId(),
     createdAt: new Date().toISOString(),
     runtimeMode: input.thread.runtimeMode,
+    temporary: input.thread.temporary ?? false,
+    conversationCompanyId: input.thread.conversationCompanyId ?? null,
     interactionMode: input.thread.interactionMode,
     ...(input.thread.locations ? { locations: input.thread.locations } : {}),
     startFromOrigin: input.preparation?.startFromOrigin ?? false,

@@ -762,6 +762,7 @@ export function makeClaudeQueryOptions(input: {
    * state.sqlite stay ungranted.
    */
   readonly attachmentsDir?: string;
+  readonly additionalDirectories?: ReadonlyArray<string>;
   readonly settings?: ClaudeSettings;
   readonly sdkSettings?: string | ClaudeSdkSettings;
   readonly environment?: NodeJS.ProcessEnv;
@@ -847,6 +848,7 @@ export function makeClaudeQueryOptions(input: {
   const additionalDirectories = [
     ...(input.cwd === null ? [] : [input.cwd]),
     ...(input.attachmentsDir === undefined ? [] : [input.attachmentsDir]),
+    ...(input.additionalDirectories ?? []),
   ];
   const withDirectories =
     additionalDirectories.length === 0 ? options : { ...options, additionalDirectories };
@@ -5056,6 +5058,9 @@ export function makeClaudeAdapterV2(
                 ...(resumeSessionAt === undefined ? {} : { resumeSessionAt }),
                 cwd: turnInput.runtimePolicy.cwd,
                 attachmentsDir,
+                ...(turnInput.runtimePolicy.additionalDirectories === undefined
+                  ? {}
+                  : { additionalDirectories: turnInput.runtimePolicy.additionalDirectories }),
                 settings: adapterOptions.settings,
                 environment: adapterOptions.environment,
                 tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
@@ -5692,8 +5697,14 @@ export function makeClaudeAdapterV2(
               const sourceNativeThreadId = yield* getNativeThreadId(forkInput.sourceProviderThread);
               yield* closeLiveQueryForNativeThread(sourceNativeThreadId);
               const upToMessageId = yield* resolveClaudeForkUpToMessageId(forkInput);
+              const hasRetainedWorkspace = input.runtimePolicy.additionalDirectories?.some(
+                (directory) => directory !== input.runtimePolicy.cwd,
+              );
               const forkOptions: ForkSessionOptions = {
-                ...(input.runtimePolicy.cwd === null ? {} : { dir: input.runtimePolicy.cwd }),
+                // After attachment the native history can still live under the original cwd.
+                ...(input.runtimePolicy.cwd === null || hasRetainedWorkspace
+                  ? {}
+                  : { dir: input.runtimePolicy.cwd }),
                 ...(upToMessageId === undefined ? {} : { upToMessageId }),
               };
               const forked = yield* queryRunner.forkSession({

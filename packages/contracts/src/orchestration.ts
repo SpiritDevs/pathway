@@ -1,3 +1,4 @@
+import { CompanyId } from "./company.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
@@ -211,7 +212,10 @@ export type ThreadTitleRegeneration = typeof ThreadTitleRegeneration.Type;
 
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
+  conversationCompanyId: Schema.optional(Schema.NullOr(CompanyId)),
+  conversationPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  temporary: Schema.optional(Schema.Boolean),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -266,7 +270,10 @@ export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
 
 export const OrchestrationThreadShell = Schema.Struct({
   id: ThreadId,
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
+  conversationCompanyId: Schema.optional(Schema.NullOr(CompanyId)),
+  conversationPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  temporary: Schema.optional(Schema.Boolean),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,

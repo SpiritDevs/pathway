@@ -3,6 +3,7 @@ import {
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
   AuthRelayWriteScope,
+  ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
   WsRpcGroup,
 } from "@spiritdevs/contracts";
@@ -70,5 +71,14 @@ describe("RPC authorization scopes", () => {
         `RPC method ${method} has no declared authorization scope.`,
       );
     }
+  });
+
+  it("allows cleanup observation with read access and requires operation access to retry deletion", () => {
+    expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.subscribeWorkspaceCleanup)).toBe(
+      AuthOrchestrationReadScope,
+    );
+    expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.retryWorkspaceCleanup)).toBe(
+      AuthOrchestrationOperateScope,
+    );
   });
 });

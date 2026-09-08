@@ -128,7 +128,7 @@ enum PathwayEnvironmentPlacement {
         return await attachments.load()?.attachments.isEmpty == false
     }
 
-    /// Probe only registered copies of the selected project, before the composer can upload files.
+    /// Probe registered workspaces within the selected company before the composer uploads files.
     @MainActor
     static func resolve(
         bindings: [PathwayNewThreadBindingOption], preferredBindingID: String,
@@ -137,20 +137,22 @@ enum PathwayEnvironmentPlacement {
     ) async -> String? {
         guard preferences.enabled, bindings.count > 1,
               !(await hasSavedDraft(bindingID: preferredBindingID, directory: directory)) else { return nil }
-        guard let origin = bindings.first(where: { $0.id == preferredBindingID }) else { return nil }
+        guard let origin = bindings.first(where: { $0.id == preferredBindingID }), origin.projectID != nil else { return nil }
         let projectBindings = bindings.filter {
-            $0.binding.companyId == origin.binding.companyId
-                && $0.binding.binding.cloudProjectId == origin.binding.binding.cloudProjectId
-                && $0.binding.binding.status == "active" && $0.environment.environment.state == "active"
+            $0.environment.companyId == origin.environment.companyId
+                && $0.projectID == origin.projectID
+                && ($0.binding?.binding.status ?? $0.environment.environment.state) == "active"
+                && $0.environment.environment.state == "active"
+                && ($0.projectID != nil || $0.environment.environment.descriptor.capabilities?["threadConversations"]?.boolValue == true)
         }
-        let byEnvironment = Dictionary(grouping: projectBindings) { $0.binding.binding.environmentId }
+        let byEnvironment = Dictionary(grouping: projectBindings) { $0.environment.environment.environmentId }
         let eligible = projectBindings.filter { candidate in
-            let environmentID = candidate.binding.binding.environmentId
-            if environmentID == origin.binding.binding.environmentId { return candidate.id == origin.id }
+            let environmentID = candidate.environment.environment.environmentId
+            if environmentID == origin.environment.environment.environmentId { return candidate.id == origin.id }
             guard let copies = byEnvironment[environmentID], let first = copies.first,
                   copies.allSatisfy({
-                      $0.binding.binding.localProjectId == first.binding.binding.localProjectId
-                          && $0.binding.binding.localWorkspaceRoot == first.binding.binding.localWorkspaceRoot
+                      $0.binding?.binding.localProjectId == first.binding?.binding.localProjectId
+                          && $0.binding?.binding.localWorkspaceRoot == first.binding?.binding.localWorkspaceRoot
                   }) else { return false }
             return candidate.id == first.id
         }

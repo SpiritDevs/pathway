@@ -10,6 +10,7 @@ import * as OpenApi from "effect/unstable/httpapi/OpenApi";
 
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  CompanyId,
   CompanyPermission,
   MembershipId,
   type CompanyPermission as CompanyPermissionType,
@@ -112,6 +113,7 @@ export const RelayAgentActivityState = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
   projectTitle: TrimmedNonEmptyString,
+  conversationCompanyId: Schema.optionalKey(CompanyId),
   threadTitle: TrimmedNonEmptyString,
   phase: RelayAgentAwarenessPhase,
   headline: TrimmedNonEmptyString,
@@ -126,6 +128,7 @@ export const RelayAgentActivityAggregateRow = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
   projectTitle: TrimmedNonEmptyString,
+  conversationCompanyId: Schema.optionalKey(CompanyId),
   threadTitle: TrimmedNonEmptyString,
   modelTitle: TrimmedNonEmptyString,
   phase: RelayAgentAwarenessPhase,

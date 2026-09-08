@@ -53,6 +53,27 @@ const createFocus = (id: string, name: string, orderKey?: string) => ({
 });
 
 describe("Focus definitions", () => {
+  it("includes conversations in multiple Focuses independently", async () => {
+    const t = harness();
+    await seedUser(t, "user-one");
+    const owner = asUser(t, "user-one");
+    await owner.mutation(api.focuses.create, {
+      ...createFocus(WORK, "Work"),
+      includeConversations: true,
+    });
+    await owner.mutation(api.focuses.create, {
+      ...createFocus(PERSONAL, "Personal"),
+      includeConversations: true,
+    });
+    expect(
+      (await owner.query(api.focuses.list, {})).focuses.map((focus) => focus.includeConversations),
+    ).toEqual([true, true]);
+    await owner.mutation(api.focuses.update, { focusId: WORK, includeConversations: false });
+    expect(
+      (await owner.query(api.focuses.list, {})).focuses.map((focus) => focus.includeConversations),
+    ).toEqual([false, true]);
+  });
+
   it("isolates each user's Focuses and supports create, update, and reorder", async () => {
     const t = harness();
     await seedUser(t, "user-one");

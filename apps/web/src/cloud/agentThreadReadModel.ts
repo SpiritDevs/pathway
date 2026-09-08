@@ -145,17 +145,29 @@ export function companyScopedEnvironmentThreads(
   replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
   environmentId: EnvironmentId,
 ): ReadonlyArray<OrchestrationV2ThreadShell> {
-  if (companyId === null) return threads;
+  if (companyId === null) {
+    const filtered = threads.filter((thread) => {
+      if (thread.projectId !== null) return true;
+      const owner = thread.conversationCompanyId;
+      const replica = owner == null ? undefined : replicas.get(owner);
+      return replica !== undefined && hasPathwayEnvironmentRegistration(replica, environmentId);
+    });
+    return filtered.length === threads.length ? threads : filtered;
+  }
   const replica = replicas.get(companyId);
   if (replica === undefined) return EMPTY_THREADS;
   if (!hasPathwayEnvironmentRegistration(replica, environmentId)) return EMPTY_THREADS;
-  const threadIds = new Set<string>();
+  const threadProjects = new Map<string, OrchestrationV2ThreadShell["projectId"]>();
   for (const value of replica.view.values()) {
     if (isAgentThread(value) && value.environmentId === environmentId) {
-      threadIds.add(value.shell.id);
+      threadProjects.set(value.shell.id, value.shell.projectId);
     }
   }
-  const filtered = threads.filter((thread) => threadIds.has(thread.id));
+  const filtered = threads.filter((thread) =>
+    thread.projectId === null
+      ? thread.conversationCompanyId === companyId
+      : threadProjects.get(thread.id) === thread.projectId,
+  );
   return filtered.length === threads.length ? threads : filtered;
 }
 
@@ -245,10 +257,12 @@ export function cloudEnvironmentThreadsFromReplicas(
   environmentId: EnvironmentId,
 ): ReadonlyArray<OrchestrationV2ThreadShell> {
   const latestByThreadId = new Map<string, AgentThreadEntity>();
-  for (const replica of replicas.values()) {
+  for (const [companyId, replica] of replicas) {
     if (!hasPathwayEnvironmentRegistration(replica, environmentId)) continue;
     for (const value of replica.view.values()) {
       if (!isAgentThread(value) || value.environmentId !== environmentId) continue;
+      if (value.shell.projectId === null && value.shell.conversationCompanyId !== companyId)
+        continue;
       const existing = latestByThreadId.get(value.shell.id);
       if (existing === undefined) {
         latestByThreadId.set(value.shell.id, value);

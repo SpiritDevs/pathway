@@ -16,6 +16,7 @@ import {
   RunId,
   ThreadId,
 } from "@spiritdevs/contracts";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -58,8 +59,12 @@ export type ThreadManagementTerminalRunStatus = Extract<
   "completed" | "failed" | "cancelled" | "interrupted" | "rolled_back"
 >;
 
-export interface ThreadManagementSendInput {
-  readonly projectId: ProjectId;
+export interface ThreadManagementScope {
+  readonly projectId: ProjectId | null;
+  readonly conversationCompanyId?: CompanyId | null | undefined;
+}
+
+export interface ThreadManagementSendInput extends ThreadManagementScope {
   readonly commandId: CommandId;
   readonly threadId: ThreadId;
   readonly messageId: MessageId;
@@ -81,8 +86,7 @@ export interface ThreadManagementSendResult {
   readonly delivery: "started" | "queued" | "steered" | "restarted";
 }
 
-export interface ThreadManagementWaitInput {
-  readonly projectId: ProjectId;
+export interface ThreadManagementWaitInput extends ThreadManagementScope {
   readonly threadId: ThreadId;
   readonly runId?: RunId;
   readonly timeoutMs: number;
@@ -95,8 +99,7 @@ export interface ThreadManagementWaitResult {
   readonly timedOut: boolean;
 }
 
-export interface ThreadManagementInterruptInput {
-  readonly projectId: ProjectId;
+export interface ThreadManagementInterruptInput extends ThreadManagementScope {
   readonly commandId: CommandId;
   readonly threadId: ThreadId;
   readonly runId?: RunId;
@@ -118,7 +121,7 @@ export type ThreadManagementInterruptResult =
 export class ThreadManagementThreadNotFoundError extends Schema.TaggedErrorClass<ThreadManagementThreadNotFoundError>()(
   "ThreadManagementThreadNotFoundError",
   {
-    projectId: ProjectId,
+    projectId: Schema.NullOr(ProjectId),
     threadId: ThreadId,
   },
 ) {
@@ -177,7 +180,7 @@ export class ThreadManagementThreadNotInterruptibleError extends Schema.TaggedEr
 export class ThreadManagementProjectionLoadError extends Schema.TaggedErrorClass<ThreadManagementProjectionLoadError>()(
   "ThreadManagementProjectionLoadError",
   {
-    projectId: ProjectId,
+    projectId: Schema.NullOr(ProjectId),
     threadId: ThreadId,
     cause: Schema.Defect(),
   },
@@ -190,7 +193,7 @@ export class ThreadManagementProjectionLoadError extends Schema.TaggedErrorClass
 export class ThreadManagementProjectThreadsListError extends Schema.TaggedErrorClass<ThreadManagementProjectThreadsListError>()(
   "ThreadManagementProjectThreadsListError",
   {
-    projectId: ProjectId,
+    projectId: Schema.NullOr(ProjectId),
     cause: Schema.Defect(),
   },
 ) {
@@ -233,19 +236,21 @@ export interface ThreadManagementServiceShape {
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, OrchestratorV2Error>;
   readonly getThreadSnapshot: OrchestratorV2["Service"]["getThreadSnapshot"];
-  readonly getProjectThread: (input: {
-    readonly projectId: ProjectId;
-    readonly threadId: ThreadId;
-  }) => Effect.Effect<OrchestrationV2ThreadProjection, ThreadManagementError>;
+  readonly getProjectThread: (
+    input: ThreadManagementScope & {
+      readonly threadId: ThreadId;
+    },
+  ) => Effect.Effect<OrchestrationV2ThreadProjection, ThreadManagementError>;
   readonly getShellSnapshot: () => Effect.Effect<
     OrchestrationV2ThreadShellSnapshot,
     OrchestratorV2Error
   >;
   readonly getThreadShell: OrchestratorV2["Service"]["getThreadShell"];
-  readonly listProjectThreads: (input: {
-    readonly projectId: ProjectId;
-    readonly includeSubagents: boolean;
-  }) => Effect.Effect<ReadonlyArray<OrchestrationV2ThreadShell>, ThreadManagementError>;
+  readonly listProjectThreads: (
+    input: ThreadManagementScope & {
+      readonly includeSubagents: boolean;
+    },
+  ) => Effect.Effect<ReadonlyArray<OrchestrationV2ThreadShell>, ThreadManagementError>;
   readonly sendToThread: (
     input: ThreadManagementSendInput,
   ) => Effect.Effect<ThreadManagementSendResult, ThreadManagementFailure>;
@@ -316,6 +321,18 @@ export function latestSteerableRun(
     .toSorted((left, right) => right.ordinal - left.ordinal)[0];
 }
 
+function threadMatchesScope(
+  thread: Pick<OrchestrationV2ThreadShell, "projectId" | "conversationCompanyId">,
+  scope: ThreadManagementScope,
+): boolean {
+  return (
+    thread.projectId === scope.projectId &&
+    (scope.projectId !== null ||
+      (scope.conversationCompanyId != null &&
+        thread.conversationCompanyId === scope.conversationCompanyId))
+  );
+}
+
 const make = Effect.gen(function* () {
   const orchestrator = yield* OrchestratorV2;
 
@@ -339,7 +356,7 @@ const make = Effect.gen(function* () {
           }),
       ),
       Effect.flatMap((projection) =>
-        projection.thread.projectId === input.projectId && projection.thread.deletedAt === null
+        threadMatchesScope(projection.thread, input) && projection.thread.deletedAt === null
           ? Effect.succeed(projection)
           : Effect.fail(
               new ThreadManagementThreadNotFoundError({
@@ -361,7 +378,7 @@ const make = Effect.gen(function* () {
       ),
       Effect.map((snapshot) =>
         snapshot.threads
-          .filter((thread) => thread.projectId === input.projectId)
+          .filter((thread) => threadMatchesScope(thread, input))
           .filter(
             (thread) =>
               input.includeSubagents || thread.lineage.relationshipToParent !== "subagent",

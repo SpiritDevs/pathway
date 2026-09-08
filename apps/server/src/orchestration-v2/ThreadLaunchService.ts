@@ -1,3 +1,4 @@
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import {
   CommandId,
   type ChatAttachment,
@@ -67,7 +68,9 @@ export interface ThreadLaunchInput {
   readonly commandId: CommandId;
   readonly threadId?: ThreadId;
   readonly reuseExistingThread?: boolean;
-  readonly projectId: ProjectId;
+  readonly projectId: ProjectId | null;
+  readonly temporary?: boolean | undefined;
+  readonly conversationCompanyId?: CompanyId | null | undefined;
   readonly title: string;
   readonly generateTitle?: boolean;
   readonly modelSelection: ModelSelection;
@@ -104,7 +107,7 @@ export class ThreadLaunchError extends Schema.TaggedErrorClass<ThreadLaunchError
       "cleanup-worktree",
     ]),
     commandId: CommandId,
-    projectId: ProjectId,
+    projectId: Schema.NullOr(ProjectId),
     threadId: Schema.optional(ThreadId),
     cause: Schema.Defect(),
   },
@@ -303,6 +306,10 @@ export const make = Effect.gen(function* () {
       const current = yield* threads
         .getThreadProjection(control.threadId)
         .pipe(Effect.mapError(() => rejected("Could not read this thread.")));
+      if (control.action === "work_locally" && current.thread.temporary === true)
+        return yield* rejected(
+          "Temporary project threads require a dedicated worktree and cannot run in the shared checkout.",
+        );
       const run = current.runs.find((run) => run.id === control.runId);
       if (run?.status === "failed") {
         // Let the old worker finish its finalizers before replacing its preparation entry.
@@ -322,6 +329,7 @@ export const make = Effect.gen(function* () {
           commandId: control.commandId,
           threadId: control.threadId,
           projectId: current.thread.projectId,
+          temporary: current.thread.temporary,
           title: current.thread.title,
           modelSelection: run.modelSelection,
           runtimeMode: current.thread.runtimeMode,
@@ -414,7 +422,41 @@ export const make = Effect.gen(function* () {
     runId: RunId | null,
     entry: ActivePreparation,
   ) {
-    const project = yield* projects.getById(input.projectId).pipe(
+    if (input.projectId === null) {
+      if (runId !== null)
+        yield* threads
+          .dispatch({
+            type: "prepared-run.release",
+            commandId: CommandId.make(`${input.commandId}:release`),
+            threadId,
+            runId,
+          })
+          .pipe(Effect.mapError(mapError(input, "release-run", threadId)));
+      return;
+    }
+    if (input.temporary === true) {
+      const current = yield* threads
+        .getThreadProjection(threadId)
+        .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+      if (
+        current.thread.ownedWorktreePath == null ||
+        current.thread.worktreePath !== current.thread.ownedWorktreePath
+      )
+        return yield* mapError(
+          input,
+          "provision-worktree",
+          threadId,
+        )("Temporary project threads require a dedicated worktree.");
+      input = {
+        ...input,
+        workspaceStrategy: {
+          type: "existing_worktree",
+          worktreePath: current.thread.ownedWorktreePath,
+          ...(current.thread.branch === null ? {} : { branch: current.thread.branch }),
+        },
+      };
+    }
+    const project = yield* projects.getById(input.projectId!).pipe(
       Effect.mapError(mapError(input, "resolve-project", threadId)),
       Effect.flatMap(
         Option.match({
@@ -577,7 +619,7 @@ export const make = Effect.gen(function* () {
     const setup = yield* setupScripts
       .runForThread({
         threadId,
-        projectId: input.projectId,
+        projectId: input.projectId!,
         projectCwd: projectWorkspaceRoot,
         worktreePath: cwd,
         project: {
@@ -625,6 +667,7 @@ export const make = Effect.gen(function* () {
     // never delays provisioning or the provider turn. The temporary name
     // simply sticks if generation or the rename fails.
     if (
+      input.temporary !== true &&
       worktreePath !== null &&
       branch !== null &&
       initialMessage !== undefined &&
@@ -747,15 +790,19 @@ export const make = Effect.gen(function* () {
 
   const launch: ThreadLaunchService["Service"]["launch"] = Effect.fn("ThreadLaunchService.launch")(
     function* (input) {
-      const project = yield* projects.getById(input.projectId).pipe(
-        Effect.mapError(mapError(input, "resolve-project")),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.fail(mapError(input, "resolve-project")("Project not found.")),
-            onSome: Effect.succeed,
-          }),
-        ),
-      );
+      const project =
+        input.projectId === null
+          ? null
+          : yield* projects.getById(input.projectId).pipe(
+              Effect.mapError(mapError(input, "resolve-project")),
+              Effect.flatMap(
+                Option.match({
+                  onNone: () =>
+                    Effect.fail(mapError(input, "resolve-project")("Project not found.")),
+                  onSome: Effect.succeed,
+                }),
+              ),
+            );
       if (input.reuseExistingThread === true && input.threadId === undefined) {
         return yield* mapError(
           input,
@@ -768,7 +815,7 @@ export const make = Effect.gen(function* () {
         const candidateThreadId =
           input.threadId ??
           (yield* ids.allocate
-            .thread({ projectId: input.projectId })
+            .thread(input.projectId === null ? {} : { projectId: input.projectId })
             .pipe(Effect.mapError(mapError(input, "create-thread"))));
 
         if (input.reuseExistingThread === true && Option.isNone(launchReceipt)) {
@@ -792,6 +839,24 @@ export const make = Effect.gen(function* () {
                 commandId: input.commandId,
                 threadId: candidateThreadId,
                 projectId: input.projectId,
+                temporary: input.temporary ?? false,
+                ...(input.temporary === true
+                  ? {
+                      temporaryWorkspace:
+                        input.workspaceStrategy.type === "worktree"
+                          ? {
+                              baseRef: input.workspaceStrategy.baseRef,
+                              ...(input.workspaceStrategy.branch === undefined
+                                ? {}
+                                : { branch: input.workspaceStrategy.branch }),
+                              ...(input.workspaceStrategy.startFromOrigin === undefined
+                                ? {}
+                                : { startFromOrigin: input.workspaceStrategy.startFromOrigin }),
+                            }
+                          : { baseRef: input.workspaceStrategy.branch ?? "HEAD" },
+                    }
+                  : {}),
+                conversationCompanyId: input.conversationCompanyId,
                 title: input.title,
                 modelSelection: input.modelSelection,
                 runtimeMode: input.runtimeMode,
@@ -814,10 +879,24 @@ export const make = Effect.gen(function* () {
         const threadId =
           claimed.storedEvents.find((stored) => stored.event.type.startsWith("thread."))?.event
             .threadId ?? candidateThreadId;
-        if (project.id !== input.projectId) {
+        if (project !== null && project.id !== input.projectId) {
           return yield* mapError(input, "resolve-project", threadId)("Project identity changed.");
         }
 
+        if (input.reuseExistingThread === true && input.temporary !== undefined) {
+          const current = yield* threads
+            .getThreadProjection(threadId)
+            .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+          if ((current.thread.temporary ?? false) !== input.temporary)
+            yield* threads
+              .dispatch({
+                type: "thread.temporary.set",
+                commandId: CommandId.make(`${input.commandId}:temporary`),
+                threadId,
+                temporary: input.temporary,
+              })
+              .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+        }
         let runId: RunId | null = null;
         let messageWasAlreadyAccepted = false;
         if (input.initialMessage !== undefined) {

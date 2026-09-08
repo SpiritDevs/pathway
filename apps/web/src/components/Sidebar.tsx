@@ -1,3 +1,4 @@
+import { activeCompanyIdAtom } from "../cloud/activeCompany";
 import { selectSidebarDraftRows, type SidebarDraftRowData } from "./sidebarDrafts";
 import { DraftSendReconciliation } from "./DraftSendReconciliation";
 import {
@@ -38,13 +39,12 @@ import {
   threadRuntimeIsActive,
 } from "@spiritdevs/client-runtime/state/models";
 import { resolveThreadForkKind } from "@spiritdevs/client-runtime/state/thread-relationships";
-import {
-  scopeProjectRef,
-  scopeThreadRef,
-  scopedThreadKey,
-} from "@spiritdevs/client-runtime/environment";
+import { scopeThreadRef, scopedThreadKey } from "@spiritdevs/client-runtime/environment";
 import {
   ALL_FOCUS_ID,
+  focusIncludesConversations,
+  focusIdForThread,
+  focusNotificationProjectKey,
   groupSearchResultsByFocus,
   visibleFocuses,
 } from "@spiritdevs/client-runtime/state/focuses";
@@ -655,14 +655,18 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
               aria-hidden
               className="size-3 shrink-0 text-amber-600 dark:text-amber-300/80"
             />
-            <ProjectFavicon
-              environmentId={session.environmentId}
-              cwd={props.projectCwd ?? ""}
-              faviconPath={props.projectFaviconPath}
-              className="size-4 shrink-0"
-            />
+            {session.projectId === null ? (
+              <MessageSquareIcon className="size-4 shrink-0" />
+            ) : (
+              <ProjectFavicon
+                environmentId={session.environmentId}
+                cwd={props.projectCwd ?? ""}
+                faviconPath={props.projectFaviconPath}
+                className="size-4 shrink-0"
+              />
+            )}
             <span className="min-w-0 flex-1 truncate text-xs font-medium text-secondary-label">
-              {props.projectTitle}
+              {session.projectId === null ? "Conversation" : props.projectTitle}
             </span>
             <span className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-end">
               {session.pendingSend ? (
@@ -696,6 +700,8 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   projectCwdByKey: ReadonlyMap<string, string | null>;
   projectFaviconPathByKey: ReadonlyMap<string, string | null | undefined>;
   scopedProjectKeys: ReadonlySet<string> | null;
+  includeConversations: boolean;
+  activeCompanyId: string | null;
   routeDraftId: string | null;
   onNavigateToDraft: (draftId: DraftId) => void;
 }) {
@@ -741,6 +747,8 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
         frozenActive,
         routeDraftId: props.routeDraftId,
         scopedProjectKeys: props.scopedProjectKeys,
+        includeConversations: props.includeConversations,
+        activeCompanyId: props.activeCompanyId,
       }),
     [
       draftThreadsByThreadKey,
@@ -749,6 +757,8 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
       frozenActive,
       props.routeDraftId,
       props.scopedProjectKeys,
+      props.includeConversations,
+      props.activeCompanyId,
     ],
   );
   const handleDiscard = useCallback(
@@ -793,7 +803,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
 });
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
-  alertProjectKey: string;
+  alertProjectKey: string | null;
   alertPolicies: readonly AlertPolicyRow[] | null;
   alertModifierHeld: boolean;
   thread: SidebarThreadSummary;
@@ -1529,20 +1539,25 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         >
           <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
             <div className="flex h-5 min-w-0 items-center gap-1.5">
-              <ProjectFavicon
-                environmentId={thread.environmentId}
-                cwd={props.projectCwd ?? ""}
-                faviconPath={props.projectFaviconPath}
-                className="size-4 shrink-0"
-              />
-              {props.projectTitle ? (
+              {thread.projectId === null ? (
+                <MessageSquareIcon className="size-4 shrink-0" />
+              ) : (
+                <ProjectFavicon
+                  environmentId={thread.environmentId}
+                  cwd={props.projectCwd ?? ""}
+                  faviconPath={props.projectFaviconPath}
+                  className="size-4 shrink-0"
+                />
+              )}
+              {props.projectTitle || thread.projectId === null ? (
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-secondary-label text-xs",
                     shouldRecede ? "font-normal" : "font-medium",
                   )}
                 >
-                  {props.projectTitle}
+                  {thread.projectId === null ? "Conversation" : props.projectTitle}
+                  {thread.temporary ? " · Temporary" : ""}
                 </span>
               ) : (
                 <span className="flex-1" />
@@ -1910,6 +1925,7 @@ export default function Sidebar() {
       ),
     [projects],
   );
+  const activeCompanyId = useAtomValue(activeCompanyIdAtom);
   const focuses = useAtomValue(focusListAtom);
   const focusAssignments = useAtomValue(focusAssignmentsAtom);
   const activeFocusProjectKeys = useAtomValue(activeFocusProjectKeysAtom);
@@ -1951,6 +1967,7 @@ export default function Sidebar() {
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
     settleThread,
+    keepConversation,
     setSettleAfterCompletion,
     unsettleThread,
     snoozeThread,
@@ -2270,6 +2287,8 @@ export default function Sidebar() {
           : null,
     [scopedCheckoutlessProject, scopedProjectGroup],
   );
+  const includeConversations =
+    projectScopedProjectKeys === null && focusIncludesConversations(focuses, activeFocusId);
   const scopedProjectKeys = useMemo(
     () => intersectSidebarProjectScopes(projectScopedProjectKeys, activeFocusProjectKeys),
     [activeFocusProjectKeys, projectScopedProjectKeys],
@@ -2306,8 +2325,11 @@ export default function Sidebar() {
         continue;
       }
       if (
-        scopedProjectKeys !== null &&
-        !scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`)
+        session.projectId === null
+          ? !includeConversations ||
+            (activeCompanyId !== null && session.conversationCompanyId !== activeCompanyId)
+          : scopedProjectKeys !== null &&
+            !scopedProjectKeys.has(`${session.environmentId}:${session.projectId}`)
       ) {
         continue;
       }
@@ -2358,7 +2380,11 @@ export default function Sidebar() {
     const preciseNow = new Date().toISOString();
     // Subagent child threads live in the parent's Agents surface, not the
     // sidebar roster (v2 models them as real threads with lineage).
-    const visible = filterSidebarV2VisibleThreads(agentThreads, scopedProjectKeys);
+    const visible = filterSidebarV2VisibleThreads(
+      agentThreads,
+      scopedProjectKeys,
+      includeConversations,
+    );
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
@@ -2428,6 +2454,7 @@ export default function Sidebar() {
     changeRequestStateByKey,
     nowMinute,
     scopedProjectKeys,
+    includeConversations,
     serverConfigs,
     snoozeWakeTick,
     agentThreads,
@@ -2482,7 +2509,8 @@ export default function Sidebar() {
         focuses,
         assignments: focusAssignments,
         activeFocusId,
-        projectKey: (thread) => `${thread.environmentId}:${thread.projectId}`,
+        projectKey: (thread) =>
+          thread.projectId === null ? null : `${thread.environmentId}:${thread.projectId}`,
       }),
     [activeFocusId, focusAssignments, focuses, ungroupedThreadSearchResults],
   );
@@ -2752,19 +2780,41 @@ export default function Sidebar() {
   const selectThreadSearchResult = useCallback(
     (thread: EnvironmentThreadShell) => {
       setActiveFocusId(
-        focusIdByProjectKey.get(`${thread.environmentId}:${thread.projectId}`) ?? ALL_FOCUS_ID,
+        thread.projectId === null
+          ? focusIncludesConversations(focuses, activeFocusId)
+            ? activeFocusId
+            : ALL_FOCUS_ID
+          : (focusIdByProjectKey.get(`${thread.environmentId}:${thread.projectId}`) ??
+              ALL_FOCUS_ID),
       );
       clearThreadSearch();
       navigateToThread(scopeThreadRef(thread.environmentId, thread.id));
     },
-    [clearThreadSearch, focusIdByProjectKey, navigateToThread, setActiveFocusId],
+    [
+      activeFocusId,
+      focuses,
+      clearThreadSearch,
+      focusIdByProjectKey,
+      navigateToThread,
+      setActiveFocusId,
+    ],
   );
   const selectFocusNotification = useCallback(
     (notification: FocusNotification) => {
-      setActiveFocusId(focusIdByProjectKey.get(notification.projectKey) ?? ALL_FOCUS_ID);
+      const thread = threadByKeyRef.current.get(
+        scopedThreadKey(scopeThreadRef(notification.environmentId, notification.threadId)),
+      );
+      const projectKey = thread
+        ? thread.projectId === null
+          ? null
+          : `${thread.environmentId}:${thread.projectId}`
+        : focusNotificationProjectKey(notification);
+      setActiveFocusId(
+        focusIdForThread({ projectKey, activeFocusId, focuses, focusIdByProjectKey }),
+      );
       navigateToThread(scopeThreadRef(notification.environmentId, notification.threadId));
     },
-    [focusIdByProjectKey, navigateToThread, setActiveFocusId],
+    [activeFocusId, focuses, focusIdByProjectKey, navigateToThread, setActiveFocusId],
   );
   const handleThreadSearchKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {
@@ -2891,7 +2941,10 @@ export default function Sidebar() {
         ? () => navigateToThread(scopeThreadRef(nextThread.environmentId, nextThread.id))
         : shell
           ? () =>
-              void handleNewThreadRef.current(scopeProjectRef(shell.environmentId, shell.projectId))
+              void handleNewThreadRef.current({
+                environmentId: shell.environmentId,
+                projectId: shell.projectId,
+              })
           : () => void router.navigate({ to: "/threads" });
     },
     [navigateToThread, router],
@@ -3534,6 +3587,7 @@ export default function Sidebar() {
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             buildThreadActionMenuItems({
+              temporary: thread.temporary,
               branch: thread.branch ?? null,
               isPinned,
               isSettled,
@@ -3569,16 +3623,33 @@ export default function Sidebar() {
           return;
         }
         switch (clicked.value) {
+          case "keep-conversation": {
+            const result = await keepConversation(threadRef);
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Could not keep conversation",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
           case "new-thread-on-branch": {
             // Explicit branch carry-over: reuse the thread's worktree when it
             // has one, otherwise its branch on the local checkout.
             const result = await settlePromise(() =>
-              handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId), {
-                branch: thread.branch,
-                worktreePath: thread.worktreePath,
-                envMode: thread.worktreePath ? "worktree" : "local",
-                startFromOrigin: false,
-              }),
+              handleNewThreadRef.current(
+                { environmentId: thread.environmentId, projectId: thread.projectId },
+                {
+                  branch: thread.branch,
+                  worktreePath: thread.worktreePath,
+                  envMode: thread.worktreePath ? "worktree" : "local",
+                  startFromOrigin: false,
+                },
+              ),
             );
             if (result._tag === "Failure") {
               const error = squashAtomCommandFailure(result);
@@ -3733,6 +3804,7 @@ export default function Sidebar() {
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
+      keepConversation,
       handleMultiSelectContextMenu,
       markThreadUnread,
       projectCwdByKey,
@@ -4243,8 +4315,11 @@ export default function Sidebar() {
                         alertPolicies={alertPolicies}
                         alertModifierHeld={shortcutModifiers.ctrlKey || shortcutModifiers.metaKey}
                         alertProjectKey={
-                          alertProjectKeys.get(`${thread.environmentId}:${thread.projectId}`) ??
-                          alertProjectScopeKey(thread.environmentId, thread.projectId)
+                          thread.projectId === null
+                            ? null
+                            : (alertProjectKeys.get(
+                                `${thread.environmentId}:${thread.projectId}`,
+                              ) ?? alertProjectScopeKey(thread.environmentId, thread.projectId))
                         }
                         // Keyed per variant on purpose: when a thread settles,
                         // the card fades out in place and the slim row fades
@@ -4363,6 +4438,8 @@ export default function Sidebar() {
                       projectCwdByKey={projectCwdByKey}
                       projectFaviconPathByKey={projectFaviconPathByKey}
                       scopedProjectKeys={scopedProjectKeys}
+                      includeConversations={includeConversations}
+                      activeCompanyId={activeCompanyId}
                       routeDraftId={routeDraftIdForRows}
                       onNavigateToDraft={navigateToDraft}
                     />,

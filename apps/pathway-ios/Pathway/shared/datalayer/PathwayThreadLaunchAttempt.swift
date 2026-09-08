@@ -44,6 +44,7 @@ struct PathwayThreadCreationDraft: Codable, Sendable {
     var sentAttachmentIDs: [String]? = nil
     var importedCaptureIDs: [UUID]? = nil
     var placementPinned: Bool? = nil
+    var temporary: Bool? = nil
 }
 
 actor PathwayThreadCreationDraftStore {

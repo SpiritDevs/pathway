@@ -3630,7 +3630,10 @@ export async function readBootstrapRows(
           id: row.id,
           version: companyRowVersion(row),
           deleted: false,
-          teamIds: await cachedProjectTeams(ctx, company, cache, row.cloudProjectId),
+          teamIds:
+            row.cloudProjectId === null
+              ? []
+              : await cachedProjectTeams(ctx, company, cache, row.cloudProjectId),
           ownerMembershipId: null,
           payload: await encodeAgentThread(ctx, row),
         });

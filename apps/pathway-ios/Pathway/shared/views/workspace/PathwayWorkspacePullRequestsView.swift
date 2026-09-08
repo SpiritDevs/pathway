@@ -48,9 +48,9 @@ final class PathwayWorkspacePullRequestListModel {
     private var scope: [String] = []
 
     func load(client: PathwayWorkspaceClient, state: String, query: String, more: Bool) async {
-        guard client.context.supportsPullRequests else { return }
+        guard client.context.supportsPullRequests, let projectID = client.context.projectID else { return }
         let query = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
-        let requestedScope = [client.context.projectID, client.context.cwd, state, query]
+        let requestedScope = [projectID, client.context.cwd, state, query]
         if more && (busy || scope != requestedScope || cursors.isEmpty) { return }
         generation += 1
         let requestGeneration = generation
@@ -59,7 +59,7 @@ final class PathwayWorkspacePullRequestListModel {
         busy = true; error = nil
         defer { if generation == requestGeneration { busy = false } }
         do {
-            var payload: [String: JSONValue] = ["projectId": .string(client.context.projectID), "state": .string(state), "limit": .number(50)]
+            var payload: [String: JSONValue] = ["projectId": .string(projectID), "state": .string(state), "limit": .number(50)]
             if !query.isEmpty { payload["query"] = .string(query) }
             if more { payload["cursors"] = .object(cursors.mapValues(JSONValue.string)) }
             let result: PathwayWorkspacePullRequestList = try await client.call("pullRequests.list", payload)

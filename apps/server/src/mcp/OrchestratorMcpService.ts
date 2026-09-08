@@ -721,11 +721,15 @@ const make = Effect.gen(function* () {
       );
 
   const loadProjectThread = (
-    projectId: OrchestrationV2ThreadProjection["thread"]["projectId"],
+    thread: Pick<OrchestrationV2ThreadProjection["thread"], "projectId" | "conversationCompanyId">,
     threadId: ThreadId,
   ): Effect.Effect<OrchestrationV2ThreadProjection, OrchestratorMcpFailure> =>
     threadManagement
-      .getProjectThread({ projectId, threadId })
+      .getProjectThread({
+        projectId: thread.projectId,
+        conversationCompanyId: thread.conversationCompanyId,
+        threadId,
+      })
       .pipe(Effect.mapError(threadManagementFailure));
 
   const loadScopedThread = (scope: McpInvocationScope, threadId: ThreadId) =>
@@ -733,9 +737,7 @@ const make = Effect.gen(function* () {
       yield* requireCapability(scope);
       const parent = yield* loadProjection(scope.threadId);
       const target =
-        threadId === scope.threadId
-          ? parent
-          : yield* loadProjectThread(parent.thread.projectId, threadId);
+        threadId === scope.threadId ? parent : yield* loadProjectThread(parent.thread, threadId);
       return { parent, target } as const;
     });
 
@@ -952,7 +954,7 @@ const make = Effect.gen(function* () {
   // Load a single scheduled task and enforce that it belongs to the calling
   // thread's project, so agents can only read/mutate tasks in their own scope.
   const loadScopedScheduledTask = (
-    projectId: ScheduledTask["projectId"],
+    projectId: ScheduledTask["projectId"] | null,
     scheduledTaskId: ScheduledTask["id"],
   ): Effect.Effect<ScheduledTask, OrchestratorMcpFailure> =>
     Effect.gen(function* () {
@@ -1073,6 +1075,9 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* requireCapability(scope);
         const parent = yield* loadProjection(scope.threadId);
+        if (parent.thread.projectId === null) {
+          return yield* failure("invalid_request", "Attach a project before scheduling a task.");
+        }
         const bindToCurrentThread = input.bindToCurrentThread ?? true;
         const derivedTitle = input.prompt.split("\n")[0]?.trim() ?? "";
         const title =
@@ -1522,6 +1527,7 @@ const make = Effect.gen(function* () {
                   }),
                   threadId,
                   projectId: parent.thread.projectId,
+                  conversationCompanyId: parent.thread.conversationCompanyId,
                   title,
                   modelSelection: target.modelSelection,
                   runtimeMode,
@@ -1616,6 +1622,7 @@ const make = Effect.gen(function* () {
         const projectThreads = yield* threadManagement
           .listProjectThreads({
             projectId: parent.thread.projectId,
+            conversationCompanyId: parent.thread.conversationCompanyId,
             includeSubagents: input.includeSubagents !== false,
           })
           .pipe(
@@ -1676,7 +1683,7 @@ const make = Effect.gen(function* () {
         ];
         const sourceProjections = yield* Effect.forEach(
           sourceThreadIds,
-          (sourceThreadId) => loadProjectThread(target.thread.projectId, sourceThreadId),
+          (sourceThreadId) => loadProjectThread(target.thread, sourceThreadId),
           { concurrency: 8 },
         );
         const messagesByThreadId = new Map<ThreadId, OrchestrationV2ThreadProjection["messages"]>([
@@ -1719,6 +1726,7 @@ const make = Effect.gen(function* () {
         const result = yield* threadManagement
           .sendToThread({
             projectId: parent.thread.projectId,
+            conversationCompanyId: parent.thread.conversationCompanyId,
             commandId: stableCommandId({
               scope,
               requestKey: key,
@@ -1756,6 +1764,7 @@ const make = Effect.gen(function* () {
         const result = yield* threadManagement
           .waitForThread({
             projectId: parent.thread.projectId,
+            conversationCompanyId: parent.thread.conversationCompanyId,
             threadId: input.threadId,
             ...(input.runId === undefined ? {} : { runId: input.runId }),
             timeoutMs: Math.min(
@@ -1778,6 +1787,7 @@ const make = Effect.gen(function* () {
         const result = yield* threadManagement
           .interruptThread({
             projectId: parent.thread.projectId,
+            conversationCompanyId: parent.thread.conversationCompanyId,
             commandId: stableCommandId({
               scope,
               requestKey: key,

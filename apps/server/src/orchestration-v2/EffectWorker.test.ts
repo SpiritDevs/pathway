@@ -21,6 +21,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { QuestionAnswerDelivery, QuestionAnswerDeliveryError } from "./QuestionAnswerDelivery.ts";
@@ -232,7 +233,7 @@ it.effect("requeues a claim when a pre-execution worker check fails", () =>
       ReadonlyArray<{
         readonly effectId: string;
         readonly workerId: string;
-        readonly error: string;
+        readonly error: string | null;
         readonly delayMs: number;
       }>
     >([]);
@@ -940,3 +941,191 @@ for (const failurePhase of ["before-event-commit", "after-event-commit"] as cons
     }).pipe(Effect.provide(effectOutboxLayer.pipe(Layer.provide(SqlitePersistenceMemory)))),
   );
 }
+
+it.effect(
+  "keeps workspace cleanup pending until deletion writers stop and retries beyond the ordinary attempt limit",
+  () =>
+    Effect.gen(function* () {
+      const failDetach = yield* Ref.make(true);
+      const failCleanup = yield* Ref.make(true);
+      const removed = yield* Ref.make(0);
+      const commandId = CommandId.make("cleanup-dependencies-command");
+      const cleanupThreadId = ThreadId.make("cleanup-dependencies-thread");
+      const detachId = "cleanup-dependencies-detach";
+      const cleanupId = "cleanup-dependencies-workspace";
+      const executor = OrchestrationEffectExecutorV2.of({
+        execute: (effect) =>
+          Effect.gen(function* () {
+            if (effect.request.type === "provider-session.detach" && (yield* Ref.get(failDetach)))
+              return yield* new OrchestrationEffectExecutionError({
+                effectId: effect.id,
+                effectType: effect.request.type,
+                cause: "provider is still writing",
+              });
+            if (effect.request.type === "thread-workspace.cleanup" && (yield* Ref.get(failCleanup)))
+              return yield* new OrchestrationEffectExecutionError({
+                effectId: effect.id,
+                effectType: effect.request.type,
+                cause: "workspace temporarily locked",
+              });
+            if (effect.request.type === "thread-workspace.cleanup")
+              yield* Ref.update(removed, (count) => count + 1);
+          }),
+      });
+      const testLayer = effectWorkerLayerWithOptions({
+        workerId: "cleanup-dependency-worker",
+        maxAttempts: 1,
+      }).pipe(
+        Layer.provide(Layer.succeed(OrchestrationEffectExecutorV2, executor)),
+        Layer.provideMerge(effectOutboxLayer),
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      yield* Effect.gen(function* () {
+        const outbox = yield* EffectOutboxV2;
+        const worker = yield* OrchestrationEffectWorkerV2;
+        yield* outbox.enqueue([
+          {
+            id: detachId,
+            commandId,
+            threadId: cleanupThreadId,
+            request: {
+              type: "provider-session.detach",
+              providerSessionId: oldSessionId,
+              revokeMcpCredential: true,
+              durableRetry: true,
+            },
+          },
+          {
+            id: cleanupId,
+            commandId,
+            threadId: cleanupThreadId,
+            request: { type: "thread-workspace.cleanup", afterEffectIds: [detachId] },
+          },
+        ]);
+        yield* worker.runOnce;
+        yield* worker.runOnce;
+        assert.equal(yield* Ref.get(removed), 0);
+        assert.equal((yield* outbox.listWorkspaceCleanupFailures())[0]?.id, cleanupId);
+        yield* TestClock.adjust("100 millis");
+        yield* worker.runOnce;
+        const retryingDetach = yield* outbox.get(detachId);
+        assert.isTrue(Option.isSome(retryingDetach));
+        if (Option.isSome(retryingDetach)) {
+          assert.equal(retryingDetach.value.status, "pending");
+          assert.equal(retryingDetach.value.attemptCount, 2);
+        }
+        const unrelatedRetry = yield* outbox.retryWorkspaceCleanup(detachId).pipe(Effect.flip);
+        assert.instanceOf(unrelatedRetry, EffectOutboxError);
+        yield* Ref.set(failDetach, false);
+        yield* outbox.retryWorkspaceCleanup(cleanupId);
+        yield* worker.drain();
+        assert.equal(yield* Ref.get(removed), 0);
+        assert.include(
+          (yield* outbox.listWorkspaceCleanupFailures())[0]?.lastError ?? "",
+          "workspace temporarily locked",
+        );
+        yield* Ref.set(failCleanup, false);
+        yield* TestClock.adjust("30 seconds");
+        yield* worker.drain();
+        assert.equal(yield* Ref.get(removed), 1);
+        assert.deepEqual(yield* outbox.listWorkspaceCleanupFailures(), []);
+      }).pipe(Effect.provide(testLayer));
+    }),
+);
+
+it.effect(
+  "recovers a previous deleted owner's failed shutdown before cleaning a shared workspace",
+  () =>
+    Effect.gen(function* () {
+      const removed = yield* Ref.make(0);
+      const oldOwnerId = ThreadId.make("cleanup-previous-owner");
+      const finalOwnerId = ThreadId.make("cleanup-final-owner");
+      const activeOwnerId = ThreadId.make("cleanup-active-owner");
+      const detachId = "previous-owner-failed-detach";
+      const cleanupId = "final-owner-cleanup";
+      const workerId = "shared-cleanup-worker";
+      const testLayer = effectWorkerLayerWithOptions({ workerId, maxAttempts: 1 }).pipe(
+        Layer.provide(
+          Layer.succeed(OrchestrationEffectExecutorV2, {
+            execute: (effect) =>
+              effect.request.type === "thread-workspace.cleanup"
+                ? Ref.update(removed, (count) => count + 1)
+                : Effect.void,
+          }),
+        ),
+        Layer.provideMerge(effectOutboxLayer),
+        Layer.provideMerge(SqlitePersistenceMemory),
+      );
+      yield* Effect.gen(function* () {
+        const outbox = yield* EffectOutboxV2;
+        const sql = yield* SqlClient.SqlClient;
+        const worker = yield* OrchestrationEffectWorkerV2;
+        const now = DateTime.formatIso(yield* DateTime.now);
+        // Only ownership columns are consumed by the outbox dependency query.
+        for (const ownerId of [oldOwnerId, finalOwnerId, activeOwnerId]) {
+          const payload = '{"ownedWorktreePath":"/owned/shared-worktree"}';
+          const deletedAt = ownerId === activeOwnerId ? null : now;
+          yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, provider_instance_id, runtime_mode, interaction_mode, created_at, updated_at, deleted_at, payload_json) VALUES (${ownerId}, 'shared-project', 'Shared workspace owner', 'codex', 'codex', 'full-access', 'default', ${now}, ${now}, ${deletedAt}, ${payload})`;
+        }
+        const activeCleanupId = "active-owner-old-terminal-cleanup";
+        yield* outbox.enqueue([
+          {
+            id: activeCleanupId,
+            commandId: CommandId.make("active-owner:past-settle"),
+            threadId: activeOwnerId,
+            request: { type: "terminal.cleanup" },
+          },
+        ]);
+        yield* outbox.claimNext({ workerId, leaseDurationMs: 30_000 });
+        yield* outbox.fail({
+          effectId: activeCleanupId,
+          workerId,
+          error: "an unrelated retained thread's old cleanup",
+        });
+        yield* outbox.enqueue([
+          {
+            id: detachId,
+            commandId: CommandId.make("previous-owner:settle"),
+            threadId: oldOwnerId,
+            request: { type: "provider-session.detach", providerSessionId: oldSessionId },
+          },
+        ]);
+        const oldClaim = yield* outbox.claimNext({ workerId, leaseDurationMs: 30_000 });
+        assert.isTrue(Option.isSome(oldClaim));
+        yield* outbox.enqueue([
+          {
+            id: cleanupId,
+            commandId: CommandId.make("final-owner:delete"),
+            threadId: finalOwnerId,
+            request: { type: "thread-workspace.cleanup" },
+          },
+        ]);
+        yield* worker.runOnce;
+        assert.equal(yield* Ref.get(removed), 0);
+        assert.deepEqual(yield* outbox.listWorkspaceCleanupFailures(), []);
+        yield* outbox.fail({
+          effectId: detachId,
+          workerId,
+          error: "previous shutdown exhausted retries",
+        });
+        yield* TestClock.adjust("1 second");
+        yield* worker.runOnce;
+        const recovered = yield* outbox.get(detachId);
+        if (Option.isNone(recovered)) return assert.fail("Missing shutdown dependency");
+        assert.equal(recovered.value.status, "pending");
+        assert.equal(recovered.value.attemptCount, 0);
+        assert.isTrue(
+          recovered.value.request.type === "provider-session.detach" &&
+            recovered.value.request.durableRetry === true,
+        );
+        yield* worker.runOnce;
+        assert.equal(yield* Ref.get(removed), 0);
+        yield* TestClock.adjust("2 seconds");
+        yield* worker.drain();
+        assert.equal(yield* Ref.get(removed), 1);
+        assert.deepEqual(yield* outbox.listWorkspaceCleanupFailures(), []);
+        const activeCleanup = yield* outbox.get(activeCleanupId);
+        assert.isTrue(Option.isSome(activeCleanup) && activeCleanup.value.status === "failed");
+      }).pipe(Effect.provide(testLayer));
+    }),
+);

@@ -314,13 +314,21 @@ export function makeCursorAgentOptions(input: {
 }): AgentOptions {
   const policy = cursorRuntimeAgentPolicy(input.runtimePolicy);
   const mcpServers = cursorMcpServers(input.threadId);
+  const directories = [
+    ...new Set([
+      ...(input.runtimePolicy.cwd === null ? [] : [input.runtimePolicy.cwd]),
+      ...(input.runtimePolicy.additionalDirectories ?? []),
+    ]),
+  ];
   return {
     model: cursorSdkModelSelection(input.modelSelection),
     name: `Pathway ${input.threadId}`,
     mode: input.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
     ...(input.apiKey === undefined ? {} : { apiKey: input.apiKey }),
     local: {
-      ...(input.runtimePolicy.cwd === null ? {} : { cwd: input.runtimePolicy.cwd }),
+      ...(directories.length === 0
+        ? {}
+        : { cwd: directories.length === 1 ? directories[0]! : directories }),
       autoReview: policy.autoReview,
       sandboxOptions: {
         enabled: policy.sandboxEnabled,

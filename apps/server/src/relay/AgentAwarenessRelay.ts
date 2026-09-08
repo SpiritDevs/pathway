@@ -234,7 +234,7 @@ export function resolveAgentAwarenessRelayPublishSnapshot(input: {
       reason: "thread-not-found",
     };
   }
-  if (Option.isNone(input.project)) {
+  if (input.thread.value.projectId !== null && Option.isNone(input.project)) {
     return {
       projectId: input.thread.value.projectId,
       state: null,
@@ -246,7 +246,8 @@ export function resolveAgentAwarenessRelayPublishSnapshot(input: {
     state: sanitizeRelayAgentActivityState(
       projectThreadAwarenessV2({
         environmentId: input.environmentId,
-        project: input.project.value,
+        project: input.thread.value.projectId === null ? null : Option.getOrNull(input.project),
+        conversationCompanyId: input.thread.value.conversationCompanyId,
         thread: input.thread.value,
       }),
     ),
@@ -262,14 +263,15 @@ export function resolveAgentAwarenessRelayActiveThreadIds(input: {
   const projectById = new Map(input.projects.map((project) => [project.id, project]));
   return input.threads
     .filter((thread) => {
-      const project = projectById.get(thread.projectId);
-      if (!project) {
+      const project = thread.projectId === null ? undefined : projectById.get(thread.projectId);
+      if (thread.projectId !== null && !project) {
         return false;
       }
       return (
         projectThreadAwarenessV2({
           environmentId: input.environmentId,
-          project,
+          project: project ?? null,
+          conversationCompanyId: thread.conversationCompanyId,
           thread,
         }) !== null
       );
@@ -399,9 +401,10 @@ export const make = Effect.gen(function* () {
       threadShell === null || threadShell.archivedAt !== null
         ? Option.none<OrchestrationV2ThreadShell>()
         : Option.some(threadShell);
-    const project = Option.isSome(thread)
-      ? yield* projects.getById(thread.value.projectId)
-      : Option.none<Project>();
+    const project =
+      Option.isSome(thread) && thread.value.projectId !== null
+        ? yield* projects.getById(thread.value.projectId)
+        : Option.none<Project>();
     const snapshot = resolveAgentAwarenessRelayPublishSnapshot({
       environmentId,
       threadId,
@@ -687,7 +690,10 @@ export const make = Effect.gen(function* () {
             if (transition !== null) {
               const thread = yield* threads.getThreadShell(threadId);
               if (thread !== null) {
-                const project = yield* projects.getById(thread.projectId);
+                const project =
+                  thread.projectId === null
+                    ? Option.none()
+                    : yield* projects.getById(thread.projectId);
                 attentionEvent = detectAttentionEventTransition({
                   environmentId,
                   event,

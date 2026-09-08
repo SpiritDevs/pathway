@@ -31,7 +31,9 @@ struct PathwayDashboardView: View {
                     NavigationLink { AgentThreadDetailRoute(thread: thread) } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(thread.shell.title)
-                            Text(appModel.cloud.projectName(companyId: thread.companyId, projectId: thread.cloudProjectId) ?? "Project").font(.caption).foregroundStyle(.secondary)
+                            Label(thread.shell.isConversation ? "Conversation" : appModel.cloud.projectName(companyId: thread.companyId, projectId: thread.cloudProjectId) ?? "Project",
+                                systemImage: thread.shell.isConversation ? "bubble.left.and.bubble.right" : "folder")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                     }
                 }

@@ -28,6 +28,8 @@ import {
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { PairingRouteSurface } from "../components/auth/PairingRouteSurface";
 import { CommandPalette } from "../components/CommandPalette";
+import { TemporaryThreadDiscardDialog } from "../components/TemporaryThreadDiscardDialog";
+import { WorkspaceCleanupNoticeHost } from "../components/WorkspaceCleanupNoticeHost";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { PullRequestAgentReviewHost } from "../components/pullRequest/PullRequestAgentReviewHost";
 import { AssignProjectCompanyDialog } from "../components/projects/AssignProjectCompanyDialog";
@@ -402,6 +404,8 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         <ConnectOnboardingDialog />
         <SshPasswordPromptDialog />
         <ConfirmDialogHost />
+        <TemporaryThreadDiscardDialog />
+        <WorkspaceCleanupNoticeHost />
         {/* A rootless project prompts for a directory just in time, from anywhere in the app. */}
         <AttachProjectDirectoryHost />
         {/* Every project needs an owning company before it can carry issues. */}

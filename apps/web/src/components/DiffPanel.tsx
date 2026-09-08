@@ -22,6 +22,12 @@ import {
   TextWrapIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  isConversationRepositoryRoot,
+  resolveConversationReviewWorkspace,
+} from "../lib/conversationWorkspace";
+import { ConversationFolderReview } from "./ConversationFolderReview";
+import { projectDirectoryInspection } from "../state/projects";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { type DraftId } from "../composerDraftStore";
 import { openDiffFilePrimaryAction } from "../diffFileActions";
@@ -135,16 +141,49 @@ export default function DiffPanel({
         }
       : null,
   );
-  const activeCwd = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
+  const projectWorkspacePath = activeThread?.worktreePath ?? activeProject?.workspaceRoot;
+  const conversationPath = activeThread?.conversationPath;
+  const hasTwoWorkspaces = Boolean(
+    projectWorkspacePath && conversationPath && projectWorkspacePath !== conversationPath,
+  );
+  const [selectedWorkspacePath, setSelectedWorkspacePath] = useState<string | null>(null);
+  const conversationDirectory = useEnvironmentQuery(
+    activeThread && conversationPath
+      ? projectDirectoryInspection({
+          environmentId: activeThread.environmentId,
+          input: { cwd: conversationPath },
+        })
+      : null,
+  );
+  const conversationHasOwnRepository = isConversationRepositoryRoot(
+    conversationPath,
+    conversationDirectory.data?.repositoryRoot,
+  );
+  const conversationGitStatus = useEnvironmentQuery(
+    activeThread && conversationHasOwnRepository && conversationPath
+      ? vcsEnvironment.status({
+          environmentId: activeThread.environmentId,
+          input: { cwd: conversationPath },
+        })
+      : null,
+  );
+  const activeCwd = resolveConversationReviewWorkspace({
+    projectPath: projectWorkspacePath,
+    conversationPath,
+    selectedPath: selectedWorkspacePath,
+    conversationGitStatus: conversationGitStatus.data,
+  });
+  const reviewingConversationFolder = activeCwd != null && activeCwd === conversationPath;
   // With no directory there is no `activeCwd`, so every query below sits disabled and the panel
   // would read as "no patch available" rather than as a project that has not been pointed at a
   // repository yet. Say so, and offer the attach — see
   // docs/internals/decisions/0006-issue-tracker.md ("Projects").
   const { isRootless: isRootlessProject, ensureWorkspaceRoot } =
     useEnsureProjectWorkspace(activeProject);
-  const activeRepositoryRoot = activeThread?.worktreePath
-    ? undefined
-    : activeProject?.repositoryIdentity?.rootPath;
+  const activeRepositoryRoot =
+    reviewingConversationFolder || activeThread?.worktreePath
+      ? undefined
+      : activeProject?.repositoryIdentity?.rootPath;
   const serverConfig = useAtomValue(
     serverEnvironment.configValueAtom(activeThread?.environmentId ?? null),
   );
@@ -154,21 +193,32 @@ export default function DiffPanel({
   );
   const getDiffFileContents = useAtomCommand(reviewEnvironment.diffFileContents);
   const gitStatusQuery = useEnvironmentQuery(
-    activeThread !== null && activeThread !== undefined && activeCwd != null
+    activeThread !== null &&
+      activeThread !== undefined &&
+      activeCwd != null &&
+      (!reviewingConversationFolder || conversationHasOwnRepository)
       ? vcsEnvironment.status({
           environmentId: activeThread.environmentId,
           input: { cwd: activeCwd },
         })
       : null,
   );
-  const diffSelection = useDiffPanelStore((state) =>
+  const savedDiffSelection = useDiffPanelStore((state) =>
     selectThreadDiffPanelSelection(
       state.byThreadKey,
       routeThreadRef,
-      initialGitScope === "unstaged",
+      reviewingConversationFolder
+        ? conversationGitStatus.data?.hasWorkingTreeChanges === true
+        : initialGitScope === "unstaged",
     ),
   );
-  const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
+  const diffSelection =
+    reviewingConversationFolder && savedDiffSelection.kind === "turn"
+      ? { kind: "unstaged" as const }
+      : savedDiffSelection;
+  const isGitRepo =
+    (!reviewingConversationFolder || conversationHasOwnRepository) &&
+    (gitStatusQuery.data?.isRepo ?? true);
   const { turnDiffSummaries, inferredCheckpointTurnCountByRunId } =
     useTurnDiffSummaries(activeThreadProjection);
   const orderedTurnDiffSummaries = useMemo(
@@ -253,7 +303,7 @@ export default function DiffPanel({
     { enabled: isGitRepo && selectedTurn !== undefined },
   );
   const primaryBranchDiffPreview = useEnvironmentQuery(
-    selectedRunId === null && activeThread && activeCwd
+    isGitRepo && selectedRunId === null && activeThread && activeCwd
       ? reviewEnvironment.diffPreview({
           environmentId: activeThread.environmentId,
           input: {
@@ -265,6 +315,7 @@ export default function DiffPanel({
       : null,
   );
   const shouldRetryBranchDiffAtEnvironmentCwd =
+    !reviewingConversationFolder &&
     selectedRunId === null &&
     primaryBranchDiffPreview.error?.includes("configured workspace root") === true &&
     serverConfig?.cwd !== undefined &&
@@ -291,12 +342,16 @@ export default function DiffPanel({
     ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}`
     : null;
 
+  const refreshConversationDirectory = conversationDirectory.refresh;
   useEffect(() => {
-    if (!canRefreshGitDiff) return;
-    const refreshOnFocus = () => refreshBranchDiffPreview();
+    if (!canRefreshGitDiff && !conversationPath) return;
+    const refreshOnFocus = () => {
+      if (conversationPath) refreshConversationDirectory();
+      if (canRefreshGitDiff) refreshBranchDiffPreview();
+    };
     window.addEventListener("focus", refreshOnFocus);
     return () => window.removeEventListener("focus", refreshOnFocus);
-  }, [canRefreshGitDiff, refreshBranchDiffPreview]);
+  }, [canRefreshGitDiff, conversationPath, refreshBranchDiffPreview, refreshConversationDirectory]);
 
   useEffect(() => {
     const current = {
@@ -827,6 +882,39 @@ export default function DiffPanel({
 
   return (
     <DiffPanelShell mode={mode} header={headerRow}>
+      {hasTwoWorkspaces ? (
+        <div className="shrink-0 space-y-1 border-b px-3 py-2 text-xs text-muted-foreground">
+          <label className="flex items-center gap-2">
+            Review folder
+            <select
+              aria-label="Review folder"
+              className="min-w-0 flex-1 rounded border bg-background px-2 py-1 text-foreground"
+              value={activeCwd ?? ""}
+              onChange={(event) => {
+                const path = event.target.value;
+                setSelectedWorkspacePath(path);
+                if (routeThreadRef)
+                  useDiffPanelStore
+                    .getState()
+                    .selectGitScope(
+                      routeThreadRef,
+                      path === conversationPath && conversationGitStatus.data?.hasWorkingTreeChanges
+                        ? "unstaged"
+                        : "branch",
+                    );
+              }}
+            >
+              <option value={projectWorkspacePath ?? ""}>Project workspace</option>
+              <option value={conversationPath ?? ""}>Original conversation folder</option>
+            </select>
+          </label>
+          <p className="break-all">{activeCwd}</p>
+          <p>Both folders belong to this thread. Review each before deleting it.</p>
+        </div>
+      ) : null}
+      {conversationPath && routeThreadRef ? (
+        <ConversationFolderReview threadRef={routeThreadRef} conversationPath={conversationPath} />
+      ) : null}
       {!activeThread ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Select a thread to inspect turn diffs.
@@ -848,7 +936,13 @@ export default function DiffPanel({
         </div>
       ) : !isGitRepo ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
-          Turn diffs are unavailable because this project is not a git repository.
+          {reviewingConversationFolder
+            ? conversationDirectory.isPending
+              ? "Checking the conversation folder…"
+              : conversationDirectory.error
+                ? "Could not inspect this folder. Open its terminal to review the Git work."
+                : "No Git working-tree diff is available at this folder's root. Use its terminal to review repositories inside it."
+            : "Diffs are unavailable because this folder is not a Git repository."}
         </div>
       ) : selectedRunId !== null && orderedTurnDiffSummaries.length === 0 ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">

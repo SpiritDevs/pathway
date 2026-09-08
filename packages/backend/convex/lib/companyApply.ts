@@ -425,7 +425,10 @@ export async function encodeAgentThread(ctx: QueryCtx, doc: Doc<"agentThreads">)
   return {
     id: doc.id,
     environmentId: doc.environmentId,
-    cloudProjectId: await requireCloudProjectDomainId(ctx, doc.cloudProjectId),
+    cloudProjectId:
+      doc.cloudProjectId === null
+        ? null
+        : await requireCloudProjectDomainId(ctx, doc.cloudProjectId),
     shell: doc.shell,
     updatedAt: doc.updatedAt,
   };

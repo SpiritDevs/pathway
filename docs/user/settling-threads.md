@@ -9,3 +9,8 @@ While this is scheduled, a blue timer appears beside the thread controls and bes
 If a thread is stuck showing work that has already finished, right-click it and choose **Force settle thread**. This cancels current and queued work, dismisses pending requests, stops its provider sessions and terminals, and moves it to Settled. You can also find it in the chat header action menu. It requires an environment that supports force settlement.
 
 Choose **Un-settle thread** to return it to the active list. Cancelled work does not restart automatically.
+
+[Temporary threads](conversations-and-temporary-threads.md) are deleted when settled and cannot be
+un-settled. They skip inactivity settlement. Uncommitted changes or unpushed commits block automatic
+settlement; manual settlement offers Review changes, Cancel, and Discard and delete. Settle after
+completion keeps a temporary thread for review when a run fails or Git work remains unfinished.

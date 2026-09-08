@@ -8,6 +8,7 @@ struct PathwayFocusEditorView: View {
     @State private var name = ""
     @State private var color = "#6366f1"
     @State private var selectedProjects: Set<String> = []
+    @State private var includeConversations = false
     @State private var saving = false
     @State private var errorMessage: String?
     @State private var deleting = false
@@ -26,6 +27,7 @@ struct PathwayFocusEditorView: View {
                     }
                 }
                 Section("Projects") {
+                    Toggle("Conversations", isOn: $includeConversations)
                     ForEach(appModel.cloud.environmentBindings) { binding in
                         let key = "\(binding.binding.environmentId):\(binding.binding.localProjectId)"
                         Toggle(isOn: Binding(get: { selectedProjects.contains(key) }, set: { if $0 { selectedProjects.insert(key) } else { selectedProjects.remove(key) } })) {
@@ -47,6 +49,7 @@ struct PathwayFocusEditorView: View {
             }
             .task {
                 name = focus?.name ?? ""; color = focus?.accentColor ?? "#6366f1"
+                includeConversations = focus?.includeConversations ?? false
                 selectedProjects = Set(model.assignments.filter { $0.focusId == focus?.id }.map(\.projectKey))
             }
             .confirmationDialog("Delete this Focus?", isPresented: $deleting, titleVisibility: .visible) {
@@ -68,7 +71,7 @@ struct PathwayFocusEditorView: View {
         saving = true; defer { saving = false }
         do {
             if let focus {
-                _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:update", arguments: .object(["focusId": .string(focus.id), "name": .string(name), "accentColor": .string(color)]))
+                _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:update", arguments: .object(["focusId": .string(focus.id), "name": .string(name), "accentColor": .string(color), "includeConversations": .bool(includeConversations)]))
                 let original = Set(model.assignments.filter { $0.focusId == focus.id }.map(\.projectKey))
                 for key in original.subtracting(selectedProjects).sorted() {
                     _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:unassignProject", arguments: .object(["projectKey": .string(key)]))
@@ -79,7 +82,8 @@ struct PathwayFocusEditorView: View {
             } else {
                 _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:create", arguments: .object([
                     "id": .string(UUID().uuidString.lowercased()), "name": .string(name), "iconName": .string("target"),
-                    "accentColor": .string(color), "projectKeys": .array(selectedProjects.sorted().map(JSONValue.string))
+                    "accentColor": .string(color), "projectKeys": .array(selectedProjects.sorted().map(JSONValue.string)),
+                    "includeConversations": .bool(includeConversations)
                 ]))
             }
             dismiss()
@@ -102,11 +106,13 @@ struct PathwayFocusNotificationsView: View {
                         guard let thread = appModel.cloud.threads.first(where: { $0.threadId == notification.threadId && $0.environmentId == notification.environmentId }) else {
                             errorMessage = "This thread is no longer available in your connected workspaces."; return
                         }
+                        model.selectedID = model.notificationFocusID(notification)
                         appModel.pendingThreadRoute = .init(companyId: thread.companyId, environmentId: thread.environmentId, threadId: thread.threadId)
                         dismiss()
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(notification.title).font(.headline)
+                            Text(model.notificationFocusName(notification)).font(.caption).foregroundStyle(.secondary)
                             Text(appModel.cloud.threads.first { $0.threadId == notification.threadId && $0.environmentId == notification.environmentId }?.shell.title ?? "Agent thread")
                             Text(Date(timeIntervalSince1970: notification.createdAt / 1000), style: .relative).font(.caption).foregroundStyle(.secondary)
                         }

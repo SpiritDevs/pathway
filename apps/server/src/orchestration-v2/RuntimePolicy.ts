@@ -22,7 +22,7 @@ import {
 export class RuntimePolicyResolveError extends Schema.TaggedErrorClass<RuntimePolicyResolveError>()(
   "RuntimePolicyResolveError",
   {
-    projectId: ProjectId,
+    projectId: Schema.NullOr(ProjectId),
     providerInstanceId: ProviderInstanceId,
     cause: Schema.optional(Schema.Defect()),
   },
@@ -65,7 +65,10 @@ export const layer: Layer.Layer<RuntimePolicyV2> = Layer.succeed(RuntimePolicyV2
     Effect.succeed({
       runtimeMode: input.thread.runtimeMode,
       interactionMode: input.thread.interactionMode,
-      cwd: input.thread.worktreePath,
+      cwd: input.thread.worktreePath ?? input.thread.conversationPath ?? null,
+      ...(input.thread.conversationPath == null
+        ? {}
+        : { additionalDirectories: [input.thread.conversationPath] }),
     }),
 });
 
@@ -79,35 +82,48 @@ export const layerFromProjectRepository: Layer.Layer<
     const projects = yield* ProjectionProjects.ProjectionProjectRepository;
     return RuntimePolicyV2.of({
       resolve: Effect.fn("RuntimePolicyV2.resolve")(function* (input) {
+        const projectId = input.thread.projectId;
         const cwd =
           input.thread.worktreePath ??
-          (yield* projects.getById({ projectId: input.thread.projectId }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new RuntimePolicyResolveError({
-                  projectId: input.thread.projectId,
-                  providerInstanceId: input.modelSelection.instanceId,
-                  cause,
-                }),
-            ),
-            Effect.flatMap(
-              Option.match({
-                onNone: () =>
-                  Effect.fail(
+          (projectId === null
+            ? (input.thread.conversationPath ?? null)
+            : yield* projects.getById({ projectId }).pipe(
+                Effect.mapError(
+                  (cause) =>
                     new RuntimePolicyResolveError({
                       projectId: input.thread.projectId,
                       providerInstanceId: input.modelSelection.instanceId,
-                      cause: "Project not found.",
+                      cause,
                     }),
-                  ),
-                onSome: (project) => Effect.succeed(project.workspaceRoot),
-              }),
-            ),
-          ));
+                ),
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () =>
+                      Effect.fail(
+                        new RuntimePolicyResolveError({
+                          projectId: input.thread.projectId,
+                          providerInstanceId: input.modelSelection.instanceId,
+                          cause: "Project not found.",
+                        }),
+                      ),
+                    onSome: (project) => Effect.succeed(project.workspaceRoot),
+                  }),
+                ),
+              ));
+        if (projectId === null && cwd === null) {
+          return yield* new RuntimePolicyResolveError({
+            projectId,
+            providerInstanceId: input.modelSelection.instanceId,
+            cause: "The conversation working folder is unavailable.",
+          });
+        }
         return ProviderAdapterV2RuntimePolicy.make({
           runtimeMode: input.thread.runtimeMode,
           interactionMode: input.thread.interactionMode,
           cwd,
+          ...(input.thread.conversationPath == null
+            ? {}
+            : { additionalDirectories: [input.thread.conversationPath] }),
         });
       }),
     });

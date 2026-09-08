@@ -7,6 +7,7 @@ struct PathwayFocus: Codable, Identifiable, Equatable {
     let iconName: String
     let accentColor: String
     let orderKey: String
+    var includeConversations: Bool? = nil
 }
 
 struct PathwayFocusAssignment: Decodable {
@@ -29,6 +30,13 @@ struct PathwayFocusNotification: Decodable, Identifiable {
         default: "Agent finished"
         }
     }
+
+    func focusID(focuses: [PathwayFocus], assignments: [PathwayFocusAssignment], selectedID: String) -> String {
+        if projectKey == "\(environmentId):conversations" {
+            return focuses.contains { $0.id == selectedID && $0.includeConversations == true } ? selectedID : "all"
+        }
+        return assignments.first { $0.projectKey == projectKey }?.focusId ?? "all"
+    }
 }
 
 @MainActor @Observable final class PathwayFocusModel {
@@ -42,7 +50,20 @@ struct PathwayFocusNotification: Decodable, Identifiable {
     @ObservationIgnored private var observationGeneration = 0
 
     func includes(_ thread: PathwayAgentThread) -> Bool {
-        selectedID == "all" || assignments.contains { $0.focusId == selectedID && $0.projectKey == "\(thread.environmentId):\(thread.shell.projectId)" }
+        if selectedID == "all" { return true }
+        guard let projectID = thread.shell.projectId else {
+            return focuses.first { $0.id == selectedID }?.includeConversations == true
+        }
+        return assignments.contains { $0.focusId == selectedID && $0.projectKey == "\(thread.environmentId):\(projectID)" }
+    }
+
+    func notificationFocusID(_ notification: PathwayFocusNotification) -> String {
+        notification.focusID(focuses: focuses, assignments: assignments, selectedID: selectedID)
+    }
+
+    func notificationFocusName(_ notification: PathwayFocusNotification) -> String {
+        let id = notificationFocusID(notification)
+        return focuses.first { $0.id == id }?.name ?? "All"
     }
 
     func move(_ focus: PathwayFocus, offset: Int, cloud: PathwayCloudModel) async {

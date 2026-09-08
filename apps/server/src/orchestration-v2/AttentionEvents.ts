@@ -59,12 +59,18 @@ export function detectAttentionEventTransition(input: {
       `attention:${input.environmentId}:${input.thread.id}:${transition.transitionId}:${transition.eventKind}`,
     ),
     threadId: input.thread.id,
-    projectKey: FocusProjectKey.make(`${input.environmentId}:${input.thread.projectId}`),
-    alertProjectKey: alertProjectScopeKey(
-      input.environmentId,
-      input.thread.projectId,
-      input.repositoryCanonicalKey,
+    projectKey: FocusProjectKey.make(
+      `${input.environmentId}:${input.thread.projectId ?? "conversations"}`,
     ),
+    ...(input.thread.projectId === null
+      ? {}
+      : {
+          alertProjectKey: alertProjectScopeKey(
+            input.environmentId,
+            input.thread.projectId,
+            input.repositoryCanonicalKey,
+          ),
+        }),
     eventKind: transition.eventKind,
   };
 }

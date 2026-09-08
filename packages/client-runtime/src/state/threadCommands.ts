@@ -3,6 +3,10 @@ import { Atom } from "effect/unstable/reactivity";
 
 import { createAtomCommandScheduler, createEnvironmentCommand } from "./runtime.ts";
 import {
+  type AttachThreadProjectInput,
+  type SetThreadTemporaryInput,
+  attachThreadProject,
+  setThreadTemporary,
   type ArchiveThreadInput,
   type AttachPullRequestInput,
   type CancelQueuedRunInput,
@@ -131,6 +135,18 @@ export function createThreadEnvironmentAtoms<R, E>(
       JSON.stringify([environmentId, input.threadId]),
   };
   return {
+    attachProject: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:attach-project",
+      execute: (input: AttachThreadProjectInput) => attachThreadProject(input),
+      scheduler,
+      concurrency,
+    }),
+    setTemporary: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-temporary",
+      execute: (input: SetThreadTemporaryInput) => setThreadTemporary(input),
+      scheduler,
+      concurrency,
+    }),
     create: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:create",
       execute: (input: CreateThreadInput) => createThread(input),

@@ -1,3 +1,4 @@
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import {
   CommandId,
   MessageId,
@@ -62,7 +63,9 @@ export interface DeleteProjectInput extends CommandMetadata {
 
 export interface CreateThreadInput extends CommandMetadata {
   readonly threadId: ThreadId;
-  readonly projectId: ProjectId;
+  readonly projectId: ProjectId | null;
+  readonly temporary?: boolean;
+  readonly conversationCompanyId?: CompanyId | null;
   readonly title: string;
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
@@ -83,6 +86,16 @@ export type ArchiveThreadInput = ThreadCommandInput;
 export type UnarchiveThreadInput = ThreadCommandInput;
 export interface SettleThreadInput extends ThreadCommandInput {
   readonly force?: boolean;
+  readonly discardChanges?: boolean;
+}
+
+export interface AttachThreadProjectInput extends ThreadCommandInput {
+  readonly projectId: ProjectId;
+}
+
+export interface SetThreadTemporaryInput extends ThreadCommandInput {
+  readonly temporary: boolean;
+  readonly keep?: boolean;
 }
 
 export interface SettleAfterCompletionInput extends ThreadCommandInput {
@@ -160,7 +173,9 @@ export interface SetThreadInteractionModeInput extends ThreadCommandInput {
 
 interface StartThreadBootstrap {
   readonly createThread?: {
-    readonly projectId: ProjectId;
+    readonly projectId: ProjectId | null;
+    readonly temporary?: boolean;
+    readonly conversationCompanyId?: CompanyId | null;
     readonly title: string;
     readonly modelSelection: ModelSelection;
     readonly runtimeMode: RuntimeMode;
@@ -401,6 +416,10 @@ export const createThread = Effect.fn("EnvironmentCommands.createThread")(functi
     creationSource: input.creationSource ?? "web",
     threadId: input.threadId,
     projectId: input.projectId,
+    ...(input.temporary === undefined ? {} : { temporary: input.temporary }),
+    ...(input.conversationCompanyId === undefined
+      ? {}
+      : { conversationCompanyId: input.conversationCompanyId }),
     title: input.title,
     modelSelection: input.modelSelection,
     runtimeMode: input.runtimeMode,
@@ -459,6 +478,30 @@ export const settleThread = Effect.fn("EnvironmentCommands.settleThread")(functi
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     ...(input.force === undefined ? {} : { force: input.force }),
+    ...(input.discardChanges === undefined ? {} : { discardChanges: input.discardChanges }),
+  });
+});
+
+export const attachThreadProject = Effect.fn("EnvironmentCommands.attachThreadProject")(function* (
+  input: AttachThreadProjectInput,
+) {
+  return yield* dispatch({
+    type: "thread.project.attach",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    projectId: input.projectId,
+  });
+});
+
+export const setThreadTemporary = Effect.fn("EnvironmentCommands.setThreadTemporary")(function* (
+  input: SetThreadTemporaryInput,
+) {
+  return yield* dispatch({
+    type: "thread.temporary.set",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    temporary: input.temporary,
+    ...(input.keep === undefined ? {} : { keep: input.keep }),
   });
 });
 
@@ -737,6 +780,10 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       threadId: input.threadId,
       ...(bootstrap === undefined ? { reuseExistingThread: true } : {}),
       projectId: thread.projectId,
+      ...(thread.temporary === undefined ? {} : { temporary: thread.temporary }),
+      ...(thread.conversationCompanyId === undefined
+        ? {}
+        : { conversationCompanyId: thread.conversationCompanyId }),
       title: input.titleSeed ?? thread.title,
       generateTitle: input.titleSeed !== undefined,
       modelSelection: input.modelSelection ?? thread.modelSelection,

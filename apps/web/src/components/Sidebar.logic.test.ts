@@ -400,6 +400,22 @@ describe("sidebar thread lineage helpers", () => {
     expect(isSidebarSubagentThread(makeThreadFixture())).toBe(false);
   });
 
+  it("shows conversations in All or enabled Focuses and applies project scope after attachment", () => {
+    const conversation = makeThreadFixture({ projectId: null });
+    expect(filterSidebarV2VisibleThreads([conversation], null)).toEqual([conversation]);
+    expect(filterSidebarV2VisibleThreads([conversation], new Set())).toEqual([]);
+    expect(filterSidebarV2VisibleThreads([conversation], new Set(), true)).toEqual([conversation]);
+    const attached = { ...conversation, projectId: ProjectId.make("attached-project") };
+    expect(filterSidebarV2VisibleThreads([attached], new Set(), true)).toEqual([]);
+    expect(
+      filterSidebarV2VisibleThreads(
+        [attached],
+        new Set([`${attached.environmentId}:${attached.projectId}`]),
+        false,
+      ),
+    ).toEqual([attached]);
+  });
+
   it("resolves the parent thread for fork sidebar affordances", () => {
     const parentId = ThreadId.make("thread-parent");
     const fallbackParentId = ThreadId.make("thread-fallback-parent");

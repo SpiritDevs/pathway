@@ -32,8 +32,8 @@ struct NewAgentThreadView: View {
                     )
                 } else if projectOptions.isEmpty {
                     unavailable(
-                        title: "No connected projects",
-                        message: "A project must be available in a Pathway Connect environment before you can start a thread."
+                        title: "No connected environments",
+                        message: "Connect an environment to start a conversation or project thread."
                     )
                 } else if let selectedProject {
                     NewAgentThreadComposer(
@@ -65,12 +65,22 @@ struct NewAgentThreadView: View {
                     )
                 }
             }
-            .navigationTitle(selectedProjectID == nil ? "Choose Project" : "New Agent Thread")
+            .navigationTitle(selectedProjectID == nil ? "Choose Project" : selectedProject?.isConversation == true ? "New Conversation" : "New Agent Thread")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: close)
                         .disabled(isChangingBinding)
+                }
+                if let model, model.supportsConversations, selectedProject != nil {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Toggle(isOn: Binding(get: { model.temporary }, set: { model.temporary = $0 })) {
+                            Label("Temporary", systemImage: "clock.badge.xmark")
+                        }
+                        .toggleStyle(.button)
+                        .disabled(model.isLaunching || isChangingBinding)
+                        .accessibilityHint("Deletes this thread and its working files when it settles")
+                    }
                 }
                 if capturedDraft != nil, !appliedCapture, let model, model.errorMessage != nil {
                     ToolbarItem(placement: .primaryAction) {
@@ -106,7 +116,7 @@ struct NewAgentThreadView: View {
     }
 
     private var bindingOptions: [PathwayNewThreadBindingOption] {
-        appModel.cloud.environmentBindings.compactMap { binding in
+        let projects: [PathwayNewThreadBindingOption] = appModel.cloud.environmentBindings.compactMap { binding in
             guard
                 let environment = appModel.cloud.environments.first(where: {
                     $0.companyId == binding.companyId
@@ -127,13 +137,20 @@ struct NewAgentThreadView: View {
         }.sorted {
             $0.label.localizedStandardCompare($1.label) == .orderedAscending
         }
+        let conversations = appModel.cloud.environments.filter {
+            $0.environment.descriptor.capabilities?["threadConversations"]?.boolValue == true
+        }.map { environment in
+            PathwayNewThreadBindingOption(binding: nil, environment: environment, projectID: nil,
+                projectName: "Conversation", companyName: appModel.cloud.companyName(for: environment.companyId) ?? "Pathway")
+        }
+        return projects + conversations
     }
 
     private var projectOptions: [PathwayNewThreadProjectOption] {
-        let groups = Dictionary(grouping: bindingOptions) { option in
-            "\(option.binding.companyId):\(option.projectID)"
+        let groups = Dictionary(grouping: bindingOptions.filter { $0.projectID != nil }) { option in
+            "\(option.environment.companyId):\(option.projectID ?? "")"
         }
-        return groups.compactMap { id, bindings in
+        var projects: [PathwayNewThreadProjectOption] = groups.compactMap { id, bindings in
             guard let first = bindings.first else { return nil }
             return PathwayNewThreadProjectOption(
                 id: id,
@@ -144,6 +161,11 @@ struct NewAgentThreadView: View {
         }.sorted {
             $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
+        let conversations = bindingOptions.filter { $0.projectID == nil }
+        if !conversations.isEmpty {
+            projects.append(PathwayNewThreadProjectOption(id: "conversation", name: "Conversation", companyName: "", bindings: conversations))
+        }
+        return projects
     }
 
     private var selectedProject: PathwayNewThreadProjectOption? {
@@ -159,11 +181,11 @@ struct NewAgentThreadView: View {
         if !project.bindings.contains(where: { $0.id == selectedBindingID }) {
             selectedBindingID = project.bindings.first?.id ?? ""
         }
-        if placementPreferences.enabled, project.bindings.count > 1 { requestAutomaticPlacement() }
+        if !project.isConversation, placementPreferences.enabled, project.bindings.count > 1 { requestAutomaticPlacement() }
     }
 
     private func requestAutomaticPlacement(resetPin: Bool = false) {
-        guard model?.hasPendingLaunch != true, model?.isLaunching != true else { return }
+        guard selectedProject?.isConversation != true, model?.hasPendingLaunch != true, model?.isLaunching != true else { return }
         placementResetsPin = resetPin
         isResolvingPlacement = true
         placementMessage = nil
@@ -192,7 +214,7 @@ struct NewAgentThreadView: View {
             }
         guard !Task.isCancelled, requestID == placementRequestID, projectID == selectedProjectID else { return }
         if let winner, let current = selectedProject?.bindings.first(where: { $0.id == winner }),
-           current.binding.binding.status == "active", placementPreferences.enabled,
+           (current.binding?.binding.status ?? current.environment.environment.state) == "active", placementPreferences.enabled,
            placementPreferences.weight(for: current.environment.environment.environmentId) > 0 {
             automaticBindingID = winner
             placementUnavailable = false
@@ -248,11 +270,18 @@ struct NewAgentThreadView: View {
         let preferences = placementPreferences
         nextModel.validatePlacement = { [weak cloud, weak nextModel] in
             guard let cloud, let nextModel else { throw PathwayRPCError.disconnected }
-            guard cloud.environmentBindings.contains(where: {
-                $0.id == option.binding.id && $0.binding.status == "active"
-                    && $0.binding.localProjectId == option.binding.binding.localProjectId
-                    && $0.binding.localWorkspaceRoot == option.binding.binding.localWorkspaceRoot
-            }) else { throw PathwayThreadConversationError.message("This project is no longer available in the selected environment.") }
+            if let binding = option.binding {
+                guard cloud.environmentBindings.contains(where: {
+                    $0.id == binding.id && $0.binding.status == "active"
+                        && $0.binding.localProjectId == binding.binding.localProjectId
+                        && $0.binding.localWorkspaceRoot == binding.binding.localWorkspaceRoot
+                }) else { throw PathwayThreadConversationError.message("This project is no longer available in the selected environment.") }
+            } else {
+                guard cloud.environments.contains(where: {
+                    $0.id == option.environment.id && $0.environment.state == "active"
+                        && $0.environment.descriptor.capabilities?["threadConversations"]?.boolValue == true
+                }) else { throw PathwayThreadConversationError.message("Conversations are no longer available in the selected environment.") }
+            }
             guard preferences.enabled else { return }
             let weight = preferences.weight(for: option.environment.environment.environmentId)
             let selection = nextModel.placementModelChoice
@@ -303,8 +332,8 @@ struct NewAgentThreadView: View {
         }
         if let option = bindingOptions.first(where: { $0.id == selectedBindingID }) {
             appModel.pendingThreadRoute = PathwayPendingThreadRoute(
-                companyId: option.binding.companyId,
-                environmentId: option.binding.binding.environmentId,
+                companyId: option.environment.companyId,
+                environmentId: option.environment.environment.environmentId,
                 threadId: threadID
             )
         }
@@ -348,12 +377,12 @@ private struct NewAgentThreadComposer: View {
             VStack(spacing: 12) {
                 Spacer(minLength: 54)
 
-                Text("What should we build")
+                Text(project.isConversation ? "What’s on your mind" : "What should we build")
                     .font(.largeTitle.weight(.regular))
 
                 Button(action: chooseProject) {
                     HStack(spacing: 5) {
-                        Text("in \(project.name)?")
+                        Text(project.isConversation ? "Conversation" : "in \(project.name)?")
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Image(systemName: "chevron.down")
@@ -377,7 +406,7 @@ private struct NewAgentThreadComposer: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 4) {
                 if let model {
-                    workspaceSummary(model)
+                    if !model.isConversation { workspaceSummary(model) }
                     composer(model).disabled(model.isImportingCapture || isResolvingPlacement || placementUnavailable)
                 } else {
                     HStack(spacing: 10) {
@@ -410,7 +439,7 @@ private struct NewAgentThreadComposer: View {
 
     private var environmentPicker: some View {
         Menu {
-            if automaticPlacementEnabled {
+            if automaticPlacementEnabled && !project.isConversation {
                 Button("Auto", action: chooseAutomaticPlacement)
                     .disabled(model?.canAutomaticallyPlace == false)
                 if model?.placementPinned == true, model?.canAutomaticallyPlace == true {
@@ -462,6 +491,7 @@ private struct NewAgentThreadComposer: View {
                         : "folder"
                 )
             }
+            .disabled(model.temporary)
             .accessibilityHint("Changes the workspace used for the new thread")
 
             if model.workspaceMode == "worktree" {

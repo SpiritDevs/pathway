@@ -180,6 +180,7 @@ export const make = Effect.gen(function* () {
       pullRequests: true,
       threadPullRequestAttachments: true,
       threadSettlement: true,
+      threadConversations: true,
       threadForceSettlement: true,
       threadSettleAfterCompletion: true,
       threadSnooze: true,

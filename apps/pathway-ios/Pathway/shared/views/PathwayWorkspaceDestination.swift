@@ -6,42 +6,55 @@ struct PathwayWorkspaceDestination: View {
     let environment: PathwayCompanyEnvironment
     let projectRoot: String
     let initialSection: String
+    let usesConversationFolder: Bool
     @State private var serverConfig: [String: JSONValue] = [:]
     @State private var configurationError: String?
     @State private var scripts: [PathwayWorkspaceScript] = []
 
     init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment, projectRoot: String,
-         connect: PathwayConnectClient, storageDirectory: URL?, initialSection: String = "repositories") {
+         connect: PathwayConnectClient, storageDirectory: URL?, initialSection: String = "repositories", usesConversationFolder: Bool = false) {
         self.thread = thread
         self.environment = environment
         self.projectRoot = projectRoot
         self.initialSection = initialSection
+        self.usesConversationFolder = usesConversationFolder
     }
 
-    private var currentThread: PathwayAgentThread? { appModel.cloud.threads.first { $0.id == thread.id && $0.shell.deletedAt == nil } }
+    private var currentThread: PathwayAgentThread? {
+        appModel.cloud.threads.filter {
+            $0.environmentId == thread.environmentId && $0.threadId == thread.threadId && $0.shell.deletedAt == nil
+        }.max { $0.cloudUpdatedAt < $1.cloudUpdatedAt }
+    }
     private var currentEnvironment: PathwayCompanyEnvironment? {
-        appModel.cloud.environments.first { $0.id == environment.id && $0.environment.state == "active" }
+        appModel.cloud.environments.first {
+            $0.companyId == currentThread?.companyId && $0.environment.environmentId == thread.environmentId
+                && $0.environment.state == "active"
+        }
     }
     private var currentScope: PathwayWorkspaceScope? {
-        guard let currentThread, currentEnvironment != nil,
-              let binding = appModel.cloud.environmentBindings.first(where: {
+        guard let currentThread, currentEnvironment != nil else { return nil }
+        if currentThread.shell.isConversation || usesConversationFolder, let path = currentThread.shell.conversationPath {
+            return .init(companyID: currentThread.companyId, environmentID: currentThread.environmentId,
+                threadID: currentThread.threadId, projectID: nil, projectRoot: path, worktreePath: nil)
+        }
+        guard let projectID = currentThread.shell.projectId, let binding = appModel.cloud.environmentBindings.first(where: {
                   $0.companyId == currentThread.companyId && $0.binding.environmentId == currentThread.environmentId
                       && $0.binding.localProjectId == currentThread.shell.projectId
                       && $0.binding.cloudProjectId == currentThread.cloudProjectId && $0.binding.status == "active"
               }) else { return nil }
         return .init(companyID: currentThread.companyId, environmentID: currentThread.environmentId,
-                     threadID: currentThread.threadId, projectID: currentThread.shell.projectId,
+                     threadID: currentThread.threadId, projectID: projectID,
                      projectRoot: binding.binding.localWorkspaceRoot, worktreePath: currentThread.shell.worktreePath)
     }
     private var canMutate: Bool {
         currentThread?.isRunning == false && currentScope != nil
-            && appModel.cloud.connectedEnvironmentIDs.contains(environment.id)
+            && currentEnvironment.map { appModel.cloud.connectedEnvironmentIDs.contains($0.id) } == true
     }
     private func context(_ scope: PathwayWorkspaceScope) -> PathwayWorkspaceContext {
         let capabilities = serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue
         return PathwayWorkspaceContext(threadID: scope.threadID, projectID: scope.projectID,
             cwd: scope.cwd, projectRoot: scope.projectRoot,
-            supportsPullRequests: capabilities?["pullRequests"]?.boolValue == true,
+            supportsPullRequests: scope.projectID != nil && capabilities?["pullRequests"]?.boolValue == true,
             canMutate: canMutate, scripts: scripts)
     }
 
@@ -55,6 +68,14 @@ struct PathwayWorkspaceDestination: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
+            if !usesConversationFolder, let currentThread, !currentThread.shell.isConversation,
+               let path = currentThread.shell.conversationPath, let currentEnvironment, let connect = appModel.connect {
+                NavigationLink("Original conversation folder") {
+                    PathwayWorkspaceDestination(thread: currentThread, environment: currentEnvironment,
+                        projectRoot: path, connect: connect, storageDirectory: appModel.localStorageDirectory,
+                        initialSection: "changes", usesConversationFolder: true)
+                }.padding()
+            }
             if let configurationError { Text(configurationError).font(.footnote).foregroundStyle(.red).padding() }
         }
     }
@@ -157,13 +178,13 @@ struct PathwayWorkspaceScope: Equatable {
     let companyID: String
     let environmentID: String
     let threadID: String
-    let projectID: String
+    let projectID: String?
     let projectRoot: String
     let worktreePath: String?
     var cwd: String { worktreePath ?? projectRoot }
 
     static let readMethods: Set<String> = [
-        "projects.readFile", "projects.listEntries", "projects.searchEntries",
+        "projects.readFile", "projects.listEntries", "projects.searchEntries", "projects.inspectDirectory",
         "pullRequests.list", "pullRequests.detail", "pullRequests.activity", "pullRequests.reviewerCandidates",
         "vcs.refreshStatus", "review.getDiffPreview", "vcs.listRefs", "orchestration.previewWorkspaceMove",
         "assets.createUrl", "terminal.attach", "/api/pull-requests/diff"
@@ -175,8 +196,11 @@ struct PathwayWorkspaceScope: Equatable {
         guard let fields = payload.objectValue else { throw PathwayWorkspaceScopeError.changed }
         let terminal = method == "terminal.open" || method == "terminal.attach"
         let requiredCWD = terminal ? expected.projectRoot : expected.cwd
-        for (key, value) in [("threadId", expected.threadID), ("projectId", expected.projectID), ("cwd", requiredCWD)] {
+        for (key, value) in [("threadId", expected.threadID), ("cwd", requiredCWD)] {
             if let provided = fields[key], provided != .string(value) { throw PathwayWorkspaceScopeError.changed }
+        }
+        if let provided = fields["projectId"], provided != (expected.projectID.map(JSONValue.string) ?? .null) {
+            throw PathwayWorkspaceScopeError.changed
         }
         let expectedWorktree: JSONValue = expected.worktreePath.map(JSONValue.string) ?? .null
         for key in ["worktreePath", "expectedWorktreePath"] {

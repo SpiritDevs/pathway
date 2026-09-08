@@ -108,6 +108,26 @@ function permissionRequest(
 }
 
 describe("acpPermissionDisposition", () => {
+  it("allows edits in the retained conversation folder while preserving other directory restrictions", () => {
+    const conversationPath = NodePath.resolve(process.cwd(), "retained-conversation-folder");
+    const retained = { ...policy, additionalDirectories: [conversationPath] };
+    assert.equal(
+      acpPermissionDisposition(
+        retained,
+        permissionRequest("edit", [{ path: NodePath.join(conversationPath, "notes.md") }]),
+      ),
+      "allow",
+    );
+    assert.equal(
+      acpPermissionDisposition(
+        retained,
+        permissionRequest("edit", [
+          { path: NodePath.join(conversationPath, "..", "unrelated", "notes.md") },
+        ]),
+      ),
+      "deny",
+    );
+  });
   const cwd = NodePath.resolve(process.cwd(), "acp-permission-workspace");
   const writableRoot = NodePath.resolve(process.cwd(), "acp-additional-writable-root");
   const policy = ProviderAdapterV2RuntimePolicy.make({

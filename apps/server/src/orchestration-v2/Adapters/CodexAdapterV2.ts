@@ -680,7 +680,23 @@ export function buildCodexTurnStartParams(input: {
       // reviewer sticky after switching away from Auto mode.
       approvalsReviewer: runtimeModeDefaults.approvalsReviewer,
       ...(approvalPolicy === undefined ? {} : { approvalPolicy }),
-      ...(sandboxPolicy === undefined ? {} : { sandboxPolicy }),
+      ...(sandboxPolicy === undefined
+        ? {}
+        : {
+            sandboxPolicy:
+              sandboxPolicy?.type === "workspaceWrite" &&
+              input.runtimePolicy.additionalDirectories?.length
+                ? {
+                    ...sandboxPolicy,
+                    writableRoots: [
+                      ...new Set([
+                        ...(sandboxPolicy.writableRoots ?? []),
+                        ...input.runtimePolicy.additionalDirectories,
+                      ]),
+                    ],
+                  }
+                : sandboxPolicy,
+          }),
       ...(effort === undefined
         ? input.modelCapabilities === undefined
           ? {}

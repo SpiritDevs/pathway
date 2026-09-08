@@ -39,8 +39,12 @@ final class PathwayAgentThreadCreationModel {
     private(set) var providers: [PathwayServerProvider] = []
     private(set) var serverConfig: [String: JSONValue] = [:]
     let attachments: PathwayNewThreadAttachments
-    var workspaceRoot: String { binding.binding.localWorkspaceRoot }
-    var bindingID: String { binding.id }
+    var workspaceRoot: String { binding?.binding.localWorkspaceRoot ?? "" }
+    var bindingID: String { binding?.id ?? Self.conversationDraftKey(environment) }
+    var isConversation: Bool { binding == nil }
+    var supportsConversations: Bool {
+        serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue?["threadConversations"]?.boolValue == true
+    }
     private(set) var isLaunching = false
     private(set) var isImportingCapture = false
     private(set) var isTransferringDraft = false
@@ -129,8 +133,14 @@ final class PathwayAgentThreadCreationModel {
     var baseReference = "main" { didSet { saveDraft() } }
     var branch = "" { didSet { saveDraft() } }
     var startFromOrigin = true { didSet { saveDraft() } }
+    var temporary = false {
+        didSet {
+            if temporary && !isConversation { workspaceMode = "worktree" }
+            saveDraft()
+        }
+    }
 
-    @ObservationIgnored private let binding: PathwayCompanyEnvironmentBinding
+    @ObservationIgnored private let binding: PathwayCompanyEnvironmentBinding?
     @ObservationIgnored private let environment: PathwayCompanyEnvironment
     typealias Request = @MainActor (String, JSONValue) async throws -> JSONValue
     typealias DraftSave = @MainActor (PathwayThreadCreationDraft, UInt64) async throws -> Void
@@ -151,21 +161,22 @@ final class PathwayAgentThreadCreationModel {
     @ObservationIgnored private var streamTask: Task<Void, Never>?
 
     init(
-        binding: PathwayCompanyEnvironmentBinding,
+        binding: PathwayCompanyEnvironmentBinding? = nil,
         environment: PathwayCompanyEnvironment,
         connect: PathwayConnectClient? = nil,
         storageDirectory: URL? = nil,
         request: Request? = nil,
         saveDraft: DraftSave? = nil
     ) {
-        attachments = PathwayNewThreadAttachments(directory: storageDirectory, key: binding.id)
+        let draftKey = binding?.id ?? Self.conversationDraftKey(environment)
+        attachments = PathwayNewThreadAttachments(directory: storageDirectory, key: draftKey)
         self.binding = binding
         self.environment = environment
         self.connect = connect
         self.storageDirectory = storageDirectory
         injectedRequest = request
         injectedDraftSave = saveDraft
-        draftStore = storageDirectory.map { PathwayThreadCreationDraftStore(directory: $0, key: binding.id) }
+        draftStore = storageDirectory.map { PathwayThreadCreationDraftStore(directory: $0, key: draftKey) }
         attachments.request = { [weak self] method, payload in
             guard let self else { throw PathwayRPCError.disconnected }
             return try await self.request(method, payload: payload)
@@ -192,6 +203,10 @@ final class PathwayAgentThreadCreationModel {
         providers.first { $0.id == selectedProviderID }
     }
 
+    nonisolated static func conversationDraftKey(_ environment: PathwayCompanyEnvironment) -> String {
+        "conversation:\(environment.id)"
+    }
+
     var selectedModel: PathwayServerModel? {
         selectedProvider?.models.first { $0.id == selectedModelID }
     }
@@ -202,9 +217,10 @@ final class PathwayAgentThreadCreationModel {
             && automaticModelChoice == nil
             && selectedProvider != nil
             && selectedModel != nil
+            && (!(isConversation || temporary) || supportsConversations)
             && connectionState == .live
             && !isLaunching && !isImportingCapture && !isTransferringDraft
-            && (workspaceMode != "worktree"
+            && (isConversation || (workspaceMode != "worktree" && !temporary)
                 || !baseReference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
@@ -269,11 +285,12 @@ final class PathwayAgentThreadCreationModel {
             let initialUploads = initialImageUploads
             let uploads = initialUploads + userUploads
             let draft = PathwayThreadLaunchDraft(
-                projectID: binding.binding.localProjectId,
+                projectID: binding?.binding.localProjectId,
                 prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
                 modelSelection: selection, runtimeMode: runtimeMode, interactionMode: interactionMode,
                 workspaceMode: workspaceMode, baseReference: baseReference, branch: branch,
-                startFromOrigin: startFromOrigin
+                startFromOrigin: startFromOrigin, temporary: temporary,
+                conversationCompanyID: isConversation ? environment.companyId : nil
             )
             var fingerprint = PathwayAgentThreadCommands.launchThread(draft, identifier: "draft").objectValue ?? [:]
             fingerprint["uploadsFingerprint"] = .object(["initial": .string(uploadsFingerprint), "files": .array(userUploads)])
@@ -403,6 +420,7 @@ final class PathwayAgentThreadCreationModel {
             selectedProviderID = stored.selectedProviderID; selectedModelID = stored.selectedModelID
             optionValues = stored.optionValues; runtimeMode = stored.runtimeMode; interactionMode = stored.interactionMode
             workspaceMode = stored.workspaceMode; baseReference = stored.baseReference
+            temporary = stored.temporary ?? false
             branch = stored.branch; startFromOrigin = stored.startFromOrigin; launchAttempt = stored.attempt
             placementPinned = stored.placementPinned ?? false
             sentIDs = stored.sentAttachmentIDs ?? []
@@ -439,6 +457,7 @@ final class PathwayAgentThreadCreationModel {
         let movingAttachments = attachments.drafts
         try await destination.attachments.stageTransfer(drafts: movingAttachments, bytes: attachments.bytes)
         destination.prompt = movingPrompt
+        destination.temporary = temporary
         destination.importedCaptureIDs = importedCaptureIDs
         try await destination.persistDraftChecked()
         try Task.checkCancellation()
@@ -458,7 +477,7 @@ final class PathwayAgentThreadCreationModel {
         PathwayThreadCreationDraft(prompt: prompt, initialImageUploads: initialImageUploads,
             selectedProviderID: selectedProviderID, selectedModelID: selectedModelID, optionValues: optionValues,
             runtimeMode: runtimeMode, interactionMode: interactionMode, workspaceMode: workspaceMode,
-            baseReference: baseReference, branch: branch, startFromOrigin: startFromOrigin, attempt: launchAttempt, sentAttachmentIDs: sentAttachmentIDs.isEmpty ? nil : sentAttachmentIDs, importedCaptureIDs: importedCaptureIDs.isEmpty ? nil : importedCaptureIDs, placementPinned: placementPinned ? true : nil)
+            baseReference: baseReference, branch: branch, startFromOrigin: startFromOrigin, attempt: launchAttempt, sentAttachmentIDs: sentAttachmentIDs.isEmpty ? nil : sentAttachmentIDs, importedCaptureIDs: importedCaptureIDs.isEmpty ? nil : importedCaptureIDs, placementPinned: placementPinned ? true : nil, temporary: temporary)
     }
 
     private func saveDraft() {

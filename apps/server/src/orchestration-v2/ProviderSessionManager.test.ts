@@ -47,6 +47,7 @@ import {
   ProviderAdapterProtocolError,
   type ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2SessionRuntime,
+  type ProviderAdapterV2TurnInput,
   type ProviderAdapterV2Shape,
 } from "./ProviderAdapter.ts";
 import { makeSingleLayer as makeProviderAdapterRegistryLayer } from "./ProviderAdapterRegistry.ts";
@@ -95,6 +96,7 @@ interface TestProviderRuntimeState {
   readonly interruptCount: number;
   readonly resumeCount: number;
   readonly eventQueues: ReadonlyMap<string, Queue.Queue<ProviderAdapterV2Event>>;
+  readonly startedTurns: ReadonlyArray<ProviderAdapterV2TurnInput>;
 }
 
 const emptyState: TestProviderRuntimeState = {
@@ -103,6 +105,7 @@ const emptyState: TestProviderRuntimeState = {
   interruptCount: 0,
   resumeCount: 0,
   eventQueues: new Map(),
+  startedTurns: [],
 };
 
 const modelSelection = {
@@ -314,7 +317,11 @@ function makeProviderAdapter(
               ...current,
               resumeCount: current.resumeCount + 1,
             })).pipe(Effect.as(threadInput.providerThread)),
-          startTurn: () => Effect.void,
+          startTurn: (turn) =>
+            Ref.update(state, (current) => ({
+              ...current,
+              startedTurns: [...current.startedTurns, turn],
+            })),
           steerTurn: () => Effect.void,
           interruptTurn: () =>
             Ref.update(state, (current) => ({
@@ -1768,6 +1775,120 @@ it.effect(
       });
 
       yield* effect.pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 1000 })));
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 adds both workspace directories only to provider input while preserving accepted history",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      yield* Effect.gen(function* () {
+        const idAllocator = yield* IdAllocatorV2;
+        const eventSink = yield* EventSinkV2;
+        const projectionStore = yield* ProjectionStoreV2;
+        const manager = yield* ProviderSessionManagerV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("attached-conversation");
+        const created = yield* makeThreadCreatedEvent({ idAllocator, threadId, now });
+        const conversationPath = "/isolated/userdata/conversations/one";
+        const projectPath = "/workspace/project-worktree";
+        yield* eventSink.write({
+          events: [
+            {
+              ...created,
+              payload: { ...created.payload, conversationPath, worktreePath: projectPath },
+            },
+          ],
+        });
+        const appThread = (yield* projectionStore.getThreadProjection(threadId)).thread;
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const providerThread = makeProviderThread({
+          idAllocator,
+          threadId,
+          providerSessionId,
+          now,
+        });
+        const policy = {
+          ...runtimePolicy,
+          cwd: projectPath,
+          additionalDirectories: [conversationPath],
+        };
+        const runtime = yield* manager.open({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy: policy,
+        });
+        yield* runtime.resumeThread({
+          threadId,
+          providerThread,
+          modelSelection,
+          runtimePolicy: policy,
+        });
+        const runId = idAllocator.derive.run({ threadId, ordinal: 2 });
+        const message: ProviderAdapterV2TurnInput["message"] = {
+          createdBy: "user",
+          creationSource: "web",
+          messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 2 }),
+          text: "Continue from my notes",
+          attachments: [],
+        };
+        yield* eventSink.write({
+          events: [
+            {
+              id: yield* idAllocator.allocate.event({ threadId }),
+              type: "message.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: message.messageId,
+                threadId,
+                runId: null,
+                nodeId: null,
+                role: "user",
+                text: message.text,
+                attachments: [],
+                streaming: false,
+                createdBy: "user",
+                creationSource: "web",
+                createdAt: now,
+                updatedAt: now,
+              },
+            },
+          ],
+        });
+        yield* runtime.startTurn({
+          appThread,
+          threadId,
+          providerThread,
+          runId,
+          runOrdinal: 2,
+          providerTurnOrdinal: 2,
+          attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+          rootNodeId: idAllocator.derive.rootNode({ runId }),
+          message,
+          modelSelection,
+          runtimePolicy: policy,
+        });
+        const providerInput = (yield* Ref.get(state)).startedTurns[0];
+        assert.isDefined(providerInput);
+        assert.equal(message.text, "Continue from my notes");
+        assert.equal(providerInput?.message.messageId, message.messageId);
+        assert.include(providerInput?.message.text ?? "", conversationPath);
+        assert.include(providerInput?.message.text ?? "", projectPath);
+        assert.include(providerInput?.message.text ?? "", "Continue from my notes");
+        assert.strictEqual(providerInput?.providerThread, providerThread);
+        assert.equal(providerInput?.providerThread.nativeThreadRef?.nativeId, "native-thread");
+        assert.equal((yield* Ref.get(state)).resumeCount, 1);
+        const persisted = yield* projectionStore.getThreadProjection(threadId);
+        assert.deepEqual(persisted.thread, appThread);
+        assert.equal(persisted.messages.length, 1);
+        assert.equal(persisted.messages[0]?.text, "Continue from my notes");
+      }).pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 60_000 })));
     }),
 );
 

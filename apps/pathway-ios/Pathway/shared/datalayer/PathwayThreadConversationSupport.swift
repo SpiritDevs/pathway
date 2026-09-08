@@ -321,8 +321,11 @@ extension PathwayAgentThreadModel {
         currentModelSelection = PathwayModelSelection(instanceId: currentModelSelection.instanceId,
             model: roster.model ?? currentModelSelection.model, options: options ?? currentModelSelection.options)
     }
-    var canStartSideChat: Bool { runs.contains { $0.status == "completed" } }
+    var canStartSideChat: Bool { !thread.shell.isTemporary && runs.contains { $0.status == "completed" } }
     func startDraftInNewThread(sideChat: Bool) async throws -> String {
+        guard !thread.shell.isTemporary else {
+            throw PathwayThreadConversationError.message("Keep conversation before starting another chat from this workspace.")
+        }
         guard canSend else { throw PathwayThreadConversationError.message("Finish preparing the message before starting a chat.") }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let selected = draftAttachments
@@ -379,7 +382,8 @@ extension PathwayAgentThreadModel {
             if let path = thread.shell.worktreePath { workspace = ["type": .string("existing_worktree"), "worktreePath": .string(path)] }
             if let branch = thread.shell.branch { workspace["branch"] = .string(branch) }
             _ = try await request("orchestration.launchThread", payload: .object(["commandId": .string(target), "creationSource": .string("mobile"),
-                "threadId": .string(target), "reuseExistingThread": .bool(false), "projectId": .string(thread.shell.projectId),
+                "threadId": .string(target), "reuseExistingThread": .bool(false), "projectId": thread.shell.projectId.map(JSONValue.string) ?? .null,
+                "conversationCompanyId": thread.shell.conversationCompanyId.map(JSONValue.string) ?? .null,
                 "title": .string(String(text.prefix(100)).isEmpty ? "New chat" : String(text.prefix(100))), "generateTitle": .bool(true),
                 "modelSelection": try Self.json(currentModelSelection), "runtimeMode": .string(runtimeMode), "interactionMode": .string(interactionMode),
                 "locations": .array([.string("agents")]), "workspaceStrategy": .object(workspace),

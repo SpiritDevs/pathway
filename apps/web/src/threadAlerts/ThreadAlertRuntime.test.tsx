@@ -1,4 +1,11 @@
 import type { ReactElement } from "react";
+import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
+import {
+  AttentionEventId,
+  FocusId,
+  FocusNotificationId,
+  FocusProjectKey,
+} from "@spiritdevs/contracts/focus";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   DEFAULT_ALERT_DELIVERY_SETTINGS,
@@ -6,7 +13,15 @@ import {
 } from "@spiritdevs/contracts/threadAlerts";
 import { reactHookHarness as hooks } from "../test/reactHookHarness";
 
-const callbacks = vi.hoisted(() => ({ navigate: vi.fn(), markRead: vi.fn(), toast: vi.fn() }));
+const callbacks = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  markRead: vi.fn(),
+  toast: vi.fn(),
+  setAtom: vi.fn(),
+  activeFocusId: "all",
+  focuses: [] as Array<import("@spiritdevs/contracts/focus").Focus>,
+  notifications: [] as Array<import("@spiritdevs/contracts/focus").FocusNotification>,
+}));
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   const { reactHookHarness } = await import("../test/reactHookHarness");
@@ -21,18 +36,29 @@ vi.mock("react/compiler-runtime", async () => {
   return { c: reactHookHarness.useMemoCache };
 });
 vi.mock("@clerk/react", () => ({ useAuth: () => ({ userId: "account", isSignedIn: true }) }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: (value: unknown) => value }));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: (value: unknown) => (value === "active-focus" ? callbacks.activeFocusId : value),
+}));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => callbacks.navigate,
   useParams: () => ({}),
 }));
 vi.mock("../cloud/companyRegistryReplica", () => ({ companyRegistryReplicasAtom: new Map() }));
-vi.mock("../cloud/agentThreadReadModel", () => ({ cloudAgentThreadCompanyId: () => null }));
+vi.mock("../cloud/agentThreadReadModel", () => ({
+  cloudAgentThreadCompanyId: () => null,
+  cloudEnvironmentProjectsFromReplicas: () => [],
+  cloudEnvironmentThreadsFromReplicas: () => [],
+}));
 vi.mock("../cloud/activeCompany", () => ({ activeCompanyIdAtom: "company" }));
 vi.mock("../cloud/focusReadModel", () => ({
-  activeFocusIdAtom: "focus",
+  activeFocusIdAtom: "active-focus",
   focusAssignmentsAtom: [],
-  focusNotificationsAtom: [],
+  get focusListAtom() {
+    return callbacks.focuses;
+  },
+  get focusNotificationsAtom() {
+    return callbacks.notifications;
+  },
   focusMutationsAtom: { markNotificationRead: callbacks.markRead },
 }));
 vi.mock("../hooks/useSettings", () => ({
@@ -41,7 +67,7 @@ vi.mock("../hooks/useSettings", () => ({
 }));
 vi.mock("../state/projects", () => ({ environmentProjects: { projectsAtom: [] } }));
 vi.mock("../state/threads", () => ({ environmentThreadShells: { threadShellsAtom: [] } }));
-vi.mock("../rpc/atomRegistry", () => ({ appAtomRegistry: { set: vi.fn() } }));
+vi.mock("../rpc/atomRegistry", () => ({ appAtomRegistry: { set: callbacks.setAtom } }));
 vi.mock("../components/ui/toast", () => ({ toastManager: { add: callbacks.toast } }));
 vi.mock("./ThreadAlertHost", () => ({ ThreadAlertHost: () => null }));
 vi.mock("./state", () => ({
@@ -68,9 +94,50 @@ beforeEach(() => {
   callbacks.navigate.mockReset().mockResolvedValue(undefined);
   callbacks.markRead.mockReset().mockResolvedValue(undefined);
   callbacks.toast.mockReset();
+  callbacks.setAtom.mockReset();
+  callbacks.activeFocusId = "all";
+  callbacks.focuses = [];
+  callbacks.notifications = [];
 });
 
 describe("notification click navigation", () => {
+  it.each([true, false])(
+    "uses the selected Focus's Conversations setting (%s) for native notification navigation",
+    async (includeConversations) => {
+      callbacks.activeFocusId = "work";
+      callbacks.focuses = [
+        {
+          id: FocusId.make("work"),
+          name: "Work",
+          iconName: "Circle",
+          accentColor: "#64748b",
+          orderKey: "a",
+          createdAt: 1,
+          updatedAt: 1,
+          includeConversations,
+        },
+      ];
+      callbacks.notifications = [
+        {
+          id: FocusNotificationId.make("notification"),
+          alertEligibleAtCreation: true,
+          eventId: AttentionEventId.make("event"),
+          environmentId: EnvironmentId.make("env"),
+          threadId: ThreadId.make("thread"),
+          projectKey: FocusProjectKey.make("env:conversations"),
+          eventKind: "finished-unsettled",
+          createdAt: 1,
+        },
+      ];
+      await openNotification();
+      expect(callbacks.setAtom).toHaveBeenCalledWith(
+        "active-focus",
+        includeConversations ? "work" : "all",
+      );
+      expect(callbacks.markRead).toHaveBeenCalledWith("event");
+    },
+  );
+
   it("opens the thread before acknowledging only the selected event", async () => {
     let finishNavigation!: () => void;
     callbacks.navigate.mockReturnValueOnce(

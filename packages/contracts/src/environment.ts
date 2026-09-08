@@ -112,6 +112,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       pre-settlement servers, so clients treat missing as unsupported and
       never send the commands under version skew. */
   threadSettlement: Schema.optionalKey(Schema.Boolean),
+  /** Projectless conversations, temporary retention, and project attachment. */
+  threadConversations: Schema.optionalKey(Schema.Boolean),
   /** Server can cancel active work when settling a thread. */
   threadForceSettlement: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.settle-after-completion.set and projects the

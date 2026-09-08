@@ -100,4 +100,50 @@ it.layer(TestLayer)("RuntimePolicyV2", (it) => {
       assert.equal(resolved.cwd, "/project-worktree");
     }),
   );
+
+  it.effect("runs a projectless conversation in its environment-owned folder", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const resolved = yield* policy.resolve({
+        thread: {
+          ...makeThread({ now, worktreePath: null }),
+          projectId: null,
+          conversationPath: "/isolated/userdata/conversations/thread",
+        },
+        modelSelection,
+      });
+      assert.equal(resolved.cwd, "/isolated/userdata/conversations/thread");
+    }),
+  );
+
+  it.effect("preserves access to the conversation folder after project attachment", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const resolved = yield* policy.resolve({
+        thread: {
+          ...makeThread({ now, worktreePath: "/project-worktree" }),
+          conversationPath: "/isolated/userdata/conversations/thread",
+        },
+        modelSelection,
+      });
+      assert.equal(resolved.cwd, "/project-worktree");
+      assert.deepEqual(resolved.additionalDirectories, ["/isolated/userdata/conversations/thread"]);
+    }),
+  );
+
+  it.effect("refuses a projectless thread without a working folder", () =>
+    Effect.gen(function* () {
+      const policy = yield* RuntimePolicyV2;
+      const now = yield* DateTime.now;
+      const error = yield* policy
+        .resolve({
+          thread: { ...makeThread({ now, worktreePath: null }), projectId: null },
+          modelSelection,
+        })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "RuntimePolicyResolveError");
+    }),
+  );
 });

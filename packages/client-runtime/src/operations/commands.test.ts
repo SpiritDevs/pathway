@@ -1,3 +1,4 @@
+import { CompanyId } from "@spiritdevs/contracts/company";
 import {
   CheckpointId,
   CheckpointRef,
@@ -39,6 +40,8 @@ import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import { v2Now, v2Projection, v2ThreadId } from "../state/orchestrationV2TestFixtures.ts";
 import {
+  attachThreadProject,
+  setThreadTemporary,
   archiveThread,
   attachPullRequest,
   createProject,
@@ -1012,6 +1015,70 @@ describe("V2 environment commands", () => {
           threadId: "thread-1",
           enabled: true,
         },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+});
+
+describe("conversation environment commands", () => {
+  it.effect("preserves a projectless temporary launch and its selected company", () =>
+    Effect.gen(function* () {
+      const launches: OrchestrationV2ThreadLaunchInput[] = [];
+      const supervisor = yield* makeSupervisor({ commands: [], projects: [], launches });
+      yield* startThreadTurn({
+        threadId: v2ThreadId,
+        message: {
+          messageId: MessageId.make("conversation-message"),
+          role: "user",
+          text: "Make a file",
+          attachments: [],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        bootstrap: {
+          createThread: {
+            projectId: null,
+            temporary: true,
+            conversationCompanyId: CompanyId.make("company-1"),
+            title: "Conversation",
+            modelSelection: v2Projection.thread.modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            createdAt: "2026-09-08T00:00:00Z",
+          },
+        },
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      expect(launches[0]).toMatchObject({
+        projectId: null,
+        temporary: true,
+        conversationCompanyId: "company-1",
+        workspaceStrategy: { type: "root" },
+      });
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("keeps attachment, retention and explicit discard addressed to the same thread", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      const environment = Effect.provideService(
+        EnvironmentSupervisor.EnvironmentSupervisor,
+        supervisor,
+      );
+      yield* attachThreadProject({
+        threadId: v2ThreadId,
+        projectId: ProjectId.make("project-1"),
+      }).pipe(environment);
+      yield* setThreadTemporary({ threadId: v2ThreadId, temporary: false, keep: true }).pipe(
+        environment,
+      );
+      yield* settleThread({ threadId: v2ThreadId, discardChanges: true }).pipe(environment);
+      expect(commands).toMatchObject([
+        { type: "thread.project.attach", threadId: v2ThreadId, projectId: "project-1" },
+        { type: "thread.temporary.set", threadId: v2ThreadId, temporary: false, keep: true },
+        { type: "thread.settle", threadId: v2ThreadId, discardChanges: true },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );

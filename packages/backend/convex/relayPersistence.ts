@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import * as DateTime from "effect/DateTime";
 
 import type { Doc, Id, TableNames } from "./_generated/dataModel.js";
-import type { MutationCtx } from "./_generated/server.js";
+import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import { mutation, query } from "./_generated/server.js";
 import { backendError } from "./lib/errors.ts";
 import { isEnvironmentIdentity, requireIdentity } from "./lib/identity.ts";
@@ -32,6 +32,7 @@ const activityState = v.object({
   environmentId: v.string(),
   threadId: v.string(),
   projectTitle: v.string(),
+  conversationCompanyId: v.optional(v.string()),
   threadTitle: v.string(),
   phase: activityPhase,
   headline: v.string(),
@@ -44,6 +45,7 @@ const aggregateRow = v.object({
   environmentId: v.string(),
   threadId: v.string(),
   projectTitle: v.string(),
+  conversationCompanyId: v.optional(v.string()),
   threadTitle: v.string(),
   modelTitle: v.string(),
   phase: activityPhase,
@@ -638,7 +640,11 @@ export const listUsersForEnvironment = query({
   },
 });
 export const listDeliveryUsersForEnvironment = query({
-  args: { environmentId: v.string(), environmentPublicKey: v.string() },
+  args: {
+    environmentId: v.string(),
+    environmentPublicKey: v.string(),
+    conversationCompanyId: v.optional(v.string()),
+  },
   returns: v.array(
     v.object({
       userId: v.string(),
@@ -648,7 +654,7 @@ export const listDeliveryUsersForEnvironment = query({
   ),
   handler: async (ctx, args) => {
     await requireRelayControlPlane(ctx);
-    return (
+    const users = (
       await ctx.db
         .query("relayEnvironmentLinks")
         .withIndex("by_environment_and_key", (q) =>
@@ -664,6 +670,14 @@ export const listDeliveryUsersForEnvironment = query({
         notificationsEnabled: row.notificationsEnabled,
         liveActivitiesEnabled: row.liveActivitiesEnabled,
       }));
+    if (args.conversationCompanyId === undefined) return users;
+    const companyId = args.conversationCompanyId;
+    const permitted = await Promise.all(
+      users.map(async (user) =>
+        (await conversationCompaniesForUser(ctx, user.userId)).has(companyId) ? user : null,
+      ),
+    );
+    return permitted.filter((user) => user !== null);
   },
 });
 export const listPublicKeysForEnvironment = query({
@@ -1352,6 +1366,29 @@ export const pruneTerminalAgentActivityRows = mutation({
     return terminal.length;
   },
 });
+async function conversationCompaniesForUser(
+  ctx: Pick<QueryCtx, "db">,
+  clerkSubject: string,
+): Promise<Set<string>> {
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", clerkSubject))
+    .unique();
+  if (user === null) return new Set();
+  const memberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_user", (q) => q.eq("userId", user._id))
+    .collect();
+  const companies = await Promise.all(
+    memberships
+      .filter((membership) => membership.state === "active")
+      .map((membership) => ctx.db.get(membership.companyId)),
+  );
+  return new Set(
+    companies.flatMap((company) => (company?.lifecycleState === "active" ? [company.id] : [])),
+  );
+}
+
 export const listAgentActivityRowsForUser = query({
   args: { userId: v.string() },
   returns: v.array(activityState),
@@ -1379,7 +1416,15 @@ export const listAgentActivityRowsForUser = query({
     )
       .flat()
       .map((row) => row.state);
-    return states.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const companies = states.some((state) => state.conversationCompanyId !== undefined)
+      ? await conversationCompaniesForUser(ctx, args.userId)
+      : new Set<string>();
+    return states
+      .filter(
+        (state) =>
+          state.conversationCompanyId === undefined || companies.has(state.conversationCompanyId),
+      )
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   },
 });
 export const getAgentActivityRowForUserThread = query({
@@ -1412,7 +1457,16 @@ export const getAgentActivityRowForUserThread = query({
     )
       .flat()
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    return rows[0]?.state ?? null;
+    const companies = rows.some((row) => row.state.conversationCompanyId !== undefined)
+      ? await conversationCompaniesForUser(ctx, args.userId)
+      : new Set<string>();
+    return (
+      rows.find(
+        (row) =>
+          row.state.conversationCompanyId === undefined ||
+          companies.has(row.state.conversationCompanyId),
+      )?.state ?? null
+    );
   },
 });
 

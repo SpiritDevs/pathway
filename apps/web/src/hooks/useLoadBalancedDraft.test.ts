@@ -194,6 +194,43 @@ afterEach(() => {
 });
 
 describe("useLoadBalancedDraft", () => {
+  it("keeps projectless conversations on their selected environment without project balancing", () => {
+    store().setDraftThreadContext(draftId, {
+      projectRef: { environmentId: local.environmentId, projectId: null },
+      conversationCompanyId: CompanyId.make("conversation-company"),
+      temporary: true,
+    });
+    const result = render({ ...base(), project: null });
+    flushEffects();
+    expect(result.visible).toBe(false);
+    expect(result.automatic).toBe(false);
+    expect(result.blocked).toBe(false);
+    expect(result.validate(selection)).toBe(true);
+    expect(mocks.resources).not.toHaveBeenCalled();
+    expect(mocks.session).not.toHaveBeenCalled();
+    expect(readDraft()).toMatchObject({
+      environmentId: local.environmentId,
+      projectId: null,
+      conversationCompanyId: "conversation-company",
+      temporary: true,
+    });
+  });
+
+  it("discards a measured project placement when the draft became a conversation", () => {
+    render();
+    store().setDraftThreadContext(draftId, {
+      projectRef: { environmentId: local.environmentId, projectId: null },
+      conversationCompanyId: CompanyId.make("conversation-company"),
+    });
+    flushEffects();
+    expect(readDraft()).toMatchObject({
+      environmentId: local.environmentId,
+      projectId: null,
+      conversationCompanyId: "conversation-company",
+    });
+    expect(store().getComposerDraft(draftId)?.activeProvider).toBe(provider.instanceId);
+  });
+
   it("does no resource reads when disabled or rootless", () => {
     expect(render({ ...base(), enabled: false }).blocked).toBe(false);
     flushEffects();

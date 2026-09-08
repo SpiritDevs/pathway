@@ -64,6 +64,7 @@ struct MainTabView: View {
                 )
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) { PathwayWorkspaceCleanupNotice() }
         .sheet(item: $presentedSheet) { sheet in
             switch sheet {
             case .agentOrchestrator:

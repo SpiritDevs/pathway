@@ -206,6 +206,74 @@ function replica(...values: ReadonlyArray<CompanySyncEntity>) {
 }
 
 describe("cloud Agent Thread read model", () => {
+  it("shows projectless conversations only through their owning company and authorized environment", () => {
+    const [original] = cloudEnvironmentThreadsFromReplicas(
+      new Map([[COMPANY_ID, replica(agentThread)]]),
+      ENVIRONMENT_ID,
+    );
+    if (original === undefined) throw new Error("missing shell fixture");
+    const conversation = { ...original, projectId: null, conversationCompanyId: COMPANY_ID };
+    const replicas = new Map([
+      [COMPANY_ID, replica()],
+      [OTHER_COMPANY_ID, replica()],
+    ]);
+    expect(
+      companyScopedEnvironmentThreads([conversation], COMPANY_ID, replicas, ENVIRONMENT_ID),
+    ).toEqual([conversation]);
+    expect(
+      companyScopedEnvironmentThreads([conversation], OTHER_COMPANY_ID, replicas, ENVIRONMENT_ID),
+    ).toEqual([]);
+    expect(
+      companyScopedEnvironmentThreads(
+        [conversation],
+        null,
+        new Map([[OTHER_COMPANY_ID, replica()]]),
+        ENVIRONMENT_ID,
+      ),
+    ).toEqual([]);
+    expect(
+      companyScopedEnvironmentThreads([conversation], COMPANY_ID, new Map(), ENVIRONMENT_ID),
+    ).toEqual([]);
+  });
+
+  it("decodes projectless cloud shells and ignores an incorrectly scoped conversation replica", () => {
+    const conversation = {
+      ...agentThread,
+      cloudProjectId: null,
+      shell: {
+        ...agentThread.shell,
+        projectId: null,
+        conversationCompanyId: COMPANY_ID,
+        conversationPath: "/userdata/conversations/one",
+        temporary: true,
+      },
+    };
+    expect(
+      cloudEnvironmentThreadsFromReplicas(
+        new Map([[COMPANY_ID, replica(conversation)]]),
+        ENVIRONMENT_ID,
+      ),
+    ).toMatchObject([{ projectId: null, conversationCompanyId: COMPANY_ID, temporary: true }]);
+    expect(
+      cloudEnvironmentThreadsFromReplicas(
+        new Map([[OTHER_COMPANY_ID, replica(conversation)]]),
+        ENVIRONMENT_ID,
+      ),
+    ).toEqual([]);
+    const [attached] = cloudEnvironmentThreadsFromReplicas(
+      new Map([[COMPANY_ID, replica(agentThread)]]),
+      ENVIRONMENT_ID,
+    );
+    if (attached === undefined) throw new Error("missing shell fixture");
+    expect(
+      companyScopedEnvironmentThreads(
+        [attached],
+        COMPANY_ID,
+        new Map([[COMPANY_ID, replica(conversation)]]),
+        ENVIRONMENT_ID,
+      ),
+    ).toEqual([]);
+  });
   beforeEach(() => {
     resetAppAtomRegistryForTests();
     appAtomRegistry.set(

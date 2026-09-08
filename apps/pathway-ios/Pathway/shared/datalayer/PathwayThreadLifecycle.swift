@@ -148,6 +148,8 @@ extension PathwayAgentThread {
 
         if shell.settledOverride == "settled" { return true }
         if shell.settledOverride == "active" { return false }
+        // Temporary settlement is adjudicated by the environment after its Git and work checks.
+        if shell.isTemporary { return false }
         if changeRequestState == .merged { return true }
         if changeRequestState == .open || changeRequestState == .closed { return false }
         guard let autoSettleAfterDays, let latestActivityDate else { return false }
