@@ -21,5 +21,8 @@ page open. Closing a source page leaves already opened tabs available.
 Reloading the Pathway app closes popup-created tabs. They are not restored by loading their URL,
 because that would lose the original form submission or scripted page state.
 
+When connected to an older Pathway server, update that server to use popup-created tabs. Pathway
+shows an update message when the connected server does not support them.
+
 Pathway does not bypass Chromium's popup blocker. Popups Chromium rejects as unsolicited remain
 blocked, and unsupported external protocols keep their existing safe handling.

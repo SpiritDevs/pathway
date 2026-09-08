@@ -83,6 +83,8 @@ describe("native browser feedback", () => {
     expect(host?.style.cssText).toContain("pointer-events:none");
     expect(host?.showPopover).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+    overlay.update({ kind: "hide-pointer", scale: 0.5, theme });
+    expect(cursor?.style.display).toBe("none");
   });
 
   it("keeps the latest zoom visible for 1.5 seconds without an older timer hiding it", () => {

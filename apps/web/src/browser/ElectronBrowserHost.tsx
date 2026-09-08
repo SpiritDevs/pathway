@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { isElectron } from "~/env";
 import { useTheme } from "~/hooks/useTheme";
+import { useServerConfigs } from "~/state/entities";
 import {
   applyPreviewServerSnapshot,
   beginPreviewSessionClose,
@@ -54,6 +55,10 @@ export const popupServerSeedUrl = (rawUrl: string): string | undefined => {
     return undefined;
   }
 };
+
+export const supportsNativePreviewPopupAdoption = (
+  capabilities: { readonly previewRequestedTabId?: boolean } | undefined,
+): boolean => capabilities?.previewRequestedTabId === true;
 
 interface NativePreviewPopupCoordination {
   readonly request: DesktopPreviewPopupRequest;
@@ -175,6 +180,7 @@ export const previewServerRevisionChanged = (
 export function ElectronBrowserHost() {
   const { resolvedTheme } = useTheme();
   const previewByThreadKey = useActivePreviewSessions();
+  const serverConfigs = useServerConfigs();
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const closePreview = useAtomCommand(previewEnvironment.close, { reportFailure: false });
   const [threadRecoveryRevision, setThreadRecoveryRevision] = useState(0);
@@ -210,6 +216,8 @@ export function ElectronBrowserHost() {
   );
   const sourceByRuntimeTabIdRef = useRef(sourceByRuntimeTabId);
   sourceByRuntimeTabIdRef.current = sourceByRuntimeTabId;
+  const serverConfigsRef = useRef(serverConfigs);
+  serverConfigsRef.current = serverConfigs;
 
   useEffect(() => {
     const unsubscribes = listNativePreviewPopupRecoveries().map((recovery) =>
@@ -265,6 +273,18 @@ export function ElectronBrowserHost() {
       const threadRef = sourceByRuntimeTabIdRef.current.get(request.sourceRuntimeTabId);
       if (!threadRef) {
         void preview.discardPopup(request.popupId).catch(() => undefined);
+        return;
+      }
+      if (
+        !supportsNativePreviewPopupAdoption(
+          serverConfigsRef.current.get(threadRef.environmentId)?.environment.capabilities,
+        )
+      ) {
+        void preview.discardPopup(request.popupId).catch(() => undefined);
+        toastManager.add({
+          type: "error",
+          title: "Update the connected Pathway server to open this popup",
+        });
         return;
       }
       pendingPopupIdsRef.current.add(request.popupId);

@@ -1373,6 +1373,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     adopted.ownerWebContents.off("render-process-gone", adopted.onOwnerDestroyed);
     adopted.ownerWebContents.off("did-start-navigation", adopted.onOwnerNavigation);
     adopted.view.webContents.off("destroyed", adopted.onPopupDestroyed);
+    adopted.view.webContents.off("render-process-gone", adopted.onPopupDestroyed);
     removePopupView(adopted);
   };
 
@@ -1571,7 +1572,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       if (Option.isSome(next)) yield* emit(tabId, next.value);
     });
     const sync = () => runFork(syncState(true));
-    const syncNavigation = () => runFork(syncState(false));
+    const syncNavigation = () =>
+      runFork(
+        Effect.all([syncState(false), sendNativeOverlay(tabId, { kind: "hide-pointer" })], {
+          discard: true,
+        }),
+      );
     const failed = (
       _event: Event,
       code: number,
@@ -1994,6 +2000,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         adopted.ownerWebContents.once("render-process-gone", onOwnerDestroyed);
         adopted.ownerWebContents.on("did-start-navigation", onOwnerNavigation);
         adopted.view.webContents.once("destroyed", onPopupDestroyed);
+        adopted.view.webContents.once("render-process-gone", onPopupDestroyed);
         const wc = pending.view.webContents;
         const annotationTheme = yield* Ref.get(annotationThemeRef);
         yield* attachListeners(runtimeTabId, wc);

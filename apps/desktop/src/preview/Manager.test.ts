@@ -888,6 +888,11 @@ describe("PreviewManager", () => {
           "preview:native-browser-overlay",
           expect.objectContaining({ kind: "pointer", x: 120, y: 80, scale: 0.5 }),
         );
+        fixture.popup.emit("did-navigate-in-page");
+        expect(fixture.popup.send).toHaveBeenCalledWith(
+          "preview:native-browser-overlay",
+          expect.objectContaining({ kind: "hide-pointer" }),
+        );
         yield* manager.zoomIn("child");
         expect(fixture.popup.send).toHaveBeenCalledWith(
           "preview:native-browser-overlay",
@@ -1056,6 +1061,31 @@ describe("PreviewManager", () => {
         expect(fixture.owner.send).toHaveBeenCalledWith("desktop:preview-popup-closed", {
           runtimeTabId: "child",
         });
+        expect((yield* manager.automationStatus("child")).available).toBe(false);
+      }),
+    ),
+  );
+
+  effectIt.effect("closes an adopted popup when its renderer exits", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const fixture = makePopupFixture();
+        yield* manager.createTab("source");
+        yield* manager.registerWebview("source", 42);
+        const request = fixture.open();
+        yield* manager.adoptPopup(request.popupId, "child");
+        const closed = yield* Deferred.make<void>();
+        yield* manager.subscribeStateChanges((tabId, state) =>
+          tabId === "child" && state.webContentsId === null
+            ? Deferred.succeed(closed, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        );
+        fixture.popup.emit("render-process-gone");
+        yield* Deferred.await(closed);
+        expect(fixture.owner.send).toHaveBeenCalledWith("desktop:preview-popup-closed", {
+          runtimeTabId: "child",
+        });
+        expect(fixture.popup.close).toHaveBeenCalledOnce();
         expect((yield* manager.automationStatus("child")).available).toBe(false);
       }),
     ),

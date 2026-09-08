@@ -14,6 +14,7 @@ import {
   popupServerSeedUrl,
   previewServerRevisionChanged,
   recoverNativePreviewPopup,
+  supportsNativePreviewPopupAdoption,
 } from "./ElectronBrowserHost";
 
 const threadRef = {
@@ -50,6 +51,13 @@ describe("desktop popup coordination", () => {
     expect(popupServerSeedUrl("about:blank")).toBeUndefined();
     expect(popupServerSeedUrl("blob:https://example.com/id")).toBeUndefined();
     expect(popupServerSeedUrl("data:text/html,hello")).toBeUndefined();
+  });
+
+  it("only adopts native popups when the server supports requested preview tab ids", () => {
+    expect(supportsNativePreviewPopupAdoption(undefined)).toBe(false);
+    expect(supportsNativePreviewPopupAdoption({})).toBe(false);
+    expect(supportsNativePreviewPopupAdoption({ previewRequestedTabId: false })).toBe(false);
+    expect(supportsNativePreviewPopupAdoption({ previewRequestedTabId: true })).toBe(true);
   });
 
   it("reserves, adopts, reconciles, and activates a foreground popup in order", async () => {

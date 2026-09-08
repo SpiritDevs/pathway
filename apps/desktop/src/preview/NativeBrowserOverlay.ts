@@ -2,6 +2,7 @@ import type { DesktopPreviewAnnotationTheme } from "@spiritdevs/contracts";
 
 export type NativeBrowserOverlayAction =
   | { readonly kind: "appearance" }
+  | { readonly kind: "hide-pointer" }
   | { readonly kind: "pointer"; readonly x: number; readonly y: number }
   | { readonly kind: "zoom"; readonly zoomFactor: number };
 
@@ -61,7 +62,9 @@ export function createNativeBrowserOverlay() {
     setTheme(message.theme);
     const scale = Number.isFinite(message.scale) && message.scale > 0 ? message.scale : 1;
     host.style.setProperty("--inverse-scale", String(1 / scale));
-    if (message.kind === "pointer") {
+    if (message.kind === "hide-pointer") {
+      cursor.style.display = "none";
+    } else if (message.kind === "pointer") {
       cursor.style.display = "block";
       // Pointer events already use guest CSS coordinates; Chromium applies viewport scaling.
       cursor.style.transform = `translate(${message.x}px, ${message.y}px)`;
