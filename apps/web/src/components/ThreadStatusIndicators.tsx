@@ -5,6 +5,7 @@ import {
 } from "@spiritdevs/client-runtime/environment";
 import type {
   OrchestrationV2PullRequestAttachment,
+  PullRequestDetail,
   SourceControlProviderInfo,
   VcsStatusResult,
 } from "@spiritdevs/contracts";
@@ -16,6 +17,7 @@ import { useProject } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { vcsEnvironment } from "../state/vcs";
+import { sameAttachedPullRequest, useAttachedPullRequest } from "../state/threadPullRequest";
 import { useUiStateStore } from "../uiStateStore";
 import { resolveChangeRequestPresentation } from "../sourceControlPresentation";
 import {
@@ -58,6 +60,7 @@ export function settledPrHoverColorClass(state: NonNullable<ThreadPr>["state"]):
 export function prStatusIndicator(
   pr: ThreadPr,
   provider: VcsStatusResult["sourceControlProvider"] | null | undefined,
+  detail?: Pick<PullRequestDetail, "checks" | "isDraft">,
 ): PrStatusIndicator | null {
   function formatPrState(state: NonNullable<ThreadPr>["state"]): string {
     return state.charAt(0).toUpperCase() + state.slice(1);
@@ -69,13 +72,26 @@ export function prStatusIndicator(
   if (!pr) return null;
   const presentation = resolveChangeRequestPresentation(provider);
 
-  const tooltipLead = formatPrStatusLead(pr, presentation.shortName);
+  const failedChecks =
+    detail?.checks.filter((check) => check.status === "failure" || check.status === "cancelled")
+      .length ?? 0;
+  const pendingChecks = detail?.checks.filter((check) => check.status === "pending").length ?? 0;
+  const checkLabel =
+    failedChecks > 0 ? "Checks failing" : pendingChecks > 0 ? "Checks pending" : null;
+  const tooltipLead = `${formatPrStatusLead(pr, presentation.shortName)}${pr.state === "open" && checkLabel ? ` - ${checkLabel}` : ""}`;
   const tooltip = `${tooltipLead}: ${pr.title}`;
 
   if (pr.state === "open") {
     return {
-      label: `${presentation.shortName} open`,
-      colorClass: "text-emerald-600 dark:text-emerald-300/90",
+      label: `${presentation.shortName} ${checkLabel?.toLowerCase() ?? (detail?.isDraft ? "draft" : "open")}`,
+      colorClass:
+        failedChecks > 0
+          ? "text-red-600 dark:text-red-300/90"
+          : pendingChecks > 0
+            ? "text-amber-600 dark:text-amber-300/90"
+            : detail?.isDraft
+              ? "text-secondary-label"
+              : "text-emerald-600 dark:text-emerald-300/90",
       tooltip,
       tooltipLead,
       tooltipTitle: pr.title,
@@ -124,23 +140,72 @@ export function attachedPrStatusIndicator(
 export function resolveThreadPrBadge(input: {
   readonly branchPullRequest: ThreadPr;
   readonly attachedPullRequest: OrchestrationV2PullRequestAttachment | null | undefined;
+  readonly attachedDetail?: Pick<
+    PullRequestDetail,
+    | "number"
+    | "url"
+    | "title"
+    | "state"
+    | "headBranch"
+    | "baseBranch"
+    | "provider"
+    | "checks"
+    | "isDraft"
+  > | null;
+  readonly attachedError?: string | null;
   readonly provider: SourceControlProviderInfo | null | undefined;
 }): {
   readonly pullRequest: OrchestrationV2PullRequestAttachment;
   readonly status: PrStatusIndicator;
   readonly changeRequestState: NonNullable<ThreadPr>["state"] | null;
 } | null {
-  const { attachedPullRequest, branchPullRequest, provider } = input;
+  const { attachedPullRequest, branchPullRequest, provider, attachedDetail, attachedError } = input;
   if (attachedPullRequest) {
+    if (attachedDetail && sameAttachedPullRequest(attachedPullRequest, attachedDetail)) {
+      const pr = {
+        ...attachedDetail,
+        baseRef: attachedDetail.baseBranch,
+        headRef: attachedDetail.headBranch,
+      };
+      const status = prStatusIndicator(
+        pr,
+        {
+          kind: attachedDetail.provider,
+          name: attachedDetail.provider,
+          baseUrl: new URL(attachedDetail.url).origin,
+        },
+        attachedDetail,
+      )!;
+      return {
+        pullRequest: attachedPullRequest,
+        changeRequestState: pr.state,
+        status: attachedError
+          ? {
+              ...status,
+              tooltip: `${status.tooltip}. Status refresh failed: ${attachedError}`,
+              tooltipTitle: `${status.tooltipTitle}. Status refresh failed: ${attachedError}`,
+            }
+          : status,
+      };
+    }
     const matchesBranchPullRequest =
       branchPullRequest?.number === attachedPullRequest.number &&
       branchPullRequest.url === attachedPullRequest.url;
+    const status =
+      (matchesBranchPullRequest ? prStatusIndicator(branchPullRequest, provider) : null) ??
+      attachedPrStatusIndicator(attachedPullRequest);
     return {
       pullRequest: attachedPullRequest,
       changeRequestState: matchesBranchPullRequest ? branchPullRequest.state : null,
-      status:
-        (matchesBranchPullRequest ? prStatusIndicator(branchPullRequest, provider) : null) ??
-        attachedPrStatusIndicator(attachedPullRequest),
+      status: attachedError
+        ? {
+            ...status,
+            label: `${getChangeRequestTerminologyFromUrl(attachedPullRequest.url).shortLabel} status unavailable`,
+            colorClass: "text-amber-600 dark:text-amber-300/90",
+            tooltip: attachedError,
+            tooltipTitle: attachedError,
+          }
+        : status,
     };
   }
   const status = prStatusIndicator(branchPullRequest, provider);
@@ -309,9 +374,12 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
   });
+  const attachedQuery = useAttachedPullRequest(thread);
   const changeRequestStatus = resolveThreadPrBadge({
     branchPullRequest: pr,
     attachedPullRequest: thread.attachedPullRequest,
+    attachedDetail: attachedQuery.data,
+    attachedError: attachedQuery.error,
     provider: gitStatus.data?.sourceControlProvider,
   })?.status;
   const threadStatus = resolveThreadStatusPill({

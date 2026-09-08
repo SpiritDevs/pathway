@@ -29,6 +29,7 @@ interface QueuedThreadShell {
 }
 
 interface SettlementThreadShell extends QueuedThreadShell {
+  readonly attachedPullRequest?: unknown;
   readonly temporary?: boolean | undefined;
   readonly settledOverride: "settled" | "active" | null;
   readonly settledAt: string | null;
@@ -330,7 +331,8 @@ export function effectiveSettled(
   if (options.changeRequestState === "open" || options.changeRequestState === "closed") {
     return false;
   }
-  if (options.autoSettleAfterDays === null) return false;
+  // An attachment whose status has not loaded must remain visible to resolve it.
+  if (shell.attachedPullRequest != null || options.autoSettleAfterDays === null) return false;
 
   const lastActivityAt = threadLastActivityAt(shell);
   if (lastActivityAt === null) return false;

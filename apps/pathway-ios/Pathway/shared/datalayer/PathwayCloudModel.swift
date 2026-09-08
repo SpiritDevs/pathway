@@ -136,8 +136,8 @@ final class PathwayCloudModel {
     @ObservationIgnored private var lifecycleTaskID: UUID?
     @ObservationIgnored private var storageConfigurationID = UUID()
     @ObservationIgnored private var lifecycleMetadataID: UUID?
-    @ObservationIgnored private var changeRequestStates: [String: PathwayChangeRequestState] = [:]
-    @ObservationIgnored private var isRefreshingLifecycleMetadata = false
+    private(set) var changeRequestStatuses: [String: PathwayThreadChangeRequestStatus] = [:]
+    @ObservationIgnored private var lifecycleMetadataThreads: [PathwayAgentThread]?
     @ObservationIgnored private var isProvisioning = false
     @ObservationIgnored private var storageDirectory: URL?
     @ObservationIgnored private var discoveryCache: PathwayDiscoveryCache?
@@ -353,7 +353,7 @@ final class PathwayCloudModel {
         latestVersionByCompany = [:]
         authorizationEpochByCompany = [:]
         latestHeadByCompany = [:]
-        changeRequestStates = [:]
+        changeRequestStatuses = [:]
         issues.replaceReplica([:])
         calendar.replaceReplica([:])
         email.replaceReplica([:])
@@ -423,12 +423,13 @@ final class PathwayCloudModel {
     }
 
     func refreshLifecycleMetadata(using connect: PathwayConnectClient) async {
-        guard !isRefreshingLifecycleMetadata, !activeThreads.isEmpty else { return }
-        isRefreshingLifecycleMetadata = true
+        // A new attachment must supersede an in-flight lookup for the old snapshot.
+        guard !activeThreads.isEmpty, lifecycleMetadataThreads != activeThreads else { return }
+        lifecycleMetadataThreads = activeThreads
         let metadataID = UUID()
         lifecycleMetadataID = metadataID
         let generation = lifecycleGeneration
-        defer { if lifecycleMetadataID == metadataID { isRefreshingLifecycleMetadata = false; lifecycleMetadataID = nil } }
+        defer { if lifecycleMetadataID == metadataID { lifecycleMetadataThreads = nil; lifecycleMetadataID = nil } }
 
         let accountDirectory = storageDirectory
         let requestedThreads = Dictionary(uniqueKeysWithValues: activeThreads.map { ($0.id, $0) })
@@ -442,12 +443,16 @@ final class PathwayCloudModel {
         for resolution in resolutions {
             guard let requested = requestedThreads[resolution.threadID],
                   let current = threads.first(where: { $0.id == resolution.threadID }),
-                  current.shell.branch == requested.shell.branch,
-                  current.shell.worktreePath == requested.shell.worktreePath else { continue }
-            changeRequestStates[resolution.threadID] = resolution.state
+                  PathwayThreadChangeRequestSource(current.shell) == PathwayThreadChangeRequestSource(requested.shell) else { continue }
+            if resolution.status.unavailable, var previous = changeRequestStatuses[resolution.threadID] {
+                previous.unavailable = true
+                changeRequestStatuses[resolution.threadID] = previous
+            } else {
+                changeRequestStatuses[resolution.threadID] = resolution.status
+            }
         }
         let currentThreadIDs = Set(threads.map(\.id))
-        changeRequestStates = changeRequestStates.filter { currentThreadIDs.contains($0.key) }
+        changeRequestStatuses = changeRequestStatuses.filter { currentThreadIDs.contains($0.key) }
         rebuildThreadPartition()
     }
 }
@@ -756,8 +761,8 @@ extension PathwayCloudModel {
         if discoveryThreads != nextThreads {
             let previous = Dictionary(uniqueKeysWithValues: discoveryThreads.map { ($0.id, $0) })
             for thread in nextThreads {
-                if let old = previous[thread.id], old.shell.branch != thread.shell.branch || old.shell.worktreePath != thread.shell.worktreePath {
-                    changeRequestStates.removeValue(forKey: thread.id)
+                if let old = previous[thread.id], PathwayThreadChangeRequestSource(old.shell) != PathwayThreadChangeRequestSource(thread.shell) {
+                    changeRequestStatuses.removeValue(forKey: thread.id)
                 }
             }
             discoveryThreads = nextThreads
@@ -796,7 +801,7 @@ extension PathwayCloudModel {
         let partition = PathwayThreadLifecyclePartition(
             threads: threads,
             now: Date(),
-            changeRequestStates: changeRequestStates,
+            changeRequestStates: changeRequestStatuses.compactMapValues(\.state),
             autoSettleAfterDays: PathwayGeneralPreferences.shared.autoSettleDays == 0 ? nil : PathwayGeneralPreferences.shared.autoSettleDays
         )
         threads = partition.all
@@ -843,7 +848,7 @@ extension PathwayCloudModel {
         cacheTask?.cancel()
         cacheTask = nil
         lifecycleMetadataID = nil
-        isRefreshingLifecycleMetadata = false
+        lifecycleMetadataThreads = nil
         companiesSubscription?.cancel()
         companiesSubscription = nil
         headSubscriptions.values.forEach { $0.cancel() }

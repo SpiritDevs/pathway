@@ -479,3 +479,17 @@ describe("temporary thread settlement", () => {
     ).toBe(true);
   });
 });
+
+it("keeps an old attached thread visible until status resolves without overriding explicit settlement", () => {
+  const shell = {
+    ...makeShell({ activityAt: STALE }),
+    attachedPullRequest: { number: 110, url: "https://github.com/spiritdevs/pathway/pull/110" },
+  };
+  const options = { now: NOW, autoSettleAfterDays: 2, changeRequestState: null };
+  expect(effectiveSettled(shell, options)).toBe(false);
+  expect(effectiveSettled(shell, { ...options, changeRequestState: "merged" })).toBe(true);
+  expect(effectiveSettled({ ...shell, settledOverride: "settled", settledAt: NOW }, options)).toBe(
+    true,
+  );
+  expect(effectiveSettled({ ...shell, attachedPullRequest: null }, options)).toBe(true);
+});
