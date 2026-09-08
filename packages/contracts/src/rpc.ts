@@ -202,7 +202,13 @@ import {
   IssueImportRpcError,
 } from "./issueImport.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import { ServerGetProviderUsageInput, ServerProviderUsageSnapshot } from "./providerUsage.ts";
+import {
+  ProviderConsumeResetCreditInput,
+  ProviderConsumeResetCreditResult,
+  ProviderResetCreditError,
+  ServerGetProviderUsageInput,
+  ServerProviderUsageSnapshot,
+} from "./providerUsage.ts";
 import {
   PullRequestActionInput,
   PullRequestActivity,
@@ -454,6 +460,7 @@ export const WS_METHODS = {
   serverReportHostPowerState: "server.reportHostPowerState",
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
+  providerConsumeResetCredit: "provider.consumeResetCredit",
   serverGetProviderUsage: "server.getProviderUsage",
   serverSubscribeProviderUsage: "server.subscribeProviderUsage",
 
@@ -655,6 +662,16 @@ export const WsServerGetUsageSummaryRpc = Rpc.make(WS_METHODS.serverGetUsageSumm
   payload: UsageSummaryInput,
   success: UsageSummary,
   error: Schema.Union([EnvironmentAuthorizationError, UsageReadError]),
+});
+
+export const WsProviderConsumeResetCreditRpc = Rpc.make(WS_METHODS.providerConsumeResetCredit, {
+  payload: ProviderConsumeResetCreditInput,
+  success: ProviderConsumeResetCreditResult,
+  error: Schema.Union([
+    EnvironmentAuthorizationError,
+    ServerSettingsError,
+    ProviderResetCreditError,
+  ]),
 });
 
 export const WsServerGetProviderUsageRpc = Rpc.make(WS_METHODS.serverGetProviderUsage, {
@@ -1905,6 +1922,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
   WsServerGetUsageSummaryRpc,
+  WsProviderConsumeResetCreditRpc,
   WsServerGetProviderUsageRpc,
   WsServerSubscribeProviderUsageRpc,
   WsServerSignalProcessRpc,

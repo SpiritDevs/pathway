@@ -970,6 +970,15 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetUsageSummary,
       staleTimeMs: 60_000,
     }),
+    consumeResetCredit: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:consume-reset-credit",
+      tag: WS_METHODS.providerConsumeResetCredit,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.accountKey, input.creditId]),
+      },
+    }),
     providerUsage: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:provider-usage",
       tag: WS_METHODS.serverGetProviderUsage,

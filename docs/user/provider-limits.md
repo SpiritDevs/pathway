@@ -19,3 +19,13 @@ Thread details and the profile usage menu hide Claude usage when that account is
 Spark quotas remain visible in Settings → Providers. Thread details show them only while a Spark model is selected; the profile usage menu hides them.
 
 The Lunar Reserve quota appears only in Settings → Providers. It is hidden from thread details and the profile usage menu.
+
+## Usage reset credits
+
+Codex accounts with available usage reset credits show them below the usage meters in **Settings → Providers** and at the bottom of the profile menu's **Provider usage** submenu. Each credit shows when it expires.
+
+Select **Redeem** beside a credit, then confirm to use it on that account. Redeeming spends the credit and resets the account's current usage limits. It cannot be undone. Pathway refreshes the account's usage and available credits afterward. If the provider cannot confirm the result, Pathway shows an error; retrying the same credit does not spend a different one.
+
+Credits belong to the provider account shown beside them. For a remote environment, Pathway sends the redemption to that environment. Viewing usage does not require permission to operate the environment, but redeeming a credit does. Providers that do not report reset credits do not show a redemption action.
+
+If the credit balance cannot be refreshed, Pathway keeps the last balance and disables redemption until a successful refresh. Usage meters can still update while credit information is unavailable.

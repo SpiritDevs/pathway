@@ -152,6 +152,7 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import {
   getProviderUsage,
+  consumeProviderResetCredit,
   subscribeProviderUsage,
   makeSharedProviderUsageSubscription,
 } from "./providerUsage/ProviderUsageService.ts";
@@ -1718,6 +1719,14 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverGetUsageSummary, usage.readSummary(input), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.providerConsumeResetCredit]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.providerConsumeResetCredit,
+            consumeProviderResetCredit(input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
         [WS_METHODS.serverGetProviderUsage]: (input) =>
           observeRpcEffect(WS_METHODS.serverGetProviderUsage, getProviderUsage(input), {
             "rpc.aggregate": "server",

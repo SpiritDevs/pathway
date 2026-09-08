@@ -19,6 +19,7 @@ export interface ConnectedProviderUsageEnvironment {
   readonly environmentLabel?: string;
   readonly receivedAt?: number;
   readonly snapshotReceivedAt?: ReadonlyMap<ProviderInstanceId, number>;
+  readonly resetCreditsReceivedAt?: ReadonlyMap<ProviderInstanceId, number>;
   readonly usage?: ReadonlyArray<ServerProviderUsageSnapshot>;
   readonly providers: ReadonlyArray<ServerProvider> | null;
 }
@@ -36,10 +37,12 @@ export interface ConnectedProviderUsageAccount {
 /** Keep unchanged quota values at their original client arrival time across list broadcasts. */
 export function createProviderUsageArrivalTracker() {
   const observed = new Map<string, { fingerprint: string; receivedAt: number }>();
+  const observedCredits = new Map<string, { fingerprint: string; receivedAt: number }>();
   return (environments: ReadonlyArray<ConnectedProviderUsageEnvironment>) => {
     const active = new Set<string>();
     const result = environments.map((environment) => {
       const snapshotReceivedAt = new Map<ProviderInstanceId, number>();
+      const resetCreditsReceivedAt = new Map<ProviderInstanceId, number>();
       for (const snapshot of environment.usage ?? []) {
         const key = JSON.stringify([environment.environmentId, snapshot.instanceId]);
         active.add(key);
@@ -51,10 +54,24 @@ export function createProviderUsageArrivalTracker() {
             : (environment.receivedAt ?? 0);
         observed.set(key, { fingerprint, receivedAt });
         snapshotReceivedAt.set(snapshot.instanceId, receivedAt);
+        const creditFingerprint = JSON.stringify([
+          snapshot.accountKey,
+          snapshot.resetCredits?.availableCount,
+          snapshot.resetCredits?.credits,
+          snapshot.resetCredits?.nextExpiresAt,
+        ]);
+        const previousCredits = observedCredits.get(key);
+        const creditsReceivedAt =
+          previousCredits?.fingerprint === creditFingerprint
+            ? previousCredits.receivedAt
+            : (environment.receivedAt ?? 0);
+        observedCredits.set(key, { fingerprint: creditFingerprint, receivedAt: creditsReceivedAt });
+        resetCreditsReceivedAt.set(snapshot.instanceId, creditsReceivedAt);
       }
-      return { ...environment, snapshotReceivedAt };
+      return { ...environment, snapshotReceivedAt, resetCreditsReceivedAt };
     });
     for (const key of observed.keys()) if (!active.has(key)) observed.delete(key);
+    for (const key of observedCredits.keys()) if (!active.has(key)) observedCredits.delete(key);
     return result;
   };
 }
@@ -100,6 +117,29 @@ export function deriveConnectedProviderUsageAccounts(
   }
 
   return [...accounts.values()];
+}
+
+/** Route credits through an environment that reports them, including an empty balance. */
+export function deriveConnectedProviderResetCreditAccounts(
+  environments: ReadonlyArray<ConnectedProviderUsageEnvironment>,
+): ReadonlyArray<ConnectedProviderUsageAccount> {
+  return deriveConnectedProviderUsageAccounts(
+    environments.map((environment) => ({
+      ...environment,
+      ...(environment.resetCreditsReceivedAt
+        ? { snapshotReceivedAt: environment.resetCreditsReceivedAt }
+        : {}),
+      providers:
+        environment.providers?.filter((provider) =>
+          environment.usage?.some(
+            (snapshot) =>
+              snapshot.instanceId === provider.instanceId &&
+              snapshot.provider === "codex" &&
+              snapshot.resetCredits !== undefined,
+          ),
+        ) ?? null,
+    })),
+  );
 }
 
 export { isProviderUsageDriver };

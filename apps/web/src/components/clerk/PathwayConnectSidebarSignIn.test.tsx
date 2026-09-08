@@ -75,6 +75,10 @@ vi.mock("../usage/ProviderUsage", () => ({
   ConnectedProviderUsageMenu: () => <div>Connected provider limits</div>,
 }));
 
+vi.mock("../usage/ProviderResetCredits", () => ({
+  AccountResetCredits: () => <div>Redeem usage reset</div>,
+}));
+
 import { PathwayConnectProfileButton } from "./PathwayConnectSidebarSignIn";
 
 describe("PathwayConnectProfileButton", () => {

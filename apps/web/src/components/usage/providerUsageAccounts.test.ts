@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   createProviderUsageArrivalTracker,
+  deriveConnectedProviderResetCreditAccounts,
   deriveConnectedProviderUsageAccounts,
 } from "./providerUsageAccounts";
 
@@ -131,6 +132,120 @@ function usage(
     stale,
   };
 }
+
+describe("connected reset credit accounts", () => {
+  const codex = provider({ driver: "codex", instanceId: "codex", displayName: "Codex" });
+  const creditSnapshot: ServerProviderUsageSnapshot = {
+    ...usage("codex", "personal"),
+    resetCredits: {
+      availableCount: 1,
+      credits: [{ id: "credit-1", expiresAt: IsoDateTime.make("2026-10-01T00:00:00Z") }],
+    },
+  };
+
+  it("keeps the credit-reporting environment when a newer usage-only snapshot arrives", () => {
+    const accounts = deriveConnectedProviderResetCreditAccounts([
+      { environmentId: studioId, providers: [codex], usage: [creditSnapshot], receivedAt: 1 },
+      {
+        environmentId: laptopId,
+        providers: [codex],
+        usage: [usage("codex", "personal")],
+        receivedAt: 2,
+      },
+    ]);
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]?.environmentId).toBe(studioId);
+    expect(accounts[0]?.snapshot?.resetCredits?.credits[0]?.id).toBe("credit-1");
+  });
+
+  it("allows a newer empty balance to replace older available credits", () => {
+    const accounts = deriveConnectedProviderResetCreditAccounts([
+      { environmentId: studioId, providers: [codex], usage: [creditSnapshot], receivedAt: 1 },
+      {
+        environmentId: laptopId,
+        providers: [codex],
+        usage: [{ ...creditSnapshot, resetCredits: { availableCount: 0, credits: [] } }],
+        receivedAt: 2,
+      },
+    ]);
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]?.environmentId).toBe(laptopId);
+    expect(accounts[0]?.snapshot?.resetCredits?.availableCount).toBe(0);
+  });
+
+  it("does not restore a spent credit when another environment pushes only usage windows", () => {
+    const track = createProviderUsageArrivalTracker();
+    const first = {
+      environmentId: studioId,
+      providers: [codex],
+      usage: [creditSnapshot],
+      receivedAt: 1,
+    };
+    const second = {
+      environmentId: laptopId,
+      providers: [codex],
+      usage: [{ ...creditSnapshot, resetCredits: { availableCount: 0, credits: [] } }],
+      receivedAt: 2,
+    };
+    expect(
+      deriveConnectedProviderResetCreditAccounts(track([first, second]))[0]?.environmentId,
+    ).toBe(laptopId);
+    const pushed = {
+      ...first,
+      receivedAt: 3,
+      usage: [
+        {
+          ...creditSnapshot,
+          updatedAt: IsoDateTime.make("2026-09-08T00:01:00Z"),
+          limits: [{ window: "Weekly", usedPercent: 25 }],
+        },
+      ],
+    };
+    const tracked = track([pushed, second]);
+    expect(deriveConnectedProviderUsageAccounts(tracked)[0]?.environmentId).toBe(studioId);
+    expect(deriveConnectedProviderResetCreditAccounts(tracked)[0]?.environmentId).toBe(laptopId);
+    expect(
+      deriveConnectedProviderResetCreditAccounts(tracked)[0]?.snapshot?.resetCredits
+        ?.availableCount,
+    ).toBe(0);
+    const creditRefreshFailed = track([
+      {
+        ...pushed,
+        receivedAt: 4,
+        usage: [
+          { ...pushed.usage[0]!, resetCredits: { ...creditSnapshot.resetCredits!, stale: true } },
+        ],
+      },
+      {
+        ...second,
+        receivedAt: 3,
+        usage: [
+          { ...second.usage[0]!, resetCredits: { availableCount: 0, credits: [], stale: true } },
+        ],
+      },
+    ]);
+    expect(deriveConnectedProviderResetCreditAccounts(creditRefreshFailed)[0]?.environmentId).toBe(
+      laptopId,
+    );
+    expect(
+      deriveConnectedProviderResetCreditAccounts(creditRefreshFailed)[0]?.snapshot?.resetCredits
+        ?.availableCount,
+    ).toBe(0);
+  });
+
+  it("does not offer credit routes for unsupported or disabled instances", () => {
+    expect(
+      deriveConnectedProviderResetCreditAccounts([
+        {
+          environmentId: studioId,
+          providers: [{ ...codex, enabled: false }],
+          usage: [creditSnapshot],
+        },
+        { environmentId: laptopId, providers: [codex], usage: [usage("codex", "personal")] },
+      ]),
+    ).toEqual([]);
+  });
+});
 
 describe("grouping Codex subscriptions", () => {
   const personal = provider({
