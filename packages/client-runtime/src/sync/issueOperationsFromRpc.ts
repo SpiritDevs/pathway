@@ -74,6 +74,7 @@ export const issueCreateOperation = (
     entityId: entityId(id),
     args: {
       title: input.title,
+      ...(input.timeTracking === undefined ? {} : { timeTracking: input.timeTracking }),
       ...(input.description === undefined ? {} : { description: input.description }),
       ...(input.statusId === undefined ? {} : { statusId: input.statusId }),
       ...(input.priority === undefined ? {} : { priority: input.priority }),

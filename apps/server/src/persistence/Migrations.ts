@@ -79,6 +79,7 @@ import Migration0063 from "./Migrations/063_IssuePullRequests.ts";
 import Migration0064 from "./Migrations/064_AuthSessionEnvironmentAttribution.ts";
 import Migration0065 from "./Migrations/065_SourceControlMarkerOrdinals.ts";
 import Migration0066 from "./Migrations/066_ProjectionProjectCustomTitle.ts";
+import Migration0067 from "./Migrations/067_AgentTimeTracking.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -157,6 +158,7 @@ export const migrationEntries = [
   [64, "AuthSessionEnvironmentAttribution", Migration0064],
   [65, "SourceControlMarkerOrdinals", Migration0065],
   [66, "ProjectionProjectCustomTitle", Migration0066],
+  [67, "AgentTimeTracking", Migration0067],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

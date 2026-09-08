@@ -12,6 +12,8 @@ struct PathwayIssueEditorView: View {
     var defaultStatusID: String?
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var compositionClock = PathwayIssueCompositionClock()
     @Environment(PathwayAppModel.self) private var appModel
     @State private var title = ""
     @State private var description = ""
@@ -76,6 +78,17 @@ struct PathwayIssueEditorView: View {
                 loadDraft()
                 if issueID == nil { focusedField = .title }
             }
+            .onChange(of: title) { _, _ in recordCompositionActivity() }
+            .onChange(of: description) { _, _ in recordCompositionActivity() }
+            .onChange(of: focusedField) { _, next in
+                if next != nil { recordCompositionActivity() }
+                else { compositionClock.pause(at: compositionNow) }
+            }
+            .onChange(of: activePicker) { _, _ in recordCompositionActivity() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { compositionClock.pause(at: compositionNow) }
+            }
+            .onDisappear { compositionClock.pause(at: compositionNow) }
             .onChange(of: projectID) { old, new in
                 if old != new && loaded && !entities(model.milestones).contains(where: {
                     $0.id == milestoneID && ($0.fields["cloudProjectId"]?.stringValue ?? $0.fields["projectId"]?.stringValue) == new
@@ -167,6 +180,13 @@ struct PathwayIssueEditorView: View {
     private var canSave: Bool {
         !saving && !loadingImage && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !statusID.isEmpty && title.count <= 512 && description.count <= 100_000
+    }
+
+    private var compositionNow: Double { (Date.now.timeIntervalSince1970 * 1_000).rounded(.down) }
+
+    private func recordCompositionActivity() {
+        guard issueID == nil, createdIssueID == nil, loaded, !saving, scenePhase == .active else { return }
+        compositionClock.activity(at: compositionNow)
     }
 
     private var composerAccessories: some View {
@@ -417,6 +437,7 @@ struct PathwayIssueEditorView: View {
     }
 
     private func save() async {
+        compositionClock.pause(at: compositionNow)
         saving = true
         defer { saving = false }
         let fields: [String: JSONValue] = [
@@ -444,7 +465,13 @@ struct PathwayIssueEditorView: View {
                     try await model.update(saved, patch: fields)
                 }
                 else {
-                    id = try await model.create(companyID: companyID, fields: fields.filter { $0.value != .null })
+                    var createFields = fields.filter { $0.value != .null }
+                    createFields["timeTracking"] = .object([
+                        "intervals": .array(compositionClock.snapshot(at: compositionNow).map {
+                            .object(["start": .number($0.start), "end": .number($0.end)])
+                        }),
+                    ])
+                    id = try await model.create(companyID: companyID, fields: createFields)
                     createdIssueID = id
                 }
                 var savedFields = fields

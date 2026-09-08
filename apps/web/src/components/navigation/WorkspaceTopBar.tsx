@@ -18,6 +18,7 @@ import { ProviderUpdateLaunchNotification } from "../ProviderUpdateLaunchNotific
 import { Button } from "../ui/button";
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { TimeTrackerIndicator } from "../timeTracker/TimeTrackerIndicator";
 import { SyncStatusIndicator } from "./SyncStatusIndicator";
 import { type WorkspaceHistoryEntry, workspaceHistoryTracker } from "./workspaceHistory.logic";
 
@@ -200,6 +201,7 @@ export function WorkspaceTopBar() {
       <div className="flex items-center gap-2">
         <ProviderUpdateLaunchNotification />
         <SyncStatusIndicator />
+        <TimeTrackerIndicator />
         <PathwayConnectProfileButton />
       </div>
     </header>

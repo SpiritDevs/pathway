@@ -95,6 +95,7 @@ describe("issue RPC operation translation", () => {
     const operation = issueCreateOperation(
       {
         title: "Ship C4",
+        timeTracking: { intervals: [{ start: 1_000, end: 15_000 }] },
         description: "Use the outbox",
         statusId: STATUS,
         priority: "high",
@@ -114,6 +115,7 @@ describe("issue RPC operation translation", () => {
       entityId: ISSUE,
       args: {
         title: "Ship C4",
+        timeTracking: { intervals: [{ start: 1_000, end: 15_000 }] },
         description: "Use the outbox",
         statusId: STATUS,
         priority: "high",

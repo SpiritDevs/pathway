@@ -343,6 +343,9 @@ function viewConfig(value: unknown, label: string): IssueViewConfig {
 // ---------------------------------------------------------------------------
 
 export interface IssueCreateArgs {
+  readonly timeTracking?:
+    | { readonly intervals: readonly { start: number; end: number }[] }
+    | undefined;
   readonly key?: string | undefined;
   readonly title: string;
   readonly description?: string | undefined;
@@ -363,6 +366,34 @@ export interface IssueCreateArgs {
   readonly workModelSelection?: unknown | null | undefined;
 }
 
+function compositionTime(value: unknown) {
+  const source = record(value, "args.timeTracking");
+  if (!Array.isArray(source.intervals) || source.intervals.length > 256) {
+    invalid("args.timeTracking.intervals must contain at most 256 intervals.");
+  }
+  let previousEnd = 0;
+  let total = 0;
+  const intervals = source.intervals.map((value: unknown) => {
+    const interval = record(value, "args.timeTracking.intervals");
+    const start = interval.start;
+    const end = interval.end;
+    if (
+      typeof start !== "number" ||
+      typeof end !== "number" ||
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      start < previousEnd ||
+      end < start
+    )
+      invalid("args.timeTracking.intervals must be ordered, non-overlapping timestamps.");
+    previousEnd = end;
+    total += end - start;
+    if (total > 86_400_000) invalid("args.timeTracking exceeds 24 hours of active composition.");
+    return { start, end };
+  });
+  return { intervals };
+}
+
 export function parseIssueCreateArgs(value: unknown): ArgsResult<IssueCreateArgs> {
   return parse(() => {
     const source = record(value, "args");
@@ -378,6 +409,8 @@ export function parseIssueCreateArgs(value: unknown): ArgsResult<IssueCreateArgs
     const rawOwner = field(source, "workflowOwner");
     const rawSelection = field(source, "workModelSelection");
     return {
+      timeTracking:
+        source.timeTracking === undefined ? undefined : compositionTime(source.timeTracking),
       key: optionalString("key", issueKey),
       title: trimmedNonEmpty(field(source, "title"), "args.title", ISSUE_TITLE_MAX_CHARS),
       description: optionalString("description", (v, label) =>

@@ -311,6 +311,37 @@ function makeOps(membershipId: string, series = "0") {
 }
 
 describe("sync.applyOperations", () => {
+  it("records issue creation time atomically, once, and only for accepted creates", async () => {
+    const t = harness();
+    await seed(t);
+    const op = makeOps(WRITER_MEMBERSHIP_ID);
+    const now = Date.now();
+    const create = op("issue.create", ISSUE_A, {
+      title: "Carefully composed issue",
+      triage: true,
+      timeTracking: { intervals: [{ start: now - 240_000, end: now }] },
+    });
+    const send = () =>
+      asWriter(t).mutation(api.sync.applyOperations, {
+        companyId: COMPANY_ID,
+        operations: [create],
+      });
+    await send();
+    await send();
+    await asWriter(t).mutation(api.sync.applyOperations, {
+      companyId: COMPANY_ID,
+      operations: [
+        op("issue.create", ISSUE_B, { title: "Quick issue", triage: true }),
+        op("issue.create", ISSUE_C, { title: "", triage: true }),
+      ],
+    });
+    const sessions = await t.run((ctx) => ctx.db.query("trackedSessions").collect());
+    expect(sessions).toHaveLength(2);
+    expect(sessions.find((row) => row.description.includes("Carefully"))?.durationMs).toBe(240_000);
+    expect(sessions.find((row) => row.description.includes("Quick"))?.durationMs).toBe(60_000);
+    expect(sessions.every((row) => row.state === "stopped")).toBe(true);
+  });
+
   it("accepted create, update, and delete write feed rows and stamp entity versions", async () => {
     const t = harness();
     await seed(t);

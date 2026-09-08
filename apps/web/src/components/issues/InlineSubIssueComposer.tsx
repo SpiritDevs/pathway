@@ -36,6 +36,7 @@ import { useIssueAssigneeOptions } from "./useIssueAssigneeOptions";
 import { IssuePriorityMenu, IssueStatusMenu } from "./IssuePropertyMenus";
 import { ISSUE_PRIORITY_LABELS, toggleIssueLabelIds } from "./issuesList.logic";
 import { subIssueCreateInput } from "./issueSubIssues.logic";
+import { useIssueComposerTime } from "./useIssueComposerTime";
 
 const COMPOSER_CHIP_CLASS =
   "flex min-h-7 max-w-40 items-center gap-1.5 rounded-full border border-input bg-input/30 px-2.5 text-xs text-foreground shadow-xs/5 outline-none transition-colors hover:bg-accent/60 focus-visible:ring-2 focus-visible:ring-ring";
@@ -166,6 +167,7 @@ export function InlineSubIssueComposer({
   const [assignee, setAssignee] = useState<IssueAssignee | null>(null);
   const [labelIds, setLabelIds] = useState<ReadonlyArray<IssueLabelId>>([]);
   const [submitting, setSubmitting] = useState(false);
+  const composerTime = useIssueComposerTime(open, submitting);
 
   useEffect(() => {
     if (!open) return;
@@ -200,7 +202,7 @@ export function InlineSubIssueComposer({
     if (input === null || submitting) return;
     setSubmitting(true);
     void (async () => {
-      const result = await createIssue(input);
+      const result = await createIssue({ ...input, timeTracking: composerTime.capture() });
       if (reportIssueWriteFailure("Failed to create the sub-issue", result)) {
         setSubmitting(false);
         return;
@@ -218,7 +220,10 @@ export function InlineSubIssueComposer({
   };
 
   return (
-    <div className="rounded-xl border border-border/70 bg-muted/20 p-3 shadow-xs">
+    <div
+      {...composerTime.interactionProps}
+      className="rounded-xl border border-border/70 bg-muted/20 p-3 shadow-xs"
+    >
       <input
         aria-label="Sub-issue title"
         className="w-full bg-transparent text-sm font-medium leading-5 outline-none placeholder:text-placeholder"

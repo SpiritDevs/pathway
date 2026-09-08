@@ -28,6 +28,28 @@ export const sessionWire = v.object({
   startedAt: v.string(),
   stoppedAt: v.union(v.string(), v.null()),
   durationMs: v.number(),
+  source: v.optional(v.union(v.literal("manual"), v.literal("agent"), v.literal("issue"))),
+});
+export const trackedInterval = v.object({ start: v.number(), end: v.number() });
+export const trackedSource = v.union(v.literal("manual"), v.literal("agent"), v.literal("issue"));
+export const trackedState = v.union(
+  v.literal("running"),
+  v.literal("paused"),
+  v.literal("stopped"),
+);
+export const activitySessionWire = v.object({
+  id: v.string(),
+  ...sessionFields,
+  startedAt: v.string(),
+  stoppedAt: v.union(v.string(), v.null()),
+  durationMs: v.number(),
+  source: trackedSource,
+  state: trackedState,
+  threadId: v.union(v.string(), v.null()),
+  issueId: v.union(v.string(), v.null()),
+  intervals: v.array(trackedInterval),
+  runningSince: v.union(v.number(), v.null()),
+  observedAt: v.union(v.number(), v.null()),
 });
 export const businessToolsTables = {
   businessContacts: defineTable({
@@ -73,10 +95,27 @@ export const businessToolsTables = {
     startedAt: v.string(),
     stoppedAt: v.union(v.string(), v.null()),
     durationMs: v.number(),
-    state: v.union(v.literal("running"), v.literal("stopped"), v.literal("deleted")),
+    state: v.union(
+      v.literal("running"),
+      v.literal("paused"),
+      v.literal("stopped"),
+      v.literal("deleted"),
+    ),
+    source: v.optional(trackedSource),
+    threadId: v.optional(v.string()),
+    issueId: v.optional(v.string()),
+    companyId: v.optional(v.id("companies")),
+    environmentId: v.optional(v.string()),
+    localProjectId: v.optional(v.string()),
+    intervals: v.optional(v.array(trackedInterval)),
+    runningSince: v.optional(v.union(v.number(), v.null())),
+    observedAt: v.optional(v.number()),
+    revision: v.optional(v.number()),
   })
     .index("by_user_and_id", ["userId", "id"])
+    .index("by_company_environment_and_id", ["companyId", "environmentId", "id"])
     .index("by_user_and_state", ["userId", "state"])
+    .index("by_user_state_source", ["userId", "state", "source"])
     .index("by_user_and_state_and_stopped_at", ["userId", "state", "stoppedAt"])
     .index("by_user_and_started_at", ["userId", "startedAt"]),
 };
