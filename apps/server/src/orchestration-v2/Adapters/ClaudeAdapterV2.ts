@@ -3719,6 +3719,7 @@ export function makeClaudeAdapterV2(
             questions: [
               {
                 id: "resume-compaction",
+                isOther: false,
                 header: "Resume session",
                 question: input.question,
                 options: [

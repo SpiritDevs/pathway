@@ -4,7 +4,10 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@spiritdevs/contracts";
-import { deletePendingAttachmentUpload } from "@spiritdevs/client-runtime/state/attachments";
+import {
+  verifyPersistedAttachmentUpload,
+  deletePendingAttachmentUpload,
+} from "@spiritdevs/client-runtime/state/attachments";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { compressImageToByteLimit } from "./lib/imageCompression";
@@ -12,13 +15,14 @@ import { uploadStandaloneFileAttachment } from "./lib/attachmentUploadQueue";
 import { createMemoryStorage } from "./lib/storage";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 import { attachmentEnvironment } from "./state/attachments";
+import { assetEnvironment } from "./state/assets";
 import { randomUUID } from "./lib/utils";
 
 export interface QuestionAttachmentDraft {
   id: string;
   questionId: string;
   name: string;
-  status: "uploading" | "ready" | "failed";
+  status: "uploading" | "ready" | "failed" | "unverified";
   attachment?: PendingChatAttachment;
   error?: string;
 }
@@ -36,6 +40,20 @@ export const useQuestionAttachmentDrafts = create(
     storage: createJSONStorage(() =>
       typeof localStorage === "undefined" ? createMemoryStorage() : localStorage,
     ),
+    merge: (persisted, current) => {
+      const restored = (persisted as Partial<typeof current> | undefined)?.byRequest ?? {};
+      return {
+        ...current,
+        byRequest: Object.fromEntries(
+          Object.entries(restored).map(([key, drafts]) => [
+            key,
+            drafts.map((draft) =>
+              draft.status === "ready" ? { ...draft, status: "unverified" as const } : draft,
+            ),
+          ]),
+        ),
+      };
+    },
     partialize: (state) => ({
       byRequest: Object.fromEntries(
         Object.entries(state.byRequest).map(([key, drafts]) => [
@@ -85,6 +103,37 @@ export async function retryQuestionAttachment(
     .byRequest[key]?.find((entry) => entry.id === id);
   const file = files.get(id);
   if (!draft || draft.status === "uploading") return;
+  if (!file && draft.attachment) {
+    updateDraft(key, id, { status: "uploading" });
+    const verification = await verifyPersistedAttachmentUpload({
+      registry: appAtomRegistry,
+      createAssetUrl: assetEnvironment.createUrl,
+      environmentId,
+      attachmentId: draft.attachment.id,
+    });
+    if (
+      !useQuestionAttachmentDrafts
+        .getState()
+        .byRequest[key]?.some(
+          (entry) => entry.id === id && entry.attachment?.id === draft.attachment?.id,
+        )
+    )
+      return;
+    updateDraft(
+      key,
+      id,
+      verification.status === "verified"
+        ? { status: "ready" }
+        : {
+            status: "failed",
+            error:
+              verification.status === "missing"
+                ? "Uploaded file expired. Attach it again."
+                : "Uploaded file could not be verified. Retry when reconnected.",
+          },
+    );
+    return;
+  }
   if (!file) {
     updateDraft(key, id, {
       status: "failed",
@@ -115,6 +164,15 @@ export async function retryQuestionAttachment(
         error instanceof Error ? error.message : "Upload failed. Retry or remove the attachment.",
     });
   }
+}
+
+export async function revalidateQuestionAttachments(environmentId: EnvironmentId, key: string) {
+  const restored = useQuestionAttachmentDrafts.getState().byRequest[key] ?? [];
+  await Promise.all(
+    restored
+      .filter((draft) => draft.status === "unverified")
+      .map((draft) => retryQuestionAttachment(environmentId, key, draft.id)),
+  );
 }
 
 export async function addQuestionAttachments(input: {

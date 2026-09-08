@@ -159,8 +159,10 @@ struct AgentTranscriptQuestions: View {
     }
 
     private func optionRow(_ option: PathwayThreadQuestion.Option, index: Int, question: PathwayThreadQuestion) -> some View {
-        let checked = selected[question.id]?.contains(option.label) == true && custom[question.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let checked = selectedOptions(for: question).contains(option.label) && custom[question.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return Button {
+            selected[question.id] = selectedOptions(for: question)
+            model.questionDrafts[item.id]?.implicitSelections.remove(question.id)
             custom[question.id] = ""
             if question.multiSelect == true {
                 if selected[question.id, default: []].contains(option.label) { selected[question.id]?.remove(option.label) }
@@ -187,14 +189,21 @@ struct AgentTranscriptQuestions: View {
 
     private func customBinding(_ id: String) -> Binding<String> {
         Binding(get: { custom[id, default: ""] }, set: { value in
+            selected[id] = model.questionDrafts[item.id]?.selectedOptions(for: id,
+                hasAttachments: model.questionAttachmentStores["\(item.id):\(id)"]?.drafts.isEmpty == false) ?? []
+            model.questionDrafts[item.id]?.implicitSelections.remove(id)
             custom[id] = value
             if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { selected[id] = [] }
         })
     }
+    private func selectedOptions(for question: PathwayThreadQuestion) -> Set<String> {
+        model.questionDrafts[item.id]?.selectedOptions(for: question.id,
+            hasAttachments: model.questionAttachmentStores["\(item.id):\(question.id)"]?.drafts.isEmpty == false) ?? []
+    }
     private func answer(for question: PathwayThreadQuestion) -> JSONValue? {
         let text = custom[question.id, default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty { return .string(text) }
-        let ordered = question.options.map(\.label).filter { selected[question.id]?.contains($0) == true }
+        let ordered = question.options.map(\.label).filter { selectedOptions(for: question).contains($0) }
         guard let first = ordered.first else {
             return model.questionAttachmentStores["\(item.id):\(question.id)"]?.drafts.isEmpty == false ? .string("") : nil
         }

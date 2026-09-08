@@ -4,6 +4,7 @@ export interface PendingUserInputDraftAnswer {
   selectedOptionLabels?: string[];
   customAnswer?: string;
   attachmentCount?: number;
+  isImplicitSelection?: boolean;
 }
 
 export interface PendingUserInputProgress {
@@ -46,6 +47,12 @@ function normalizeSelectedOptionLabels(value: string[] | undefined): string[] {
   return Array.from(new Set(normalized));
 }
 
+function effectiveSelectedOptionLabels(draft: PendingUserInputDraftAnswer | undefined): string[] {
+  return draft?.isImplicitSelection && (draft.attachmentCount ?? 0) > 0
+    ? []
+    : normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+}
+
 export function resolvePendingUserInputAnswer(
   question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
@@ -55,7 +62,7 @@ export function resolvePendingUserInputAnswer(
     return customAnswer;
   }
 
-  const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+  const selectedOptionLabels = effectiveSelectedOptionLabels(draft);
   if (question.multiSelect) {
     return selectedOptionLabels.length > 0
       ? selectedOptionLabels
@@ -72,9 +79,7 @@ export function setPendingUserInputCustomAnswer(
   customAnswer: string,
 ): PendingUserInputDraftAnswer {
   const selectedOptionLabels =
-    customAnswer.trim().length > 0
-      ? undefined
-      : normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+    customAnswer.trim().length > 0 ? undefined : effectiveSelectedOptionLabels(draft);
 
   return {
     customAnswer,
@@ -88,7 +93,7 @@ export function togglePendingUserInputOptionSelection(
   optionLabel: string,
 ): PendingUserInputDraftAnswer {
   if (question.multiSelect) {
-    const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+    const selectedOptionLabels = effectiveSelectedOptionLabels(draft);
     const nextSelectedOptionLabels = selectedOptionLabels.includes(optionLabel)
       ? selectedOptionLabels.filter((label) => label !== optionLabel)
       : [...selectedOptionLabels, optionLabel];
@@ -167,7 +172,7 @@ export function derivePendingUserInputProgress(
     questionIndex: normalizedQuestionIndex,
     activeQuestion,
     activeDraft,
-    selectedOptionLabels: normalizeSelectedOptionLabels(activeDraft?.selectedOptionLabels),
+    selectedOptionLabels: effectiveSelectedOptionLabels(activeDraft),
     customAnswer,
     resolvedAnswer,
     usingCustomAnswer: customAnswer.trim().length > 0,

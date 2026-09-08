@@ -49,7 +49,7 @@ export function QuestionAttachmentStrip({
           <div className="min-w-0">
             <p className="max-w-48 truncate text-xs">{draft.name}</p>
             <p className="max-w-64 text-xs text-muted-foreground" role="status">
-              {draft.status === "uploading"
+              {draft.status === "uploading" || draft.status === "unverified"
                 ? "Uploading…"
                 : draft.status === "failed"
                   ? draft.error

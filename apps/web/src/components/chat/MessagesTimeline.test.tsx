@@ -595,12 +595,25 @@ describe("MessagesTimeline", () => {
       mimeType: "image/png",
       sizeBytes: 3,
     };
+    const file = {
+      ...attachment,
+      type: "file" as const,
+      id: "answer-file",
+      name: "colors.txt",
+      mimeType: "text/plain",
+    };
+    const unowned = {
+      ...attachment,
+      id: "other-image",
+      name: "other.png",
+      previewUrl: "https://example.com/other.png",
+    };
     const entry = buildQuestionReplyTimelineEntry(
       JSON.stringify({
         request_user_input_async: "call-images",
         answers: [
           { question: "Which layout?", answer: "", attachments: [attachment] },
-          { question: "Which color?", answer: "Blue" },
+          { question: "Which color?", answer: "Blue", attachments: [file] },
         ],
       }),
     );
@@ -608,7 +621,11 @@ describe("MessagesTimeline", () => {
       ...entry,
       message: {
         ...entry.message,
-        attachments: [{ ...attachment, previewUrl: "https://example.com/answer.png" }],
+        attachments: [
+          { ...attachment, previewUrl: "https://example.com/answer.png" },
+          { ...file, previewUrl: "https://example.com/colors.txt" },
+          unowned,
+        ],
       },
     };
     const markup = renderToStaticMarkup(
@@ -617,6 +634,12 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-question-reply="true"');
     expect(markup).toContain("Which layout?");
     expect(markup).toContain("Which color?");
+    expect(markup.match(/src="https:\/\/example.com\/answer.png"/g)).toHaveLength(1);
+    expect(markup.match(/href="https:\/\/example.com\/colors.txt"/g)).toHaveLength(1);
+    expect(markup).toContain('src="https://example.com/other.png"');
+    expect(markup).toMatch(
+      /Which layout\?[\s\S]*src="https:\/\/example.com\/answer.png"[\s\S]*Which color\?/,
+    );
     expect(markup).toContain('href="https://example.com/answer.png"');
     expect(markup).not.toContain("request_user_input_async");
   });

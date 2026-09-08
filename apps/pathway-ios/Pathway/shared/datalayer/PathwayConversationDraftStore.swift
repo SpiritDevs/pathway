@@ -124,6 +124,15 @@ actor PathwayConversationDraftStore {
         }
     }
 
+    /// Retire the draft without loading its attachment bytes into memory.
+    func discard() throws -> [String] {
+        let manifest = (try? Data(contentsOf: directory.appending(path: "draft.json")))
+            .flatMap { try? JSONDecoder().decode(Manifest.self, from: $0) }
+        lastRevision = .max
+        if FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) }
+        return manifest?.attachments.compactMap { $0.attachment?.id } ?? []
+    }
+
     private func attachmentURL(_ id: String) -> URL { directory.appending(path: Self.fileName(id) + ".data") }
     private static func fileName(_ value: String) -> String {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()

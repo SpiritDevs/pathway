@@ -11,7 +11,10 @@ export function initialAsyncQuestionAnswers(
   return Object.fromEntries(
     prompt.questions.map((question) => [
       question.id,
-      { selectedOptionLabels: question.options[0] ? [question.options[0].label] : [] },
+      {
+        selectedOptionLabels: question.options[0] ? [question.options[0].label] : [],
+        isImplicitSelection: true,
+      },
     ]),
   );
 }

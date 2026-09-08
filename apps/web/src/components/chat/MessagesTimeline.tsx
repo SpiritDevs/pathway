@@ -1382,16 +1382,24 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const copyText = questionReply
     ? formatAsyncQuestionReplyText(questionReply)
     : displayedUserMessage.copyText;
-  const previewImages = userAttachments.filter(
+  const answerAttachmentIds = new Set(
+    questionReply?.flatMap(
+      (reply) => reply.attachments?.map((attachment) => attachment.id) ?? [],
+    ) ?? [],
+  );
+  const genericAttachments = userAttachments.filter(
+    (attachment) => !answerAttachmentIds.has(attachment.id),
+  );
+  const previewImages = genericAttachments.filter(
     (attachment) =>
       attachment.type === "image" && attachment.name.startsWith("preview-annotation-"),
   );
-  const regularImages = userAttachments.filter(
+  const regularImages = genericAttachments.filter(
     (attachment) =>
       attachment.type === "image" && !attachment.name.startsWith("preview-annotation-"),
   );
-  const fileAttachments = userAttachments.filter((attachment) => attachment.type === "file");
-  const unknownAttachments = userAttachments.filter(
+  const fileAttachments = genericAttachments.filter((attachment) => attachment.type === "file");
+  const unknownAttachments = genericAttachments.filter(
     (attachment) => attachment.type !== "image" && attachment.type !== "file",
   );
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
@@ -2832,6 +2840,13 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
                               rel="noreferrer"
                               className="text-primary underline"
                             >
+                              {attachment.type === "image" ? (
+                                <img
+                                  src={url}
+                                  alt={attachment.name}
+                                  className="mb-1 block max-h-[220px] max-w-full rounded-lg object-contain"
+                                />
+                              ) : null}
                               {attachment.name}
                             </a>
                           ) : (

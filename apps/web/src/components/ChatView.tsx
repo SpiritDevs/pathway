@@ -5,6 +5,7 @@ import {
   EMPTY_QUESTION_ATTACHMENTS,
   questionAttachmentDraftKey,
   readyQuestionAttachments,
+  revalidateQuestionAttachments,
   removeQuestionAttachment,
   retryQuestionAttachment,
   useQuestionAttachmentDrafts,
@@ -2833,6 +2834,9 @@ function ChatViewContent(props: ChatViewProps) {
     (state) => state.byRequest[questionAttachmentsKey] ?? EMPTY_QUESTION_ATTACHMENTS,
   );
   const questionAttachmentsReady = readyQuestionAttachments(questionAttachmentDrafts) !== null;
+  useEffect(() => {
+    void revalidateQuestionAttachments(environmentId, questionAttachmentsKey);
+  }, [environmentId, questionAttachmentsKey]);
   const activePendingDraftAnswers = useMemo(
     () =>
       activePendingUserInput
@@ -8453,7 +8457,15 @@ function ChatViewContent(props: ChatViewProps) {
             ...existing[activePendingUserInput.requestId],
             [questionId]: togglePendingUserInputOptionSelection(
               question,
-              existing[activePendingUserInput.requestId]?.[questionId],
+              {
+                ...existing[activePendingUserInput.requestId]?.[questionId],
+                attachmentCount:
+                  useQuestionAttachmentDrafts
+                    .getState()
+                    .byRequest[questionAttachmentsKey]?.filter(
+                      (draft) => draft.questionId === questionId,
+                    ).length ?? 0,
+              },
               optionLabel,
             ),
           },
@@ -8462,7 +8474,12 @@ function ChatViewContent(props: ChatViewProps) {
       promptRef.current = "";
       composerRef.current?.resetCursorState({ cursor: 0 });
     },
-    [activePendingProgress?.activeQuestion, activePendingUserInput, composerRef],
+    [
+      activePendingProgress?.activeQuestion,
+      activePendingUserInput,
+      composerRef,
+      questionAttachmentsKey,
+    ],
   );
 
   const timelineAsyncQuestions = useMemo(
@@ -8499,7 +8516,15 @@ function ChatViewContent(props: ChatViewProps) {
         [activePendingUserInput.requestId]: {
           ...existing[activePendingUserInput.requestId],
           [questionId]: setPendingUserInputCustomAnswer(
-            existing[activePendingUserInput.requestId]?.[questionId],
+            {
+              ...existing[activePendingUserInput.requestId]?.[questionId],
+              attachmentCount:
+                useQuestionAttachmentDrafts
+                  .getState()
+                  .byRequest[questionAttachmentsKey]?.filter(
+                    (draft) => draft.questionId === questionId,
+                  ).length ?? 0,
+            },
             value,
           ),
         },
@@ -8513,7 +8538,7 @@ function ChatViewContent(props: ChatViewProps) {
         composerRef.current?.focusAt(nextCursor);
       }
     },
-    [activePendingUserInput, composerRef],
+    [activePendingUserInput, composerRef, questionAttachmentsKey],
   );
 
   const onAdvanceActivePendingUserInput = useCallback(() => {

@@ -26,6 +26,7 @@ final class PathwayNewThreadAttachments {
     @ObservationIgnored private(set) var bytes: [String: Data] = [:]
     @ObservationIgnored private let store: PathwayConversationDraftStore?
     @ObservationIgnored private var restored = false
+    @ObservationIgnored private var discarded = false
     @ObservationIgnored private var transferredIDs: Set<String> = []
 
     init(directory: URL?, key: String) {
@@ -36,10 +37,10 @@ final class PathwayNewThreadAttachments {
     var isReady: Bool { drafts.allSatisfy { $0.state == .ready } }
 
     func restore(preservingPreparedUploadIDs: Set<String> = []) async {
-        guard !restored, let store else { return }
+        guard !discarded, !restored, let store else { return }
         restored = true
         guard let saved = await store.load(expirePendingUploads: true,
-            preservingPreparedUploadIDs: preservingPreparedUploadIDs), drafts.isEmpty else { return }
+            preservingPreparedUploadIDs: preservingPreparedUploadIDs), !discarded, drafts.isEmpty else { return }
         drafts = saved.attachments; bytes = saved.data
     }
 
@@ -85,7 +86,7 @@ final class PathwayNewThreadAttachments {
     }
 
     func persistChecked() async throws {
-        guard let store, restored || !drafts.isEmpty else { return }
+        guard !discarded, let store, restored || !drafts.isEmpty else { return }
         try await store.save(PathwayConversationDraftSnapshot(text: "", attachments: drafts, data: bytes,
             preparedSend: nil, preparedNewSend: nil, revision: DispatchTime.now().uptimeNanoseconds))
     }
@@ -110,6 +111,7 @@ final class PathwayNewThreadAttachments {
     }
 
     func add(data: Data, name: String, mimeType: String) async {
+        guard !discarded else { return }
         let type = mimeType.hasPrefix("image/") ? "image" : "file"
         guard drafts.count < 8 else { errorMessage = "You can attach up to 8 files."; return }
         guard supportsUploads, type == "image" || maximumFileBytes != nil else {
@@ -127,7 +129,7 @@ final class PathwayNewThreadAttachments {
     }
 
     func retry(id: String) async {
-        guard let index = drafts.firstIndex(where: { $0.id == id }), let data = bytes[id] else { return }
+        guard !discarded, let index = drafts.firstIndex(where: { $0.id == id }), let data = bytes[id] else { return }
         let draft = drafts[index]
         drafts[index].state = .uploading
         var uploadedID: String?
@@ -167,6 +169,17 @@ final class PathwayNewThreadAttachments {
         drafts.removeAll { ids.contains($0.id) }
         for id in ids { bytes.removeValue(forKey: id) }
         await persist()
+    }
+
+    /// Resolved questions cannot retain bytes or accept late imports and uploads.
+    func discard() async throws {
+        discarded = true
+        let activeIDs = drafts.compactMap { $0.attachment?.id }
+        drafts = []; bytes = [:]
+        let savedIDs = try await store?.discard() ?? []
+        for id in Set(activeIDs + savedIDs) {
+            if let request { _ = try? await request("attachments.delete", .object(["attachmentId": .string(id)])) }
+        }
     }
 
     func clearError() { errorMessage = nil }
