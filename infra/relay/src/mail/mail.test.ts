@@ -10,6 +10,7 @@ import {
 import { draftMime, mailboxList, decodeText, makeGmail } from "./gmail.ts";
 import {
   MailStorageError,
+  mailStorageApiKey,
   makePrivateMailStorage,
   materializeMessage,
   type PrivateMailStorage,
@@ -601,4 +602,28 @@ describe("mail sync failure diagnostics", () => {
       error: "Google authorization expired. Reconnect this mailbox.",
     });
   });
+});
+
+describe("UploadThing deployment credentials", () => {
+  it.each([
+    "  sk_live_test-key\n",
+    encoded(JSON.stringify({ apiKey: "sk_live_test-key", appId: "app", regions: ["syd1"] })),
+  ])(
+    "authenticates storage requests with the API key from either supported format",
+    async (credential) => {
+      const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        expect(new Headers(init?.headers).get("x-uploadthing-api-key")).toBe("sk_live_test-key");
+        return Response.json({ ufsUrl: "https://app.ufs.sh/f/key?signature=test" });
+      }) as typeof fetch;
+      await makePrivateMailStorage(credential, fetcher).signedUrl("key");
+      expect(fetcher).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["invalid-token", encoded("null"), encoded("{}"), encoded('{"apiKey":42}')])(
+    "leaves invalid credentials on the provider authentication error path",
+    (credential) => {
+      expect(mailStorageApiKey(credential)).toBe(credential);
+    },
+  );
 });

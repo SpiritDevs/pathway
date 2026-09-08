@@ -26,15 +26,15 @@ A `400 origin_invalid` response from `clerk.spiritdevs.com` with the origin `htt
 
 Before testing Google consent, check the deployed `/v1/mail/config` endpoint. A missing route returns 404; the current relay returns 503 when mail is disabled, 401 without a valid Clerk token, and 200 with its capabilities after authentication. Credentialed mail preflights must echo the request origin and include `Access-Control-Allow-Credentials: true`. A successful desktop release does not establish that the relay deployment succeeded.
 
-| Variable                             | Purpose                                                                                                                                         |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MAIL_ENABLED`                       | Defaults to `false`. Enables mail routes, queue processing and reconciliation.                                                                  |
-| `MAIL_ENCRYPTION_KEY`                | Base64url encoding of 32 cryptographically random bytes; relay key-encryption key. Store in deployment secrets and retain a protected backup.   |
-| `MAIL_UPLOADTHING_API_KEY`           | UploadThing REST API key for the private mail storage app. This is the API key accepted by `x-uploadthing-api-key`, not a serialized SDK token. |
-| `MAIL_GOOGLE_PUBSUB_TOPIC`           | Optional hosted OAuth topic, `projects/PROJECT_ID/topics/TOPIC_ID`. Omit to use five-minute reconciliation.                                     |
-| `MAIL_GOOGLE_PUBSUB_SERVICE_ACCOUNT` | Exact service-account email allowed to authenticate Pub/Sub push. Required only when using a hosted or BYO topic.                               |
-| `MAIL_GOOGLE_CLIENT_ID`              | Optional Pathway-owned Google web OAuth client ID.                                                                                              |
-| `MAIL_GOOGLE_CLIENT_SECRET`          | Optional corresponding secret. Both hosted values are needed to expose hosted OAuth.                                                            |
+| Variable                             | Purpose                                                                                                                                       |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MAIL_ENABLED`                       | Defaults to `false`. Enables mail routes, queue processing and reconciliation.                                                                |
+| `MAIL_ENCRYPTION_KEY`                | Base64url encoding of 32 cryptographically random bytes; relay key-encryption key. Store in deployment secrets and retain a protected backup. |
+| `MAIL_UPLOADTHING_API_KEY`           | UploadThing API key or V7 SDK token for the private mail storage app. V7 tokens are decoded to the API key used by REST requests.             |
+| `MAIL_GOOGLE_PUBSUB_TOPIC`           | Optional hosted OAuth topic, `projects/PROJECT_ID/topics/TOPIC_ID`. Omit to use five-minute reconciliation.                                   |
+| `MAIL_GOOGLE_PUBSUB_SERVICE_ACCOUNT` | Exact service-account email allowed to authenticate Pub/Sub push. Required only when using a hosted or BYO topic.                             |
+| `MAIL_GOOGLE_CLIENT_ID`              | Optional Pathway-owned Google web OAuth client ID.                                                                                            |
+| `MAIL_GOOGLE_CLIENT_SECRET`          | Optional corresponding secret. Both hosted values are needed to expose hosted OAuth.                                                          |
 
 The existing `CLERK_SECRET_KEY`, `CLERK_JWT_AUDIENCE`, `CONVEX_URL`, relay signing key and public relay origin remain required. Web mail requests use `getToken(resolveRelayClerkTokenOptions())`, the same relay JWT template used by Connect. Configure the template selected by `VITE_CLERK_JWT_TEMPLATE` to emit the audience accepted by relay `CLERK_JWT_AUDIENCE`; the separately named `convex` template is for the Convex socket. Mail routes retain the gateway's bearer-token CORS behavior.
 

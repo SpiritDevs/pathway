@@ -28,11 +28,32 @@ export interface PrivateMailStorage {
   signedUrl(key: string): Promise<string>;
   delete(keys: string[]): Promise<void>;
 }
+/** UploadThing's V7 dashboard token wraps the REST API key in base64 JSON. */
+export function mailStorageApiKey(credential: string): string {
+  const value = credential.trim();
+  if (value.startsWith("sk_")) return value;
+  try {
+    const token: unknown = JSON.parse(new TextDecoder().decode(decodeBase64Url(value)));
+    if (
+      token !== null &&
+      typeof token === "object" &&
+      "apiKey" in token &&
+      typeof token.apiKey === "string" &&
+      token.apiKey.trim().startsWith("sk_")
+    )
+      return token.apiKey.trim();
+  } catch {
+    // Unrecognized credentials reach the provider's normal authentication error path.
+  }
+  return value;
+}
+
 export function makePrivateMailStorage(
-  apiKey: string,
+  credential: string,
   fetcher: typeof fetch = fetch,
   onPrepared: (key: string) => Promise<void> = async () => {},
 ): PrivateMailStorage {
+  const apiKey = mailStorageApiKey(credential);
   const api = async <T>(
     path: string,
     body: unknown,
