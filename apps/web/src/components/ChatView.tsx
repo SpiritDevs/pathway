@@ -1,3 +1,4 @@
+import { useLoadBalancedDraft } from "../hooks/useLoadBalancedDraft";
 import { initialAsyncQuestionAnswers } from "./chat/ComposerAsyncQuestions";
 import {
   DEFAULT_MODEL,
@@ -3452,16 +3453,48 @@ function ChatViewContent(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
-  const { selectedModel: usageSelectedModel } = useEffectiveComposerModelState({
-    threadRef: composerDraftTarget,
-    providers: providerStatuses,
-    selectedProvider: activeProviderStatus?.driver ?? selectedProvider,
-    selectedInstanceId: activeProviderStatus?.instanceId,
-    subagentModelSelection: activeSubagentModelSelection,
-    threadModelSelection: activeThread?.modelSelection,
-    projectModelSelection: activeProject?.defaultModelSelection,
-    settings,
+  const { selectedModel: usageSelectedModel, modelOptions: placementModelOptions } =
+    useEffectiveComposerModelState({
+      threadRef: composerDraftTarget,
+      providers: providerStatuses,
+      selectedProvider: activeProviderStatus?.driver ?? selectedProvider,
+      selectedInstanceId: activeProviderStatus?.instanceId,
+      subagentModelSelection: activeSubagentModelSelection,
+      threadModelSelection: activeThread?.modelSelection,
+      projectModelSelection: activeProject?.defaultModelSelection,
+      settings,
+    });
+  const placementModelSelection = useMemo(
+    () =>
+      activeProviderStatus
+        ? {
+            instanceId: activeProviderStatus.instanceId,
+            model: usageSelectedModel,
+            ...(placementModelOptions?.[activeProviderStatus.instanceId]
+              ? { options: placementModelOptions[activeProviderStatus.instanceId] }
+              : {}),
+          }
+        : null,
+    [activeProviderStatus, usageSelectedModel, placementModelOptions],
+  );
+  const draftPlacement = useLoadBalancedDraft({
+    draftId: isServerThread ? null : draftId,
+    enabled: settings.loadBalancingEnabled,
+    weights: settings.loadBalancingWeights,
+    project: activeProject,
+    projects: allProjects,
+    environments,
+    replicas: companyReplicas,
+    selection: placementModelSelection,
   });
+  const autoPlacement = draftPlacement.visible
+    ? {
+        active: draftPlacement.automatic,
+        disabled: draftPlacement.pinned,
+        label: draftPlacement.label,
+        onSelect: draftPlacement.recheck,
+      }
+    : undefined;
   const activeProviderThread = useMemo(() => {
     if (!serverProjection) return null;
     const activeId = serverProjection.thread.activeProviderThreadId;
@@ -3651,16 +3684,31 @@ function ChatViewContent(props: ChatViewProps) {
   // project in that environment while keeping the same logical project.
   const onEnvironmentChange = useCallback(
     (nextEnvironmentId: EnvironmentId) => {
-      if (envLocked || !draftId) return;
+      if (
+        envLocked ||
+        !draftId ||
+        (settings.loadBalancingEnabled && draftPlacement.machinePinned) ||
+        draftThread?.placement?.dispatched
+      )
+        return;
       const target = logicalProjectEnvironments.find(
         (env) => env.environmentId === nextEnvironmentId,
       );
       if (!target) return;
       setDraftThreadContext(draftId, {
         projectRef: scopeProjectRef(target.environmentId, target.projectId),
+        placement: { mode: "manual", providerPinned: false, resolvedKey: null },
       });
     },
-    [draftId, envLocked, logicalProjectEnvironments, setDraftThreadContext],
+    [
+      draftId,
+      draftPlacement.machinePinned,
+      draftThread?.placement?.dispatched,
+      settings.loadBalancingEnabled,
+      envLocked,
+      logicalProjectEnvironments,
+      setDraftThreadContext,
+    ],
   );
 
   const activeTerminalGroup =
@@ -7038,6 +7086,13 @@ function ChatViewContent(props: ChatViewProps) {
       notifyDirectAnnotationAttached();
       return;
     }
+    if (!draftPlacement.validate(sendCtx.selectedModelSelection)) {
+      setThreadError(
+        activeThread.id,
+        "Choose an available machine or recheck Auto placement before sending.",
+      );
+      return;
+    }
     const {
       images: sendContextImages,
       terminalContexts: composerTerminalContexts,
@@ -7515,6 +7570,25 @@ function ChatViewContent(props: ChatViewProps) {
       const startResult = await startThreadTurn({
         environmentId,
         input: {
+          onLaunchDispatch: () => {
+            if (pendingDraftTarget !== null) {
+              const store = useComposerDraftStore.getState();
+              const currentPlacement = (
+                typeof pendingDraftTarget === "string"
+                  ? store.getDraftSession(pendingDraftTarget)
+                  : store.getDraftThreadByRef(pendingDraftTarget)
+              )?.placement;
+              store.setDraftThreadContext(pendingDraftTarget, {
+                placement: {
+                  mode: "manual",
+                  providerPinned: false,
+                  resolvedKey: null,
+                  ...currentPlacement,
+                  dispatched: true,
+                },
+              });
+            }
+          },
           threadId: threadIdForSend,
           message: {
             messageId: messageIdForSend,
@@ -8655,6 +8729,11 @@ function ChatViewContent(props: ChatViewProps) {
         scheduleComposerFocus();
         return;
       }
+      if (draftId && !isServerThread && instanceId !== activeProviderStatus?.instanceId) {
+        setDraftThreadContext(draftId, {
+          placement: { mode: "manual", providerPinned: true, resolvedKey: null },
+        });
+      }
       setComposerDraftModelSelection(
         scopeThreadRef(activeThread.environmentId, activeThread.id),
         nextModelSelection,
@@ -8672,6 +8751,10 @@ function ChatViewContent(props: ChatViewProps) {
       setStickyComposerModelSelection,
       providerStatuses,
       settings,
+      draftId,
+      isServerThread,
+      setDraftThreadContext,
+      activeProviderStatus?.instanceId,
     ],
   );
   const onEnvModeChange = useCallback(
@@ -8893,7 +8976,12 @@ function ChatViewContent(props: ChatViewProps) {
     gitCwd,
     isGitRepo,
     envLocked,
+    environmentLocked:
+      envLocked ||
+      (settings.loadBalancingEnabled && draftPlacement.machinePinned) ||
+      Boolean(draftThread?.placement?.dispatched),
     availableEnvironments: logicalProjectEnvironments,
+    autoPlacement,
     onEnvironmentChange,
     onLinkEnvironmentRequest,
     onEnvModeChange,
@@ -9303,12 +9391,18 @@ function ChatViewContent(props: ChatViewProps) {
                                     }
                                   : {})}
                                 envLocked={envLocked}
+                                environmentLocked={
+                                  envLocked ||
+                                  (settings.loadBalancingEnabled && draftPlacement.machinePinned) ||
+                                  Boolean(draftThread?.placement?.dispatched)
+                                }
                                 onComposerFocusRequest={scheduleComposerFocus}
                                 {...(canCheckoutPullRequestIntoThread
                                   ? { onCheckoutPullRequestRequest: openPullRequestDialog }
                                   : {})}
                                 {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
                                 onLinkEnvironmentRequest={onLinkEnvironmentRequest}
+                                autoPlacement={autoPlacement}
                                 availableEnvironments={logicalProjectEnvironments}
                               />
                             </div>
@@ -9319,6 +9413,37 @@ function ChatViewContent(props: ChatViewProps) {
                     <div className="chat-composer-glass-shell chat-composer-glass-shell-with-context chat-composer-content-sized-shell relative mx-auto w-full max-w-3xl">
                       <div className="relative z-10 w-full">
                         <div className="relative z-10">
+                          {draftPlacement.visible && (
+                            <div
+                              className="flex flex-wrap items-center gap-2 px-3 pt-2 text-xs text-muted-foreground"
+                              aria-live="polite"
+                            >
+                              <span title={draftPlacement.detail}>{draftPlacement.label}</span>
+                              {draftPlacement.automatic ? (
+                                <>
+                                  <Button
+                                    variant="ghost"
+                                    size="xs"
+                                    onClick={draftPlacement.recheck}
+                                    disabled={draftPlacement.pending}
+                                  >
+                                    Recheck
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="xs"
+                                    onClick={draftPlacement.useManual}
+                                  >
+                                    Use selected machine
+                                  </Button>
+                                </>
+                              ) : !draftPlacement.pinned ? (
+                                <Button variant="ghost" size="xs" onClick={draftPlacement.recheck}>
+                                  Auto
+                                </Button>
+                              ) : null}
+                            </div>
+                          )}
                           <ChatComposer
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
@@ -9335,7 +9460,7 @@ function ChatViewContent(props: ChatViewProps) {
                             projectSelectionRequired={isLocalDraftThread && activeProject === null}
                             phase={phase}
                             isConnecting={isConnecting}
-                            isSendBusy={isSendBusy}
+                            isSendBusy={isSendBusy || draftPlacement.blocked}
                             isPreparingWorktree={isPreparingWorktree}
                             environmentUnavailable={activeEnvironmentUnavailableState}
                             activePendingApproval={activePendingApproval}

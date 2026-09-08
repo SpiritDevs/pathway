@@ -4,6 +4,8 @@ struct PathwayConnectionOnboardingView: View {
     @Bindable var model: PathwayConnectionOnboardingModel
     let accountKey: String
     let companies: [PathwayCompany]
+    var environments: [PathwayCompanyEnvironment] = []
+    @State private var placementPreferences = PathwayEnvironmentPlacementPreferences.shared
     var roles: [String: [JSONValue]] = [:]
     var registrations: [String: [JSONValue]] = [:]
     @State private var address = ""
@@ -24,6 +26,7 @@ struct PathwayConnectionOnboardingView: View {
                 if !model.directConnections.isEmpty { directSection }
                 if let selected = model.selected { setupSection(selected) }
                 accountSection
+                placementSection
             }
             if model.busy {
                 Section { ProgressView(model.progress ?? "Working") }
@@ -70,6 +73,34 @@ struct PathwayConnectionOnboardingView: View {
     }
 
     private var companyName: String { companies.first { $0.id == companyID }?.name ?? "workspace" }
+
+    private var placementSection: some View {
+        Section {
+            Toggle("Auto balance new threads", isOn: $placementPreferences.enabled)
+            if placementPreferences.enabled {
+                ForEach(placementEnvironments) { environment in
+                    Picker(environment.environment.label, selection: Binding(
+                        get: { placementPreferences.weight(for: environment.environment.environmentId) },
+                        set: { placementPreferences.setWeight($0, for: environment.environment.environmentId) }
+                    )) {
+                        ForEach(PathwayEnvironmentPlacementPreferences.weights, id: \.self) { weight in
+                            Text(PathwayEnvironmentPlacementPreferences.label(weight)).tag(weight)
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("Load balancing")
+        } footer: {
+            Text("Auto chooses an available environment with a registered copy of the project before you compose. Existing threads stay where they started. These preferences apply to this device.")
+        }
+    }
+
+    private var placementEnvironments: [PathwayCompanyEnvironment] {
+        var seen = Set<String>()
+        return environments.filter { seen.insert($0.environment.environmentId).inserted }
+            .sorted { $0.environment.label.localizedStandardCompare($1.environment.label) == .orderedAscending }
+    }
 
     private var pairingSection: some View {
         Section {

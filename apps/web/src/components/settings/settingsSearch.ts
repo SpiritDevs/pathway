@@ -226,6 +226,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/environments",
   },
   {
+    id: "load-balancing",
+    title: "Load balancing and automatic machine selection",
+    to: "/settings/environments",
+  },
+  {
     id: "color-scheme",
     title: "Color scheme",
     to: "/settings/appearance",

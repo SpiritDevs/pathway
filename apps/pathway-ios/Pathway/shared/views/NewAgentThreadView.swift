@@ -13,6 +13,14 @@ struct NewAgentThreadView: View {
     @State private var appliedInitialPrompt = false
     @State private var appliedCapture = false
     @State private var selectionError: String?
+    @State private var placementPreferences = PathwayEnvironmentPlacementPreferences.shared
+    @State private var placementRequestID: UUID?
+    @State private var isResolvingPlacement = false
+    @State private var automaticBindingID: String?
+    @State private var pendingPlacementChoice: PathwayPlacementModelChoice?
+    @State private var placementMessage: String?
+    @State private var placementUnavailable = false
+    @State private var placementResetsPin = false
 
     var body: some View {
         NavigationStack {
@@ -32,6 +40,20 @@ struct NewAgentThreadView: View {
                         project: selectedProject,
                         model: model,
                         selectedBindingID: $selectedBindingID,
+                        automaticPlacementEnabled: placementPreferences.enabled,
+                        isResolvingPlacement: isResolvingPlacement,
+                        placementMessage: placementMessage,
+                        placementUnavailable: placementUnavailable,
+                        chooseAutomaticPlacement: { requestAutomaticPlacement(resetPin: true) },
+                        chooseEnvironment: { id in
+                            automaticBindingID = nil
+                            pendingPlacementChoice = nil
+                            model?.automaticModelChoice = nil
+                            placementMessage = nil
+                            placementUnavailable = false
+                            model?.isAutomaticPlacement = false
+                            selectedBindingID = id
+                        },
                         chooseProject: { selectedProjectID = nil },
                         didLaunch: didLaunch
                     )
@@ -59,8 +81,11 @@ struct NewAgentThreadView: View {
             }
         }
         .interactiveDismissDisabled(isChangingBinding)
-        .task(id: selectedBindingID) {
+        .task(id: "\(selectedBindingID):\(isResolvingPlacement)") {
             await configureSelection()
+        }
+        .task(id: placementRequestID) {
+            if placementRequestID != nil { await resolveAutomaticPlacement() }
         }
         .task(id: model?.connectionState) {
             await applyIncomingDraft()
@@ -75,6 +100,7 @@ struct NewAgentThreadView: View {
     }
 
     private var isChangingBinding: Bool {
+        if isResolvingPlacement { return true }
         guard let model else { return false }
         return model.isTransferringDraft || model.bindingID != selectedBindingID
     }
@@ -125,14 +151,70 @@ struct NewAgentThreadView: View {
     }
 
     private func selectProject(_ project: PathwayNewThreadProjectOption) {
+        automaticBindingID = nil
+        pendingPlacementChoice = nil
+        placementMessage = nil
+        placementUnavailable = false
         selectedProjectID = project.id
         if !project.bindings.contains(where: { $0.id == selectedBindingID }) {
             selectedBindingID = project.bindings.first?.id ?? ""
         }
+        if placementPreferences.enabled, project.bindings.count > 1 { requestAutomaticPlacement() }
+    }
+
+    private func requestAutomaticPlacement(resetPin: Bool = false) {
+        guard model?.hasPendingLaunch != true, model?.isLaunching != true else { return }
+        placementResetsPin = resetPin
+        isResolvingPlacement = true
+        placementMessage = nil
+        placementRequestID = UUID()
+    }
+
+    private func resolveAutomaticPlacement() async {
+        let requestID = placementRequestID
+        let projectID = selectedProjectID
+        let preferred = selectedBindingID
+        guard let project = selectedProject else { isResolvingPlacement = false; return }
+        if placementResetsPin, let model, model.bindingID == preferred {
+            guard await model.prepareAutomaticPlacement() else {
+                guard !Task.isCancelled, requestID == placementRequestID, projectID == selectedProjectID else { return }
+                isResolvingPlacement = false
+                return
+            }
+        }
+        guard !Task.isCancelled, requestID == placementRequestID, projectID == selectedProjectID else { return }
+        let choice = model?.bindingID == preferred ? model?.placementModelChoice : nil
+        let hasSavedDraft = await PathwayEnvironmentPlacement.hasSavedDraft(bindingID: preferred, directory: appModel.localStorageDirectory)
+        let winner = await PathwayEnvironmentPlacement.resolve(bindings: project.bindings,
+            preferredBindingID: preferred, choice: choice, preferences: placementPreferences,
+            directory: appModel.localStorageDirectory) { environment in
+                try await appModel.cloud.environmentPlacementSnapshot(environment: environment)
+            }
+        guard !Task.isCancelled, requestID == placementRequestID, projectID == selectedProjectID else { return }
+        if let winner, let current = selectedProject?.bindings.first(where: { $0.id == winner }),
+           current.binding.binding.status == "active", placementPreferences.enabled,
+           placementPreferences.weight(for: current.environment.environment.environmentId) > 0 {
+            automaticBindingID = winner
+            placementUnavailable = false
+            pendingPlacementChoice = model?.bindingID == winner ? nil : choice
+            selectedBindingID = winner
+            if model?.bindingID == winner {
+                model?.activateAutomaticPlacement(choice: choice)
+            } else {
+                model?.isAutomaticPlacement = false
+            }
+        } else {
+            automaticBindingID = nil
+            pendingPlacementChoice = nil
+            model?.isAutomaticPlacement = false
+            placementUnavailable = !hasSavedDraft && placementPreferences.enabled
+            placementMessage = placementUnavailable ? "Auto could not find an available environment. Choose an environment manually to continue." : nil
+        }
+        isResolvingPlacement = false
     }
 
     private func configureSelection() async {
-        guard model?.bindingID != selectedBindingID else { return }
+        guard !isResolvingPlacement, model?.bindingID != selectedBindingID else { return }
         let requestedBindingID = selectedBindingID
         let departing = model
         guard
@@ -159,6 +241,33 @@ struct NewAgentThreadView: View {
         }
         await departing?.stop()
         guard !Task.isCancelled, selectedBindingID == requestedBindingID else { return }
+        nextModel.isAutomaticPlacement = automaticBindingID == requestedBindingID
+        nextModel.automaticModelChoice = pendingPlacementChoice
+        pendingPlacementChoice = nil
+        let cloud = appModel.cloud
+        let preferences = placementPreferences
+        nextModel.validatePlacement = { [weak cloud, weak nextModel] in
+            guard let cloud, let nextModel else { throw PathwayRPCError.disconnected }
+            guard cloud.environmentBindings.contains(where: {
+                $0.id == option.binding.id && $0.binding.status == "active"
+                    && $0.binding.localProjectId == option.binding.binding.localProjectId
+                    && $0.binding.localWorkspaceRoot == option.binding.binding.localWorkspaceRoot
+            }) else { throw PathwayThreadConversationError.message("This project is no longer available in the selected environment.") }
+            guard preferences.enabled else { return }
+            let weight = preferences.weight(for: option.environment.environment.environmentId)
+            let selection = nextModel.placementModelChoice
+            let instanceID = nextModel.selectedProviderID
+            let snapshot = try await cloud.environmentPlacementSnapshot(environment: option.environment)
+            let providers = PathwayEnvironmentPlacement.availableProviders(snapshot.config).filter { $0.id == instanceID }
+            guard selection?.provider(in: providers) != nil, nextModel.selectedProviderID == instanceID else {
+                throw PathwayThreadConversationError.message("The selected account or model is no longer available. Choose a model manually to continue.")
+            }
+            let resources = try JSONDecoder().decode(PathwayHostResources.self, from: JSONEncoder().encode(snapshot.resources))
+            let now = ProcessInfo.processInfo.systemUptime
+            guard resources.score(weight: weight, receivedAt: snapshot.receivedAt, now: now) != nil else {
+                throw PathwayThreadConversationError.message("The selected environment is busy or unavailable. Choose an environment manually to continue with this draft.")
+            }
+        }
         model = nextModel
         nextModel.start()
     }
@@ -166,7 +275,7 @@ struct NewAgentThreadView: View {
     private func applyIncomingDraft() async {
         guard let model, model.connectionState == .live else { return }
         await model.restoreDraft()
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, !isResolvingPlacement else { return }
         await model.attachments.prepareTransferredAttachments()
         guard !Task.isCancelled else { return }
         if !appliedInitialPrompt, !initialPrompt.isEmpty {
@@ -219,6 +328,12 @@ private struct NewAgentThreadComposer: View {
     let project: PathwayNewThreadProjectOption
     let model: PathwayAgentThreadCreationModel?
     @Binding var selectedBindingID: String
+    let automaticPlacementEnabled: Bool
+    let isResolvingPlacement: Bool
+    let placementMessage: String?
+    let placementUnavailable: Bool
+    let chooseAutomaticPlacement: () -> Void
+    let chooseEnvironment: (String) -> Void
     let chooseProject: () -> Void
     let didLaunch: (String) -> Void
 
@@ -248,6 +363,7 @@ private struct NewAgentThreadComposer: View {
                     .foregroundStyle(.primary)
                 }
                 .buttonStyle(.plain)
+                .disabled(model?.isLaunching == true || model?.hasPendingLaunch == true)
                 .accessibilityLabel("Choose project")
                 .accessibilityValue(project.name)
 
@@ -262,7 +378,7 @@ private struct NewAgentThreadComposer: View {
             VStack(spacing: 4) {
                 if let model {
                     workspaceSummary(model)
-                    composer(model).disabled(model.isImportingCapture)
+                    composer(model).disabled(model.isImportingCapture || isResolvingPlacement || placementUnavailable)
                 } else {
                     HStack(spacing: 10) {
                         ProgressView()
@@ -294,9 +410,16 @@ private struct NewAgentThreadComposer: View {
 
     private var environmentPicker: some View {
         Menu {
+            if automaticPlacementEnabled {
+                Button("Auto", action: chooseAutomaticPlacement)
+                    .disabled(model?.canAutomaticallyPlace == false)
+                if model?.placementPinned == true, model?.canAutomaticallyPlace == true {
+                    Text("Auto may choose a compatible account on another machine.")
+                }
+            }
             ForEach(project.bindings) { binding in
                 Button {
-                    selectedBindingID = binding.id
+                    chooseEnvironment(binding.id)
                 } label: {
                     if binding.id == selectedBindingID {
                         Label(binding.label, systemImage: "checkmark")
@@ -308,7 +431,8 @@ private struct NewAgentThreadComposer: View {
         } label: {
             HStack(spacing: 7) {
                 Image(systemName: "desktopcomputer")
-                Text(selectedBinding?.label ?? "Choose environment")
+                Text(isResolvingPlacement ? "Choosing environment…"
+                    : "\(model?.usesAutomaticPlacement == true && automaticPlacementEnabled ? "Auto · " : "")\(selectedBinding?.label ?? "Choose environment")")
                     .lineLimit(1)
                 if project.bindings.count > 1 {
                     Image(systemName: "chevron.down")
@@ -320,7 +444,7 @@ private struct NewAgentThreadComposer: View {
             .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
-        .disabled(project.bindings.count < 2)
+        .disabled(project.bindings.count < 2 || isResolvingPlacement || model?.isLaunching == true || model?.hasPendingLaunch == true)
         .accessibilityLabel("Environment")
         .accessibilityValue(selectedBinding?.label ?? "Not selected")
     }
@@ -328,6 +452,7 @@ private struct NewAgentThreadComposer: View {
     private func workspaceSummary(_ model: PathwayAgentThreadCreationModel) -> some View {
         HStack(spacing: 14) {
             Button {
+                model.pinPlacement()
                 model.workspaceMode = model.workspaceMode == "local" ? "worktree" : "local"
             } label: {
                 Label(
@@ -354,16 +479,19 @@ private struct NewAgentThreadComposer: View {
         .foregroundStyle(.secondary)
         .frame(minHeight: 44)
         .padding(.horizontal, 8)
+        .disabled(model.isLaunching)
     }
 
     private func composer(_ model: PathwayAgentThreadCreationModel) -> some View {
         return VStack(spacing: 12) {
             NewAgentThreadMessageEditor(model: model, isFocused: $promptFocused)
+                .disabled(model.isLaunching)
 
             HStack(spacing: 10) {
                 Button("Thread settings", systemImage: "slider.horizontal.3") {
                     showsSettings = true
                 }
+                .disabled(model.isLaunching)
                 .labelStyle(.iconOnly)
                 .buttonStyle(.bordered)
                 .buttonBorderShape(.circle)
@@ -407,6 +535,7 @@ private struct NewAgentThreadComposer: View {
                 Section(provider.name) {
                     ForEach(provider.models) { availableModel in
                         Button {
+                            model.pinPlacement()
                             model.selectedProviderID = provider.id
                             model.selectedModelID = availableModel.id
                         } label: {
@@ -441,6 +570,7 @@ private struct NewAgentThreadComposer: View {
 
     private func statusMessage(_ model: PathwayAgentThreadCreationModel) -> String? {
         if let error = model.errorMessage { return error }
+        if let placementMessage { return placementMessage }
         switch model.connectionState {
         case .connecting: return "Loading agents and models…"
         case let .failed(message): return message

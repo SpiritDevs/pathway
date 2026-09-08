@@ -56,6 +56,15 @@ struct NewAgentThreadSettings: View {
                     }
                 }
             }
+            .onChange(of: model.selectedProviderID) { _, _ in model.pinPlacement() }
+            .onChange(of: model.selectedModelID) { _, _ in model.pinPlacement() }
+            .onChange(of: model.optionValues) { _, _ in model.pinPlacement() }
+            .onChange(of: model.workspaceMode) { _, _ in model.pinPlacement() }
+            .onChange(of: model.baseReference) { _, _ in model.pinPlacement() }
+            .onChange(of: model.branch) { _, _ in model.pinPlacement() }
+            .onChange(of: model.runtimeMode) { _, _ in model.pinPlacement() }
+            .onChange(of: model.interactionMode) { _, _ in model.pinPlacement() }
+            .onChange(of: model.startFromOrigin) { _, _ in model.pinPlacement() }
             .navigationTitle("Thread Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

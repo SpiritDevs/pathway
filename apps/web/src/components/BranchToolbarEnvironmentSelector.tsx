@@ -2,7 +2,7 @@ import type { EnvironmentId } from "@spiritdevs/contracts";
 import { CloudIcon, MonitorIcon, PlusIcon } from "lucide-react";
 import { memo, useMemo } from "react";
 
-import type { EnvironmentOption } from "./BranchToolbar.logic";
+import type { AutoPlacementOption, EnvironmentOption } from "./BranchToolbar.logic";
 import { cn } from "../lib/utils";
 import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
@@ -27,6 +27,7 @@ import {
 const LINK_ENVIRONMENT_VALUE = "__link-environment__";
 
 interface BranchToolbarEnvironmentSelectorProps {
+  autoPlacement?: AutoPlacementOption | undefined;
   envLocked: boolean;
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[];
@@ -37,6 +38,7 @@ interface BranchToolbarEnvironmentSelectorProps {
 }
 
 export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvironmentSelector({
+  autoPlacement,
   envLocked,
   environmentId,
   availableEnvironments,
@@ -108,8 +110,12 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   return (
     <Select
       modal={false}
-      value={environmentId}
+      value={autoPlacement?.active ? "__auto-placement__" : environmentId}
       onValueChange={(value) => {
+        if (value === "__auto-placement__") {
+          autoPlacement?.onSelect();
+          return;
+        }
         if (value === LINK_ENVIRONMENT_VALUE) {
           onLinkEnvironmentRequest?.();
           return;
@@ -153,7 +159,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
             data-composer-label-motion
             className="block w-full min-w-0 max-w-[240px] origin-left truncate transition-[opacity,transform] duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:[transform:translateX(-0.25rem)_scaleX(0.95)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transform-none motion-reduce:transition-opacity"
           >
-            <SelectValue />
+            {autoPlacement?.active ? autoPlacement.label : <SelectValue />}
           </span>
         </span>
       </SelectTrigger>
@@ -167,6 +173,11 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
       >
         <SelectGroup>
           <SelectGroupLabel>Run on</SelectGroupLabel>
+          {autoPlacement && (
+            <SelectItem value="__auto-placement__" disabled={autoPlacement.disabled}>
+              Auto · available resources
+            </SelectItem>
+          )}
           {availableEnvironments.map((env) => (
             <SelectItem key={env.environmentId} value={env.environmentId}>
               <span className="inline-flex items-center gap-1.5">

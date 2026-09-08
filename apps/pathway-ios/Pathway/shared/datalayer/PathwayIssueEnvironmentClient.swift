@@ -28,7 +28,8 @@ final class PathwayIssueEnvironmentClient {
         environment: PathwayCompanyEnvironment,
         connect: PathwayConnectClient,
         method: String,
-        payload: JSONValue
+        payload: JSONValue,
+        timeout: Duration = .seconds(30)
     ) async throws -> JSONValue {
         let key = environment.id
         let rpc: any PathwayIssueRPCClient
@@ -72,9 +73,32 @@ final class PathwayIssueEnvironmentClient {
         }
         // Reconnect repeats this gate because protocol negotiation belongs to the socket.
         let result = try await rpc.request(method, payload: payload, requiresSubscription: true,
-                                           waitForSubscription: true, timeout: .seconds(30))
+                                           waitForSubscription: true, timeout: timeout)
         guard clientIDs[key] == clientID, !Task.isCancelled else { throw CancellationError() }
         return result
+    }
+
+    /// Placement reads do not require an issue or conversation subscription.
+    static func placementSnapshot(
+        environment: PathwayCompanyEnvironment, connect: PathwayConnectClient,
+        makeClient: ClientFactory = { environment, connect in
+            PathwayRPCClient { try await connect.prepare(environment: environment).threadOperationWebSocketURL() }
+        }
+    ) async throws -> PathwayEnvironmentPlacementSnapshot {
+        let rpc = makeClient(environment, connect)
+        do {
+            let config = try await rpc.request("server.getConfig", payload: .object([:]),
+                requiresSubscription: false, waitForSubscription: false, timeout: .seconds(5))
+            let resources = try await rpc.request("server.getHostResources", payload: .object([:]),
+                requiresSubscription: false, waitForSubscription: false, timeout: .seconds(5))
+            let receivedAt = ProcessInfo.processInfo.systemUptime
+            await rpc.stop()
+            try Task.checkCancellation()
+            return PathwayEnvironmentPlacementSnapshot(config: config, resources: resources, receivedAt: receivedAt)
+        } catch {
+            await rpc.stop()
+            throw error
+        }
     }
 
     func stop() async {

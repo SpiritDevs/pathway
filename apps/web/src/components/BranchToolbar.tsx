@@ -19,6 +19,7 @@ import { useIsMobile } from "../hooks/useMediaQuery";
 import {
   canOpenEnvironmentPicker,
   type EnvMode,
+  type AutoPlacementOption,
   type EnvironmentOption,
   hasEnvironmentChoice,
   resolveCurrentWorkspaceLabel,
@@ -59,6 +60,8 @@ interface BranchToolbarProps {
   onActiveThreadBranchOverrideChange?: (branch: string | null) => void;
   startFromOrigin: boolean;
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
+  autoPlacement?: AutoPlacementOption | undefined;
+  environmentLocked?: boolean | undefined;
   envLocked: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
@@ -71,6 +74,8 @@ interface BranchToolbarProps {
 }
 
 interface MobileRunContextSelectorProps {
+  autoPlacement?: AutoPlacementOption | undefined;
+  environmentLocked?: boolean | undefined;
   envLocked: boolean;
   envModeLocked: boolean;
   environmentId: EnvironmentId;
@@ -94,6 +99,8 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
   showEnvironmentPicker,
   showEnvironmentIndicator,
   onEnvironmentChange,
+  autoPlacement,
+  environmentLocked,
   onLinkEnvironmentRequest,
   effectiveEnvMode,
   activeWorktreePath,
@@ -132,7 +139,11 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
     <>
       {icon}
       <span className="min-w-0 truncate">
-        {showEnvironmentIndicator ? (activeEnvironment?.label ?? "Run on") : workspaceLabel}
+        {autoPlacement?.active
+          ? autoPlacement.label
+          : showEnvironmentIndicator
+            ? (activeEnvironment?.label ?? "Run on")
+            : workspaceLabel}
       </span>
     </>
   );
@@ -160,15 +171,24 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
             <MenuGroup>
               <MenuGroupLabel>Run on</MenuGroupLabel>
               <MenuRadioGroup
-                value={environmentId}
-                onValueChange={(value) => onEnvironmentChange?.(value as EnvironmentId)}
+                value={autoPlacement?.active ? "__auto-placement__" : environmentId}
+                onValueChange={(value) =>
+                  value === "__auto-placement__"
+                    ? autoPlacement?.onSelect()
+                    : onEnvironmentChange?.(value as EnvironmentId)
+                }
               >
+                {autoPlacement && (
+                  <MenuRadioItem value="__auto-placement__" disabled={autoPlacement.disabled}>
+                    Auto · available resources
+                  </MenuRadioItem>
+                )}
                 {availableEnvironments.map((env) => {
                   const Icon = env.isPrimary ? MonitorIcon : CloudIcon;
                   return (
                     <MenuRadioItem
                       key={env.environmentId}
-                      disabled={envLocked}
+                      disabled={environmentLocked ?? envLocked}
                       value={env.environmentId}
                     >
                       <span className="flex min-w-0 items-center gap-1.5">
@@ -415,6 +435,8 @@ export const BranchToolbar = memo(function BranchToolbar({
   onComposerFocusRequest,
   availableEnvironments,
   onEnvironmentChange,
+  autoPlacement,
+  environmentLocked,
   onLinkEnvironmentRequest,
   onMoveToWorktree,
   moveToWorktreeDisabled,
@@ -571,6 +593,8 @@ export const BranchToolbar = memo(function BranchToolbar({
           availableEnvironments={availableEnvironments}
           showEnvironmentPicker={showEnvironmentPicker}
           showEnvironmentIndicator={showEnvironmentIndicator}
+          autoPlacement={autoPlacement}
+          environmentLocked={environmentLocked}
           onEnvironmentChange={onEnvironmentChange}
           onLinkEnvironmentRequest={onLinkEnvironmentRequest}
           effectiveEnvMode={effectiveEnvMode}
@@ -584,7 +608,8 @@ export const BranchToolbar = memo(function BranchToolbar({
           {showEnvironmentIndicator && availableEnvironments && (
             <>
               <BranchToolbarEnvironmentSelector
-                envLocked={envLocked}
+                autoPlacement={autoPlacement}
+                envLocked={environmentLocked ?? envLocked}
                 environmentId={environmentId}
                 availableEnvironments={availableEnvironments}
                 {...(showEnvironmentPicker && onEnvironmentChange ? { onEnvironmentChange } : {})}

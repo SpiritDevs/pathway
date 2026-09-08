@@ -486,3 +486,15 @@ export const ResourceTelemetryRetryResult = Schema.Struct({
   snapshot: ResourceTelemetrySnapshot,
 });
 export type ResourceTelemetryRetryResult = typeof ResourceTelemetryRetryResult.Type;
+
+/** Whole-host headroom, sampled on demand for placement of new threads. */
+export const HostResourcesSnapshot = Schema.Struct({
+  sampledAt: NonNegativeInt,
+  cpuUtilization: Schema.NullOr(
+    Schema.Number.check(Schema.isFinite(), Schema.isBetween({ minimum: 0, maximum: 1 })),
+  ),
+  cpuCount: NonNegativeInt,
+  availableMemoryBytes: NonNegativeInt,
+  totalMemoryBytes: NonNegativeInt,
+});
+export type HostResourcesSnapshot = typeof HostResourcesSnapshot.Type;

@@ -2470,3 +2470,100 @@ describe("createDebouncedJSONStorage", () => {
     });
   });
 });
+
+describe("draft automatic placement persistence", () => {
+  const draftId = DraftId.make("placement-draft");
+  const local = scopeProjectRef(
+    EnvironmentId.make("placement-local"),
+    ProjectId.make("placement-project"),
+  );
+  const remote = scopeProjectRef(
+    EnvironmentId.make("placement-remote"),
+    ProjectId.make("placement-project-remote"),
+  );
+  beforeEach(() => resetComposerDraftStore());
+
+  it.each(["context", "project"] as const)(
+    "persists Auto provenance and clears it when %s remaps the project",
+    (remap) => {
+      const store = useComposerDraftStore.getState();
+      const automaticProviderInstanceId = ProviderInstanceId.make("codex-placed");
+      store.setProjectDraftThreadId(local, draftId);
+      store.setDraftThreadContext(draftId, {
+        placement: {
+          mode: "auto",
+          providerPinned: false,
+          resolvedKey: "resolved-model",
+          automaticProviderInstanceId,
+        },
+      });
+      const merge = useComposerDraftStore.persist.getOptions().merge!;
+      useComposerDraftStore.setState(
+        merge(flushComposerDraftStorage(), useComposerDraftStore.getState()),
+      );
+      expect(store.getDraftSession(draftId)?.placement?.resolvedKey).toBe("resolved-model");
+      expect(store.getDraftSession(draftId)?.placement?.automaticProviderInstanceId).toBe(
+        automaticProviderInstanceId,
+      );
+      if (remap === "context") store.setDraftThreadContext(draftId, { projectRef: remote });
+      else store.setProjectDraftThreadId(remote, draftId);
+      expect(store.getDraftSession(draftId)?.placement).toEqual({
+        mode: "auto",
+        providerPinned: false,
+        resolvedKey: null,
+      });
+    },
+  );
+
+  it("allows placement changes after preparation fails before dispatch", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(local, draftId);
+    store.setDraftThreadContext(draftId, {
+      placement: { mode: "auto", providerPinned: false, resolvedKey: "resolved-model" },
+    });
+    store.setDraftPendingSend(draftId, {
+      messageId: MessageId.make("failed-preparation"),
+      text: "Keep this work",
+      title: "Keep this work",
+      createdAt: "2026-09-08T00:00:00.000Z",
+    });
+    store.setPrompt(draftId, "Keep this work");
+    store.setDraftPendingSend(draftId, null);
+    store.setDraftThreadContext(draftId, {
+      projectRef: remote,
+      placement: { mode: "auto", providerPinned: false, resolvedKey: null },
+    });
+    expect(store.getDraftSession(draftId)?.environmentId).toBe(remote.environmentId);
+    expect(store.getDraftSession(draftId)?.placement?.dispatched).not.toBe(true);
+    expect(store.getComposerDraft(draftId)?.prompt).toBe("Keep this work");
+  });
+
+  it("does not move a dispatched draft when a failed launch has cleared pendingSend", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(local, draftId);
+    store.setDraftThreadContext(draftId, {
+      placement: {
+        mode: "auto",
+        providerPinned: false,
+        resolvedKey: "resolved-model",
+        dispatched: true,
+      },
+    });
+    store.setDraftPendingSend(draftId, null);
+    store.setDraftThreadContext(draftId, {
+      placement: { mode: "manual", providerPinned: true, resolvedKey: null },
+    });
+    expect(store.getDraftSession(draftId)?.placement?.dispatched).toBe(true);
+    const merge = useComposerDraftStore.persist.getOptions().merge!;
+    useComposerDraftStore.setState(
+      merge(flushComposerDraftStorage(), useComposerDraftStore.getState()),
+    );
+    expect(store.getDraftSession(draftId)?.placement?.dispatched).toBe(true);
+    store.setDraftThreadContext(draftId, {
+      projectRef: remote,
+      placement: { mode: "manual", providerPinned: false, resolvedKey: null },
+    });
+    expect(store.getDraftSession(draftId)?.environmentId).toBe(local.environmentId);
+    expect(store.getDraftSession(draftId)?.placement?.dispatched).toBe(true);
+  });
+});

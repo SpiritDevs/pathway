@@ -9,6 +9,7 @@ struct PathwayConnectionsDestination: View {
             if let model, let accountKey = appModel.accountIdentity {
                 PathwayConnectionOnboardingView(model: model, accountKey: accountKey,
                     companies: appModel.cloud.companies,
+                    environments: appModel.cloud.environments,
                     roles: appModel.cloud.companies.reduce(into: [:]) { result, company in
                         result[company.id] = appModel.cloud.entities(kind: "role", companyID: company.id)
                     },

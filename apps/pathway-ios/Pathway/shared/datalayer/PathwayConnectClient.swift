@@ -47,6 +47,12 @@ struct PathwayPreparedEnvironmentConnection: Sendable {
     let webSocketURL: URL
     let accessToken: String
     let proofKeyThumbprint: String
+    let scopes: Set<String>
+
+    func threadOperationWebSocketURL() throws -> URL {
+        guard scopes.contains("orchestration:operate") else { throw PathwayConnectError.scopeMismatch }
+        return webSocketURL
+    }
 }
 
 private struct PathwayRelayAccessToken: Decodable, Sendable {
@@ -184,7 +190,8 @@ actor PathwayConnectClient {
             httpBaseURL: httpBaseURL,
             webSocketURL: socketURL,
             accessToken: accessToken.accessToken,
-            proofKeyThumbprint: thumbprint
+            proofKeyThumbprint: thumbprint,
+            scopes: Set(accessToken.scope.split(separator: " ").map(String.init))
         )
     }
 

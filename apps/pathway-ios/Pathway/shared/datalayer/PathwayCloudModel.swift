@@ -233,6 +233,14 @@ final class PathwayCloudModel {
         return try await issueEnvironmentClient.request(environment: environment, connect: connect, method: method, payload: payload)
     }
 
+    /// Placement probes open a temporary connection for the two reads, without subscribing to app data.
+    func environmentPlacementSnapshot(environment: PathwayCompanyEnvironment) async throws -> PathwayEnvironmentPlacementSnapshot {
+        guard let connect, environments.contains(where: { $0.id == environment.id }) else {
+            throw URLError(.notConnectedToInternet)
+        }
+        return try await PathwayIssueEnvironmentClient.placementSnapshot(environment: environment, connect: connect)
+    }
+
     func environmentSubscription(environment: PathwayCompanyEnvironment, method: String, payload: JSONValue) async -> AsyncThrowingStream<JSONValue, Error> {
         guard let connect, environments.contains(where: { $0.id == environment.id }) else {
             return AsyncThrowingStream { $0.finish(throwing: URLError(.notConnectedToInternet)) }

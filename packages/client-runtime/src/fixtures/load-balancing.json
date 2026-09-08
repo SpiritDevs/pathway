@@ -1,0 +1,241 @@
+[
+  {
+    "name": "capacity",
+    "now": 20000,
+    "candidates": [
+      {
+        "environmentId": "small",
+        "resources": {
+          "sampledAt": 0,
+          "cpuUtilization": 0.25,
+          "cpuCount": 8,
+          "availableMemoryBytes": 500,
+          "totalMemoryBytes": 1000
+        },
+        "receivedAt": 20000,
+        "weight": 50
+      },
+      {
+        "environmentId": "large",
+        "resources": {
+          "sampledAt": 0,
+          "cpuUtilization": 0.25,
+          "cpuCount": 16,
+          "availableMemoryBytes": 500,
+          "totalMemoryBytes": 1000
+        },
+        "receivedAt": 20000,
+        "weight": 50
+      }
+    ],
+    "expectedEnvironmentId": "large"
+  },
+  {
+    "name": "preference",
+    "now": 20000,
+    "candidates": [
+      {
+        "environmentId": "preferred",
+        "resources": {
+          "sampledAt": 0,
+          "cpuUtilization": 0.25,
+          "cpuCount": 8,
+          "availableMemoryBytes": 500,
+          "totalMemoryBytes": 1000
+        },
+        "receivedAt": 20000,
+        "weight": 100
+      },
+      {
+        "environmentId": "large",
+        "resources": {
+          "sampledAt": 0,
+          "cpuUtilization": 0.25,
+          "cpuCount": 16,
+          "availableMemoryBytes": 500,
+          "totalMemoryBytes": 1000
+        },
+        "receivedAt": 20000,
+        "weight": 25
+      }
+    ],
+    "expectedEnvironmentId": "preferred"
+  },
+  {
+    "name": "first tie",
+    "now": 20000,
+    "candidates": [
+      {
+        "environmentId": "a",
+        "resources": {
+          "sampledAt": 0,
+          "cpuUtilization": 0.25,
+          "cpuCount": 8,
+          "availableMemoryBytes": 500,
+          "totalMemoryBytes": 1000
+        },
+        "receivedAt": 20000,
+        "weight": 50
+      },
+      {
+        "environmentId": "b",
+        "resources": {
+          "sampledAt": 0,
+          "cpuUtilization": 0.25,
+          "cpuCount": 8,
+          "availableMemoryBytes": 500,
+          "totalMemoryBytes": 1000
+        },
+        "receivedAt": 20000,
+        "weight": 50
+      }
+    ],
+    "expectedEnvironmentId": "a"
+  },
+  {
+    "name": "manual only",
+    "now": 20000,
+    "candidates": [
+      {
+        "environmentId": "manual",
+        "resources": {
+          "sampledAt": 0,
+          "cpuUtilization": 0.25,
+          "cpuCount": 8,
+          "availableMemoryBytes": 500,
+          "totalMemoryBytes": 1000
+        },
+        "receivedAt": 20000,
+        "weight": 0
+      }
+    ],
+    "expectedEnvironmentId": null
+  },
+  {
+    "name": "busy CPU",
+    "now": 20000,
+    "candidates": [
+      {
+        "environmentId": "busy",
+        "resources": {
+          "sampledAt": 0,
+          "cpuUtilization": 0.95,
+          "cpuCount": 8,
+          "availableMemoryBytes": 500,
+          "totalMemoryBytes": 1000
+        },
+        "receivedAt": 20000,
+        "weight": 50
+      }
+    ],
+    "expectedEnvironmentId": null
+  },
+  {
+    "name": "busy memory",
+    "now": 20000,
+    "candidates": [
+      {
+        "environmentId": "busy",
+        "resources": {
+          "sampledAt": 0,
+          "cpuUtilization": 0.25,
+          "cpuCount": 8,
+          "availableMemoryBytes": 50,
+          "totalMemoryBytes": 1000
+        },
+        "receivedAt": 20000,
+        "weight": 50
+      }
+    ],
+    "expectedEnvironmentId": null
+  },
+  {
+    "name": "unknown CPU",
+    "now": 20000,
+    "candidates": [
+      {
+        "environmentId": "unknown",
+        "resources": {
+          "sampledAt": 0,
+          "cpuUtilization": null,
+          "cpuCount": 8,
+          "availableMemoryBytes": 500,
+          "totalMemoryBytes": 1000
+        },
+        "receivedAt": 20000,
+        "weight": 50
+      }
+    ],
+    "expectedEnvironmentId": null
+  },
+  {
+    "name": "stale",
+    "now": 20000,
+    "candidates": [
+      {
+        "environmentId": "stale",
+        "resources": {
+          "sampledAt": 0,
+          "cpuUtilization": 0.25,
+          "cpuCount": 8,
+          "availableMemoryBytes": 500,
+          "totalMemoryBytes": 1000
+        },
+        "receivedAt": 4999,
+        "weight": 50
+      }
+    ],
+    "expectedEnvironmentId": null
+  },
+  {
+    "name": "future",
+    "now": 20000,
+    "candidates": [
+      {
+        "environmentId": "future",
+        "resources": {
+          "sampledAt": 0,
+          "cpuUtilization": 0.25,
+          "cpuCount": 8,
+          "availableMemoryBytes": 500,
+          "totalMemoryBytes": 1000
+        },
+        "receivedAt": 25001,
+        "weight": 50
+      }
+    ],
+    "expectedEnvironmentId": null
+  },
+  {
+    "name": "invalid memory",
+    "now": 20000,
+    "candidates": [
+      {
+        "environmentId": "invalid",
+        "resources": {
+          "sampledAt": 0,
+          "cpuUtilization": 0.25,
+          "cpuCount": 8,
+          "availableMemoryBytes": 1001,
+          "totalMemoryBytes": 1000
+        },
+        "receivedAt": 20000,
+        "weight": 50
+      }
+    ],
+    "expectedEnvironmentId": null
+  },
+  {
+    "name": "missing",
+    "now": 20000,
+    "candidates": [
+      {
+        "environmentId": "missing",
+        "resources": null,
+        "receivedAt": 20000,
+        "weight": 50
+      }
+    ],
+    "expectedEnvironmentId": null
+  }
+]

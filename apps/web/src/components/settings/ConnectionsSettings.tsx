@@ -153,6 +153,7 @@ import {
 } from "../ui/menu";
 import { ServerUpdateAction, ServerUpdateProgress } from "../ServerUpdateAction";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
+import { LoadBalancingSettings } from "./LoadBalancingSettings";
 import {
   isCloudAccountLinkConflict,
   requestAlwaysOnCloudLinkRelink,
@@ -3744,6 +3745,7 @@ export function EnvironmentConnectionSettings({
       </AlertDialog>
 
       {environmentSection}
+      <LoadBalancingSettings environments={visibleSavedEnvironments} />
 
       {canManageLocalBackend &&
       (cloudLinkStatus.phase !== "idle" || cloudLinkStatus.error !== null) ? (

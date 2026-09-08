@@ -31,7 +31,7 @@ struct PathwayNewThreadDraft {
     }
 }
 
-struct PathwayNewThreadBindingOption: Identifiable {
+struct PathwayNewThreadBindingOption: Identifiable, Sendable {
     let binding: PathwayCompanyEnvironmentBinding
     let environment: PathwayCompanyEnvironment
     let projectID: String

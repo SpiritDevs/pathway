@@ -43,6 +43,7 @@ struct PathwayThreadCreationDraft: Codable, Sendable {
     var attempt: PathwayThreadLaunchAttempt?
     var sentAttachmentIDs: [String]? = nil
     var importedCaptureIDs: [UUID]? = nil
+    var placementPinned: Bool? = nil
 }
 
 actor PathwayThreadCreationDraftStore {
