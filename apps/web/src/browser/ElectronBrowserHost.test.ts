@@ -12,6 +12,8 @@ import {
   coordinateNativePreviewPopup,
   popupActivation,
   popupServerSeedUrl,
+  previewServerRevisionChanged,
+  recoverNativePreviewPopup,
 } from "./ElectronBrowserHost";
 
 const threadRef = {
@@ -72,6 +74,7 @@ describe("desktop popup coordination", () => {
       openSurface: (_tabId, activate) => order.push(`surface:${String(activate)}`),
       reserve: () => order.push("reserve"),
       release: () => order.push("release"),
+      forget: () => order.push("forget"),
       isDisposed: () => false,
     });
     expect(order).toEqual(["reserve", "open", "adopt", "reconcile:foreground", "surface:true"]);
@@ -95,6 +98,7 @@ describe("desktop popup coordination", () => {
       openSurface,
       reserve: vi.fn(),
       release: vi.fn(),
+      forget: vi.fn(),
       isDisposed: () => false,
     });
     expect(reconcile).toHaveBeenCalledWith(snapshot, "background");
@@ -124,6 +128,7 @@ describe("desktop popup coordination", () => {
         openSurface: vi.fn(),
         reserve: vi.fn(),
         release,
+        forget: vi.fn(),
         isDisposed: () => false,
       }),
     ).rejects.toThrow("adoption failed");
@@ -160,10 +165,11 @@ describe("desktop popup coordination", () => {
         openSurface: vi.fn(),
         reserve: vi.fn(),
         release,
+        forget: vi.fn(),
         isDisposed: () => false,
       }),
     ).rejects.toThrow("could not be cleaned up");
-    expect(release).toHaveBeenCalledOnce();
+    expect(release).not.toHaveBeenCalled();
     applyPreviewServerSnapshot(threadRef, snapshot);
     expect(readThreadPreviewState(threadRef).sessions[snapshot.tabId]).toBeUndefined();
   });
@@ -194,6 +200,7 @@ describe("desktop popup coordination", () => {
         openSurface,
         reserve: vi.fn(),
         release: vi.fn(),
+        forget: vi.fn(),
         isDisposed: () => false,
       }),
     ).rejects.toThrow("closed during adoption");
@@ -221,10 +228,108 @@ describe("desktop popup coordination", () => {
         openSurface: vi.fn(),
         reserve: vi.fn(),
         release: vi.fn(),
+        forget: vi.fn(),
         isDisposed: () => true,
       }),
     ).rejects.toThrow("owner was closed");
     expect(discardPopup).toHaveBeenCalledWith(request.popupId);
     expect(closeSession).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a pre-open recovery fenced until the late server session is observed", async () => {
+    const desktop = {
+      closeTab: vi.fn(async () => undefined),
+      discardPopup: vi.fn(async () => undefined),
+    };
+    const closeSession = vi.fn(async () => undefined);
+    const forget = vi.fn();
+    const recovery = {
+      tabId: snapshot.tabId,
+      threadRef,
+      serverEpoch: "epoch-1",
+    } as const;
+
+    expect(
+      await recoverNativePreviewPopup({
+        recovery,
+        desktop,
+        currentServerEpoch: "epoch-1",
+        logicalSessionObserved: false,
+        closeSession,
+        forget,
+      }),
+    ).toBe(false);
+    expect(forget).not.toHaveBeenCalled();
+
+    expect(
+      await recoverNativePreviewPopup({
+        recovery,
+        desktop,
+        currentServerEpoch: "epoch-1",
+        logicalSessionObserved: true,
+        closeSession,
+        forget,
+      }),
+    ).toBe(true);
+    expect(forget).toHaveBeenCalledWith(snapshot.tabId);
+  });
+
+  it("retains an adopted popup recovery when logical cleanup fails", async () => {
+    const forget = vi.fn();
+    await expect(
+      recoverNativePreviewPopup({
+        recovery: {
+          tabId: snapshot.tabId,
+          threadRef,
+          serverEpoch: "epoch-1",
+          runtimeTabId: "runtime-child",
+        },
+        desktop: {
+          closeTab: vi.fn(async () => undefined),
+          discardPopup: vi.fn(async () => undefined),
+        },
+        currentServerEpoch: "epoch-1",
+        logicalSessionObserved: true,
+        closeSession: async () => {
+          throw new Error("disconnected");
+        },
+        forget,
+      }),
+    ).rejects.toThrow("disconnected");
+    expect(forget).not.toHaveBeenCalled();
+  });
+
+  it("clears a previously observed pre-open recovery after a successful retry", async () => {
+    const forget = vi.fn();
+    await expect(
+      recoverNativePreviewPopup({
+        recovery: {
+          tabId: snapshot.tabId,
+          threadRef,
+          serverEpoch: "epoch-1",
+          logicalSessionObserved: true,
+        },
+        desktop: {
+          closeTab: vi.fn(async () => undefined),
+          discardPopup: vi.fn(async () => undefined),
+        },
+        currentServerEpoch: "epoch-1",
+        logicalSessionObserved: true,
+        closeSession: vi.fn(async () => undefined),
+        forget,
+      }),
+    ).resolves.toBe(true);
+    expect(forget).toHaveBeenCalledWith(snapshot.tabId);
+  });
+
+  it("reschedules recovery only when server progress landed during cleanup", () => {
+    const initial = { serverEpoch: "epoch-1", serverRevision: 4 };
+    expect(previewServerRevisionChanged(initial, initial)).toBe(false);
+    expect(
+      previewServerRevisionChanged(initial, { serverEpoch: "epoch-1", serverRevision: 5 }),
+    ).toBe(true);
+    expect(
+      previewServerRevisionChanged(initial, { serverEpoch: "epoch-2", serverRevision: 0 }),
+    ).toBe(true);
   });
 });

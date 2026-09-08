@@ -9,7 +9,7 @@ import {
   type PreviewSessionSnapshot,
   type ScopedThreadRef,
 } from "@spiritdevs/contracts";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { isElectron } from "~/env";
 import { useTheme } from "~/hooks/useTheme";
@@ -30,7 +30,12 @@ import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserPointerStore } from "./browserPointerStore";
 import { HostedBrowserWebview } from "./HostedBrowserWebview";
 import {
+  forgetNativePreviewPopup,
+  listNativePreviewPopupRecoveries,
+  markNativePreviewPopupSessionObserved,
+  type NativePreviewPopupRecovery,
   releaseNativePreviewPopup,
+  rememberNativePreviewPopup,
   reserveNativePreviewPopup,
   useNativePreviewPopupStore,
 } from "./nativePreviewPopupStore";
@@ -64,6 +69,7 @@ interface NativePreviewPopupCoordination {
   readonly openSurface: (tabId: string, activate: boolean) => void;
   readonly reserve: (tabId: string) => void;
   readonly release: (tabId: string) => void;
+  readonly forget: (tabId: string) => void;
   readonly isDisposed: () => boolean;
 }
 
@@ -78,6 +84,7 @@ export async function coordinateNativePreviewPopup({
   openSurface,
   reserve,
   release,
+  forget,
   isDisposed,
 }: NativePreviewPopupCoordination): Promise<void> {
   const activation = popupActivation(request);
@@ -114,7 +121,6 @@ export async function coordinateNativePreviewPopup({
     if (adoptedRuntimeTabId !== null) {
       await desktop.closeTab(adoptedRuntimeTabId).catch(() => undefined);
     }
-    release(request.popupId);
     if (opened) {
       try {
         await closeSession();
@@ -124,18 +130,58 @@ export async function coordinateNativePreviewPopup({
         });
       }
     }
+    forget(request.popupId);
+    release(request.popupId);
     throw error;
   } finally {
     unsubscribe();
   }
 }
 
+export async function recoverNativePreviewPopup(input: {
+  readonly recovery: NativePreviewPopupRecovery;
+  readonly desktop: Pick<DesktopPreviewBridge, "closeTab" | "discardPopup">;
+  readonly currentServerEpoch: string | null;
+  readonly logicalSessionObserved: boolean;
+  readonly closeSession: () => Promise<void>;
+  readonly forget: (tabId: string) => void;
+}): Promise<boolean> {
+  const { recovery } = input;
+  await input.desktop.discardPopup(recovery.tabId).catch(() => undefined);
+  if (recovery.runtimeTabId !== undefined) {
+    await input.desktop.closeTab(recovery.runtimeTabId).catch(() => undefined);
+  }
+  if (
+    recovery.serverEpoch !== null &&
+    input.currentServerEpoch !== null &&
+    recovery.serverEpoch !== input.currentServerEpoch
+  ) {
+    input.forget(recovery.tabId);
+    return true;
+  }
+  await input.closeSession();
+  if (recovery.runtimeTabId === undefined && !input.logicalSessionObserved) return false;
+  input.forget(recovery.tabId);
+  return true;
+}
+
+export const previewServerRevisionChanged = (
+  previous: Pick<ReturnType<typeof readThreadPreviewState>, "serverEpoch" | "serverRevision">,
+  current: Pick<ReturnType<typeof readThreadPreviewState>, "serverEpoch" | "serverRevision">,
+): boolean =>
+  previous.serverEpoch !== current.serverEpoch ||
+  previous.serverRevision !== current.serverRevision;
+
 export function ElectronBrowserHost() {
   const { resolvedTheme } = useTheme();
   const previewByThreadKey = useActivePreviewSessions();
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
   const closePreview = useAtomCommand(previewEnvironment.close, { reportFailure: false });
+  const [threadRecoveryRevision, setThreadRecoveryRevision] = useState(0);
+  const storedRecoveryRevision = useNativePreviewPopupStore((state) => state.recoveryRevision);
   const pendingPopupIdsRef = useRef(new Set<string>());
+  const ownedPopupIdsRef = useRef(new Set<string>());
+  const recoveringPopupIdsRef = useRef(new Set<string>());
   const nativeSessionsRef = useRef(
     new Map<string, { threadRef: ScopedThreadRef; tabId: string }>(),
   );
@@ -166,6 +212,25 @@ export function ElectronBrowserHost() {
   sourceByRuntimeTabIdRef.current = sourceByRuntimeTabId;
 
   useEffect(() => {
+    const unsubscribes = listNativePreviewPopupRecoveries().map((recovery) =>
+      subscribeThreadPreviewState(recovery.threadRef, (state, previous) => {
+        if (
+          state.serverEpoch !== previous.serverEpoch ||
+          state.serverRevision !== previous.serverRevision
+        ) {
+          if (state.sessions[recovery.tabId] !== undefined) {
+            markNativePreviewPopupSessionObserved(recovery.tabId);
+          }
+          setThreadRecoveryRevision((revision) => revision + 1);
+        }
+      }),
+    );
+    return () => {
+      for (const unsubscribe of unsubscribes) unsubscribe();
+    };
+  }, [storedRecoveryRevision]);
+
+  useEffect(() => {
     const preview = window.desktopBridge?.preview;
     if (!preview?.onPopupRequest || !preview.onPopupClosed) return;
     let disposed = false;
@@ -175,13 +240,14 @@ export function ElectronBrowserHost() {
       nativeSessionsRef.current.delete(runtimeTabId);
       beginPreviewSessionClose(session.threadRef, session.tabId);
       useRightPanelStore.getState().closeSurface(session.threadRef, `browser:${session.tabId}`);
-      releaseNativePreviewPopup(session.tabId);
+      ownedPopupIdsRef.current.delete(session.tabId);
       void closePreview({
         environmentId: session.threadRef.environmentId,
         input: { threadId: session.threadRef.threadId, tabId: session.tabId },
       })
         .then((result) => {
           if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          forgetNativePreviewPopup(session.tabId);
         })
         .catch(() => {
           if (!disposed) {
@@ -202,6 +268,12 @@ export function ElectronBrowserHost() {
         return;
       }
       pendingPopupIdsRef.current.add(request.popupId);
+      ownedPopupIdsRef.current.add(request.popupId);
+      rememberNativePreviewPopup({
+        tabId: request.popupId,
+        threadRef,
+        serverEpoch: readThreadPreviewState(threadRef).serverEpoch,
+      });
       void (async () => {
         let adoptedRuntimeTabId: string | null = null;
         try {
@@ -239,6 +311,12 @@ export function ElectronBrowserHost() {
               );
               adoptedRuntimeTabId = runtimeTabId;
               nativeSessionsRef.current.set(runtimeTabId, { threadRef, tabId: snapshot.tabId });
+              rememberNativePreviewPopup({
+                tabId: snapshot.tabId,
+                threadRef,
+                serverEpoch: state.serverEpoch,
+                runtimeTabId,
+              });
               return runtimeTabId;
             },
             reconcile: (snapshot, activation) => {
@@ -253,12 +331,14 @@ export function ElectronBrowserHost() {
               useRightPanelStore.getState().openBrowser(threadRef, tabId, activate),
             reserve: reserveNativePreviewPopup,
             release: releaseNativePreviewPopup,
+            forget: forgetNativePreviewPopup,
             isDisposed: () =>
               disposed ||
               (adoptedRuntimeTabId !== null && !nativeSessionsRef.current.has(adoptedRuntimeTabId)),
           });
         } catch (error) {
           if (adoptedRuntimeTabId !== null) nativeSessionsRef.current.delete(adoptedRuntimeTabId);
+          ownedPopupIdsRef.current.delete(request.popupId);
           if (!disposed) {
             toastManager.add({
               type: "error",
@@ -285,15 +365,72 @@ export function ElectronBrowserHost() {
   }, [closePreview, openPreview]);
 
   useEffect(() => {
-    const liveServerTabIds = new Set(sessions.map(({ snapshot }) => snapshot.tabId));
-    for (const popupTabId of useNativePreviewPopupStore.getState().tabIds) {
-      if (!liveServerTabIds.has(popupTabId) && !pendingPopupIdsRef.current.has(popupTabId)) {
-        releaseNativePreviewPopup(popupTabId);
+    const preview = window.desktopBridge?.preview;
+    if (!preview) return;
+    for (const recovery of listNativePreviewPopupRecoveries()) {
+      if (
+        ownedPopupIdsRef.current.has(recovery.tabId) ||
+        recoveringPopupIdsRef.current.has(recovery.tabId)
+      ) {
+        continue;
       }
+      recoveringPopupIdsRef.current.add(recovery.tabId);
+      const previewState = readThreadPreviewState(recovery.threadRef);
+      const logicalSessionObserved =
+        recovery.logicalSessionObserved === true ||
+        previewState.sessions[recovery.tabId] !== undefined;
+      if (logicalSessionObserved && recovery.logicalSessionObserved !== true) {
+        markNativePreviewPopupSessionObserved(recovery.tabId);
+      }
+      if (recovery.runtimeTabId !== undefined || logicalSessionObserved) {
+        beginPreviewSessionClose(recovery.threadRef, recovery.tabId);
+      }
+      useRightPanelStore.getState().closeSurface(recovery.threadRef, `browser:${recovery.tabId}`);
+      void (async () => {
+        await recoverNativePreviewPopup({
+          recovery,
+          desktop: preview,
+          currentServerEpoch: previewState.serverEpoch,
+          logicalSessionObserved,
+          closeSession: async () => {
+            const result = await closePreview({
+              environmentId: recovery.threadRef.environmentId,
+              input: { threadId: recovery.threadRef.threadId, tabId: recovery.tabId },
+            });
+            if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+          },
+          forget: forgetNativePreviewPopup,
+        });
+      })()
+        .catch(() => {
+          // Keep the durable reservation so a stale server snapshot cannot mount a replacement.
+        })
+        .finally(() => {
+          recoveringPopupIdsRef.current.delete(recovery.tabId);
+          if (
+            previewServerRevisionChanged(previewState, readThreadPreviewState(recovery.threadRef))
+          ) {
+            setThreadRecoveryRevision((revision) => revision + 1);
+          }
+        });
     }
-    for (const [runtimeTabId, { tabId }] of nativeSessionsRef.current) {
-      if (!liveServerTabIds.has(tabId) && !pendingPopupIdsRef.current.has(tabId)) {
+  }, [closePreview, sessions, storedRecoveryRevision, threadRecoveryRevision]);
+
+  useEffect(() => {
+    for (const [runtimeTabId, { threadRef, tabId }] of nativeSessionsRef.current) {
+      const previewState = readThreadPreviewState(threadRef);
+      if (
+        previewState.serverEpoch !== null &&
+        previewState.sessions[tabId] === undefined &&
+        !pendingPopupIdsRef.current.has(tabId)
+      ) {
         nativeSessionsRef.current.delete(runtimeTabId);
+        ownedPopupIdsRef.current.delete(tabId);
+        if (previewState.suppressedTabIds.has(tabId)) {
+          setThreadRecoveryRevision((revision) => revision + 1);
+        } else {
+          forgetNativePreviewPopup(tabId);
+        }
       }
     }
   }, [sessions]);

@@ -18,5 +18,8 @@ Popup-created tabs use the ordinary Browser controls. You can switch between pag
 resize the browser panel. A page that closes its own popup removes that tab and leaves the source
 page open. Closing a source page leaves already opened tabs available.
 
+Reloading the Pathway app closes popup-created tabs. They are not restored by loading their URL,
+because that would lose the original form submission or scripted page state.
+
 Pathway does not bypass Chromium's popup blocker. Popups Chromium rejects as unsolicited remain
 blocked, and unsupported external protocols keep their existing safe handling.
