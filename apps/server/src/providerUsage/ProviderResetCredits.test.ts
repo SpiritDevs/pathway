@@ -178,6 +178,86 @@ describe("Codex reset credits", () => {
     }),
   );
 
+  it.effect("rejects disabled legacy Codex before reading credentials or sending requests", () =>
+    Effect.gen(function* () {
+      const fetch = vi.fn();
+      vi.stubGlobal("fetch", fetch);
+      const result = yield* consumeProviderResetCredit({
+        ...credit,
+        instanceId: ProviderInstanceId.make("codex"),
+      }).pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({ providers: { codex: { enabled: false } } }),
+        ),
+        Effect.result,
+      );
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(String(result.failure)).toContain("missing or disabled");
+      expect(fetch).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("retains the empty balance when only the post-redemption credit refresh fails", () =>
+    Effect.gen(function* () {
+      const ctx = yield* Effect.promise(context);
+      let spent = false;
+      let creditRefreshFails = true;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          if (url.endsWith("/consume")) {
+            spent = true;
+            return Response.json({ code: "reset" });
+          }
+          if (url.endsWith("/usage"))
+            return Response.json({
+              rate_limit: { primary_window: { used_percent: spent ? 0 : 90 } },
+            });
+          if (spent && creditRefreshFails) return new Response("unavailable", { status: 500 });
+          return Response.json({
+            credits: spent
+              ? []
+              : [
+                  {
+                    id: "credit-a",
+                    status: "available",
+                    reset_type: "codex_rate_limits",
+                    expires_at: "2099-09-10T00:00:00Z",
+                  },
+                ],
+          });
+        }),
+      );
+      yield* Effect.gen(function* () {
+        yield* getProviderUsage({ instanceId, provider: "codex" });
+        const result = yield* consumeProviderResetCredit(credit);
+        expect(result.outcome).toBe("reset");
+        expect(result.warning).toContain("latest usage");
+        const snapshot = yield* getProviderUsage({ instanceId, provider: "codex" });
+        expect(snapshot.status).toBe("ok");
+        expect(snapshot.stale).not.toBe(true);
+        expect(snapshot.limits[0]?.usedPercent).toBe(0);
+        expect(snapshot.resetCredits).toEqual({ availableCount: 0, credits: [], stale: true });
+        creditRefreshFails = false;
+        const recovered = yield* getProviderUsage({
+          instanceId,
+          provider: "codex",
+          forceRefresh: true,
+        });
+        expect(recovered.resetCredits).toEqual({ availableCount: 0, credits: [] });
+      }).pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({
+            providerInstances: {
+              [instanceId]: { driver: "codex", config: { homePath: ctx.providerHomePath } },
+            },
+          }),
+        ),
+      );
+    }),
+  );
+
   it.effect("publishes refreshed credits and limits after redemption", () =>
     Effect.gen(function* () {
       const ctx = yield* Effect.promise(context);

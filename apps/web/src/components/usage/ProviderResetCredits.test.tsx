@@ -123,6 +123,23 @@ describe("provider reset credits", () => {
     ).toBe(true);
   });
 
+  it("disables stale credits even when usage meters are fresh", () => {
+    expect(
+      button(
+        render({
+          account: {
+            ...account,
+            snapshot: {
+              ...account.snapshot!,
+              resetCredits: { ...account.snapshot!.resetCredits!, stale: true },
+            },
+          },
+        }),
+        "Redeem",
+      ).props.disabled,
+    ).toBe(true);
+  });
+
   it("requires confirmation and targets the credit's environment, instance and account", async () => {
     state.redeem.mockResolvedValue({ _tag: "Success", value: { outcome: "reset" } });
     const confirmation = open();

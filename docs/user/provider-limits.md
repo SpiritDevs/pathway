@@ -27,3 +27,5 @@ Codex accounts with available usage reset credits show them below the usage mete
 Select **Redeem** beside a credit, then confirm to use it on that account. Redeeming spends the credit and resets the account's current usage limits. It cannot be undone. Pathway refreshes the account's usage and available credits afterward. If the provider cannot confirm the result, Pathway shows an error; retrying the same credit does not spend a different one.
 
 Credits belong to the provider account shown beside them. For a remote environment, Pathway sends the redemption to that environment. Viewing usage does not require permission to operate the environment, but redeeming a credit does. Providers that do not report reset credits do not show a redemption action.
+
+If the credit balance cannot be refreshed, Pathway keeps the last balance and disables redemption until a successful refresh. Usage meters can still update while credit information is unavailable.

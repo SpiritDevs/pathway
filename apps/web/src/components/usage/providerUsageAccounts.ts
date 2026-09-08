@@ -54,7 +54,12 @@ export function createProviderUsageArrivalTracker() {
             : (environment.receivedAt ?? 0);
         observed.set(key, { fingerprint, receivedAt });
         snapshotReceivedAt.set(snapshot.instanceId, receivedAt);
-        const creditFingerprint = JSON.stringify([snapshot.accountKey, snapshot.resetCredits]);
+        const creditFingerprint = JSON.stringify([
+          snapshot.accountKey,
+          snapshot.resetCredits?.availableCount,
+          snapshot.resetCredits?.credits,
+          snapshot.resetCredits?.nextExpiresAt,
+        ]);
         const previousCredits = observedCredits.get(key);
         const creditsReceivedAt =
           previousCredits?.fingerprint === creditFingerprint

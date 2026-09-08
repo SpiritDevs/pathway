@@ -208,6 +208,29 @@ describe("connected reset credit accounts", () => {
       deriveConnectedProviderResetCreditAccounts(tracked)[0]?.snapshot?.resetCredits
         ?.availableCount,
     ).toBe(0);
+    const creditRefreshFailed = track([
+      {
+        ...pushed,
+        receivedAt: 4,
+        usage: [
+          { ...pushed.usage[0]!, resetCredits: { ...creditSnapshot.resetCredits!, stale: true } },
+        ],
+      },
+      {
+        ...second,
+        receivedAt: 3,
+        usage: [
+          { ...second.usage[0]!, resetCredits: { availableCount: 0, credits: [], stale: true } },
+        ],
+      },
+    ]);
+    expect(deriveConnectedProviderResetCreditAccounts(creditRefreshFailed)[0]?.environmentId).toBe(
+      laptopId,
+    );
+    expect(
+      deriveConnectedProviderResetCreditAccounts(creditRefreshFailed)[0]?.snapshot?.resetCredits
+        ?.availableCount,
+    ).toBe(0);
   });
 
   it("does not offer credit routes for unsupported or disabled instances", () => {

@@ -144,6 +144,7 @@ export function ProviderResetCreditList({
     operateAccess === "granted" &&
     snapshot?.status === "ok" &&
     !snapshot.stale &&
+    !credits?.stale &&
     !!snapshot.accountKey;
   const accountLabel = [account.displayName, account.provider.auth.email, account.environmentLabel]
     .filter(Boolean)

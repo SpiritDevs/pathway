@@ -34,6 +34,7 @@ export const ServerProviderResetCredits = Schema.Struct({
   availableCount: NonNegativeInt,
   credits: Schema.Array(Schema.Struct({ id: TrimmedNonEmptyString, expiresAt: IsoDateTime })),
   nextExpiresAt: Schema.optional(IsoDateTime),
+  stale: Schema.optional(Schema.Boolean),
 });
 export type ServerProviderResetCredits = typeof ServerProviderResetCredits.Type;
 

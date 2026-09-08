@@ -1866,10 +1866,16 @@ async function resolveProviderUsage(
             };
     }
     if (result.status === "ok" && ctx.provider === "codex" && latest) {
-      // Credits and plan type arrive independently of limit lanes. Only fields
-      // actually pushed after this request began may override its HTTP result.
+      // A credit endpoint failure retains this account's last balance independently
+      // of fresh meters. Pushed usage metadata only wins if it arrived during this read.
       resolved = {
         ...resolved,
+        ...(result.resetCredits === undefined &&
+        result.accountKey !== undefined &&
+        result.accountKey === latest.snapshot.accountKey &&
+        latest.snapshot.resetCredits !== undefined
+          ? { resetCredits: { ...latest.snapshot.resetCredits, stale: true } }
+          : {}),
         ...((latest.pushedMetadataAt?.usageLines ?? -Infinity) > ctx.nowMs
           ? { usageLines: latest.snapshot.usageLines }
           : {}),
@@ -1989,7 +1995,7 @@ export const consumeProviderResetCredit = Effect.fn("ProviderUsage.consumeResetC
   const legacyCodex =
     !instance &&
     input.instanceId === defaultInstanceIdForDriver(ProviderDriverKind.make("codex")) &&
-    settings.providers.codex !== undefined;
+    settings.providers.codex.enabled !== false;
   if (!legacyCodex && (!instance || instance.enabled === false || instance.driver !== "codex")) {
     return yield* new ProviderResetCreditError({
       detail: "This Codex provider is missing or disabled.",
@@ -2056,7 +2062,10 @@ export const consumeProviderResetCredit = Effect.fn("ProviderUsage.consumeResetC
   const confirmed = confirmedResult?._tag === "Success" ? confirmedResult.success : undefined;
   return {
     ...result,
-    ...(confirmed?.status === "ok" && !confirmed.stale && confirmed.resetCredits !== undefined
+    ...(confirmed?.status === "ok" &&
+    !confirmed.stale &&
+    confirmed.resetCredits !== undefined &&
+    !confirmed.resetCredits.stale
       ? {}
       : {
           warning:
