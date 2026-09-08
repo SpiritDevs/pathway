@@ -531,6 +531,46 @@ describe("MessagesTimeline", () => {
     ).not.toContain('data-maintain-scroll-at-end="enabled"');
   });
 
+  it("renders async question replies as question and answer pairs", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          buildUserTimelineEntry(
+            JSON.stringify({
+              request_user_input_async: "call-example",
+              answers: [
+                {
+                  question: "Do you have an instance?",
+                  answer: "No instance yet.\nPrepare the setup.",
+                },
+                { question: "Which region?", answer: "Sydney" },
+              ],
+            }),
+          ),
+        ]}
+      />,
+    );
+    expect(markup).toContain('data-question-reply="true"');
+    expect(markup).toMatch(/<dt[^>]*>Do you have an instance\?<\/dt>/);
+    expect(markup).toMatch(/<dd[^>]*>No instance yet.\nPrepare the setup.<\/dd>/);
+    expect(markup).toContain("Which region?");
+    expect(markup).toContain("Sydney");
+    expect(markup).not.toContain("request_user_input_async");
+  });
+
+  it.each([
+    '{"request_user_input_async":',
+    '{"answers":[{"question":"Question","answer":"Answer"}]}',
+    '{"request_user_input_async":"call","answers":[{"question":"Question","answer":{"unexpected":true}}]}',
+  ])("keeps unrecognized reply content visible: %s", (text) => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[buildUserTimelineEntry(text)]} />,
+    );
+    expect(markup).not.toContain('data-question-reply="true"');
+    expect(markup).toContain('data-user-message-body="true"');
+  });
+
   it("renders collapse controls for long user messages", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline

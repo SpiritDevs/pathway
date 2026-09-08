@@ -108,6 +108,7 @@ import {
   resolveActiveAttachedPullRequestItemId,
   replaceEditableUserMessageText,
   splitEditableUserMessageText,
+  parseAsyncQuestionReply,
   shouldPreserveAssistantLineBreaks,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
@@ -2775,7 +2776,11 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
 }) {
   const [expanded, setExpanded] = useState(false);
   const hasVisibleBody = props.text.trim().length > 0 || props.terminalContexts.length > 0;
-  const canCollapse = hasVisibleBody && shouldCollapseUserMessage(props.text);
+  const questionReply = useMemo(() => parseAsyncQuestionReply(props.text), [props.text]);
+  const visibleText = questionReply
+    ? questionReply.map(({ question, answer }) => `${question}\n${answer}`).join("\n\n")
+    : props.text;
+  const canCollapse = hasVisibleBody && shouldCollapseUserMessage(visibleText);
   const isCollapsed = canCollapse && !expanded;
 
   return (
@@ -2796,12 +2801,27 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
               : undefined
           }
         >
-          <UserMessageBody
-            text={props.text}
-            terminalContexts={props.terminalContexts}
-            skills={props.skills}
-            markdownCwd={props.markdownCwd}
-          />
+          {questionReply ? (
+            <dl className="space-y-4 text-sm leading-relaxed" data-question-reply="true">
+              {questionReply.map(({ question, answer }, index) => (
+                // Replies are immutable and questions may repeat, so their position is stable.
+                // eslint-disable-next-line react/no-array-index-key
+                <div key={index} className="space-y-1.5">
+                  <dt className="whitespace-pre-wrap wrap-break-word font-medium text-muted-foreground">
+                    {question}
+                  </dt>
+                  <dd className="whitespace-pre-wrap wrap-break-word text-foreground">{answer}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <UserMessageBody
+              text={props.text}
+              terminalContexts={props.terminalContexts}
+              skills={props.skills}
+              markdownCwd={props.markdownCwd}
+            />
+          )}
         </div>
       ) : null}
       {canCollapse || props.footer ? (

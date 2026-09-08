@@ -891,3 +891,38 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     }
   }
 }
+
+/** Recognize the provider's async reply envelope without changing the stored message. */
+export function parseAsyncQuestionReply(
+  text: string,
+): Array<{ question: string; answer: string }> | null {
+  if (!text.trimStart().startsWith("{") || !text.includes('"request_user_input_async"'))
+    return null;
+  try {
+    const value: unknown = JSON.parse(text);
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      !("request_user_input_async" in value) ||
+      typeof value.request_user_input_async !== "string" ||
+      !("answers" in value) ||
+      !Array.isArray(value.answers) ||
+      value.answers.length === 0
+    )
+      return null;
+    const answers: Array<{ question: string; answer: string }> = [];
+    for (const entry of value.answers) {
+      if (
+        typeof entry !== "object" ||
+        entry === null ||
+        typeof entry.question !== "string" ||
+        typeof entry.answer !== "string"
+      )
+        return null;
+      answers.push({ question: entry.question, answer: entry.answer });
+    }
+    return answers;
+  } catch {
+    return null;
+  }
+}
