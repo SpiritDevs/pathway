@@ -1,4 +1,4 @@
-import { scopeProjectRef, scopedThreadKey } from "@spiritdevs/client-runtime/environment";
+import { scopedThreadKey } from "@spiritdevs/client-runtime/environment";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
@@ -71,6 +71,7 @@ export function useThreadActionMenu(input: {
   const { threadRef, projectCwd, changeRequestState, onStartRename } = input;
   const {
     settleThread,
+    keepConversation,
     setSettleAfterCompletion,
     unsettleThread,
     snoozeThread,
@@ -133,6 +134,7 @@ export function useThreadActionMenu(input: {
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
         const items = buildThreadActionMenuItems({
+          temporary: thread.temporary,
           branch: thread.branch ?? null,
           isPinned: thread.pinnedAt != null,
           isSettled:
@@ -198,16 +200,22 @@ export function useThreadActionMenu(input: {
           }
         };
         switch (action) {
+          case "keep-conversation":
+            await reportFailure("Could not keep conversation", () => keepConversation(threadRef));
+            return;
           case "new-thread-on-branch": {
             // Explicit branch carry-over: reuse the thread's worktree when it
             // has one, otherwise its branch on the local checkout.
             const result = await settlePromise(() =>
-              handleNewThread(scopeProjectRef(threadRef.environmentId, thread.projectId), {
-                branch: thread.branch,
-                worktreePath: thread.worktreePath,
-                envMode: thread.worktreePath ? "worktree" : "local",
-                startFromOrigin: false,
-              }),
+              handleNewThread(
+                { environmentId: threadRef.environmentId, projectId: thread.projectId },
+                {
+                  branch: thread.branch,
+                  worktreePath: thread.worktreePath,
+                  envMode: thread.worktreePath ? "worktree" : "local",
+                  startFromOrigin: false,
+                },
+              ),
             );
             if (result._tag === "Failure") {
               failureToast("Could not create thread", squashAtomCommandFailure(result));
@@ -261,7 +269,7 @@ export function useThreadActionMenu(input: {
             );
             return;
           case "copy-path": {
-            const workspacePath = thread.worktreePath ?? projectCwd;
+            const workspacePath = thread.worktreePath ?? projectCwd ?? thread.conversationPath;
             if (!workspacePath) {
               toastManager.add(
                 stackedThreadToast({
@@ -346,6 +354,7 @@ export function useThreadActionMenu(input: {
       copyThreadIdToClipboard,
       deleteThread,
       handleNewThread,
+      keepConversation,
       markThreadUnread,
       onStartRename,
       pinThread,

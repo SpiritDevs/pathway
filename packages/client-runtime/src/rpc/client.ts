@@ -47,6 +47,7 @@ type RpcMethod<TTag extends EnvironmentRpcTag> = WsRpcProtocolClient[TTag];
 export type EnvironmentSubscriptionRpcTag =
   | typeof ORCHESTRATION_V2_WS_METHODS.subscribeShell
   | typeof ORCHESTRATION_V2_WS_METHODS.subscribeThread
+  | typeof ORCHESTRATION_V2_WS_METHODS.subscribeWorkspaceCleanup
   | typeof EMAIL_WS_METHODS.stream
   | typeof ISSUES_WS_METHODS.stream
   | typeof WS_METHODS.subscribeAuthAccess

@@ -83,6 +83,33 @@ const tokens: ConvexServiceTokenProvider = {
 };
 
 describe("cloud Agent Thread publisher", () => {
+  it.effect("publishes conversations only to their selected company", () =>
+    Effect.gen(function* () {
+      const { client, upserts } = fakeClient(() => Promise.resolve({ outcome: "published" }));
+      const publisher = yield* makeCloudAgentThreadPublisher({
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        convexUrl: "https://convex.example.test",
+        tokens,
+        client,
+      });
+      const conversation = {
+        ...shellOf("conversation", "project-unused"),
+        projectId: null,
+        conversationCompanyId: COMPANY_ID,
+        conversationPath: "/userdata/conversations/conversation",
+        temporary: true,
+      };
+      yield* publisher.publish({
+        ...conversation,
+        conversationCompanyId: "another-company" as CompanyId,
+      });
+      yield* publisher.publish({ ...conversation, conversationCompanyId: null });
+      expect(upserts).toEqual([]);
+      yield* publisher.publish(conversation);
+      expect(upserts).toEqual([{ threadId: "conversation", localProjectId: null }]);
+    }),
+  );
   it("removes message text while retaining discovery metadata", () => {
     const shell = {
       id: "thread-one",

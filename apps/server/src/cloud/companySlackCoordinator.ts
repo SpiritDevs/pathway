@@ -916,6 +916,7 @@ export const makeCompanyAutomationExecutor = Effect.fn("cloud.company_automation
         const snapshot = yield* decodeRemediationSnapshotJson(job.ruleSnapshot);
         yield* threads.sendToThread({
           projectId: projection.thread.projectId,
+          conversationCompanyId: projection.thread.conversationCompanyId,
           commandId: CommandId.make(`company-automation:${job.id}`),
           threadId: ThreadId.make(job.threadId),
           messageId: MessageId.make(`message:company-automation:${job.id}`),

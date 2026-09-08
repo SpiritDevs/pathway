@@ -34,6 +34,7 @@ import {
   OrchestrationV2DispatchCommandError,
   OrchestrationV2ContinuationLaunchError,
   OrchestrationV2GetShellSnapshotError,
+  OrchestrationV2WorkspaceCleanupError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2ThreadLaunchError,
   type OrchestrationProjectShell,
@@ -80,6 +81,7 @@ import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import { EffectOutboxV2 } from "./orchestration-v2/EffectOutbox.ts";
 import type { OrchestratorV2Error } from "./orchestration-v2/Orchestrator.ts";
 import { issuePullRequestFromStatus } from "./orchestration-v2/RunFinalizationService.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
@@ -547,6 +549,7 @@ const makeWsRpcLayer = (
       const currentSessionId = currentSession.sessionId;
       const sql = yield* SqlClient.SqlClient;
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+      const effectOutbox = yield* EffectOutboxV2;
       const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
@@ -600,6 +603,7 @@ const makeWsRpcLayer = (
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+      const gitVcs = yield* GitVcsDriver.GitVcsDriver;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
@@ -1223,6 +1227,52 @@ const makeWsRpcLayer = (
       });
 
       const handlers = ServerWsRpcGroup.of({
+        [ORCHESTRATION_V2_WS_METHODS.subscribeWorkspaceCleanup]: (_input) =>
+          observeRpcStream(
+            ORCHESTRATION_V2_WS_METHODS.subscribeWorkspaceCleanup,
+            effectOutbox.workspaceCleanupChanges.pipe(
+              Stream.mapEffect(() =>
+                effectOutbox.listWorkspaceCleanupFailures().pipe(
+                  Effect.flatMap((failures) =>
+                    Effect.forEach(failures, (failure) =>
+                      threadManagement.getThreadProjection(failure.threadId).pipe(
+                        Effect.map((projection) => ({
+                          effectId: failure.id,
+                          threadId: failure.threadId,
+                          title: projection.thread.title,
+                          message:
+                            "Local file cleanup failed. Pathway will keep retrying on this environment.",
+                          nextAttemptAt: failure.status === "pending" ? failure.availableAt : null,
+                        })),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Stream.mapError(
+                (cause) =>
+                  new OrchestrationV2WorkspaceCleanupError({
+                    message: "Could not read local file cleanup status.",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestrationV2" },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.retryWorkspaceCleanup]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.retryWorkspaceCleanup,
+            startup.enqueueCommand(effectOutbox.retryWorkspaceCleanup(input.effectId)).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2WorkspaceCleanupError({
+                    message: "Could not retry local file cleanup.",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestrationV2" },
+          ),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
@@ -1417,6 +1467,10 @@ const makeWsRpcLayer = (
                     ? {}
                     : { reuseExistingThread: input.reuseExistingThread }),
                   projectId: input.projectId,
+                  ...(input.temporary === undefined ? {} : { temporary: input.temporary }),
+                  ...(input.conversationCompanyId === undefined
+                    ? {}
+                    : { conversationCompanyId: input.conversationCompanyId }),
                   title: input.title,
                   ...(input.generateTitle === undefined
                     ? {}
@@ -1989,9 +2043,27 @@ const makeWsRpcLayer = (
         [WS_METHODS.projectsInspectDirectory]: (input) =>
           observeRpcEffect(
             WS_METHODS.projectsInspectDirectory,
-            repositoryIdentityResolver
-              .resolve(input.cwd)
-              .pipe(Effect.map((repositoryIdentity) => ({ repositoryIdentity }))),
+            repositoryIdentityResolver.resolve(input.cwd).pipe(
+              Effect.flatMap((repositoryIdentity) =>
+                gitVcs
+                  .execute({
+                    operation: "projects.inspectDirectory.repositoryRoot",
+                    cwd: input.cwd,
+                    args: ["rev-parse", "--show-toplevel"],
+                    allowNonZeroExit: true,
+                    timeoutMs: 5_000,
+                    maxOutputBytes: 4_096,
+                  })
+                  .pipe(
+                    Effect.orElseSucceed(() => null),
+                    Effect.map((repository) => ({
+                      repositoryIdentity,
+                      repositoryRoot:
+                        repository?.exitCode === 0 ? repository.stdout.trim() || null : null,
+                    })),
+                  ),
+              ),
+            ),
             { "rpc.aggregate": "workspace" },
           ),
         [WS_METHODS.projectsMutate]: (mutation) =>
@@ -2071,6 +2143,14 @@ const makeWsRpcLayer = (
                       }),
                   ),
                 );
+              if (thread.thread.projectId === null) {
+                return yield* issueAssetUrl({
+                  resource: input.resource,
+                  ...(thread.thread.conversationPath == null
+                    ? {}
+                    : { workspaceRoot: thread.thread.conversationPath }),
+                });
+              }
               const project = yield* projectService.getById(thread.thread.projectId).pipe(
                 Effect.mapError(
                   (cause) =>

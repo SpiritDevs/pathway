@@ -1,3 +1,4 @@
+import { ThreadWorkspaceService } from "./ThreadWorkspaceService.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -235,6 +236,33 @@ function nextRunOrdinal(projection: OrchestrationV2ThreadProjection): number {
   return projection.runs.length + 1;
 }
 
+function subagentDescendantIds(
+  threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+  parentThreadId: ThreadId,
+): ReadonlyArray<ThreadId> {
+  const children = new Map<ThreadId, Array<ThreadId>>();
+  for (const thread of threads) {
+    if (
+      thread.deletedAt !== null ||
+      thread.lineage.relationshipToParent !== "subagent" ||
+      thread.lineage.parentThreadId === null
+    )
+      continue;
+    const siblings = children.get(thread.lineage.parentThreadId) ?? [];
+    siblings.push(thread.id);
+    children.set(thread.lineage.parentThreadId, siblings);
+  }
+  const descendants = new Set<ThreadId>();
+  const pending = [...(children.get(parentThreadId) ?? [])];
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    if (id === parentThreadId || descendants.has(id)) continue;
+    descendants.add(id);
+    pending.push(...(children.get(id) ?? []));
+  }
+  return [...descendants].sort();
+}
+
 function commandThreadId(command: OrchestrationV2Command): ThreadId {
   switch (command.type) {
     case "thread.create":
@@ -253,6 +281,8 @@ function commandThreadId(command: OrchestrationV2Command): ThreadId {
     case "thread.visit":
     case "thread.mark-unread":
     case "thread.workspace-move.request":
+    case "thread.project.attach":
+    case "thread.temporary.set":
     case "thread.metadata.update":
     case "thread.title.regeneration.complete":
     case "thread.browser-takeover.request":
@@ -644,6 +674,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const providerSwitchService = yield* ProviderSwitchServiceV2;
   const runtimePolicy = yield* RuntimePolicyV2;
   const threadForkService = yield* ThreadForkServiceV2;
+  const threadWorkspaces = yield* ThreadWorkspaceService;
   const threadDispatch = yield* makeKeyedSerialExecutor<ThreadId>();
 
   const mapDispatchError =
@@ -1567,6 +1598,54 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       "orchestration_v2.driver": command.modelSelection.instanceId,
     });
 
+    const alreadyExists = yield* projectionStore.getThreadProjection(command.threadId).pipe(
+      Effect.as(true),
+      Effect.catchTag("ProjectionStoreThreadNotFoundError", () => Effect.succeed(false)),
+      mapDispatchError(command),
+    );
+    if (alreadyExists)
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause:
+          "This thread already exists. Its history and retention cannot be replaced by creating it again.",
+      });
+    if (command.projectId === null && command.conversationCompanyId == null)
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Choose a company before starting a conversation.",
+      });
+    const conversationPath =
+      command.projectId === null
+        ? yield* threadWorkspaces
+            .createConversation(command.threadId)
+            .pipe(mapDispatchError(command))
+        : null;
+    const dedicatedWorkspace =
+      command.projectId !== null && command.temporary === true
+        ? yield* threadWorkspaces
+            .attachProject({
+              threadId: command.threadId,
+              projectId: command.projectId,
+              temporary: true,
+              ...command.temporaryWorkspace,
+            })
+            .pipe(mapDispatchError(command))
+        : null;
+    let sharedOwner: OrchestrationV2ThreadShell | undefined;
+    if (dedicatedWorkspace === null && command.worktreePath !== null) {
+      const shell = yield* projectionStore.getShellSnapshot().pipe(mapDispatchError(command));
+      sharedOwner = [...shell.threads, ...shell.archivedThreads].find(
+        (thread) => thread.deletedAt === null && thread.ownedWorktreePath === command.worktreePath,
+      );
+      if (sharedOwner?.temporary === true)
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Keep conversation before sharing its temporary worktree.",
+        });
+    }
     const now = yield* DateTime.now;
     const emitEvent = emit(events, command);
     const thread: OrchestrationV2AppThread = {
@@ -1574,14 +1653,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       creationSource: command.creationSource,
       id: command.threadId,
       projectId: command.projectId,
+      conversationPath,
+      conversationCompanyId: command.conversationCompanyId ?? null,
+      temporary: command.temporary ?? false,
+      ownedWorktreePath: dedicatedWorkspace?.worktreePath ?? sharedOwner?.ownedWorktreePath ?? null,
+      ownedBranch: dedicatedWorkspace?.branch ?? sharedOwner?.ownedBranch ?? null,
       title: command.title,
       providerInstanceId: command.modelSelection.instanceId,
       modelSelection: command.modelSelection,
       runtimeMode: command.runtimeMode,
       interactionMode: command.interactionMode,
       locations: command.locations ?? ["agents"],
-      branch: command.branch,
-      worktreePath: command.worktreePath,
+      branch: command.projectId === null ? null : (dedicatedWorkspace?.branch ?? command.branch),
+      worktreePath:
+        command.projectId === null
+          ? null
+          : (dedicatedWorkspace?.worktreePath ?? command.worktreePath),
       activeProviderThreadId: null,
       lineage: {
         parentThreadId: null,
@@ -1678,6 +1765,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.pin.reorder"
           | "thread.visit"
           | "thread.mark-unread"
+          | "thread.project.attach"
+          | "thread.temporary.set"
           | "thread.metadata.update"
           | "thread.title.regeneration.complete"
           | "thread.runtime-mode.set"
@@ -1688,7 +1777,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     >,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
-  ) {
+  ): Effect.fn.Return<void, OrchestratorV2Error> {
     const projection = yield* projectionStore.getThreadProjection(command.threadId).pipe(
       Effect.mapError(
         (cause) =>
@@ -1699,7 +1788,128 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
     const thread = projection.thread;
+    const deletingTemporary = command.type === "thread.settle" && thread.temporary === true;
     const forceSettle = command.type === "thread.settle" && command.force === true;
+    let subagentsToDelete: ReadonlyArray<ThreadId> = [];
+    if (
+      deletingTemporary ||
+      (command.type === "thread.delete" && thread.lineage.relationshipToParent !== "subagent")
+    ) {
+      const shell = yield* projectionStore.getShellSnapshot().pipe(mapDispatchError(command));
+      subagentsToDelete = subagentDescendantIds(
+        [...shell.threads, ...shell.archivedThreads],
+        thread.id,
+      );
+      for (const childId of subagentsToDelete) {
+        const child = yield* projectionStore
+          .getThreadProjection(childId)
+          .pipe(mapDispatchError(command));
+        if (
+          child.runs.some((run) =>
+            ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+          ) ||
+          child.runtimeRequests.some((request) => request.status === "pending") ||
+          (threadShellFromProjection(child).pendingBackgroundTasks?.length ?? 0) > 0
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause:
+              "Wait for all subagents and their queued work to finish before deleting this thread.",
+          });
+        }
+      }
+    }
+    let attachedWorkspace: { worktreePath: string | null; branch: string | null } | null = null;
+    if (command.type === "thread.project.attach" || command.type === "thread.temporary.set") {
+      const busy =
+        projection.runs.some((run) =>
+          ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+        ) ||
+        projection.runtimeRequests.some((request) => request.status === "pending") ||
+        (threadShellFromProjection(projection).pendingBackgroundTasks?.length ?? 0) > 0;
+      if (
+        thread.deletedAt !== null ||
+        ((command.type === "thread.project.attach" || command.temporary) &&
+          (thread.archivedAt !== null || busy))
+      )
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "Wait until all running and queued work finishes before changing this conversation.",
+        });
+      if (command.type === "thread.project.attach") {
+        if (thread.projectId !== null)
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: "This thread already has a project.",
+          });
+        attachedWorkspace = yield* threadWorkspaces
+          .attachProject({
+            threadId: thread.id,
+            projectId: command.projectId,
+            temporary: thread.temporary === true,
+          })
+          .pipe(mapDispatchError(command));
+      } else if (command.temporary && !thread.temporary) {
+        if (projection.messages.length > 0 || projection.runs.length > 0 || thread.keptAt != null)
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause:
+              "Temporary can only be enabled before the first message, and a kept conversation cannot become temporary again.",
+          });
+        if (
+          thread.projectId !== null &&
+          (thread.ownedWorktreePath == null || thread.worktreePath !== thread.ownedWorktreePath)
+        )
+          attachedWorkspace = yield* threadWorkspaces
+            .attachProject({ threadId: thread.id, projectId: thread.projectId, temporary: true })
+            .pipe(mapDispatchError(command));
+      }
+    }
+    if (
+      command.type === "thread.settle" &&
+      command.reason === "after-completion" &&
+      (thread.settleAfterCompletion !== true ||
+        projection.runs.at(-1)?.status !== "completed" ||
+        command.discardChanges === true ||
+        command.force === true)
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Settle after completion is no longer ready.",
+      });
+    }
+    if (
+      command.type === "thread.settle" &&
+      command.reason === "merged-pr" &&
+      (thread.pinnedAt != null ||
+        thread.archivedAt !== null ||
+        !(yield* threadWorkspaces.hasMergedPullRequest(thread).pipe(mapDispatchError(command))) ||
+        command.discardChanges === true ||
+        command.force === true)
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Automatic settlement requires a verified merged pull request and finished work.",
+      });
+    }
+    if (
+      deletingTemporary &&
+      command.discardChanges !== true &&
+      (yield* threadWorkspaces.hasUnfinishedGitWork(thread).pipe(mapDispatchError(command)))
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "temporary-unfinished-git-work",
+      });
+    }
     if (thread.deletedAt !== null && command.type !== "thread.delete") {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
@@ -1734,6 +1944,21 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandId: command.commandId,
         commandType: command.type,
         cause: `Thread ${command.threadId} changed before it could be deleted.`,
+      });
+    }
+    if (
+      command.type === "thread.metadata.update" &&
+      command.worktreePath !== undefined &&
+      ((thread.projectId === null && command.worktreePath !== null) ||
+        (thread.temporary === true &&
+          thread.projectId !== null &&
+          command.worktreePath !== thread.ownedWorktreePath))
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause:
+          "Temporary project threads must keep their dedicated worktree; conversations use their owned folder.",
       });
     }
     if (
@@ -1794,7 +2019,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       (projection.runs.some((run) =>
         ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
       ) ||
-        projection.runtimeRequests.some((request) => request.status === "pending"))
+        projection.runtimeRequests.some((request) => request.status === "pending") ||
+        (thread.temporary === true &&
+          (threadShellFromProjection(projection).pendingBackgroundTasks?.length ?? 0) > 0))
     ) {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
@@ -1922,6 +2149,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             thread.settledOverride === "settled" && thread.settledAt !== null && !wasPinned;
           return {
             ...thread,
+            ...(deletingTemporary ? { deletedAt: now, titleRegeneration: null } : {}),
             settledOverride: "settled",
             settledAt: alreadySettled ? thread.settledAt : now,
             settleAfterCompletion: false,
@@ -2031,6 +2259,32 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         }
         case "thread.mark-unread":
           return { ...thread, lastVisitedAt: markUnreadVisitedAt };
+        case "thread.project.attach":
+          return {
+            ...thread,
+            projectId: command.projectId,
+            worktreePath: attachedWorkspace!.worktreePath,
+            branch: attachedWorkspace!.branch,
+            ownedWorktreePath: attachedWorkspace!.worktreePath,
+            ownedBranch: attachedWorkspace!.branch,
+            updatedAt: now,
+          };
+        case "thread.temporary.set":
+          return {
+            ...thread,
+            temporary: command.temporary,
+            ...(command.temporary
+              ? {}
+              : { keptAt: thread.temporary && command.keep === true ? now : thread.keptAt }),
+            ...(attachedWorkspace === null
+              ? {}
+              : {
+                  ...attachedWorkspace,
+                  ownedWorktreePath: attachedWorkspace.worktreePath,
+                  ownedBranch: attachedWorkspace.branch,
+                }),
+            updatedAt: now,
+          };
         case "thread.metadata.update":
           return {
             ...thread,
@@ -2081,7 +2335,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         case "thread.delete":
           return "thread.deleted" as const;
         case "thread.settle":
-          return "thread.settled" as const;
+          return deletingTemporary ? ("thread.deleted" as const) : ("thread.settled" as const);
         case "thread.settle-after-completion.set":
           // The optional field rides an established event discriminator so
           // older clients can keep decoding this thread's event stream.
@@ -2102,6 +2356,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.visited" as const;
         case "thread.mark-unread":
           return "thread.marked-unread" as const;
+        case "thread.project.attach":
+        case "thread.temporary.set":
         case "thread.metadata.update":
         case "thread.title.regeneration.complete":
           return "thread.metadata-updated" as const;
@@ -2135,7 +2391,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ]);
     }
 
-    if (command.type === "thread.archive" || command.type === "thread.delete" || forceSettle) {
+    if (
+      command.type === "thread.archive" ||
+      command.type === "thread.delete" ||
+      forceSettle ||
+      deletingTemporary
+    ) {
       const emitEvent = emit(events, command);
       const activeRunIds = new Set(
         projection.runs
@@ -2287,9 +2548,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command.type === "thread.delete" ||
         command.type === "thread.settle"
         ? projection.providerSessions.map((session) => session.id)
-        : command.type === "thread.metadata.update" &&
-            command.worktreePath !== undefined &&
-            command.worktreePath !== thread.worktreePath
+        : command.type === "thread.project.attach" ||
+            attachedWorkspace !== null ||
+            (command.type === "thread.metadata.update" &&
+              command.worktreePath !== undefined &&
+              command.worktreePath !== thread.worktreePath)
           ? projection.providerSessions.map((session) => session.id)
           : command.type === "thread.runtime-mode.set"
             ? projection.providerSessions
@@ -2328,7 +2591,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                       ? "Thread settled."
                       : command.type === "thread.delete"
                         ? "Thread deleted."
-                        : command.type === "thread.metadata.update"
+                        : command.type === "thread.metadata.update" ||
+                            command.type === "thread.project.attach" ||
+                            command.type === "thread.temporary.set"
                           ? "Workspace changed."
                           : command.type === "thread.runtime-mode.set"
                             ? "Runtime mode changed."
@@ -2349,7 +2614,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                       ? "Thread settled."
                       : command.type === "thread.delete"
                         ? "Thread deleted."
-                        : command.type === "thread.metadata.update"
+                        : command.type === "thread.metadata.update" ||
+                            command.type === "thread.project.attach" ||
+                            command.type === "thread.temporary.set"
                           ? "Workspace changed."
                           : command.type === "thread.runtime-mode.set"
                             ? "Runtime mode changed."
@@ -2366,6 +2633,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   : {}),
                 ...(command.type === "thread.archive" ||
                 command.type === "thread.delete" ||
+                deletingTemporary ||
                 forceSettle
                   ? { revokeMcpCredential: true }
                   : {}),
@@ -2377,7 +2645,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
     }
 
-    if (command.type === "thread.archive" || command.type === "thread.delete" || forceSettle) {
+    if (
+      command.type === "thread.archive" ||
+      command.type === "thread.delete" ||
+      forceSettle ||
+      deletingTemporary
+    ) {
       yield* Ref.update(effects, (existing) => [
         ...existing,
         {
@@ -2389,7 +2662,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ]);
     }
 
-    if (command.type === "thread.delete") {
+    if (command.type === "thread.delete" || deletingTemporary) {
+      if (thread.conversationPath != null || thread.ownedWorktreePath != null)
+        yield* Ref.update(effects, (existing) => [
+          ...existing,
+          {
+            id: `effect:${command.commandId}:thread-workspace.cleanup`,
+            commandId: command.commandId,
+            threadId: command.threadId,
+            request: { type: "thread-workspace.cleanup" },
+          } satisfies PendingOrchestrationEffectV2,
+        ]);
       const attachmentIds = Array.from(
         new Set(
           projection.messages.flatMap((message) => message.attachments.map((item) => item.id)),
@@ -2406,6 +2689,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           } satisfies PendingOrchestrationEffectV2,
         ]);
       }
+    }
+    for (const childId of subagentsToDelete) {
+      yield* dispatchThreadMutation(
+        {
+          type: "thread.delete",
+          commandId: CommandId.make(`${command.commandId}:subagent:${childId}`),
+          threadId: childId,
+        },
+        events,
+        effects,
+      );
     }
   });
 
@@ -2754,6 +3048,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             }),
         ),
       );
+
+    if (sourceProjection.thread.temporary === true)
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "Keep conversation before creating a fork or side chat.",
+      });
 
     const sourceRun = runForSourcePoint(sourceProjection, command.sourcePoint);
 
@@ -3562,6 +3863,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) =>
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      if (
+        projection.thread.temporary === true &&
+        projection.thread.projectId !== null &&
+        (projection.thread.ownedWorktreePath == null ||
+          projection.thread.worktreePath !== projection.thread.ownedWorktreePath)
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "Temporary project threads require their dedicated worktree before work can start.",
+        });
+      }
+
       if (command.replyToRuntimeRequestId !== undefined) {
         const question = projection.runtimeRequests.find(
           (request) => request.id === command.replyToRuntimeRequestId,
@@ -8098,6 +8413,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.pin.reorder":
       case "thread.visit":
       case "thread.mark-unread":
+      case "thread.project.attach":
+      case "thread.temporary.set":
       case "thread.metadata.update":
       case "thread.title.regeneration.complete":
       case "thread.runtime-mode.set":
@@ -8191,9 +8508,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       default:
         return yield* dispatchUnsupported(command);
     }
+    const pendingEffects = yield* Ref.get(effects);
+    const cleanupDependencies = pendingEffects
+      .filter(
+        (effect) =>
+          effect.request.type === "provider-session.detach" ||
+          effect.request.type === "terminal.cleanup",
+      )
+      .map((effect) => effect.id);
+    const hasWorkspaceCleanup = pendingEffects.some(
+      (effect) => effect.request.type === "thread-workspace.cleanup",
+    );
     return {
       events: yield* Ref.get(events),
-      effects: yield* Ref.get(effects),
+      effects: pendingEffects.map((effect) =>
+        effect.request.type === "thread-workspace.cleanup"
+          ? { ...effect, request: { ...effect.request, afterEffectIds: cleanupDependencies } }
+          : hasWorkspaceCleanup &&
+              (effect.request.type === "provider-session.detach" ||
+                effect.request.type === "terminal.cleanup")
+            ? { ...effect, request: { ...effect.request, durableRetry: true } }
+            : effect,
+      ),
       ...(cancelUnsettledEffects === undefined ? {} : { cancelUnsettledEffects }),
     };
   });
@@ -8368,8 +8704,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
+  const withSubagentLocks = <A, E, R>(threadId: ThreadId, effect: Effect.Effect<A, E, R>) =>
+    Effect.gen(function* () {
+      const shell = yield* projectionStore
+        .getShellSnapshot()
+        .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
+      const descendants = subagentDescendantIds(
+        [...shell.threads, ...shell.archivedThreads],
+        threadId,
+      );
+      let locked = effect;
+      for (const childId of descendants.toReversed())
+        locked = threadDispatch.withLock(childId, locked);
+      return yield* locked;
+    });
+
   const dispatchWithReceipt = (command: OrchestrationV2Command) =>
-    threadDispatch.withLock(commandThreadId(command), dispatchWithReceiptEffect(command));
+    threadDispatch.withLock(
+      commandThreadId(command),
+      command.type === "thread.settle" || command.type === "thread.delete"
+        ? withSubagentLocks(command.threadId, dispatchWithReceiptEffect(command))
+        : dispatchWithReceiptEffect(command),
+    );
 
   /** Complete the one-shot request only after every run and runtime request is
       terminal and the normalized background roster is empty. The dispatch
@@ -8381,6 +8737,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const projection = snapshot.projection;
       if (
         projection.thread.settleAfterCompletion !== true ||
+        (projection.thread.temporary === true && projection.runs.at(-1)?.status !== "completed") ||
         projection.thread.archivedAt !== null ||
         projection.thread.deletedAt !== null ||
         projection.runs.some((run) =>
@@ -8392,16 +8749,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         return false;
       }
 
+      if (
+        projection.thread.temporary === true &&
+        (yield* threadWorkspaces.hasUnfinishedGitWork(projection.thread))
+      )
+        return false;
       const latestRunId = projection.runs.at(-1)?.id ?? "no-run";
-      const settled = yield* dispatchWithReceiptAttempt(
-        {
-          type: "thread.settle",
-          commandId: CommandId.make(
-            `command:settle-after-completion:${threadId}:${latestRunId}:${snapshot.snapshotSequence}`,
-          ),
-          threadId,
-        },
-        snapshot.snapshotSequence,
+      const settled = yield* withSubagentLocks(
+        threadId,
+        dispatchWithReceiptAttempt(
+          {
+            type: "thread.settle",
+            commandId: CommandId.make(
+              `command:settle-after-completion:${threadId}:${latestRunId}:${snapshot.snapshotSequence}`,
+            ),
+            threadId,
+          },
+          snapshot.snapshotSequence,
+        ),
       );
       return settled !== null;
     });

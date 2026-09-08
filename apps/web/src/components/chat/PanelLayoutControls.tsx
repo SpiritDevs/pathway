@@ -15,6 +15,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export interface PanelLayoutControlsProps {
   showThreadPanelControl?: boolean;
+  threadRetentionControl?: ReactNode;
   showTerminalControl?: boolean;
   showRightPanelControl?: boolean;
   settleAfterCompletionActive?: boolean;
@@ -40,6 +41,7 @@ export interface PanelLayoutControlsProps {
 
 export const PanelLayoutControls = memo(function PanelLayoutControls({
   showThreadPanelControl = true,
+  threadRetentionControl,
   showTerminalControl = true,
   showRightPanelControl = true,
   settleAfterCompletionActive = false,
@@ -114,6 +116,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
           <TooltipPopup side="bottom">Cancel settle after completion</TooltipPopup>
         </Tooltip>
       ) : null}
+      {showThreadPanelControl ? threadRetentionControl : null}
       {showThreadPanelControl ? (
         threadPanelPresentation === "popover" ? (
           <Popover

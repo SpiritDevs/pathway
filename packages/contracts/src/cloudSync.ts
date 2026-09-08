@@ -554,7 +554,7 @@ export type SyncEnvironmentBindingPayload = typeof SyncEnvironmentBindingPayload
 export const SyncAgentThreadPayload = Schema.Struct({
   id: AgentThreadId,
   environmentId: EnvironmentId,
-  cloudProjectId: CloudProjectId,
+  cloudProjectId: Schema.NullOr(CloudProjectId),
   shell: CloudAgentThreadShell,
   updatedAt: CloudTimestamp,
 });

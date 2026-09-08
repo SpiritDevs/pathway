@@ -7,6 +7,7 @@ import type {
   ThreadId,
 } from "@spiritdevs/contracts";
 import { ProviderInstanceId, RuntimeRequestId } from "@spiritdevs/contracts";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import * as DateTime from "effect/DateTime";
 
 import { projectThreadAwarenessV2 } from "./agentAwareness.ts";
@@ -41,6 +42,30 @@ describe("projectThreadAwarenessV2", () => {
         thread: v2Thread(),
       }),
     ).toMatchObject({ phase: "running", headline: "Agent is working" });
+  });
+
+  it("represents conversation activity with its owning company and normal phase ladder", () => {
+    const owner = CompanyId.make("company-conversation");
+    const input = {
+      environmentId: "env-1" as EnvironmentId,
+      project: null,
+      conversationCompanyId: owner,
+      thread: v2Thread(),
+    };
+    expect(projectThreadAwarenessV2(input)).toMatchObject({
+      phase: "running",
+      projectTitle: "Conversation",
+      conversationCompanyId: owner,
+      threadId: "thread-2",
+      deepLink: "/threads/env-1/thread-2",
+    });
+    expect(projectThreadAwarenessV2({ ...input, conversationCompanyId: null })).toBeNull();
+    expect(
+      projectThreadAwarenessV2({ ...input, thread: v2Thread({ status: "completed" }) }),
+    ).toMatchObject({ phase: "completed" });
+    expect(projectThreadAwarenessV2({ ...input, project })).not.toHaveProperty(
+      "conversationCompanyId",
+    );
   });
 
   it("keeps an older activity run visible over a newer cancelled run", () => {

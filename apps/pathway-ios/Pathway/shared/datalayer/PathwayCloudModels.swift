@@ -23,6 +23,7 @@ struct PathwayEnvironmentDescriptor: Decodable, Equatable, Sendable {
     let environmentId: String
     let label: String
     let serverVersion: String
+    var capabilities: [String: JSONValue]? = nil
 }
 
 struct PathwayEnvironment: Decodable, Equatable, Identifiable, Sendable {
@@ -111,7 +112,7 @@ struct PathwayPullRequestAttachment: Codable, Equatable, Sendable {
 
 struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let id: String
-    let projectId: String
+    let projectId: String?
     let title: String
     let providerInstanceId: String
     let modelSelection: PathwayModelSelection
@@ -146,12 +147,19 @@ struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let pinOrderKey: String?
     let lastVisitedAt: String?
     let deletedAt: String?
+    var conversationPath: String? = nil
+    var temporary: Bool? = nil
+    var conversationCompanyId: String? = nil
+    var settleAfterCompletion: Bool? = nil
+
+    var isConversation: Bool { projectId == nil }
+    var isTemporary: Bool { temporary == true }
 }
 
 struct PathwayAgentThread: Equatable, Identifiable, Sendable {
     let companyId: String
     let environmentId: String
-    let cloudProjectId: String
+    let cloudProjectId: String?
     let shell: PathwayAgentThreadShell
     let cloudUpdatedAt: Double
 
@@ -168,6 +176,11 @@ struct PathwayAgentThread: Equatable, Identifiable, Sendable {
 
     var isRunning: Bool {
         shell.activeRunId != nil || ["preparing", "starting", "running"].contains(shell.status)
+    }
+
+    var canAttachProject: Bool {
+        shell.isConversation && !isRunning && shell.pendingRuntimeRequest == nil
+            && !["queued", "preparing", "starting", "running", "waiting"].contains(shell.activityRunStatus ?? shell.status)
     }
 }
 

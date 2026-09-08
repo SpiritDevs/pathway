@@ -28,6 +28,15 @@ const companyScopedProjectSnapshotAtom = Atom.family((environmentId: Environment
 );
 
 export const projectEnvironment = createProjectEnvironmentAtoms(connectionAtomRuntime);
+export const projectDirectoryInspection = createEnvironmentRpcQueryAtomFamily(
+  connectionAtomRuntime,
+  {
+    label: "environment-data:projects:directory-inspection",
+    tag: WS_METHODS.projectsInspectDirectory,
+    staleTimeMs: 0,
+    idleTtlMs: 0,
+  },
+);
 /**
  * Web-only: project content search backs the ⇧⌘F dialog, which has no mobile
  * surface, so the atom family lives here instead of the shared client-runtime

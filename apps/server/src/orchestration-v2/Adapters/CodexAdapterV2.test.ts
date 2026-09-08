@@ -267,6 +267,27 @@ describe("CodexAdapterV2 assistant message streaming", () => {
 });
 
 describe("CodexAdapterV2 runtime policy", () => {
+  it.effect("retains conversation folder access without changing the native thread identity", () =>
+    Effect.gen(function* () {
+      const params = yield* buildCodexTurnStartParams({
+        nativeThreadId: "native-conversation",
+        codexInput: [{ type: "text", text: "continue" }],
+        runtimePolicy: {
+          runtimeMode: "auto-accept-edits",
+          interactionMode: "default",
+          cwd: "/workspace/project",
+          additionalDirectories: ["/userdata/conversations/one"],
+        },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+      });
+      assert.equal(params.threadId, "native-conversation");
+      assert.equal(params.cwd, "/workspace/project");
+      assert.equal(params.sandboxPolicy?.type, "workspaceWrite");
+      if (params.sandboxPolicy?.type === "workspaceWrite") {
+        assert.include(params.sandboxPolicy.writableRoots ?? [], "/userdata/conversations/one");
+      }
+    }),
+  );
   it.effect("clears unsupported saved options in both turn and collaboration settings", () =>
     Effect.gen(function* () {
       const params = yield* buildCodexTurnStartParams({

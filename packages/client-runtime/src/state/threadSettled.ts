@@ -29,6 +29,7 @@ interface QueuedThreadShell {
 }
 
 interface SettlementThreadShell extends QueuedThreadShell {
+  readonly temporary?: boolean | undefined;
   readonly settledOverride: "settled" | "active" | null;
   readonly settledAt: string | null;
   readonly hasPendingApprovals: boolean;
@@ -319,6 +320,8 @@ export function effectiveSettled(
   // "active" is the explicit keep-active pin: it suppresses auto-settle
   // until real activity clears it server-side.
   if (shell.settledOverride === "active") return false;
+  // Only the environment can verify unfinished Git work before deleting a temporary thread.
+  if (shell.temporary === true) return false;
   if (options.changeRequestState === "merged") {
     return true;
   }

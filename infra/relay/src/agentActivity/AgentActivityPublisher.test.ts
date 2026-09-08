@@ -1,5 +1,6 @@
 import type { RelayAgentActivityState, RelayDeliveryResult } from "@spiritdevs/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -199,6 +200,67 @@ describe("AgentActivityPublisher", () => {
       });
     });
   });
+
+  it.effect(
+    "scopes conversation targets by company and retains ownership in Live Activity rows",
+    () => {
+      const conversation = {
+        ...state,
+        projectTitle: "Conversation",
+        conversationCompanyId: CompanyId.make("company-one"),
+      };
+      const lookups: Array<
+        Parameters<
+          EnvironmentLinks.EnvironmentLinks["Service"]["listDeliveryUsersForEnvironment"]
+        >[0]
+      > = [];
+      return Effect.gen(function* () {
+        const publisher = yield* AgentActivityPublisher.AgentActivityPublisher;
+        yield* publisher.publish({
+          environmentId: "env",
+          environmentPublicKey: "environment-public-key",
+          threadId: "thread",
+          state: conversation,
+        });
+        expect(lookups).toEqual([
+          {
+            environmentId: "env",
+            environmentPublicKey: "environment-public-key",
+            conversationCompanyId: "company-one",
+          },
+        ]);
+        expect(
+          AgentActivityPublisher.makeAggregateState({
+            activeStates: [conversation],
+            terminalState: null,
+            nowMs: 0,
+          })?.activities[0],
+        ).toMatchObject({ projectTitle: "Conversation", conversationCompanyId: "company-one" });
+      }).pipe(
+        Effect.provide(
+          AgentActivityPublisher.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                Layer.succeed(AgentActivityRows.AgentActivityRows, makeAgentActivityRows()),
+                Layer.succeed(
+                  EnvironmentLinks.EnvironmentLinks,
+                  makeEnvironmentLinks({
+                    listDeliveryUsersForEnvironment: (input) =>
+                      Effect.sync(() => {
+                        lookups.push(input);
+                        return [];
+                      }),
+                  }),
+                ),
+                Layer.succeed(LiveActivities.LiveActivities, makeLiveActivities()),
+                Layer.succeed(ApnsDeliveries.ApnsDeliveries, makeApnsDeliveries()),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
 
   it.effect("publishes listed targets through the APNs delivery service", () => {
     const firstTarget = target("device-1");

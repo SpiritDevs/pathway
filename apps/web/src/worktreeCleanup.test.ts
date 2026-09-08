@@ -3,7 +3,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 import { makeThreadFixture } from "./test-fixtures";
-import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "./worktreeCleanup";
+import {
+  formatWorktreePathForDisplay,
+  getOrphanedWorktreePathForThread,
+  getClientWorktreeCleanupPathForThread,
+} from "./worktreeCleanup";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
 
@@ -81,6 +85,46 @@ describe("getOrphanedWorktreePathForThread", () => {
     ];
     const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"));
     expect(result).toBe("/tmp/repo/worktrees/feature-a");
+  });
+});
+
+describe("getClientWorktreeCleanupPathForThread", () => {
+  const ownedPath = "/tmp/repo/worktrees/temporary";
+  const continuationPath = "/tmp/repo/worktrees/continuation";
+  const keptThread = makeThread({
+    temporary: false,
+    keptAt: "2026-02-13T00:00:00.000Z",
+    conversationPath: "/tmp/userdata/conversations/one",
+    worktreePath: ownedPath,
+    ownedWorktreePath: ownedPath,
+  });
+
+  it("leaves the current owned worktree to environment cleanup after Keep", () => {
+    expect(getClientWorktreeCleanupPathForThread([keptThread], keptThread.id)).toBeNull();
+  });
+
+  it("offers normal cleanup for a new continuation worktree while retaining original directory ownership", () => {
+    const continuation = makeThread({
+      ...keptThread,
+      id: ThreadId.make("continuation"),
+      worktreePath: continuationPath,
+    });
+    expect(getClientWorktreeCleanupPathForThread([keptThread, continuation], continuation.id)).toBe(
+      continuationPath,
+    );
+  });
+
+  it("does not offer cleanup when another thread still uses the continuation worktree", () => {
+    const continuation = makeThread({ ...keptThread, worktreePath: continuationPath });
+    const sibling = makeThread({ id: ThreadId.make("sibling"), worktreePath: continuationPath });
+    expect(
+      getClientWorktreeCleanupPathForThread([continuation, sibling], continuation.id),
+    ).toBeNull();
+  });
+
+  it("does not offer cleanup for a temporary thread", () => {
+    const temporary = makeThread({ ...keptThread, temporary: true });
+    expect(getClientWorktreeCleanupPathForThread([temporary], temporary.id)).toBeNull();
   });
 });
 

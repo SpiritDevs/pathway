@@ -33,6 +33,8 @@ import { layer as providerContinuationRequestsLayer } from "./ProviderContinuati
 import { workerLive as providerContinuationWorkerLive } from "./ProviderContinuationService.ts";
 import { layer as threadTitleRegenerationServiceLayer } from "./ThreadTitleRegenerationService.ts";
 import { layer as threadWorkspaceMoveServiceLayer } from "./ThreadWorkspaceMoveService.ts";
+import { live as threadWorkspaceServiceLayer } from "./ThreadWorkspaceService.ts";
+import { layer as temporaryThreadSettlementLayer } from "./TemporaryThreadSettlement.ts";
 import { layer as providerEventIngestorLayer } from "./ProviderEventIngestor.ts";
 import { layer as providerSessionManagerLayer } from "./ProviderSessionManager.ts";
 import { layer as providerRuntimeRecoveryLayer } from "./ProviderRuntimeRecoveryService.ts";
@@ -72,6 +74,10 @@ const storesLayer = Layer.mergeAll(
   commandReceiptStoreProvided,
   effectOutboxLayer,
   turnItemPositionStoreLayer,
+);
+
+export const ThreadWorkspaceServiceLayerLive = threadWorkspaceServiceLayer.pipe(
+  Layer.provide(Layer.merge(projectionStoreLayer, ProjectionProjectRepositoryLive)),
 );
 
 export const OrchestrationV2EventSinkLayerLive = eventSinkLayer.pipe(Layer.provide(storesLayer));
@@ -279,6 +285,7 @@ const providerRuntimeRecoveryProvided = providerRuntimeRecoveryLayer.pipe(
 );
 
 export const OrchestrationV2LayerLive = Layer.mergeAll(
+  effectOutboxLayer,
   orchestratorProvided,
   threadManagementProvided,
   threadWorkspaceMoveProvided,
@@ -299,4 +306,5 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   threadLifecycleProvided,
   scheduledTaskProvided,
   providerContinuationWorkerProvided,
+  temporaryThreadSettlementLayer.pipe(Layer.provide(threadManagementProvided)),
 );

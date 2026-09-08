@@ -260,6 +260,9 @@ final class PathwayAgentThreadModel {
     var draft = "" { didSet { saveDraft() } }
     var threadID: String { thread.threadId }
     var environmentLabel: String { environment.environment.label }
+    var supportsConversations: Bool {
+        serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue?["threadConversations"]?.boolValue == true
+    }
     var canSend: Bool {
         (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftAttachments.isEmpty)
             && draft.count <= 120_000 && !isSending && draftAttachments.allSatisfy { $0.state == .ready }
@@ -274,7 +277,7 @@ final class PathwayAgentThreadModel {
     @ObservationIgnored private var didRestoreDraft = false
     @ObservationIgnored let connect: PathwayConnectClient?
     @ObservationIgnored let environment: PathwayCompanyEnvironment
-    @ObservationIgnored let thread: PathwayAgentThread
+    private(set) var thread: PathwayAgentThread
     @ObservationIgnored let cache: PathwayThreadCache
     @ObservationIgnored let persistsLocalState: Bool
     @ObservationIgnored let injectedRequest: Request?
@@ -475,6 +478,9 @@ final class PathwayAgentThreadModel {
             "messageId": .string(messageID), "replacementMessageId": .string(UUID().uuidString), "text": .string(Self.preservingMessageContext(original: item.text ?? "", edited: text))])
     }
     func fork(from item: PathwayTimelineItem? = nil) async throws -> String {
+        guard !thread.shell.isTemporary else {
+            throw PathwayThreadConversationError.message("Keep conversation before forking this thread.")
+        }
         let target = UUID().uuidString
         var source: JSONValue = .object(["type": .string("latest_stable")])
         if let item {
@@ -621,6 +627,14 @@ final class PathwayAgentThreadModel {
     }
     private func applyThread(_ value: JSONValue?) {
         guard let object = value?.objectValue else { return }
+        // Events can carry partial metadata; merge it with the last shell to retain directory references.
+        if var shell = (try? Self.json(thread.shell))?.objectValue {
+            shell.merge(object) { _, value in value }
+            if let decoded = try? JSONDecoder().decode(PathwayAgentThreadShell.self, from: JSONEncoder().encode(JSONValue.object(shell))) {
+                thread = PathwayAgentThread(companyId: thread.companyId, environmentId: thread.environmentId,
+                    cloudProjectId: thread.cloudProjectId, shell: decoded, cloudUpdatedAt: thread.cloudUpdatedAt)
+            }
+        }
         if let value = object["browserTakeover"] { browserTakeover = value.objectValue }
         if let value = object["title"]?.stringValue { threadTitle = value }
         if let value = object["runtimeMode"]?.stringValue { runtimeMode = value }

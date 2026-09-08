@@ -1,3 +1,4 @@
+import { EnvironmentId } from "@spiritdevs/contracts";
 import {
   FocusId,
   FocusProjectKey,
@@ -9,6 +10,9 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ALL_FOCUS_ID,
   focusIsVisible,
+  focusIncludesConversations,
+  focusIdForThread,
+  focusNotificationProjectKey,
   groupSearchResultsByFocus,
   nextFocusId,
   resolveActiveFocusId,
@@ -83,6 +87,26 @@ describe("Focus carousel", () => {
 });
 
 describe("Focus project scoping", () => {
+  it("allows Conversations in several Focuses and keeps those Focuses visible without projects", () => {
+    const focuses = [WORK, PERSONAL].map((id) => ({
+      ...focus(id, id),
+      includeConversations: true,
+    }));
+    for (const id of [WORK, PERSONAL]) {
+      expect(focusIncludesConversations(focuses, id)).toBe(true);
+      expect(
+        resolveActiveFocusId({
+          preferredId: id,
+          focuses,
+          assignments: [assignment(id, WORK_PROJECT)],
+          visibleProjectKeys: new Set(),
+        }),
+      ).toBe(id);
+    }
+    expect(focusIncludesConversations([focus(WORK, "a")], WORK)).toBe(false);
+    expect(focusIncludesConversations([], ALL_FOCUS_ID)).toBe(true);
+  });
+
   it("uses null for All and a project-key set for a user Focus", () => {
     const assignments = [assignment(WORK, WORK_PROJECT), assignment(PERSONAL, PERSONAL_PROJECT)];
 
@@ -186,5 +210,48 @@ describe("Focus search grouping", () => {
       ["work-1"],
       ["unassigned"],
     ]);
+  });
+});
+
+describe("conversation notification navigation", () => {
+  const focuses = [
+    { ...focus(WORK, "a"), includeConversations: true },
+    { ...focus(PERSONAL, "b"), includeConversations: true },
+  ];
+  const input = { projectKey: null, focuses, focusIdByProjectKey: new Map([[WORK_PROJECT, WORK]]) };
+  it.each([WORK, PERSONAL])(
+    "preserves selected enabled Focus %s without inventing an exclusive membership",
+    (activeFocusId) => {
+      expect(focusIdForThread({ ...input, activeFocusId })).toBe(activeFocusId);
+    },
+  );
+  it("uses All when the selected Focus excludes conversations or no current thread is known", () => {
+    expect(focusIdForThread({ ...input, focuses: [focus(WORK, "a")], activeFocusId: WORK })).toBe(
+      ALL_FOCUS_ID,
+    );
+    expect(focusIdForThread({ ...input, activeFocusId: ALL_FOCUS_ID })).toBe(ALL_FOCUS_ID);
+    expect(focusIdForThread({ ...input, projectKey: undefined, activeFocusId: WORK })).toBe(
+      ALL_FOCUS_ID,
+    );
+  });
+  it("follows project assignments once a conversation is attached", () => {
+    expect(focusIdForThread({ ...input, projectKey: WORK_PROJECT, activeFocusId: PERSONAL })).toBe(
+      WORK,
+    );
+  });
+  it("recognizes only the current environment's conversation marker", () => {
+    const environmentId = EnvironmentId.make("environment-a");
+    expect(
+      focusNotificationProjectKey({
+        environmentId,
+        projectKey: FocusProjectKey.make("environment-a:conversations"),
+      }),
+    ).toBeNull();
+    expect(
+      focusNotificationProjectKey({
+        environmentId,
+        projectKey: FocusProjectKey.make("environment-b:conversations"),
+      }),
+    ).toBe("environment-b:conversations");
   });
 });

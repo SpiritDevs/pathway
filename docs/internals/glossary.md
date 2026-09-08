@@ -59,6 +59,15 @@ A versioned data file used for model metadata and classification. It does not pr
 
 ## Thread workspaces
 
+**Conversation**:
+A thread without an attached project. Its environment owns its history and dedicated working folder;
+the company selected at creation determines its visibility. Project attachment preserves its identity
+and original folder.
+
+**Temporary thread**:
+A thread deleted on settlement, independently of project attachment. Temporary project threads use
+dedicated worktrees. Keep conversation changes retention without moving files.
+
 **Workspace move**:
 The durable server workflow that moves an existing thread and the source checkout's tracked and untracked non-ignored changes into a new linked Git worktree. It is not a client-side sequence of Git calls.
 _Avoid_: Worktree copy, Repo copy, Workspace switch
@@ -75,7 +84,7 @@ The temporary Git stash identified by object id that carries dirty state from th
 ## Focuses
 
 **Focus**:
-A named, user-defined set of projects used to filter the Agent Threads view to one mindset (e.g. Work, Personal). A Focus is a filter, not a container: it scopes what the Agent Threads sidebar shows (thread list, pinned/snoozed/settled shelves, project dropdown, search) and nothing outside that view.
+A named, user-defined set of projects, optionally including projectless conversations, used to filter the Agent Threads view to one mindset (e.g. Work, Personal). A Focus is a filter, not a container: it scopes what the Agent Threads sidebar shows (thread list, pinned/snoozed/settled shelves, project dropdown, search) and nothing outside that view.
 _Avoid_: Profile, Space, Tab, Category, Mindset
 
 **All Focus**:

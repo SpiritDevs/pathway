@@ -22,6 +22,12 @@ export const AGENT_THREAD_SHELL_FIELDS = new Set([
   "creationSource",
   "id",
   "projectId",
+  "conversationPath",
+  "conversationCompanyId",
+  "temporary",
+  "ownedWorktreePath",
+  "ownedBranch",
+  "keptAt",
   "title",
   "providerInstanceId",
   "modelSelection",
@@ -121,7 +127,7 @@ export const upsert = mutation({
     companyId: domainIdArg,
     environmentId: v.string(),
     threadId: v.string(),
-    localProjectId: v.string(),
+    localProjectId: v.union(v.string(), v.null()),
     shell: v.any(),
   },
   returns: v.object({
@@ -131,13 +137,20 @@ export const upsert = mutation({
     const actor = await requireCompanyActor(ctx, args.companyId);
     const environmentId = requireTrimmed(args.environmentId, "Environment id");
     const threadId = requireTrimmed(args.threadId, "Thread id");
-    const localProjectId = requireTrimmed(args.localProjectId, "Local project id");
+    const localProjectId =
+      args.localProjectId === null ? null : requireTrimmed(args.localProjectId, "Local project id");
     requireEnvironmentActor(actor, environmentId);
 
     if (typeof args.shell !== "object" || args.shell === null || Array.isArray(args.shell)) {
       throw backendError("invalid-arguments", "Agent Thread shell must be an object.");
     }
     const shell = args.shell as Record<string, unknown>;
+    if (localProjectId === null && shell["conversationCompanyId"] !== actor.company.id) {
+      throw backendError(
+        "permission-denied",
+        "A conversation may only be published to its owning company.",
+      );
+    }
     if (Object.keys(shell).some((key) => !AGENT_THREAD_SHELL_FIELDS.has(key))) {
       throw backendError("invalid-arguments", "Agent Thread metadata contains an unknown field.");
     }
@@ -167,14 +180,28 @@ export const upsert = mutation({
         q.eq("companyId", actor.company._id).eq("id", id),
       )
       .unique();
-    const binding = await activeBinding(ctx, actor.company._id, environmentId, localProjectId);
+    const binding =
+      localProjectId === null
+        ? undefined
+        : await activeBinding(ctx, actor.company._id, environmentId, localProjectId);
     // Discovery of a NEW thread still requires an active binding. A thread
     // already in the index was published while its binding was active; its
     // shell must stay updatable after the binding is revoked (e.g. duplicate
     // project identities merged away), or one such thread wedges the
     // environment's reconcile loop forever.
-    const cloudProjectId = binding?.cloudProjectId ?? existing?.cloudProjectId;
-    if (cloudProjectId === undefined) return { outcome: "unbound" as const };
+    const cloudProjectId =
+      localProjectId === null
+        ? null
+        : (binding?.cloudProjectId ??
+          (existing?.localProjectId === localProjectId
+            ? (existing.cloudProjectId ?? undefined)
+            : undefined));
+    if (cloudProjectId === undefined) {
+      // Attachment now follows its project. Remove an earlier conversation entry from a company
+      // that has no binding to the attached project rather than leaving stale visibility behind.
+      if (existing?.localProjectId === null) await removeRows(ctx, actor, [existing]);
+      return { outcome: "unbound" as const };
+    }
     if (
       existing !== null &&
       existing.cloudProjectId === cloudProjectId &&
@@ -211,8 +238,9 @@ export const upsert = mutation({
       row = updated;
     }
 
-    const project = await ctx.db.get(cloudProjectId);
-    if (project === null) throw backendError("entity-not-found", "The cloud project is missing.");
+    const project = cloudProjectId === null ? null : await ctx.db.get(cloudProjectId);
+    if (cloudProjectId !== null && project === null)
+      throw backendError("entity-not-found", "The cloud project is missing.");
     await appendCompanyChanges(ctx, {
       companyId: actor.company._id,
       actor: actorRecord(actor),
@@ -221,7 +249,7 @@ export const upsert = mutation({
           entityKind: "agentThread",
           entityId: row.id,
           changeKind: "upsert",
-          teamIds: project.teamIds,
+          teamIds: project?.teamIds ?? [],
           versionDocId: row._id,
           payload: await encodeAgentThread(ctx, row),
         },
@@ -239,7 +267,7 @@ async function removeRows(
   if (rows.length === 0) return;
   const changes = [];
   for (const row of rows) {
-    const project = await ctx.db.get(row.cloudProjectId);
+    const project = row.cloudProjectId === null ? null : await ctx.db.get(row.cloudProjectId);
     await deleteThreadAlertPolicies(ctx, row.environmentId, row.threadId);
     await ctx.db.delete(row._id);
     changes.push({
@@ -300,7 +328,7 @@ export const removeMissing = mutation({
       )
       .unique();
     if (row !== null) {
-      const project = await ctx.db.get(row.cloudProjectId);
+      const project = row.cloudProjectId === null ? null : await ctx.db.get(row.cloudProjectId);
       requireRecordPermission(actor, "projects.manage", project?.teamIds ?? []);
     }
     await removeRows(ctx, actor, row === null ? [] : [row]);

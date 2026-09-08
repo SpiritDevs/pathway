@@ -19,7 +19,7 @@ struct PathwayProjectIconContext: Sendable {
         environments: [PathwayCompanyEnvironment],
         bindings: [PathwayCompanyEnvironmentBinding]
     ) {
-        guard let environment = environments.first(where: {
+        guard let projectID = thread.shell.projectId, let environment = environments.first(where: {
             $0.companyId == thread.companyId
                 && $0.environment.environmentId == thread.environmentId
         }), let binding = bindings.first(where: {
@@ -32,7 +32,7 @@ struct PathwayProjectIconContext: Sendable {
         key = Key(
             companyID: thread.companyId,
             environmentID: thread.environmentId,
-            projectID: thread.shell.projectId,
+            projectID: projectID,
             workspaceRoot: binding.binding.localWorkspaceRoot
         )
     }

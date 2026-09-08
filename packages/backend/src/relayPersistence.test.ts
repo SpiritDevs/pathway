@@ -89,6 +89,136 @@ const deliveryAttempt = (id: string) => ({
 });
 
 describe("relayPersistence", () => {
+  it("limits conversation activity delivery and replay to active members of its owning company", async () => {
+    const { t, relay } = testRelay();
+    const membership = await t.run(async (ctx) => {
+      const companyId = await ctx.db.insert("companies", {
+        id: "conversation-company",
+        name: "Conversation company",
+        issueKeyPrefix: "CON",
+        nextIssueNumber: 1,
+        lifecycleState: "active",
+        deletionScheduledAt: null,
+        purgeAfter: null,
+        authorizationEpoch: 1,
+        syncVersion: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      const userId = await ctx.db.insert("users", {
+        clerkSubject: "user-1",
+        email: "user-1@example.test",
+        displayName: "Owner",
+        imageUrl: null,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      await ctx.db.insert("users", {
+        clerkSubject: "user-2",
+        email: "user-2@example.test",
+        displayName: "Outside company",
+        imageUrl: null,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      return await ctx.db.insert("memberships", {
+        id: "conversation-member",
+        companyId,
+        userId,
+        state: "active",
+        displayNameSnapshot: "Owner",
+        emailSnapshot: "user-1@example.test",
+        invitedByMembershipId: null,
+        joinedAt: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+    });
+    for (const userId of ["user-1", "user-2"]) {
+      await relay.mutation(api.relayPersistence.upsertEnvironmentLink, {
+        userId,
+        environmentId: "environment-1",
+        environmentLabel: "Shared environment",
+        environmentPublicKey: "public-key-1",
+        endpointHttpBaseUrl: "https://environment.example.test",
+        endpointWsBaseUrl: "wss://environment.example.test",
+        endpointProviderKind: "manual",
+        notificationsEnabled: true,
+        liveActivitiesEnabled: true,
+        managedTunnelsEnabled: false,
+        createdByDeviceId: null,
+        now: "2026-08-14T00:00:00.000Z",
+      });
+    }
+    for (const state of [
+      activityState("project", "running"),
+      {
+        ...activityState("conversation", "running"),
+        projectTitle: "Conversation",
+        conversationCompanyId: "conversation-company",
+      },
+    ]) {
+      await relay.mutation(api.relayPersistence.upsertAgentActivityRow, {
+        environmentPublicKey: "public-key-1",
+        state,
+        createdAt: state.updatedAt,
+      });
+    }
+    const lookup = {
+      environmentId: "environment-1",
+      environmentPublicKey: "public-key-1",
+      conversationCompanyId: "conversation-company",
+    };
+    expect(
+      (await relay.query(api.relayPersistence.listDeliveryUsersForEnvironment, lookup)).map(
+        (user) => user.userId,
+      ),
+    ).toEqual(["user-1"]);
+    expect(
+      (await relay.query(api.relayPersistence.listAgentActivityRowsForUser, { userId: "user-1" }))
+        .map((state) => state.threadId)
+        .sort(),
+    ).toEqual(["conversation", "project"]);
+    expect(
+      (
+        await relay.query(api.relayPersistence.listAgentActivityRowsForUser, { userId: "user-2" })
+      ).map((state) => state.threadId),
+    ).toEqual(["project"]);
+    expect(
+      await relay.query(api.relayPersistence.getAgentActivityRowForUserThread, {
+        userId: "user-2",
+        environmentId: "environment-1",
+        threadId: "conversation",
+      }),
+    ).toBeNull();
+    expect(
+      await relay.query(api.relayPersistence.getAgentActivityRowForUserThread, {
+        userId: "user-1",
+        environmentId: "environment-1",
+        threadId: "conversation",
+      }),
+    ).toMatchObject({ conversationCompanyId: "conversation-company" });
+    await t.run((ctx) => ctx.db.patch(membership, { state: "left" }));
+    expect(await relay.query(api.relayPersistence.listDeliveryUsersForEnvironment, lookup)).toEqual(
+      [],
+    );
+    expect(
+      (
+        await relay.query(api.relayPersistence.listAgentActivityRowsForUser, { userId: "user-1" })
+      ).map((state) => state.threadId),
+    ).toEqual(["project"]);
+    expect(
+      (
+        await relay.query(api.relayPersistence.listDeliveryUsersForEnvironment, {
+          environmentId: "environment-1",
+          environmentPublicKey: "public-key-1",
+        })
+      )
+        .map((user) => user.userId)
+        .sort(),
+    ).toEqual(["user-1", "user-2"]);
+  });
+
   it("rejects ordinary identities and accepts only the relay control plane", async () => {
     const { t, relay } = testRelay();
 

@@ -20,6 +20,20 @@ import {
 import { isCursorCancellationError, loggedCursorAgentOptions } from "./CursorAgentSdk.ts";
 
 describe("CursorAdapterV2", () => {
+  it("keeps the project primary while granting the retained conversation folder to Cursor", () => {
+    const options = makeCursorAgentOptions({
+      threadId: ThreadId.make("conversation"),
+      modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "auto" },
+      runtimePolicy: {
+        runtimeMode: "auto-accept-edits",
+        interactionMode: "default",
+        cwd: "/workspace/project",
+        additionalDirectories: ["/userdata/conversations/one", "/workspace/project"],
+      },
+    });
+    assert.deepEqual(options.local?.cwd, ["/workspace/project", "/userdata/conversations/one"]);
+    assert.deepEqual(options.local?.sandboxOptions, { enabled: true });
+  });
   it("accepts a resolved file-path prompt without native images", () => {
     assert.isFalse(
       cursorUserMessageIsEmpty({

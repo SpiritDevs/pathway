@@ -10,6 +10,7 @@ import { requireUser } from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
 
 const focusResult = v.object({
+  includeConversations: v.optional(v.boolean()),
   id: v.string(),
   name: v.string(),
   iconName: v.string(),
@@ -76,6 +77,7 @@ function focusProjectKey(value: string): string {
 function encodeFocus(row: Doc<"focuses">) {
   return {
     id: row.id,
+    includeConversations: row.includeConversations ?? false,
     name: row.name,
     iconName: row.iconName,
     accentColor: row.accentColor,
@@ -172,6 +174,7 @@ export const create = mutation({
     accentColor: v.string(),
     orderKey: v.optional(v.string()),
     projectKeys: v.optional(v.array(v.string())),
+    includeConversations: v.optional(v.boolean()),
   },
   returns: focusResult,
   handler: async (ctx, args) => {
@@ -196,6 +199,7 @@ export const create = mutation({
     const rowId = await ctx.db.insert("focuses", {
       id,
       userId: user._id,
+      includeConversations: args.includeConversations ?? false,
       name: focusName(args.name),
       iconName: trimRequired(args.iconName, "A Focus icon"),
       accentColor: accentColor(args.accentColor),
@@ -221,12 +225,16 @@ export const update = mutation({
     name: v.optional(v.string()),
     iconName: v.optional(v.string()),
     accentColor: v.optional(v.string()),
+    includeConversations: v.optional(v.boolean()),
   },
   returns: focusResult,
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
     const row = await ownedFocus(ctx, user._id, args.focusId);
     const patch = {
+      ...(args.includeConversations === undefined
+        ? {}
+        : { includeConversations: args.includeConversations }),
       ...(args.name === undefined ? {} : { name: focusName(args.name) }),
       ...(args.iconName === undefined
         ? {}

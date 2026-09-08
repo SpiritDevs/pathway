@@ -13,7 +13,7 @@ struct PathwayWorkspaceView: View {
         Group {
             switch PathwayWorkspaceSection(rawValue: initialSection) ?? .repositories {
             case .repositories: overview
-            case .changes: PathwayWorkspaceGitView(client: client)
+            case .changes: PathwayWorkspaceGitView(client: client, subscribe: subscribe, assetURL: assetURL)
             case .pullRequests:
                 if context.supportsPullRequests {
                     PathwayWorkspacePullRequestsView(client: client, postHTTP: postHTTP)
@@ -34,7 +34,7 @@ struct PathwayWorkspaceView: View {
                 }
             }
             NavigationLink {
-                PathwayWorkspaceGitView(client: client)
+                PathwayWorkspaceGitView(client: client, subscribe: subscribe, assetURL: assetURL)
             } label: { Label("Source control", systemImage: "arrow.triangle.branch") }
             NavigationLink {
                 PathwayWorkspaceFilesView(client: client, assetURL: assetURL)
@@ -54,6 +54,8 @@ struct PathwayWorkspaceView: View {
 
 struct PathwayWorkspaceGitView: View {
     let client: PathwayWorkspaceClient
+    var subscribe: PathwayWorkspaceSubscribe?
+    var assetURL: PathwayWorkspaceAssetURL?
     @State private var status: PathwayWorkspaceStatus?
     @State private var selected = Set<String>()
     @State private var message = ""
@@ -66,13 +68,25 @@ struct PathwayWorkspaceGitView: View {
         List {
             if let error { Section { Text(error).foregroundStyle(.red) } }
             if let notice { Section { Text(notice) } }
+            if client.context.projectID == nil {
+                Section("Conversation folder") {
+                    Text(client.context.cwd).font(.caption.monospaced()).textSelection(.enabled)
+                    NavigationLink("Files") { PathwayWorkspaceFilesView(client: client, assetURL: assetURL) }
+                    NavigationLink("Open terminal in this folder") {
+                        PathwayWorkspaceTerminalView(client: client, subscribe: subscribe, openNewOnAppear: true)
+                    }.disabled(!client.context.canMutate || subscribe == nil)
+                    Text("Use the terminal to review, commit, and push work in repositories inside this folder.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
             if let status {
                 Section("Repository") {
                     LabeledContent("Branch", value: status.refName ?? "Detached HEAD")
                     LabeledContent("Ahead / behind", value: "\(status.aheadCount) / \(status.behindCount)")
                     NavigationLink("Review current changes") { PathwayWorkspaceDiffView(client: client) }
                     NavigationLink("Branches") { PathwayWorkspaceBranchesView(client: client) }
-                    NavigationLink("Move to a worktree") { PathwayWorkspaceMoveView(client: client) }
+                    if client.context.projectID != nil {
+                        NavigationLink("Move to a worktree") { PathwayWorkspaceMoveView(client: client) }
+                    }
                 }
                 if status.isRepo {
                     Section("Files to commit") {
@@ -116,6 +130,7 @@ struct PathwayWorkspaceGitView: View {
     }
     private func refresh() async {
         guard !busy else { return }; busy = true; defer { busy = false }
+        status = nil
         do {
             status = try await client.call("vcs.refreshStatus", client.cwdPayload)
             selected.formIntersection(Set(status?.workingTree.files.map(\.path) ?? []))

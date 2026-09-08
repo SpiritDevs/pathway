@@ -241,6 +241,7 @@ import {
   OrchestrationV2DispatchCommandError,
   OrchestrationV2ContinuationLaunchError,
   OrchestrationV2GetShellSnapshotError,
+  OrchestrationV2WorkspaceCleanupError,
   OrchestrationV2GetThreadProjectionError,
   OrchestrationV2RpcSchemas,
   OrchestrationV2ThreadLaunchError,
@@ -1285,6 +1286,25 @@ export const WsOrchestrationV2SubscribeThreadRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationV2SubscribeWorkspaceCleanupRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.subscribeWorkspaceCleanup,
+  {
+    payload: OrchestrationV2RpcSchemas.subscribeWorkspaceCleanup.input,
+    success: OrchestrationV2RpcSchemas.subscribeWorkspaceCleanup.output,
+    error: Schema.Union([OrchestrationV2WorkspaceCleanupError, EnvironmentAuthorizationError]),
+    stream: true,
+  },
+);
+
+export const WsOrchestrationV2RetryWorkspaceCleanupRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.retryWorkspaceCleanup,
+  {
+    payload: OrchestrationV2RpcSchemas.retryWorkspaceCleanup.input,
+    success: OrchestrationV2RpcSchemas.retryWorkspaceCleanup.output,
+    error: Schema.Union([OrchestrationV2WorkspaceCleanupError, EnvironmentAuthorizationError]),
+  },
+);
+
 export const WsSubscribeTerminalEventsRpc = Rpc.make(WS_METHODS.subscribeTerminalEvents, {
   payload: Schema.Struct({}),
   success: TerminalEvent,
@@ -2034,6 +2054,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SubscribeArchivedShellRpc,
   WsOrchestrationV2SubscribeShellRpc,
   WsOrchestrationV2SubscribeThreadRpc,
+  WsOrchestrationV2SubscribeWorkspaceCleanupRpc,
+  WsOrchestrationV2RetryWorkspaceCleanupRpc,
 )
   .merge(IssuesRpcs)
   .merge(EmailRpcs);

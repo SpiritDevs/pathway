@@ -57,3 +57,17 @@ describe("alert controls", () => {
     );
   });
 });
+
+it("inherits global and thread alert choices for conversations without a project", () => {
+  const view = threadPolicyView(
+    [
+      { scopeKind: "global", scopeKey: "global", choices: { completion: true, failure: true } },
+      { scopeKind: "project", scopeKey: "null", choices: { completion: false } },
+      { scopeKind: "thread", scopeKey: "conversation", choices: { failure: false } },
+    ],
+    null,
+    "conversation",
+  );
+  expect(view.effective.completion).toBe(true);
+  expect(view.effective.failure).toBe(false);
+});

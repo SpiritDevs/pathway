@@ -9,6 +9,7 @@ enum PathwayRPCError: LocalizedError, Sendable {
     case timedOut
     case protocolViolation(String)
     case remote(String)
+    case rejected(message: String, detail: String)
 
     var errorDescription: String? {
         switch self {
@@ -16,6 +17,7 @@ enum PathwayRPCError: LocalizedError, Sendable {
         case .timedOut: "The environment did not respond in time. Check the latest state before retrying."
         case let .protocolViolation(message): message
         case let .remote(message): message
+        case let .rejected(message, _): message
         }
     }
 }
@@ -324,14 +326,14 @@ actor PathwayRPCClient {
                     requestID,
                     result: exit.envelopeTag == "Success"
                         ? .success(exit.value ?? .null)
-                        : .failure(PathwayRPCError.remote(Self.remoteMessage(exit)))
+                        : .failure(Self.remoteError(exit))
                 )
             } else if requestID == subscriptionRequestID {
                 subscriptionRequestID = nil
                 subscriptionGate.reset()
                 yieldTransportState("disconnected")
                 if exit.envelopeTag != "Success" {
-                    let error = PathwayRPCError.remote(Self.remoteMessage(exit))
+                    let error = Self.remoteError(exit)
                     let waiting = pending.filter { $0.value.requiresSubscription }.map(\.key)
                     for id in waiting { complete(id, result: .failure(error)) }
                     throw error
@@ -487,6 +489,14 @@ actor PathwayRPCClient {
     private static func remoteMessage(_ exit: PathwayRPCExit) -> String {
         exit.cause?.compactMap { $0.error?.displayString ?? $0.defect?.displayString }.first
             ?? "The Pathway environment rejected the request."
+    }
+
+    private static func remoteError(_ exit: PathwayRPCExit) -> PathwayRPCError {
+        let message = remoteMessage(exit)
+        if let detail = exit.cause?.compactMap({ $0.error?.objectValue?["detail"]?.stringValue }).first {
+            return .rejected(message: message, detail: detail)
+        }
+        return .remote(message)
     }
 }
 

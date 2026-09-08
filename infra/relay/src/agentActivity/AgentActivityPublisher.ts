@@ -158,6 +158,9 @@ export const make = Effect.gen(function* () {
       const deliveryUsers = yield* links.listDeliveryUsersForEnvironment({
         environmentId: input.environmentId,
         environmentPublicKey: input.environmentPublicKey,
+        ...(input.state?.conversationCompanyId === undefined
+          ? {}
+          : { conversationCompanyId: input.state.conversationCompanyId }),
       });
       const now = yield* DateTime.now;
       const deliveriesByUser = yield* Effect.forEach(
@@ -207,6 +210,9 @@ function aggregateRowForState(state: RelayAgentActivityState) {
     environmentId: state.environmentId,
     threadId: state.threadId,
     projectTitle: state.projectTitle,
+    ...(state.conversationCompanyId === undefined
+      ? {}
+      : { conversationCompanyId: state.conversationCompanyId }),
     threadTitle: state.threadTitle,
     modelTitle: state.modelTitle,
     phase: state.phase,

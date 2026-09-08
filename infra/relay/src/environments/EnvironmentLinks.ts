@@ -115,6 +115,7 @@ export class EnvironmentLinks extends Context.Service<
     readonly listDeliveryUsersForEnvironment: (input: {
       readonly environmentId: string;
       readonly environmentPublicKey: string;
+      readonly conversationCompanyId?: string;
     }) => Effect.Effect<
       ReadonlyArray<AgentAwarenessDeliveryUserRecord>,
       EnvironmentLinkUserListPersistenceError

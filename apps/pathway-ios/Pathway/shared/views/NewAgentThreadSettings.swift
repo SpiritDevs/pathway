@@ -40,12 +40,15 @@ struct NewAgentThreadSettings: View {
                         }
                     }
 
-                    Picker("Workspace", selection: $model.workspaceMode) {
-                        Text("Current checkout").tag("local")
-                        Text("New worktree").tag("worktree")
+                    if !model.isConversation {
+                        Picker("Workspace", selection: $model.workspaceMode) {
+                            Text("Current checkout").tag("local")
+                            Text("New worktree").tag("worktree")
+                        }
+                        .disabled(model.temporary)
                     }
 
-                    if model.workspaceMode == "worktree" {
+                    if !model.isConversation && model.workspaceMode == "worktree" {
                         TextField("Base branch or ref", text: $model.baseReference)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()

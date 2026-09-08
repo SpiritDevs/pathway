@@ -19,6 +19,10 @@ Focus shows **Moving from _Focus name_** and moves the project when you save. Yo
 project from the **Focus** section in its project menu. Choose **None** there to remove its Focus
 assignment.
 
+Enable **Conversations** alongside the project choices to include threads without a project.
+Several Focuses can enable this independently. Conversations remain scoped to the company selected
+at creation. Attaching a project makes the thread follow that project's Focus.
+
 Deleting a Focus unlinks its projects. It does not delete projects or threads. The unlinked projects
 remain available under **All**.
 
@@ -28,7 +32,7 @@ Focus does not sync. Each machine remembers its own selection.
 ## Company scope and search
 
 Company scope applies before a Focus. If none of a Focus's projects are visible in the current
-company, Pathway hides that Focus. If the active Focus becomes hidden or is deleted, Pathway switches
+company and it does not include Conversations, Pathway hides that Focus. If the active Focus becomes hidden or is deleted, Pathway switches
 back to **All**.
 
 Sidebar search stays global even when a Focus is active. Results are grouped by Focus, with the

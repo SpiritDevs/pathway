@@ -40,10 +40,15 @@ import {
   readThreadShell,
   readThreadShells,
 } from "../state/entities";
+import { requestTemporaryThreadDiscard } from "../components/TemporaryThreadDiscardDialog";
+import { useRightPanelStore } from "../rightPanelStore";
 import { useUiStateStore } from "../uiStateStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
-import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
+import {
+  formatWorktreePathForDisplay,
+  getClientWorktreeCleanupPathForThread,
+} from "../worktreeCleanup";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -171,6 +176,9 @@ export function useMarkThreadUnread() {
 }
 
 export function useThreadActions() {
+  const setTemporaryMutation = useAtomCommand(threadEnvironment.setTemporary, {
+    reportFailure: false,
+  });
   const closeTerminal = useAtomCommand(terminalEnvironment.close);
   const archiveThreadMutation = useAtomCommand(threadEnvironment.archive, {
     reportFailure: false,
@@ -281,7 +289,10 @@ export function useThreadActions() {
 
       if (shouldNavigateToDraft) {
         const navigationResult = await settlePromise(() =>
-          handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId)),
+          handleNewThreadRef.current({
+            environmentId: thread.environmentId,
+            projectId: thread.projectId,
+          }),
         );
         if (navigationResult._tag === "Failure") {
           return navigationResult;
@@ -328,10 +339,13 @@ export function useThreadActions() {
         const shell = readThreadShell(ref);
         return shell === null ? [] : [shell];
       });
-      const threadProject = readProject({
-        environmentId: threadRef.environmentId,
-        projectId: thread.projectId,
-      });
+      const threadProject =
+        thread.projectId === null
+          ? null
+          : readProject({
+              environmentId: threadRef.environmentId,
+              projectId: thread.projectId,
+            });
       const deletedIds =
         opts.deletedThreadKeys && opts.deletedThreadKeys.size > 0
           ? new Set<ThreadId>(
@@ -345,7 +359,7 @@ export function useThreadActions() {
         deletedIds && deletedIds.size > 0
           ? threads.filter((entry) => entry.id === threadRef.threadId || !deletedIds.has(entry.id))
           : threads;
-      const orphanedWorktreePath = getOrphanedWorktreePathForThread(
+      const orphanedWorktreePath = getClientWorktreeCleanupPathForThread(
         survivingThreads,
         threadRef.threadId,
       );
@@ -406,10 +420,11 @@ export function useThreadActions() {
       refreshArchivedThreadsForEnvironment(threadRef.environmentId);
       releaseComposerDraftUploads(threadRef);
       clearComposerDraftForThread(threadRef);
-      clearProjectDraftThreadById(
-        scopeProjectRef(threadRef.environmentId, thread.projectId),
-        threadRef,
-      );
+      if (thread.projectId !== null)
+        clearProjectDraftThreadById(
+          scopeProjectRef(threadRef.environmentId, thread.projectId),
+          threadRef,
+        );
       clearTerminalUiState(threadRef);
 
       if (shouldNavigateToFallback) {
@@ -513,7 +528,7 @@ export function useThreadActions() {
   );
 
   const settleThread = useCallback(
-    async (target: ScopedThreadRef, opts: { force?: boolean } = {}) => {
+    async (target: ScopedThreadRef, opts: { force?: boolean; discardChanges?: boolean } = {}) => {
       // Version skew: never send the command to a server that predates it —
       // the raw protocol rejection would read as a random failure.
       if (
@@ -553,16 +568,53 @@ export function useThreadActions() {
         : null;
       // Settle is a high-frequency lifecycle action and stays silent — no
       // toast.
-      const result = await settleThreadMutation({
+      let result = await settleThreadMutation({
         environmentId: target.environmentId,
-        input: { threadId: target.threadId, ...(opts.force ? { force: true } : {}) },
+        input: {
+          threadId: target.threadId,
+          ...(opts.force ? { force: true } : {}),
+          ...(opts.discardChanges ? { discardChanges: true } : {}),
+        },
       });
+      if (result._tag === "Failure" && resolved?.thread.temporary) {
+        const error = squashAtomCommandFailure(result);
+        if (
+          (typeof error === "object" &&
+            error !== null &&
+            "detail" in error &&
+            error.detail === "temporary-unfinished-git-work") ||
+          (error instanceof Error && error.message.includes("temporary-unfinished-git-work"))
+        ) {
+          const choice = await requestTemporaryThreadDiscard(resolved.thread.title);
+          if (choice === "review") {
+            useRightPanelStore.getState().open(target, "diff");
+            await router.navigate({
+              to: "/threads/$environmentId/$threadId",
+              params: buildThreadRouteParams(target),
+            });
+          }
+          if (choice !== "discard") return AsyncResult.failure(Cause.interrupt());
+          result = await settleThreadMutation({
+            environmentId: target.environmentId,
+            input: { threadId: target.threadId, discardChanges: true },
+          });
+        }
+      }
       if (result._tag === "Success" && wokeAt !== null) {
         markThreadVisited(scopedThreadKey(target), wokeAt);
       }
       return result;
     },
-    [markThreadVisited, resolveThreadTarget, settleThreadMutation],
+    [markThreadVisited, resolveThreadTarget, router, settleThreadMutation],
+  );
+
+  const keepConversation = useCallback(
+    (target: ScopedThreadRef) =>
+      setTemporaryMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, temporary: false, keep: true },
+      }),
+    [setTemporaryMutation],
   );
 
   const unsettleThread = useCallback(
@@ -774,6 +826,7 @@ export function useThreadActions() {
       deleteThread,
       confirmAndDeleteThread,
       settleThread,
+      keepConversation,
       setSettleAfterCompletion,
       unsettleThread,
       snoozeThread,
@@ -791,6 +844,7 @@ export function useThreadActions() {
       pinThread,
       reorderPinnedThread,
       settleThread,
+      keepConversation,
       setSettleAfterCompletion,
       snoozeThread,
       unarchiveThread,

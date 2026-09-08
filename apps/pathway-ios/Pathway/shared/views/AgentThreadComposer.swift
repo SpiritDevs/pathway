@@ -367,8 +367,10 @@ struct AgentThreadComposer: View {
             }
             if onOpenThread != nil {
                 Button("Start in new chat", systemImage: "square.and.pencil") { startNewThread(sideChat: false) }
+                    .disabled(model.thread.shell.isTemporary)
                 Button("Start in side chat", systemImage: "rectangle.split.2x1") { startNewThread(sideChat: true) }
-                    .disabled(!model.canStartSideChat)
+                    .disabled(model.thread.shell.isTemporary || !model.canStartSideChat)
+                if model.thread.shell.isTemporary { Text("Keep conversation before starting another chat from this workspace.") }
             }
         }
         .accessibilityLabel(model.activeRunID == nil ? "Send message" : PathwayGeneralPreferences.shared.activeTurnSendMode == "steer" ? "Steer now" : "Queue message")

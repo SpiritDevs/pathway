@@ -84,6 +84,52 @@ describe("Focus notification labels", () => {
 });
 
 describe("Focus notification rows", () => {
+  it.each([WORK, PERSONAL])(
+    "groups Conversation notifications in selected enabled Focus %s",
+    (activeFocusId) => {
+      const groups = buildFocusNotificationRows({
+        notifications: [
+          notification("conversation", 10, {
+            projectKey: FocusProjectKey.make(`${ENVIRONMENT}:conversations`),
+          }),
+        ],
+        unreadCount: 1,
+        focuses: [
+          { ...WORK_FOCUS, includeConversations: true },
+          { ...PERSONAL_FOCUS, includeConversations: true },
+        ],
+        assignments: [],
+        activeFocusId,
+        threadTitlesByKey: new Map(),
+        projectNamesByKey: new Map(),
+      });
+      expect(groups).toHaveLength(1);
+      expect(groups[0]?.focusId).toBe(activeFocusId);
+      expect(groups[0]?.rows[0]).toMatchObject({
+        projectName: "Conversation",
+        focusId: activeFocusId,
+        unread: true,
+      });
+    },
+  );
+  it("keeps Conversation notifications in All when the selected Focus excludes them", () => {
+    const groups = buildFocusNotificationRows({
+      notifications: [
+        notification("conversation", 10, {
+          projectKey: FocusProjectKey.make(`${ENVIRONMENT}:conversations`),
+        }),
+      ],
+      unreadCount: 0,
+      focuses: [WORK_FOCUS, { ...PERSONAL_FOCUS, includeConversations: true }],
+      assignments: [],
+      activeFocusId: WORK,
+      threadTitlesByKey: new Map(),
+      projectNamesByKey: new Map(),
+    });
+    expect(groups.map((group) => group.focusId)).toEqual(["all"]);
+    expect(groups[0]?.rows[0]?.projectName).toBe("Conversation");
+  });
+
   it("keeps rows newest-first within groups and computes unread flags globally", () => {
     const groups = buildFocusNotificationRows({
       notifications: [

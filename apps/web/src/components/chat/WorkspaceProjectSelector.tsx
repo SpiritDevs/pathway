@@ -1,8 +1,8 @@
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { scopedProjectKey } from "@spiritdevs/client-runtime/environment";
 import { ALL_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
-import type { ScopedProjectRef } from "@spiritdevs/contracts";
-import { FolderPlusIcon } from "lucide-react";
+import type { EnvironmentId, ScopedProjectRef } from "@spiritdevs/contracts";
+import { FolderPlusIcon, MessageCircleIcon } from "lucide-react";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { openCommandPalette } from "~/commandPaletteBus";
@@ -10,7 +10,7 @@ import { activeFocusIdAtom, focusAssignmentsAtom, focusListAtom } from "~/cloud/
 import { useClientSettings } from "~/hooks/useSettings";
 import { selectProjectGroupingSettings } from "~/logicalProject";
 import { buildSidebarProjectSnapshots } from "~/sidebarProjectGrouping";
-import { useProjects, useThreadShells } from "~/state/entities";
+import { useProjects, useThreadShells, useUnscopedProjects } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { FocusIcon } from "../focus/FocusIcon";
 import { useWorkspaceProjectPicker } from "../projects/useWorkspaceProjectPicker";
@@ -35,6 +35,9 @@ interface WorkspaceProjectSelectorProps {
   readonly triggerClassName: string;
   readonly renderTrigger?: (displayName: string) => ReactNode;
   readonly menuAlign?: "start" | "center" | "end";
+  readonly conversationSelected?: boolean;
+  readonly onSelectConversation?: (() => unknown) | undefined;
+  readonly environmentId?: EnvironmentId;
   readonly onSelectProject: (projectRef: ScopedProjectRef) => unknown | Promise<unknown>;
 }
 
@@ -46,8 +49,13 @@ export function WorkspaceProjectSelector({
   renderTrigger,
   menuAlign = "center",
   onSelectProject,
+  onSelectConversation,
+  conversationSelected = false,
+  environmentId,
 }: WorkspaceProjectSelectorProps) {
-  const projects = useProjects();
+  const companyProjects = useProjects();
+  const allProjects = useUnscopedProjects();
+  const projects = environmentId === undefined ? companyProjects : allProjects;
   const threads = useThreadShells();
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -69,7 +77,10 @@ export function WorkspaceProjectSelector({
     () =>
       sortLogicalProjectsForSidebar(
         buildSidebarProjectSnapshots({
-          projects,
+          projects:
+            environmentId === undefined
+              ? projects
+              : projects.filter((project) => project.environmentId === environmentId),
           settings: projectGroupingSettings,
           primaryEnvironmentId,
           resolveEnvironmentLabel: (environmentId) =>
@@ -80,6 +91,7 @@ export function WorkspaceProjectSelector({
       ),
     [
       environmentLabelById,
+      environmentId,
       primaryEnvironmentId,
       projectGroupingSettings,
       projectSortOrder,
@@ -87,10 +99,14 @@ export function WorkspaceProjectSelector({
       threads,
     ],
   );
-  const { entries, resolveProjectRef } = useWorkspaceProjectPicker({
+  const { entries: allEntries, resolveProjectRef } = useWorkspaceProjectPicker({
     groups: projectGroups,
     preferredProjectRef: activeProjectRef,
   });
+  const entries =
+    environmentId === undefined
+      ? allEntries
+      : allEntries.filter((entry) => entry.targetProject?.environmentId === environmentId);
   const entryByKey = useMemo(
     () => new Map(entries.map((entry) => [entry.projectKey, entry] as const)),
     [entries],
@@ -123,7 +139,9 @@ export function WorkspaceProjectSelector({
           ),
         ) ?? null);
   const activeProjectKey = activeProjectGroup?.projectKey ?? "";
-  const displayName = activeProjectGroup?.displayName ?? activeProjectTitle ?? "Choose a project";
+  const displayName = conversationSelected
+    ? "Conversation"
+    : (activeProjectGroup?.displayName ?? activeProjectTitle ?? "Choose a project");
 
   const selectProject = (value: unknown) => {
     const entry = entryByKey.get(value as string);
@@ -144,7 +162,7 @@ export function WorkspaceProjectSelector({
     </MenuRadioItem>
   );
 
-  if (entries.length === 0) {
+  if (entries.length === 0 && onSelectConversation === undefined) {
     return (
       <button
         type="button"
@@ -193,6 +211,17 @@ export function WorkspaceProjectSelector({
           <FolderPlusIcon />
           New project
         </MenuItem>
+        {onSelectConversation ? (
+          <MenuItem
+            onClick={() => {
+              setActiveFocusId(ALL_FOCUS_ID);
+              onSelectConversation();
+            }}
+          >
+            <MessageCircleIcon />
+            Conversation
+          </MenuItem>
+        ) : null}
       </MenuPopup>
     </Menu>
   );

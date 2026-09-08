@@ -4,6 +4,7 @@ import type {
   Project,
   ThreadId,
 } from "@spiritdevs/contracts";
+import type { CompanyId } from "@spiritdevs/contracts/company";
 import * as DateTime from "effect/DateTime";
 
 export type AgentAwarenessPhase =
@@ -19,6 +20,7 @@ export interface AgentAwarenessState {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly projectTitle: string;
+  readonly conversationCompanyId?: CompanyId;
   readonly threadTitle: string;
   readonly phase: AgentAwarenessPhase;
   readonly headline: string;
@@ -37,7 +39,8 @@ export function buildAgentAwarenessDeepLink(input: {
 
 export interface ProjectThreadAwarenessV2Input {
   readonly environmentId: EnvironmentId;
-  readonly project: Pick<Project, "title">;
+  readonly project: Pick<Project, "title"> | null;
+  readonly conversationCompanyId?: CompanyId | null | undefined;
   readonly thread: Pick<
     OrchestrationV2ThreadShell,
     | "activityRunStatus"
@@ -55,6 +58,7 @@ export function projectThreadAwarenessV2(
   input: ProjectThreadAwarenessV2Input,
 ): AgentAwarenessState | null {
   const { environmentId, project, thread } = input;
+  if (project === null && input.conversationCompanyId == null) return null;
   const phase = resolveThreadAwarenessPhaseV2(thread);
   if (phase === null) {
     return null;
@@ -68,7 +72,10 @@ export function projectThreadAwarenessV2(
   return {
     environmentId,
     threadId: thread.id,
-    projectTitle: project.title,
+    projectTitle: project?.title ?? "Conversation",
+    ...(project === null && input.conversationCompanyId != null
+      ? { conversationCompanyId: input.conversationCompanyId }
+      : {}),
     threadTitle: thread.title,
     phase,
     headline: headlineForPhase(phase),

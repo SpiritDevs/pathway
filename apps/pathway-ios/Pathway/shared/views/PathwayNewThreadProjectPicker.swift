@@ -9,6 +9,7 @@ struct PathwayNewThreadDraft {
     let baseReference: String
     let branch: String
     let startFromOrigin: Bool
+    let temporary: Bool
 
     init(model: PathwayAgentThreadCreationModel) {
         prompt = model.prompt
@@ -18,6 +19,7 @@ struct PathwayNewThreadDraft {
         baseReference = model.baseReference
         branch = model.branch
         startFromOrigin = model.startFromOrigin
+        temporary = model.temporary
     }
 
     func apply(to model: PathwayAgentThreadCreationModel) {
@@ -28,19 +30,20 @@ struct PathwayNewThreadDraft {
         model.baseReference = baseReference
         model.branch = branch
         model.startFromOrigin = startFromOrigin
+        model.temporary = temporary
     }
 }
 
 struct PathwayNewThreadBindingOption: Identifiable, Sendable {
-    let binding: PathwayCompanyEnvironmentBinding
+    let binding: PathwayCompanyEnvironmentBinding?
     let environment: PathwayCompanyEnvironment
-    let projectID: String
+    let projectID: String?
     let projectName: String
     let companyName: String
 
-    var id: String { binding.id }
-    var label: String { environment.environment.label }
-    var workspacePath: String { binding.binding.localWorkspaceRoot }
+    var id: String { binding?.id ?? PathwayAgentThreadCreationModel.conversationDraftKey(environment) }
+    var label: String { projectID == nil ? "\(companyName) · \(environment.environment.label)" : environment.environment.label }
+    var workspacePath: String { binding?.binding.localWorkspaceRoot ?? environment.environment.label }
 }
 
 struct PathwayNewThreadProjectOption: Identifiable {
@@ -48,6 +51,7 @@ struct PathwayNewThreadProjectOption: Identifiable {
     let name: String
     let companyName: String
     let bindings: [PathwayNewThreadBindingOption]
+    var isConversation: Bool { id == "conversation" }
 
     var locationDescription: String {
         if bindings.count == 1 {
@@ -84,7 +88,7 @@ struct PathwayNewThreadProjectPicker: View {
 
     private func projectLabel(_ project: PathwayNewThreadProjectOption) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: "folder")
+            Image(systemName: project.isConversation ? "bubble.left.and.bubble.right" : "folder")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .frame(width: 28)

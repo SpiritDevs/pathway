@@ -982,6 +982,30 @@ describe("environment registry", () => {
     expect(await feedRows(t)).toHaveLength(0);
   });
 
+  it("publishes conversation capability changes to existing environment registrations", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    const base = descriptor();
+    await asEnvironment(t).mutation(api.environments.register, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      descriptor: base,
+      relayLinkState: "linked",
+      managedEndpointAvailable: true,
+    });
+    await asEnvironment(t).mutation(api.environments.register, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      descriptor: { ...base, capabilities: { ...base.capabilities, threadConversations: true } },
+      relayLinkState: "linked",
+      managedEndpointAvailable: true,
+    });
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "environmentRegistration",
+      payload: { descriptor: { capabilities: { threadConversations: true } } },
+    });
+  });
+
   it("publishes redacted Agent Thread metadata once for an active project binding", async () => {
     const t = harness();
     await seedRegistration(t);
@@ -1111,6 +1135,94 @@ describe("environment registry", () => {
         shell,
       }),
     ).resolves.toEqual({ outcome: "unchanged" });
+  });
+
+  it("publishes a projectless conversation only to its selected company and removes its nullable references", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db.query("environmentRegistrations").unique();
+      if (registration === null) throw new Error("missing environment fixture");
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+    });
+    const args = {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "conversation",
+      localProjectId: null,
+      shell: {
+        id: "conversation",
+        projectId: null,
+        conversationCompanyId: COMPANY_ID,
+        conversationPath: "/environment/userdata/conversations/one",
+        temporary: true,
+        title: "Conversation",
+      },
+    };
+    await expect(
+      asEnvironment(t).mutation(api.agentThreads.upsert, {
+        ...args,
+        shell: { ...args.shell, conversationCompanyId: COMPANY_TWO_ID },
+      }),
+    ).rejects.toThrow("owning company");
+    await expect(asEnvironment(t).mutation(api.agentThreads.upsert, args)).resolves.toEqual({
+      outcome: "published",
+    });
+    await expect(asEnvironment(t).mutation(api.agentThreads.upsert, args)).resolves.toEqual({
+      outcome: "unchanged",
+    });
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "agentThread",
+      payload: { cloudProjectId: null, shell: args.shell },
+    });
+    const rows = await t.run(async (ctx) => await ctx.db.query("agentThreads").collect());
+    expect(rows).toMatchObject([{ localProjectId: null, cloudProjectId: null }]);
+    await asEnvironment(t).mutation(api.agentThreads.remove, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "conversation",
+    });
+    expect(await t.run(async (ctx) => await ctx.db.query("agentThreads").collect())).toEqual([]);
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "agentThread",
+      changeKind: "tombstone",
+    });
+  });
+
+  it("moves conversation discovery to its attached project without retaining the old company's visibility", async () => {
+    const t = harness();
+    await seedRegistration(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db.query("environmentRegistrations").unique();
+      if (registration === null) throw new Error("missing environment fixture");
+      await ctx.db.patch(registration._id, { serviceRoleIds: [MANAGER_ROLE_ID] });
+    });
+    const args = {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      threadId: "conversation",
+      localProjectId: null,
+      shell: {
+        id: "conversation",
+        projectId: null,
+        conversationCompanyId: COMPANY_ID,
+        conversationPath: "/userdata/conversation",
+        title: "Conversation",
+      },
+    };
+    await asEnvironment(t).mutation(api.agentThreads.upsert, args);
+    await expect(
+      asEnvironment(t).mutation(api.agentThreads.upsert, {
+        ...args,
+        localProjectId: "unbound-project",
+        shell: { ...args.shell, projectId: "unbound-project" },
+      }),
+    ).resolves.toEqual({ outcome: "unbound" });
+    expect(await t.run(async (ctx) => await ctx.db.query("agentThreads").collect())).toEqual([]);
+    expect((await feedRows(t)).at(-1)).toMatchObject({
+      entityKind: "agentThread",
+      changeKind: "tombstone",
+    });
   });
 
   it("lets a project manager remove a confirmed-missing Agent Thread shell", async () => {

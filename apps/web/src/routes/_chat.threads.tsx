@@ -1,3 +1,5 @@
+import { useAtomValue } from "@effect/atom-react";
+import { activeCompanyIdAtom } from "../cloud/activeCompany";
 import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import { threadIsVisibleAt } from "@spiritdevs/contracts";
 import { createFileRoute, Link } from "@tanstack/react-router";
@@ -177,6 +179,14 @@ function NoProjectsHero({
   const openAddProject = useCallback(() => openCommandPalette({ open: "add-project" }), []);
   const openNewThread = useCallback(() => openCommandPalette({ open: "new-thread-in" }), []);
   const hasWorkspaceProjects = availability !== "unavailable";
+  const { environments } = useEnvironments();
+  const handleNewThread = useNewThreadHandler();
+  const activeCompanyId = useAtomValue(activeCompanyIdAtom);
+  const [conversationError, setConversationError] = useState<string | null>(null);
+  const conversationEnvironments = environments.filter(
+    (environment) =>
+      environment.serverConfig?.environment.capabilities.threadConversations === true,
+  );
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
@@ -192,7 +202,7 @@ function NoProjectsHero({
                   ? "Choose a project to create its checkout and start your first thread."
                   : hasWorkspaceProjects
                     ? "Choose a project to start your first thread."
-                    : "Add a project to start your first thread."}
+                    : "Start a conversation or add a project to begin."}
               </EmptyDescription>
               <div className="mt-6 flex justify-center">
                 <Button size="sm" onClick={hasWorkspaceProjects ? openNewThread : openAddProject}>
@@ -200,6 +210,45 @@ function NoProjectsHero({
                   {hasWorkspaceProjects ? "New thread" : "Add project"}
                 </Button>
               </div>
+              {conversationEnvironments.length > 0 ? (
+                <div className="mt-3 flex flex-wrap justify-center gap-2">
+                  {conversationEnvironments.map((environment) => (
+                    <Button
+                      key={environment.environmentId}
+                      size="sm"
+                      variant="outline"
+                      disabled={activeCompanyId === null}
+                      onClick={() => {
+                        setConversationError(null);
+                        void handleNewThread({
+                          environmentId: environment.environmentId,
+                          projectId: null,
+                        }).catch((error: unknown) =>
+                          setConversationError(
+                            error instanceof Error
+                              ? error.message
+                              : "Could not start a conversation.",
+                          ),
+                        );
+                      }}
+                    >
+                      {conversationEnvironments.length === 1
+                        ? "New conversation"
+                        : `Conversation on ${environment.label}`}
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
+              {conversationEnvironments.length > 0 && activeCompanyId === null ? (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Choose a company to start a conversation.
+                </p>
+              ) : null}
+              {conversationError ? (
+                <p role="alert" className="mt-2 text-sm text-destructive">
+                  {conversationError}
+                </p>
+              ) : null}
             </EmptyHeader>
           </div>
         </Empty>

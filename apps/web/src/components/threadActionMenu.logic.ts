@@ -7,6 +7,7 @@ import type { SnoozePreset } from "@spiritdevs/client-runtime/state/thread-settl
  * remains data-driven.
  */
 export type ThreadActionMenuId =
+  | "keep-conversation"
   | "new-thread-on-branch"
   | "pin"
   | "unpin"
@@ -27,6 +28,7 @@ export type ThreadActionMenuId =
   | "delete";
 
 export interface ThreadActionMenuState {
+  readonly temporary?: boolean | undefined;
   readonly branch: string | null;
   readonly isPinned: boolean;
   readonly isSettled: boolean;
@@ -57,7 +59,10 @@ export function buildThreadActionMenuItems(
   state: ThreadActionMenuState,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
   return [
-    ...(state.branch
+    ...(state.temporary && !state.isSettled
+      ? [{ id: "keep-conversation" as const, label: "Keep conversation" }]
+      : []),
+    ...(state.branch && !state.temporary
       ? [
           {
             id: "new-thread-on-branch" as const,
@@ -82,7 +87,7 @@ export function buildThreadActionMenuItems(
             : { id: "settle" as const, label: "Settle thread" },
         ]
       : []),
-    ...(!state.isSettled && state.supports.forceSettlement
+    ...(!state.temporary && !state.isSettled && state.supports.forceSettlement
       ? [{ id: "force-settle" as const, label: "Force settle thread" }]
       : []),
     ...(!state.isSettled && state.supports.settleAfterCompletion

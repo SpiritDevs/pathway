@@ -141,7 +141,6 @@ import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinar
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
-import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   OrchestrationV2ProductionLayerLive,
   ProjectSetupScriptRunnerLayerLive,
@@ -151,6 +150,7 @@ import {
   registerPreviewAutomationFence,
 } from "./orchestration-v2/BrowserTakeoverService.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
+import { ThreadWorkspaceServiceLayerLive } from "./orchestration-v2/runtimeLayer.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -470,6 +470,7 @@ const OrchestrationV2RuntimeLayerLive = OrchestrationV2ProductionLayerLive.pipe(
   Layer.provide(questionAnswerDeliveryLayer),
   Layer.provide(CheckpointStoreLayerLive),
   Layer.provide(ResourceCleanupService.live),
+  Layer.provide(ThreadWorkspaceServiceLayerLive),
   Layer.provide(RunFinalizationObserverLayerLive),
 );
 

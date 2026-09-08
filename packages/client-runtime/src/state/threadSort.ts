@@ -94,7 +94,7 @@ export function sortThreads<T extends { readonly id: string } & ThreadSortInput>
 export function getLatestThreadForProject<
   T extends {
     readonly id: string;
-    readonly projectId: ProjectId;
+    readonly projectId: ProjectId | null;
     readonly archivedAt: string | null;
   } & ThreadSortInput,
 >(threads: readonly T[], projectId: ProjectId, sortOrder: SidebarThreadSortOrder): T | null {

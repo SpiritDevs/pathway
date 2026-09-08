@@ -21,6 +21,7 @@ import {
   openCodeBoundaryAfterProviderTurn,
   openCodeChildPermissionRules,
   openCodePermissionRules,
+  openCodeConversationResumePermissions,
   openCodePermissionRequestKind,
   openCodeMcpRegistration,
   openCodeToolProjectionKind,
@@ -235,6 +236,47 @@ describe("OpenCodeAdapterV2", () => {
       pattern: "/tmp/opencode-workspace/*",
       action: "allow",
     });
+  });
+
+  it("grants the retained conversation folder without granting all external directories", () => {
+    const rules = openCodePermissionRules(
+      runtimePolicy("auto-accept-edits", {
+        additionalDirectories: ["/userdata/conversations/one"],
+      }),
+    );
+    assert.deepInclude(rules, {
+      permission: "external_directory",
+      pattern: "/userdata/conversations/one/*",
+      action: "allow",
+    });
+    assert.notDeepInclude(rules, {
+      permission: "external_directory",
+      pattern: "*",
+      action: "allow",
+    });
+  });
+
+  it("refreshes persisted native permissions when a conversation gains a project workspace", () => {
+    const before = runtimePolicy("auto-accept-edits", { cwd: "/userdata/conversations/one" });
+    const after = {
+      ...before,
+      cwd: "/workspace/project",
+      additionalDirectories: ["/userdata/conversations/one"],
+    };
+    const permission = openCodeConversationResumePermissions(
+      after,
+      openCodePermissionRules(before),
+    );
+    assert.isDefined(permission);
+    assert.deepInclude(permission, {
+      permission: "external_directory",
+      pattern: "/userdata/conversations/one/*",
+      action: "allow",
+    });
+    assert.isUndefined(openCodeConversationResumePermissions(after, permission!));
+    assert.isUndefined(
+      openCodeConversationResumePermissions(before, openCodePermissionRules(before)),
+    );
   });
 
   it("preserves OpenCode's recursion guard on task-created child sessions", () => {

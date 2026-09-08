@@ -139,3 +139,19 @@ describe("buildThreadActionMenuItems", () => {
     expect(archiveItem?.disabled).toBe(true);
   });
 });
+
+it("offers Keep conversation and settle after completion without a force-delete shortcut", () => {
+  const actions = ids({
+    ...baseState,
+    temporary: true,
+    branch: "feature",
+    supports: { ...baseState.supports, forceSettlement: true },
+  });
+  expect(actions).toContain("keep-conversation");
+  expect(actions).toContain("settle-after-completion");
+  expect(actions).not.toContain("force-settle");
+  expect(actions).not.toContain("new-thread-on-branch");
+  expect(ids({ ...baseState, temporary: true, isSettled: true })).not.toContain(
+    "keep-conversation",
+  );
+});

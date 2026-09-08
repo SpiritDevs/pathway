@@ -213,6 +213,8 @@ export function buildLocalDraftThread(
   return presentThreadShell(draftThread.environmentId, {
     id: threadId,
     projectId: draftThread.projectId,
+    temporary: draftThread.temporary ?? false,
+    conversationCompanyId: draftThread.conversationCompanyId ?? null,
     title: draftThread.pendingSend?.title ?? "New thread",
     providerInstanceId: fallbackModelSelection.instanceId,
     modelSelection: fallbackModelSelection,

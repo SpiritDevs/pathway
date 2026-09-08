@@ -20,6 +20,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -30,6 +32,7 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     detail: Schema.optional(Schema.String),
     /** Set on terminal detaches (thread archive/delete): revoke the thread's MCP credentials. */
     revokeMcpCredential: Schema.optional(Schema.Boolean),
+    durableRetry: Schema.optional(Schema.Boolean),
     /** Turns terminalized by force settle that still need a runtime interrupt. */
     interruptTurnIds: Schema.optional(Schema.Array(ProviderTurnId)),
   }),
@@ -93,7 +96,12 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     scopeId: CheckpointScopeId,
   }),
   Schema.Struct({
+    type: Schema.Literal("thread-workspace.cleanup"),
+    afterEffectIds: Schema.optional(Schema.Array(Schema.String)),
+  }),
+  Schema.Struct({
     type: Schema.Literal("terminal.cleanup"),
+    durableRetry: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("attachment.cleanup"),
@@ -136,6 +144,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "provider-session.detach",
   "provider-thread.rollback",
   "checkpoint.capture",
+  "thread-workspace.cleanup",
   "terminal.cleanup",
   "attachment.cleanup",
   "thread-title.generate",
@@ -203,6 +212,15 @@ export class EffectOutboxError extends Schema.TaggedErrorClass<EffectOutboxError
 const isEffectOutboxError = Schema.is(EffectOutboxError);
 
 export interface EffectOutboxV2Shape {
+  readonly listWorkspaceCleanupFailures: () => Effect.Effect<
+    ReadonlyArray<OrchestrationEffectV2>,
+    EffectOutboxError
+  >;
+  readonly retryWorkspaceCleanup: (effectId: string) => Effect.Effect<void, EffectOutboxError>;
+  readonly listWorkspaceCleanupDependencies: (
+    effectId: string,
+  ) => Effect.Effect<ReadonlyArray<OrchestrationEffectV2>, EffectOutboxError>;
+  readonly workspaceCleanupChanges: Stream.Stream<void>;
   readonly awaitAvailable: Effect.Effect<void>;
   readonly notifyAvailable: (count?: number) => Effect.Effect<void>;
   /** Persist rows only. Notify workers after the surrounding transaction commits. */
@@ -239,7 +257,7 @@ export interface EffectOutboxV2Shape {
   readonly retry: (input: {
     readonly effectId: string;
     readonly workerId: string;
-    readonly error: string;
+    readonly error: string | null;
     readonly delayMs: number;
   }) => Effect.Effect<boolean, EffectOutboxError>;
   readonly fail: (input: {
@@ -354,7 +372,103 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
         Effect.mapError((cause) => new EffectOutboxError({ operation, cause })),
       );
 
+    const workspaceCleanupUpdates = yield* PubSub.unbounded<void>();
+    const publishWorkspaceCleanup = PubSub.publish(workspaceCleanupUpdates, undefined).pipe(
+      Effect.asVoid,
+    );
     const service: EffectOutboxV2Shape = {
+      workspaceCleanupChanges: Stream.unwrap(
+        Effect.gen(function* () {
+          const subscription = yield* PubSub.subscribe(workspaceCleanupUpdates);
+          return Stream.concat(Stream.succeed(undefined), Stream.fromSubscription(subscription));
+        }),
+      ),
+      listWorkspaceCleanupFailures: () =>
+        sql<EffectRow>`SELECT * FROM orchestration_v2_effect_outbox WHERE effect_type = 'thread-workspace.cleanup' AND status IN ('pending', 'running', 'failed') AND last_error IS NOT NULL ORDER BY updated_at DESC`.pipe(
+          Effect.flatMap((rows) => decodeRows("list-workspace-cleanup-failures", rows)),
+          Effect.mapError(
+            (cause) =>
+              new EffectOutboxError({ operation: "list-workspace-cleanup-failures", cause }),
+          ),
+        ),
+      listWorkspaceCleanupDependencies: (effectId) =>
+        Effect.gen(function* () {
+          const candidate = yield* service.get(effectId);
+          if (
+            Option.isNone(candidate) ||
+            candidate.value.request.type !== "thread-workspace.cleanup"
+          )
+            return yield* new EffectOutboxError({
+              operation: "list-workspace-cleanup-dependencies",
+              effectId,
+              cause: "Only workspace cleanup effects have cleanup dependencies.",
+            });
+          const dependencyIds = candidate.value.request.afterEffectIds ?? [];
+          const threadId = candidate.value.threadId;
+          // Include earlier shutdown attempts and deleted owners of shared directories.
+          // A stopped projection is not evidence that its provider process stopped.
+          const rows = yield* sql<EffectRow>`
+            SELECT dependency.* FROM orchestration_v2_effect_outbox AS dependency
+            WHERE dependency.effect_type IN ('provider-session.detach', 'terminal.cleanup')
+              AND dependency.status IN ('pending', 'running', 'failed', 'cancelled')
+              AND (
+                dependency.thread_id = ${threadId}
+                OR ${dependencyIds.length > 0 ? sql`dependency.effect_id IN ${sql.in(dependencyIds)}` : sql`0 = 1`}
+                OR EXISTS (
+                  SELECT 1 FROM orchestration_v2_projection_threads AS owner
+                  JOIN orchestration_v2_projection_threads AS related ON related.thread_id = dependency.thread_id
+                  WHERE owner.thread_id = ${threadId}
+                    AND related.deleted_at IS NOT NULL
+                    AND (
+                      json_extract(owner.payload_json, '$.conversationPath') = json_extract(related.payload_json, '$.conversationPath')
+                      OR json_extract(owner.payload_json, '$.ownedWorktreePath') = json_extract(related.payload_json, '$.ownedWorktreePath')
+                      OR json_extract(owner.payload_json, '$.ownedWorktreePath') = json_extract(related.payload_json, '$.worktreePath')
+                    )
+                )
+              )
+          `;
+          return yield* decodeRows("list-workspace-cleanup-dependencies", rows);
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new EffectOutboxError({
+                operation: "list-workspace-cleanup-dependencies",
+                effectId,
+                cause,
+              }),
+          ),
+        ),
+      retryWorkspaceCleanup: (effectId) =>
+        Effect.gen(function* () {
+          const candidate = yield* service.get(effectId);
+          if (
+            Option.isNone(candidate) ||
+            candidate.value.request.type !== "thread-workspace.cleanup"
+          )
+            return yield* new EffectOutboxError({
+              operation: "retry-workspace-cleanup",
+              effectId,
+              cause: "Only workspace cleanup effects can be retried here.",
+            });
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const dependencies = (yield* service.listWorkspaceCleanupDependencies(effectId)).map(
+            (effect) => effect.id,
+          );
+          if (dependencies.length > 0) {
+            const revived = yield* sql<{
+              readonly effect_id: string;
+            }>`UPDATE orchestration_v2_effect_outbox SET status = 'pending', attempt_count = CASE WHEN status IN ('failed', 'cancelled') THEN 0 ELSE attempt_count END, payload_json = json_set(payload_json, '$.durableRetry', json('true')), available_at = ${now}, completed_at = NULL, updated_at = ${now} WHERE effect_id IN ${sql.in(dependencies)} AND effect_type IN ('provider-session.detach', 'terminal.cleanup') AND status IN ('pending', 'failed', 'cancelled') RETURNING effect_id`;
+            for (const dependency of revived) cancellationSignals.delete(dependency.effect_id);
+          }
+          yield* sql`UPDATE orchestration_v2_effect_outbox SET status = 'pending', available_at = ${now}, completed_at = NULL, updated_at = ${now} WHERE effect_id = ${effectId} AND status IN ('pending', 'failed')`;
+          yield* notifyAvailable();
+          yield* publishWorkspaceCleanup;
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new EffectOutboxError({ operation: "retry-workspace-cleanup", effectId, cause }),
+          ),
+        ),
       enqueue: (effects) =>
         Effect.gen(function* () {
           const now = yield* DateTime.now;
@@ -493,11 +607,12 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             available_at = ${now},
             updated_at = ${now},
             last_error = 'Requeued after the previous server process ended.'
-          WHERE status = 'running'
-            AND effect_type IN ${sql.in(REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS)}
+          WHERE (status = 'running' AND effect_type IN ${sql.in(REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS)})
+            OR (status = 'failed' AND effect_type = 'thread-workspace.cleanup')
           RETURNING effect_id
         `;
         if (requeuedRows.length > 0) yield* notifyAvailable(requeuedRows.length);
+        yield* publishWorkspaceCleanup;
         return { requeued: requeuedRows.length, cancelled: cancelledRows.length };
       }).pipe(
         Effect.mapError(
@@ -522,7 +637,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
               lease_owner = ${workerId},
               lease_expires_at = ${leaseExpiresAt},
               updated_at = ${nowIso},
-              last_error = NULL
+              last_error = CASE WHEN effect_type = 'thread-workspace.cleanup' THEN last_error ELSE NULL END
             WHERE effect_id = (
               SELECT candidate.effect_id
               FROM orchestration_v2_effect_outbox AS candidate
@@ -564,7 +679,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
       succeed: ({ effectId, workerId }) =>
         Effect.gen(function* () {
           const now = DateTime.formatIso(yield* DateTime.now);
-          const rows = yield* sql<{ readonly effect_id: string }>`
+          const rows = yield* sql<{ readonly effect_id: string; readonly effect_type: string }>`
             UPDATE orchestration_v2_effect_outbox
             SET
               status = 'succeeded',
@@ -576,11 +691,12 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             WHERE effect_id = ${effectId}
               AND status = 'running'
               AND lease_owner = ${workerId}
-            RETURNING effect_id
+            RETURNING effect_id, effect_type
           `;
           if (rows.length === 1) {
             cancellationSignals.delete(effectId);
             yield* notifyAvailable();
+            if (rows[0]?.effect_type === "thread-workspace.cleanup") yield* publishWorkspaceCleanup;
           }
           return rows.length === 1;
         }).pipe(
@@ -595,7 +711,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
           const availableAt = DateTime.formatIso(
             DateTime.add(now, { milliseconds: Math.max(0, delayMs) }),
           );
-          const rows = yield* sql<{ readonly effect_id: string }>`
+          const rows = yield* sql<{ readonly effect_id: string; readonly effect_type: string }>`
             UPDATE orchestration_v2_effect_outbox
             SET
               status = 'pending',
@@ -607,11 +723,13 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             WHERE effect_id = ${effectId}
               AND status = 'running'
               AND lease_owner = ${workerId}
-            RETURNING effect_id
+            RETURNING effect_id, effect_type
           `;
           if (rows.length === 1) {
             cancellationSignals.delete(effectId);
             yield* notifyAvailable();
+            if (rows[0]?.effect_type === "thread-workspace.cleanup" && error !== null)
+              yield* publishWorkspaceCleanup;
           }
           return rows.length === 1;
         }).pipe(
@@ -622,7 +740,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
       fail: ({ effectId, workerId, error }) =>
         Effect.gen(function* () {
           const now = DateTime.formatIso(yield* DateTime.now);
-          const rows = yield* sql<{ readonly effect_id: string }>`
+          const rows = yield* sql<{ readonly effect_id: string; readonly effect_type: string }>`
             UPDATE orchestration_v2_effect_outbox
             SET
               status = 'failed',
@@ -634,11 +752,12 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             WHERE effect_id = ${effectId}
               AND status = 'running'
               AND lease_owner = ${workerId}
-            RETURNING effect_id
+            RETURNING effect_id, effect_type
           `;
           if (rows.length === 1) {
             cancellationSignals.delete(effectId);
             yield* notifyAvailable();
+            if (rows[0]?.effect_type === "thread-workspace.cleanup") yield* publishWorkspaceCleanup;
           }
           return rows.length === 1;
         }).pipe(

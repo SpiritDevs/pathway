@@ -56,6 +56,7 @@ struct PathwayActivityRow: Codable, Hashable, Sendable, Identifiable {
     let status: String
     let updatedAt: String
     let deepLink: String
+    var conversationCompanyId: String? = nil
 
     var id: String { "\(environmentId):\(threadId)" }
     var url: URL? {

@@ -34,6 +34,7 @@ export const FocusAccentColor = TrimmedNonEmptyString.check(Schema.isPattern(/^#
 export type FocusAccentColor = typeof FocusAccentColor.Type;
 
 export const Focus = Schema.Struct({
+  includeConversations: Schema.optionalKey(Schema.Boolean),
   id: FocusId,
   name: FocusName,
   iconName: FocusIconName,

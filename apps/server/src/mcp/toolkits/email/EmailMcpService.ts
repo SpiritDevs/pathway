@@ -89,6 +89,12 @@ export const EmailMcpProjectScopeLive = Layer.effect(
               ),
             ),
           );
+        if (projection.thread.projectId === null) {
+          return yield* failure(
+            "not-found",
+            "Choose an email project or attach a project to this conversation.",
+          );
+        }
         return { type: "project", projectId: projection.thread.projectId };
       }),
     });

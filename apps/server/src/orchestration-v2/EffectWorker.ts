@@ -1,3 +1,4 @@
+import { ThreadWorkspaceService } from "./ThreadWorkspaceService.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -94,6 +95,7 @@ export const executorLayer: Layer.Layer<
   Effect.gen(function* () {
     const runFinalization = yield* RunFinalizationService;
     const resourceCleanup = yield* ResourceCleanupService;
+    const threadWorkspaces = yield* ThreadWorkspaceService;
     const checkpointRollback = yield* CheckpointRollbackServiceV2;
     const providerSessions = yield* ProviderSessionManagerV2;
     const providerTurnControl = yield* ProviderTurnControlServiceV2;
@@ -307,6 +309,17 @@ export const executorLayer: Layer.Layer<
                     }),
                 ),
               );
+          case "thread-workspace.cleanup":
+            return threadWorkspaces.cleanup(effect.threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: effect.request.type,
+                    cause,
+                  }),
+              ),
+            );
           case "terminal.cleanup":
             return resourceCleanup.cleanupTerminals(effect.threadId).pipe(
               Effect.mapError(
@@ -580,6 +593,11 @@ export const layerWithOptions = (
           return false;
         }
         const effect = claimed.value;
+        const durableCleanup =
+          effect.request.type === "thread-workspace.cleanup" ||
+          ((effect.request.type === "terminal.cleanup" ||
+            effect.request.type === "provider-session.detach") &&
+            effect.request.durableRetry === true);
         // Arm the process-local cancellation signal before re-reading durable
         // state. A cancellation that commits after the row read has begun can
         // then still win the execution race instead of falling into the gap
@@ -612,7 +630,11 @@ export const layerWithOptions = (
         }).pipe(Effect.onError((cause) => requeueClaim(effect, cause)));
         if (cancelledBeforeExecution) return true;
 
-        if (effect.attemptCount > maxAttempts && Option.isSome(questionDelivery)) {
+        if (
+          !durableCleanup &&
+          effect.attemptCount > maxAttempts &&
+          Option.isSome(questionDelivery)
+        ) {
           const updated = yield* settleExhaustedClaim(
             effect,
             effect.lastError ?? "Provider execution exhausted its retry attempts.",
@@ -625,6 +647,38 @@ export const layerWithOptions = (
           });
         }
 
+        if (effect.request.type === "thread-workspace.cleanup") {
+          const unsettled = yield* outbox.listWorkspaceCleanupDependencies(effect.id);
+          const dependencies = yield* Effect.forEach(effect.request.afterEffectIds ?? [], (id) =>
+            outbox.get(id),
+          );
+          if (
+            unsettled.length > 0 ||
+            dependencies.some(
+              (dependency) => Option.isNone(dependency) || dependency.value.status !== "succeeded",
+            )
+          ) {
+            if (
+              unsettled.some(
+                (dependency) => dependency.status === "failed" || dependency.status === "cancelled",
+              )
+            )
+              yield* outbox.retryWorkspaceCleanup(effect.id);
+            yield* outbox.retry({
+              effectId: effect.id,
+              workerId,
+              error:
+                effect.lastError ??
+                unsettled.find((dependency) => dependency.lastError !== null)?.lastError ??
+                (dependencies.some(Option.isNone)
+                  ? "A required provider shutdown record is missing."
+                  : null),
+              delayMs: Math.min(30_000, 1_000 * 2 ** Math.max(0, effect.attemptCount - 1)),
+            });
+            yield* outbox.clearCancellation(effect.id);
+            return true;
+          }
+        }
         const execution = executor.execute(effect).pipe(Effect.as("executed" as const));
         const exit = yield* Effect.exit(Effect.raceFirst(execution, cancellation)).pipe(
           Effect.ensuring(outbox.clearCancellation(effect.id)),
@@ -662,7 +716,7 @@ export const layerWithOptions = (
           ? yield* outbox
               .succeed({ effectId: effect.id, workerId })
               .pipe(Effect.onError((cause) => terminalizeClaim(effect, cause)))
-          : effect.attemptCount >= maxAttempts
+          : !durableCleanup && effect.attemptCount >= maxAttempts
             ? yield* settleExhaustedClaim(effect, error)
             : yield* outbox
                 .retry({

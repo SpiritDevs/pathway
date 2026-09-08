@@ -1,7 +1,7 @@
 import Foundation
 
 struct PathwayThreadLaunchDraft: Sendable {
-    let projectID: String
+    let projectID: String?
     let prompt: String
     let modelSelection: PathwayModelSelection
     let runtimeMode: String
@@ -11,6 +11,8 @@ struct PathwayThreadLaunchDraft: Sendable {
     let branch: String
     let startFromOrigin: Bool
     var attachments: [JSONValue] = []
+    var temporary = false
+    var conversationCompanyID: String? = nil
 }
 
 enum PathwayAgentThreadCommands {
@@ -21,7 +23,7 @@ enum PathwayAgentThreadCommands {
     ) -> JSONValue {
         let trimmedBranch = draft.branch.trimmingCharacters(in: .whitespacesAndNewlines)
         let workspaceStrategy: JSONValue
-        if draft.workspaceMode == "worktree" {
+        if draft.projectID != nil && (draft.workspaceMode == "worktree" || draft.temporary) {
             var fields: [String: JSONValue] = [
                 "type": .string("worktree"),
                 "baseRef": .string(
@@ -50,7 +52,7 @@ enum PathwayAgentThreadCommands {
         var payload: [String: JSONValue] = [
             "commandId": .string(identifier),
             "creationSource": .string("mobile"),
-            "projectId": .string(draft.projectID),
+            "projectId": draft.projectID.map(JSONValue.string) ?? .null,
             "title": .string("New thread"),
             "generateTitle": .bool(true),
             "modelSelection": .object(selection),
@@ -64,6 +66,10 @@ enum PathwayAgentThreadCommands {
                 "attachments": .array(draft.attachments)
             ])
         ]
+        if draft.temporary { payload["temporary"] = .bool(true) }
+        if draft.projectID == nil, let companyID = draft.conversationCompanyID {
+            payload["conversationCompanyId"] = .string(companyID)
+        }
         if let threadID { payload["threadId"] = .string(threadID) }
         return .object(payload)
     }

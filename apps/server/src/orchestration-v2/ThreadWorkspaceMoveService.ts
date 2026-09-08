@@ -129,6 +129,18 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
+    if (projection.thread.projectId === null) {
+      return {
+        fileCount: 0,
+        terminalCount: 0,
+        blockers: [
+          {
+            kind: "workspace_unavailable" as const,
+            message: "Attach a project before moving to a worktree.",
+          },
+        ],
+      };
+    }
     const project = yield* projects.getById({ projectId: projection.thread.projectId }).pipe(
       Effect.mapError(
         (cause) =>
@@ -302,6 +314,15 @@ export const make = Effect.gen(function* () {
     }
     const { git, terminals, vcsStatus } = dependencies.value;
     const initial = yield* loadMove(input.threadId, input.moveId);
+    if (initial.projection.thread.projectId === null) {
+      return yield* new ThreadWorkspaceMoveExecutionError({
+        threadId: input.threadId,
+        moveId: input.moveId,
+        operation: "resolve-services",
+        cause: "Attach a project before moving to a worktree.",
+      });
+    }
+    const projectId = initial.projection.thread.projectId;
     if (initial.move.status !== "running") return;
     if (
       initial.projection.thread.worktreePath !== null &&
@@ -310,7 +331,7 @@ export const make = Effect.gen(function* () {
       const targetWorktreePath = initial.projection.thread.worktreePath;
       const project = yield* projects
         .getById({
-          projectId: initial.projection.thread.projectId,
+          projectId,
         })
         .pipe(
           Effect.map(Option.getOrNull),
@@ -339,7 +360,7 @@ export const make = Effect.gen(function* () {
         const setupExit = yield* Effect.exit(
           ProjectSetupScriptRunner.runResolvedProjectSetupScript({
             threadId: input.threadId,
-            projectId: initial.projection.thread.projectId,
+            projectId,
             projectCwd: project.workspaceRoot,
             worktreePath: targetWorktreePath,
             project: {
@@ -410,7 +431,7 @@ export const make = Effect.gen(function* () {
       }
       const project = yield* projects
         .getById({
-          projectId: initial.projection.thread.projectId,
+          projectId,
         })
         .pipe(
           Effect.map(Option.getOrNull),
@@ -665,7 +686,7 @@ export const make = Effect.gen(function* () {
       const setupExit = yield* Effect.exit(
         ProjectSetupScriptRunner.runResolvedProjectSetupScript({
           threadId: input.threadId,
-          projectId: initial.projection.thread.projectId,
+          projectId,
           projectCwd: sourceCwd,
           worktreePath,
           project: {

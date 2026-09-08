@@ -32,6 +32,7 @@ import {
 } from "@spiritdevs/client-runtime/connection";
 import { deriveThreadTitleSeed } from "@spiritdevs/client-runtime/operations";
 import {
+  canSettle,
   effectiveSettled,
   effectiveSnoozed,
 } from "@spiritdevs/client-runtime/state/thread-settled";
@@ -101,6 +102,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
 import { restoreWorkspacePreparationDraft } from "../workspacePreparationDraft";
 import { onOpenThreadWorkspaceMove } from "../threadWorkspaceMoveBus";
+import { activeCompanyIdAtom } from "../cloud/activeCompany";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
@@ -256,6 +258,7 @@ import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
+  draftProjectKey,
   composerDraftHasUserContent,
   captureComposerDraft,
   deriveComposerControlsLocked,
@@ -818,11 +821,12 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const serverThread = useThreadShell(threadRef);
   const draftThread = useComposerDraftStore((store) => store.getDraftThreadByRef(threadRef));
-  const projectRef = serverThread
-    ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
-    : draftThread
-      ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-      : null;
+  const projectRef =
+    serverThread && serverThread.projectId !== null
+      ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
+      : draftThread && draftThread.projectId !== null
+        ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+        : null;
   const project = useProject(projectRef);
   const terminalUiState = useTerminalUiStateStore((state) =>
     selectThreadTerminalUiState(state.terminalUiStateByThreadKey, threadRef),
@@ -947,8 +951,8 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
             workspaceRoot: project.workspaceRoot,
             worktreePath: effectiveWorktreePath,
           })
-        : null),
-    [effectiveWorktreePath, launchContext?.cwd, project],
+        : (serverThread?.conversationPath ?? null)),
+    [effectiveWorktreePath, launchContext?.cwd, project, serverThread?.conversationPath],
   );
   const runtimeEnv = useMemo(
     () =>
@@ -1236,11 +1240,12 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
 }: PersistentThreadTerminalPanelProps) {
   const serverThread = useThreadShell(threadRef);
   const draftThread = useComposerDraftStore((store) => store.getDraftThreadByRef(threadRef));
-  const projectRef = serverThread
-    ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
-    : draftThread
-      ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-      : null;
+  const projectRef =
+    serverThread && serverThread.projectId !== null
+      ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
+      : draftThread && draftThread.projectId !== null
+        ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+        : null;
   const project = useProject(projectRef);
   const knownTerminalSessions = useKnownTerminalSessions({
     environmentId: threadRef.environmentId,
@@ -1258,8 +1263,8 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
       activeSummary?.cwd ??
       (project
         ? projectWorkspaceCwd({ workspaceRoot: project.workspaceRoot, worktreePath })
-        : null),
-    [activeSummary?.cwd, launchContext?.cwd, project, worktreePath],
+        : (serverThread?.conversationPath ?? null)),
+    [activeSummary?.cwd, launchContext?.cwd, project, worktreePath, serverThread?.conversationPath],
   );
   const runtimeEnv = useMemo(
     () =>
@@ -1444,6 +1449,14 @@ function ChatViewContent(props: ChatViewProps) {
   const openTerminal = useAtomCommand(terminalEnvironment.open, "terminal open");
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
+  const activeCompanyId = useAtomValue(activeCompanyIdAtom);
+  const setActiveCompanyId = useAtomSet(activeCompanyIdAtom);
+  const attachConversationProject = useAtomCommand(threadEnvironment.attachProject, {
+    reportFailure: false,
+  });
+  const setThreadTemporary = useAtomCommand(threadEnvironment.setTemporary, {
+    reportFailure: false,
+  });
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -1778,9 +1791,10 @@ function ChatViewContent(props: ChatViewProps) {
     [mountedTerminalThreadKeys],
   );
 
-  const fallbackDraftProjectRef = draftThread
-    ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-    : null;
+  const fallbackDraftProjectRef =
+    draftThread && draftThread.projectId !== null
+      ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+      : null;
   const fallbackDraftProject = useProject(fallbackDraftProjectRef);
   const localDraftError = serverThread
     ? null
@@ -2197,9 +2211,10 @@ function ChatViewContent(props: ChatViewProps) {
     reconcile();
   }, [activeThreadKey, existingOpenTerminalThreadKeys, terminalUiState.terminalOpen]);
   const latestRunSettled = isLatestRunSettled(activeLatestRun, activeRuntime);
-  const activeProjectRef = activeThread
-    ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
-    : null;
+  const activeProjectRef =
+    activeThread && activeThread.projectId !== null
+      ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
+      : null;
   const activeProject = useProject(activeProjectRef);
   // Rootless projects stay selectable, so every surface below that needs a real directory —
   // terminals, project scripts, worktree bootstrap — resolves one through this rather than
@@ -2240,7 +2255,9 @@ function ChatViewContent(props: ChatViewProps) {
   const activeEnvironmentBootstrapComplete = activeEnvironmentShell.data?.snapshot._tag === "Some";
   const activeProjectKey = activeProject
     ? `${activeProject.environmentId}:${activeProject.workspaceRoot}`
-    : null;
+    : activeThread?.conversationPath
+      ? `${activeThread.environmentId}:${activeThread.conversationPath}`
+      : null;
   const [pendingFileSurfaceIdsByProject, setPendingFileSurfaceIdsByProject] = useState<
     ReadonlyMap<string, ReadonlySet<string>>
   >(() => new Map());
@@ -2272,8 +2289,18 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     if (!activeThreadRef || !activeEnvironmentBootstrapComplete) return;
-    useRightPanelStore.getState().reconcileFileSurfaces(activeThreadRef, activeProject !== null);
-  }, [activeEnvironmentBootstrapComplete, activeProject, activeThreadRef]);
+    useRightPanelStore
+      .getState()
+      .reconcileFileSurfaces(
+        activeThreadRef,
+        activeProject !== null || activeThread?.conversationPath != null,
+      );
+  }, [
+    activeEnvironmentBootstrapComplete,
+    activeProject,
+    activeThread?.conversationPath,
+    activeThreadRef,
+  ]);
 
   // Compute the list of environments this logical project spans, used to
   // drive the environment picker in BranchToolbar.
@@ -3258,6 +3285,10 @@ function ChatViewContent(props: ChatViewProps) {
   const onControlWorkspacePreparation = useCallback(
     async (runId: RunId, action: "cancel" | "work_locally" | "retry") => {
       if (!activeProject || !serverProjection) throw new Error("This thread is unavailable.");
+      if (action === "work_locally" && serverProjection.thread.temporary)
+        throw new Error(
+          "Temporary project threads require a dedicated worktree. Retry preparation or keep the conversation first.",
+        );
       const message = serverProjection.messages.find(
         (message) => message.runId === runId && message.role === "user",
       );
@@ -3407,7 +3438,7 @@ function ChatViewContent(props: ChatViewProps) {
         workspaceRoot: activeProject.workspaceRoot,
         worktreePath: activeThread?.worktreePath ?? null,
       })
-    : null;
+    : (activeThread?.conversationPath ?? null);
   const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
@@ -3606,7 +3637,8 @@ function ChatViewContent(props: ChatViewProps) {
   const hasTimelineTopBanner = Boolean(visibleThreadError) || visibleProviderStatus !== null;
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
-  const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  const activeWorkspaceRoot =
+    activeThreadWorktreePath ?? activeProjectCwd ?? activeThread?.conversationPath ?? undefined;
   const activeTerminalLaunchContext =
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
   // Default true while loading to avoid toolbar flicker.
@@ -3774,13 +3806,14 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef) return;
     const nextOpen = !terminalUiState.terminalOpen;
     if (nextOpen && terminalUiState.terminalIds.length === 0) {
-      if (!activeThreadId || !activeProject) {
+      if (!activeThreadId || (!activeProject && !gitCwd)) {
         return;
       }
       void (async () => {
         const cwdForOpen =
           gitCwd ??
-          activeProject.workspaceRoot ??
+          activeProject?.workspaceRoot ??
+          gitCwd ??
           (await ensureActiveProjectWorkspaceRoot("A terminal runs inside a directory."));
         if (!cwdForOpen) {
           return;
@@ -3795,7 +3828,7 @@ function ChatViewContent(props: ChatViewProps) {
             cwd: cwdForOpen,
             ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
             env: projectWorkspaceRuntimeEnv({
-              workspaceRoot: activeProject.workspaceRoot,
+              workspaceRoot: activeProject?.workspaceRoot ?? gitCwd,
               cwd: cwdForOpen,
               worktreePath: activeThreadWorktreePath,
             }),
@@ -3822,13 +3855,19 @@ function ChatViewContent(props: ChatViewProps) {
   ]);
   const splitTerminal = useCallback(
     (direction: "horizontal" | "vertical" = "horizontal") => {
-      if (!activeThreadRef || hasReachedSplitLimit || !activeThreadId || !activeProject) {
+      if (
+        !activeThreadRef ||
+        hasReachedSplitLimit ||
+        !activeThreadId ||
+        (!activeProject && !gitCwd)
+      ) {
         return;
       }
       void (async () => {
         const cwdForOpen =
           gitCwd ??
-          activeProject.workspaceRoot ??
+          activeProject?.workspaceRoot ??
+          gitCwd ??
           (await ensureActiveProjectWorkspaceRoot("A terminal runs inside a directory."));
         if (!cwdForOpen) {
           return;
@@ -3848,7 +3887,7 @@ function ChatViewContent(props: ChatViewProps) {
             cwd: cwdForOpen,
             ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
             env: projectWorkspaceRuntimeEnv({
-              workspaceRoot: activeProject.workspaceRoot,
+              workspaceRoot: activeProject?.workspaceRoot ?? gitCwd,
               cwd: cwdForOpen,
               worktreePath: activeThreadWorktreePath,
             }),
@@ -3872,13 +3911,14 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
   const createNewTerminal = useCallback(() => {
-    if (!activeThreadRef || !activeThreadId || !activeProject) {
+    if (!activeThreadRef || !activeThreadId || (!activeProject && !gitCwd)) {
       return;
     }
     void (async () => {
       const cwdForOpen =
         gitCwd ??
-        activeProject.workspaceRoot ??
+        activeProject?.workspaceRoot ??
+        gitCwd ??
         (await ensureActiveProjectWorkspaceRoot("A terminal runs inside a directory."));
       if (!cwdForOpen) {
         return;
@@ -3894,7 +3934,7 @@ function ChatViewContent(props: ChatViewProps) {
           cwd: cwdForOpen,
           ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
           env: projectWorkspaceRuntimeEnv({
-            workspaceRoot: activeProject.workspaceRoot,
+            workspaceRoot: activeProject?.workspaceRoot ?? gitCwd,
             cwd: cwdForOpen,
             worktreePath: activeThreadWorktreePath,
           }),
@@ -4268,12 +4308,12 @@ function ChatViewContent(props: ChatViewProps) {
     addDiffSurface();
   }, [addDiffSurface]);
   const addFilesSurface = useCallback(() => {
-    if (!activeThreadRef || !activeProject) return;
+    if (!activeThreadRef || !activeWorkspaceRoot) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
-  }, [activeProject, activeThreadRef]);
+  }, [activeWorkspaceRoot, activeThreadRef]);
   const openFileSurface = useCallback(
     (relativePath: string, line?: number) => {
-      if (!activeProject) return;
+      if (!activeWorkspaceRoot) return;
       const ownerThreadRef = resolvePanelSurfaceOwnerThreadRef(
         activeThreadRef,
         panelOwnerThreadRef,
@@ -4281,7 +4321,7 @@ function ChatViewContent(props: ChatViewProps) {
       if (!ownerThreadRef) return;
       useRightPanelStore.getState().openFile(ownerThreadRef, relativePath, line);
     },
-    [activeProject, activeThreadRef, panelOwnerThreadRef],
+    [activeWorkspaceRoot, activeThreadRef, panelOwnerThreadRef],
   );
   // The thread's own change request, placed against the project it belongs to. Without a
   // project there is nothing to resolve it against, so the caller falls back to the browser.
@@ -4355,11 +4395,12 @@ function ChatViewContent(props: ChatViewProps) {
     rightPanelState.surfaces,
   ]);
   const addTerminalSurface = useCallback(() => {
-    if (!activeThreadRef || !activeThreadId || !activeProject) return;
+    if (!activeThreadRef || !activeThreadId || (!activeProject && !gitCwd)) return;
     void (async () => {
       const cwd =
         gitCwd ??
-        activeProject.workspaceRoot ??
+        activeProject?.workspaceRoot ??
+        gitCwd ??
         (await ensureActiveProjectWorkspaceRoot("A terminal runs inside a directory."));
       if (cwd === null) return;
       const terminalId = nextTerminalId(allocatableActiveTerminalIds);
@@ -4373,7 +4414,7 @@ function ChatViewContent(props: ChatViewProps) {
           cwd,
           ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
           env: projectWorkspaceRuntimeEnv({
-            workspaceRoot: activeProject.workspaceRoot,
+            workspaceRoot: activeProject?.workspaceRoot ?? gitCwd,
             cwd,
             worktreePath: activeThreadWorktreePath,
           }),
@@ -4395,7 +4436,7 @@ function ChatViewContent(props: ChatViewProps) {
       if (
         !activeThreadRef ||
         !activeThreadId ||
-        !activeProject ||
+        (!activeProject && !gitCwd) ||
         activeRightPanelSurface?.kind !== "terminal" ||
         activeRightPanelSurface.terminalIds.length >= MAX_TERMINALS_PER_GROUP
       ) {
@@ -4404,7 +4445,8 @@ function ChatViewContent(props: ChatViewProps) {
       void (async () => {
         const cwd =
           gitCwd ??
-          activeProject.workspaceRoot ??
+          activeProject?.workspaceRoot ??
+          gitCwd ??
           (await ensureActiveProjectWorkspaceRoot("A terminal runs inside a directory."));
         if (cwd === null) return;
         const terminalId = nextTerminalId(allocatableActiveTerminalIds);
@@ -4420,7 +4462,7 @@ function ChatViewContent(props: ChatViewProps) {
             cwd,
             ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
             env: projectWorkspaceRuntimeEnv({
-              workspaceRoot: activeProject.workspaceRoot,
+              workspaceRoot: activeProject?.workspaceRoot ?? gitCwd,
               cwd,
               worktreePath: activeThreadWorktreePath,
             }),
@@ -5441,6 +5483,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadPr, openThreadPullRequest]);
   const pullRequestSurfaceAvailable =
     supportsPullRequests && activeThreadPr !== null && threadRepository !== null;
+  const supportsConversations = serverConfig?.environment.capabilities.threadConversations === true;
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
   const supportsSettleAfterCompletion =
     serverConfig?.environment.capabilities.threadSettleAfterCompletion === true;
@@ -6497,7 +6540,13 @@ function ChatViewContent(props: ChatViewProps) {
   const projectSwitchInFlightRef = useRef(false);
   const canChangeHeaderProject =
     (isLocalDraftThread && timelineEntries.length === 0 && !isWorking) ||
-    (isServerThread && canReplaceInitialThreadProject(serverProjection) && !isWorking);
+    (isServerThread &&
+      !isWorking &&
+      (activeThread?.projectId === null
+        ? canSettle(activeThread, { now: new Date().toISOString() }) &&
+          (activeThread.pendingBackgroundTasks?.length ?? 0) === 0
+        : activeThread?.conversationPath == null &&
+          canReplaceInitialThreadProject(serverProjection)));
   const handleHeaderProjectChange = useCallback(
     async (projectRef: { environmentId: EnvironmentId; projectId: ProjectId }) => {
       if (projectSwitchInFlightRef.current || !activeThread || !canChangeHeaderProject) return;
@@ -6523,10 +6572,39 @@ function ChatViewContent(props: ChatViewProps) {
             : scopedProjectKey(projectRef),
           projectRef,
           draftId,
+          session.temporary ? { envMode: "worktree", worktreePath: null } : undefined,
         );
         return;
       }
 
+      if (activeThread.projectId === null) {
+        if (projectRef.environmentId !== activeThread.environmentId) return;
+        projectSwitchInFlightRef.current = true;
+        try {
+          const result = await attachConversationProject({
+            environmentId: activeThread.environmentId,
+            input: { threadId: activeThread.id, projectId: projectRef.projectId },
+          });
+          if (result._tag === "Failure") {
+            const error = squashAtomCommandFailure(result);
+            setThreadError(
+              activeThread.id,
+              error instanceof Error ? error.message : "Could not attach project.",
+            );
+          } else if (
+            !allProjects.some(
+              (project) =>
+                project.environmentId === projectRef.environmentId &&
+                project.id === projectRef.projectId,
+            )
+          ) {
+            setActiveCompanyId(null);
+          }
+        } finally {
+          projectSwitchInFlightRef.current = false;
+        }
+        return;
+      }
       if (!serverProjection) return;
       const firstUserMessage = serverProjection.messages.find((message) => message.role === "user");
       const initialRun = serverProjection.runs[0];
@@ -6682,6 +6760,8 @@ function ChatViewContent(props: ChatViewProps) {
       activeThread,
       allProjects,
       attachProjectDirectory,
+      attachConversationProject,
+      setActiveCompanyId,
       canChangeHeaderProject,
       deleteThread,
       draftId,
@@ -6696,9 +6776,56 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
+  const handleSelectConversation = useCallback(() => {
+    if (!draftId || !activeThread || isServerThread || sendInFlightRef.current) return;
+    const ref = { environmentId: activeThread.environmentId, projectId: null };
+    setLogicalProjectDraftThreadId(
+      `${draftProjectKey(ref)}:${activeCompanyId ?? "unassigned"}`,
+      ref,
+      draftId,
+      {
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        conversationCompanyId: activeCompanyId,
+      },
+    );
+  }, [activeCompanyId, activeThread, draftId, isServerThread, setLogicalProjectDraftThreadId]);
+  const handleTemporaryChange = useCallback(
+    (temporary: boolean, keep = false) => {
+      if (!activeThread || sendInFlightRef.current) return;
+      if (!isServerThread && draftId) {
+        useComposerDraftStore.getState().setDraftThreadContext(draftId, {
+          temporary,
+          ...(temporary && activeThread.projectId !== null
+            ? { envMode: "worktree", worktreePath: null }
+            : {}),
+        });
+        return;
+      }
+      void setThreadTemporary({
+        environmentId: activeThread.environmentId,
+        input: { threadId: activeThread.id, temporary, ...(keep ? { keep: true } : {}) },
+      }).then((result) => {
+        if (result._tag === "Failure") {
+          const error = squashAtomCommandFailure(result);
+          setThreadError(
+            activeThread.id,
+            error instanceof Error ? error.message : "Could not change retention.",
+          );
+        }
+      });
+    },
+    [activeThread, draftId, isServerThread, setThreadError, setThreadTemporary],
+  );
+
   const sideChatCreateInFlightRef = useRef(false);
   const createSideChat = useCallback(
     async (options?: { moveCurrentComposerDraft?: boolean }) => {
+      if (activeThread?.temporary) {
+        setThreadError(activeThread.id, "Choose Keep conversation before creating a side chat.");
+        return;
+      }
       if (
         sideChatCreateInFlightRef.current ||
         !activeThread ||
@@ -6830,6 +6957,10 @@ function ChatViewContent(props: ChatViewProps) {
   const [continuationPending, setContinuationPending] = useState(false);
   const onContinueFromRun = useCallback(
     (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => {
+      if (activeThread?.temporary) {
+        setThreadError(activeThread.id, "Choose Keep conversation before forking this thread.");
+        return;
+      }
       setContinuationRequest({
         kind: "continue",
         commandId: newCommandId(),
@@ -6838,7 +6969,7 @@ function ChatViewContent(props: ChatViewProps) {
         targetThreadId: newThreadId(),
       });
     },
-    [],
+    [activeThread, setThreadError],
   );
   const onOpenHandoff = useCallback(() => {
     if (activeLatestRun?.status !== "completed") return;
@@ -7044,6 +7175,13 @@ function ChatViewContent(props: ChatViewProps) {
     target: "current" | "new-chat" | "side-chat" = "current",
   ) => {
     e?.preventDefault();
+    if (target !== "current" && activeThread?.temporary) {
+      setThreadError(
+        activeThread.id,
+        "Choose Keep conversation before creating another thread from this workspace.",
+      );
+      return;
+    }
     const notifyDirectAnnotationAttached = () => {
       if (!directAnnotation) return;
       toastManager.add(
@@ -7206,37 +7344,40 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return;
     }
-    if (!activeProject) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: "Choose a project first",
-          description: "This draft no longer points to an available project.",
-        }),
-      );
+    const conversationCompanyIdForSend = activeThread.conversationCompanyId ?? activeCompanyId;
+    if (isLocalDraftThread && activeThread.projectId === null && !conversationCompanyIdForSend) {
+      setThreadError(activeThread.id, "Choose a company before starting a conversation.");
       return;
     }
-    // The composer is the loudest just-in-time promotion surface: a rootless project cannot hold
-    // a thread at all (the decider refuses `thread.create`), so the directory is resolved here,
-    // before the draft is consumed — cancelling leaves the composer exactly as it was.
-    const projectWorkspaceRootForSend =
-      activeProject.workspaceRoot ??
-      (await ensureActiveProjectWorkspaceRoot("An agent needs a directory to work in."));
-    if (projectWorkspaceRootForSend === null) {
+    if (!activeProject && activeThread.projectId !== null) {
+      setThreadError(activeThread.id, "This draft no longer points to an available project.");
       return;
     }
+    const projectWorkspaceRootForSend = activeProject
+      ? (activeProject.workspaceRoot ??
+        (await ensureActiveProjectWorkspaceRoot("An agent needs a directory to work in.")))
+      : null;
+    if (activeProject && projectWorkspaceRootForSend === null) return;
     const sendsToCurrentThread = target === "current";
     const threadIdForSend = sendsToCurrentThread ? activeThread.id : newThreadId();
     const isFirstMessage = sendsToCurrentThread && (!isServerThread || activeMessageCount === 0);
     const baseBranchForWorktree =
-      isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
+      isFirstMessage &&
+      activeProject !== null &&
+      !activeThread.temporary &&
+      sendEnvMode === "worktree" &&
+      !activeThread.worktreePath
         ? activeThreadBranch
         : null;
 
     // In worktree mode, require an explicit base branch so we don't silently
     // fall back to local execution when branch selection is missing.
     const shouldCreateWorktree =
-      isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath;
+      isFirstMessage &&
+      activeProject !== null &&
+      !activeThread.temporary &&
+      sendEnvMode === "worktree" &&
+      !activeThread.worktreePath;
     if (shouldCreateWorktree && !activeThreadBranch) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
@@ -7254,10 +7395,11 @@ function ChatViewContent(props: ChatViewProps) {
     if (target === "new-chat" && pendingDraftTarget !== null) {
       const store = useComposerDraftStore.getState();
       store.setProjectDraftThreadId(
-        scopeProjectRef(environmentId, activeProject.id),
+        { environmentId, projectId: activeProject?.id ?? null },
         DraftId.make(threadIdForSend),
         {
           threadId: threadIdForSend,
+          conversationCompanyId: activeProject ? null : conversationCompanyIdForSend,
           branch: activeThreadBranch,
           worktreePath: activeThread.worktreePath,
           runtimeMode,
@@ -7449,7 +7591,7 @@ function ChatViewContent(props: ChatViewProps) {
     });
     const threadCreateModelSelection = createModelSelection(
       ctxSelectedModelSelection.instanceId,
-      ctxSelectedModel || activeProject.defaultModelSelection?.model || DEFAULT_MODEL,
+      ctxSelectedModel || activeProject?.defaultModelSelection?.model || DEFAULT_MODEL,
       ctxSelectedModelSelection.options,
     );
 
@@ -7527,7 +7669,8 @@ function ChatViewContent(props: ChatViewProps) {
         target === "new-chat"
           ? {
               createThread: {
-                projectId: activeProject.id,
+                projectId: activeProject?.id ?? null,
+                conversationCompanyId: activeProject ? null : conversationCompanyIdForSend,
                 title,
                 modelSelection: threadCreateModelSelection,
                 runtimeMode,
@@ -7543,7 +7686,9 @@ function ChatViewContent(props: ChatViewProps) {
                 ...(isLocalDraftThread
                   ? {
                       createThread: {
-                        projectId: activeProject.id,
+                        projectId: activeProject?.id ?? null,
+                        temporary: activeThread.temporary ?? false,
+                        conversationCompanyId: conversationCompanyIdForSend,
                         title,
                         modelSelection: threadCreateModelSelection,
                         runtimeMode,
@@ -7555,7 +7700,7 @@ function ChatViewContent(props: ChatViewProps) {
                       },
                     }
                   : {}),
-                ...(baseBranchForWorktree
+                ...(baseBranchForWorktree && projectWorkspaceRootForSend
                   ? {
                       prepareWorktree: {
                         projectCwd: projectWorkspaceRootForSend,
@@ -7783,19 +7928,29 @@ function ChatViewContent(props: ChatViewProps) {
   };
 
   const onStartInNewChat = useCallback(async () => {
-    if (!activeProjectRef || !activeThread || sendInFlightRef.current) return;
+    if (!activeThread || sendInFlightRef.current) return;
+    if (activeThread.temporary) {
+      setThreadError(
+        activeThread.id,
+        "Choose Keep conversation before creating another thread from this workspace.",
+      );
+      return;
+    }
     sendInFlightRef.current = true;
     let opened: Awaited<ReturnType<typeof handleNewThread>> = null;
     let moved = false;
     try {
-      opened = await handleNewThread(activeProjectRef, {
-        branch: activeThreadBranch,
-        envMode: sendEnvMode,
-        forceNew: true,
-        navigate: false,
-        startFromOrigin,
-        worktreePath: activeThread.worktreePath,
-      });
+      opened = await handleNewThread(
+        { environmentId: activeThread.environmentId, projectId: activeThread.projectId },
+        {
+          branch: activeThreadBranch,
+          envMode: sendEnvMode,
+          forceNew: true,
+          navigate: false,
+          startFromOrigin,
+          worktreePath: activeThread.worktreePath,
+        },
+      );
       if (opened === null) {
         throw new Error("The new chat draft could not be created.");
       }
@@ -7822,7 +7977,6 @@ function ChatViewContent(props: ChatViewProps) {
       sendInFlightRef.current = false;
     }
   }, [
-    activeProjectRef,
     activeThread,
     activeThreadBranch,
     composerDraftTarget,
@@ -7831,6 +7985,7 @@ function ChatViewContent(props: ChatViewProps) {
     navigate,
     sendEnvMode,
     startFromOrigin,
+    setThreadError,
   ]);
 
   const onStartInSideChat = useCallback(() => {
@@ -8490,6 +8645,13 @@ function ChatViewContent(props: ChatViewProps) {
   }
 
   const onImplementPlanInNewThread = useCallback(async () => {
+    if (activeThread?.temporary) {
+      setThreadError(
+        activeThread.id,
+        "Choose Keep conversation before creating a thread for this plan.",
+      );
+      return;
+    }
     if (
       !activeThread ||
       !activeProject ||
@@ -8930,14 +9092,13 @@ function ChatViewContent(props: ChatViewProps) {
         threadId={activeThreadRef?.threadId ?? null}
       />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
-      activeProject &&
       activeWorkspaceRoot ? (
       <Suspense fallback={null}>
         <FilePreviewPanel
-          key={`${activeProject.environmentId}:${activeWorkspaceRoot}`}
-          environmentId={activeProject.environmentId}
+          key={`${activeThread.environmentId}:${activeWorkspaceRoot}`}
+          environmentId={activeThread.environmentId}
           cwd={activeWorkspaceRoot}
-          projectName={activeProject.title}
+          projectName={activeProject?.title ?? "Conversation"}
           threadRef={activeThreadRef}
           composerDraftTarget={composerDraftTarget}
           keybindings={keybindings}
@@ -9025,8 +9186,38 @@ function ChatViewContent(props: ChatViewProps) {
     onUpdateProjectScript: updateProjectScript,
     onDeleteProjectScript: deleteProjectScript,
   };
+  const canChangeTemporary =
+    activeThread.keptAt == null &&
+    activeThread.latestUserMessageAt == null &&
+    activeMessageCount === 0 &&
+    !isWorking &&
+    !draftThread?.pendingSend &&
+    !draftThread?.placement?.dispatched;
+  const retentionControlVisible =
+    supportsConversations && (canChangeTemporary || activeThread.temporary === true);
+  const threadRetentionControl = retentionControlVisible ? (
+    canChangeTemporary ? (
+      <label className="inline-flex shrink-0 items-center gap-1.5 px-1 text-xs text-muted-foreground">
+        <input
+          type="checkbox"
+          checked={activeThread.temporary ?? false}
+          onChange={(event) => handleTemporaryChange(event.target.checked)}
+        />
+        Temporary
+      </label>
+    ) : (
+      <button
+        type="button"
+        className="shrink-0 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+        onClick={() => handleTemporaryChange(false, true)}
+      >
+        Keep conversation
+      </button>
+    )
+  ) : null;
   const panelToggleControlProps = {
-    terminalAvailable: activeProject !== null,
+    threadRetentionControl,
+    terminalAvailable: activeWorkspaceRoot !== undefined,
     terminalOpen: terminalUiState.terminalOpen,
     terminalShortcutLabel: shortcutLabelForCommand(keybindings, "terminal.toggle"),
     threadPanelOpen,
@@ -9047,7 +9238,7 @@ function ChatViewContent(props: ChatViewProps) {
       : {}),
     threadPanelShortcutLabel: shortcutLabelForCommand(keybindings, "threadPanel.toggle"),
     threadPanelHasAttention: activeEnvironmentUnavailableState !== null,
-    rightPanelAvailable: activeProject !== null,
+    rightPanelAvailable: activeWorkspaceRoot !== undefined,
     rightPanelOpen,
     rightPanelShortcutLabel: shortcutLabelForCommand(keybindings, "rightPanel.toggle"),
     // Suppressed while the Agents surface is visible: the roster itself is
@@ -9152,6 +9343,10 @@ function ChatViewContent(props: ChatViewProps) {
               activeProjectCwd={activeProject?.workspaceRoot ?? null}
               activeProjectRef={activeProjectRef}
               projectSelectionEnabled={canChangeHeaderProject}
+              retentionControlVisible={retentionControlVisible}
+              {...(isLocalDraftThread && supportsConversations
+                ? { onSelectConversation: handleSelectConversation }
+                : {})}
               threadAncestors={threadBreadcrumbAncestors}
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
               onProjectChange={handleHeaderProjectChange}
@@ -9323,6 +9518,10 @@ function ChatViewContent(props: ChatViewProps) {
                           activeProjectRef={activeProjectRef}
                           activeProjectTitle={activeProject?.title ?? null}
                           onSelectProject={handleHeaderProjectChange}
+                          {...(supportsConversations
+                            ? { onSelectConversation: handleSelectConversation }
+                            : {})}
+                          conversationSelected={activeThread.projectId === null}
                         />
                       </div>
                       <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
@@ -9511,6 +9710,7 @@ function ChatViewContent(props: ChatViewProps) {
                             onImplementPlanInNewThread={onImplementPlanInNewThread}
                             sideChatAvailable={
                               isServerThread &&
+                              !activeThread.temporary &&
                               latestSideChatSourceRun !== null &&
                               !activeEnvironmentUnavailable
                             }
@@ -9687,13 +9887,16 @@ function ChatViewContent(props: ChatViewProps) {
               onAddAgents={addAgentsSurface}
               onAddSideChat={createSideChat}
               browserAvailable={isPreviewSupportedInRuntime()}
-              terminalAvailable={activeProject !== null}
+              terminalAvailable={activeWorkspaceRoot !== undefined}
               diffAvailable={isServerThread && isGitRepo}
-              filesAvailable={activeProject !== null}
+              filesAvailable={activeWorkspaceRoot !== undefined}
               pullRequestAvailable={pullRequestSurfaceAvailable}
               agentsAvailable
               sideChatAvailable={
-                isServerThread && latestSideChatSourceRun !== null && !activeEnvironmentUnavailable
+                isServerThread &&
+                !activeThread.temporary &&
+                latestSideChatSourceRun !== null &&
+                !activeEnvironmentUnavailable
               }
               pullRequestStatuses={pullRequestTabStatuses}
               liveAgentCount={agentPanelModel.liveCount}
@@ -9740,13 +9943,16 @@ function ChatViewContent(props: ChatViewProps) {
             onAddAgents={addAgentsSurface}
             onAddSideChat={createSideChat}
             browserAvailable={isPreviewSupportedInRuntime()}
-            terminalAvailable={activeProject !== null}
+            terminalAvailable={activeWorkspaceRoot !== undefined}
             diffAvailable={isServerThread && isGitRepo}
-            filesAvailable={activeProject !== null}
+            filesAvailable={activeWorkspaceRoot !== undefined}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             agentsAvailable
             sideChatAvailable={
-              isServerThread && latestSideChatSourceRun !== null && !activeEnvironmentUnavailable
+              isServerThread &&
+              !activeThread.temporary &&
+              latestSideChatSourceRun !== null &&
+              !activeEnvironmentUnavailable
             }
             pullRequestStatuses={pullRequestTabStatuses}
             liveAgentCount={agentPanelModel.liveCount}

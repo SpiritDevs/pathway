@@ -13,6 +13,7 @@ struct AgentThreadsView: View {
     @State private var isSettledExpanded = false
     @State private var settledVisibleCount = 10
     @State private var routedThreadID: String?
+    @State private var reviewingThreadID: String?
     @State private var threadProviders = PathwayThreadProviders()
     @State private var threadActions = PathwayThreadActions()
     @State private var sleepingThread: PathwayAgentThread?
@@ -25,6 +26,7 @@ struct AgentThreadsView: View {
     @State private var renamingThread: PathwayAgentThread?
     @State private var renameText = ""
     @State private var deletingThread: PathwayAgentThread?
+    @State private var attachingThread: PathwayAgentThread?
     @State private var focuses = PathwayFocusModel()
     @State private var creatingFocus = false
     @State private var editingFocus: PathwayFocus?
@@ -73,7 +75,7 @@ struct AgentThreadsView: View {
         }
         .navigationDestination(item: $routedThreadID) { threadID in
             if let thread = appModel.cloud.threads.first(where: { $0.id == threadID }) {
-                AgentThreadDetailRoute(thread: thread)
+                AgentThreadDetailRoute(thread: thread, initiallyReviewChanges: reviewingThreadID == thread.id)
             } else {
                 ContentUnavailableView(
                     "Thread unavailable",
@@ -93,6 +95,25 @@ struct AgentThreadsView: View {
         .sheet(item: $sleepingThread) { thread in
             sleepSheet(for: thread)
         }
+        .sheet(item: $attachingThread) { thread in
+            PathwayAttachProjectView(thread: thread) { projectID in
+                perform(.attachProject(projectID), on: thread)
+            }
+        }
+        .alert("Unfinished Git work", isPresented: Binding(
+            get: { threadActions.unfinishedGitThread != nil },
+            set: { if !$0 { threadActions.unfinishedGitThread = nil } }
+        )) {
+            Button("Review changes") {
+                if let thread = threadActions.unfinishedGitThread { reviewingThreadID = thread.id; routedThreadID = thread.id }
+                threadActions.unfinishedGitThread = nil
+            }
+            Button("Cancel", role: .cancel) { threadActions.unfinishedGitThread = nil }
+            Button("Discard and delete", role: .destructive) {
+                if let thread = threadActions.unfinishedGitThread { perform(.discardAndSettle, on: thread) }
+                threadActions.unfinishedGitThread = nil
+            }
+        } message: { Text("This temporary thread has uncommitted changes or unpushed commits. Review and push the work to keep it, or discard it and delete the thread.") }
         .alert("Rename thread", isPresented: Binding(get: { renamingThread != nil }, set: { if !$0 { renamingThread = nil } })) {
             TextField("Thread title", text: $renameText)
             Button("Cancel", role: .cancel) { renamingThread = nil }
@@ -252,7 +273,7 @@ struct AgentThreadsView: View {
         if !focuses.includes(thread) { return false }
         if !companyFilter.isEmpty && thread.companyId != companyFilter { return false }
         if !environmentFilter.isEmpty && "\(thread.companyId):\(thread.environmentId)" != environmentFilter { return false }
-        if !projectFilter.isEmpty && "\(thread.companyId):\(thread.cloudProjectId)" != projectFilter { return false }
+        if !projectFilter.isEmpty && "\(thread.companyId):\(thread.cloudProjectId ?? "")" != projectFilter { return false }
         if !providerFilter.isEmpty && thread.shell.providerInstanceId != providerFilter { return false }
         if listFilter == .running && !thread.isRunning { return false }
         if listFilter == .needsAttention && !thread.needsAction { return false }
@@ -316,6 +337,17 @@ struct AgentThreadsView: View {
 
     @ViewBuilder private func threadMenu(_ thread: PathwayAgentThread) -> some View {
         Button("Rename", systemImage: "pencil") { renameText = thread.shell.title; renamingThread = thread }
+        if thread.shell.isTemporary {
+            Button("Keep conversation", systemImage: "tray.and.arrow.down") { perform(.keepConversation, on: thread) }
+                .disabled(!supportsConversations(thread))
+        }
+        Button(thread.shell.settleAfterCompletion == true ? "Cancel settle after completion" : "Settle after completion", systemImage: "checkmark.circle") {
+            perform(.settleAfterCompletion(thread.shell.settleAfterCompletion != true), on: thread)
+        }
+        if thread.shell.isConversation {
+            Button("Attach project", systemImage: "folder.badge.plus") { attachingThread = thread }
+                .disabled(!thread.canAttachProject || !supportsConversations(thread))
+        }
         if thread.shell.archivedAt != nil {
             Button("Restore", systemImage: "tray.and.arrow.up") { perform(.restore, on: thread) }
         } else {
@@ -341,6 +373,12 @@ struct AgentThreadsView: View {
                 if threadActions.errorMessage != nil { return }
             }
         }
+    }
+
+    private func supportsConversations(_ thread: PathwayAgentThread) -> Bool {
+        appModel.cloud.environments.first {
+            $0.companyId == thread.companyId && $0.environment.environmentId == thread.environmentId
+        }?.environment.descriptor.capabilities?["threadConversations"]?.boolValue == true
     }
 
     private func openPendingThread() async {
@@ -536,7 +574,7 @@ private struct AgentThreadRow: View {
             HStack(spacing: 6) {
                 projectIcon
 
-                Text(projectName ?? "Project unavailable")
+                Text(thread.shell.isConversation ? "Conversation" : projectName ?? "Project unavailable")
                     .font(.subheadline)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -546,6 +584,9 @@ private struct AgentThreadRow: View {
                     Image(systemName: "pin")
                         .font(.caption2)
                         .accessibilityLabel("Pinned")
+                }
+                if thread.shell.isTemporary {
+                    Image(systemName: "clock.badge.xmark").font(.caption2).accessibilityLabel("Temporary")
                 }
 
                 Text(activityAge)
@@ -599,7 +640,7 @@ private struct AgentThreadRow: View {
                     .resizable()
                     .scaledToFit()
             } else {
-                Image(systemName: "folder.fill")
+                Image(systemName: thread.shell.isConversation ? "bubble.left.and.bubble.right" : "folder.fill")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -714,6 +755,7 @@ private struct AgentThreadPullRequestBadge: View {
 struct AgentThreadDetailRoute: View {
     @Environment(PathwayAppModel.self) private var appModel
     let thread: PathwayAgentThread
+    var initiallyReviewChanges = false
 
     var body: some View {
         if let connect = appModel.connect, let environment {
@@ -724,8 +766,9 @@ struct AgentThreadDetailRoute: View {
                 workspaceRoot: appModel.cloud.environmentBindings.first {
                     $0.companyId == thread.companyId && $0.binding.environmentId == thread.environmentId
                         && $0.binding.localProjectId == thread.shell.projectId
-                }?.binding.localWorkspaceRoot,
-                storageDirectory: appModel.localStorageDirectory
+                }?.binding.localWorkspaceRoot ?? thread.shell.conversationPath,
+                storageDirectory: appModel.localStorageDirectory,
+                initiallyReviewChanges: initiallyReviewChanges
             )
         } else {
             ContentUnavailableView {
@@ -746,6 +789,8 @@ struct AgentThreadDetailRoute: View {
 }
 
 struct AgentThreadConversationView: View {
+    @Environment(PathwayAppModel.self) private var appModel
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.compactThreadChrome) private var compactThreadChrome
     @State private var model: PathwayAgentThreadModel
@@ -759,11 +804,16 @@ struct AgentThreadConversationView: View {
     @State private var showsChanges = false
     @State private var navigationError: String?
     @State private var isForking = false
+    @State private var isUpdatingLifecycle = false
+    @State private var showsAttachment = false
+    @State private var showsUnfinishedGit = false
+    @State private var showsGitReview = false
     @FocusState private var isComposerFocused: Bool
 
-    init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient, workspaceRoot: String? = nil, storageDirectory: URL? = nil) {
+    init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient, workspaceRoot: String? = nil, storageDirectory: URL? = nil, initiallyReviewChanges: Bool = false) {
         self.workspaceRoot = workspaceRoot
         _model = State(initialValue: PathwayAgentThreadModel(thread: thread, environment: environment, connect: connect, storageDirectory: storageDirectory))
+        _showsGitReview = State(initialValue: initiallyReviewChanges)
     }
 
     init(model: PathwayAgentThreadModel, workspaceRoot: String? = nil) {
@@ -872,13 +922,27 @@ struct AgentThreadConversationView: View {
                     isComposerExpanded = true; isComposerFocused = true
                 }
                 Menu {
-                    if let workspaceRoot, let connect = model.connect {
+                    if model.thread.shell.isTemporary {
+                        Button("Keep conversation", systemImage: "tray.and.arrow.down") { performLifecycle(.keepConversation) }
+                            .disabled(isUpdatingLifecycle || !model.supportsConversations)
+                    }
+                    if model.thread.shell.isConversation {
+                        Button("Attach project", systemImage: "folder.badge.plus") { showsAttachment = true }
+                            .disabled(!model.thread.canAttachProject || model.activeRunID != nil || model.isSending || isUpdatingLifecycle || !model.supportsConversations)
+                    }
+                    Button("Settle", systemImage: "checkmark") { performLifecycle(.settle) }
+                        .disabled(model.activeRunID != nil || model.isSending || isUpdatingLifecycle)
+                    Button(model.thread.shell.settleAfterCompletion == true ? "Cancel settle after completion" : "Settle after completion", systemImage: "checkmark.circle") {
+                        performLifecycle(.settleAfterCompletion(model.thread.shell.settleAfterCompletion != true))
+                    }.disabled(isUpdatingLifecycle)
+                    if let workspaceRoot = currentWorkspaceRoot, let connect = model.connect {
                         NavigationLink {
                             PathwayWorkspaceDestination(thread: model.thread, environment: model.environment,
                                 projectRoot: workspaceRoot, connect: connect, storageDirectory: model.storageDirectory)
                         } label: { Label("Workspace", systemImage: "folder") }
                     }
-                    Button("Fork thread", systemImage: "arrow.triangle.branch") { fork() }.disabled(isForking)
+                    Button("Fork thread", systemImage: "arrow.triangle.branch") { fork() }.disabled(isForking || model.thread.shell.isTemporary)
+                    if model.thread.shell.isTemporary { Text("Keep conversation before forking or starting a side chat.") }
                     Button("Copy conversation", systemImage: "doc.on.doc") {
                         UIPasteboard.general.string = model.items.filter(\.isConversation).compactMap(\.text).joined(separator: "\n\n")
                     }
@@ -897,6 +961,20 @@ struct AgentThreadConversationView: View {
             }
         }
         .sheet(isPresented: $showsChanges) { AgentThreadChangesView(model: model) }
+        .sheet(isPresented: $showsAttachment) {
+            PathwayAttachProjectView(thread: model.thread) { performLifecycle(.attachProject($0)) }
+        }
+        .alert("Unfinished Git work", isPresented: $showsUnfinishedGit) {
+            Button("Review changes") { showsGitReview = true }
+            Button("Cancel", role: .cancel) {}
+            Button("Discard and delete", role: .destructive) { performLifecycle(.discardAndSettle) }
+        } message: { Text("This temporary thread has uncommitted changes or unpushed commits. Review and push the work to keep it, or discard it and delete the thread.") }
+        .navigationDestination(isPresented: $showsGitReview) {
+            if let root = currentWorkspaceRoot, let connect = model.connect {
+                PathwayWorkspaceDestination(thread: model.thread, environment: model.environment,
+                    projectRoot: root, connect: connect, storageDirectory: model.storageDirectory, initialSection: "changes")
+            }
+        }
         .navigationDestination(item: $childDestination) { destination in
             AgentThreadConversationView(model: destination.model, workspaceRoot: destination.workspaceRoot)
         }
@@ -905,6 +983,9 @@ struct AgentThreadConversationView: View {
         } message: { Text(navigationError ?? "") }
         .onAppear { compactThreadChrome?.enterThreadDetail() }
         .onChange(of: isComposerExpanded, initial: true) { _, expanded in compactThreadChrome?.setComposerExpanded(expanded) }
+        .onChange(of: model.thread.shell.deletedAt) { _, deletedAt in
+            if deletedAt != nil { dismiss() }
+        }
         .task { model.start() }
         .onDisappear {
             compactThreadChrome?.leaveThreadDetail()
@@ -915,6 +996,36 @@ struct AgentThreadConversationView: View {
     }
 
     private var changedFileCount: Int { Set(changedItems.compactMap(\.fileName)).count }
+    private var currentWorkspaceRoot: String? {
+        if let projectID = model.thread.shell.projectId {
+            return appModel.cloud.environmentBindings.first {
+                $0.binding.environmentId == model.thread.environmentId
+                    && $0.binding.localProjectId == projectID && $0.binding.status == "active"
+            }?.binding.localWorkspaceRoot ?? workspaceRoot
+        }
+        return model.thread.shell.conversationPath ?? workspaceRoot
+    }
+    private func performLifecycle(_ action: PathwayThreadAction) {
+        guard !isUpdatingLifecycle else { return }
+        isUpdatingLifecycle = true
+        Task {
+            defer { isUpdatingLifecycle = false }
+            do {
+                _ = try await model.request("orchestration.dispatchCommand", payload: action.command(threadID: model.threadID),
+                    reportsErrors: false, requiresSubscription: true)
+                if model.thread.shell.isTemporary && (action == .settle || action == .discardAndSettle) {
+                    dismiss()
+                } else {
+                    let projection = try await model.request("orchestration.getThreadProjection", payload: .object(["threadId": .string(model.threadID)]))
+                    model.installSnapshot(projection)
+                }
+            } catch {
+                if action == .settle && model.thread.shell.isTemporary && PathwayThreadActions.requiresDiscardConfirmation(error) {
+                    showsUnfinishedGit = true
+                } else { navigationError = error.localizedDescription }
+            }
+        }
+    }
     private var changedItems: [PathwayTimelineItem] { model.items.filter { $0.type == "file_change" } }
     private func openChild(_ id: String) {
         guard !isOpeningChild else { return }

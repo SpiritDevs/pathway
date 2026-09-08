@@ -51,7 +51,8 @@ struct AgentThreadTranscript: View {
                 if !item.isUserMessage && !item.streaming && item.runID != nil {
                     Button("Fork from here", systemImage: "arrow.triangle.branch") { fork(item) }
                         .accessibilityIdentifier("thread-message-fork-\(item.id)")
-                        .disabled(forkingID != nil)
+                        .disabled(forkingID != nil || model.thread.shell.isTemporary)
+                    if model.thread.shell.isTemporary { Text("Keep conversation before forking this thread.") }
                 }
             }
             if let run = queued {

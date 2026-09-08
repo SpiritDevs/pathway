@@ -451,11 +451,12 @@ export const BranchToolbar = memo(function BranchToolbar({
     draftId ? store.getDraftSession(draftId) : store.getDraftThreadByRef(threadRef),
   );
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
-  const activeProjectRef = serverThread
-    ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
-    : draftThread
-      ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-      : null;
+  const activeProjectRef =
+    serverThread && serverThread.projectId !== null
+      ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
+      : draftThread && draftThread.projectId !== null
+        ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+        : null;
   const activeProject = useProject(activeProjectRef);
   // A worktree is cut from a repository, so picking one on a rootless project asks for a directory
   // first and applies the mode once there is one. Nothing needs re-reading afterwards: the mode is
@@ -486,7 +487,10 @@ export const BranchToolbar = memo(function BranchToolbar({
       hasServerThread: serverThread !== null,
       draftThreadEnvMode: draftThread?.envMode,
     });
-  const envModeLocked = envLocked || (serverThread !== null && activeWorktreePath !== null);
+  const envModeLocked =
+    (serverThread?.temporary ?? draftThread?.temporary ?? false) ||
+    envLocked ||
+    (serverThread !== null && activeWorktreePath !== null);
 
   // "Previous worktree" hops a draft into the most recently active worktree
   // of this project — the "keep going where I just was" follow-up flow. Only

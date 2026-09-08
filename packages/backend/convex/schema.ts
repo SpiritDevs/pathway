@@ -146,6 +146,7 @@ const relayActivityState = v.object({
   environmentId: v.string(),
   threadId: v.string(),
   projectTitle: v.string(),
+  conversationCompanyId: v.optional(v.string()),
   threadTitle: v.string(),
   phase: relayActivityPhase,
   headline: v.string(),
@@ -165,6 +166,7 @@ const relayActivityAggregateState = v.object({
       environmentId: v.string(),
       threadId: v.string(),
       projectTitle: v.string(),
+      conversationCompanyId: v.optional(v.string()),
       threadTitle: v.string(),
       modelTitle: v.string(),
       phase: relayActivityPhase,
@@ -214,6 +216,7 @@ export default defineSchema({
 
   /** Account-owned Agent Threads filters. Selection stays local to each client. */
   focuses: defineTable({
+    includeConversations: v.optional(v.boolean()),
     id: domainId,
     userId: v.id("users"),
     name: v.string(),
@@ -1174,8 +1177,8 @@ export default defineSchema({
     id: domainId,
     companyId: v.id("companies"),
     environmentId: v.string(),
-    cloudProjectId: v.id("cloudProjects"),
-    localProjectId: v.string(),
+    cloudProjectId: v.union(v.id("cloudProjects"), v.null()),
+    localProjectId: v.union(v.string(), v.null()),
     threadId: v.string(),
     shell: v.any(),
     updatedAt: v.number(),

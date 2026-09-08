@@ -153,6 +153,7 @@ export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publi
     const publish = (shell: OrchestrationV2ThreadShell) =>
       publishLock.withPermits(1)(
         Effect.gen(function* () {
+          if (shell.projectId === null && shell.conversationCompanyId !== options.companyId) return;
           const encoded = encodeCloudShell(cloudSafeThreadShell(shell));
           const identity = encodeCloudShellIdentity(cloudSafeThreadShell(shell));
           if ((yield* Ref.get(published)).get(shell.id) === identity) return;
@@ -177,17 +178,18 @@ export const makeCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publi
           );
           if (outcome === "unbound") {
             const announced = yield* Ref.get(announcedUnboundProjects);
-            if (!announced.has(shell.projectId)) {
+            const projectId = shell.projectId;
+            if (projectId !== null && !announced.has(projectId)) {
               yield* Effect.logInfo(
                 "Cloud Agent Thread project has no active binding on this environment; its threads stay local until it is assigned",
                 {
                   companyId: options.companyId,
                   environmentId: options.environmentId,
-                  projectId: shell.projectId,
+                  projectId,
                 },
               );
               yield* Ref.update(announcedUnboundProjects, (current) =>
-                new Set(current).add(shell.projectId),
+                new Set(current).add(projectId),
               );
             }
             const until = now + Duration.toMillis(AGENT_THREAD_UNBOUND_PARK_INTERVAL);
@@ -253,7 +255,9 @@ export const runCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publis
 
     const reconcile = Effect.gen(function* () {
       const snapshot = yield* threads.getShellSnapshot();
-      const shells = [...snapshot.threads, ...snapshot.archivedThreads];
+      const shells = [...snapshot.threads, ...snapshot.archivedThreads].filter(
+        (shell) => shell.projectId !== null || shell.conversationCompanyId === options.companyId,
+      );
       // One unpublishable shell (a thread whose project binding was revoked,
       // a shell the deployed validator rejects) must not abort the cycle:
       // every other shell still publishes and stale removals below still run.

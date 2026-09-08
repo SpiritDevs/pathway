@@ -479,6 +479,7 @@ export const make = Effect.gen(function* () {
       const sent = yield* threads
         .sendToThread({
           projectId: loaded.projection.thread.projectId,
+          conversationCompanyId: loaded.projection.thread.conversationCompanyId,
           commandId: CommandId.make(`${input.attemptId}:takeover-continuation`),
           threadId: input.threadId,
           messageId: continuationMessageId(input),

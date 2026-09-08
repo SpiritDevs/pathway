@@ -1,5 +1,9 @@
 "use client";
 
+import { canSettle } from "@spiritdevs/client-runtime/state/thread-settled";
+import { useThreadActions } from "../hooks/useThreadActions";
+import { threadEnvironment } from "../state/threads";
+
 import { alertProjectScopeKey, alertThreadScopeKey } from "@spiritdevs/contracts/threadAlerts";
 import {
   threadAlertMutationsAtom,
@@ -101,6 +105,7 @@ import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import {
   useProjects,
+  useUnscopedProjects,
   useThreadShells,
   waitForProject,
   waitForUnscopedProject,
@@ -536,11 +541,13 @@ async function toggleCurrentThreadAlerts(environmentId: string, threadId: string
   const threadKey = alertThreadScopeKey(environmentId, threadId);
   const view = threadPolicyView(
     policies,
-    alertProjectScopeKey(
-      environmentId,
-      thread.projectId,
-      project?.repositoryIdentity?.canonicalKey,
-    ),
+    thread.projectId === null
+      ? null
+      : alertProjectScopeKey(
+          environmentId,
+          thread.projectId,
+          project?.repositoryIdentity?.canonicalKey,
+        ),
     threadKey,
   );
   await mutations.upsert({
@@ -838,10 +845,15 @@ function OpenCommandPaletteDialog(props: {
   const clientSettings = useClientSettings();
   const updateClientSettings = useUpdateClientSettings();
   const activeCompanyId = useAtomValue(activeCompanyIdAtom);
+  const setActiveCompanyId = useAtomSet(activeCompanyIdAtom);
   const companies = useAtomValue(companyListAtom);
   const { activeFocusId, setActiveFocusId, visibleFocuses } = useFocusSelection();
   const environmentControl = useEnvironmentControl();
   const workspaceProjects = useWorkspaceProjects();
+  const { keepConversation } = useThreadActions();
+  const attachConversationProject = useAtomCommand(threadEnvironment.attachProject, {
+    reportFailure: false,
+  });
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
@@ -871,6 +883,7 @@ function OpenCommandPaletteDialog(props: {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const projects = useProjects();
+  const attachmentProjects = useUnscopedProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -1376,9 +1389,36 @@ function OpenCommandPaletteDialog(props: {
             description: "Creates a folder for it",
             runProject: openCheckoutlessProject,
           }),
+          environments
+            .filter(
+              (environment) =>
+                environment.serverConfig?.environment.capabilities.threadConversations === true,
+            )
+            .map(
+              (environment): CommandPaletteActionItem => ({
+                kind: "action",
+                value: `new-conversation:${environment.environmentId}`,
+                searchTerms: ["conversation", "new chat", "without project", environment.label],
+                title: "Conversation",
+                description:
+                  activeCompanyId === null ? "Choose a company first" : environment.label,
+                disabled: activeCompanyId === null,
+                icon: <MessageSquareIcon />,
+                run: async () => {
+                  setActiveFocusId(ALL_FOCUS_ID);
+                  await handleNewThread({
+                    environmentId: environment.environmentId,
+                    projectId: null,
+                  });
+                },
+              }),
+            ),
         ),
       ),
     [
+      activeCompanyId,
+      environments,
+      setActiveFocusId,
       checkoutlessProjects,
       contextualProjectRef,
       handleNewThread,
@@ -1880,6 +1920,7 @@ function OpenCommandPaletteDialog(props: {
 
   if (
     activeThread &&
+    activeThread.projectId !== null &&
     activeThread.worktreePath === null &&
     activeThread.source.status === "idle" &&
     activeThread.source.pendingRuntimeRequest === null &&
@@ -1900,6 +1941,69 @@ function OpenCommandPaletteDialog(props: {
         });
       },
     });
+  }
+
+  if (activeThread?.temporary) {
+    actionItems.push({
+      kind: "action",
+      value: "action:keep-conversation",
+      title: "Keep conversation",
+      description: activeThread.title,
+      searchTerms: ["temporary", "permanent", "retention", "keep conversation"],
+      icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        const result = await keepConversation(
+          scopeThreadRef(activeThread.environmentId, activeThread.id),
+        );
+        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      },
+    });
+  }
+  if (activeThread?.projectId === null) {
+    const conversation = activeThread;
+    const projectsToAttach = attachmentProjects.filter(
+      (project) => project.environmentId === conversation.environmentId,
+    );
+    if (projectsToAttach.length > 0)
+      actionItems.push({
+        kind: "submenu",
+        value: "action:attach-conversation-project",
+        title: "Attach project",
+        description: conversation.title,
+        searchTerms: ["attach", "project", "conversation"],
+        disabled:
+          !canSettle(conversation, { now: new Date().toISOString() }) ||
+          (conversation.pendingBackgroundTasks?.length ?? 0) > 0,
+        icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
+        addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
+        groups: [
+          {
+            value: "attach-project",
+            label: "Projects on this environment",
+            items: buildProjectActionItems({
+              projects: projectsToAttach,
+              valuePrefix: "attach-conversation-project",
+              icon: projectFaviconIcon,
+              runProject: async (project) => {
+                const result = await attachConversationProject({
+                  environmentId: conversation.environmentId,
+                  input: { threadId: conversation.id, projectId: project.id },
+                });
+                if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+                if (
+                  !projects.some(
+                    (visible) =>
+                      visible.environmentId === project.environmentId && visible.id === project.id,
+                  )
+                ) {
+                  setActiveCompanyId(null);
+                }
+                setActiveFocusId(ALL_FOCUS_ID);
+              },
+            }),
+          },
+        ],
+      });
   }
 
   if (projects.length > 0) {

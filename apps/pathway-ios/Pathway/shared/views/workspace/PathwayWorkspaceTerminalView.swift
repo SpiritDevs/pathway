@@ -3,6 +3,7 @@ import SwiftUI
 struct PathwayWorkspaceTerminalView: View {
     let client: PathwayWorkspaceClient
     var subscribe: PathwayWorkspaceSubscribe?
+    var openNewOnAppear = false
     @State private var terminalID = "term-1"
     @State private var attachGeneration = 0
     @State private var attached = false
@@ -56,6 +57,7 @@ struct PathwayWorkspaceTerminalView: View {
                 }.padding()
             }
         }.navigationTitle("Terminal")
+            .task { if openNewOnAppear { await open() } }
             .toolbar {
                 Menu {
                     Button("Attach primary terminal") { terminalID = "term-1"; attachGeneration += 1 }
