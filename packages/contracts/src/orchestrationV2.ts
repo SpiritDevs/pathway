@@ -28,7 +28,7 @@ import {
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
-import { ChatAttachment } from "./chatAttachment.ts";
+import { ChatAttachment, UserInputAttachments } from "./chatAttachment.ts";
 import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
@@ -2596,6 +2596,7 @@ export const OrchestrationV2Command = Schema.Union([
     requestId: RuntimeRequestId,
     decision: Schema.optional(ProviderApprovalDecision),
     answers: Schema.optional(ProviderUserInputAnswers),
+    attachmentsByQuestionId: Schema.optional(UserInputAttachments),
   }),
   Schema.Struct({
     type: Schema.Literal("checkpoint.rollback"),

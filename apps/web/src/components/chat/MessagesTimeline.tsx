@@ -1534,6 +1534,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         ) : (
           <CollapsibleUserMessageBody
             questionReply={questionReply}
+            attachments={userAttachments}
             text={elementContextState.promptText}
             terminalContexts={terminalContexts}
             skills={ctx.skills}
@@ -2775,6 +2776,7 @@ function shouldCollapseUserMessage(text: string): boolean {
 
 const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(props: {
   questionReply: ReturnType<typeof parseAsyncQuestionReply>;
+  attachments: NonNullable<TimelineMessage["attachments"]>;
   text: string;
   terminalContexts: ParsedTerminalContextEntry[];
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
@@ -2808,14 +2810,37 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
         >
           {questionReply ? (
             <dl className="space-y-4 text-sm leading-relaxed" data-question-reply="true">
-              {questionReply.map(({ question, answer }, index) => (
+              {questionReply.map(({ question, answer, attachments }, index) => (
                 // Replies are immutable and questions may repeat, so their position is stable.
                 // eslint-disable-next-line react/no-array-index-key
                 <div key={index} className="space-y-1.5">
                   <dt className="whitespace-pre-wrap wrap-break-word font-medium text-muted-foreground">
                     {question}
                   </dt>
-                  <dd className="whitespace-pre-wrap wrap-break-word text-foreground">{answer}</dd>
+                  <dd className="whitespace-pre-wrap wrap-break-word text-foreground">
+                    {answer}
+                    {attachments?.map((attachment) => {
+                      const url = props.attachments.find(
+                        (item) => item.id === attachment.id,
+                      )?.previewUrl;
+                      return (
+                        <div key={attachment.id} className="mt-1 text-xs">
+                          {url ? (
+                            <a
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-primary underline"
+                            >
+                              {attachment.name}
+                            </a>
+                          ) : (
+                            attachment.name
+                          )}
+                        </div>
+                      );
+                    })}
+                  </dd>
                 </div>
               ))}
             </dl>

@@ -147,6 +147,7 @@ export interface OrchestratorV2ProviderReplayScenario<
 > extends OrchestratorV2Scenario {
   readonly transcript: Transcript;
   readonly runtimePolicyOverride?: RuntimePolicyV2Override;
+  readonly serverConfig?: ServerConfig["Service"];
 }
 
 export interface OrchestratorV2ProviderReplayHarness<
@@ -159,7 +160,10 @@ export interface OrchestratorV2ProviderReplayHarness<
   ) => Effect.Effect<Transcript, Error>;
   readonly makeProviderAdapterRegistryLayer: (
     transcript: Transcript,
-    options?: { readonly replayGate?: ProviderReplayGate },
+    options?: {
+      readonly replayGate?: ProviderReplayGate;
+      readonly serverConfig?: ServerConfig["Service"];
+    },
   ) => Layer.Layer<ProviderAdapterRegistryV2, Error>;
 }
 
@@ -218,15 +222,18 @@ export function makeOrchestratorV2ProviderReplayLayer<
     readonly replayGate?: ProviderReplayGate;
   } = {},
 ): Layer.Layer<OrchestratorV2, Error | MigrationError | PlatformError.PlatformError | SqlError> {
-  const registryLayer = harness.makeProviderAdapterRegistryLayer(
-    scenario.transcript,
-    options.replayGate === undefined ? {} : { replayGate: options.replayGate },
-  );
+  const registryLayer = harness.makeProviderAdapterRegistryLayer(scenario.transcript, {
+    ...(options.replayGate === undefined ? {} : { replayGate: options.replayGate }),
+    ...(scenario.serverConfig === undefined ? {} : { serverConfig: scenario.serverConfig }),
+  });
   return makeOrchestratorV2ReplayLayerWithRegistry(scenario, registryLayer, options);
 }
 
 export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
-  scenario: Pick<OrchestratorV2ProviderReplayScenario, "name" | "runtimePolicyOverride">,
+  scenario: Pick<
+    OrchestratorV2ProviderReplayScenario,
+    "name" | "runtimePolicyOverride" | "serverConfig"
+  >,
   registryLayer: Layer.Layer<ProviderAdapterRegistryV2, Error>,
   options: {
     readonly databaseLayer?: Layer.Layer<
@@ -240,7 +247,9 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
 ): Layer.Layer<OrchestratorV2, Error | MigrationError | PlatformError.PlatformError | SqlError> {
   const serverConfigLayer = Layer.effect(
     ServerConfig,
-    makeReplayServerConfig(scenario.name).pipe(Effect.orDie),
+    scenario.serverConfig
+      ? Effect.succeed(scenario.serverConfig)
+      : makeReplayServerConfig(scenario.name).pipe(Effect.orDie),
   ).pipe(Layer.provide(NodeServices.layer));
   const runtimeLayer =
     scenario.runtimePolicyOverride === undefined
@@ -378,6 +387,8 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     }),
   );
   const orchestratorProvided = orchestratorLayer.pipe(
+    Layer.provide(serverConfigLayer),
+    Layer.provide(NodeServices.layer),
     Layer.provide(
       Layer.mergeAll(
         questionAnswerDeliveryLayer,

@@ -11,6 +11,7 @@ import {
   PlanId,
   ProjectId,
   ProviderInstanceId,
+  RuntimeRequestId,
   RunId,
   ThreadId,
   WS_METHODS,
@@ -19,6 +20,8 @@ import {
   type OrchestrationV2ThreadLaunchInput,
   type OrchestrationV2ThreadProjection,
   type ProjectMutation,
+  type ChatAttachment,
+  type PersistChatAttachmentsInput,
 } from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
@@ -62,6 +65,7 @@ import {
   unsettleThread,
   updateProject,
   updateThreadMetadata,
+  respondToThreadUserInput,
 } from "./commands.ts";
 
 class LaunchTestError extends Schema.TaggedErrorClass<LaunchTestError>()("LaunchTestError", {
@@ -89,6 +93,8 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly launches?: OrchestrationV2ThreadLaunchInput[];
   readonly launchCalls?: string[];
   readonly launchFailure?: "attachments" | "launch";
+  readonly savedAttachments?: readonly ChatAttachment[];
+  readonly attachmentRequests?: PersistChatAttachmentsInput[];
   readonly continuationLaunches?: OrchestrationV2ContinuationLaunchInput[];
   readonly projection?: OrchestrationV2ThreadProjection;
   readonly resolvedPullRequest?: {
@@ -108,12 +114,13 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
       }),
     [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: () =>
       Effect.succeed(input.projection ?? v2Projection),
-    [WS_METHODS.assetsPersistChatAttachments]: () =>
+    [WS_METHODS.assetsPersistChatAttachments]: (request: PersistChatAttachmentsInput) =>
       Effect.gen(function* () {
+        input.attachmentRequests?.push(request);
         input.launchCalls?.push("attachments");
         if (input.launchFailure === "attachments")
           return yield* new LaunchTestError({ phase: "attachments" });
-        return { attachments: [] };
+        return { attachments: input.savedAttachments ?? [] };
       }),
     [ORCHESTRATION_V2_WS_METHODS.launchThread]: (launchInput: OrchestrationV2ThreadLaunchInput) =>
       Effect.gen(function* () {
@@ -186,6 +193,87 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
 });
 
 describe("V2 environment commands", () => {
+  it.effect("saves question uploads before responding and preserves their question ownership", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const attachmentRequests: PersistChatAttachmentsInput[] = [];
+      const first = {
+        type: "image" as const,
+        id: "pending-00000000-0000-4000-8000-000000000001-png",
+        name: "layout.png",
+        mimeType: "image/png",
+        sizeBytes: 3,
+      };
+      const second = {
+        ...first,
+        id: "pending-00000000-0000-4000-8000-000000000002-png",
+        name: "color.png",
+      };
+      const savedAttachments = [first, second].map((attachment) => ({
+        ...attachment,
+        id: attachment.id.replace("pending", "thread"),
+      }));
+      const supervisor = yield* makeSupervisor({
+        commands,
+        projects: [],
+        attachmentRequests,
+        savedAttachments,
+      });
+      yield* respondToThreadUserInput({
+        threadId: v2ThreadId,
+        requestId: RuntimeRequestId.make("question"),
+        answers: { layout: "", color: "Blue" },
+        attachmentsByQuestionId: { layout: [first], color: [second] },
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      expect(attachmentRequests).toEqual([
+        {
+          threadId: v2ThreadId,
+          messageId: "question:00000000-0000-4000-8000-000000000000",
+          attachments: [first, second],
+        },
+      ]);
+      expect(commands).toEqual([
+        expect.objectContaining({
+          type: "runtime-request.respond",
+          answers: { layout: "", color: "Blue" },
+          attachmentsByQuestionId: { layout: [savedAttachments[0]], color: [savedAttachments[1]] },
+        }),
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("keeps the question pending when saving an upload fails", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({
+        commands,
+        projects: [],
+        launchFailure: "attachments",
+      });
+      const result = yield* respondToThreadUserInput({
+        threadId: v2ThreadId,
+        requestId: RuntimeRequestId.make("question"),
+        answers: { layout: "" },
+        attachmentsByQuestionId: {
+          layout: [
+            {
+              type: "image",
+              id: "pending-00000000-0000-4000-8000-000000000001-png",
+              name: "layout.png",
+              mimeType: "image/png",
+              sizeBytes: 3,
+            },
+          ],
+        },
+      }).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.exit,
+      );
+      expect(Exit.isFailure(result)).toBe(true);
+      expect(commands).toEqual([]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
   it.effect("routes projects through the event-sourced project transport", () =>
     Effect.gen(function* () {
       const projects: ProjectMutation[] = [];

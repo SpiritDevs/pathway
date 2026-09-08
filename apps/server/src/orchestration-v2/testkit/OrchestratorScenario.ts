@@ -82,6 +82,10 @@ export type OrchestratorV2ScenarioStep =
       readonly commandId: CommandId;
       readonly decision?: ProviderApprovalDecision;
       readonly answers?: ProviderUserInputAnswers;
+      readonly attachmentsByQuestionId?: Extract<
+        OrchestrationV2Command,
+        { type: "runtime-request.respond" }
+      >["attachmentsByQuestionId"];
     };
 
 export interface OrchestratorV2Scenario {
@@ -572,6 +576,9 @@ export function runOrchestratorV2Scenario(
               requestId: request.id,
               ...(step.decision === undefined ? {} : { decision: step.decision }),
               ...(step.answers === undefined ? {} : { answers: step.answers }),
+              ...(step.attachmentsByQuestionId === undefined
+                ? {}
+                : { attachmentsByQuestionId: step.attachmentsByQuestionId }),
             });
             storedEventGroups.push(result.storedEvents);
             break;

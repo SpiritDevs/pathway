@@ -240,6 +240,10 @@ final class PathwayAgentThreadModel {
     private(set) var connectionState: PathwayThreadConnectionState = .idle
     private(set) var items: [PathwayTimelineItem] = []
     var questionDrafts: [String: PathwayQuestionDraft] = [:]
+    var questionAttachmentStores: [String: PathwayNewThreadAttachments] = [:]
+    var restoringQuestionAttachments: Set<String> = []
+    var preparingQuestionAttachments: Set<String> = []
+    private var restoredQuestionAttachments: Set<String> = []
     var serverConfig: [String: JSONValue] = [:]
     var providers: [PathwayServerProvider] = []
     var modelCatalog: [PathwayServerProvider] = []
@@ -327,7 +331,7 @@ final class PathwayAgentThreadModel {
         isParentRosterLoading = thread.shell.lineage?.relationshipToParent == "subagent"
     }
 
-    deinit {
+    isolated deinit {
         streamTask?.cancel(); configTask?.cancel(); cacheWriteTask?.cancel(); draftWriteTask?.cancel()
         if let pendingDraftWrite, let draftStore { Task { try? await draftStore.save(pendingDraftWrite) } }
         if let pending = pendingCacheWrite {
@@ -533,6 +537,14 @@ final class PathwayAgentThreadModel {
         }
     }
     func prepareQuestionDraft(for item: PathwayTimelineItem) {
+        if supportsQuestionAttachments && !restoredQuestionAttachments.contains(item.id) {
+            restoredQuestionAttachments.insert(item.id)
+            restoringQuestionAttachments.insert(item.id)
+            Task {
+                defer { restoringQuestionAttachments.remove(item.id) }
+                for question in item.questions { await questionAttachments(item: item, questionID: question.id).restore() }
+            }
+        }
         guard questionDrafts[item.id] == nil, isNonBlockingQuestion(item) else { return }
         var draft = PathwayQuestionDraft()
         for question in item.questions {
@@ -561,7 +573,64 @@ final class PathwayAgentThreadModel {
         catch { actionError = error.localizedDescription }
     }
     func respondToQuestions(requestID: String, answers: [String: JSONValue]) async throws {
-        try await respond(requestID: requestID, fields: ["answers": .object(answers)])
+        guard let item = items.first(where: { $0.requestID == requestID }), questionAttachmentsReady(item) else {
+            throw PathwayThreadConversationError.message("Wait for answer attachments to finish uploading.")
+        }
+        let stores = item.questions.map { ($0.id, questionAttachments(item: item, questionID: $0.id)) }
+        let uploads = stores.flatMap { $0.1.uploads }
+        guard uploads.count <= 8 else { throw PathwayThreadConversationError.message("You can attach up to 8 files across these answers.") }
+        var fields: [String: JSONValue] = ["answers": .object(answers)]
+        if !uploads.isEmpty {
+            let persisted = try await request("assets.persistChatAttachments", payload: .object([
+                "threadId": .string(threadID), "messageId": .string("question:\(UUID().uuidString)"), "attachments": .array(uploads)
+            ]))
+            guard let saved = persisted.objectValue?["attachments"]?.arrayValue, saved.count == uploads.count else {
+                throw PathwayThreadConversationError.message("The answer attachments could not be saved.")
+            }
+            var offset = 0
+            var byQuestion: [String: JSONValue] = [:]
+            for (questionID, store) in stores {
+                let count = store.uploads.count
+                if count > 0 { byQuestion[questionID] = .array(Array(saved[offset..<(offset + count)])) }
+                offset += count
+            }
+            fields["attachmentsByQuestionId"] = .object(byQuestion)
+        }
+        try await respond(requestID: requestID, fields: fields)
+        for (_, store) in stores {
+            for draft in store.drafts { await store.remove(id: draft.id) }
+        }
+    }
+
+    var supportsQuestionAttachments: Bool {
+        serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue?["questionAttachments"]?.boolValue == true
+    }
+
+    func questionAttachments(item: PathwayTimelineItem, questionID: String) -> PathwayNewThreadAttachments {
+        let key = "\(item.id):\(questionID)"
+        let store = questionAttachmentStores[key] ?? PathwayNewThreadAttachments(directory: storageDirectory?.appending(path: "QuestionAttachments"), key: "\(thread.id):\(key)")
+        if questionAttachmentStores[key] == nil { questionAttachmentStores[key] = store }
+        store.supportsUploads = supportsQuestionAttachments
+        store.maximumFileBytes = maximumFileAttachmentBytes
+        store.isConnected = isSubscriptionReady
+        store.request = { [weak self] method, payload in
+            guard let self else { throw PathwayRPCError.disconnected }
+            return try await self.request(method, payload: payload)
+        }
+        store.uploadRequest = { [weak self] path in
+            guard let self, let connect = self.connect else { throw PathwayRPCError.disconnected }
+            return try await connect.authenticatedRequest(environment: self.environment, method: "PUT", path: path)
+        }
+        return store
+    }
+
+    func questionAttachmentCount(_ item: PathwayTimelineItem) -> Int {
+        item.questions.reduce(0) { $0 + (questionAttachmentStores["\(item.id):\($1.id)"]?.drafts.count ?? 0) }
+    }
+
+    func questionAttachmentsReady(_ item: PathwayTimelineItem) -> Bool {
+        !restoringQuestionAttachments.contains(item.id) && !preparingQuestionAttachments.contains(item.id) &&
+        item.questions.allSatisfy { questionAttachmentStores["\(item.id):\($0.id)"]?.isReady ?? true }
     }
     private func respond(requestID: String, fields: [String: JSONValue]) async throws {
         guard let item = items.first(where: { $0.requestID == requestID }), canRespond(to: item) else {

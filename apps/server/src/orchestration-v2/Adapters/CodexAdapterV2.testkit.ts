@@ -138,6 +138,7 @@ export function makeReplayServerConfig(
 export function makeCodexProviderAdapterRegistryReplayLayer(input: {
   readonly transcript: CodexReplay.CodexAppServerReplayTranscript;
   readonly driver?: CodexReplay.CodexAppServerReplayDriver;
+  readonly serverConfig?: ServerConfig["Service"];
 }) {
   const replayLayer =
     input.driver === undefined
@@ -163,7 +164,9 @@ export function makeCodexProviderAdapterRegistryReplayLayer(input: {
   });
   const serverConfigLayer = Layer.effect(
     ServerConfig,
-    makeReplayServerConfig(input.transcript.scenario).pipe(Effect.orDie),
+    input.serverConfig
+      ? Effect.succeed(input.serverConfig)
+      : makeReplayServerConfig(input.transcript.scenario).pipe(Effect.orDie),
   ).pipe(Layer.provide(NodeServices.layer));
   const registryLayer = makeProviderAdapterRegistryDriverLayer({
     drivers: [CodexAdapterV2Driver],
@@ -207,7 +210,10 @@ export const CodexOrchestratorReplayHarness: OrchestratorV2ProviderReplayHarness
     ),
   makeProviderAdapterRegistryLayer: (
     transcript,
-    options: { readonly replayGate?: ProviderReplayGate } = {},
+    options: {
+      readonly replayGate?: ProviderReplayGate;
+      readonly serverConfig?: ServerConfig["Service"];
+    } = {},
   ) => {
     return Layer.effectContext(
       Effect.gen(function* () {
@@ -225,7 +231,11 @@ export const CodexOrchestratorReplayHarness: OrchestratorV2ProviderReplayHarness
               },
         );
         return yield* Layer.build(
-          makeCodexProviderAdapterRegistryReplayLayer({ transcript, driver }),
+          makeCodexProviderAdapterRegistryReplayLayer({
+            transcript,
+            driver,
+            ...(options.serverConfig ? { serverConfig: options.serverConfig } : {}),
+          }),
         );
       }),
     );

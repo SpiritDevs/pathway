@@ -41,6 +41,21 @@ const multiSelectQuestion = {
 } as const;
 
 describe("resolvePendingUserInputAnswer", () => {
+  it("accepts an attachment-only answer while keeping other questions required", () => {
+    const drafts = { scope: { attachmentCount: 1 }, areas: { attachmentCount: 1 } };
+    expect(
+      buildPendingUserInputAnswers([singleSelectQuestion, multiSelectQuestion], drafts),
+    ).toEqual({ scope: "", areas: "" });
+    expect(
+      countAnsweredPendingUserInputQuestions([singleSelectQuestion, multiSelectQuestion], drafts),
+    ).toBe(2);
+    expect(derivePendingUserInputProgress([singleSelectQuestion], drafts, 0).canAdvance).toBe(true);
+    expect(
+      buildPendingUserInputAnswers([singleSelectQuestion, multiSelectQuestion], {
+        scope: drafts.scope,
+      }),
+    ).toBeNull();
+  });
   it("prefers a custom answer over selected options", () => {
     expect(
       resolvePendingUserInputAnswer(singleSelectQuestion, {

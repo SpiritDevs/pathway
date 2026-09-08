@@ -1,4 +1,7 @@
 import { ThreadWorkspaceService } from "./ThreadWorkspaceService.ts";
+import { ServerConfig } from "../config.ts";
+import * as FileSystem from "effect/FileSystem";
+import { prepareQuestionAttachmentAnswers } from "./QuestionAttachments.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -659,7 +662,11 @@ function rootProviderThreadsForProvider(
     );
 }
 
+const encodeQuestionReply = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+
 const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(function* () {
+  const config = yield* ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
   const checkpointService = yield* CheckpointServiceV2;
   const commandPolicy = yield* CommandPolicyV2;
   const contextHandoffService = yield* ContextHandoffServiceV2;
@@ -6051,6 +6058,39 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const questionItem = projection.turnItems.find(
         (item) => item.type === "user_input_request" && item.requestId === command.requestId,
       );
+      const attachmentsByQuestionId = command.attachmentsByQuestionId ?? {};
+      const attachments = Object.values(attachmentsByQuestionId).flat();
+      const declined = command.decision === "cancel" || command.decision === "decline";
+      if (
+        Object.keys(attachmentsByQuestionId).some(
+          (id) =>
+            runtimeRequest.kind !== "user_input" ||
+            declined ||
+            questionItem?.type !== "user_input_request" ||
+            !questionItem.questions.some(
+              (question) =>
+                question.id === id && question.isOther !== false && question.isSecret !== true,
+            ),
+        )
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "Attachments must belong to a question that accepts a custom answer.",
+        });
+      }
+      const providerAnswers =
+        attachments.length === 0
+          ? command.answers
+          : yield* prepareQuestionAttachmentAnswers({
+              threadId: command.threadId,
+              attachmentsDir: config.attachmentsDir,
+              answers: command.answers ?? {},
+              attachmentsByQuestionId,
+            }).pipe(
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              mapDispatchError(command),
+            );
       if (
         runtimeRequest.kind === "user_input" &&
         command.decision !== "cancel" &&
@@ -6059,6 +6099,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         if (
           questionItem?.type !== "user_input_request" ||
           questionItem.questions.some((question) => {
+            if ((attachmentsByQuestionId[question.id]?.length ?? 0) > 0) return false;
             const answer = command.answers?.[question.id];
             return typeof answer === "string"
               ? answer.trim().length === 0
@@ -6130,12 +6171,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           occurredAt: now,
           payload: { ...questionItem, status: "completed", completedAt: now, updatedAt: now },
         });
-        const declined = command.decision === "cancel" || command.decision === "decline";
-        const text = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))({
+        const text = yield* encodeQuestionReply({
           request_user_input_async: runtimeRequest.nativeRequestRef?.nativeId ?? command.requestId,
           answers: questionItem.questions.map((question) => ({
             question: question.question,
-            answer: declined ? "The user chose not to answer." : command.answers?.[question.id],
+            answer: declined
+              ? "The user chose not to answer."
+              : (command.answers?.[question.id] ?? ""),
+            ...(attachmentsByQuestionId[question.id]?.length
+              ? { attachments: attachmentsByQuestionId[question.id] }
+              : {}),
           })),
         }).pipe(mapDispatchError(command));
         const activeRun = projection.runs.find(
@@ -6173,7 +6218,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               createdBy: "user",
               creationSource: "server",
               text,
-              attachments: [],
+              attachments,
               streaming: false,
               createdAt: now,
               updatedAt: now,
@@ -6204,7 +6249,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               messageId,
               inputIntent: "steer",
               text,
-              attachments: [],
+              attachments,
             },
           });
           yield* Ref.update(effects, (existing) => [
@@ -6234,7 +6279,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             createdBy: "user",
             creationSource: "server",
             text,
-            attachments: [],
+            attachments,
             modelSelection: originRun?.modelSelection ?? projection.thread.modelSelection,
             dispatchMode:
               activeRun === undefined
@@ -6273,6 +6318,59 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         resolvedAt: now,
       };
       const emitEvent = emit(events, command);
+      if (questionItem?.type === "user_input_request" && attachments.length > 0) {
+        const messageId = MessageId.make(`message:question-answer:${runtimeRequest.id}`);
+        const text = yield* encodeQuestionReply({
+          request_user_input_async: runtimeRequest.nativeRequestRef?.nativeId ?? command.requestId,
+          answers: questionItem.questions.map((question) => ({
+            question: question.question,
+            answer: command.answers?.[question.id] ?? "",
+            ...(attachmentsByQuestionId[question.id]?.length
+              ? { attachments: attachmentsByQuestionId[question.id] }
+              : {}),
+          })),
+        }).pipe(mapDispatchError(command));
+        yield* emitEvent({
+          type: "message.updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: {
+            id: messageId,
+            threadId: command.threadId,
+            runId: questionItem.runId,
+            nodeId: questionItem.nodeId,
+            role: "user",
+            createdBy: "user",
+            creationSource: "server",
+            text,
+            attachments,
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        yield* emitEvent({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: {
+            ...questionItem,
+            id: idAllocator.derive.userTurnItem({ messageId }),
+            type: "user_message",
+            messageId,
+            createdBy: "user",
+            creationSource: "server",
+            inputIntent: "steer",
+            text,
+            attachments,
+            ordinal: nextTurnItemOrdinal(projection),
+            status: "completed",
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+          },
+        });
+      }
       const requestNode = projection.nodes.find((node) => node.id === runtimeRequest.nodeId);
       const resolvedNodeStatus =
         command.decision === "decline" || command.decision === "cancel"
@@ -6338,7 +6436,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             providerSessionId,
             requestId: command.requestId,
             ...(command.decision === undefined ? {} : { decision: command.decision }),
-            ...(command.answers === undefined ? {} : { answers: command.answers }),
+            ...(providerAnswers === undefined ? {} : { answers: providerAnswers }),
           },
         } satisfies PendingOrchestrationEffectV2,
       ]);
@@ -9196,6 +9294,8 @@ export const layer: Layer.Layer<
   | ProjectionStoreV2
   | RuntimePolicyV2
   | ThreadForkServiceV2
+  | ServerConfig
+  | FileSystem.FileSystem
 > = Layer.effect(OrchestratorV2, makeOrchestrator());
 
 export const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(

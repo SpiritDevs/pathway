@@ -453,6 +453,8 @@ export const UserInputQuestion = Schema.Struct({
   header: TrimmedNonEmptyStringSchema,
   question: TrimmedNonEmptyStringSchema,
   options: Schema.Array(UserInputQuestionOption),
+  isOther: Schema.optional(Schema.Boolean),
+  isSecret: Schema.optional(Schema.Boolean),
   multiSelect: Schema.optional(Schema.Boolean).pipe(
     Schema.withConstructorDefault(Effect.succeed(false)),
   ),

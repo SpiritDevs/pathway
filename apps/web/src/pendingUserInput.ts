@@ -3,6 +3,7 @@ import type { UserInputQuestion } from "@spiritdevs/contracts";
 export interface PendingUserInputDraftAnswer {
   selectedOptionLabels?: string[];
   customAnswer?: string;
+  attachmentCount?: number;
 }
 
 export interface PendingUserInputProgress {
@@ -56,10 +57,14 @@ export function resolvePendingUserInputAnswer(
 
   const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
   if (question.multiSelect) {
-    return selectedOptionLabels.length > 0 ? selectedOptionLabels : null;
+    return selectedOptionLabels.length > 0
+      ? selectedOptionLabels
+      : (draft?.attachmentCount ?? 0) > 0
+        ? ""
+        : null;
   }
 
-  return selectedOptionLabels[0] ?? null;
+  return selectedOptionLabels[0] ?? ((draft?.attachmentCount ?? 0) > 0 ? "" : null);
 }
 
 export function setPendingUserInputCustomAnswer(
@@ -110,7 +115,7 @@ export function buildPendingUserInputAnswers(
 
   for (const question of questions) {
     const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
-    if (!answer) {
+    if (answer === null) {
       return null;
     }
     answers[question.id] = answer;
@@ -124,7 +129,9 @@ export function countAnsweredPendingUserInputQuestions(
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): number {
   return questions.reduce((count, question) => {
-    return resolvePendingUserInputAnswer(question, draftAnswers[question.id]) ? count + 1 : count;
+    return resolvePendingUserInputAnswer(question, draftAnswers[question.id]) !== null
+      ? count + 1
+      : count;
   }, 0);
 }
 
@@ -133,7 +140,7 @@ export function findFirstUnansweredPendingUserInputQuestionIndex(
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): number {
   const unansweredIndex = questions.findIndex(
-    (question) => !resolvePendingUserInputAnswer(question, draftAnswers[question.id]),
+    (question) => resolvePendingUserInputAnswer(question, draftAnswers[question.id]) === null,
   );
 
   return unansweredIndex === -1 ? Math.max(questions.length - 1, 0) : unansweredIndex;
@@ -167,6 +174,6 @@ export function derivePendingUserInputProgress(
     answeredQuestionCount,
     isLastQuestion,
     isComplete: buildPendingUserInputAnswers(questions, draftAnswers) !== null,
-    canAdvance: Boolean(resolvedAnswer),
+    canAdvance: resolvedAnswer !== null,
   };
 }

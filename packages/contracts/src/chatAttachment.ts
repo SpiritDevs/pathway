@@ -86,6 +86,19 @@ export const ChatAttachment = Schema.Union([
 ]);
 export type ChatAttachment = typeof ChatAttachment.Type;
 
+/** Saved answer attachments are grouped by the question that owns them. */
+export const UserInputAttachments = Schema.Record(
+  Schema.String,
+  Schema.Array(Schema.Union([ChatImageAttachment, ChatFileAttachment])),
+).check(
+  Schema.makeFilter(
+    (value) =>
+      Object.values(value).reduce((count, attachments) => count + attachments.length, 0) <=
+      PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  ),
+);
+export type UserInputAttachments = typeof UserInputAttachments.Type;
+
 const PendingChatAttachmentId = ChatAttachmentId.check(
   Schema.isPattern(
     /^pending-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[a-z0-9]{1,10}$/i,

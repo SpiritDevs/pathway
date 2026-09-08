@@ -587,6 +587,40 @@ describe("MessagesTimeline", () => {
     );
   });
 
+  it("keeps each attachment-only answer and its file link in saved question history", () => {
+    const attachment = {
+      type: "image" as const,
+      id: "answer-image",
+      name: "answer.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+    };
+    const entry = buildQuestionReplyTimelineEntry(
+      JSON.stringify({
+        request_user_input_async: "call-images",
+        answers: [
+          { question: "Which layout?", answer: "", attachments: [attachment] },
+          { question: "Which color?", answer: "Blue" },
+        ],
+      }),
+    );
+    const withAttachments = {
+      ...entry,
+      message: {
+        ...entry.message,
+        attachments: [{ ...attachment, previewUrl: "https://example.com/answer.png" }],
+      },
+    };
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[withAttachments]} />,
+    );
+    expect(markup).toContain('data-question-reply="true"');
+    expect(markup).toContain("Which layout?");
+    expect(markup).toContain("Which color?");
+    expect(markup).toContain('href="https://example.com/answer.png"');
+    expect(markup).not.toContain("request_user_input_async");
+  });
+
   it("keeps generated answers out of the raw message editor", () => {
     const entry = buildQuestionReplyTimelineEntry(
       JSON.stringify({
