@@ -295,6 +295,16 @@ describe("MessagesTimeline", () => {
     expect(fadedMarkup).toContain("chat-timeline-scroll-fade");
   });
 
+  it("initially shows ordinary working animation while a new thread connects", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[]} workingPresentation="connecting" />,
+    );
+    expect(markup).toContain("animate-status-pulse");
+    expect(markup).toContain("Working");
+    expect(markup).not.toContain("Still connecting");
+    expect(markup).not.toContain("Stop loading");
+  });
+
   it("keeps recovery controls available after thread loading is stopped", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline

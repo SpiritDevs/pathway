@@ -2320,7 +2320,18 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
 
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
   const ctx = use(TimelineRowCtx);
-  const isConnecting = row.presentation !== "activity";
+  const [connectionDetailsReady, setConnectionDetailsReady] = useState(false);
+  const awaitingActiveThread = row.presentation === "connecting";
+  useEffect(() => {
+    if (!awaitingActiveThread) {
+      setConnectionDetailsReady(false);
+      return;
+    }
+    const timer = setTimeout(() => setConnectionDetailsReady(true), 10_000);
+    return () => clearTimeout(timer);
+  }, [awaitingActiveThread]);
+  const isConnecting =
+    row.presentation !== "activity" && (!awaitingActiveThread || connectionDetailsReady);
   const loadingStopped = row.presentation === "connecting-stopped";
   return (
     <div className="py-0.5 pl-1.5">
@@ -2331,7 +2342,9 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
           isConnecting ? "items-start" : "items-center",
         )}
       >
-        <span className="inline-flex items-center gap-[3px]">
+        <span
+          className={cn("inline-flex shrink-0 items-center gap-[3px]", isConnecting && "h-[1lh]")}
+        >
           <span
             className={cn(
               "h-1 w-1 rounded-full bg-muted-foreground/30",
