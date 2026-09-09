@@ -180,6 +180,7 @@ export async function readStorageState(
 
 interface Shape {
   snapshot: Effect.Effect<StorageSnapshot, StorageError>;
+  monitor: Effect.Effect<void, StorageError>;
   waitForJob: (jobId: string) => Effect.Effect<StorageJob, StorageError>;
   setPolicy: (
     policy: typeof StoragePolicy.Type,
@@ -289,6 +290,9 @@ export const makeStorageService = Effect.gen(function* () {
   };
   let cached: StorageSnapshot | null = null;
   let cachedRevision = -1;
+  let capacityPaths = new Map<string, string>();
+  let capacityPathsRevision = -1;
+  let capacityPathsDiscoveredAt = 0;
   let refreshing: Promise<StorageSnapshot> | null = null;
   let activeJob: string | null = null;
   const completions = new Map<
@@ -439,10 +443,13 @@ export const makeStorageService = Effect.gen(function* () {
           !state.keep.includes(thread.id);
         if (eligible) {
           const lifecycleAt = thread.archivedAt ?? thread.settledAt;
+          const previousSince = state.since[thread.id];
           const initialAt = lifecycleAt
             ? DateTime.toEpochMillis(lifecycleAt)
             : pr?.state === "merged"
-              ? Date.now()
+              ? previousSince
+                ? Date.parse(previousSince)
+                : Date.now()
               : activityAt + (inactiveDays ?? 0) * 86_400_000;
           since[thread.id] = new Date(
             Math.max(
@@ -613,6 +620,9 @@ export const makeStorageService = Effect.gen(function* () {
         scanError: persistenceError,
       };
       cachedRevision = revision;
+      capacityPaths = new Map(cached.volumes.map((volume) => [volume.id, volume.path]));
+      capacityPathsRevision = revision;
+      capacityPathsDiscoveredAt = Date.now();
       recordStoragePressure(cached);
       return cached;
     })();
@@ -897,6 +907,84 @@ export const makeStorageService = Effect.gen(function* () {
   });
   const service: Shape = {
     snapshot: io(() => refresh()),
+    monitor: Effect.gen(function* () {
+      if (!state.policy.enabled || activeJob !== null || persistenceError !== null) {
+        yield* io(async () => {
+          const revision = storageInventoryRevision();
+          if (
+            capacityPathsRevision !== revision ||
+            Date.now() - capacityPathsDiscoveredAt >= 15 * 60_000
+          ) {
+            const shell = await run(threads.getShellSnapshot());
+            const projectRows = await run(projects.listAll());
+            const paths = new Set([
+              NodePath.parse(config.stateDir).root,
+              config.stateDir,
+              ...projectRows.flatMap((project) =>
+                project.workspaceRoot ? [project.workspaceRoot] : [],
+              ),
+              ...[...shell.threads, ...shell.archivedThreads].flatMap((thread) =>
+                thread.deletedAt === null
+                  ? [thread.worktreePath, thread.conversationPath].filter((path): path is string =>
+                      Boolean(path),
+                    )
+                  : [],
+              ),
+            ]);
+            const discovered = new Map<string, string>();
+            for (const path of paths) {
+              try {
+                const stat = await NodeFSP.stat(path);
+                const id = String(stat.dev);
+                if (!discovered.has(id)) discovered.set(id, path);
+              } catch {
+                // Recheck absent paths on inventory changes and periodic volume rediscovery.
+              }
+            }
+            capacityPaths = discovered;
+            capacityPathsRevision = revision;
+            capacityPathsDiscoveredAt = Date.now();
+          }
+          const volumes = new Map<string, StorageSnapshot["volumes"][number]>();
+          const sampledAt = iso();
+          for (const [id, path] of capacityPaths) {
+            try {
+              const capacity = await NodeFSP.statfs(path);
+              const availableBytes = capacity.bavail * capacity.bsize;
+              const totalBytes = capacity.blocks * capacity.bsize;
+              volumes.set(id, {
+                id,
+                path,
+                availableBytes,
+                totalBytes,
+                sampledAt,
+                pressure: storagePressure(availableBytes, totalBytes, state.policy),
+              });
+            } catch {
+              // Rediscover a removed or disconnected representative on the next monitoring tick.
+              capacityPathsRevision = -1;
+            }
+          }
+          recordStoragePressure({ sampledAt, volumes: [...volumes.values()] });
+        });
+        return;
+      }
+      const snapshot = yield* service.snapshot;
+      const ids = snapshot.worktrees
+        .filter(
+          (entry) =>
+            entry.kind === "worktree" &&
+            !entry.removed &&
+            entry.blockers.length === 0 &&
+            entry.threadIds.every(
+              (id) =>
+                state.since[id] &&
+                Date.now() - Date.parse(state.since[id]!) >= state.policy.afterDays * 86_400_000,
+            ),
+        )
+        .map((entry) => entry.id);
+      if (ids.length) yield* service.start({ mode: "scheduled", worktreeIds: ids });
+    }),
     waitForJob: (jobId) =>
       io(async () => {
         const completion = completions.get(jobId);
@@ -995,24 +1083,7 @@ export const makeStorageService = Effect.gen(function* () {
       }),
   };
   yield* forkParked(
-    Effect.gen(function* () {
-      const snapshot = yield* service.snapshot;
-      if (!state.policy.enabled || activeJob !== null || persistenceError !== null) return;
-      const ids = snapshot.worktrees
-        .filter(
-          (entry) =>
-            entry.kind === "worktree" &&
-            !entry.removed &&
-            entry.blockers.length === 0 &&
-            entry.threadIds.every(
-              (id) =>
-                state.since[id] &&
-                Date.now() - Date.parse(state.since[id]!) >= state.policy.afterDays * 86_400_000,
-            ),
-        )
-        .map((entry) => entry.id);
-      if (ids.length) yield* service.start({ mode: "scheduled", worktreeIds: ids });
-    }).pipe(
+    service.monitor.pipe(
       Effect.catch((cause) =>
         Effect.logWarning("Storage monitoring deferred", { message: cause.message }),
       ),

@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, StorageJob, ThreadId } from "@spiritdevs/contracts";
 import { squashAtomCommandFailure } from "@spiritdevs/client-runtime/state/runtime";
 import { serverEnvironment } from "../state/server";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import { storageMeasurementIsFresh, storagePressure } from "../lib/storagePresentation";
+import { activeCompanyIdAtom, scopedCompanyRegistryReplicasAtom } from "../cloud/activeCompany";
+import { companyScopedStorageSnapshot } from "../lib/storageCompanyScope";
 
 export function useConversationStorage(input: {
   environmentId: EnvironmentId;
@@ -12,17 +15,27 @@ export function useConversationStorage(input: {
   enabled: boolean;
 }) {
   const { environmentId, threadId, enabled } = input;
+  const companyId = useAtomValue(activeCompanyIdAtom);
+  const replicas = useAtomValue(scopedCompanyRegistryReplicasAtom);
   const snapshot = useEnvironmentQuery(
     enabled ? serverEnvironment.storageSnapshot({ environmentId, input: {} }) : null,
   );
   const pressure = snapshot.error ? "unknown" : storagePressure(snapshot.data);
-  const scope = `${environmentId}:${threadId}`;
+  const scope = JSON.stringify([companyId, environmentId, threadId]);
+  const scopedSnapshot = useMemo(
+    () =>
+      snapshot.data
+        ? companyScopedStorageSnapshot(snapshot.data, companyId, replicas, environmentId)
+        : null,
+    [snapshot.data, companyId, replicas, environmentId],
+  );
   const [allowedScope, setAllowedScope] = useState<string | null>(null);
   const [error, setError] = useState<{ scope: string; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [startedJob, setStartedJob] = useState<{ scope: string; job: StorageJob } | null>(null);
   const inFlight = useRef(false);
   const worktreeIds = useMemo(() => {
+    const visibleThreadIds = new Set(scopedSnapshot?.threads.map((thread) => thread.threadId));
     const criticalVolumes = new Set(
       snapshot.data?.volumes
         .filter(
@@ -31,18 +44,20 @@ export function useConversationStorage(input: {
         .map((volume) => volume.id),
     );
     return (
-      snapshot.data?.worktrees
+      scopedSnapshot?.worktrees
         .filter(
           (worktree) =>
             !worktree.removed &&
             worktree.kind === "worktree" &&
+            worktree.threadIds.length > 0 &&
+            worktree.threadIds.every((id) => visibleThreadIds.has(id)) &&
             worktree.volumeId !== null &&
             criticalVolumes.has(worktree.volumeId),
         )
         .map((worktree) => worktree.id) ?? []
     );
-  }, [snapshot.data]);
-  const preview = useEnvironmentQuery(
+  }, [snapshot.data, scopedSnapshot]);
+  const previewResult = useEnvironmentQuery(
     enabled && pressure === "critical"
       ? serverEnvironment.storagePreview({
           environmentId,
@@ -50,6 +65,21 @@ export function useConversationStorage(input: {
         })
       : null,
   );
+  const preview = useMemo(() => {
+    if (!previewResult.data) return previewResult;
+    const ids = new Set(worktreeIds);
+    const items = previewResult.data.items.filter((item) => ids.has(item.worktreeId));
+    return {
+      ...previewResult,
+      data: {
+        items,
+        estimatedBytes: items.reduce(
+          (sum, item) => sum + (item.eligible ? (item.estimatedBytes ?? 0) : 0),
+          0,
+        ),
+      },
+    };
+  }, [previewResult, worktreeIds]);
   const start = useAtomCommand(serverEnvironment.storageStart, { reportFailure: false });
   const cancel = useAtomCommand(serverEnvironment.storageCancel, { reportFailure: false });
   const recreate = useAtomCommand(serverEnvironment.storageRecreate, { reportFailure: false });

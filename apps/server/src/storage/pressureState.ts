@@ -3,7 +3,9 @@ let latest: { storagePressure: StoragePressure; storageSampledAt: number } = {
   storagePressure: "unknown",
   storageSampledAt: 0,
 };
-export function recordStoragePressure(snapshot: StorageSnapshot): void {
+export function recordStoragePressure(
+  snapshot: Pick<StorageSnapshot, "sampledAt" | "volumes">,
+): void {
   const levels = snapshot.volumes.map((volume) => volume.pressure);
   latest = {
     storagePressure: levels.includes("critical")

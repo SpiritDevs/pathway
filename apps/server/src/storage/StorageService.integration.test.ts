@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, vi } from "@effect/vitest";
 import {
   OrchestrationV2ThreadShell,
   StorageJob,
@@ -17,6 +17,7 @@ import * as Schema from "effect/Schema";
 import { ProjectionProject } from "../persistence/Services/ProjectionProjects.ts";
 import { ServerActivation } from "../serverActivation.ts";
 import { makeStorageService, StorageServiceInputs } from "./StorageService.ts";
+import { invalidateStorageInventory, readStoragePressure } from "./pressureState.ts";
 import { workspaceStorageBlocker } from "./workspaceLease.ts";
 
 const execute = NodeUtil.promisify(NodeChildProcess.execFile);
@@ -123,6 +124,179 @@ function inputsFor(
 }
 
 describe("storage service lifecycle", () => {
+  it.effect(
+    "preserves first merged-PR eligibility across inventories and resets it after activity",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const value = yield* fixture;
+          let thread = {
+            ...value.thread,
+            archivedAt: null,
+            settledAt: null,
+            settledOverride: null,
+          };
+          const service = yield* makeStorageService.pipe(
+            Effect.provideService(
+              StorageServiceInputs,
+              inputsFor(value, {
+                threads: {
+                  getShellSnapshot: () =>
+                    Effect.succeed({
+                      schemaVersion: 1,
+                      snapshotSequence: 0,
+                      threads: [thread],
+                      archivedThreads: [],
+                    }),
+                  getThreadProjection: () => Effect.die("Unexpected projection read"),
+                },
+                workflow: {
+                  status: () =>
+                    Effect.succeed({
+                      isRepo: true,
+                      hasPrimaryRemote: true,
+                      isDefaultRef: false,
+                      refName: "topic",
+                      hasWorkingTreeChanges: false,
+                      workingTree: { files: [], insertions: 0, deletions: 0 },
+                      hasUpstream: true,
+                      aheadCount: 0,
+                      behindCount: 0,
+                      pr: {
+                        number: 1,
+                        title: "Merged",
+                        url: "https://example.invalid/pr/1",
+                        baseRef: "main",
+                        headRef: "topic",
+                        state: "merged",
+                      },
+                    }),
+                },
+              }),
+            ),
+            Effect.provideService(ServerActivation, Effect.never),
+          );
+          const first = yield* service.snapshot;
+          const since = first.threads[0]!.eligibleSince!;
+          expect(since).not.toBeNull();
+          const later = Date.parse(since) + 31 * 86_400_000;
+          const clock = vi.spyOn(Date, "now").mockReturnValue(later);
+          yield* Effect.addFinalizer(() => Effect.sync(() => clock.mockRestore()));
+          const preview = yield* service.preview({
+            mode: "scheduled",
+            worktreeIds: [value.worktree],
+          });
+          expect(preview.items[0]?.eligible).toBe(true);
+          expect((yield* service.snapshot).threads[0]?.eligibleSince).toBe(since);
+          thread = { ...thread, status: "running" };
+          invalidateStorageInventory();
+          expect((yield* service.snapshot).threads[0]?.eligibleSince).toBeNull();
+          thread = { ...thread, status: "idle" };
+          invalidateStorageInventory();
+          const reset = yield* service.snapshot;
+          expect(Date.parse(reset.threads[0]!.eligibleSince!)).toBeGreaterThan(Date.parse(since));
+          expect(
+            (yield* service.preview({ mode: "scheduled", worktreeIds: [value.worktree] })).items[0]
+              ?.eligible,
+          ).toBe(false);
+        }),
+      ),
+  );
+
+  it.effect(
+    "reuses volume paths for disabled monitoring and rediscovers on invalidation or expiry",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const value = yield* fixture;
+          let shellReads = 0;
+          let projectReads = 0;
+          let terminalReads = 0;
+          let gitReads = 0;
+          let payloadReads = 0;
+          const service = yield* makeStorageService.pipe(
+            Effect.provideService(
+              StorageServiceInputs,
+              inputsFor(value, {
+                threads: {
+                  getShellSnapshot: () =>
+                    Effect.sync(() => {
+                      shellReads++;
+                      return {
+                        schemaVersion: 1,
+                        snapshotSequence: 0,
+                        threads: [],
+                        archivedThreads: [value.thread],
+                      };
+                    }),
+                  getThreadProjection: () => Effect.die("Unexpected projection read"),
+                },
+                projects: {
+                  listAll: () =>
+                    Effect.sync(() => {
+                      projectReads++;
+                      return [value.project];
+                    }),
+                },
+                terminals: {
+                  listMetadata: Effect.sync(() => {
+                    terminalReads++;
+                    return [];
+                  }),
+                },
+                workflow: {
+                  status: () =>
+                    Effect.sync(() => {
+                      gitReads++;
+                      throw new Error("Unexpected Git read");
+                    }),
+                },
+                threadDataBytes: () =>
+                  Effect.sync(() => {
+                    payloadReads++;
+                    return 0;
+                  }),
+              }),
+            ),
+            Effect.provideService(ServerActivation, Effect.never),
+          );
+          yield* service.monitor;
+          yield* service.monitor;
+          expect({ shellReads, projectReads }).toEqual({ shellReads: 1, projectReads: 1 });
+          invalidateStorageInventory();
+          yield* service.monitor;
+          expect({ shellReads, projectReads }).toEqual({ shellReads: 2, projectReads: 2 });
+          const clock = vi
+            .spyOn(Date, "now")
+            .mockReturnValue(DateTime.toEpochMillis(DateTime.nowUnsafe()) + 16 * 60_000);
+          yield* Effect.addFinalizer(() => Effect.sync(() => clock.mockRestore()));
+          yield* service.monitor;
+          yield* service.monitor;
+          expect({ shellReads, projectReads }).toEqual({ shellReads: 3, projectReads: 3 });
+          expect(readStoragePressure().storageSampledAt).toBeGreaterThan(0);
+          expect(readStoragePressure().storagePressure).not.toBe("unknown");
+          expect({ terminalReads, gitReads, payloadReads }).toEqual({
+            terminalReads: 0,
+            gitReads: 0,
+            payloadReads: 0,
+          });
+          expect(
+            yield* Effect.promise(() =>
+              NodeFSP.access(NodePath.join(value.stateDir, "storage-management.json")).then(
+                () => true,
+                () => false,
+              ),
+            ),
+          ).toBe(false);
+          const requested = yield* service.snapshot;
+          expect(requested.worktrees[0]?.estimatedBytes).not.toBeNull();
+          expect(terminalReads).toBe(1);
+          expect(gitReads).toBe(1);
+          expect(payloadReads).toBe(1);
+        }),
+      ),
+  );
+
   it.effect(
     "removes a worktree, persists the receipt, and recreates it without deleting its thread or branch",
     () =>

@@ -8,6 +8,7 @@ import {
 } from "@spiritdevs/contracts";
 import { reactHookHarness } from "../test/reactHookHarness";
 import { useConversationStorage } from "./useConversationStorage";
+import { CompanyId } from "@spiritdevs/contracts/company";
 
 const mocks = vi.hoisted(() => ({
   query: vi.fn(),
@@ -46,9 +47,45 @@ vi.mock("../state/server", () => ({
   },
 }));
 vi.mock("../state/use-atom-command", () => ({ useAtomCommand: (command: unknown) => command }));
+vi.mock("../cloud/activeCompany", () => ({
+  activeCompanyIdAtom: "company",
+  scopedCompanyRegistryReplicasAtom: "replicas",
+}));
+vi.mock("@effect/atom-react", () => ({
+  useAtomValue: (atom: string) => (atom === "company" ? companyId : replicas),
+}));
 
 const environmentId = EnvironmentId.make("machine");
 const threadId = ThreadId.make("thread");
+const companyA = CompanyId.make("company-a");
+const companyB = CompanyId.make("company-b");
+let companyId = companyA;
+const registration = {
+  entityKind: "environmentRegistration",
+  id: "registration",
+  environmentId,
+  publicKeyThumbprint: "thumbprint",
+  descriptor: {
+    environmentId,
+    applicationId: "pathway",
+    label: "Machine",
+    platform: { os: "darwin", arch: "arm64" },
+    serverVersion: "2026.9.0",
+    capabilities: { repositoryIdentity: true, storageManagement: true },
+  },
+  relayLinkState: "linked",
+  managedEndpointAvailable: true,
+  lastSeenAt: 1000,
+  serviceRoleIds: [],
+  teamIds: [],
+  state: "active",
+  registeredByMembershipId: null,
+  createdAt: 1000,
+  updatedAt: 1000,
+};
+const replicas = new Map(
+  [companyA, companyB].map((id) => [id, { view: new Map([["registration", registration]]) }]),
+);
 let snapshot: StorageSnapshot | null;
 let snapshotError: string | null;
 let preview: StoragePreview;
@@ -63,6 +100,7 @@ beforeEach(() => {
   reactHookHarness.reset();
   mocks.effects.length = 0;
   snapshotError = null;
+  companyId = companyA;
   vi.stubGlobal("window", { setInterval: vi.fn(() => 1), clearInterval: vi.fn() });
   const sampledAt = new Date().toISOString();
   snapshot = {
@@ -95,7 +133,20 @@ beforeEach(() => {
         removed: false,
       },
     ],
-    threads: [],
+    threads: [
+      {
+        threadId,
+        title: "Company A work",
+        projectId: null,
+        conversationCompanyId: companyA,
+        worktreeId: "eligible",
+        status: "settled",
+        keepWorktree: false,
+        threadDataBytes: 0,
+        eligibleSince: null,
+        reclaimedAt: null,
+      },
+    ],
   };
   preview = {
     estimatedBytes: 100,
@@ -141,6 +192,64 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("conversation storage", () => {
+  it("previews and cleans only the active company's worktrees, excluding cross-company shared folders", async () => {
+    const foreignThread = {
+      ...snapshot!.threads[0]!,
+      threadId: ThreadId.make("foreign-thread"),
+      conversationCompanyId: companyB,
+      worktreeId: "foreign",
+    };
+    snapshot = {
+      ...snapshot!,
+      threads: [...snapshot!.threads, foreignThread],
+      worktrees: [
+        ...snapshot!.worktrees,
+        { ...snapshot!.worktrees[0]!, id: "foreign", threadIds: [foreignThread.threadId] },
+        { ...snapshot!.worktrees[0]!, id: "shared", threadIds: [threadId, foreignThread.threadId] },
+      ],
+    };
+    preview = {
+      estimatedBytes: 900,
+      items: [
+        preview.items[0]!,
+        {
+          ...preview.items[0]!,
+          worktreeId: "foreign",
+          estimatedBytes: 400,
+          threadIds: [foreignThread.threadId],
+        },
+        {
+          ...preview.items[0]!,
+          worktreeId: "shared",
+          estimatedBytes: 400,
+          threadIds: [threadId, foreignThread.threadId],
+        },
+      ],
+    };
+    const storage = render();
+    expect(mocks.query).toHaveBeenCalledWith({
+      type: "preview",
+      input: { environmentId, input: { mode: "emergency", worktreeIds: ["eligible"] } },
+    });
+    expect(storage.preview.data?.estimatedBytes).toBe(100);
+    expect(storage.preview.data?.items.map((item) => item.worktreeId)).toEqual(["eligible"]);
+    await storage.cleanup();
+    expect(mocks.start).toHaveBeenCalledExactlyOnceWith({
+      environmentId,
+      input: { mode: "emergency", worktreeIds: ["eligible"] },
+    });
+  });
+  it("drops the previous company's preview and override immediately when company selection changes", async () => {
+    render().allow();
+    expect(render().allowed).toBe(true);
+    companyId = companyB;
+    const changed = render();
+    expect(changed.allowed).toBe(false);
+    expect(changed.preview.data?.estimatedBytes).toBe(0);
+    expect(changed.preview.data?.items).toEqual([]);
+    await changed.cleanup();
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
   it("previews worktrees only on critically low disks", () => {
     snapshot = {
       ...snapshot!,

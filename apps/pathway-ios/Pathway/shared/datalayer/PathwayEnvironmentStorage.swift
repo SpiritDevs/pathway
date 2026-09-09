@@ -2,6 +2,14 @@ import Foundation
 import Observation
 import CryptoKit
 
+enum PathwayStorageAvailabilityError: LocalizedError {
+    case unsupportedEnvironment
+
+    var errorDescription: String? {
+        "Update this environment to use Storage & cleanup."
+    }
+}
+
 struct PathwayStoragePolicy: Codable, Sendable {
     var enabled: Bool
     var afterDays: Int
@@ -97,6 +105,14 @@ struct PathwayStorageSnapshot: Codable, Sendable {
     let scanError: String?
     var runningJob: PathwayStorageJob? { jobs.first { $0.status == "running" } }
     var critical: Bool { volumes.contains { $0.pressure == "critical" } }
+    var emergencyWorktreeIDs: [String] {
+        let volumeIDs = Set(volumes.filter { $0.pressure == "critical" }.map(\.id))
+        let visibleThreadIDs = Set(threads.map(\.threadId))
+        return worktrees.filter {
+            !$0.removed && $0.kind == "worktree" && $0.volumeId.map(volumeIDs.contains) == true &&
+                !$0.threadIds.isEmpty && $0.threadIds.allSatisfy(visibleThreadIDs.contains)
+        }.map(\.id)
+    }
 }
 
 func pathwayStorageBytes(_ value: Double?) -> String {
@@ -133,6 +149,10 @@ final class PathwayEnvironmentStorageModel: Identifiable {
 
     static func request(environment: PathwayCompanyEnvironment, connect: PathwayConnectClient,
                         method: String, fields: [String: JSONValue] = [:]) async throws -> JSONValue {
+        guard !method.hasPrefix("storage.") ||
+                environment.environment.descriptor.capabilities?["storageManagement"]?.boolValue == true else {
+            throw PathwayStorageAvailabilityError.unsupportedEnvironment
+        }
         let rpc = PathwayRPCClient {
             let connection = try await connect.prepare(environment: environment)
             let readOnly = method == "storage.snapshot" || method == "storage.preview" || method == "server.getHostResources"

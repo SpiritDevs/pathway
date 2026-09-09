@@ -47,6 +47,9 @@ struct PathwayStorageStatusNotice: View {
                 var seen = Set<String>()
                 for environment in appModel.cloud.environments {
                     guard !Task.isCancelled, seen.insert(environment.environment.environmentId).inserted else { continue }
+                    let registrationIDs = appModel.cloud.environments.filter {
+                        $0.environment.environmentId == environment.environment.environmentId
+                    }.map(\.id)
                     do {
                         let value = try await PathwayEnvironmentStorageModel.request(environment: environment, connect: connect, method: "server.getHostResources")
                         guard !Task.isCancelled else { return }
@@ -54,13 +57,13 @@ struct PathwayStorageStatusNotice: View {
                         guard let pressure = resources.storagePressure, ["healthy", "warning", "critical"].contains(pressure),
                               let storageAt = resources.storageSampledAt, storageAt.isFinite,
                               resources.sampledAt - storageAt >= -5_000, resources.sampledAt - storageAt <= 90_000 else {
-                            stale.insert(environment.id)
+                            stale.formUnion(registrationIDs)
                             continue
                         }
-                        stale.remove(environment.id)
+                        PathwayStoragePressureCache.apply(pressure: pressure, registrationIDs: registrationIDs,
+                            pressures: &pressures, stale: &stale)
                         let key = PathwayStoragePressureCache.key(account: account, environmentID: environment.environment.environmentId)
                         let previous = UserDefaults.standard.string(forKey: key)
-                        pressures[environment.id] = pressure
                         guard previous != pressure else { continue }
                         UserDefaults.standard.set(pressure, forKey: key)
                         guard pressure != "healthy" || previous == "warning" || previous == "critical" else { continue }
@@ -77,7 +80,7 @@ struct PathwayStorageStatusNotice: View {
                         }
                     } catch {
                         guard !Task.isCancelled else { return }
-                        stale.insert(environment.id)
+                        stale.formUnion(registrationIDs)
                     }
                 }
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
@@ -94,6 +97,15 @@ struct PathwayStorageStatusNotice: View {
 
 /// Persisted readings are display-only until a fresh telemetry response arrives.
 enum PathwayStoragePressureCache {
+    /// One physical host reading updates every company registration, even without a pressure transition.
+    static func apply(pressure: String, registrationIDs: [String],
+                      pressures: inout [String: String], stale: inout Set<String>) {
+        for id in registrationIDs {
+            pressures[id] = pressure
+            stale.remove(id)
+        }
+    }
+
     static func key(account: String, environmentID: String) -> String {
         "pathway.storagePressure.\(account).\(environmentID)"
     }

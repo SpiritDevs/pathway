@@ -47,7 +47,7 @@ struct PathwayHostResources: Decodable, Sendable {
 
     var hasFreshCriticalStorage: Bool {
         guard storagePressure == "critical", let storageSampledAt else { return false }
-        return storageSampledAt.isFinite && sampledAt - storageSampledAt >= -5_000 && sampledAt - storageSampledAt <= 60_000
+        return storageSampledAt.isFinite && sampledAt - storageSampledAt >= -5_000 && sampledAt - storageSampledAt <= 120_000
     }
 
     /// Use receipt age because clocks on remote environments need not agree with this device.

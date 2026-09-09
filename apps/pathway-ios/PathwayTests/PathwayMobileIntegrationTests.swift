@@ -3,6 +3,46 @@ import Foundation
 import Testing
 
 struct PathwayMobileIntegrationTests {
+    @Test @MainActor func storageRPCsRejectOlderEnvironmentsBeforeConnecting() async throws {
+        let connect = PathwayConnectClient(relayURL: URL(string: "https://relay.test")!, clerkTokenProvider: {
+            Issue.record("An unsupported storage request must not connect to the environment")
+            return "unused"
+        })
+        let capabilityOptions: [[String: JSONValue]?] = [nil, [:], ["storageManagement": .bool(false)]]
+        for capabilities in capabilityOptions {
+            let environment = PathwayCompanyEnvironment(companyId: "company", environment: .init(
+                id: "host", environmentId: "host", descriptor: .init(environmentId: "host", label: "Host",
+                    serverVersion: "old", capabilities: capabilities), relayLinkState: "linked",
+                managedEndpointAvailable: true, lastSeenAt: nil, state: "active"))
+            let model = PathwayEnvironmentStorageModel(environment: environment, connect: connect)
+            await model.refresh()
+            #expect(!model.hasCurrentSnapshot)
+            #expect(model.snapshot == nil)
+            #expect(model.error == "Update this environment to use Storage & cleanup.")
+            for method in ["storage.preview", "storage.start", "storage.cancel", "storage.recreate", "storage.setKeep", "storage.setPolicy"] {
+                do {
+                    _ = try await PathwayEnvironmentStorageModel.request(environment: environment, connect: connect, method: method)
+                    Issue.record("Unsupported storage RPC unexpectedly succeeded")
+                } catch PathwayStorageAvailabilityError.unsupportedEnvironment { }
+                catch { Issue.record("Unexpected error: \(error)") }
+            }
+        }
+    }
+
+    @Test @MainActor func sharedEnvironmentRecoveryUpdatesEveryCompanyRegistration() {
+        var pressures = ["one:host": "critical", "two:host": "critical", "other:host": "warning"]
+        var stale: Set<String> = ["one:host", "two:host", "other:host"]
+        PathwayStoragePressureCache.apply(pressure: "healthy", registrationIDs: ["one:host", "two:host"],
+            pressures: &pressures, stale: &stale)
+        #expect(pressures == ["one:host": "healthy", "two:host": "healthy", "other:host": "warning"])
+        #expect(stale == ["other:host"])
+        // Repeated readings must also clear stale state, without requiring another notification transition.
+        stale.formUnion(["one:host", "two:host"])
+        PathwayStoragePressureCache.apply(pressure: "healthy", registrationIDs: ["one:host", "two:host"],
+            pressures: &pressures, stale: &stale)
+        #expect(stale == ["other:host"])
+    }
+
     @Test @MainActor func offlineStoragePressureRestoresOnlyTheCurrentAccountAndEnvironments() throws {
         let suite = "storage-pressure-test-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -24,6 +64,28 @@ struct PathwayMobileIntegrationTests {
         #expect(PathwayProductLink(notification: destination.userInfo) == nil)
         #expect(PathwayStorageNotificationDestination(notification: ["environmentId": "host"]) == nil)
         #expect(PathwayStorageNotificationDestination(notification: ["destination": "storage", "account": "", "environmentId": "host"]) == nil)
+    }
+
+    @Test func emergencyCleanupRequiresEveryLinkedThreadToBeVisible() {
+        let snapshot = PathwayStorageSnapshot(sampledAt: "", volumes: [
+            .init(id: "critical", path: "/", totalBytes: 100, availableBytes: 1, sampledAt: "", pressure: "critical"),
+            .init(id: "healthy", path: "/other", totalBytes: 100, availableBytes: 80, sampledAt: "", pressure: "healthy")
+        ], worktrees: [
+            storageWorktree("visible", volume: "critical", threads: ["visible"]),
+            storageWorktree("shared", volume: "critical", threads: ["visible", "other-company"]),
+            storageWorktree("healthy", volume: "healthy", threads: ["visible"]),
+            storageWorktree("orphan", volume: "critical", threads: [])
+        ], threads: [
+            .init(threadId: "visible", title: "Visible", projectId: "project", worktreeId: "visible", status: "settled",
+                keepWorktree: false, threadDataBytes: 0, eligibleSince: nil, reclaimedAt: nil)
+        ], policy: .init(enabled: false, afterDays: 30, warningBytes: 20, criticalBytes: 10,
+                        warningPercent: 10, criticalPercent: 5), jobs: [], scanError: nil)
+        #expect(snapshot.emergencyWorktreeIDs == ["visible"])
+    }
+
+    private func storageWorktree(_ id: String, volume: String, threads: [String]) -> PathwayStorageWorktree {
+        .init(id: id, path: "/\(id)", projectRoot: "/project", branch: id, volumeId: volume,
+              threadIds: threads, estimatedBytes: 1, measuredAt: nil, kind: "worktree", blockers: [], removed: false)
     }
 
     @Test func conversationFindsRunningCleanupBehindNewerCompletedJobs() {

@@ -80,10 +80,7 @@ struct PathwayConversationStorageNotice: View {
                 model.setVisibility(cloud: appModel.cloud)
                 await model.refresh()
                 if model.snapshot?.critical == true {
-                    let volumeIDs = Set((model.snapshot?.volumes ?? []).filter { $0.pressure == "critical" }.map(\.id))
-                    let ids = (model.snapshot?.worktrees ?? []).filter {
-                        !$0.removed && $0.kind == "worktree" && $0.volumeId.map(volumeIDs.contains) == true
-                    }.map(\.id)
+                    let ids = model.snapshot?.emergencyWorktreeIDs ?? []
                     if !model.performingAction { await model.prepare(mode: "emergency", ids: ids) }
                 } else { continued = false }
                 do { try await Task.sleep(for: .seconds(model.snapshot?.runningJob != nil ? 2 : 30)) }
