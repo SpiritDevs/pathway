@@ -1,21 +1,17 @@
-import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/shell";
-import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceControl";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
-import { cn } from "../lib/utils";
-import { sameAttachedPullRequest, useAttachedPullRequest } from "../state/threadPullRequest";
+import { useAttachedPullRequest } from "../state/threadPullRequest";
+import { threadPullRequestAttachments } from "@spiritdevs/shared/sourceControl";
+import type { OrchestrationV2PullRequestAttachment } from "@spiritdevs/contracts";
+import { useProject, useServerConfigs } from "../state/entities";
+import { threadEnvironment } from "../state/threads";
+import { useAtomCommand } from "../state/use-atom-command";
+import { ThreadDetailsPrRow } from "./chat/ThreadDetailsPrRow";
 import { Button } from "./ui/button";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
-import {
-  ChangeRequestStatusIcon,
-  PrStatusTooltipContent,
-  resolveThreadPrBadge,
-  type ThreadPr,
-} from "./ThreadStatusIndicators";
-import {
-  THREAD_DETAILS_PANEL_ICON_CLASS,
-  THREAD_DETAILS_PANEL_ROW_CLASS,
-} from "./chat/threadDetailsPanelStyles";
+import { Popover, PopoverTrigger, PopoverPopup } from "./ui/popover";
+import { GitPullRequestIcon, GitPullRequestArrowIcon } from "lucide-react";
+import { resolveThreadPrBadge, type ThreadPr } from "./ThreadStatusIndicators";
 
 export function ThreadPullRequestAction({
   thread,
@@ -26,54 +22,104 @@ export function ThreadPullRequestAction({
   isPanel: boolean;
   branchPullRequest?: ThreadPr;
 }) {
-  const query = useAttachedPullRequest(thread, { poll: true });
   const openPrLink = useOpenPrLink(scopeThreadRef(thread.environmentId, thread.id));
+  const attachments = threadPullRequestAttachments(thread);
+  const linked =
+    branchPullRequest &&
+    !thread.detachedPullRequestUrls?.includes(branchPullRequest.url) &&
+    !attachments.some((pr) => pr.url === branchPullRequest.url)
+      ? [...attachments, branchPullRequest]
+      : attachments;
+  if (linked.length === 0) return null;
+  const rows = (
+    <div className="flex w-full min-w-0 flex-col">
+      {linked.map((attachment) => (
+        <ThreadPullRequestRow
+          key={attachment.url}
+          thread={thread}
+          attachment={attachment}
+          branchPullRequest={branchPullRequest}
+        />
+      ))}
+    </div>
+  );
+  if (isPanel) return rows;
+  if (linked.length === 1)
+    return (
+      <Button size="xs" variant="ghost" onClick={(event) => openPrLink(event, linked[0]!.url)}>
+        <GitPullRequestIcon className="size-3" />#{linked[0]!.number}
+      </Button>
+    );
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={<Button size="xs" variant="ghost" />}
+        aria-label={`${linked.length} pull requests`}
+      >
+        <GitPullRequestArrowIcon className="size-3" />
+        {linked.length} PRs
+      </PopoverTrigger>
+      <PopoverPopup className="w-80" viewportClassName="p-1">
+        {rows}
+      </PopoverPopup>
+    </Popover>
+  );
+}
+
+function ThreadPullRequestRow({
+  thread,
+  attachment,
+  branchPullRequest,
+}: {
+  thread: EnvironmentThreadShell;
+  attachment: OrchestrationV2PullRequestAttachment;
+  branchPullRequest: ThreadPr;
+}) {
+  const query = useAttachedPullRequest(
+    { ...thread, attachedPullRequest: attachment },
+    { poll: true },
+  );
+  const openPrLink = useOpenPrLink(scopeThreadRef(thread.environmentId, thread.id));
+  const project = useProject(
+    thread.projectId ? scopeProjectRef(thread.environmentId, thread.projectId) : null,
+  );
+  const configs = useServerConfigs();
+  const detach = useAtomCommand(threadEnvironment.detachPullRequest);
   const badge = resolveThreadPrBadge({
-    attachedPullRequest: thread.attachedPullRequest,
+    attachedPullRequest: attachment,
     attachedDetail: query.data,
     attachedError: query.error,
-    branchPullRequest: null,
+    branchPullRequest,
     provider: undefined,
-  });
-  if (
-    !badge ||
-    (branchPullRequest && sameAttachedPullRequest(badge.pullRequest, branchPullRequest))
-  ) {
-    return null;
-  }
-  const terminology = getChangeRequestTerminologyFromUrl(badge.pullRequest.url);
-  const stateLabel = badge.status.label.replace(/^(PR|MR) /, "");
+  })!;
+  const detail = query.data;
+  const pr = {
+    ...attachment,
+    title: detail?.title ?? "",
+    state: badge.changeRequestState ?? "open",
+    headRef: detail?.headBranch ?? "",
+    baseRef: detail?.baseBranch ?? "",
+  };
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            size="xs"
-            variant={isPanel ? "ghost" : "outline"}
-            className={cn(isPanel && THREAD_DETAILS_PANEL_ROW_CLASS, badge.status.colorClass)}
-            aria-label={badge.status.tooltip}
-            onClick={(event) => openPrLink(event, badge.pullRequest.url)}
-          />
-        }
-      >
-        <ChangeRequestStatusIcon
-          className={cn(
-            isPanel ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3.5",
-            badge.status.colorClass,
-          )}
-        />
-        <span>
-          {terminology.shortLabel} #{badge.pullRequest.number}
-        </span>
-        <span className="ml-auto truncate pl-2 text-xs">
-          {query.isPending && !query.data
-            ? "Checking status"
-            : stateLabel.charAt(0).toUpperCase() + stateLabel.slice(1)}
-        </span>
-      </TooltipTrigger>
-      <TooltipPopup side="left">
-        <PrStatusTooltipContent status={badge.status} />
-      </TooltipPopup>
-    </Tooltip>
+    <ThreadDetailsPrRow
+      environmentId={thread.environmentId}
+      project={project ?? null}
+      pr={pr}
+      status={badge.status}
+      label={`#${attachment.number}${pr.title ? `: ${pr.title}` : ` · ${badge.status.label.replace(/^(PR|MR) /, "")}`}`}
+      openAriaLabel={badge.status.tooltip}
+      onOpen={(event) => openPrLink(event, attachment.url)}
+      onActed={query.refresh}
+      onUnlink={
+        configs.get(thread.environmentId)?.environment.capabilities.threadPullRequestAttachments
+          ? () => {
+              void detach({
+                environmentId: thread.environmentId,
+                input: { threadId: thread.id, pullRequest: attachment },
+              });
+            }
+          : undefined
+      }
+    />
   );
 }

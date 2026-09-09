@@ -152,7 +152,7 @@ extension PathwayAgentThread {
         if shell.isTemporary { return false }
         if changeRequestState == .merged { return true }
         if changeRequestState == .open || changeRequestState == .closed { return false }
-        guard shell.attachedPullRequest == nil, let autoSettleAfterDays, let latestActivityDate else { return false }
+        guard shell.linkedPullRequests.isEmpty, let autoSettleAfterDays, let latestActivityDate else { return false }
         return latestActivityDate < now.addingTimeInterval(-Double(autoSettleAfterDays) * 86400)
     }
 

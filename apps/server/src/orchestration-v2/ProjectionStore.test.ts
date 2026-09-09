@@ -232,6 +232,18 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
 
       yield* recordAttachment("attach-1", 1, "attached", 1);
       yield* recordAttachment("attach-2", 2, "attached", 2);
+      for (const shell of [
+        threadShellFromProjection(yield* projectionStore.getThreadProjection(threadId)),
+        (yield* projectionStore.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        ),
+        yield* projectionStore.getThreadShell(threadId),
+      ]) {
+        assert.deepEqual(
+          shell?.attachedPullRequests?.map((pr) => pr.number),
+          [1, 2],
+        );
+      }
       yield* recordAttachment("stale-detach-1", 3, "detached", 1);
 
       const projection = yield* projectionStore.getThreadProjection(threadId);
@@ -247,6 +259,10 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       assert.deepEqual(threadShellFromProjection(projection).attachedPullRequest, expected);
       assert.deepEqual(snapshotShell?.attachedPullRequest, expected);
       assert.deepEqual(threadShell?.attachedPullRequest, expected);
+      assert.deepEqual(threadShell?.attachedPullRequests, [expected]);
+      assert.deepEqual(threadShell?.detachedPullRequestUrls, [
+        "https://github.com/SpiritDevs/pathway/pull/1",
+      ]);
 
       yield* recordAttachment("detach-2", 4, "detached", 2);
       assert.isNull((yield* projectionStore.getThreadShell(threadId))?.attachedPullRequest ?? null);

@@ -8,7 +8,7 @@ import {
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
-  resolveActiveAttachedPullRequestItemId,
+  resolveActiveAttachedPullRequestItemIds,
   replaceEditableUserMessageText,
   splitEditableUserMessageText,
   resolveTimelineToolPresentation,
@@ -61,7 +61,9 @@ describe("active pull request attachment", () => {
       url: "https://github.com/acme/repo/pull/1",
     });
 
-    expect(resolveActiveAttachedPullRequestItemId([first, second, staleDetach])).toBe("attach-2");
+    expect(resolveActiveAttachedPullRequestItemIds([first, second, staleDetach])).toEqual(
+      new Set(["attach-2"]),
+    );
   });
 
   it("clears the matching attachment and ignores inherited state", () => {
@@ -85,7 +87,9 @@ describe("active pull request attachment", () => {
       url: "https://github.com/acme/repo/pull/2",
     });
 
-    expect(resolveActiveAttachedPullRequestItemId([attached, inherited, detached])).toBeNull();
+    expect(resolveActiveAttachedPullRequestItemIds([attached, inherited, detached])).toEqual(
+      new Set(),
+    );
   });
 });
 

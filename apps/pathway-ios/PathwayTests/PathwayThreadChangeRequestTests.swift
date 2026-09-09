@@ -77,6 +77,27 @@ struct PathwayThreadChangeRequestTests {
         #expect(makeAgentThread(settledOverride: "settled", attachedPullRequest: attachment).lifecycleSection(at: now) == .settled)
     }
 
+    @Test func multiplePullRequestsOnlySettleWhenEveryStatusIsMerged() {
+        for remaining in [PathwayChangeRequestState.open, .closed] {
+            #expect(PathwayThreadChangeRequestResolver.aggregate([.init(state: .merged), .init(state: remaining)]).state != .merged)
+        }
+        #expect(PathwayThreadChangeRequestResolver.aggregate([.init(state: .merged), .init(unavailable: true)]).state == nil)
+        #expect(PathwayThreadChangeRequestResolver.aggregate([.init(state: .merged), .init(state: .merged)]).state == .merged)
+        #expect(PathwayThreadChangeRequestResolver.aggregate([]).state == nil)
+    }
+
+    @Test func multipleLinksSurviveShellEncodingAndInvalidateSettlementSource() throws {
+        let original = makeAgentThread(attachedPullRequest: attachment).shell
+        var shell = original
+        let second = PathwayPullRequestAttachment(number: 111, url: attachment.url.replacingOccurrences(of: "110", with: "111"))
+        shell.attachedPullRequests = [attachment, second]
+        let decoded = try JSONDecoder().decode(PathwayAgentThreadShell.self, from: JSONEncoder().encode(shell))
+        #expect(decoded.linkedPullRequests == [attachment, second])
+        #expect(PathwayThreadChangeRequestSource(shell) != PathwayThreadChangeRequestSource(original))
+        shell.attachedPullRequests = []
+        #expect(shell.linkedPullRequests.isEmpty)
+    }
+
     @Test func parsesGitLabSubgroupsAndNormalizesGitHubIdentity() {
         let gitlab = PathwayAttachedPullRequestReference(.init(number: 47, url: "https://gitlab.example.com/group/subgroup/repo/-/merge_requests/47"))
         #expect(gitlab?.repository == "group/subgroup/repo")

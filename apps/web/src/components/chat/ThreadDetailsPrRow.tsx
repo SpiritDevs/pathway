@@ -1,21 +1,21 @@
-/**
- * The thread details panel's pull request row: what the branch's pull request is, and the one
- * thing worth doing to it right now.
- *
- * The row itself opens the pull request in the right panel, exactly as it always has. Around
- * that, the host's richer answer — draft, mergeable, conflicting — turns into at most one
- * trailing action ("Ready" on a clean draft, "Merge" on a mergeable branch) and a conflict line
- * below when the branch cannot merge. All of it runs through the same hooks as the detail panel,
- * so the row can never offer something the panel would refuse.
- *
- * Until the detail arrives — or where pull requests are not supported at all — the row renders
- * from the `vcs.status` summary alone, which is the plain row this panel showed before.
- */
+/** A linked PR's status, provider actions, and thread unlink menu, shared by the panel and hover card. */
 import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/shell";
 import type { EnvironmentId, ProjectId, PullRequestRef } from "@spiritdevs/contracts";
-import { ArrowUpRightIcon, TriangleAlertIcon } from "lucide-react";
+import {
+  ArrowUpRightIcon,
+  TriangleAlertIcon,
+  MoreHorizontalIcon,
+  ExternalLinkIcon,
+  UnlinkIcon,
+  CopyIcon,
+} from "lucide-react";
 import { useState, type MouseEvent as ReactMouseEvent } from "react";
 
+import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { sameAttachedPullRequest } from "~/state/threadPullRequest";
+import { parseChangeRequestUrl } from "~/lib/openPullRequestLink";
+import { readLocalApi } from "~/localApi";
+import { Menu, MenuTrigger, MenuPopup, MenuItem, MenuSeparator } from "../ui/menu";
 import { cn } from "~/lib/utils";
 import { useServerConfigs } from "~/state/entities";
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -67,6 +67,7 @@ export function ThreadDetailsPrRow({
   openAriaLabel,
   onOpen,
   onActed,
+  onUnlink,
 }: {
   environmentId: EnvironmentId;
   pr: NonNullable<ThreadPr>;
@@ -78,6 +79,7 @@ export function ThreadDetailsPrRow({
   onOpen: (event: ReactMouseEvent<HTMLElement>) => void;
   /** An action changed the pull request on the host, so the vcs status behind the row is stale. */
   onActed?: () => void;
+  onUnlink?: (() => void) | undefined;
 }) {
   const serverConfigs = useServerConfigs();
   const supportsPullRequests =
@@ -85,6 +87,7 @@ export function ThreadDetailsPrRow({
   // The identity's own spelling, the way the detail panel is addressed everywhere else.
   const identity = project?.repositoryIdentity;
   const repository =
+    parseChangeRequestUrl(pr.url)?.repository ??
     identity?.displayName ??
     (identity?.owner && identity.name ? `${identity.owner}/${identity.name}` : null);
   const reference: PullRequestRef | null =
@@ -94,7 +97,8 @@ export function ThreadDetailsPrRow({
   const detailQuery = useEnvironmentQuery(
     reference === null ? null : pullRequestEnvironment.detail({ environmentId, input: reference }),
   );
-  const detail = detailQuery.data ?? null;
+  const detail =
+    detailQuery.data && sameAttachedPullRequest(pr, detailQuery.data) ? detailQuery.data : null;
 
   const { actionPending, perform } = usePullRequestActionRunner({
     environmentId,
@@ -161,13 +165,56 @@ export function ThreadDetailsPrRow({
     <>
       {icon}
       <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+      {detail?.state !== "open" && (
+        <span className="text-xs">
+          {detail?.state === "merged" ? "Merged" : detail?.state === "closed" ? "Closed" : ""}
+        </span>
+      )}
     </>
   );
 
   return (
     <>
-      {trailingAction ? (
-        <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
+      <div className="flex min-w-0 items-center [&>button]:min-w-0 [&>button]:flex-1 [&>div:first-child]:min-w-0 [&>div:first-child]:flex-1">
+        {trailingAction ? (
+          <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS}
+                    aria-label={openAriaLabel}
+                    onClick={onOpen}
+                  />
+                }
+              >
+                {rowContent}
+              </TooltipTrigger>
+              <TooltipPopup side="top">{status.tooltip}</TooltipPopup>
+            </Tooltip>
+            <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className={THREAD_DETAILS_PANEL_LINK_SPLIT_ACTION_CLASS}
+                    disabled={actionPending}
+                    onClick={trailingAction.onClick}
+                  />
+                }
+              >
+                {actionPending ? trailingAction.pendingLabel : trailingAction.label}
+              </TooltipTrigger>
+              <TooltipPopup side="top">{trailingAction.tooltip}</TooltipPopup>
+            </Tooltip>
+          </div>
+        ) : (
           <Tooltip>
             <TooltipTrigger
               render={
@@ -175,7 +222,7 @@ export function ThreadDetailsPrRow({
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className={THREAD_DETAILS_PANEL_LINK_SPLIT_PRIMARY_CLASS}
+                  className={THREAD_DETAILS_PANEL_ROW_CLASS}
                   aria-label={openAriaLabel}
                   onClick={onOpen}
                 />
@@ -185,44 +232,41 @@ export function ThreadDetailsPrRow({
             </TooltipTrigger>
             <TooltipPopup side="top">{status.tooltip}</TooltipPopup>
           </Tooltip>
-          <span aria-hidden="true" className={THREAD_DETAILS_PANEL_SPLIT_SEPARATOR_CLASS} />
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className={THREAD_DETAILS_PANEL_LINK_SPLIT_ACTION_CLASS}
-                  disabled={actionPending}
-                  onClick={trailingAction.onClick}
-                />
-              }
-            >
-              {actionPending ? trailingAction.pendingLabel : trailingAction.label}
-            </TooltipTrigger>
-            <TooltipPopup side="top">{trailingAction.tooltip}</TooltipPopup>
-          </Tooltip>
-        </div>
-      ) : (
-        <Tooltip>
-          <TooltipTrigger
+        )}
+        <Menu>
+          <MenuTrigger
             render={
               <Button
-                type="button"
+                size="icon"
                 variant="ghost"
-                size="sm"
-                className={THREAD_DETAILS_PANEL_ROW_CLASS}
-                aria-label={openAriaLabel}
-                onClick={onOpen}
+                className="size-7 shrink-0"
+                aria-label={`Actions for PR #${pr.number}`}
               />
             }
           >
-            {rowContent}
-          </TooltipTrigger>
-          <TooltipPopup side="top">{status.tooltip}</TooltipPopup>
-        </Tooltip>
-      )}
+            <MoreHorizontalIcon className="size-3.5" />
+          </MenuTrigger>
+          <MenuPopup align="end">
+            <MenuItem onClick={() => void readLocalApi()?.shell.openExternal(pr.url)}>
+              <ExternalLinkIcon />
+              Open in {pr.url.startsWith("https://github.com/") ? "GitHub" : "browser"}
+            </MenuItem>
+            <MenuItem onClick={() => void writeTextToClipboard(pr.url)}>
+              <CopyIcon />
+              Copy link
+            </MenuItem>
+            {onUnlink && (
+              <>
+                <MenuSeparator />
+                <MenuItem onClick={onUnlink}>
+                  <UnlinkIcon />
+                  Unlink from thread
+                </MenuItem>
+              </>
+            )}
+          </MenuPopup>
+        </Menu>
+      </div>
       {conflicting ? (
         // The same words the detail panel says, one click away, so the two read as one thing.
         <div className="flex h-8 items-center gap-1.5 ps-2.5 pe-1">

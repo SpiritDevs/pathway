@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   type OrchestrationV2AppThread,
+  type VcsStatusResult,
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -94,6 +95,11 @@ it.effect("owns isolated conversation folders and protects uncommitted and unpus
         payload: value,
       });
     let sharingThread: OrchestrationV2AppThread | null = null;
+    const linkedPullRequests = [1, 2].map((number) => ({
+      number,
+      url: `https://github.com/SpiritDevs/pathway/pull/${number}`,
+    }));
+    let secondMerged = false;
     const workspaceLayer = live.pipe(
       Layer.provide(
         Layer.mock(ProjectionProjectRepository)({
@@ -116,6 +122,11 @@ it.effect("owns isolated conversation folders and protects uncommitted and unpus
       Layer.provide(
         Layer.mock(ProjectionStoreV2)({
           getThreadProjection: () => Effect.sync(() => projection(thread)),
+          getThreadShell: () =>
+            Effect.sync(() => ({
+              ...threadShellFromProjection(projection(thread)),
+              attachedPullRequests: linkedPullRequests,
+            })),
           getShellSnapshot: () =>
             Effect.sync(() => ({
               schemaVersion: 2,
@@ -128,7 +139,26 @@ it.effect("owns isolated conversation folders and protects uncommitted and unpus
             })),
         }),
       ),
-      Layer.provide(Layer.mock(GitWorkflowService)({})),
+      Layer.provide(
+        Layer.mock(GitWorkflowService)({
+          invalidateStatus: () => Effect.void,
+          status: () =>
+            Effect.succeed({
+              pr: { ...linkedPullRequests[0]!, state: "merged" },
+            } as VcsStatusResult),
+          resolvePullRequest: ({ reference }) =>
+            Effect.succeed({
+              pullRequest: {
+                number: reference.endsWith("/2") ? 2 : 1,
+                url: reference,
+                title: "Feature",
+                baseBranch: "main",
+                headBranch: "feature",
+                state: reference.endsWith("/2") && !secondMerged ? "open" : "merged",
+              },
+            }),
+        }),
+      ),
     );
 
     yield* Effect.gen(function* () {
@@ -152,6 +182,9 @@ it.effect("owns isolated conversation folders and protects uncommitted and unpus
         ownedWorktreePath: workspace.worktreePath,
         ownedBranch: workspace.branch,
       };
+      assert.isFalse(yield* workspaces.hasMergedPullRequest(thread));
+      secondMerged = true;
+      assert.isTrue(yield* workspaces.hasMergedPullRequest(thread));
       const worktree = workspace.worktreePath!;
       // Provisioning may finish before the orchestration event commits. A
       // replay must find its own workspace and preserve files created there.

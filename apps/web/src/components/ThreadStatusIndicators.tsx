@@ -10,14 +10,20 @@ import type {
   VcsStatusResult,
 } from "@spiritdevs/contracts";
 import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceControl";
-import { CloudIcon, FolderGit2Icon, GitPullRequestIcon, TerminalIcon } from "lucide-react";
+import {
+  CloudIcon,
+  FolderGit2Icon,
+  GitPullRequestIcon,
+  GitPullRequestArrowIcon,
+  TerminalIcon,
+} from "lucide-react";
 import { useMemo } from "react";
 import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
 import { useProject } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { vcsEnvironment } from "../state/vcs";
-import { sameAttachedPullRequest, useAttachedPullRequest } from "../state/threadPullRequest";
+import { sameAttachedPullRequest, useAttachedPullRequests } from "../state/threadPullRequest";
 import { useUiStateStore } from "../uiStateStore";
 import { resolveChangeRequestPresentation } from "../sourceControlPresentation";
 import {
@@ -374,14 +380,30 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
   });
-  const attachedQuery = useAttachedPullRequest(thread);
-  const changeRequestStatus = resolveThreadPrBadge({
-    branchPullRequest: pr,
-    attachedPullRequest: thread.attachedPullRequest,
-    attachedDetail: attachedQuery.data,
-    attachedError: attachedQuery.error,
-    provider: gitStatus.data?.sourceControlProvider,
-  })?.status;
+  const attachedQueries = useAttachedPullRequests(thread);
+  const visibleBranchPr = pr && !thread.detachedPullRequestUrls?.includes(pr.url) ? pr : null;
+  const badges = attachedQueries.map(
+    (query) =>
+      resolveThreadPrBadge({
+        branchPullRequest: visibleBranchPr,
+        attachedPullRequest: query.attachment,
+        attachedDetail: query.data,
+        attachedError: query.error,
+        provider: gitStatus.data?.sourceControlProvider,
+      })!,
+  );
+  if (visibleBranchPr && !badges.some((badge) => badge.pullRequest.url === visibleBranchPr.url)) {
+    badges.push(
+      resolveThreadPrBadge({
+        branchPullRequest: visibleBranchPr,
+        attachedPullRequest: null,
+        provider: gitStatus.data?.sourceControlProvider,
+      })!,
+    );
+  }
+  const changeRequestStatus = (
+    badges.find((badge) => badge.changeRequestState !== "merged") ?? badges.at(-1)
+  )?.status;
   const threadStatus = resolveThreadStatusPill({
     thread: {
       ...thread,
@@ -405,7 +427,14 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
               />
             }
           >
-            <ChangeRequestStatusIcon className="size-3" />
+            {badges.length > 1 ? (
+              <>
+                <GitPullRequestArrowIcon className="size-3" />
+                <span className="text-xs">{badges.length}</span>
+              </>
+            ) : (
+              <ChangeRequestStatusIcon className="size-3" />
+            )}
           </TooltipTrigger>
           <TooltipPopup side="top">
             <PrStatusTooltipContent status={changeRequestStatus} />

@@ -136,6 +136,7 @@ final class PathwayCloudModel {
     @ObservationIgnored private var lifecycleTaskID: UUID?
     @ObservationIgnored private var storageConfigurationID = UUID()
     @ObservationIgnored private var lifecycleMetadataID: UUID?
+    private(set) var threadPullRequestStatuses: [String: [String: PathwayThreadChangeRequestStatus]] = [:]
     private(set) var changeRequestStatuses: [String: PathwayThreadChangeRequestStatus] = [:]
     @ObservationIgnored private var lifecycleMetadataThreads: [PathwayAgentThread]?
     @ObservationIgnored private var isProvisioning = false
@@ -354,6 +355,7 @@ final class PathwayCloudModel {
         authorizationEpochByCompany = [:]
         latestHeadByCompany = [:]
         changeRequestStatuses = [:]
+        threadPullRequestStatuses = [:]
         issues.replaceReplica([:])
         calendar.replaceReplica([:])
         email.replaceReplica([:])
@@ -444,14 +446,11 @@ final class PathwayCloudModel {
             guard let requested = requestedThreads[resolution.threadID],
                   let current = threads.first(where: { $0.id == resolution.threadID }),
                   PathwayThreadChangeRequestSource(current.shell) == PathwayThreadChangeRequestSource(requested.shell) else { continue }
-            if resolution.status.unavailable, var previous = changeRequestStatuses[resolution.threadID] {
-                previous.unavailable = true
-                changeRequestStatuses[resolution.threadID] = previous
-            } else {
-                changeRequestStatuses[resolution.threadID] = resolution.status
-            }
+            changeRequestStatuses[resolution.threadID] = resolution.status
+            threadPullRequestStatuses[resolution.threadID] = resolution.pullRequests
         }
         let currentThreadIDs = Set(threads.map(\.id))
+        threadPullRequestStatuses = threadPullRequestStatuses.filter { currentThreadIDs.contains($0.key) }
         changeRequestStatuses = changeRequestStatuses.filter { currentThreadIDs.contains($0.key) }
         rebuildThreadPartition()
     }

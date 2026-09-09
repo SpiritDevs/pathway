@@ -21,6 +21,7 @@ export function sourceControlMarkerLabel(
     item.pullRequest === null
       ? "PR"
       : getChangeRequestTerminologyFromUrl(item.pullRequest.url).shortLabel;
+  if (item.pullRequestAction === "detected") return `${changeRequestLabel} linked`;
   if (item.pullRequestAction === "attached") return `${changeRequestLabel} attached`;
   if (item.pullRequestAction === "detached") return `${changeRequestLabel} detached`;
   if (item.pullRequest !== null) {
@@ -34,26 +35,58 @@ export interface ActivePullRequestAttachment {
   readonly pullRequest: { readonly number: number; readonly url: string };
 }
 
-/** Resolves the one local PR attachment represented by source-control markers. */
+/** Replays PR markers in order, retaining every link until that PR is detached. */
+export function resolveActivePullRequestAttachments(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+): ReadonlyArray<ActivePullRequestAttachment> {
+  const active = new Map<string, ActivePullRequestAttachment>();
+  const detached = new Set<string>();
+  for (const item of items) {
+    if (item.type !== "source_control" || item.pullRequest === null) continue;
+    const key = item.pullRequest.url;
+    if (item.pullRequestAction === "detached") {
+      active.delete(key);
+      detached.add(key);
+    } else {
+      if (item.pullRequestAction === "detected" && detached.has(key)) continue;
+      detached.delete(key);
+      active.set(key, { itemId: item.id, pullRequest: item.pullRequest });
+    }
+  }
+  return [...active.values()];
+}
+
+export function resolveDetachedPullRequestUrls(
+  items: ReadonlyArray<OrchestrationV2TurnItem>,
+): string[] {
+  const detached = new Set<string>();
+  for (const item of items) {
+    if (item.type !== "source_control" || item.pullRequest === null) continue;
+    if (item.pullRequestAction === "detached") detached.add(item.pullRequest.url);
+    else if (item.pullRequestAction !== "detected") detached.delete(item.pullRequest.url);
+  }
+  return [...detached];
+}
+
+/** Compatibility summary for clients that can display only one attachment. */
 export function resolveActivePullRequestAttachment(
   items: ReadonlyArray<OrchestrationV2TurnItem>,
 ): ActivePullRequestAttachment | null {
-  let active: ActivePullRequestAttachment | null = null;
-  for (const item of items) {
-    if (item.type !== "source_control" || item.pullRequest === null) continue;
-    if (item.pullRequestAction === "attached") {
-      active = { itemId: item.id, pullRequest: item.pullRequest };
-    }
-    if (
-      item.pullRequestAction === "detached" &&
-      active !== null &&
-      active.pullRequest.number === item.pullRequest.number &&
-      active.pullRequest.url === item.pullRequest.url
-    ) {
-      active = null;
-    }
-  }
-  return active;
+  return resolveActivePullRequestAttachments(items).at(-1) ?? null;
+}
+
+export function threadPullRequestAttachments(thread: {
+  readonly attachedPullRequests?:
+    | ReadonlyArray<{ readonly number: number; readonly url: string }>
+    | undefined;
+  readonly attachedPullRequest?:
+    | { readonly number: number; readonly url: string }
+    | null
+    | undefined;
+}) {
+  return (
+    thread.attachedPullRequests ?? (thread.attachedPullRequest ? [thread.attachedPullRequest] : [])
+  );
 }
 
 export interface ChangeRequestPresentation {

@@ -55,7 +55,9 @@ struct PathwayWorkspaceDestination: View {
         return PathwayWorkspaceContext(threadID: scope.threadID, projectID: scope.projectID,
             cwd: scope.cwd, projectRoot: scope.projectRoot,
             supportsPullRequests: scope.projectID != nil && capabilities?["pullRequests"]?.boolValue == true,
-            canMutate: canMutate, scripts: scripts)
+            canMutate: canMutate, scripts: scripts,
+            linkedPullRequests: currentThread?.shell.linkedPullRequests ?? [],
+            supportsPullRequestAttachments: capabilities?["threadPullRequestAttachments"]?.boolValue == true)
     }
 
     var body: some View {

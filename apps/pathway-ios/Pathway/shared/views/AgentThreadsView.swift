@@ -255,7 +255,7 @@ struct AgentThreadsView: View {
 
     private var lifecycleRefreshKey: String {
         appModel.cloud.threads.map { thread in
-            "\(thread.id):\(thread.shell.branch ?? ""):\(thread.shell.worktreePath ?? ""):\(thread.shell.projectId ?? ""):\(thread.shell.attachedPullRequest?.url ?? ""):\(thread.shell.attachedPullRequest?.number ?? 0):\(thread.isRunning):\(thread.shell.latestRunCompletedAt ?? "")"
+            "\(thread.id):\(thread.shell.branch ?? ""):\(thread.shell.worktreePath ?? ""):\(thread.shell.projectId ?? ""):\(thread.shell.linkedPullRequests.map(\.url).joined(separator: ",")):\((thread.shell.detachedPullRequestUrls ?? []).joined(separator: ",")):\(thread.isRunning):\(thread.shell.latestRunCompletedAt ?? "")"
         }.joined(separator: "|")
     }
 
@@ -549,7 +549,7 @@ private struct CompactAgentThreadRow: View {
 
             Spacer(minLength: 8)
 
-            if let pullRequest = thread.shell.attachedPullRequest {
+            if let pullRequest = thread.shell.linkedPullRequests.first {
                 AgentThreadPullRequestBadge(thread: thread, pullRequest: pullRequest)
             }
 
@@ -609,7 +609,7 @@ private struct AgentThreadRow: View {
 
                 statusIndicator
 
-                if let pullRequest = thread.shell.attachedPullRequest {
+                if let pullRequest = thread.shell.linkedPullRequests.first {
                     AgentThreadPullRequestBadge(thread: thread, pullRequest: pullRequest)
                         .labelStyle(.titleOnly)
                         .fixedSize()
@@ -759,10 +759,18 @@ private struct AgentThreadPullRequestBadge: View {
     }
 
     var body: some View {
-        Label("#\(pullRequest.number)", systemImage: "arrow.triangle.pull")
-            .foregroundStyle(color)
-            .lineLimit(1)
-            .accessibilityLabel("\(pullRequest.url.contains("/-/merge_requests/") ? "Merge request" : "Pull request") \(pullRequest.number), \(status.label)")
+        Menu {
+            ForEach(thread.shell.linkedPullRequests, id: \.url) { pr in
+                if let url = URL(string: pr.url) {
+                    let state = appModel.cloud.threadPullRequestStatuses[thread.id]?[pr.url]?.label ?? "Attached"
+                    Link("#\(pr.number) · \(state)", destination: url)
+                }
+            }
+        } label: {
+            Label(thread.shell.linkedPullRequests.count > 1 ? "\(thread.shell.linkedPullRequests.count) PRs" : "#\(pullRequest.number)", systemImage: "arrow.triangle.pull")
+                .foregroundStyle(color).lineLimit(1)
+        }
+        .accessibilityLabel("Pull requests, \(status.label)")
     }
 }
 

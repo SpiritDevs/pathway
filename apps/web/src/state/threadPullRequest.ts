@@ -4,7 +4,10 @@ import type {
   ProjectId,
   PullRequestRef,
 } from "@spiritdevs/contracts";
-import { Atom } from "effect/unstable/reactivity";
+import { useAtomValue } from "@effect/atom-react";
+import { threadPullRequestAttachments } from "@spiritdevs/shared/sourceControl";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { parseChangeRequestUrl } from "../lib/openPullRequestLink";
 import { pullRequestEnvironment } from "./pullRequests";
 import { useEnvironmentQuery } from "./query";
@@ -13,6 +16,8 @@ import { useEnvironment } from "./environments";
 export interface ThreadPullRequestTarget {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId | null;
+  readonly attachedPullRequests?: ReadonlyArray<OrchestrationV2PullRequestAttachment> | undefined;
+  readonly detachedPullRequestUrls?: ReadonlyArray<string> | undefined;
   readonly attachedPullRequest: OrchestrationV2PullRequestAttachment | null | undefined;
 }
 
@@ -48,7 +53,10 @@ export interface ThreadChangeRequestState {
 }
 
 export function threadChangeRequestSource(
-  thread: Pick<ThreadPullRequestTarget, "projectId" | "attachedPullRequest"> & {
+  thread: Pick<
+    ThreadPullRequestTarget,
+    "projectId" | "attachedPullRequest" | "attachedPullRequests" | "detachedPullRequestUrls"
+  > & {
     readonly branch: string | null;
     readonly worktreePath: string | null;
   },
@@ -57,8 +65,8 @@ export function threadChangeRequestSource(
     thread.projectId,
     thread.branch,
     thread.worktreePath,
-    thread.attachedPullRequest?.url,
-    thread.attachedPullRequest?.number,
+    threadPullRequestAttachments(thread),
+    thread.detachedPullRequestUrls,
   ]);
 }
 
@@ -110,4 +118,72 @@ export function useAttachedPullRequest(
           ? "The environment returned a different pull request."
           : null),
   };
+}
+
+export function aggregateThreadPullRequestState(
+  states: ReadonlyArray<"open" | "closed" | "merged" | null>,
+) {
+  if (states.length === 0) return null;
+  if (states.every((state) => state === "merged")) return "merged";
+  if (states.includes("open")) return "open";
+  if (states.includes("closed")) return "closed";
+  return null;
+}
+
+export const attachedPullRequestsAtom = Atom.family((key: string) =>
+  Atom.make((get) => {
+    const { thread, poll, supported } = JSON.parse(key) as {
+      thread: ThreadPullRequestTarget | null;
+      poll: boolean;
+      supported: boolean;
+    };
+    if (!thread) return [];
+    return threadPullRequestAttachments(thread).map((attachment) => {
+      const target = attachedPullRequestQueryTarget({
+        ...thread,
+        attachedPullRequest: attachment,
+      });
+      const result =
+        supported && target
+          ? get(
+              poll ? liveAttachedPullRequestDetail(target) : pullRequestEnvironment.detail(target),
+            )
+          : null;
+      const value = result ? Option.getOrNull(AsyncResult.value(result)) : null;
+      const data = value && sameAttachedPullRequest(attachment, value) ? value : null;
+      return {
+        attachment,
+        data,
+        isPending: result?.waiting ?? false,
+        error:
+          result?._tag === "Failure" || (value && !data)
+            ? "Could not refresh pull request status."
+            : supported && !target
+              ? "Live pull request status is unavailable for this attachment."
+              : null,
+      };
+    });
+  }),
+);
+
+export function useAttachedPullRequests(
+  thread: ThreadPullRequestTarget | null,
+  { poll = false }: { poll?: boolean } = {},
+) {
+  const environment = useEnvironment(thread?.environmentId ?? null);
+  return useAtomValue(
+    attachedPullRequestsAtom(
+      JSON.stringify({
+        thread: thread
+          ? {
+              environmentId: thread.environmentId,
+              projectId: thread.projectId,
+              attachedPullRequests: threadPullRequestAttachments(thread),
+            }
+          : null,
+        poll,
+        supported: environment?.descriptor?.capabilities?.pullRequests === true,
+      }),
+    ),
+  );
 }

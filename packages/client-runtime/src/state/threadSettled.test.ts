@@ -493,3 +493,19 @@ it("keeps an old attached thread visible until status resolves without overridin
   );
   expect(effectiveSettled({ ...shell, attachedPullRequest: null }, options)).toBe(true);
 });
+
+it("does not age-settle a thread whose multiple linked PR statuses are unknown", () => {
+  const shell = {
+    ...makeShell({ activityAt: STALE }),
+    attachedPullRequests: [{ number: 1 }, { number: 2 }],
+  };
+  expect(
+    effectiveSettled(shell, { now: NOW, autoSettleAfterDays: 1, changeRequestState: null }),
+  ).toBe(false);
+  expect(
+    effectiveSettled(shell, { now: NOW, autoSettleAfterDays: 1, changeRequestState: "open" }),
+  ).toBe(false);
+  expect(
+    effectiveSettled(shell, { now: NOW, autoSettleAfterDays: 1, changeRequestState: "merged" }),
+  ).toBe(true);
+});

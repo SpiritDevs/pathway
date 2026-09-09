@@ -133,6 +133,11 @@ struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let latestVisibleMessage: PathwayLatestMessageSummary?
     let latestUserMessageAt: String?
     let attachedPullRequest: PathwayPullRequestAttachment?
+    var attachedPullRequests: [PathwayPullRequestAttachment]? = nil
+    var detachedPullRequestUrls: [String]? = nil
+    var linkedPullRequests: [PathwayPullRequestAttachment] {
+        attachedPullRequests ?? attachedPullRequest.map { [$0] } ?? []
+    }
     let hasActionableProposedPlan: Bool
     let itemCount: Int
     let visibleItemCount: Int

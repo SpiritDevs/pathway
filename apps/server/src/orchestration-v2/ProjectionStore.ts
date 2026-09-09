@@ -37,7 +37,10 @@ import {
   isOrchestrationV2TurnItemVisible,
 } from "@spiritdevs/shared/orchestrationV2Timeline";
 import { derivePendingBackgroundWork } from "@spiritdevs/shared/orchestrationV2PendingBackgroundWork";
-import { resolveActivePullRequestAttachment } from "@spiritdevs/shared/sourceControl";
+import {
+  resolveActivePullRequestAttachments,
+  resolveDetachedPullRequestUrls,
+} from "@spiritdevs/shared/sourceControl";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -865,9 +868,11 @@ export function threadShellFromProjection(
     activeProviderThreadId: projection.thread.activeProviderThreadId,
     runs: projection.runs,
   });
-  const attachedPullRequest =
-    resolveActivePullRequestAttachment(activeLocalTurnItems(projection).map((row) => row.item))
-      ?.pullRequest ?? null;
+  const localItems = activeLocalTurnItems(projection).map((row) => row.item);
+  const attachedPullRequests = resolveActivePullRequestAttachments(localItems).map(
+    (attachment) => attachment.pullRequest,
+  );
+  const attachedPullRequest = attachedPullRequests.at(-1) ?? null;
   return {
     createdBy: projection.thread.createdBy,
     creationSource: projection.thread.creationSource,
@@ -921,11 +926,13 @@ export function threadShellFromProjection(
           },
     latestUserMessageAt: latestUserMessage?.updatedAt ?? null,
     attachedPullRequest,
+    attachedPullRequests,
+    detachedPullRequestUrls: resolveDetachedPullRequestUrls(localItems),
     hasActionableProposedPlan: projection.plans.some(
       (plan) => plan.kind === "proposed_plan" && plan.status === "active",
     ),
     pendingBackgroundTasks: [...pendingBackgroundTasks],
-    itemCount: activeLocalTurnItems(projection).length,
+    itemCount: localItems.length,
     visibleItemCount: projection.visibleTurnItems.length,
     createdAt: projection.thread.createdAt,
     updatedAt: projection.updatedAt,
@@ -971,6 +978,8 @@ type ShellThreadState = {
   readonly latestVisibleMessage: OrchestrationV2ConversationMessage | null;
   readonly latestUserMessageAt: DateTime.Utc | null;
   readonly attachedPullRequest: OrchestrationV2ThreadShell["attachedPullRequest"];
+  readonly detachedPullRequestUrls: OrchestrationV2ThreadShell["detachedPullRequestUrls"];
+  readonly attachedPullRequests: OrchestrationV2ThreadShell["attachedPullRequests"];
   readonly hasActionableProposedPlan: boolean;
   readonly pendingBackgroundTasks: OrchestrationV2ThreadShell["pendingBackgroundTasks"];
   readonly itemCount: number;
@@ -1119,6 +1128,8 @@ function shellFromState(input: {
           },
     latestUserMessageAt: input.state.latestUserMessageAt,
     attachedPullRequest: input.state.attachedPullRequest,
+    attachedPullRequests: input.state.attachedPullRequests,
+    detachedPullRequestUrls: input.state.detachedPullRequestUrls,
     hasActionableProposedPlan: input.state.hasActionableProposedPlan,
     pendingBackgroundTasks: input.state.pendingBackgroundTasks,
     itemCount: input.state.itemCount,
@@ -2458,7 +2469,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             LEFT JOIN orchestration_v2_projection_runs r
               ON r.run_id = i.run_id
             WHERE i.type = 'source_control'
-              AND json_extract(i.payload_json, '$.pullRequestAction') IN ('attached', 'detached')
+              AND json_extract(i.payload_json, '$.pullRequest') IS NOT NULL
               AND (i.run_id IS NULL OR r.status <> 'rolled_back')
             ORDER BY i.thread_id ASC, i.ordinal ASC, i.turn_item_id ASC
           `
@@ -2468,7 +2479,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             LEFT JOIN orchestration_v2_projection_runs r
               ON r.run_id = i.run_id
             WHERE i.type = 'source_control'
-              AND json_extract(i.payload_json, '$.pullRequestAction') IN ('attached', 'detached')
+              AND json_extract(i.payload_json, '$.pullRequest') IS NOT NULL
               AND (i.run_id IS NULL OR r.status <> 'rolled_back')
               AND i.thread_id IN ${sql.in(threadIds)}
             ORDER BY i.thread_id ASC, i.ordinal ASC, i.turn_item_id ASC
@@ -2571,6 +2582,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           pullRequestAttachmentItemsByThreadId,
         } = input;
         const thread = yield* decodeThreadPayload(row.payload_json);
+        const attachmentItems = pullRequestAttachmentItemsByThreadId.get(thread.id) ?? [];
+        const attachedPullRequests = resolveActivePullRequestAttachments(attachmentItems).map(
+          (attachment) => attachment.pullRequest,
+        );
         const pendingRuntimeRequest =
           row.pending_request_payload_json === null
             ? null
@@ -2628,10 +2643,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             row.latest_user_message_at === null
               ? null
               : DateTime.makeUnsafe(row.latest_user_message_at),
-          attachedPullRequest:
-            resolveActivePullRequestAttachment(
-              pullRequestAttachmentItemsByThreadId.get(thread.id) ?? [],
-            )?.pullRequest ?? null,
+          detachedPullRequestUrls: resolveDetachedPullRequestUrls(attachmentItems),
+          attachedPullRequests,
+          attachedPullRequest: attachedPullRequests.at(-1) ?? null,
           hasActionableProposedPlan: row.has_actionable_proposed_plan === 1,
           pendingBackgroundTasks,
           itemCount: row.item_count,

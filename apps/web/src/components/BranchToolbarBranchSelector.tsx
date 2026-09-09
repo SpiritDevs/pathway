@@ -24,7 +24,6 @@ import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useEnsureProjectWorkspace } from "../hooks/useEnsureProjectWorkspace";
 import { readLocalApi } from "../localApi";
-import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { shouldLoadNextBranchPageAfterScroll } from "../state/paginatedBranches";
 import { usePaginatedBranches } from "../state/queries";
 import { useProject, useThreadShell } from "../state/entities";
@@ -39,7 +38,6 @@ import {
   THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
   THREAD_DETAILS_PANEL_SELECT_ROW_CLASS,
 } from "./chat/threadDetailsPanelStyles";
-import { ThreadDetailsPrRow } from "./chat/ThreadDetailsPrRow";
 import { parsePullRequestReference } from "../pullRequestReference";
 import { getSourceControlPresentation } from "../sourceControlPresentation";
 import {
@@ -57,14 +55,8 @@ import {
   sanitizeNewRefName,
   shouldIncludeBranchPickerItem,
 } from "./BranchToolbar.logic";
-import {
-  ChangeRequestStatusIcon,
-  prStatusIndicator,
-  resolveThreadPr,
-  resolveThreadPrBadge,
-} from "./ThreadStatusIndicators";
+import { resolveThreadPr } from "./ThreadStatusIndicators";
 import { ThreadPullRequestAction } from "./ThreadPullRequestAction";
-import { sameAttachedPullRequest, useAttachedPullRequest } from "../state/threadPullRequest";
 import { Button } from "./ui/button";
 import { Switch } from "./ui/switch";
 import {
@@ -740,29 +732,6 @@ export function BranchToolbarBranchSelector({
     }),
     gitStatus: branchStatusQuery.data ?? null,
   });
-  const attachedQuery = useAttachedPullRequest(serverThread, { poll: true });
-  const branchPrStatus =
-    branchPr &&
-    serverThread?.attachedPullRequest &&
-    sameAttachedPullRequest(serverThread.attachedPullRequest, branchPr)
-      ? resolveThreadPrBadge({
-          attachedPullRequest: serverThread.attachedPullRequest,
-          attachedDetail: attachedQuery.data,
-          attachedError: attachedQuery.error,
-          branchPullRequest: branchPr,
-          provider: branchStatusQuery.data?.sourceControlProvider,
-        })?.status
-      : prStatusIndicator(branchPr, branchStatusQuery.data?.sourceControlProvider);
-  // Action-oriented tooltip (the pill opens the PR), distinct from the sidebar's
-  // state-description tooltip.
-  const branchPrTooltip = branchPr
-    ? `Open ${sourceControlPresentation.terminology.singular} #${branchPr.number} (${branchPr.state})`
-    : "";
-  const openPrLink = useOpenPrLink(threadRef);
-  const panelPrLabel = branchPr
-    ? `#${branchPr.number}${branchPr.title.trim() ? `: ${branchPr.title}` : ""}`
-    : "";
-
   function renderPickerItem(itemValue: string, index: number) {
     if (checkoutPullRequestItemValue && itemValue === checkoutPullRequestItemValue) {
       return (
@@ -868,34 +837,6 @@ export function BranchToolbarBranchSelector({
         )}
         data-composer-context-control
       >
-        {serverThread?.attachedPullRequest && (
-          <ThreadPullRequestAction
-            thread={serverThread}
-            isPanel={displayMode === "panel"}
-            branchPullRequest={branchPr}
-          />
-        )}
-        {displayMode !== "panel" && branchPr && branchPrStatus ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label={branchPrTooltip}
-                  onClick={(event) => openPrLink(event, branchPrStatus.url)}
-                  className={cn(
-                    "inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[11px] font-medium tabular-nums transition-colors hover:bg-muted/60",
-                    branchPrStatus.colorClass,
-                  )}
-                />
-              }
-            >
-              <ChangeRequestStatusIcon className="size-3" />
-              <span>#{branchPr.number}</span>
-            </TooltipTrigger>
-            <TooltipPopup side="top">{branchPrTooltip}</TooltipPopup>
-          </Tooltip>
-        ) : null}
         <span
           className="flex min-w-0"
           onContextMenu={(event) => handleBranchContextMenu(event, resolvedActiveBranch)}
@@ -939,16 +880,11 @@ export function BranchToolbarBranchSelector({
             )}
           </ComboboxTrigger>
         </span>
-        {displayMode === "panel" && branchPr && branchPrStatus ? (
-          <ThreadDetailsPrRow
-            environmentId={environmentId}
-            pr={branchPr}
-            status={branchPrStatus}
-            project={activeProject}
-            label={panelPrLabel}
-            openAriaLabel={branchPrTooltip}
-            onOpen={(event) => openPrLink(event, branchPrStatus.url)}
-            onActed={() => branchStatusQuery.refresh()}
+        {serverThread ? (
+          <ThreadPullRequestAction
+            thread={serverThread}
+            isPanel={displayMode === "panel"}
+            branchPullRequest={branchPr}
           />
         ) : null}
       </div>

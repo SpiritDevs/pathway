@@ -5,6 +5,8 @@ import { Atom, AtomRegistry, AsyncResult } from "effect/unstable/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   attachedPullRequestQueryTarget,
+  aggregateThreadPullRequestState,
+  attachedPullRequestsAtom,
   currentThreadChangeRequestState,
   threadChangeRequestSource,
   useAttachedPullRequest,
@@ -190,4 +192,90 @@ describe("attachment query subscriptions", () => {
       registry.dispose();
     }
   });
+});
+
+describe("multiple PR settlement", () => {
+  it.each([
+    [["merged", "open"], "open"],
+    [["merged", "closed"], "closed"],
+    [["merged", null], null],
+    [["merged", "merged"], "merged"],
+    [[], null],
+  ] as const)("aggregates %j as %s", (states, expected) => {
+    expect(aggregateThreadPullRequestState(states)).toBe(expected);
+  });
+
+  it("invalidates settlement when any link is added, removed or unlinked", () => {
+    const original = {
+      ...thread,
+      branch: "main",
+      worktreePath: null,
+      attachedPullRequests: [thread.attachedPullRequest],
+    };
+    const cached = { source: threadChangeRequestSource(original), state: "merged" as const };
+    expect(
+      currentThreadChangeRequestState({ ...original, attachedPullRequests: [] }, cached),
+    ).toBeNull();
+    expect(
+      currentThreadChangeRequestState(
+        {
+          ...original,
+          attachedPullRequests: [
+            ...original.attachedPullRequests,
+            { number: 111, url: thread.attachedPullRequest.url.replace("110", "111") },
+          ],
+        },
+        cached,
+      ),
+    ).toBeNull();
+    expect(
+      currentThreadChangeRequestState(
+        { ...original, detachedPullRequestUrls: [thread.attachedPullRequest.url] },
+        cached,
+      ),
+    ).toBeNull();
+  });
+});
+
+it("observes every linked PR through the shared cache and waits for the last merge", () => {
+  let secondState: "open" | "merged" = "open";
+  const source = Atom.family((number: number) =>
+    Atom.make(() =>
+      AsyncResult.success({
+        number,
+        url: `https://github.com/SpiritDevs/pathway/pull/${number}`,
+        state: number === 110 ? "merged" : secondState,
+      }),
+    ),
+  );
+  mocks.detail.mockImplementation((target) => source(target.input.number));
+  const atom = attachedPullRequestsAtom(
+    JSON.stringify({
+      thread: {
+        ...thread,
+        attachedPullRequests: [
+          thread.attachedPullRequest,
+          { number: 111, url: thread.attachedPullRequest.url.replace("110", "111") },
+        ],
+      },
+      poll: false,
+      supported: true,
+    }),
+  );
+  const registry = AtomRegistry.make();
+  try {
+    const unsubscribe = registry.subscribe(atom, () => {});
+    expect(registry.get(atom).map((entry) => entry.data?.number)).toEqual([110, 111]);
+    expect(
+      aggregateThreadPullRequestState(registry.get(atom).map((entry) => entry.data?.state ?? null)),
+    ).toBe("open");
+    secondState = "merged";
+    registry.refresh(source(111));
+    expect(
+      aggregateThreadPullRequestState(registry.get(atom).map((entry) => entry.data?.state ?? null)),
+    ).toBe("merged");
+    unsubscribe();
+  } finally {
+    registry.dispose();
+  }
 });

@@ -1,3 +1,4 @@
+import { threadPullRequestAttachments } from "@spiritdevs/shared/sourceControl";
 import * as NodeCrypto from "node:crypto";
 import { ProjectId, ThreadId, type OrchestrationV2AppThread } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
@@ -333,7 +334,24 @@ export const live = Layer.effect(
         const status = yield* gitWorkflow
           .status({ cwd: thread.worktreePath })
           .pipe(Effect.mapError(mapError("Could not verify merged pull request.")));
-        return status.pr?.state === "merged";
+        const shell = yield* projections
+          .getThreadShell(thread.id)
+          .pipe(Effect.mapError(mapError("Could not load linked pull requests.")));
+        if (shell === null) return false;
+        const attachments = threadPullRequestAttachments(shell);
+        for (const attachment of attachments) {
+          const resolved = yield* gitWorkflow
+            .resolvePullRequest({ cwd: thread.worktreePath, reference: attachment.url })
+            .pipe(Effect.mapError(mapError("Could not verify linked pull request.")));
+          if (
+            resolved.pullRequest.url !== attachment.url ||
+            resolved.pullRequest.state !== "merged"
+          )
+            return false;
+        }
+        const branchPr =
+          status.pr && !shell.detachedPullRequestUrls?.includes(status.pr.url) ? status.pr : null;
+        return branchPr ? branchPr.state === "merged" : attachments.length > 0;
       }),
       hasUnfinishedGitWork: Effect.fn("ThreadWorkspaceService.hasUnfinishedGitWork")(function* (
         thread: OrchestrationV2AppThread,

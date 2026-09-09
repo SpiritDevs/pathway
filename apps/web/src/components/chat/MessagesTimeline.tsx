@@ -105,7 +105,7 @@ import {
   resolveTimelineMinimapIndexFromPointer,
   resolveTimelineMinimapInteractiveWidth,
   resolveTimelineMinimapTopPercent,
-  resolveActiveAttachedPullRequestItemId,
+  resolveActiveAttachedPullRequestItemIds,
   replaceEditableUserMessageText,
   splitEditableUserMessageText,
   parseAsyncQuestionReply,
@@ -221,7 +221,7 @@ interface TimelineRowSharedState {
     | undefined;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   onDetachPullRequest: (pullRequest: { readonly number: number; readonly url: string }) => void;
-  activeAttachedPullRequestItemId: string | null;
+  activeAttachedPullRequestItemIds: ReadonlySet<string>;
   onContinueFromRun: (input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => void;
   onRecoverUsageLimit: (input: {
     readonly runId: RunId;
@@ -657,13 +657,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const supportsPullRequestAttachments =
     threadServerConfig?.environment.capabilities.threadPullRequestAttachments === true;
-  const resolvedActiveAttachedPullRequestItemId = useMemo(
-    () => resolveActiveAttachedPullRequestItemId(rows),
+  const resolvedActiveAttachedPullRequestItemIds = useMemo(
+    () => resolveActiveAttachedPullRequestItemIds(rows),
     [rows],
   );
-  const activeAttachedPullRequestItemId = supportsPullRequestAttachments
-    ? resolvedActiveAttachedPullRequestItemId
-    : null;
+  const activeAttachedPullRequestItemIds = supportsPullRequestAttachments
+    ? resolvedActiveAttachedPullRequestItemIds
+    : new Set<string>();
   const detachPullRequest = useAtomCommand(threadEnvironment.detachPullRequest, {
     reportFailure: false,
   });
@@ -834,7 +834,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onControlWorkspacePreparation,
       onOpenThread,
       onDetachPullRequest,
-      activeAttachedPullRequestItemId,
+      activeAttachedPullRequestItemIds,
       onContinueFromRun,
       onRecoverUsageLimit,
       onWaitUntilUsageReset,
@@ -881,7 +881,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onControlWorkspacePreparation,
       onOpenThread,
       onDetachPullRequest,
-      activeAttachedPullRequestItemId,
+      activeAttachedPullRequestItemIds,
       onContinueFromRun,
       onRecoverUsageLimit,
       onWaitUntilUsageReset,
@@ -2086,7 +2086,7 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
         subagents={ctx.subagents}
         onOpenThread={ctx.onOpenThread}
         onDetachPullRequest={
-          item.id === ctx.activeAttachedPullRequestItemId ? ctx.onDetachPullRequest : undefined
+          ctx.activeAttachedPullRequestItemIds.has(item.id) ? ctx.onDetachPullRequest : undefined
         }
       />
     );

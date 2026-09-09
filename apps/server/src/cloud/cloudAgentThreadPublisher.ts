@@ -107,7 +107,7 @@ export function shouldPublishCloudAgentThreadEvent(event: OrchestrationV2DomainE
     event.type === "plan.updated" ||
     (event.type === "turn-item.updated" &&
       event.payload.type === "source_control" &&
-      event.payload.pullRequestAction !== undefined) ||
+      (event.payload.pullRequestAction !== undefined || event.payload.pullRequest != null)) ||
     (event.type === "message.updated" && !event.payload.streaming)
   );
 }
