@@ -1,4 +1,9 @@
-import type { AuthSessionState, EnvironmentId, ServerConfig } from "@spiritdevs/contracts";
+import {
+  WS_METHODS,
+  type AuthSessionState,
+  type EnvironmentId,
+  type ServerConfig,
+} from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -13,8 +18,10 @@ import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { executeEnvironmentHttpRequest, makeEnvironmentHttpApiClient } from "../rpc/http.ts";
+import { EnvironmentRpcUnavailableError } from "../rpc/client.ts";
+import type { RpcSession } from "../rpc/session.ts";
 import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
-import { followStreamInEnvironment } from "./runtime.ts";
+import { createEnvironmentQueryAtomFamily, followStreamInEnvironment } from "./runtime.ts";
 
 export function initialConfigOption<E>(
   initialConfig: Effect.Effect<ServerConfig, E>,
@@ -60,6 +67,25 @@ export const fetchEnvironmentSessionState = Effect.fn(
     withEnvironmentCredentials(input.prepared.httpAuthorization, client.auth.session({ headers })),
   );
 });
+
+/** Use the launch socket's permissions even after its original HTTP credential expires. */
+export const fetchEnvironmentPlacementSessionState = Effect.fn(
+  "clientRuntime.state.fetchEnvironmentPlacementSessionState",
+)(function* (input: {
+  readonly session: Pick<RpcSession, "initialConfig" | "client">;
+  readonly prepared: PreparedConnection;
+  readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
+}) {
+  const config = yield* input.session.initialConfig;
+  if (config.environment.capabilities.connectionProbe === true) {
+    const probe = yield* input.session.client[WS_METHODS.serverProbe]({});
+    if (probe.scopes !== undefined) {
+      return { authenticated: true, scopes: probe.scopes };
+    }
+  }
+  // Old servers do not report socket permissions. Keep their existing access check.
+  return yield* fetchEnvironmentSessionState(input);
+}, Effect.timeout(DEFAULT_SESSION_STATE_TIMEOUT_MS));
 
 export function createEnvironmentSessionAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | HttpClient.HttpClient | R, E>,
@@ -151,6 +177,28 @@ export function createEnvironmentSessionAtoms<R, E>(
     ).pipe(Atom.withLabel(`environment-session-state-value:${environmentId}`)),
   );
 
+  const placementSessionState = createEnvironmentQueryAtomFamily(runtime, {
+    label: "environment-placement-session-state",
+    execute: (_input: Record<string, never>) =>
+      Effect.gen(function* () {
+        const supervisor = yield* EnvironmentSupervisor;
+        const session = yield* SubscriptionRef.get(supervisor.session);
+        const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+        if (Option.isNone(session) || Option.isNone(prepared)) {
+          return yield* new EnvironmentRpcUnavailableError({
+            environmentId: supervisor.target.environmentId,
+            message: "The environment is not connected.",
+          });
+        }
+        const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+        return yield* fetchEnvironmentPlacementSessionState({
+          session: session.value,
+          prepared: prepared.value,
+          signer,
+        });
+      }),
+  });
+
   return {
     initialConfigAtom,
     initialConfigValueAtom,
@@ -158,5 +206,7 @@ export function createEnvironmentSessionAtoms<R, E>(
     preparedConnectionValueAtom,
     sessionStateAtom,
     sessionStateValueAtom,
+    placementSessionStateAtom: (environmentId: EnvironmentId) =>
+      placementSessionState({ environmentId, input: {} }),
   };
 }

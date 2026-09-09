@@ -5,9 +5,11 @@ import {
   AuthRelayWriteScope,
   ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
+  WsServerProbeRpc,
   WsRpcGroup,
 } from "@spiritdevs/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Schema from "effect/Schema";
 
 import { RPC_REQUIRED_SCOPES, requiredScopeForRpcMethod } from "./RpcAuthorization.ts";
 
@@ -20,6 +22,16 @@ describe("RPC authorization scopes", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.serverGetHostResources)).toBe(
       AuthOrchestrationReadScope,
     );
+  });
+
+  it("lets read-only clients inspect socket permissions without granting launch access", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverProbe)).toBe(AuthOrchestrationReadScope);
+    const decode = Schema.decodeUnknownSync(WsServerProbeRpc.successSchema);
+    expect(decode({ scopes: [AuthOrchestrationReadScope] }).scopes).not.toContain(
+      AuthOrchestrationOperateScope,
+    );
+    expect(decode({})).toEqual({});
+    expect(decode({ scopes: [] }).scopes).toEqual([]);
   });
 
   it("requires operation access to prepare and commit remote desktop updates", () => {

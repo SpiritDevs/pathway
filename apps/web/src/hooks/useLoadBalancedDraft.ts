@@ -116,7 +116,7 @@ export function useLoadBalancedDraft(input: {
         canBalance
           ? placementEnvironments.map((environment) => ({
               environmentId: environment.environmentId,
-              session: get(environmentSession.sessionStateAtom(environment.environmentId)),
+              session: get(environmentSession.placementSessionStateAtom(environment.environmentId)),
             }))
           : [],
       ),
@@ -135,6 +135,7 @@ export function useLoadBalancedDraft(input: {
       )?.session;
       if (
         session?._tag !== "Success" ||
+        session.waiting ||
         !session.value.authenticated ||
         !session.value.scopes?.includes(AuthOrchestrationOperateScope)
       )
@@ -189,13 +190,10 @@ export function useLoadBalancedDraft(input: {
   const measurements = useAtomValue(measurementsAtom);
   const pending =
     canBalance &&
-    !resolved &&
-    (sessions.some(
-      ({ session }) =>
-        session._tag === "Initial" || (session.waiting && session._tag !== "Success"),
-    ) ||
-      measurements.length !== candidates.length ||
-      measurements.some(({ result }) => result.waiting || result._tag === "Initial"));
+    (sessions.some(({ session }) => session._tag === "Initial" || session.waiting) ||
+      (!resolved &&
+        (measurements.length !== candidates.length ||
+          measurements.some(({ result }) => result.waiting || result._tag === "Initial"))));
 
   const measuredEnvironmentId =
     !resolved && !pending && draftId
@@ -282,10 +280,12 @@ export function useLoadBalancedDraft(input: {
       recommended !== undefined;
     if (!canUseRecommendation) {
       setRecommendation(null);
-      for (const candidate of candidates)
+      for (const environment of placementEnvironments) {
+        registry.refresh(environmentSession.placementSessionStateAtom(environment.environmentId));
         registry.refresh(
-          serverEnvironment.hostResources({ environmentId: candidate.environmentId, input: {} }),
+          serverEnvironment.hostResources({ environmentId: environment.environmentId, input: {} }),
         );
+      }
     }
     store.setDraftThreadContext(draftId, {
       placement: {
@@ -294,7 +294,7 @@ export function useLoadBalancedDraft(input: {
         resolvedKey: canUseRecommendation && storedResolution ? key : null,
       },
     });
-  }, [draftId, registry, candidates, key, recommended, storedResolution]);
+  }, [draftId, registry, placementEnvironments, key, recommended, storedResolution]);
   const selectEnvironment = useCallback(
     (target: ScopedProjectRef) => {
       if (!draftId) return;
@@ -351,7 +351,22 @@ export function useLoadBalancedDraft(input: {
         ? "Auto: checking machines"
         : recommended
           ? `Auto: ${environments.find((environment) => environment.environmentId === recommended.environmentId)?.label ?? "Selected machine"}`
-          : "Auto: no available machine",
+          : sessions.some(
+                ({ session }) => session._tag === "Success" && !session.value.authenticated,
+              )
+            ? "Auto: reconnect to check machines"
+            : sessions.some(({ session }) => session._tag === "Failure")
+              ? "Auto: could not check access"
+              : sessions.length > 0 &&
+                  sessions.every(
+                    ({ session }) =>
+                      session._tag === "Success" &&
+                      !session.value.scopes?.includes(AuthOrchestrationOperateScope),
+                  )
+                ? "Auto: no permission to start threads"
+                : measurements.some(({ result }) => result._tag === "Failure")
+                  ? "Auto: could not check resources"
+                  : "Auto: no available machine",
     selectAuto,
     selectEnvironment,
     validate: (sendSelection: ModelSelection) => {

@@ -15,6 +15,7 @@ import { CompanyId } from "@spiritdevs/contracts/company";
 import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import { EnvironmentBindingEntity } from "@spiritdevs/client-runtime/sync";
 import * as Schema from "effect/Schema";
+import * as Cause from "effect/Cause";
 import { Atom, AtomRegistry, AsyncResult } from "effect/unstable/reactivity";
 import { DraftId, hydrateImagesFromPersisted, useComposerDraftStore } from "../composerDraftStore";
 import type { Project } from "../types";
@@ -50,7 +51,9 @@ vi.mock("react/compiler-runtime", async () => {
 });
 vi.mock("@effect/atom-react", () => ({ RegistryContext: {}, useAtomValue: mocks.atomValue }));
 vi.mock("../state/server", () => ({ serverEnvironment: { hostResources: mocks.resources } }));
-vi.mock("../state/session", () => ({ environmentSession: { sessionStateAtom: mocks.session } }));
+vi.mock("../state/session", () => ({
+  environmentSession: { placementSessionStateAtom: mocks.session },
+}));
 vi.mock("../composerDraftStore", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../composerDraftStore")>();
   return {
@@ -215,6 +218,71 @@ afterEach(() => {
 });
 
 describe("useLoadBalancedDraft", () => {
+  it("rechecks rejected access and resources when Auto is selected again", () => {
+    const session = Atom.make(
+      AsyncResult.success({ authenticated: false, scopes: [] as string[] }),
+    );
+    mocks.session.mockReturnValue(session);
+    const refresh = vi.spyOn(registry, "refresh");
+    const result = render();
+    expect(result.label).toBe("Auto: reconnect to check machines");
+    expect(result.blocked).toBe(true);
+    expect(mocks.resources).not.toHaveBeenCalled();
+    result.selectAuto();
+    expect(refresh).toHaveBeenCalledWith(session);
+    expect(refresh).toHaveBeenCalledWith(localResources);
+    expect(refresh).toHaveBeenCalledWith(remoteResources);
+    registry.set(
+      session,
+      AsyncResult.success({ authenticated: true, scopes: [AuthOrchestrationOperateScope] }),
+    );
+    render();
+    flushEffects();
+    const recovered = render({
+      ...base(),
+      project: remote,
+      selection: { ...selection, instanceId: remoteProvider.instanceId },
+    });
+    expect(recovered.label).toBe("Auto: remote");
+    expect(recovered.blocked).toBe(false);
+  });
+
+  it("does not use stale write access while a connection is being rechecked", () => {
+    const session = Atom.make(
+      AsyncResult.success(
+        { authenticated: true, scopes: [AuthOrchestrationOperateScope] },
+        { waiting: true },
+      ),
+    );
+    mocks.session.mockReturnValue(session);
+    expect(render().label).toBe("Auto: checking machines");
+    expect(render().blocked).toBe(true);
+    expect(mocks.resources).not.toHaveBeenCalled();
+    registry.set(session, AsyncResult.success({ authenticated: true, scopes: [] }));
+    expect(render().label).toBe("Auto: no permission to start threads");
+    expect(render().blocked).toBe(true);
+  });
+
+  it("explains failed access checks and keeps a manual choice available", () => {
+    mocks.session.mockReturnValue(
+      Atom.make(AsyncResult.failure(Cause.fail(new Error("probe failed")))),
+    );
+    const result = render();
+    expect(result.label).toBe("Auto: could not check access");
+    expect(result.blocked).toBe(true);
+    result.selectEnvironment(scopeProjectRef(local.environmentId, local.id));
+    expect(render().validate(selection)).toBe(true);
+  });
+
+  it("distinguishes failed resource reads from machines with no headroom", () => {
+    const failure = AsyncResult.failure<HostResourcesSnapshot, never>(
+      Cause.die("resources failed"),
+    );
+    registry.set(localResources, failure);
+    registry.set(remoteResources, failure);
+    expect(render().label).toBe("Auto: could not check resources");
+  });
+
   it("keeps projectless conversations on their selected environment without project balancing", () => {
     store().setDraftThreadContext(draftId, {
       projectRef: { environmentId: local.environmentId, projectId: null },

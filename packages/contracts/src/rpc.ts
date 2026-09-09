@@ -43,6 +43,7 @@ import {
 import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
+  AuthEnvironmentScopes,
   EnvironmentAuthorizationError,
 } from "./auth.ts";
 import {
@@ -530,7 +531,10 @@ export const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybi
 
 export const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
   payload: Schema.Struct({}),
-  success: Schema.Struct({}),
+  success: Schema.Struct({
+    /** Permissions of this WebSocket session; absent on older servers. */
+    scopes: Schema.optionalKey(AuthEnvironmentScopes),
+  }),
   error: EnvironmentAuthorizationError,
 });
 
