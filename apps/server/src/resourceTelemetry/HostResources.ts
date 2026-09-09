@@ -1,3 +1,4 @@
+import { readStoragePressure } from "../storage/pressureState.ts";
 // Adapted from t3code #9895 (MIT), https://github.com/pingdotgg/t3code/pull/9895.
 import * as NodeOS from "node:os";
 import type { HostResourcesSnapshot } from "@spiritdevs/contracts";
@@ -94,6 +95,7 @@ export const make = Effect.fn("makeHostResources")(function* () {
       availableMemoryBytes = darwinAvailableMemory(output) ?? availableMemoryBytes;
     }
     return {
+      ...readStoragePressure(),
       sampledAt: DateTime.toEpochMillis(yield* DateTime.now),
       cpuUtilization,
       cpuCount: memoryBytes(cpu.count),

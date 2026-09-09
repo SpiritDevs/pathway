@@ -18,6 +18,7 @@ import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
   ...DEFAULT_CLIENT_SETTINGS,
+  loadBalancingAvoidCriticalStorage: false,
   threadAlerts: DEFAULT_CLIENT_SETTINGS.threadAlerts,
   activeTurnSendMode: "steer",
   actionPaletteSections: [],

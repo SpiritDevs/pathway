@@ -108,11 +108,14 @@ export const AlertDeliverySettings = Schema.Struct({
 export type AlertDeliverySettings = typeof AlertDeliverySettings.Type;
 
 export const ThreadAlertTarget = Schema.NullOr(
-  Schema.Struct({
-    environmentId: Schema.String,
-    threadId: Schema.String,
-    eventId: Schema.String,
-  }),
+  Schema.Union([
+    Schema.Struct({
+      environmentId: Schema.String,
+      threadId: Schema.String,
+      eventId: Schema.String,
+    }),
+    Schema.Struct({ kind: Schema.Literal("storage"), environmentId: Schema.String }),
+  ]),
 );
 export type ThreadAlertTarget = typeof ThreadAlertTarget.Type;
 export const DesktopThreadAlertClick = Schema.Struct({

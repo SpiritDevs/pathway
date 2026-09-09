@@ -17,6 +17,47 @@ const candidate = (
 ) => ({ environmentId, resources: { ...resources, ...overrides }, receivedAt: 20_000, weight });
 
 describe("chooseLoadBalancedEnvironment", () => {
+  it("keeps critical storage advisory by default and prefers alternatives only when enabled", () => {
+    const critical = candidate("critical", {
+      cpuCount: 64,
+      storagePressure: "critical",
+      storageSampledAt: 0,
+    });
+    const healthy = candidate("healthy", { storagePressure: "healthy", storageSampledAt: 0 });
+    expect(chooseLoadBalancedEnvironment([critical, healthy], 20_000)).toBe("critical");
+    expect(
+      chooseLoadBalancedEnvironment([critical, healthy], 20_000, undefined, {
+        avoidCriticalStorage: true,
+      }),
+    ).toBe("healthy");
+    expect(
+      chooseLoadBalancedEnvironment([healthy, critical], 20_000, undefined, {
+        avoidCriticalStorage: true,
+      }),
+    ).toBe("healthy");
+    expect(
+      chooseLoadBalancedEnvironment([critical], 20_000, undefined, { avoidCriticalStorage: true }),
+    ).toBe("critical");
+  });
+  it("uses storage age relative to the remote resource clock and ignores stale pressure", () => {
+    const options = { avoidCriticalStorage: true };
+    const critical = candidate("critical", {
+      sampledAt: 9_000_000,
+      storageSampledAt: 8_999_000,
+      storagePressure: "critical",
+      cpuCount: 64,
+    });
+    expect(
+      chooseLoadBalancedEnvironment([critical, candidate("healthy")], 20_000, undefined, options),
+    ).toBe("healthy");
+    const stale = {
+      ...critical,
+      resources: { ...critical.resources, storageSampledAt: 8_000_000 },
+    };
+    expect(
+      chooseLoadBalancedEnvironment([stale, candidate("healthy")], 20_000, undefined, options),
+    ).toBe("critical");
+  });
   it.each(fixtures)("matches shared native conformance fixture: $name", (fixture) => {
     expect(chooseLoadBalancedEnvironment(fixture.candidates, fixture.now)).toBe(
       fixture.expectedEnvironmentId,

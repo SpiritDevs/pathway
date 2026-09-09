@@ -1,3 +1,4 @@
+import { StorageService } from "./storage/StorageService.ts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Encoding from "effect/Encoding";
@@ -658,6 +659,7 @@ const makeWsRpcLayer = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const hostResources = yield* HostResources.HostResources;
+      const storage = yield* StorageService;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const relayClient = yield* RelayClient.RelayClient;
       const issueTracker = yield* IssueTrackerService.IssueTrackerService;
@@ -1779,6 +1781,13 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
+        [WS_METHODS.storageSnapshot]: (_input) => storage.snapshot,
+        [WS_METHODS.storageSetPolicy]: (input) => storage.setPolicy(input.policy),
+        [WS_METHODS.storageSetKeep]: (input) => storage.setKeep(input.threadId, input.keep),
+        [WS_METHODS.storagePreview]: (input) => storage.preview(input),
+        [WS_METHODS.storageStart]: (input) => storage.start(input),
+        [WS_METHODS.storageCancel]: (input) => storage.cancel(input.jobId),
+        [WS_METHODS.storageRecreate]: (input) => storage.recreate(input.threadId),
         [WS_METHODS.serverGetHostResources]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetHostResources, hostResources.read, {
             "rpc.aggregate": "server",

@@ -107,7 +107,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/issues-enrichment": "Enrichment",
   "/settings/integrations": "Integrations",
   "/settings/email": "Email",
-  "/settings/archived": "Archive",
+  "/settings/archived": "Storage & cleanup",
   "/settings/diagnostics": "Diagnostics",
 };
 
@@ -598,7 +598,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "archive",
-    title: "Archived threads",
+    title: "Storage & cleanup, archived, settled and snoozed threads",
     to: "/settings/archived",
   },
   {

@@ -830,6 +830,7 @@ struct AgentThreadConversationView: View {
     @State private var showsAttachment = false
     @State private var showsUnfinishedGit = false
     @State private var showsGitReview = false
+    @State private var showsAlternateEnvironment = false
     @FocusState private var isComposerFocused: Bool
 
     init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient, workspaceRoot: String? = nil, storageDirectory: URL? = nil, initiallyReviewChanges: Bool = false) {
@@ -904,6 +905,12 @@ struct AgentThreadConversationView: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 4) {
                 VStack(spacing: 8) {
+                    if let connect = appModel.connect {
+                        PathwayConversationStorageNotice(environment: model.environment, connect: connect, threadID: model.thread.threadId,
+                            chooseEnvironment: { showsAlternateEnvironment = true },
+                            onAvailabilityChanged: { model.storageAllowsSend = $0 })
+                            .id(model.environment.id)
+                    }
                     HStack(spacing: 8) {
                     if !changedItems.isEmpty {
                         Button { showsChanges = true } label: {
@@ -983,6 +990,9 @@ struct AgentThreadConversationView: View {
             }
         }
         .sheet(isPresented: $showsChanges) { AgentThreadChangesView(model: model) }
+        .sheet(isPresented: $showsAlternateEnvironment) {
+            NewAgentThreadView(initialPrompt: model.draft)
+        }
         .sheet(isPresented: $showsAttachment) {
             PathwayAttachProjectView(thread: model.thread) { performLifecycle(.attachProject($0)) }
         }

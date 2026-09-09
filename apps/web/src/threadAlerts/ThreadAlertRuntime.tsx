@@ -161,6 +161,10 @@ export function ThreadAlertRuntime() {
         window.dispatchEvent(new Event(OPEN_NOTIFICATION_TRAY_EVENT));
         return;
       }
+      if ("kind" in target) {
+        await navigate({ to: "/settings/archived" });
+        return;
+      }
       const thread = threadMap.get(alertThreadScopeKey(target.environmentId, target.threadId));
       const companyId = cloudAgentThreadCompanyId(
         replicas,

@@ -937,6 +937,38 @@ export function createServerEnvironmentAtoms<R, E>(
     updateStateAtom,
     settingsValueAtom,
     providersValueAtom,
+    storageSnapshot: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:storage:snapshot",
+      tag: WS_METHODS.storageSnapshot,
+    }),
+    storagePreview: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:storage:preview",
+      tag: WS_METHODS.storagePreview,
+    }),
+    storageSetPolicy: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:storage:setpolicy",
+      tag: WS_METHODS.storageSetPolicy,
+    }),
+    storageSetKeep: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:storage:setkeep",
+      tag: WS_METHODS.storageSetKeep,
+    }),
+    storagePreviewCommand: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:storage:preview-command",
+      tag: WS_METHODS.storagePreview,
+    }),
+    storageStart: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:storage:start",
+      tag: WS_METHODS.storageStart,
+    }),
+    storageCancel: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:storage:cancel",
+      tag: WS_METHODS.storageCancel,
+    }),
+    storageRecreate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:storage:recreate",
+      tag: WS_METHODS.storageRecreate,
+    }),
     hostResources: createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:server:host-resources",
       staleTimeMs: 5_000,

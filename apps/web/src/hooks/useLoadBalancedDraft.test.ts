@@ -218,6 +218,29 @@ afterEach(() => {
 });
 
 describe("useLoadBalancedDraft", () => {
+  it("only avoids critical storage when opted in and preserves a resolved destination", () => {
+    registry.set(
+      remoteResources,
+      AsyncResult.success(
+        { ...snapshot, storagePressure: "critical", storageSampledAt: snapshot.sampledAt },
+        { timestamp: 20_000 },
+      ),
+    );
+    expect(render().label).toBe("Auto: remote");
+    expect(render({ ...base(), avoidCriticalStorage: true }).label).toBe("Auto: local");
+    flushEffects();
+    const current = readDraft();
+    expect(current.environmentId).toBe(remote.environmentId);
+    const resolved = render({
+      ...base(),
+      project: remote,
+      selection: { ...selection, instanceId: remoteProvider.instanceId },
+      avoidCriticalStorage: true,
+    });
+    flushEffects();
+    expect(resolved.label).toBe("Auto: remote");
+    expect(readDraft().environmentId).toBe(remote.environmentId);
+  });
   it("rechecks rejected access and resources when Auto is selected again", () => {
     const session = Atom.make(
       AsyncResult.success({ authenticated: false, scopes: [] as string[] }),

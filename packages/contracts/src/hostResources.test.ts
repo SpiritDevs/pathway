@@ -11,6 +11,7 @@ describe("load balancing contracts", () => {
   it("defaults existing clients to opt out and accepts reversible preferences", () => {
     expect(decodeSettings({})).toMatchObject({
       loadBalancingEnabled: false,
+      loadBalancingAvoidCriticalStorage: false,
       loadBalancingWeights: {},
     });
     expect(
@@ -22,6 +23,16 @@ describe("load balancing contracts", () => {
     for (const value of [-1, 101, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => decodeSettingsPatch({ loadBalancingWeights: { invalid: value } })).toThrow();
     }
+  });
+  it("allows users to opt into storage avoidance and reverse that choice", () => {
+    expect(
+      decodeSettingsPatch({ loadBalancingAvoidCriticalStorage: true })
+        .loadBalancingAvoidCriticalStorage,
+    ).toBe(true);
+    expect(
+      decodeSettingsPatch({ loadBalancingAvoidCriticalStorage: false })
+        .loadBalancingAvoidCriticalStorage,
+    ).toBe(false);
   });
   it("accepts unknown CPU and rejects malformed resource metrics", () => {
     const snapshot = {

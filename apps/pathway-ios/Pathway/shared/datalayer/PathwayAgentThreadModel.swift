@@ -290,10 +290,11 @@ final class PathwayAgentThreadModel {
     var supportsConversations: Bool {
         serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue?["threadConversations"]?.boolValue == true
     }
+    var storageAllowsSend = true
     var canSend: Bool {
         (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftAttachments.isEmpty)
             && draft.count <= 120_000 && !isSending && draftAttachments.allSatisfy { $0.state == .ready }
-            && isSubscriptionReady && (rpc != nil || injectedRequest != nil)
+            && isSubscriptionReady && storageAllowsSend && (rpc != nil || injectedRequest != nil)
     }
 
     private(set) var isSubscriptionReady = false

@@ -42,7 +42,7 @@ struct PathwayStorageSettingsView: View {
 
 actor PathwayDownloadedHistory {
     private static func paths(_ directory: URL) -> [URL] {
-        [directory.appending(path: "Discovery.json"), directory.appending(path: "AgentThreads")]
+        [directory.appending(path: "Discovery.json"), directory.appending(path: "AgentThreads"), directory.appending(path: "EnvironmentStorage")]
     }
     static func size(directory: URL) async -> Int {
         await Task.detached {

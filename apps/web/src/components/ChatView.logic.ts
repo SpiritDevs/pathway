@@ -103,6 +103,35 @@ export function resolveDraftEnvironmentProjectRef(
   return projectEnvironments.find((target) => target.environmentId === environmentId) ?? null;
 }
 
+/** Storage recovery must offer destinations that can create the intended kind of thread. */
+export function filterStorageEnvironmentOptions(
+  options: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly projectId: ProjectId | null;
+    readonly label: string;
+  }>,
+  environments: ReadonlyMap<
+    EnvironmentId,
+    {
+      readonly connection: { readonly phase: string };
+      readonly serverConfig: {
+        readonly environment: {
+          readonly capabilities: { readonly threadConversations?: boolean | undefined };
+        };
+      } | null;
+    }
+  >,
+) {
+  return options.filter((option) => {
+    const environment = environments.get(option.environmentId);
+    return (
+      environment?.connection.phase === "connected" &&
+      (option.projectId !== null ||
+        environment.serverConfig?.environment.capabilities.threadConversations === true)
+    );
+  });
+}
+
 /** A stopped first turn can be replaced until the agent has written into the conversation. */
 export function canReplaceInitialThreadProject(
   projection: OrchestrationV2ThreadProjection | null | undefined,
