@@ -56,6 +56,7 @@ export function SyncStatusIndicator() {
   }, [activeCompany, activeCompanyId, availability, status, statuses]);
 
   if (availability.phase !== null) return null;
+  if (status?.phase === "live") return null;
 
   if (availability.tab.role === "follower") {
     return (
