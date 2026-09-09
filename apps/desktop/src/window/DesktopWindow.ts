@@ -94,6 +94,7 @@ export class DesktopWindow extends Context.Service<
     readonly handleBackendNotReady: Effect.Effect<void>;
     readonly flushMainWindowBounds: Effect.Effect<void>;
     readonly prepareCaptureReveal: Effect.Effect<void>;
+    readonly cancelPreparedCaptureReveal: Effect.Effect<void>;
     readonly dispatchMenuAction: (
       action: string,
       options?: { readonly reveal?: boolean },
@@ -289,6 +290,12 @@ export const make = Effect.gen(function* () {
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runFork = Effect.runForkWith(context);
   const runPromise = Effect.runPromiseWith(context);
+  let preparedCaptureReveal:
+    | {
+        readonly window: Electron.BrowserWindow;
+        readonly settled: Promise<void>;
+      }
+    | undefined;
   let flushMainWindowBounds: Effect.Effect<void> = Effect.void;
 
   const dismissConnectingSplash = Effect.gen(function* () {
@@ -849,8 +856,20 @@ export const make = Effect.gen(function* () {
     prepareCaptureReveal: Effect.gen(function* () {
       const existingWindow = yield* currentMainWindow;
       if (Option.isSome(existingWindow)) {
-        yield* electronWindow.prepareReveal(existingWindow.value);
+        const settled = Promise.withResolvers<void>();
+        const preparation = { window: existingWindow.value, settled: settled.promise };
+        preparedCaptureReveal = preparation;
+        yield* electronWindow
+          .prepareReveal(preparation.window)
+          .pipe(Effect.ensuring(Effect.sync(() => settled.resolve())));
       }
+    }),
+    cancelPreparedCaptureReveal: Effect.gen(function* () {
+      const preparation = preparedCaptureReveal;
+      if (!preparation) return;
+      yield* Effect.promise(() => preparation.settled);
+      yield* electronWindow.cancelPreparedReveal(preparation.window);
+      if (preparedCaptureReveal === preparation) preparedCaptureReveal = undefined;
     }),
     activate: Effect.gen(function* () {
       const existingWindow = yield* currentMainWindow;

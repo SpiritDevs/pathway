@@ -108,7 +108,8 @@ pub(super) fn capture_on(connection: Connection, address: u64, directory: &Path)
     let (connection, globals, mut queue, mut state) = connect(connection)?;
     state.target = address;
     let _manager: Manager = globals.bind(&queue.handle(), 1..=3, ())?;
-    let deadline = Instant::now() + Duration::from_secs(15);
+    // Hyprland may wait for the user to approve screen sharing before producing a frame.
+    let deadline = Instant::now() + Duration::from_secs(120);
     while !state.done && state.error.is_none() {
         queue.dispatch_pending(&mut state)?;
         if state.done || state.error.is_some() {

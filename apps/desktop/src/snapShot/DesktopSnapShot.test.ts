@@ -28,6 +28,7 @@ beforeEach(() => {
   transitionCapturePageMock.mockReset().mockResolvedValue(undefined);
   transitionSnapshotMock.mockReset().mockResolvedValue(undefined);
   prepareCaptureRevealMock.mockReset();
+  cancelPreparedCaptureRevealMock.mockReset();
 });
 
 const {
@@ -56,6 +57,7 @@ const {
   unregisterShortcutMock,
   portalShortcutInstances,
   prepareCaptureRevealMock,
+  cancelPreparedCaptureRevealMock,
   nextPortalState,
   regionCaptureMock,
   screenToDipRectMock,
@@ -134,6 +136,7 @@ const {
     hasSession: boolean;
   }>,
   prepareCaptureRevealMock: vi.fn(),
+  cancelPreparedCaptureRevealMock: vi.fn(),
   regionCaptureMock:
     vi.fn<
       (region: Electron.Rectangle) => Promise<{ width: number; height: number; png: Buffer }>
@@ -508,6 +511,7 @@ const testLayer = (
       DesktopWindow.DesktopWindow.of({
         activate: Effect.void,
         prepareCaptureReveal: Effect.sync(prepareCaptureRevealMock),
+        cancelPreparedCaptureReveal: Effect.sync(cancelPreparedCaptureRevealMock),
         dispatchMenuAction: () => Effect.void,
         dispatchSnapShotEvent: () => Effect.void,
       } as unknown as DesktopWindow.DesktopWindow["Service"]),
@@ -570,8 +574,10 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
     snapshots: 0,
     handoffs: 0,
     preparations: 0,
+    preparationCancellations: 0,
     preparedWithoutOverlay: true,
     failFirstPersistence: false,
+    failFirstEnrichment: false,
   };
   const images = new Map<string, Uint8Array>();
   const metadata = new Map<string, string>();
@@ -638,8 +644,13 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
           images.set(path, bytes);
         }),
       writeFileString: (path, text) => {
-        const pending = JSON.parse(text) as { source: { windowTitle: string } };
-        return state.failFirstPersistence && pending.source.windowTitle === first!.title
+        const pending = JSON.parse(text) as {
+          source: { windowTitle: string; accessibleText?: string };
+        };
+        return (state.failFirstPersistence && pending.source.windowTitle === first!.title) ||
+          (state.failFirstEnrichment &&
+            pending.source.windowTitle === first!.title &&
+            pending.source.accessibleText !== undefined)
           ? Effect.fail(
               PlatformError.systemError({
                 _tag: "PermissionDenied",
@@ -669,6 +680,12 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
           images.delete(path);
           metadata.delete(path);
         }),
+      readDirectory: () =>
+        Effect.sync(() =>
+          [...metadata.keys()]
+            .filter((filePath) => filePath.endsWith(".json"))
+            .map((filePath) => filePath.slice(filePath.lastIndexOf("/") + 1)),
+        ),
       readFile: (path) => Effect.sync(() => images.get(path)!),
       readFileString: (path) => Effect.sync(() => metadata.get(path)!),
     }),
@@ -686,6 +703,9 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
         prepareCaptureReveal: Effect.sync(() => {
           state.preparations++;
           state.preparedWithoutOverlay &&= flashWindows.every((window) => window.destroyed);
+        }),
+        cancelPreparedCaptureReveal: Effect.sync(() => {
+          state.preparationCancellations++;
         }),
         dispatchMenuAction: () => Effect.void,
         dispatchSnapShotEvent: (event: DesktopSnapShotEvent) => {
@@ -711,6 +731,8 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
     first: first!,
     second: second!,
     state,
+    images,
+    metadata,
     readyIds,
     requestedIds,
     layer,
@@ -1169,6 +1191,63 @@ it.effect.each([
   },
 );
 
+it.effect(
+  "publishes an acquired image before accessibility finishes and recovers it after restart",
+  () => {
+    const fixture = concurrentCaptureFixture("win32", false);
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* makeSignedInService;
+        yield* service.configure(fixture.settings);
+        fixture.first.pixels.resolve();
+        const capture = yield* service.capture.pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Effect.promise(() => fixture.first.handoff.promise);
+
+        const id = fixture.requestedIds[0]!;
+        assert.isTrue(fixture.images.has(`/state/snap-shots/${id}.png`));
+        const minimal = yield* decodePendingMetadata(
+          fixture.metadata.get(`/state/snap-shots/${id}.json`)!,
+        );
+        assert.isFalse("accessibleText" in minimal.source);
+        assert.deepEqual(yield* service.listPending, []);
+        assert.equal((yield* service.read(id).pipe(Effect.flip)).operation, "read");
+
+        const restarted = yield* makeSignedInService;
+        assert.deepEqual(
+          (yield* restarted.listPending).map((pending) => pending.id),
+          [id],
+        );
+        assert.equal((yield* restarted.read(id)).source.windowTitle, fixture.first.title);
+
+        fixture.first.context.resolve({ accessibleText: "Recovered accessibility" });
+        yield* Fiber.join(capture);
+        assert.equal((yield* service.read(id)).source.accessibleText, "Recovered accessibility");
+      }).pipe(Effect.ensuring(Effect.sync(fixture.releaseAll))),
+    ).pipe(Effect.provide(fixture.layer), Effect.ensuring(Effect.sync(fixture.reset)));
+  },
+);
+
+it.effect("keeps the minimal capture when optional metadata enrichment fails", () => {
+  const fixture = concurrentCaptureFixture("win32", false);
+  fixture.state.failFirstEnrichment = true;
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* makeSignedInService;
+      yield* service.configure(fixture.settings);
+      fixture.first.pixels.resolve();
+      fixture.first.context.resolve({ accessibleText: "Optional accessibility" });
+
+      yield* service.capture;
+
+      const id = fixture.readyIds[0]!;
+      const capture = yield* service.read(id);
+      assert.equal(capture.source.windowTitle, fixture.first.title);
+      assert.isFalse("accessibleText" in capture.source);
+      assert.isTrue(fixture.images.has(`/state/snap-shots/${id}.png`));
+    }).pipe(Effect.ensuring(Effect.sync(fixture.releaseAll))),
+  ).pipe(Effect.provide(fixture.layer), Effect.ensuring(Effect.sync(fixture.reset)));
+});
+
 it.effect.each(["win32", "darwin", "linux"] as const)(
   "captures the foreground window in place from the shortcut on %s",
   (platform) => {
@@ -1264,6 +1343,7 @@ it.effect.each(["win32", "darwin", "linux"] as const)(
         assert.equal(saved.source.accessibleText, `Window from process ${pathway.owner.processId}`);
         assert.deepEqual(images, [pathway.png]);
         assert.equal(prepareCaptureRevealMock.mock.calls.length, platform === "win32" ? 1 : 0);
+        assert.equal(cancelPreparedCaptureRevealMock.mock.calls.length, 1);
         if (platform === "linux") {
           assert.equal(saved.source.appIdentifier, pathway.appIdentifier);
           assert.deepEqual(activate.mock.calls, [[pathway.title]]);
@@ -1408,10 +1488,10 @@ it.effect.each([
 );
 
 it.effect.each(["succeeds", "fails"] as const)(
-  "keeps the newer snapshot exclusive when older persistence %s",
+  "keeps the newer snapshot exclusive when older metadata enrichment %s",
   (outcome) => {
     const fixture = concurrentCaptureFixture("win32", true);
-    fixture.state.failFirstPersistence = outcome === "fails";
+    fixture.state.failFirstEnrichment = outcome === "fails";
     return Effect.scoped(
       Effect.gen(function* () {
         const service = yield* makeSignedInService;
@@ -1432,7 +1512,10 @@ it.effect.each(["succeeds", "fails"] as const)(
         assert.equal(fixture.state.snapshots, 2);
         fixture.first.context.resolve({ accessibleText: "Discord accessibility" });
         yield* Fiber.join(first);
-        assert.lengthOf(fixture.readyIds, outcome === "succeeds" ? 1 : 0);
+        assert.lengthOf(fixture.readyIds, 1);
+        const older = yield* service.read(fixture.readyIds[0]!);
+        assert.equal(older.source.windowTitle, fixture.first.title);
+        assert.equal("accessibleText" in older.source, outcome === "succeeds");
         yield* TestClock.adjust("200 millis");
         yield* Effect.promise(fixture.trigger);
         assert.equal(fixture.state.snapshots, 2);
@@ -1442,6 +1525,7 @@ it.effect.each(["succeeds", "fails"] as const)(
         fixture.second.context.resolve({ accessibleText: "Explorer accessibility" });
         yield* Fiber.join(second);
         assert.equal(fixture.state.handoffs, 2);
+        assert.lengthOf(fixture.readyIds, 2);
         const newer = yield* service.read(fixture.readyIds.at(-1)!);
         assert.equal(newer.source.windowTitle, fixture.second.title);
         assert.equal(newer.source.accessibleText, "Explorer accessibility");
@@ -1452,7 +1536,7 @@ it.effect.each(["succeeds", "fails"] as const)(
 
 it.effect("keeps newer native feedback when older accessibility persistence fails", () => {
   const fixture = concurrentCaptureFixture("linux", true);
-  fixture.state.failFirstPersistence = true;
+  fixture.state.failFirstEnrichment = true;
   return Effect.scoped(
     Effect.gen(function* () {
       const service = yield* makeSignedInService;
@@ -1471,16 +1555,37 @@ it.effect("keeps newer native feedback when older accessibility persistence fail
       fixture.first.context.resolve({ accessibleText: "Discord accessibility" });
       yield* Fiber.join(first);
 
-      assert.lengthOf(fixture.readyIds, 0);
+      assert.lengthOf(fixture.readyIds, 1);
       assert.lengthOf(fixture.second.feedback.close.mock.calls, 0);
       assert.lengthOf(fixture.second.feedback.complete.mock.calls, 0);
       fixture.second.context.resolve({ accessibleText: "Explorer accessibility" });
       yield* Fiber.join(second);
-      assert.lengthOf(fixture.readyIds, 1);
-      const newer = yield* service.read(fixture.readyIds[0]!);
+      assert.lengthOf(fixture.readyIds, 2);
+      const newer = yield* service.read(fixture.readyIds[1]!);
       assert.equal(newer.source.windowTitle, fixture.second.title);
-      yield* service.acknowledge(fixture.readyIds[0]!);
+      yield* service.acknowledge(fixture.readyIds[1]!);
       assert.lengthOf(fixture.second.feedback.complete.mock.calls, 1);
+    }).pipe(Effect.ensuring(Effect.sync(fixture.releaseAll))),
+  ).pipe(Effect.provide(fixture.layer), Effect.ensuring(Effect.sync(fixture.reset)));
+});
+
+it.effect("removes partial files when initial snapshot persistence fails", () => {
+  const fixture = concurrentCaptureFixture("win32", false);
+  fixture.state.failFirstPersistence = true;
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* makeSignedInService;
+      yield* service.configure(fixture.settings);
+      fixture.first.pixels.resolve();
+
+      const error = yield* service.capture.pipe(Effect.flip);
+
+      assert.equal(error.operation, "capture");
+      assert.equal(fixture.state.preparationCancellations, 1);
+      assert.deepEqual(fixture.readyIds, []);
+      assert.equal(fixture.images.size, 0);
+      assert.equal(fixture.metadata.size, 0);
+      assert.deepEqual(yield* service.listPending, []);
     }).pipe(Effect.ensuring(Effect.sync(fixture.releaseAll))),
   ).pipe(Effect.provide(fixture.layer), Effect.ensuring(Effect.sync(fixture.reset)));
 });
@@ -2049,6 +2154,7 @@ it.effect.each(["ready", "failed"] as const)(
           assert.lengthOf(transitionShowMock.mock.calls, 0);
           assert.isTrue(flashWindows.every((window) => window.destroyed));
         }
+        assert.lengthOf(cancelPreparedCaptureRevealMock.mock.calls, 1);
       }),
     ).pipe(
       Effect.provide(

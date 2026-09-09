@@ -558,6 +558,21 @@ describe("ElectronWindow", () => {
     }).pipe(Effect.provide(testLayer("win32"))),
   );
 
+  it.effect("a cancelled capture preparation does not affect the next ordinary reveal", () =>
+    Effect.gen(function* () {
+      const window = makeWindowsRevealWindow();
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+      yield* electronWindow.prepareReveal(window as unknown as Electron.BrowserWindow);
+      yield* electronWindow.cancelPreparedReveal(window as unknown as Electron.BrowserWindow);
+      yield* electronWindow.reveal(window as unknown as Electron.BrowserWindow);
+
+      assert.lengthOf(activateWindowsForegroundMock.mock.calls, 0);
+      assert.lengthOf(windowsForegroundFocusMock.mock.calls, 0);
+      assert.lengthOf(window.focus.mock.calls, 1);
+    }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
   it.effect("starts the Windows focus worker lazily and closes it with the layer", () =>
     Effect.gen(function* () {
       yield* ElectronWindow.ElectronWindow.pipe(Effect.provide(testLayer("win32")));

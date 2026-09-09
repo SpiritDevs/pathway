@@ -118,6 +118,7 @@ export class ElectronWindow extends Context.Service<
     readonly setMain: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly clearMain: (window: Option.Option<Electron.BrowserWindow>) => Effect.Effect<void>;
     readonly prepareReveal: (window: Electron.BrowserWindow) => Effect.Effect<boolean>;
+    readonly cancelPreparedReveal: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly reveal: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly sendAll: (channel: string, ...args: readonly unknown[]) => Effect.Effect<void>;
     readonly destroyAll: Effect.Effect<void>;
@@ -260,6 +261,10 @@ export const make = Effect.gen(function* () {
         return ensureWindowsForegroundFocus()
           .prepare(windowsForegroundFocusTarget(window))
           .catch(() => false);
+      }),
+    cancelPreparedReveal: (window) =>
+      Effect.sync(() => {
+        captureRevealWindows.delete(window.id);
       }),
     reveal: (window) =>
       Effect.tryPromise({

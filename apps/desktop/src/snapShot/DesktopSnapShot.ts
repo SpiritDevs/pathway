@@ -441,6 +441,7 @@ async function captureSource({
   accessibilityProcessPool,
   regionSnapShotPool,
   prepareReveal,
+  onAcquired,
   onLinuxFeedback,
   isCurrentAccount,
 }: {
@@ -457,6 +458,13 @@ async function captureSource({
   accessibilityProcessPool: AccessibilityProcessPool;
   regionSnapShotPool: RegionSnapShotPool;
   prepareReveal: () => Promise<void>;
+  onAcquired: (capture: {
+    readonly source: MacSnapShotSource | RegionSnapShotSource | Electron.DesktopCapturerSource;
+    readonly active: ActiveWindow | undefined;
+    readonly linuxWindow: LinuxWindowMetadata | undefined;
+    readonly png: Buffer;
+    readonly imageTempReady: boolean;
+  }) => Promise<DesktopPendingSnapShot>;
   onLinuxFeedback: (feedback: LinuxCaptureFeedback) => void;
   isCurrentAccount: () => boolean;
 }) {
@@ -471,9 +479,9 @@ async function captureSource({
     Electron.BrowserWindow.getFocusedWindow() ??
     Electron.BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
   const destinationWindowBounds = destinationWindow?.getBounds();
-  {
-    const revealPreparation =
-      platform === "win32" ? prepareReveal().catch(() => undefined) : Promise.resolve();
+  const revealPreparation =
+    platform === "win32" ? prepareReveal().catch(() => undefined) : Promise.resolve();
+  try {
     if (mode === "direct") {
       active = await resolveSnapShotActiveWindow(platform);
     }
@@ -545,6 +553,7 @@ async function captureSource({
         png = selected.thumbnail.toPNG();
       }
     }
+    const pending = await onAcquired({ source, active, linuxWindow, png, imageTempReady });
     const accessibleIdentity = active
       ? { ...active, bounds: snapShotFlashBounds(active, platform) }
       : linuxWindow?.processId
@@ -602,11 +611,15 @@ async function captureSource({
       active,
       linuxWindow,
       linuxActivationFailure,
+      pending,
       contextPromise,
       animationStarted,
       png,
       imageTempReady,
     };
+  } catch (cause) {
+    await revealPreparation;
+    throw cause;
   }
 }
 
@@ -782,6 +795,7 @@ export const make = Effect.gen(function* () {
   });
   const snapshotMutex = yield* Semaphore.make(1);
   const configurationMutex = yield* Semaphore.make(1);
+  const inFlightCaptureIds = new Set<string>();
   const context = yield* Effect.context<
     DesktopEnvironment.DesktopEnvironment | DesktopWindow.DesktopWindow
   >();
@@ -912,8 +926,58 @@ export const make = Effect.gen(function* () {
         fileSystem.remove(path.join(captureDirectory, name), { force: true }),
       ),
       { concurrency: "unbounded", discard: true },
-    ).pipe(Effect.ignore);
+    ).pipe(Effect.ignore, Effect.ensuring(Effect.sync(() => inFlightCaptureIds.delete(id))));
   });
+
+  const persistAcquiredCapture = Effect.fn("desktop.snapShot.persistAcquiredCapture")(
+    function* (capture: {
+      readonly id: string;
+      readonly ownerUserId: string;
+      readonly source: MacSnapShotSource | RegionSnapShotSource | Electron.DesktopCapturerSource;
+      readonly active: ActiveWindow | undefined;
+      readonly linuxWindow: LinuxWindowMetadata | undefined;
+      readonly png: Buffer;
+      readonly imageTempReady: boolean;
+    }) {
+      const { id, source, active, linuxWindow, png, imageTempReady } = capture;
+      const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
+      const appIdentifier = boundedSnapShotString(
+        active?.platform === "macos" ? active.owner.bundleId : linuxWindow?.appIdentifier,
+        255,
+      );
+      const pending = yield* decodePendingCapture({
+        id,
+        ownerUserId: capture.ownerUserId,
+        name: `window-${capturedAt.replaceAll(":", "-")}.png`,
+        mimeType: "image/png",
+        sizeBytes: png.byteLength,
+        source: {
+          kind: "snap-shot",
+          capturedAt,
+          appName:
+            boundedSnapShotString(snapShotAppName(active, linuxWindow, source.name), 255) ??
+            "Window",
+          windowTitle:
+            boundedSnapShotString(
+              active?.title.trim() || linuxWindow?.title.trim() || source.name,
+              1_000,
+            ) ?? "",
+          ...(appIdentifier ? { appIdentifier } : {}),
+        },
+      });
+      const imagePath = path.join(captureDirectory, `${id}.png`);
+      const imageTempPath = path.join(captureDirectory, `${id}.tmp.png`);
+      const metadataPath = path.join(captureDirectory, `${id}.json`);
+      if (!imageTempReady) yield* fileSystem.writeFile(imageTempPath, png);
+      yield* fileSystem.rename(imageTempPath, imagePath);
+      yield* fileSystem.writeFileString(
+        metadataPath + ".tmp",
+        yield* encodePendingCaptureJson(pending),
+      );
+      yield* fileSystem.rename(metadataPath + ".tmp", metadataPath);
+      return pending;
+    },
+  );
 
   const prepareCapture = Effect.fn("desktop.snapShot.prepareCapture")(function* (
     settings: ClientSettings,
@@ -938,6 +1002,20 @@ export const make = Effect.gen(function* () {
         return yield* new DesktopSnapShotError({ operation: "signed-out", captureId: id });
       }
       yield* emit({ type: "requested", id: id as DesktopSnapShotId });
+      inFlightCaptureIds.add(id);
+      let acquired:
+        | {
+            readonly pending: DesktopPendingSnapShot;
+            readonly source:
+              | MacSnapShotSource
+              | RegionSnapShotSource
+              | Electron.DesktopCapturerSource;
+            readonly active: ActiveWindow | undefined;
+            readonly linuxWindow: LinuxWindowMetadata | undefined;
+            readonly png: Buffer;
+            readonly imageTempReady: boolean;
+          }
+        | undefined;
       const snapshot = yield* Effect.tryPromise({
         try: () =>
           captureSource({
@@ -954,6 +1032,13 @@ export const make = Effect.gen(function* () {
             accessibilityProcessPool,
             regionSnapShotPool,
             prepareReveal: () => runPromise(desktopWindow.prepareCaptureReveal),
+            onAcquired: async (capture) => {
+              const pending = await runPromise(
+                persistAcquiredCapture({ id, ownerUserId, ...capture }),
+              );
+              acquired = { pending, ...capture };
+              return pending;
+            },
             onLinuxFeedback: (feedback) => {
               if (isCurrentAccount(ownerUserId, revision)) linuxFeedback = { id, feedback };
               else feedback.close();
@@ -961,8 +1046,20 @@ export const make = Effect.gen(function* () {
             isCurrentAccount: () => isCurrentAccount(ownerUserId, revision),
           }),
         catch: (cause) => captureFailure(cause, id),
-      });
-      const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
+      }).pipe(
+        Effect.catch((error) =>
+          acquired
+            ? Effect.logWarning("Snapshot feedback failed after the image was saved", error).pipe(
+                Effect.as({
+                  ...acquired,
+                  linuxActivationFailure: undefined,
+                  contextPromise: Promise.resolve(undefined),
+                  animationStarted: false,
+                }),
+              )
+            : Effect.fail(error),
+        ),
+      );
       if (snapshot.linuxActivationFailure) {
         yield* Effect.logWarning(
           "The compositor could not activate Pathway after the snapshot",
@@ -974,17 +1071,18 @@ export const make = Effect.gen(function* () {
       } else if (isCurrentAccount(ownerUserId, revision)) {
         yield* desktopWindow.activate.pipe(Effect.catchCause(() => Effect.void));
       }
-      return { id, capturedAt, ownerUserId, revision, ...snapshot };
-    }).pipe(Effect.mapError((cause) => captureFailure(cause, id)));
+      return { id, ownerUserId, revision, ...snapshot };
+    }).pipe(
+      Effect.onInterrupt(() => Effect.sync(() => inFlightCaptureIds.delete(id))),
+      Effect.ensuring(desktopWindow.cancelPreparedCaptureReveal.pipe(Effect.ignoreCause)),
+      Effect.mapError((cause) => captureFailure(cause, id)),
+    );
   });
 
   const persistCapture = Effect.fn("desktop.snapShot.persistCapture")(function* (
     capture: Effect.Success<ReturnType<typeof prepareCapture>>,
   ) {
-    const { id, capturedAt, source, active, linuxWindow, contextPromise, png, imageTempReady } =
-      capture;
-    const imagePath = path.join(captureDirectory, `${id}.png`);
-    const imageTempPath = path.join(captureDirectory, `${id}.tmp.png`);
+    const { id, pending, source, active, contextPromise } = capture;
     const metadataPath = path.join(captureDirectory, `${id}.json`);
 
     yield* Effect.gen(function* () {
@@ -992,45 +1090,30 @@ export const make = Effect.gen(function* () {
       const appIconDataUrl = yield* Effect.promise(() =>
         iconDataUrl(source, active, environment.platform),
       );
-      // Native labels are unbounded; keep a valid screenshot when its metadata is too long.
-      const appIdentifier = boundedSnapShotString(
-        active?.platform === "macos" ? active.owner.bundleId : linuxWindow?.appIdentifier,
-        255,
-      );
-      const pending = yield* decodePendingCapture({
-        id,
-        ownerUserId: capture.ownerUserId,
-        name: `window-${capturedAt.replaceAll(":", "-")}.png`,
-        mimeType: "image/png",
-        sizeBytes: png.byteLength,
-        source: {
-          kind: "snap-shot",
-          capturedAt,
-          appName:
-            boundedSnapShotString(snapShotAppName(active, linuxWindow, source.name), 255) ??
-            "Window",
-          windowTitle:
-            boundedSnapShotString(
-              active?.title.trim() || linuxWindow?.title.trim() || source.name,
-              1_000,
-            ) ?? "",
-          ...(accessibilityContext?.accessibility
-            ? { accessibility: accessibilityContext.accessibility }
-            : accessibilityContext?.accessibleText
-              ? { accessibleText: accessibilityContext.accessibleText }
-              : {}),
-          ...(appIdentifier ? { appIdentifier } : {}),
-          ...(appIconDataUrl ? { appIconDataUrl } : {}),
-        },
+      const sourceEnrichment = {
+        ...(accessibilityContext?.accessibility
+          ? { accessibility: accessibilityContext.accessibility }
+          : accessibilityContext?.accessibleText
+            ? { accessibleText: accessibilityContext.accessibleText }
+            : {}),
+        ...(appIconDataUrl ? { appIconDataUrl } : {}),
+      };
+      if (Object.keys(sourceEnrichment).length === 0) return;
+      const enriched = yield* decodePendingCapture({
+        ...pending,
+        source: { ...pending.source, ...sourceEnrichment },
       });
-      if (!imageTempReady) yield* fileSystem.writeFile(imageTempPath, png);
-      yield* fileSystem.rename(imageTempPath, imagePath);
       yield* fileSystem.writeFileString(
         metadataPath + ".tmp",
-        yield* encodePendingCaptureJson(pending),
+        yield* encodePendingCaptureJson(enriched),
       );
       yield* fileSystem.rename(metadataPath + ".tmp", metadataPath);
-    }).pipe(Effect.mapError((cause) => captureFailure(cause, id)));
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Could not enrich the captured snapshot metadata", cause),
+      ),
+      Effect.ensuring(Effect.sync(() => inFlightCaptureIds.delete(id))),
+    );
   });
 
   const capture = Effect.gen(function* () {
@@ -1043,8 +1126,8 @@ export const make = Effect.gen(function* () {
     if (!settings.snapShotEnabled) {
       return yield* new DesktopSnapShotError({ operation: "disabled" });
     }
-    // Only source acquisition and the initial handoff require exclusive access.
-    // Each captured image can finish its own accessibility read and persistence.
+    // Only acquisition, the durable image handoff, and the initial UI handoff require
+    // exclusive access. Each captured image can finish its own metadata enrichment.
     const prepared = yield* prepareCapture(settings, ownerUserId, revision).pipe(
       Effect.tapError((error) =>
         (error.captureId ? discardCapture(error.captureId) : Effect.void).pipe(
@@ -1069,17 +1152,6 @@ export const make = Effect.gen(function* () {
                 Effect.andThen(emit({ type: "ready", id: capture.id as DesktopSnapShotId })),
               )
             : Effect.void,
-        ),
-      ),
-      Effect.tapError((error) =>
-        discardCapture(capture.id).pipe(
-          Effect.andThen(
-            Effect.suspend(() =>
-              isCurrentAccount(ownerUserId, revision)
-                ? setFailure(error.message, capture.id)
-                : Effect.void,
-            ),
-          ),
         ),
       ),
     );
@@ -1722,7 +1794,12 @@ export const make = Effect.gen(function* () {
         }),
         Effect.flatMap((names) =>
           Effect.forEach(
-            names.filter((name) => name.endsWith(".json") && !name.endsWith(".json.tmp")),
+            names.filter(
+              (name) =>
+                name.endsWith(".json") &&
+                !name.endsWith(".json.tmp") &&
+                !inFlightCaptureIds.has(name.slice(0, -".json".length)),
+            ),
             (name) =>
               fileSystem.readFileString(path.join(captureDirectory, name)).pipe(
                 Effect.flatMap(decodePendingCaptureJson),
@@ -1751,6 +1828,8 @@ export const make = Effect.gen(function* () {
         const ownerUserId = accountUserId;
         const revision = accountRevision;
         if (ownerUserId === null)
+          return yield* new DesktopSnapShotError({ operation: "read", captureId: id });
+        if (inFlightCaptureIds.has(id))
           return yield* new DesktopSnapShotError({ operation: "read", captureId: id });
         const metadata = yield* fileSystem
           .readFileString(path.join(captureDirectory, `${id}.json`))
@@ -1791,6 +1870,8 @@ export const make = Effect.gen(function* () {
         const ownerUserId = accountUserId;
         const revision = accountRevision;
         if (ownerUserId === null)
+          return yield* new DesktopSnapShotError({ operation: "acknowledge", captureId: id });
+        if (inFlightCaptureIds.has(id))
           return yield* new DesktopSnapShotError({ operation: "acknowledge", captureId: id });
         const metadata = yield* fileSystem
           .readFileString(path.join(captureDirectory, `${id}.json`))

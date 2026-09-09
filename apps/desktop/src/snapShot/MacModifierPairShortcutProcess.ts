@@ -1,8 +1,11 @@
+// @effect-diagnostics globalTimers:off -- The child-process deadlines run at native process callback boundaries outside any Effect fiber.
 // @effect-diagnostics nodeBuiltinImport:off -- This macOS platform boundary spawns the native modifier-key poller with Node.
 
 import * as NodeChildProcess from "node:child_process";
 
 import type { SnapShotModifier } from "@spiritdevs/contracts";
+
+const START_TIMEOUT_MS = 5_000;
 
 const MAC_MODIFIER_PAIR_DEVICE_MASKS: Record<SnapShotModifier, readonly [number, number]> = {
   shift: [0x2, 0x4],
@@ -44,11 +47,28 @@ export function startMacModifierPairShortcutProcess(
   return new Promise((resolve, reject) => {
     let settled = false;
     let stopped = false;
+    let exited = false;
     let buffered = "";
+    let startTimeout: ReturnType<typeof setTimeout> | undefined;
+    let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
+    const clearStartTimeout = () => {
+      if (!startTimeout) return;
+      clearTimeout(startTimeout);
+      startTimeout = undefined;
+    };
+    const clearForceKillTimeout = () => {
+      if (!forceKillTimeout) return;
+      clearTimeout(forceKillTimeout);
+      forceKillTimeout = undefined;
+    };
     const stop = () => {
       if (stopped) return;
       stopped = true;
+      clearStartTimeout();
+      if (exited) return;
       poller.kill();
+      forceKillTimeout = setTimeout(() => poller.kill("SIGKILL"), 1_000);
+      forceKillTimeout.unref?.();
     };
     const fail = (error: Error) => {
       if (stopped) return;
@@ -61,6 +81,11 @@ export function startMacModifierPairShortcutProcess(
       stop();
       reject(error);
     };
+    startTimeout = setTimeout(
+      () => fail(new Error("Snapshot shortcut helper timed out while starting.")),
+      START_TIMEOUT_MS,
+    );
+    startTimeout.unref?.();
 
     poller.stderr.on("data", (chunk: Buffer) => {
       buffered += chunk.toString();
@@ -70,6 +95,7 @@ export function startMacModifierPairShortcutProcess(
         const message = line.trim();
         if (message === "ready" && !settled) {
           settled = true;
+          clearStartTimeout();
           resolve(stop);
           continue;
         }
@@ -83,6 +109,8 @@ export function startMacModifierPairShortcutProcess(
       fail(error);
     });
     poller.once("exit", (code) => {
+      exited = true;
+      clearForceKillTimeout();
       fail(new Error(`Snapshot shortcut helper exited with code ${code}`));
     });
   });

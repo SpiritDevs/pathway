@@ -90,4 +90,28 @@ describe("macOS modifier pair poller", () => {
     spawnedPollers[0]!.emitExit(1);
     await expect(started).rejects.toThrow(/exited with code 1/);
   });
+
+  it("kills and rejects a poller that never becomes ready", async () => {
+    vi.useFakeTimers();
+    try {
+      spawnedPollers.length = 0;
+      const onFailure = vi.fn();
+      const started = startMacModifierPairShortcutProcess("alt", () => undefined, onFailure);
+      const failure = expect(started).rejects.toThrow(/timed out while starting/);
+      const poller = spawnedPollers[0]!;
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await failure;
+      expect(poller.kill).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(poller.kill).toHaveBeenLastCalledWith("SIGKILL");
+      expect(vi.getTimerCount()).toBe(0);
+
+      poller.emitExit(1);
+      expect(onFailure).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

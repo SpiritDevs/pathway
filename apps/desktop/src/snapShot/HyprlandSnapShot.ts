@@ -51,7 +51,13 @@ function run(executable: string, args: string[], signal?: AbortSignal): Promise<
     NodeChildProcess.execFile(
       executable,
       args,
-      { timeout: 20_000, maxBuffer: 128 * 1024, encoding: "utf8", ...(signal ? { signal } : {}) },
+      {
+        // Allow two minutes for consent plus the normal helper work after approval.
+        timeout: args[0] === "capture" ? 140_000 : 20_000,
+        maxBuffer: 128 * 1024,
+        encoding: "utf8",
+        ...(signal ? { signal } : {}),
+      },
       (error, stdout, stderr) => {
         if (error)
           reject(

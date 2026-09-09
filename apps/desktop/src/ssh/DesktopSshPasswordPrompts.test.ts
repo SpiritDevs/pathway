@@ -98,6 +98,7 @@ function makeElectronWindowLayer(window: ReturnType<typeof makeTestWindow>["wind
       setMain: () => Effect.void,
       clearMain: () => Effect.void,
       prepareReveal: () => Effect.succeed(false),
+      cancelPreparedReveal: () => Effect.void,
       reveal: () => Effect.void,
       sendAll: () => Effect.void,
       destroyAll: Effect.void,
