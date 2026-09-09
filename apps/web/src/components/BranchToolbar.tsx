@@ -1,3 +1,11 @@
+import { useEnvironmentQuery } from "../state/query";
+import { vcsEnvironment } from "../state/vcs";
+import { useVcsInitAction } from "../state/sourceControlActions";
+import {
+  squashAtomCommandFailure,
+  isAtomCommandInterrupted,
+} from "@spiritdevs/client-runtime/state/runtime";
+import { toastManager } from "./ui/toast";
 import { EnvironmentStorageIcon } from "./navigation/EnvironmentStorageIcon";
 import { InternalProjectWorkspace } from "./projects/InternalProjectWorkspace";
 import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
@@ -8,6 +16,7 @@ import {
   FolderGit2Icon,
   FolderGitIcon,
   FolderIcon,
+  GitBranchPlusIcon,
   HistoryIcon,
   MonitorIcon,
   PlusIcon,
@@ -81,6 +90,9 @@ interface MobileRunContextSelectorProps {
   environmentLocked?: boolean | undefined;
   envLocked: boolean;
   envModeLocked: boolean;
+  repositoryReady: boolean;
+  onInitializeGit: (() => void) | undefined;
+  initializingGit: boolean;
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[] | undefined;
   showEnvironmentPicker: boolean;
@@ -97,6 +109,9 @@ interface MobileRunContextSelectorProps {
 const MobileRunContextSelector = memo(function MobileRunContextSelector({
   envLocked,
   envModeLocked,
+  repositoryReady,
+  onInitializeGit,
+  initializingGit,
   environmentId,
   availableEnvironments,
   showEnvironmentPicker,
@@ -226,43 +241,54 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
         ) : null}
         <MenuGroup>
           <MenuGroupLabel>Workspace</MenuGroupLabel>
-          <MenuRadioGroup
-            value={effectiveEnvMode}
-            onValueChange={(value) => {
-              if (value === "previous-worktree") {
-                onUsePreviousWorktree();
-                return;
-              }
-              onEnvModeChange(value as EnvMode);
-            }}
-          >
-            <MenuRadioItem disabled={envModeLocked} value="local">
-              <span className="flex min-w-0 items-center gap-1.5">
-                {activeWorktreePath ? (
-                  <FolderGitIcon className="size-3" />
-                ) : (
-                  <FolderIcon className="size-3" />
-                )}
-                <span className="min-w-0 truncate">
-                  {resolveCurrentWorkspaceLabel(activeWorktreePath)}
-                </span>
-              </span>
-            </MenuRadioItem>
-            <MenuRadioItem disabled={envModeLocked} value="worktree">
-              <span className="flex min-w-0 items-center gap-1.5">
-                <FolderGit2Icon className="size-3" />
-                <span className="min-w-0 truncate">{resolveEnvModeLabel("worktree")}</span>
-              </span>
-            </MenuRadioItem>
-            {previousWorktreeLabel ? (
-              <MenuRadioItem disabled={envModeLocked} value="previous-worktree">
+          {repositoryReady ? (
+            <MenuRadioGroup
+              value={effectiveEnvMode}
+              onValueChange={(value) => {
+                if (value === "previous-worktree") {
+                  onUsePreviousWorktree();
+                  return;
+                }
+                onEnvModeChange(value as EnvMode);
+              }}
+            >
+              <MenuRadioItem disabled={envModeLocked} value="local">
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <HistoryIcon className="size-3" />
-                  <span className="min-w-0 truncate">{previousWorktreeLabel}</span>
+                  {activeWorktreePath ? (
+                    <FolderGitIcon className="size-3" />
+                  ) : (
+                    <FolderIcon className="size-3" />
+                  )}
+                  <span className="min-w-0 truncate">
+                    {resolveCurrentWorkspaceLabel(activeWorktreePath)}
+                  </span>
                 </span>
               </MenuRadioItem>
-            ) : null}
-          </MenuRadioGroup>
+              <MenuRadioItem disabled={envModeLocked} value="worktree">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <FolderGit2Icon className="size-3" />
+                  <span className="min-w-0 truncate">{resolveEnvModeLabel("worktree")}</span>
+                </span>
+              </MenuRadioItem>
+              {previousWorktreeLabel ? (
+                <MenuRadioItem disabled={envModeLocked} value="previous-worktree">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <HistoryIcon className="size-3" />
+                    <span className="min-w-0 truncate">{previousWorktreeLabel}</span>
+                  </span>
+                </MenuRadioItem>
+              ) : null}
+            </MenuRadioGroup>
+          ) : (
+            <MenuItem disabled={!onInitializeGit || initializingGit} onClick={onInitializeGit}>
+              <GitBranchPlusIcon className="size-3" />
+              {initializingGit
+                ? "Initializing..."
+                : onInitializeGit
+                  ? "Initialize Git"
+                  : "Checking repository..."}
+            </MenuItem>
+          )}
         </MenuGroup>
       </MenuPopup>
     </Menu>
@@ -472,6 +498,28 @@ export const BranchToolbar = memo(function BranchToolbar({
   // A worktree is cut from a repository, so picking one on a rootless project asks for a directory
   // first and applies the mode once there is one. Nothing needs re-reading afterwards: the mode is
   // draft state, and the send path resolves the root again anyway (`ChatView.tsx:5134`).
+  const repositoryCwd = activeProject?.workspaceRoot ?? null;
+  const repositoryStatus = useEnvironmentQuery(
+    repositoryCwd ? vcsEnvironment.status({ environmentId, input: { cwd: repositoryCwd } }) : null,
+  );
+  const initScope = useMemo(
+    () => ({ environmentId, cwd: repositoryCwd }),
+    [environmentId, repositoryCwd],
+  );
+  const initAction = useVcsInitAction(initScope);
+  const initializeGit = useCallback(() => {
+    void initAction.run().then((result) => {
+      if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Git initialization failed",
+        description: error instanceof Error ? error.message : "Unable to initialize Git.",
+      });
+    });
+  }, [initAction]);
+  const repositoryReady = repositoryStatus.data?.isRepo === true;
+  const repositoryMissing = repositoryStatus.data?.isRepo === false;
   const { isRootless: isRootlessProject, ensureWorkspaceRoot } =
     useEnsureProjectWorkspace(activeProject);
   const handleEnvModeChange = useCallback(
@@ -565,6 +613,9 @@ export const BranchToolbar = memo(function BranchToolbar({
       <div className="flex w-full flex-col" data-thread-panel-run-context>
         {panelSection !== "branch" && !internalOnly ? (
           <BranchToolbarEnvModeSelector
+            repositoryReady={repositoryReady}
+            onInitializeGit={repositoryMissing ? initializeGit : undefined}
+            initializingGit={initAction.isPending}
             displayMode="panel"
             envLocked={envModeLocked}
             effectiveEnvMode={effectiveEnvMode}
@@ -610,6 +661,9 @@ export const BranchToolbar = memo(function BranchToolbar({
     >
       {isMobile && showGitControls && !internalOnly ? (
         <MobileRunContextSelector
+          repositoryReady={repositoryReady}
+          onInitializeGit={repositoryMissing ? initializeGit : undefined}
+          initializingGit={initAction.isPending}
           envLocked={envLocked}
           envModeLocked={envModeLocked}
           environmentId={environmentId}
@@ -651,6 +705,9 @@ export const BranchToolbar = memo(function BranchToolbar({
           )}
           {showGitControls && !internalOnly ? (
             <BranchToolbarEnvModeSelector
+              repositoryReady={repositoryReady}
+              onInitializeGit={repositoryMissing ? initializeGit : undefined}
+              initializingGit={initAction.isPending}
               envLocked={envModeLocked}
               effectiveEnvMode={effectiveEnvMode}
               activeWorktreePath={activeWorktreePath}

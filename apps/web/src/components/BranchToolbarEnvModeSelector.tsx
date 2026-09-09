@@ -1,4 +1,10 @@
-import { FolderGit2Icon, FolderGitIcon, FolderIcon, HistoryIcon } from "lucide-react";
+import {
+  GitBranchPlusIcon,
+  FolderGit2Icon,
+  FolderGitIcon,
+  FolderIcon,
+  HistoryIcon,
+} from "lucide-react";
 import { memo, useMemo } from "react";
 import { cn } from "../lib/utils";
 import {
@@ -30,6 +36,9 @@ import { Button } from "./ui/button";
 export const PREVIOUS_WORKTREE_SELECT_VALUE = "previous-worktree";
 
 interface BranchToolbarEnvModeSelectorProps {
+  repositoryReady?: boolean;
+  onInitializeGit?: (() => void) | undefined;
+  initializingGit?: boolean;
   envLocked: boolean;
   effectiveEnvMode: EnvMode;
   activeWorktreePath: string | null;
@@ -44,6 +53,9 @@ interface BranchToolbarEnvModeSelectorProps {
 }
 
 export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSelector({
+  repositoryReady = true,
+  onInitializeGit,
+  initializingGit = false,
   envLocked,
   effectiveEnvMode,
   activeWorktreePath,
@@ -105,7 +117,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
 
     if (!workspacePath) return lockedRow;
 
-    if (displayMode === "panel" && !activeWorktreePath && onMoveToWorktree) {
+    if (displayMode === "panel" && !activeWorktreePath && onMoveToWorktree && repositoryReady) {
       return (
         <div className="flex w-full items-center gap-1">
           <Tooltip>
@@ -146,6 +158,11 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
       modal={false}
       value={effectiveEnvMode}
       onValueChange={(value: string | null) => {
+        if (value === "initialize-git") {
+          onInitializeGit?.();
+          return;
+        }
+        if (!repositoryReady) return;
         if (value === PREVIOUS_WORKTREE_SELECT_VALUE) {
           onUsePreviousWorktree?.();
           return;
@@ -212,30 +229,45 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
       >
         <SelectGroup>
           <SelectGroupLabel>Workspace</SelectGroupLabel>
-          <SelectItem value="local">
-            <span className="inline-flex items-center gap-1.5">
-              {activeWorktreePath ? (
-                <FolderGitIcon className="size-3" />
-              ) : (
-                <FolderIcon className="size-3" />
-              )}
-              {resolveCurrentWorkspaceLabel(activeWorktreePath)}
-            </span>
-          </SelectItem>
-          <SelectItem value="worktree">
-            <span className="inline-flex items-center gap-1.5">
-              <FolderGit2Icon className="size-3" />
-              {resolveEnvModeLabel("worktree")}
-            </span>
-          </SelectItem>
-          {showPreviousWorktree && previousWorktreeLabel ? (
-            <SelectItem value={PREVIOUS_WORKTREE_SELECT_VALUE}>
+          {repositoryReady ? (
+            <>
+              <SelectItem value="local">
+                <span className="inline-flex items-center gap-1.5">
+                  {activeWorktreePath ? (
+                    <FolderGitIcon className="size-3" />
+                  ) : (
+                    <FolderIcon className="size-3" />
+                  )}
+                  {resolveCurrentWorkspaceLabel(activeWorktreePath)}
+                </span>
+              </SelectItem>
+              <SelectItem value="worktree">
+                <span className="inline-flex items-center gap-1.5">
+                  <FolderGit2Icon className="size-3" />
+                  {resolveEnvModeLabel("worktree")}
+                </span>
+              </SelectItem>
+              {showPreviousWorktree && previousWorktreeLabel ? (
+                <SelectItem value={PREVIOUS_WORKTREE_SELECT_VALUE}>
+                  <span className="inline-flex items-center gap-1.5">
+                    <HistoryIcon className="size-3" />
+                    {previousWorktreeLabel}
+                  </span>
+                </SelectItem>
+              ) : null}
+            </>
+          ) : (
+            <SelectItem value="initialize-git" disabled={!onInitializeGit || initializingGit}>
               <span className="inline-flex items-center gap-1.5">
-                <HistoryIcon className="size-3" />
-                {previousWorktreeLabel}
+                <GitBranchPlusIcon className="size-3" />
+                {initializingGit
+                  ? "Initializing..."
+                  : onInitializeGit
+                    ? "Initialize Git"
+                    : "Checking repository..."}
               </span>
             </SelectItem>
-          ) : null}
+          )}
         </SelectGroup>
       </SelectPopup>
     </Select>
