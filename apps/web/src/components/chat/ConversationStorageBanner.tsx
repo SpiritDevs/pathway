@@ -41,6 +41,7 @@ export function conversationStorageBanner({
         </Button>
       ),
     };
+  if (!storage.isStartingConversation) return null;
   if (storage.running)
     return {
       id: "storage-cleanup-running",

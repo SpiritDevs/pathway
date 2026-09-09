@@ -6,14 +6,16 @@ struct PathwayConversationStorageNotice: View {
     @State private var continued = false
     @State private var showsDashboard = false
     let threadID: String?
+    let isStartingConversation: Bool
     var chooseEnvironment: (() -> Void)?
     var onContinueAnyway: (() -> Void)?
     var onAvailabilityChanged: ((Bool) -> Void)?
 
     init(environment: PathwayCompanyEnvironment, connect: PathwayConnectClient,
-         threadID: String? = nil, chooseEnvironment: (() -> Void)? = nil, onContinueAnyway: (() -> Void)? = nil, onAvailabilityChanged: ((Bool) -> Void)? = nil) {
+         threadID: String? = nil, isStartingConversation: Bool = true, chooseEnvironment: (() -> Void)? = nil, onContinueAnyway: (() -> Void)? = nil, onAvailabilityChanged: ((Bool) -> Void)? = nil) {
         _model = State(initialValue: PathwayEnvironmentStorageModel(environment: environment, connect: connect))
         self.threadID = threadID
+        self.isStartingConversation = isStartingConversation
         self.chooseEnvironment = chooseEnvironment
         self.onContinueAnyway = onContinueAnyway
         self.onAvailabilityChanged = onAvailabilityChanged
@@ -24,7 +26,11 @@ struct PathwayConversationStorageNotice: View {
     }
 
     private var blocksSending: Bool {
-        (model.hasCurrentSnapshot && model.snapshot?.critical == true && !continued) || reclaimed != nil
+        (model.hasCurrentSnapshot && showsCriticalStorage) || reclaimed != nil
+    }
+
+    private var showsCriticalStorage: Bool {
+        isStartingConversation && model.snapshot?.critical == true && !continued
     }
 
     var body: some View {
@@ -35,7 +41,7 @@ struct PathwayConversationStorageNotice: View {
                 Button("Recreate worktree") { Task { await model.recreate(reclaimed) } }
                     .disabled(model.performingAction)
             }
-            if model.snapshot?.critical == true && !continued {
+            if showsCriticalStorage {
                 Label("\(model.environment.environment.label) is critically low on storage", systemImage: "externaldrive.badge.exclamationmark")
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
                 if !model.hasCurrentSnapshot {
@@ -61,17 +67,17 @@ struct PathwayConversationStorageNotice: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if let job = model.snapshot?.runningJob {
+            if isStartingConversation, let job = model.snapshot?.runningJob {
                 HStack {
                     ProgressView("Reclaiming worktrees…")
                     Button("Cancel") { Task { await model.cancel(job) } }
                 }.font(.caption)
             }
-            if let error = model.error, model.snapshot?.critical == true || reclaimed != nil {
+            if let error = model.error, showsCriticalStorage || reclaimed != nil {
                 Text(error).font(.caption).foregroundStyle(.orange)
             }
         }
-        .padding(model.snapshot?.critical == true && !continued || reclaimed != nil ? 12 : 0)
+        .padding(showsCriticalStorage || reclaimed != nil ? 12 : 0)
         .onChange(of: blocksSending, initial: true) { _, blocked in
             onAvailabilityChanged?(!blocked)
         }
@@ -79,7 +85,7 @@ struct PathwayConversationStorageNotice: View {
             while !Task.isCancelled {
                 model.setVisibility(cloud: appModel.cloud)
                 await model.refresh()
-                if model.snapshot?.critical == true {
+                if isStartingConversation && model.snapshot?.critical == true {
                     let ids = model.snapshot?.emergencyWorktreeIDs ?? []
                     if !model.performingAction { await model.prepare(mode: "emergency", ids: ids) }
                 } else { continued = false }

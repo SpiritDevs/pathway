@@ -34,7 +34,7 @@ Cleanup runs on that environment even when the dashboard is closed. Each environ
 
 The default warning limits are **20 GB or 10% available**. The default critical limits are **10 GB or 5% available**. Either limit can trigger the corresponding warning. Adjust them in the environment's policy.
 
-Pathway shows low-storage status outside this dashboard and alerts you when an environment crosses a threshold. When a conversation targets a critically low machine, it offers **Clean up**, **Choose another environment**, and **Continue anyway**.
+Pathway shows low-storage status outside this dashboard and alerts you when an environment crosses a threshold. Before a new conversation starts on a critically low machine, it offers **Clean up**, **Choose another environment**, and **Continue anyway**. Once the conversation starts, this prompt stays hidden and low storage does not block follow-up messages.
 
 The conversation cleanup action shows an estimate before you click. It reclaims the oldest eligible worktrees until available space exceeds both warning limits. It can bypass the scheduled age limit, but retains the other protections. It keeps your draft and does not send your message. Emergency cleanup always requires your click. Scheduled tasks continue under their existing scheduling rules.
 

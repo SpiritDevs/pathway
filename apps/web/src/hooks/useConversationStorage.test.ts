@@ -89,7 +89,7 @@ const replicas = new Map(
 let snapshot: StorageSnapshot | null;
 let snapshotError: string | null;
 let preview: StoragePreview;
-const input = () => ({ environmentId, threadId, enabled: true });
+const input = () => ({ environmentId, threadId, enabled: true, isStartingConversation: true });
 const render = (override = {}) => {
   reactHookHarness.beginRender();
   return useConversationStorage({ ...input(), ...override });
@@ -268,13 +268,27 @@ describe("conversation storage", () => {
       input: { environmentId, input: { mode: "emergency", worktreeIds: ["eligible"] } },
     });
   });
-  it("requires an explicit choice for critical storage on drafts and existing threads", () => {
+  it("requires an explicit choice for critical storage on new conversations", () => {
     expect(render().canSend).toBe(false);
     render().allow();
     expect(render().canSend).toBe(true);
     expect(render({ threadId: ThreadId.make("other") }).canSend).toBe(false);
     expect(render({ environmentId: EnvironmentId.make("other") }).canSend).toBe(false);
     expect(mocks.start).not.toHaveBeenCalled();
+  });
+  it("stops gating and previewing cleanup once the conversation starts, including after reopening", () => {
+    expect(render().canSend).toBe(false);
+    mocks.query.mockClear();
+    const started = render({ isStartingConversation: false });
+    const blocked = vi.fn();
+    expect(started.allowed).toBe(true);
+    expect(started.checkCanSend(blocked)).toBe(true);
+    expect(blocked).not.toHaveBeenCalled();
+    expect(mocks.query.mock.calls.some(([atom]) => atom?.type === "preview")).toBe(false);
+
+    reactHookHarness.reset();
+    expect(render({ isStartingConversation: false }).canSend).toBe(true);
+    expect(render({ threadId: ThreadId.make("new-draft") }).canSend).toBe(false);
   });
   it("checks imperative responses and recovery actions again after permission or workspace state changes", () => {
     const blocked = vi.fn();
@@ -350,6 +364,7 @@ describe("conversation storage", () => {
     };
     render().allow();
     expect(render().canSend).toBe(false);
+    expect(render({ isStartingConversation: false }).canSend).toBe(false);
     await render().recreateWorktree();
     expect(mocks.recreate).toHaveBeenCalledExactlyOnceWith({ environmentId, input: { threadId } });
     expect(mocks.start).not.toHaveBeenCalled();
