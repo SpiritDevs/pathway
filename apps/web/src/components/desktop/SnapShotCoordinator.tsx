@@ -21,7 +21,11 @@ import {
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useClientSettings } from "../../hooks/useSettings";
 import { readThreadShell } from "../../state/entities";
-import { compressImageToByteLimit, dataUrlToFile } from "../../lib/imageCompression";
+import {
+  MAX_STASH_IMAGE_DATA_URL_CHARS,
+  compressImageToByteLimit,
+  dataUrlToFile,
+} from "../../lib/imageCompression";
 import { resolveThreadActionProjectRef } from "../../lib/chatThreadActions";
 import {
   beginSnapShotAnimation,
@@ -66,6 +70,9 @@ export function resolveExistingSnapShotTarget(
 }
 
 const NEXT_PAINT_FALLBACK_MS = 100;
+// Leave room for the data URL prefix when the capture is persisted in browser storage.
+const DRAFT_SNAPSHOT_MAX_IMAGE_BYTES =
+  Math.floor((MAX_STASH_IMAGE_DATA_URL_CHARS - "data:image/png;base64,".length) / 4) * 3;
 
 export async function beginSnapShotAnimationWhenReady(
   id: string,
@@ -169,7 +176,10 @@ export async function deliverSnapShot(
   const capture = await bridge.readSnapShot(item.id);
   assertAccountCurrent();
   const original = dataUrlToFile(capture.dataUrl, capture.name, capture.mimeType);
-  const compressed = await compressImageToByteLimit(original, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES);
+  const compressed = await compressImageToByteLimit(
+    original,
+    Math.min(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES, DRAFT_SNAPSHOT_MAX_IMAGE_BYTES),
+  );
   if (!compressed.ok) {
     finishSnapShotAnimation(item.id);
     throw new Error("The captured window is too large to attach.");

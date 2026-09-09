@@ -96,6 +96,7 @@ const FLASH_ANIMATION_DURATION_MS = 180;
 const FLASH_STATIC_DURATION_MS = 60;
 const FLASH_FRAME_INTERVAL_MS = 16;
 const FLASH_PEAK_OPACITY = 0.08;
+const PENDING_CAPTURE_READ_CONCURRENCY = 8;
 const MAC_SCREEN_CAPTURE_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 const MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE =
@@ -1725,16 +1726,18 @@ export const make = Effect.gen(function* () {
             (name) =>
               fileSystem.readFileString(path.join(captureDirectory, name)).pipe(
                 Effect.flatMap(decodePendingCaptureJson),
+                Effect.map((capture) =>
+                  capture.ownerUserId === ownerUserId ? capture : undefined,
+                ),
                 Effect.orElseSucceed(() => undefined),
               ),
-            { concurrency: "unbounded" },
+            { concurrency: PENDING_CAPTURE_READ_CONCURRENCY },
           ),
         ),
         Effect.map((captures) =>
           isCurrentAccount(ownerUserId, revision)
             ? captures
                 .filter((capture) => capture !== undefined)
-                .filter((capture) => capture.ownerUserId === ownerUserId)
                 .sort((left, right) =>
                   left.source.capturedAt.localeCompare(right.source.capturedAt),
                 )
@@ -1801,13 +1804,8 @@ export const make = Effect.gen(function* () {
         });
         if (!isCurrentAccount(ownerUserId, revision))
           return yield* new DesktopSnapShotError({ operation: "acknowledge", captureId: id });
-        yield* Effect.all(
-          [
-            fileSystem.remove(path.join(captureDirectory, `${id}.json`), { force: true }),
-            fileSystem.remove(path.join(captureDirectory, `${id}.png`), { force: true }),
-          ],
-          { concurrency: "unbounded", discard: true },
-        );
+        yield* fileSystem.remove(path.join(captureDirectory, `${id}.png`), { force: true });
+        yield* fileSystem.remove(path.join(captureDirectory, `${id}.json`), { force: true });
       }).pipe(
         Effect.mapError(
           (cause) => new DesktopSnapShotError({ operation: "acknowledge", captureId: id, cause }),

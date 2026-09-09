@@ -855,9 +855,9 @@ it.effect(
           [ids[0]],
         );
         yield* restarted.acknowledge(ids[0]!);
-        assert.deepEqual(removed.sort(), [
-          `/state/snap-shots/${ids[0]}.json`,
+        assert.deepEqual(removed, [
           `/state/snap-shots/${ids[0]}.png`,
+          `/state/snap-shots/${ids[0]}.json`,
         ]);
       }),
     ).pipe(
@@ -1064,7 +1064,7 @@ it.effect("reads and acknowledges queued captures through Effect services", () =
       assert.strictEqual(capture.dataUrl, "data:image/png;base64,AQID");
 
       yield* service.acknowledge(captureId);
-      assert.deepEqual(removed.sort(), [imagePath, metadataPath].sort());
+      assert.deepEqual(removed, [imagePath, metadataPath]);
     }),
   ).pipe(Effect.provide(layer));
 });
