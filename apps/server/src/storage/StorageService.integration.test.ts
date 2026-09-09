@@ -178,6 +178,33 @@ describe("storage service lifecycle", () => {
           );
           const first = yield* service.snapshot;
           expect(first.threads[0]?.hasMessages).toBe(false);
+          const orphan = NodePath.join(value.dir, "orphan");
+          yield* Effect.promise(() => git(value.root, ["worktree", "add", "--detach", orphan]));
+          yield* Effect.promise(() =>
+            NodeFSP.writeFile(NodePath.join(orphan, "draft"), "Unsaved work"),
+          );
+          invalidateStorageInventory();
+          const review = yield* service.preview({ mode: "manual", worktreeIds: [orphan] });
+          expect(review.items[0]?.blockers).toContain("No preserved branch");
+          expect(review.items[0]?.blockers).toContain("Uncommitted or untracked files");
+          expect(review.items[0]?.estimatedBytes).toBeGreaterThan(0);
+          expect(review.items[0]?.gitStatus).toContain("draft");
+          expect(
+            (yield* service.preview({ mode: "manual", worktreeIds: [orphan], force: true }))
+              .items[0]?.eligible,
+          ).toBe(true);
+          expect(
+            (yield* service.preview({ mode: "scheduled", worktreeIds: [orphan], force: true }))
+              .items[0]?.eligible,
+          ).toBe(false);
+
+          const forced = yield* service.start({
+            mode: "manual",
+            worktreeIds: [orphan],
+            force: true,
+          });
+          expect((yield* service.waitForJob(forced.id)).items[0]?.status).toBe("removed");
+          yield* Effect.promise(() => NodeFSP.access(value.worktree));
           const since = first.threads[0]!.eligibleSince!;
           expect(since).not.toBeNull();
           const later = Date.parse(since) + 31 * 86_400_000;

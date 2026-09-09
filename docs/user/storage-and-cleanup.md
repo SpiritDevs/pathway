@@ -47,3 +47,11 @@ Cleanup history records manual and scheduled runs for each environment. Successf
 **Cancel remaining** stops before the next worktree. It cannot restore worktrees already removed. If cleanup cannot recover enough space, use the remaining blockers and disk readings to decide what to clean up next.
 
 The main Threads table lists threads with existing Git worktrees. It defaults to archived and settled threads; select Snoozed or All threads to include snoozed worktrees. Below it, switch between Unlinked worktrees, Empty threads (no user messages), and Archived threads. These lists follow the selected environment. Older environments that do not report whether a thread has messages cannot populate the Empty threads list until updated.
+
+### Inspect an unlinked worktree
+
+Open its three-dot menu and choose **Review** to measure its disk usage and check cleanup eligibility. Large worktrees can exceed the bounded measurement limit and remain unmeasured.
+
+**Ask AI** opens a conversation in that environment with a worktree report attached. The report includes its path, repository, branch or detached HEAD, and any size or review details already available. Opening the conversation does not wait for a new disk scan or Git review; the AI can inspect details when needed. Type your question in the empty message input; nothing is sent automatically.
+
+**Delete** opens a separate review showing modified or untracked files and other risks. You can choose **Ask AI** from this dialog too. **Force delete** permanently removes the unlinked worktree, including uncommitted and ignored files, even without a preserved branch. Repository roots, locks, and active-use protections still prevent removal. Ordinary Review and automatic cleanup retain their existing protections.

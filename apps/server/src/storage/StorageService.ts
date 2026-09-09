@@ -65,7 +65,7 @@ async function git(cwd: string, args: string[]): Promise<string> {
 export async function inspectStorageGitWorktree(
   path: string,
   root: string,
-  branch: string,
+  branch: string | null,
 ): Promise<string[]> {
   const blockers: string[] = [];
   if ((await NodeFSP.stat(path)).dev !== (await NodeFSP.stat(NodePath.dirname(path))).dev)
@@ -84,6 +84,7 @@ export async function inspectStorageGitWorktree(
     blockers.push("Not an unlocked linked worktree");
   if (
     registered &&
+    branch !== null &&
     !registered.includes(`\nbranch refs/heads/${branch}\n`) &&
     !registered.endsWith(`\nbranch refs/heads/${branch}`)
   )
@@ -98,10 +99,16 @@ export async function inspectStorageGitWorktree(
 export async function removeStorageGitWorktree(
   path: string,
   root: string,
-  branch: string,
+  branch: string | null,
+  force = false,
 ): Promise<void> {
   const blockers = await inspectStorageGitWorktree(path, root, branch);
-  if (blockers.length) throw new Error(blockers.join("; "));
+  const blocking = force
+    ? blockers.filter(
+        (reason) => !["Uncommitted or untracked files", "Unpublished commits"].includes(reason),
+      )
+    : blockers;
+  if (blocking.length) throw new Error(blocking.join("; "));
   await git(root, ["worktree", "remove", "--force", "--", path]);
 }
 
@@ -140,7 +147,7 @@ const Removal = Schema.Struct({
   phase: Schema.optional(Schema.Literals(["pending", "removed"])),
   path: Schema.String,
   root: Schema.String,
-  branch: Schema.String,
+  branch: Schema.NullOr(Schema.String),
   threadIds: Schema.Array(Schema.String),
   reclaimedAt: Schema.String,
 });
@@ -668,26 +675,68 @@ export const makeStorageService = Effect.gen(function* () {
         blockers.push("Retention period has not elapsed");
       if (!worktree.projectRoot) blockers.push("Repository root unavailable");
       if (!worktree.branch) blockers.push("No preserved branch");
-      if (blockers.length === 0) {
+      if (worktree.projectRoot && !worktree.removed) {
         try {
           blockers.push(
             ...(await inspectStorageGitWorktree(
               worktree.path,
               worktree.projectRoot!,
-              worktree.branch!,
+              worktree.branch,
             )),
           );
         } catch {
           blockers.push("Could not verify worktree safety");
         }
       }
+      const forceAllowed =
+        input.force === true &&
+        input.mode === "manual" &&
+        worktree.kind === "orphan" &&
+        worktree.threadIds.length === 0;
+      const effectiveBlockers = forceAllowed
+        ? blockers.filter(
+            (reason) =>
+              ![
+                "No preserved branch",
+                "Uncommitted or untracked files",
+                "Unpublished commits",
+              ].includes(reason),
+          )
+        : blockers;
+      const estimatedBytes =
+        input.mode === "manual" && !worktree.removed
+          ? await measureStorageDirectory(worktree.path)
+          : worktree.estimatedBytes;
+      if (input.mode === "manual" && !worktree.removed) {
+        const measuredAt = iso();
+        sizes.set(worktree.path, { bytes: estimatedBytes, at: measuredAt });
+        if (cached)
+          cached = {
+            ...cached,
+            worktrees: cached.worktrees.map((row) =>
+              row.id === worktree.id ? { ...row, estimatedBytes, measuredAt } : row,
+            ),
+          };
+      }
+      const gitStatus =
+        input.mode === "manual"
+          ? await git(worktree.path, ["status", "--short", "--untracked-files=all"]).catch(
+              () => "Unable to read Git status",
+            )
+          : "";
+      const head =
+        input.mode === "manual"
+          ? await git(worktree.path, ["rev-parse", "HEAD"]).catch(() => "Unknown")
+          : "";
       items.push({
+        gitStatus: gitStatus.slice(0, 16000),
+        head: head.trim(),
         worktreeId: id,
         path: worktree.path,
         threadIds: worktree.threadIds,
-        estimatedBytes: worktree.estimatedBytes,
-        eligible: blockers.length === 0,
-        blockers,
+        estimatedBytes,
+        eligible: effectiveBlockers.length === 0,
+        blockers: effectiveBlockers,
       });
     }
     return {
@@ -723,10 +772,14 @@ export const makeStorageService = Effect.gen(function* () {
         let result: (typeof StorageJob.Type)["items"][number] = item;
         try {
           release = leaseStorageWorkspace(item.worktreeId);
-          const checked = await preview({ mode: job.mode, worktreeIds: [item.worktreeId] });
+          const checked = await preview({
+            mode: job.mode,
+            worktreeIds: [item.worktreeId],
+            force: job.force === true,
+          });
           const candidate = checked.items[0];
           const worktree = cached?.worktrees.find((entry) => entry.id === item.worktreeId);
-          if (!candidate?.eligible || !worktree?.projectRoot || !worktree.branch) {
+          if (!candidate?.eligible || !worktree?.projectRoot || (!worktree.branch && !job.force)) {
             result = {
               ...item,
               status: "skipped",
@@ -779,7 +832,12 @@ export const makeStorageService = Effect.gen(function* () {
                 await save();
                 break;
               }
-              await removeStorageGitWorktree(worktree.path, worktree.projectRoot, worktree.branch);
+              await removeStorageGitWorktree(
+                worktree.path,
+                worktree.projectRoot,
+                worktree.branch,
+                job.force === true,
+              );
               markStorageWorkspaceRemoved(worktree.path, true);
               state = {
                 ...state,
@@ -879,6 +937,7 @@ export const makeStorageService = Effect.gen(function* () {
         const job: typeof StorageJob.Type = {
           id,
           mode: input.mode,
+          force: input.force === true && input.mode === "manual",
           status: "running",
           startedAt: iso(),
           finishedAt: null,
@@ -1046,7 +1105,7 @@ export const makeStorageService = Effect.gen(function* () {
     recreate: (threadId) =>
       io(async () => {
         const removal = state.removals.find((entry) => entry.threadIds.includes(threadId));
-        if (!removal || removal.phase === "pending")
+        if (!removal || removal.phase === "pending" || !removal.branch)
           throw new Error("No reclaimed worktree is recorded for this thread.");
         const current = await run(threads.getShellSnapshot());
         const target = [...current.threads, ...current.archivedThreads].find(

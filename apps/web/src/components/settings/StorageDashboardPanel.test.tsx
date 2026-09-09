@@ -15,9 +15,14 @@ import { ConversationFolderDeleteDialog } from "./ConversationFolderDeleteDialog
 const state = vi.hoisted(() => ({
   entries: [] as unknown[],
   refresh: vi.fn(),
+  newThread: vi.fn(),
+  addImage: vi.fn(),
+  setContext: vi.fn(),
+  command: vi.fn(),
   deleteThread: vi.fn(),
   confirmAndDeleteThread: vi.fn(),
 }));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => "company" }));
 vi.mock("react", async (original) => {
   const actual = await original<typeof import("react")>();
   const { reactHookHarness } = await import("../../test/reactHookHarness");
@@ -35,7 +40,13 @@ vi.mock("../../lib/storagePreferences", () => ({
 }));
 vi.mock("../../state/entities", () => ({ useActiveEnvironmentId: () => "remote-machine" }));
 vi.mock("../../state/server", () => ({ serverEnvironment: {} }));
-vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
+vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.command }));
+vi.mock("../../composerDraftStore", () => ({
+  useComposerDraftStore: {
+    getState: () => ({ addImage: state.addImage, setDraftThreadContext: state.setContext }),
+  },
+}));
+vi.mock("../../hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => state.newThread }));
 vi.mock("../../hooks/useThreadActions", () => ({
   useThreadActions: () => ({
     deleteThread: state.deleteThread,
@@ -178,4 +189,91 @@ it("defaults to the current environment and switches the thread list using a car
       (element) => element.props.entry === other && element.props.selected === true,
     ),
   ).not.toBeNull();
+});
+
+it("offers review, AI context, and deletion in the unlinked worktree menu", () => {
+  state.entries = [
+    {
+      environment: { environmentId, label: "Remote Mac", connection: { phase: "connected" } },
+      snapshot: {
+        threads: [],
+        worktrees: [{ ...worktree, kind: "orphan", threadIds: [] }],
+        jobs: [],
+        volumes: [],
+        policy: DEFAULT_STORAGE_POLICY,
+      },
+      error: null,
+      isLoading: false,
+    },
+  ];
+  const tree = render();
+  expect(
+    visitElements(
+      tree,
+      (element) => element.props["aria-label"] === `Actions for ${worktree.path}`,
+    ),
+  ).not.toBeNull();
+  for (const label of ["Review", "Ask AI", "Delete…"]) {
+    expect(
+      visitElements(
+        tree,
+        (element) =>
+          element.props.children === label && typeof element.props.onClick === "function",
+      ),
+    ).not.toBeNull();
+  }
+});
+
+it("opens an AI conversation with a worktree report queued for normal composer upload instead of filling the input", async () => {
+  state.entries = [
+    {
+      environment: { environmentId, label: "Remote Mac", connection: { phase: "connected" } },
+      snapshot: {
+        threads: [],
+        worktrees: [{ ...worktree, kind: "orphan", threadIds: [] }],
+        jobs: [],
+        volumes: [],
+        policy: DEFAULT_STORAGE_POLICY,
+      },
+      error: null,
+      isLoading: false,
+    },
+  ];
+  state.command.mockResolvedValue({
+    _tag: "Success",
+    value: {
+      items: [
+        {
+          estimatedBytes: 400,
+          head: "abc123",
+          gitStatus: " M file.txt",
+          blockers: ["No preserved branch"],
+        },
+      ],
+    },
+  });
+  state.newThread.mockResolvedValue({ draftId: "draft", threadId: "thread" });
+  const action = visitElements(
+    render(),
+    (element) => element.props.children === "Ask AI" && typeof element.props.onClick === "function",
+  );
+  (action!.props.onClick as () => void)();
+  await vi.waitFor(() => expect(state.addImage).toHaveBeenCalledOnce());
+  expect(state.newThread).toHaveBeenCalledWith(
+    { environmentId, projectId: null },
+    { forceNew: true },
+  );
+  expect(state.addImage).toHaveBeenCalledWith(
+    "draft",
+    expect.objectContaining({
+      type: "file",
+      name: "Worktree - notes.md",
+      file: expect.any(File),
+    }),
+  );
+  const report = await state.addImage.mock.calls[0]![1].file.text();
+  expect(report).toContain(worktree.path);
+  expect(report).toContain("Not checked; inspect Git status");
+  expect(report).toContain("Disk usage: 400 B");
+  expect(state.command).not.toHaveBeenCalled();
 });
