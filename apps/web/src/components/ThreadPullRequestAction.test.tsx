@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { ProjectId } from "@spiritdevs/contracts";
 import { makeThreadFixture } from "../test-fixtures";
 import { ThreadPullRequestAction } from "./ThreadPullRequestAction";
 
@@ -47,6 +48,7 @@ const thread = {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.query.mockImplementation((target) => ({
+    project: { id: ProjectId.make(`project-${target.attachedPullRequest.number}`) },
     data: {
       ...target.attachedPullRequest,
       title: "Feature",
@@ -68,6 +70,10 @@ describe("ThreadPullRequestAction", () => {
     expect(html).toContain("PR #110 - Merged");
     expect(html).toContain("PR #111 - Open");
     expect(mocks.row.mock.calls.map(([props]) => props.pr.number)).toEqual([110, 111]);
+    expect(mocks.row.mock.calls.map(([props]) => props.project.id)).toEqual([
+      "project-110",
+      "project-111",
+    ]);
   });
   it("deduplicates the branch PR and hides explicitly unlinked branch PRs", () => {
     const branch = {

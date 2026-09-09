@@ -101,6 +101,20 @@ enum PathwayThreadChangeRequestResolver {
         }
     }
 
+    static func projectID(for attachment: PathwayPullRequestAttachment, thread: PathwayAgentThread,
+                          bindings: [PathwayCompanyEnvironmentBinding]) -> String? {
+        guard let reference = PathwayAttachedPullRequestReference(attachment) else { return nil }
+        let matches = bindings.filter {
+            guard $0.companyId == thread.companyId, $0.binding.environmentId == thread.environmentId,
+                  $0.binding.status == "active", let identity = $0.binding.repositoryIdentity?.objectValue,
+                  let host = identity["canonicalKey"]?.stringValue?.split(separator: "/").first else { return false }
+            let repository = identity["displayName"]?.stringValue
+                ?? [identity["owner"]?.stringValue, identity["name"]?.stringValue].compactMap { $0 }.joined(separator: "/")
+            return host.lowercased() == reference.host && repository.lowercased() == reference.repository
+        }
+        return (matches.first { $0.binding.localProjectId == thread.shell.projectId } ?? matches.first)?.binding.localProjectId
+    }
+
     static func request(
         for thread: PathwayAgentThread,
         environment: PathwayCompanyEnvironment,
@@ -109,7 +123,7 @@ enum PathwayThreadChangeRequestResolver {
     ) -> Request? {
         if let attachment = selectedAttachment ?? thread.shell.linkedPullRequests.first {
             guard environment.environment.descriptor.capabilities?["pullRequests"] == .bool(true),
-                  let projectID = thread.shell.projectId,
+                  let projectID = projectID(for: attachment, thread: thread, bindings: bindings),
                   let reference = PathwayAttachedPullRequestReference(attachment) else { return nil }
             return Request(
                 method: "pullRequests.detail",
@@ -138,9 +152,10 @@ enum PathwayThreadChangeRequestResolver {
             guard !thread.isRunning,
                   let environment = environments.first(where: {
                       $0.companyId == thread.companyId && $0.environment.environmentId == thread.environmentId
-                  }),
-                  let request = request(for: thread, environment: environment, bindings: bindings) else { return nil }
+                  }) else { return nil }
             let attachments = thread.shell.linkedPullRequests
+            let request = request(for: thread, environment: environment, bindings: bindings)
+            guard request != nil || !attachments.isEmpty else { return nil }
             let requests = attachments.isEmpty ? [request] : attachments.map { attachment in
                 self.request(for: thread, environment: environment, bindings: bindings, attachment: attachment)
             }

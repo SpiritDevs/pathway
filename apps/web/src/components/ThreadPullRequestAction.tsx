@@ -1,10 +1,10 @@
-import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
+import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/shell";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { useAttachedPullRequest } from "../state/threadPullRequest";
 import { threadPullRequestAttachments } from "@spiritdevs/shared/sourceControl";
 import type { OrchestrationV2PullRequestAttachment } from "@spiritdevs/contracts";
-import { useProject, useServerConfigs } from "../state/entities";
+import { useServerConfigs } from "../state/entities";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import { ThreadDetailsPrRow } from "./chat/ThreadDetailsPrRow";
@@ -80,9 +80,7 @@ function ThreadPullRequestRow({
     { poll: true },
   );
   const openPrLink = useOpenPrLink(scopeThreadRef(thread.environmentId, thread.id));
-  const project = useProject(
-    thread.projectId ? scopeProjectRef(thread.environmentId, thread.projectId) : null,
-  );
+  const project = query.project;
   const configs = useServerConfigs();
   const detach = useAtomCommand(threadEnvironment.detachPullRequest);
   const badge = resolveThreadPrBadge({

@@ -312,7 +312,7 @@ private struct PathwayThreadPullRequestRow: View {
     @State private var confirmMerge = false
     @State private var mergeMethod = "squash"
     private var row: PathwayWorkspacePullRequestRow? {
-        guard let reference = PathwayAttachedPullRequestReference(attachment), let projectID = client.context.projectID else { return nil }
+        guard let reference = PathwayAttachedPullRequestReference(attachment), let projectID = client.context.linkedPullRequestProjectIDs[attachment.url] else { return nil }
         return .init(host: reference.host, projectId: projectID, repository: reference.repository,
             number: attachment.number, title: detail?.title ?? "#\(attachment.number)", state: detail?.state ?? "open", isDraft: detail?.isDraft ?? false, url: attachment.url)
     }
@@ -346,7 +346,7 @@ private struct PathwayThreadPullRequestRow: View {
                 }
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
             }
-            .task(id: attachment.url) { await refresh() }
+            .task(id: "\(row?.projectId ?? ""):\(client.context.supportsPullRequests)") { await refresh() }
             .confirmationDialog("Merge pull request #\(attachment.number)?", isPresented: $confirmMerge) {
                 Button("Merge using \(mergeMethod)") { Task { await merge() } }
                 Button("Cancel", role: .cancel) { }
@@ -354,7 +354,7 @@ private struct PathwayThreadPullRequestRow: View {
         }
     }
     private func refresh() async {
-        guard let row, client.context.supportsPullRequests else { return }
+        guard let row, client.context.supportsPullRequests else { error = "Live pull request status is unavailable for this attachment."; return }
         do {
             detail = try await client.call("pullRequests.detail", row.payload)
             if let methods = detail?.availableMergeMethods, !methods.contains(mergeMethod) { mergeMethod = methods.first ?? "squash" }

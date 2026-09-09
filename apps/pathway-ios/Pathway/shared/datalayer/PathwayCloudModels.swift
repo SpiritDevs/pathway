@@ -65,6 +65,7 @@ struct PathwayEnvironmentBinding: Decodable, Equatable, Identifiable, Sendable {
     let environmentId: String
     let localProjectId: String
     let localWorkspaceRoot: String
+    var repositoryIdentity: JSONValue? = nil
     let status: String
     let lastSeenAt: Double?
 }

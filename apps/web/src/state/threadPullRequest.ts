@@ -8,7 +8,10 @@ import { useAtomValue } from "@effect/atom-react";
 import { threadPullRequestAttachments } from "@spiritdevs/shared/sourceControl";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { parseChangeRequestUrl } from "../lib/openPullRequestLink";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/shell";
+import { useProjects } from "./entities";
+import { environmentProjects } from "./projects";
+import { findProjectForChangeRequest, parseChangeRequestUrl } from "../lib/openPullRequestLink";
 import { pullRequestEnvironment } from "./pullRequests";
 import { useEnvironmentQuery } from "./query";
 import { useEnvironment } from "./environments";
@@ -21,13 +24,35 @@ export interface ThreadPullRequestTarget {
   readonly attachedPullRequest: OrchestrationV2PullRequestAttachment | null | undefined;
 }
 
-export function attachedPullRequestQueryTarget(thread: ThreadPullRequestTarget | null) {
+export function attachedPullRequestProject(
+  thread: ThreadPullRequestTarget | null,
+  projects: ReadonlyArray<EnvironmentProject>,
+) {
   const attachment = thread?.attachedPullRequest;
   const link = attachment ? parseChangeRequestUrl(attachment.url) : null;
-  if (!thread?.projectId || !link || link.number !== attachment?.number) return null;
+  if (!thread || !link || link.number !== attachment?.number) return null;
+  const candidates = projects.filter((project) => project.environmentId === thread.environmentId);
+  return (
+    findProjectForChangeRequest(
+      candidates.filter((project) => project.id === thread.projectId),
+      link,
+    ) ??
+    findProjectForChangeRequest(candidates, link) ??
+    null
+  );
+}
+
+export function attachedPullRequestQueryTarget(
+  thread: ThreadPullRequestTarget | null,
+  projects: ReadonlyArray<EnvironmentProject>,
+) {
+  const attachment = thread?.attachedPullRequest;
+  const link = attachment ? parseChangeRequestUrl(attachment.url) : null;
+  const project = attachedPullRequestProject(thread, projects);
+  if (!thread || !link || !project) return null;
   return {
     environmentId: thread.environmentId,
-    input: { projectId: thread.projectId, repository: link.repository, number: link.number },
+    input: { projectId: project.id, repository: link.repository, number: link.number },
   };
 }
 
@@ -97,7 +122,9 @@ export function useAttachedPullRequest(
 ) {
   const environment = useEnvironment(thread?.environmentId ?? null);
   const supported = environment?.descriptor?.capabilities?.pullRequests === true;
-  const target = attachedPullRequestQueryTarget(thread);
+  const projects = useProjects();
+  const project = attachedPullRequestProject(thread, projects);
+  const target = attachedPullRequestQueryTarget(thread, projects);
   const query = useEnvironmentQuery(
     supported && target
       ? poll
@@ -109,6 +136,7 @@ export function useAttachedPullRequest(
   const matches = attachment && query.data && sameAttachedPullRequest(attachment, query.data);
   return {
     ...query,
+    project,
     data: matches ? query.data : null,
     error:
       query.error ??
@@ -138,11 +166,15 @@ export const attachedPullRequestsAtom = Atom.family((key: string) =>
       supported: boolean;
     };
     if (!thread) return [];
+    const projects = get(environmentProjects.projectsAtom);
     return threadPullRequestAttachments(thread).map((attachment) => {
-      const target = attachedPullRequestQueryTarget({
-        ...thread,
-        attachedPullRequest: attachment,
-      });
+      const target = attachedPullRequestQueryTarget(
+        {
+          ...thread,
+          attachedPullRequest: attachment,
+        },
+        projects,
+      );
       const result =
         supported && target
           ? get(
