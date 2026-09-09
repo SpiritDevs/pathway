@@ -80,7 +80,7 @@ describe("ComposerBannerStack", () => {
       />,
     );
 
-    expect(markup).toContain("mb-0 px-4");
+    expect(markup).toContain("-mb-2 px-8 pt-1 sm:px-10");
     expect(markup).toContain('data-presentation="lip"');
     expect(markup).toContain("min-h-8 rounded-b-none rounded-t-[14px]");
     expect(markup).not.toContain("rounded-[22px]");
