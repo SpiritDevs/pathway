@@ -34,6 +34,7 @@ const isBinding = Schema.is(EnvironmentBindingEntity);
 export function useLoadBalancedDraft(input: {
   draftId: DraftId | null;
   enabled: boolean;
+  avoidCriticalStorage?: boolean;
   weights: Readonly<Record<string, number>>;
   project: Project | null;
   projects: ReadonlyArray<Project>;
@@ -205,6 +206,7 @@ export function useLoadBalancedDraft(input: {
           })),
           Date.now(),
           draftId,
+          { avoidCriticalStorage: input.avoidCriticalStorage === true },
         )
       : null;
   const recommended = candidates.find(

@@ -1,3 +1,4 @@
+import { useStorageWorkspace } from "../storage/workspaceLease.ts";
 /**
  * TerminalManager - Terminal session orchestration service interface.
  *
@@ -1885,7 +1886,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     return yield* trySpawn(shellCandidates, spawnEnv, session, index + 1, spawnError);
   });
 
-  const startSession = Effect.fn("terminal.startSession")(function* (
+  const startSessionUnprotected = Effect.fn("terminal.startSession")(function* (
     session: TerminalSessionState,
     input: TerminalStartInput,
     eventType: "started" | "restarted",
@@ -2015,6 +2016,20 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       });
     }
   });
+
+  const startSession = (
+    session: TerminalSessionState,
+    input: TerminalStartInput,
+    eventType: "started" | "restarted",
+  ) =>
+    Effect.acquireUseRelease(
+      Effect.try({
+        try: () => useStorageWorkspace(session.worktreePath ?? session.cwd),
+        catch: (cause) => new TerminalCwdStatError({ cwd: session.cwd, cause }),
+      }),
+      () => startSessionUnprotected(session, input, eventType),
+      (release) => Effect.sync(release),
+    );
 
   const closeSession = Effect.fn("terminal.closeSession")(function* (
     threadId: string,

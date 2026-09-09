@@ -20,6 +20,7 @@ import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup } from "../ui/menu
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { TimeTrackerIndicator } from "../timeTracker/TimeTrackerIndicator";
 import { SyncStatusIndicator } from "./SyncStatusIndicator";
+import { StorageStatusIndicator } from "./StorageStatusIndicator";
 import { type WorkspaceHistoryEntry, workspaceHistoryTracker } from "./workspaceHistory.logic";
 
 const HISTORY_LONG_PRESS_MS = 500;
@@ -200,6 +201,7 @@ export function WorkspaceTopBar() {
       <WorkspaceHistoryControls />
       <div className="flex items-center gap-2">
         <ProviderUpdateLaunchNotification />
+        <StorageStatusIndicator />
         <SyncStatusIndicator />
         <TimeTrackerIndicator />
         <PathwayConnectProfileButton />

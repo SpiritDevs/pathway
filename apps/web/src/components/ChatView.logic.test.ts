@@ -17,6 +17,7 @@ import type { Thread } from "../types";
 import { makeThreadFixture } from "../test-fixtures";
 import {
   FORK_THREAD_READINESS_ERROR,
+  filterStorageEnvironmentOptions,
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   branchMismatchKey,
@@ -1370,5 +1371,46 @@ describe("pending first-send attachments", () => {
         previewUrl: "",
       },
     ]);
+  });
+});
+
+describe("storage recovery destinations", () => {
+  it("omits projectless legacy, unknown and offline environments while retaining capable ones", () => {
+    const options = ["capable", "legacy", "unknown", "offline", "missing"].map((name) => ({
+      environmentId: EnvironmentId.make(name),
+      projectId: null,
+      label: name,
+    }));
+    const environments = new Map([
+      [
+        EnvironmentId.make("capable"),
+        {
+          connection: { phase: "connected" },
+          serverConfig: { environment: { capabilities: { threadConversations: true } } },
+        },
+      ],
+      [
+        EnvironmentId.make("legacy"),
+        {
+          connection: { phase: "connected" },
+          serverConfig: { environment: { capabilities: { threadConversations: false } } },
+        },
+      ],
+      [EnvironmentId.make("unknown"), { connection: { phase: "connected" }, serverConfig: null }],
+      [
+        EnvironmentId.make("offline"),
+        {
+          connection: { phase: "offline" },
+          serverConfig: { environment: { capabilities: { threadConversations: true } } },
+        },
+      ],
+    ]);
+    expect(filterStorageEnvironmentOptions(options, environments)).toEqual([options[0]]);
+    expect(
+      filterStorageEnvironmentOptions(
+        options.map((option) => ({ ...option, projectId: ProjectId.make("project") })),
+        environments,
+      ).map((option) => option.label),
+    ).toEqual(["capable", "legacy", "unknown"]);
   });
 });

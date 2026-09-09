@@ -24,3 +24,25 @@ struct PathwayProductLink: Equatable, Sendable {
         environmentID = environment; threadID = thread
     }
 }
+
+/// Local storage alerts carry an account partition so old notifications cannot open another account's data.
+struct PathwayStorageNotificationDestination: Equatable, Sendable {
+    let account: String
+    let environmentID: String
+
+    init(account: String, environmentID: String) {
+        self.account = account
+        self.environmentID = environmentID
+    }
+
+    init?(notification: [AnyHashable: Any]) {
+        guard notification["destination"] as? String == "storage",
+              let account = notification["account"] as? String, !account.isEmpty,
+              let environment = notification["environmentId"] as? String, !environment.isEmpty else { return nil }
+        self.init(account: account, environmentID: environment)
+    }
+
+    var userInfo: [AnyHashable: Any] {
+        ["destination": "storage", "account": account, "environmentId": environmentID]
+    }
+}

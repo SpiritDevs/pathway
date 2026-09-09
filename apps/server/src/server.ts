@@ -1,3 +1,4 @@
+import * as StorageManagement from "./storage/StorageService.ts";
 import { EnvironmentHttpApi } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -479,7 +480,14 @@ const OrchestrationApplicationLayerLive = CheckpointDiffQuery.layer.pipe(
   Layer.provideMerge(OrchestrationV2RuntimeLayerLive),
 );
 
+const StorageManagementLayerLive = StorageManagement.layer.pipe(
+  Layer.provide(GitWorkflowLayerLive),
+  Layer.provide(OrchestrationApplicationLayerLive),
+  Layer.provide(TerminalLayerLive),
+);
+
 const RuntimeCoreDependenciesBaseLive = AgentAwarenessRelay.layer.pipe(
+  Layer.provideMerge(StorageManagementLayerLive),
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),
   Layer.provideMerge(PersistenceLayerLive),

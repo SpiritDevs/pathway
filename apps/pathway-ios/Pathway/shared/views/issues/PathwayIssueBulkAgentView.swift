@@ -40,7 +40,7 @@ struct PathwayIssueBulkAgentView: View {
                         Text("Investigating assigns the selected issues to this project and researches each issue using the investigation model in Issue settings.")
                             .font(.subheadline).foregroundStyle(.secondary)
                         Button("Investigate \(issues.count) \(issues.count == 1 ? "issue" : "issues")", systemImage: "sparkle.magnifyingglass") { investigate() }
-                            .disabled(busy || selectedBinding == nil)
+                            .disabled(busy || selectedBinding == nil || creation?.connectionState != .live || creation?.storageAllowsLaunch == false)
                     }
                 }
                 if let result { Section { Text(result).foregroundStyle(.secondary) } }
@@ -66,6 +66,14 @@ struct PathwayIssueBulkAgentView: View {
     private func discussionSection(_ model: PathwayAgentThreadCreationModel) -> some View {
         @Bindable var model = model
         return Section("Discuss together") {
+            if let binding = selectedBinding, let connect = appModel.connect,
+               let environment = appModel.cloud.environments.first(where: {
+                   $0.companyId == binding.companyId && $0.environment.environmentId == binding.binding.environmentId
+               }) {
+                PathwayConversationStorageNotice(environment: environment, connect: connect,
+                    onContinueAnyway: { model.continueDespiteCriticalStorage() },
+                    onAvailabilityChanged: { model.storageAllowsLaunch = $0 }).id(binding.id)
+            }
             Picker("Provider", selection: $model.selectedProviderID) {
                 ForEach(model.providers) { Text($0.name).tag($0.id) }
             }
@@ -114,6 +122,7 @@ struct PathwayIssueBulkAgentView: View {
         result = nil
         Task {
             defer { busy = false }
+            guard let creation, await creation.checkStorageBeforeLaunch() else { return }
             var started = 0
             var skipped = 0
             var failures: [String] = []

@@ -16,6 +16,28 @@ const preferences = [
   { value: 0, label: "Manual only" },
 ] as const;
 
+export function StorageAutoPlacementSetting() {
+  const settings = useClientSettings();
+  const hydrated = useClientSettingsHydrated();
+  const updateSettings = useUpdateClientSettings();
+  return (
+    <SettingsRow
+      title="Avoid critically low environments in Auto"
+      description="Prefer another eligible machine for new conversations when storage is critically low. Existing conversations stay on their environment. This is off by default."
+      control={
+        <Switch
+          aria-label="Avoid critically low environments in Auto"
+          checked={settings.loadBalancingAvoidCriticalStorage}
+          disabled={!hydrated}
+          onCheckedChange={(checked) =>
+            updateSettings({ loadBalancingAvoidCriticalStorage: checked })
+          }
+        />
+      }
+    />
+  );
+}
+
 export function LoadBalancingSettings({
   environments,
 }: {
@@ -50,6 +72,7 @@ export function LoadBalancingSettings({
           }
         />
       ) : null}
+      {settings.loadBalancingEnabled ? <StorageAutoPlacementSetting /> : null}
       {!needsAnotherMachine && settings.loadBalancingEnabled
         ? environments.map((environment) => (
             <SettingsRow

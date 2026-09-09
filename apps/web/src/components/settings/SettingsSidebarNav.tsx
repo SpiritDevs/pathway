@@ -10,7 +10,7 @@ import {
 import {
   BellIcon,
   ActivityIcon,
-  ArchiveIcon,
+  HardDriveIcon,
   ArrowLeftIcon,
   BotIcon,
   Building2Icon,
@@ -102,7 +102,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/issues-import": FileUpIcon,
   "/settings/issues-enrichment": WandSparklesIcon,
   "/settings/email": MailIcon,
-  "/settings/archived": ArchiveIcon,
+  "/settings/archived": HardDriveIcon,
   "/settings/diagnostics": ActivityIcon,
 };
 

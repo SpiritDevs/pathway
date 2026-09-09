@@ -23,6 +23,7 @@ final class PathwayAppModel {
     private(set) var authenticationState: AppAuthenticationState = .restoring
     private(set) var authenticationErrorMessage: String?
     var pendingThreadRoute: PathwayPendingThreadRoute?
+    var pendingStorageNotification: PathwayStorageNotificationDestination?
     var pendingProductLink: PathwayProductLink?
     private(set) var localStorageDirectory: URL?
     private(set) var accountID: String?

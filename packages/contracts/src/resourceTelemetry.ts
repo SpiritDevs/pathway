@@ -1,3 +1,4 @@
+import { StoragePressure } from "./storage.ts";
 import * as Schema from "effect/Schema";
 
 import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
@@ -489,6 +490,8 @@ export type ResourceTelemetryRetryResult = typeof ResourceTelemetryRetryResult.T
 
 /** Whole-host headroom, sampled on demand for placement of new threads. */
 export const HostResourcesSnapshot = Schema.Struct({
+  storagePressure: Schema.optional(StoragePressure),
+  storageSampledAt: Schema.optional(NonNegativeInt),
   sampledAt: NonNegativeInt,
   cpuUtilization: Schema.NullOr(
     Schema.Number.check(Schema.isFinite(), Schema.isBetween({ minimum: 0, maximum: 1 })),

@@ -157,6 +157,9 @@ export const LoadBalancingWeights = Schema.Record(
 
 export const ClientSettingsSchema = Schema.Struct({
   loadBalancingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  loadBalancingAvoidCriticalStorage: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   loadBalancingWeights: LoadBalancingWeights.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   threadAlerts: AlertDeliverySettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ALERT_DELIVERY_SETTINGS)),
@@ -1009,6 +1012,7 @@ export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
   loadBalancingEnabled: Schema.optionalKey(Schema.Boolean),
+  loadBalancingAvoidCriticalStorage: Schema.optionalKey(Schema.Boolean),
   loadBalancingWeights: Schema.optionalKey(LoadBalancingWeights),
   threadAlerts: Schema.optionalKey(AlertDeliverySettings),
   activeTurnSendMode: Schema.optionalKey(ActiveTurnSendMode),

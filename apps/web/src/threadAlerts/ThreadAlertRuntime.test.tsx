@@ -101,6 +101,16 @@ beforeEach(() => {
 });
 
 describe("notification click navigation", () => {
+  it("opens Storage & cleanup for a native storage alert without touching a thread notification", async () => {
+    hooks.beginRender();
+    const host = ThreadAlertRuntime() as ReactElement<{
+      onNavigate: (target: ThreadAlertTarget) => Promise<void>;
+    }>;
+    await host.props.onNavigate({ kind: "storage", environmentId: "env" });
+    expect(callbacks.navigate).toHaveBeenCalledExactlyOnceWith({ to: "/settings/archived" });
+    expect(callbacks.markRead).not.toHaveBeenCalled();
+    expect(callbacks.setAtom).not.toHaveBeenCalled();
+  });
   it.each([true, false])(
     "uses the selected Focus's Conversations setting (%s) for native notification navigation",
     async (includeConversations) => {

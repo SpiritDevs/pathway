@@ -182,6 +182,7 @@ export const make = Effect.gen(function* () {
       threadPullRequestAttachments: true,
       threadSettlement: true,
       threadConversations: true,
+      storageManagement: true,
       threadForceSettlement: true,
       threadSettleAfterCompletion: true,
       threadSnooze: true,

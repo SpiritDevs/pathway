@@ -97,6 +97,14 @@ struct PathwayIssueWorkView: View {
     private func agentSection(_ creation: PathwayAgentThreadCreationModel) -> some View {
         @Bindable var creation = creation
         return Section(commentBody == nil ? "Start work" : "Ask an agent") {
+            if let binding = selectedBinding, let connect = appModel.connect,
+               let environment = appModel.cloud.environments.first(where: {
+                   $0.companyId == binding.companyId && $0.environment.environmentId == binding.binding.environmentId
+               }) {
+                PathwayConversationStorageNotice(environment: environment, connect: connect,
+                    onContinueAnyway: { creation.continueDespiteCriticalStorage() },
+                    onAvailabilityChanged: { creation.storageAllowsLaunch = $0 }).id(binding.id)
+            }
             Picker("Provider", selection: $creation.selectedProviderID) {
                 ForEach(creation.providers) { Text($0.name).tag($0.id) }
             }
@@ -205,6 +213,7 @@ struct PathwayIssueWorkView: View {
     private func sendToAgent(_ creation: PathwayAgentThreadCreationModel) {
         guard let provider = creation.selectedProvider, let selectedModel = creation.selectedModel else { return }
         perform {
+            guard await creation.checkStorageBeforeLaunch() else { return }
             var selection: [String: JSONValue] = ["instanceId": .string(provider.id), "model": .string(selectedModel.id)]
             let options = creation.optionValues.sorted { $0.key < $1.key }.map { JSONValue.object(["id": .string($0.key), "value": $0.value]) }
             if !options.isEmpty { selection["options"] = .array(options) }

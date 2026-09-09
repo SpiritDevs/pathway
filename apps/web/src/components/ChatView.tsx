@@ -1,4 +1,7 @@
 import { useLoadBalancedDraft } from "../hooks/useLoadBalancedDraft";
+import { useConversationStorage } from "../hooks/useConversationStorage";
+import { conversationStorageBanner } from "./chat/ConversationStorageBanner";
+import { Select, SelectItem, SelectPopup, SelectTrigger } from "./ui/select";
 import {
   addQuestionAttachments,
   clearQuestionAttachments,
@@ -438,6 +441,7 @@ import {
   loadQueuedComposerImages,
   reconcileMountedTerminalThreadIds,
   resolveDraftEnvironmentProjectRef,
+  filterStorageEnvironmentOptions,
   resolveEditableV2UserMessageId,
   resolveRetryableV2UserMessageId,
   resolvePanelSurfaceOwnerThreadRef,
@@ -3324,8 +3328,32 @@ function ChatViewContent(props: ChatViewProps) {
       threadId,
     ],
   );
+  const conversationStorage = useConversationStorage({
+    environmentId,
+    threadId,
+    enabled:
+      activeEnvironmentConnectionPhase === "connected" &&
+      activeEnvironment?.serverConfig?.environment.capabilities.storageManagement === true,
+  });
+  const requireConversationStorage = useCallback(
+    () =>
+      conversationStorage.checkCanSend((reclaimed) => {
+        toastManager.add({
+          type: "warning",
+          title: reclaimed
+            ? "Recreate the worktree before continuing"
+            : "This environment is critically low on storage",
+          description: reclaimed
+            ? "Your input is preserved. Use Recreate worktree above the composer."
+            : "Choose Clean up, another environment, or Continue anyway above the composer. Your input is preserved.",
+        });
+      }),
+    [conversationStorage.checkCanSend],
+  );
+
   const onControlWorkspacePreparation = useCallback(
     async (runId: RunId, action: "cancel" | "work_locally" | "retry") => {
+      if (action !== "cancel" && !requireConversationStorage()) return;
       if (!activeProject || !serverProjection) throw new Error("This thread is unavailable.");
       if (action === "work_locally" && serverProjection.thread.temporary)
         throw new Error(
@@ -3383,6 +3411,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeProject,
       serverProjection,
       serverAttachmentUrlById,
+      requireConversationStorage,
       controlWorkspacePreparation,
       environmentId,
       threadId,
@@ -3553,6 +3582,7 @@ function ChatViewContent(props: ChatViewProps) {
   const draftPlacement = useLoadBalancedDraft({
     draftId: isServerThread ? null : draftId,
     enabled: settings.loadBalancingEnabled,
+    avoidCriticalStorage: settings.loadBalancingAvoidCriticalStorage,
     weights: settings.loadBalancingWeights,
     project: activeProject,
     projects: allProjects,
@@ -3776,6 +3806,88 @@ function ChatViewContent(props: ChatViewProps) {
       logicalProjectEnvironments,
     ],
   );
+
+  const storageEnvironmentOptions = filterStorageEnvironmentOptions(
+    activeProject
+      ? logicalProjectEnvironments
+      : environments.map((item) => ({
+          environmentId: item.environmentId,
+          projectId: null,
+          label: item.label,
+        })),
+    environmentById,
+  );
+  const storageChoiceStartsConversation =
+    envLocked || draftPlacement.locked || activeProject === null;
+  const chooseStorageEnvironment = (nextEnvironmentId: EnvironmentId) => {
+    if (!storageChoiceStartsConversation) {
+      onEnvironmentChange(nextEnvironmentId);
+      return;
+    }
+    const destination = storageEnvironmentOptions.find(
+      (item) => item.environmentId === nextEnvironmentId,
+    );
+    if (!destination) return;
+    // Changing an existing conversation's machine starts an explicit new draft.
+    // Its current history and draft remain on their original environment.
+    const nextDraftId = newDraftId();
+    useComposerDraftStore
+      .getState()
+      .setProjectDraftThreadId(
+        { environmentId: destination.environmentId, projectId: destination.projectId },
+        nextDraftId,
+        {
+          threadId: newThreadId(),
+          conversationCompanyId:
+            destination.projectId === null
+              ? (activeThread?.conversationCompanyId ?? activeCompanyId)
+              : null,
+          temporary: activeThread?.temporary ?? false,
+        },
+      );
+    useComposerDraftStore.getState().setDraftThreadContext(nextDraftId, {
+      placement: { mode: "manual", providerPinned: false, resolvedKey: null },
+    });
+    void navigate({
+      to: "/threads/draft/$draftId",
+      params: buildDraftThreadRouteParams(nextDraftId),
+    });
+  };
+  const storageBannerItem = conversationStorageBanner({
+    storage: conversationStorage,
+    environmentLabel: activeEnvironment?.label ?? "This environment",
+    chooseEnvironment: (
+      <Select<EnvironmentId>
+        value={null}
+        onValueChange={(value) => {
+          if (value) chooseStorageEnvironment(value);
+        }}
+      >
+        <SelectTrigger size="xs" aria-label="Choose another environment">
+          Choose another environment
+        </SelectTrigger>
+        <SelectPopup>
+          {storageEnvironmentOptions
+            .filter(
+              (item) =>
+                item.environmentId !== environmentId &&
+                environmentById.get(item.environmentId)?.connection.phase === "connected",
+            )
+            .map((item) => (
+              <SelectItem key={item.environmentId} value={item.environmentId}>
+                {item.label}
+                {storageChoiceStartsConversation ? " · New conversation" : ""}
+              </SelectItem>
+            ))}
+          <p className="px-3 py-2 text-xs text-muted-foreground">
+            {storageChoiceStartsConversation
+              ? "Choose a machine to start a new conversation. This conversation and its draft stay here."
+              : "Only connected environments with this project are available."}
+          </p>
+        </SelectPopup>
+      </Select>
+    ),
+  });
 
   const activeTerminalGroup =
     terminalUiState.terminalGroups.find(
@@ -6111,6 +6223,7 @@ function ChatViewContent(props: ChatViewProps) {
       resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
+        ...(storageBannerItem ? [storageBannerItem] : []),
         ...systemComposerBannerItems,
         ...browserTakeoverItems,
         ...resumeCompactionItems,
@@ -6118,6 +6231,7 @@ function ChatViewContent(props: ChatViewProps) {
       ];
     }
     return [
+      ...(storageBannerItem ? [storageBannerItem] : []),
       ...systemComposerBannerItems,
       ...browserTakeoverItems,
       {
@@ -6172,6 +6286,7 @@ function ChatViewContent(props: ChatViewProps) {
     resumeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
+    storageBannerItem,
   ]);
 
   useEffect(() => {
@@ -7035,6 +7150,7 @@ function ChatViewContent(props: ChatViewProps) {
       ) {
         return;
       }
+      if (request.kind !== "handoff" && !requireConversationStorage()) return;
       setContinuationPending(true);
       if (request.kind === "recovery") {
         if (activeLatestRun?.runId !== request.sourceRunId || activeLatestRun.status !== "failed") {
@@ -7178,6 +7294,7 @@ function ChatViewContent(props: ChatViewProps) {
       activePendingApproval,
       activePendingUserInput,
       activeThread,
+      requireConversationStorage,
       continuationPending,
       continuationRequest,
       environmentId,
@@ -7245,6 +7362,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return;
     }
+    if (!requireConversationStorage()) return;
     if (activePendingProgress) {
       if (directAnnotation) {
         notifyDirectAnnotationAttached();
@@ -8050,6 +8168,8 @@ function ChatViewContent(props: ChatViewProps) {
         return false;
       }
 
+      if (!requireConversationStorage()) return false;
+
       const sendCtx = composerRef.current?.getSendContext();
       if (!sendCtx?.providerAvailable) {
         toastManager.add(
@@ -8143,6 +8263,7 @@ function ChatViewContent(props: ChatViewProps) {
       activePendingApproval,
       activePendingUserInput,
       activeThread,
+      requireConversationStorage,
       beginLocalDispatch,
       composerRef,
       environmentId,
@@ -8295,6 +8416,7 @@ function ChatViewContent(props: ChatViewProps) {
       ) {
         return false;
       }
+      if (!requireConversationStorage()) return false;
       sendInFlightRef.current = true;
       setThreadError(activeThread.id, null);
       const result = await editAndRestartMessage({
@@ -8318,6 +8440,7 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [
       activeThread,
+      requireConversationStorage,
       editAndRestartMessage,
       editableUserMessageId,
       environmentId,
@@ -8344,6 +8467,8 @@ function ChatViewContent(props: ChatViewProps) {
       )
         return;
 
+      if (decision !== "cancel" && !requireConversationStorage()) return;
+
       setRespondingRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
       );
@@ -8365,7 +8490,14 @@ function ChatViewContent(props: ChatViewProps) {
       setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
       return result;
     },
-    [activeThreadId, environmentId, pendingApprovals, respondToThreadApproval, setThreadError],
+    [
+      activeThreadId,
+      environmentId,
+      pendingApprovals,
+      respondToThreadApproval,
+      requireConversationStorage,
+      setThreadError,
+    ],
   );
 
   const onRespondToUserInput = useCallback(
@@ -8373,6 +8505,7 @@ function ChatViewContent(props: ChatViewProps) {
       if (!activeThreadId) return;
       const request = allPendingUserInputs.find((input) => input.requestId === requestId);
       if (!request || request.responseCapability === "not_resumable") return;
+      if (!requireConversationStorage()) return;
       const draftKey = questionAttachmentDraftKey(environmentId, activeThreadId, requestId);
       const attachmentsByQuestionId = readyQuestionAttachments(
         useQuestionAttachmentDrafts.getState().byRequest[draftKey] ?? [],
@@ -8417,6 +8550,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeThreadId,
       environmentId,
       allPendingUserInputs,
+      requireConversationStorage,
       respondToThreadUserInput,
       setResumeCompactionPermanentlyDismissed,
       setThreadError,
@@ -8586,6 +8720,7 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThread || !isServerThread || isSendBusy || isConnecting || sendInFlightRef.current) {
       return;
     }
+    if (!requireConversationStorage()) return;
 
     const trimmed = text.trim();
     if (!trimmed) {
@@ -8735,6 +8870,8 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
 
+    if (!requireConversationStorage()) return;
+
     const sendCtx = composerRef.current?.getSendContext();
     if (!sendCtx?.providerAvailable) {
       return;
@@ -8865,6 +9002,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread,
     beginLocalDispatch,
     activeEnvironmentUnavailable,
+    requireConversationStorage,
     createThread,
     deleteThread,
     isConnecting,
