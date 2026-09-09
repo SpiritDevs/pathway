@@ -58,6 +58,19 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
   };
 }
 
+function threadIsInActiveProfile(
+  thread: DraftProjectRef & { conversationCompanyId?: string | null | undefined },
+  projects: ReturnType<typeof useProjects>,
+  activeCompanyId: string | null,
+) {
+  return thread.projectId === null
+    ? activeCompanyId === null || thread.conversationCompanyId === activeCompanyId
+    : projects.some(
+        (project) =>
+          project.environmentId === thread.environmentId && project.id === thread.projectId,
+      );
+}
+
 export function useNewThreadHandler() {
   const activeCompanyId = useAtomValue(activeCompanyIdAtom);
   const projects = useProjects();
@@ -114,29 +127,28 @@ export function useNewThreadHandler() {
       // viewed: permission mode and interaction mode. Model, branch, worktree,
       // and env mode come from the configured defaults unless the caller
       // passes workspace context explicitly.
-      const carrySourceShell =
+      const routeThread =
         currentRouteTarget?.kind === "server"
           ? readThreadShell(currentRouteTarget.threadRef)
+          : currentRouteTarget?.kind === "draft"
+            ? getDraftSession(currentRouteTarget.draftId)
+            : null;
+      const carrySourceThread =
+        routeThread && threadIsInActiveProfile(routeThread, projects, activeCompanyId)
+          ? routeThread
           : null;
-      const carrySourceDraft =
-        currentRouteTarget?.kind === "draft" ? getDraftSession(currentRouteTarget.draftId) : null;
-      const carrySourceComposer = currentRouteTarget
-        ? getComposerDraft(
-            currentRouteTarget.kind === "server"
-              ? currentRouteTarget.threadRef
-              : currentRouteTarget.draftId,
-          )
-        : null;
+      const carrySourceComposer =
+        currentRouteTarget && carrySourceThread
+          ? getComposerDraft(
+              currentRouteTarget.kind === "server"
+                ? currentRouteTarget.threadRef
+                : currentRouteTarget.draftId,
+            )
+          : null;
       const carryRuntimeMode =
-        carrySourceComposer?.runtimeMode ??
-        carrySourceShell?.runtimeMode ??
-        carrySourceDraft?.runtimeMode ??
-        null;
+        carrySourceComposer?.runtimeMode ?? carrySourceThread?.runtimeMode ?? null;
       const carryInteractionMode =
-        carrySourceComposer?.interactionMode ??
-        carrySourceShell?.interactionMode ??
-        carrySourceDraft?.interactionMode ??
-        null;
+        carrySourceComposer?.interactionMode ?? carrySourceThread?.interactionMode ?? null;
       const project = projects.find(
         (candidate) =>
           candidate.id === projectRef.projectId &&
@@ -467,18 +479,15 @@ export function useHandleNewThread() {
   const handleNewThread = useNewThreadHandler();
 
   // A profile switch can leave the previous profile's thread on the route.
-  const isInActiveProfile = (thread: NonNullable<typeof activeThread> | DraftThreadState) =>
-    thread.projectId === null
-      ? activeCompanyId === null || thread.conversationCompanyId === activeCompanyId
-      : projects.some(
-          (project) =>
-            project.environmentId === thread.environmentId && project.id === thread.projectId,
-        );
-
   return {
     activeDraftThread:
-      activeDraftThread && isInActiveProfile(activeDraftThread) ? activeDraftThread : null,
-    activeThread: activeThread && isInActiveProfile(activeThread) ? activeThread : null,
+      activeDraftThread && threadIsInActiveProfile(activeDraftThread, projects, activeCompanyId)
+        ? activeDraftThread
+        : null,
+    activeThread:
+      activeThread && threadIsInActiveProfile(activeThread, projects, activeCompanyId)
+        ? activeThread
+        : null,
     defaultProjectRef: orderedProjects[0]
       ? scopeProjectRef(orderedProjects[0].environmentId, orderedProjects[0].id)
       : null,
