@@ -27,6 +27,7 @@ interface ChatHeaderProps {
   threadAncestors: ReadonlyArray<ThreadBreadcrumbAncestor>;
   rightPanelOpen: boolean;
   retentionControlVisible?: boolean;
+  temporary?: boolean;
   onSelectConversation?: () => void;
   onProjectChange: (projectRef: ScopedProjectRef) => void | Promise<void>;
   onOpenThread: (threadId: ThreadId) => void;
@@ -95,8 +96,10 @@ export const ChatHeader = memo(function ChatHeader({
   onOpenThread,
   onRenameThread,
   retentionControlVisible = false,
+  temporary = false,
   onSelectConversation,
 }: ChatHeaderProps) {
+  const conversationLabel = temporary ? "Temporary conversation" : "Conversation";
   const [renaming, setRenaming] = useState<{ threadId: ThreadId; title: string } | null>(null);
   const renamingTitle = renaming?.threadId === activeThreadId ? renaming.title : null;
   const renameCommittedRef = useRef(false);
@@ -163,7 +166,7 @@ export const ChatHeader = memo(function ChatHeader({
               {projectSelectionEnabled ? (
                 <WorkspaceProjectSelector
                   activeProjectRef={activeProjectRef}
-                  activeProjectTitle={activeProjectName ?? "Conversation"}
+                  activeProjectTitle={activeProjectName ?? conversationLabel}
                   conversationSelected={activeProjectRef === null}
                   onSelectConversation={onSelectConversation}
                   {...(activeProjectRef === null && onSelectConversation === undefined
@@ -179,7 +182,10 @@ export const ChatHeader = memo(function ChatHeader({
                   renderTrigger={(displayName) => (
                     <>
                       {activeProjectRef === null ? (
-                        <MessageCircleIcon className="size-3.5" />
+                        <MessageCircleIcon
+                          className="size-3.5"
+                          strokeDasharray={temporary ? "3 3" : undefined}
+                        />
                       ) : (
                         <ProjectFavicon
                           environmentId={activeThreadEnvironmentId}
@@ -187,7 +193,9 @@ export const ChatHeader = memo(function ChatHeader({
                           className="size-3.5"
                         />
                       )}
-                      <span className="max-w-40 truncate text-sm font-medium">{displayName}</span>
+                      <span className="max-w-56 truncate text-sm font-medium">
+                        {activeProjectRef === null ? conversationLabel : displayName}
+                      </span>
                     </>
                   )}
                   onSelectProject={onProjectChange}
@@ -198,7 +206,10 @@ export const ChatHeader = memo(function ChatHeader({
                     render={<span className="inline-flex min-w-0 items-center gap-1.5" />}
                   >
                     {activeProjectRef === null ? (
-                      <MessageCircleIcon className="size-3.5" />
+                      <MessageCircleIcon
+                        className="size-3.5"
+                        strokeDasharray={temporary ? "3 3" : undefined}
+                      />
                     ) : (
                       <ProjectFavicon
                         environmentId={activeThreadEnvironmentId}
@@ -206,11 +217,11 @@ export const ChatHeader = memo(function ChatHeader({
                         className="size-3.5"
                       />
                     )}
-                    <span className="max-w-40 truncate text-sm font-medium text-muted-foreground">
-                      {activeProjectName ?? "Conversation"}
+                    <span className="max-w-56 truncate text-sm font-medium text-muted-foreground">
+                      {activeProjectName ?? conversationLabel}
                     </span>
                   </TooltipTrigger>
-                  <TooltipPopup side="top">{activeProjectName ?? "Conversation"}</TooltipPopup>
+                  <TooltipPopup side="top">{activeProjectName ?? conversationLabel}</TooltipPopup>
                 </Tooltip>
               )}
               <span aria-hidden className="text-muted-foreground/40">
