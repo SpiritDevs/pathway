@@ -85,6 +85,9 @@ jobs:
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
+        env:
+          # The next step installs and verifies Electron with download retries.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         with:
           node-version-file: package.json
           cache: true
@@ -253,6 +256,8 @@ jobs:
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         with:
           node-version-file: package.json
           cache: true
@@ -261,6 +266,9 @@ jobs:
               - --filter=@spiritdevs/desktop...
               - --filter=@spiritdevs/pathway...
               - --filter=@spiritdevs/scripts...
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @spiritdevs/desktop ensure:electron
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
