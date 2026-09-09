@@ -123,8 +123,8 @@ export const make = Effect.gen(function* () {
     const probe = initialConfig.pipe(
       Effect.flatMap((config) =>
         (config.environment.capabilities.connectionProbe === true
-          ? client[WS_METHODS.serverProbe]({})
-          : client[WS_METHODS.serverGetConfig]({})
+          ? client[WS_METHODS.serverProbe]({}).pipe(Effect.asVoid)
+          : client[WS_METHODS.serverGetConfig]({}).pipe(Effect.asVoid)
         ).pipe(Effect.mapError(mapSessionRpcError)),
       ),
       Effect.asVoid,
