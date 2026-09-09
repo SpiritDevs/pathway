@@ -289,7 +289,7 @@ import {
   releaseDraftAttachment,
   uploadStandaloneFileAttachment,
 } from "../lib/attachmentUploadQueue";
-import { useAttachProjectDirectory } from "./projects/useProjectWorkspaceCommands";
+import { useProvisionInternalWorkspace } from "./projects/useProjectWorkspaceCommands";
 import {
   appendTerminalContextsToPrompt,
   formatTerminalContextLabel,
@@ -2239,7 +2239,7 @@ function ChatViewContent(props: ChatViewProps) {
   // going quiet. See docs/internals/decisions/0006-issue-tracker.md.
   const { ensureWorkspaceRoot: ensureActiveProjectWorkspaceRoot } =
     useEnsureProjectWorkspace(activeProject);
-  const attachProjectDirectory = useAttachProjectDirectory();
+  const provisionProjectWorkspace = useProvisionInternalWorkspace();
   const handleRenameActiveThread = useCallback(
     (title: string) => {
       if (!isServerThread || !activeThread) return;
@@ -4460,6 +4460,13 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef || !activeWorkspaceRoot) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeWorkspaceRoot, activeThreadRef]);
+  const openDirectorySurface = useCallback(
+    (cwd: string) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().openDirectory(activeThreadRef, cwd);
+    },
+    [activeThreadRef],
+  );
   const openFileSurface = useCallback(
     (relativePath: string, line?: number) => {
       if (!activeWorkspaceRoot) return;
@@ -6779,7 +6786,7 @@ function ChatViewContent(props: ChatViewProps) {
           targetProject &&
           (await ensureProjectWorkspaceRoot({
             project: targetProject,
-            attachDirectory: attachProjectDirectory,
+            provisionWorkspace: provisionProjectWorkspace,
             reason: "Choose a folder before moving this thread to the project.",
           })) === null
         ) {
@@ -6911,7 +6918,7 @@ function ChatViewContent(props: ChatViewProps) {
     [
       activeThread,
       allProjects,
-      attachProjectDirectory,
+      provisionProjectWorkspace,
       attachConversationProject,
       setActiveCompanyId,
       canChangeHeaderProject,
@@ -9299,9 +9306,9 @@ function ChatViewContent(props: ChatViewProps) {
       activeWorkspaceRoot ? (
       <Suspense fallback={null}>
         <FilePreviewPanel
-          key={`${activeThread.environmentId}:${activeWorkspaceRoot}`}
+          key={`${activeThread.environmentId}:${activeRightPanelSurface.cwd ?? activeWorkspaceRoot}`}
           environmentId={activeThread.environmentId}
-          cwd={activeWorkspaceRoot}
+          cwd={activeRightPanelSurface.cwd ?? activeWorkspaceRoot}
           projectName={activeProject?.title ?? "Conversation"}
           threadRef={activeThreadRef}
           composerDraftTarget={composerDraftTarget}
@@ -9312,18 +9319,27 @@ function ChatViewContent(props: ChatViewProps) {
           }
           revealLine={activeFileSurface?.revealLine ?? null}
           revealRequestId={activeFileSurface?.revealRequestId ?? 0}
-          onOpenFile={openFileSurface}
+          onOpenFile={(relativePath) => {
+            if (!activeThreadRef) return;
+            useRightPanelStore
+              .getState()
+              .openFile(activeThreadRef, relativePath, undefined, activeRightPanelSurface.cwd);
+          }}
           onPendingChange={handleFilePendingChange}
         />
       </Suspense>
     ) : null
   ) : null;
   const threadDetailsPanelProps: Omit<ThreadDetailsPanelProps, "mode"> = {
+    onOpenDirectory: openDirectorySurface,
     environmentId: activeThread.environmentId,
     environmentConnection: activeEnvironment?.connection ?? null,
     threadId: activeThread.id,
     ...(draftId ? { draftId } : {}),
     activeProjectName: activeProject?.title,
+    hasAttachedDirectory:
+      activeProject?.workspaceRoot != null &&
+      activeProject.workspaceRoot !== activeProject.internalWorkspaceRoot,
     activeProjectScripts: activeProject?.scripts,
     activeProvider: activeProviderStatus,
     selectedModel: usageSelectedModel,
@@ -9388,6 +9404,10 @@ function ChatViewContent(props: ChatViewProps) {
     onDeleteProjectScript: deleteProjectScript,
   };
   const canChangeTemporary =
+    !(
+      activeProject?.internalWorkspaceRoot != null &&
+      activeProject.workspaceRoot === activeProject.internalWorkspaceRoot
+    ) &&
     activeThread.keptAt == null &&
     activeThread.latestUserMessageAt == null &&
     activeMessageCount === 0 &&

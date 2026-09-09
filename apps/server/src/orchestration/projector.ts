@@ -218,6 +218,7 @@ export function projectEvent(
             title: payload.title,
             titleIsCustom: payload.titleIsCustom ?? false,
             workspaceRoot: payload.workspaceRoot,
+            internalWorkspaceRoot: payload.internalWorkspaceRoot ?? null,
             defaultModelSelection: payload.defaultModelSelection,
             defaultThreadEnvMode: null,
             faviconPath: payload.faviconPath ?? null,
@@ -249,6 +250,9 @@ export function projectEvent(
                   ...(payload.title !== undefined ? { title: payload.title } : {}),
                   ...(payload.titleIsCustom !== undefined
                     ? { titleIsCustom: payload.titleIsCustom }
+                    : {}),
+                  ...(payload.internalWorkspaceRoot !== undefined
+                    ? { internalWorkspaceRoot: payload.internalWorkspaceRoot }
                     : {}),
                   ...(payload.workspaceRoot !== undefined
                     ? { workspaceRoot: payload.workspaceRoot }

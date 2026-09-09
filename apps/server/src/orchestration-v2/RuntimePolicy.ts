@@ -83,15 +83,14 @@ export const layerFromProjectRepository: Layer.Layer<
     return RuntimePolicyV2.of({
       resolve: Effect.fn("RuntimePolicyV2.resolve")(function* (input) {
         const projectId = input.thread.projectId;
-        const cwd =
-          input.thread.worktreePath ??
-          (projectId === null
-            ? (input.thread.conversationPath ?? null)
+        const project =
+          projectId === null
+            ? null
             : yield* projects.getById({ projectId }).pipe(
                 Effect.mapError(
                   (cause) =>
                     new RuntimePolicyResolveError({
-                      projectId: input.thread.projectId,
+                      projectId,
                       providerInstanceId: input.modelSelection.instanceId,
                       cause,
                     }),
@@ -101,15 +100,24 @@ export const layerFromProjectRepository: Layer.Layer<
                     onNone: () =>
                       Effect.fail(
                         new RuntimePolicyResolveError({
-                          projectId: input.thread.projectId,
+                          projectId,
                           providerInstanceId: input.modelSelection.instanceId,
                           cause: "Project not found.",
                         }),
                       ),
-                    onSome: (project) => Effect.succeed(project.workspaceRoot),
+                    onSome: Effect.succeed,
                   }),
                 ),
-              ));
+              );
+        const cwd =
+          input.thread.worktreePath ??
+          project?.workspaceRoot ??
+          input.thread.conversationPath ??
+          null;
+        const additionalDirectories = [
+          input.thread.conversationPath,
+          project?.internalWorkspaceRoot,
+        ].filter((directory): directory is string => directory != null && directory !== cwd);
         if (projectId === null && cwd === null) {
           return yield* new RuntimePolicyResolveError({
             projectId,
@@ -121,9 +129,9 @@ export const layerFromProjectRepository: Layer.Layer<
           runtimeMode: input.thread.runtimeMode,
           interactionMode: input.thread.interactionMode,
           cwd,
-          ...(input.thread.conversationPath == null
+          ...(additionalDirectories.length === 0
             ? {}
-            : { additionalDirectories: [input.thread.conversationPath] }),
+            : { additionalDirectories: [...new Set(additionalDirectories)] }),
         });
       }),
     });

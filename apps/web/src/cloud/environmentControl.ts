@@ -187,6 +187,7 @@ export const ENVIRONMENT_CONTROL_FUNCTION_REFERENCES = {
       readonly environmentId: EnvironmentId;
       readonly localProjectId: string;
       readonly localWorkspaceRoot: string | null;
+      readonly internalWorkspaceRoot?: string | null;
       readonly repositoryIdentity?: EnvironmentProject["repositoryIdentity"];
       readonly name: string;
     },
@@ -354,7 +355,7 @@ export interface EnvironmentControlClient {
      * that has just created a project has not received its asynchronous enrichment yet.
      */
     readonly project: Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot" | "title"> &
-      Partial<Pick<EnvironmentProject, "repositoryIdentity">>;
+      Partial<Pick<EnvironmentProject, "repositoryIdentity" | "internalWorkspaceRoot">>;
   }) => Promise<void>;
   readonly setPreferredEnvironmentBinding: (args: {
     readonly companyId: CompanyId;
@@ -519,6 +520,9 @@ export function makeEnvironmentControlClient(options: {
           environmentId: project.environmentId,
           localProjectId: project.id,
           localWorkspaceRoot: project.workspaceRoot,
+          ...(project.internalWorkspaceRoot === undefined
+            ? {}
+            : { internalWorkspaceRoot: project.internalWorkspaceRoot }),
           repositoryIdentity: project.repositoryIdentity ?? null,
           name: project.title,
         },

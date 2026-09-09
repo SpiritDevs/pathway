@@ -380,6 +380,7 @@ export async function encodeEnvironmentBinding(
     environmentId: doc.environmentId,
     localProjectId: doc.localProjectId,
     localWorkspaceRoot: doc.localWorkspaceRoot,
+    internalWorkspaceRoot: doc.internalWorkspaceRoot ?? null,
     ...(doc.repositoryIdentity === undefined ? {} : { repositoryIdentity: doc.repositoryIdentity }),
     status: doc.status,
     lastSeenAt: doc.lastSeenAt,

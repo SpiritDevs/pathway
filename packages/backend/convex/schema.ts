@@ -749,6 +749,7 @@ export default defineSchema({
     environmentId: v.string(),
     localProjectId: v.string(),
     localWorkspaceRoot: v.string(),
+    internalWorkspaceRoot: v.optional(v.union(v.string(), v.null())),
     /** Optional while environments running older publishers still have bindings in the feed. */
     repositoryIdentity: v.optional(v.union(repositoryIdentityArg, v.null())),
     /** Storage-only index key derived from `repositoryIdentity.canonicalKey`. */

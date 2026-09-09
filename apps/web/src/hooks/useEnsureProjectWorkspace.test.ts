@@ -1,7 +1,6 @@
 import { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { scratchWorkspaceRoot } from "../components/projects/projectWorkspace.logic";
 import { ensureProjectWorkspaceRoot } from "./useEnsureProjectWorkspace";
 
 const project = {
@@ -13,32 +12,23 @@ const project = {
 
 describe("ensureProjectWorkspaceRoot", () => {
   it("returns an existing workspace without writing", async () => {
-    const attachDirectory = vi.fn();
+    const provisionWorkspace = vi.fn();
     await expect(
       ensureProjectWorkspaceRoot({
         project: { ...project, workspaceRoot: "/code/pathway" },
-        attachDirectory,
+        provisionWorkspace,
       }),
     ).resolves.toBe("/code/pathway");
-    expect(attachDirectory).not.toHaveBeenCalled();
+    expect(provisionWorkspace).not.toHaveBeenCalled();
   });
 
   it("provisions a scratch workspace for a rootless project", async () => {
-    const attachDirectory = vi.fn().mockResolvedValue({ ok: true, value: "/unused" });
-    const workspaceRoot = scratchWorkspaceRoot(project);
+    const provisionWorkspace = vi.fn().mockResolvedValue("/server/userdata/project-workspaces/id");
+    const workspaceRoot = "/server/userdata/project-workspaces/id";
 
-    await expect(ensureProjectWorkspaceRoot({ project, attachDirectory })).resolves.toBe(
+    await expect(ensureProjectWorkspaceRoot({ project, provisionWorkspace })).resolves.toBe(
       workspaceRoot,
     );
-    expect(attachDirectory).toHaveBeenCalledWith({
-      environmentId: project.environmentId,
-      projectId: project.id,
-      plan: {
-        kind: "attach",
-        workspaceRoot,
-        createWorkspaceRootIfMissing: true,
-        initializeGit: false,
-      },
-    });
+    expect(provisionWorkspace).toHaveBeenCalledWith(project);
   });
 });

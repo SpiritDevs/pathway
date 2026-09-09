@@ -12,8 +12,6 @@ import {
   projectWorkspaceLabel,
   projectWorkspaceRuntimeEnv,
   resolveEnsuredWorkspaceRoot,
-  scratchWorkspaceFolderName,
-  scratchWorkspaceRoot,
   shouldInitializeGitBeforeAttach,
   type AttachProjectDirectoryPlan,
   type ProjectWorkspaceTarget,
@@ -303,7 +301,6 @@ describe("scratch workspaces", () => {
     expect(decision).toEqual({
       kind: "provision",
       project: expect.objectContaining({ title: "Scratch Ideas" }),
-      workspaceRoot: "~/Pathway Projects/Scratch Ideas",
     });
   });
 
@@ -316,22 +313,5 @@ describe("scratch workspaces", () => {
         workspaceRoot: "/Users/ada/src/rooted",
       }),
     ).toEqual({ kind: "ready", workspaceRoot: "/Users/ada/src/rooted" });
-  });
-
-  it("keeps the folder name usable on Windows", () => {
-    // Reserved punctuation becomes a space, and a trailing dot or space is stripped rather than
-    // left for the shell to remove silently — which would fold two names into one directory.
-    expect(scratchWorkspaceFolderName('Quotes: "v2"/beta', "project-1")).toBe("Quotes v2 beta");
-    expect(scratchWorkspaceFolderName("trailing dot.", "project-1")).toBe("trailing dot");
-    expect(scratchWorkspaceFolderName("a  b", "project-1")).toBe("a b");
-  });
-
-  it("falls back to the id when a title names no folder at all", () => {
-    expect(scratchWorkspaceFolderName("///", "0198c0de-aaaa")).toBe("project-0198c0de");
-  });
-
-  it("is stable for a project, so files left there are still there next time", () => {
-    const project = { id: "project-1", title: "Notes" };
-    expect(scratchWorkspaceRoot(project)).toBe(scratchWorkspaceRoot(project));
   });
 });

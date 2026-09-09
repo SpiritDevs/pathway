@@ -40,7 +40,7 @@ struct NewAgentThreadSettings: View {
                         }
                     }
 
-                    if !model.isConversation {
+                    if !model.isConversation && !model.usesInternalWorkspace {
                         Picker("Workspace", selection: $model.workspaceMode) {
                             Text("Current checkout").tag("local")
                             Text("New worktree").tag("worktree")

@@ -1,3 +1,4 @@
+import { InternalProjectWorkspace } from "./projects/InternalProjectWorkspace";
 import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import {
@@ -50,6 +51,7 @@ import { Separator } from "./ui/separator";
 interface BranchToolbarProps {
   layout?: "composer" | "panel";
   panelSection?: "all" | "workspace" | "branch";
+  onOpenDirectory?: ((cwd: string) => void) | undefined;
   environmentId: EnvironmentId;
   threadId: ThreadId;
   showGitControls: boolean;
@@ -423,6 +425,7 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
 export const BranchToolbar = memo(function BranchToolbar({
   layout = "composer",
   panelSection = "all",
+  onOpenDirectory,
   environmentId,
   threadId,
   showGitControls,
@@ -548,10 +551,14 @@ export const BranchToolbar = memo(function BranchToolbar({
 
   if (!hasActiveThread || !activeProject) return null;
 
+  const internalOnly =
+    activeProject.workspaceRoot === null ||
+    activeProject.workspaceRoot === activeProject.internalWorkspaceRoot;
+
   if (layout === "panel") {
     return (
       <div className="flex w-full flex-col" data-thread-panel-run-context>
-        {panelSection !== "branch" ? (
+        {panelSection !== "branch" && !internalOnly ? (
           <BranchToolbarEnvModeSelector
             displayMode="panel"
             envLocked={envModeLocked}
@@ -566,7 +573,10 @@ export const BranchToolbar = memo(function BranchToolbar({
             {...(moveToWorktreeTooltip === undefined ? {} : { moveToWorktreeTooltip })}
           />
         ) : null}
-        {panelSection !== "workspace" ? (
+        {panelSection !== "branch" ? (
+          <InternalProjectWorkspace project={activeProject} onOpenDirectory={onOpenDirectory} />
+        ) : null}
+        {panelSection !== "workspace" && !internalOnly ? (
           <BranchToolbarBranchSelector
             displayMode="panel"
             className="w-full"
@@ -593,7 +603,7 @@ export const BranchToolbar = memo(function BranchToolbar({
       data-compact={labelsOverflow ? "" : undefined}
       className="chat-composer-context-strip chat-composer-context-strip-top group/composer-context -mb-4 mx-auto flex w-[calc(100%-2.75rem-2px)] max-w-[calc(48rem-2.75rem-2px)] items-center gap-2 rounded-t-[20px] border border-b-0 border-border/60 px-2 pt-1 pb-5"
     >
-      {isMobile && showGitControls ? (
+      {isMobile && showGitControls && !internalOnly ? (
         <MobileRunContextSelector
           envLocked={envLocked}
           envModeLocked={envModeLocked}
@@ -625,7 +635,7 @@ export const BranchToolbar = memo(function BranchToolbar({
                   ? { onLinkEnvironmentRequest }
                   : {})}
               />
-              {showGitControls ? (
+              {showGitControls && !internalOnly ? (
                 <Separator
                   orientation="vertical"
                   className="mx-0.5 h-3.5!"
@@ -634,7 +644,7 @@ export const BranchToolbar = memo(function BranchToolbar({
               ) : null}
             </>
           )}
-          {showGitControls ? (
+          {showGitControls && !internalOnly ? (
             <BranchToolbarEnvModeSelector
               envLocked={envModeLocked}
               effectiveEnvMode={effectiveEnvMode}
@@ -647,7 +657,7 @@ export const BranchToolbar = memo(function BranchToolbar({
         </div>
       )}
 
-      {showGitControls ? (
+      {showGitControls && !internalOnly ? (
         <BranchToolbarBranchSelector
           className="min-w-0 flex-1 justify-end md:ml-auto md:flex-none"
           environmentId={environmentId}

@@ -1476,7 +1476,9 @@ export function ProjectDetail({
                         <CopyIcon className="size-3.5" />
                         Copy path
                       </MenuItem>
-                      {connection.directory === null && member !== null ? (
+                      {member !== null &&
+                      (connection.directory === null ||
+                        member.workspaceRoot === member.internalWorkspaceRoot) ? (
                         <MenuItem
                           onClick={() => {
                             setSelectedCheckoutKey(member.physicalProjectKey);

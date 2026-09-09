@@ -512,6 +512,18 @@ export function wsProjectUpdateInputFromMutation(
     ...(mutation.title === undefined ? {} : { title: mutation.title }),
     ...(mutation.titleIsCustom === undefined ? {} : { titleIsCustom: mutation.titleIsCustom }),
     ...(mutation.workspaceRoot === undefined ? {} : { workspaceRoot: mutation.workspaceRoot }),
+    ...(mutation.createWorkspaceRootIfMissing === undefined
+      ? {}
+      : { createWorkspaceRootIfMissing: mutation.createWorkspaceRootIfMissing }),
+    ...(mutation.useInternalWorkspace === undefined
+      ? {}
+      : { useInternalWorkspace: mutation.useInternalWorkspace }),
+    ...(mutation.copyInternalWorkspaceFiles === undefined
+      ? {}
+      : { copyInternalWorkspaceFiles: mutation.copyInternalWorkspaceFiles }),
+    ...(mutation.disconnectInternalWorkspace === undefined
+      ? {}
+      : { disconnectInternalWorkspace: mutation.disconnectInternalWorkspace }),
     ...(mutation.defaultModelSelection === undefined
       ? {}
       : { defaultModelSelection: mutation.defaultModelSelection }),

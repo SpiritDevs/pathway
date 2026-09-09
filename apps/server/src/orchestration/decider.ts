@@ -252,6 +252,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           title: command.title,
           titleIsCustom: false,
           workspaceRoot: command.workspaceRoot,
+          internalWorkspaceRoot: command.internalWorkspaceRoot ?? null,
           defaultModelSelection: command.defaultModelSelection ?? null,
           faviconPath: null,
           scripts: command.scripts ?? [],
@@ -289,6 +290,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.title !== undefined ? { title: command.title } : {}),
           ...(command.titleIsCustom !== undefined ? { titleIsCustom: command.titleIsCustom } : {}),
           ...(command.workspaceRoot !== undefined ? { workspaceRoot: command.workspaceRoot } : {}),
+          ...(command.internalWorkspaceRoot !== undefined
+            ? { internalWorkspaceRoot: command.internalWorkspaceRoot }
+            : {}),
           ...(command.defaultModelSelection !== undefined
             ? { defaultModelSelection: command.defaultModelSelection }
             : {}),

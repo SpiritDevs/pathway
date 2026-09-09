@@ -13,6 +13,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   // Optional so cached snapshots from older servers still decode.
   titleIsCustom: Schema.optional(Schema.Boolean),
   workspaceRoot: Schema.NullOr(TrimmedNonEmptyString),
+  internalWorkspaceRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   // Per-project override for where new threads start. Null/absent means

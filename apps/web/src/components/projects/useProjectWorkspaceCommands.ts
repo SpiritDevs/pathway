@@ -58,6 +58,7 @@ export function useAttachProjectDirectory() {
       readonly environmentId: EnvironmentId;
       readonly projectId: ProjectId;
       readonly plan: Extract<AttachProjectDirectoryPlan, { kind: "attach" }>;
+      readonly copyInternalWorkspaceFiles?: boolean;
     }): Promise<ProjectWorkspaceWriteOutcome<string>> => {
       const { environmentId, plan, projectId } = input;
       if (plan.initializeGit) {
@@ -71,16 +72,19 @@ export function useAttachProjectDirectory() {
       }
       const updateResult = await updateProject({
         environmentId,
-        input: attachProjectDirectoryUpdateInput({
-          projectId,
-          workspaceRoot: plan.workspaceRoot,
-          createWorkspaceRootIfMissing: plan.createWorkspaceRootIfMissing,
-        }),
+        input: {
+          ...attachProjectDirectoryUpdateInput({
+            projectId,
+            workspaceRoot: plan.workspaceRoot,
+            createWorkspaceRootIfMissing: plan.createWorkspaceRootIfMissing,
+          }),
+          ...(input.copyInternalWorkspaceFiles ? { copyInternalWorkspaceFiles: true } : {}),
+        },
       });
       if (updateResult._tag === "Failure") {
         return failureOutcome(updateResult);
       }
-      return { ok: true, value: plan.workspaceRoot };
+      return { ok: true, value: updateResult.value.workspaceRoot ?? plan.workspaceRoot };
     },
     [initRepository, updateProject],
   );
@@ -135,10 +139,29 @@ export function useQuickCreateProject() {
           projectId: createResult.value.id,
           title: createResult.value.title,
           workspaceRoot: createResult.value.workspaceRoot,
+          internalWorkspaceRoot: createResult.value.internalWorkspaceRoot ?? null,
           repositoryIdentity: createResult.value.repositoryIdentity ?? null,
         },
       };
     },
     [createProject, initRepository],
+  );
+}
+
+/** Provision legacy name-only records on their owning environment. */
+export function useProvisionInternalWorkspace() {
+  const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
+  return useCallback(
+    async (project: { environmentId: EnvironmentId; id: ProjectId }): Promise<string | null> => {
+      const result = await updateProject({
+        environmentId: project.environmentId,
+        input: {
+          projectId: project.id,
+          useInternalWorkspace: true,
+        },
+      });
+      return result._tag === "Success" ? result.value.workspaceRoot : null;
+    },
+    [updateProject],
   );
 }

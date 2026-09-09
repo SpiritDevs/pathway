@@ -72,7 +72,7 @@ struct NewAgentThreadView: View {
                     Button("Cancel", action: close)
                         .disabled(isChangingBinding)
                 }
-                if let model, model.supportsConversations, selectedProject != nil {
+                if let model, model.supportsConversations, selectedProject != nil, !model.usesInternalWorkspace {
                     ToolbarItem(placement: .topBarTrailing) {
                         Toggle(isOn: Binding(get: { model.temporary }, set: { model.temporary = $0 })) {
                             Label("Temporary", systemImage: "clock.badge.xmark")
@@ -490,13 +490,13 @@ private struct NewAgentThreadComposer: View {
                 model.workspaceMode = model.workspaceMode == "local" ? "worktree" : "local"
             } label: {
                 Label(
-                    model.workspaceMode == "worktree" ? "New worktree" : "Current checkout",
+                    model.usesInternalWorkspace ? "Pathway workspace" : model.workspaceMode == "worktree" ? "New worktree" : "Current checkout",
                     systemImage: model.workspaceMode == "worktree"
                         ? "arrow.triangle.branch"
                         : "folder"
                 )
             }
-            .disabled(model.temporary)
+            .disabled(model.temporary || model.usesInternalWorkspace)
             .accessibilityHint("Changes the workspace used for the new thread")
 
             if model.workspaceMode == "worktree" {

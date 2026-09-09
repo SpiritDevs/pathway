@@ -51,6 +51,9 @@ export interface UpdateProjectInput extends CommandMetadata {
   readonly title?: string;
   readonly titleIsCustom?: boolean;
   readonly workspaceRoot?: string;
+  readonly useInternalWorkspace?: boolean;
+  readonly copyInternalWorkspaceFiles?: boolean;
+  readonly disconnectInternalWorkspace?: boolean;
   readonly createWorkspaceRootIfMissing?: boolean;
   readonly defaultModelSelection?: ModelSelection | null;
   readonly defaultThreadEnvMode?: ThreadEnvMode | null;
@@ -342,6 +345,9 @@ const mutateProject = Effect.fn("EnvironmentCommands.mutateProject")(function* (
         readonly projectId: ProjectId;
         readonly title?: string;
         readonly workspaceRoot?: string;
+        readonly useInternalWorkspace?: boolean;
+        readonly copyInternalWorkspaceFiles?: boolean;
+        readonly disconnectInternalWorkspace?: boolean;
         readonly createWorkspaceRootIfMissing?: boolean;
         readonly defaultModelSelection?: ModelSelection | null;
         readonly defaultThreadEnvMode?: ThreadEnvMode | null;
@@ -386,6 +392,15 @@ export const updateProject = Effect.fn("EnvironmentCommands.updateProject")(func
     ...(input.title === undefined ? {} : { title: input.title }),
     ...(input.titleIsCustom === undefined ? {} : { titleIsCustom: input.titleIsCustom }),
     ...(input.workspaceRoot === undefined ? {} : { workspaceRoot: input.workspaceRoot }),
+    ...(input.useInternalWorkspace === undefined
+      ? {}
+      : { useInternalWorkspace: input.useInternalWorkspace }),
+    ...(input.copyInternalWorkspaceFiles === undefined
+      ? {}
+      : { copyInternalWorkspaceFiles: input.copyInternalWorkspaceFiles }),
+    ...(input.disconnectInternalWorkspace === undefined
+      ? {}
+      : { disconnectInternalWorkspace: input.disconnectInternalWorkspace }),
     ...(input.createWorkspaceRootIfMissing === undefined
       ? {}
       : { createWorkspaceRootIfMissing: input.createWorkspaceRootIfMissing }),

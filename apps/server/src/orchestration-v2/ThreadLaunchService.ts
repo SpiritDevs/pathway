@@ -467,6 +467,18 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+    if (
+      project.internalWorkspaceRoot != null &&
+      project.workspaceRoot === project.internalWorkspaceRoot &&
+      input.workspaceStrategy.type !== "root"
+    ) {
+      return yield* mapError(
+        input,
+        "resolve-project",
+        threadId,
+      )("Attach a project directory before creating or selecting a worktree.");
+    }
+
     const reportProgress = (
       phase: OrchestrationV2WorkspacePreparation["phase"],
       details: Partial<OrchestrationV2WorkspacePreparation> = {},

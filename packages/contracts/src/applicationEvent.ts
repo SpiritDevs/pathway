@@ -30,6 +30,7 @@ export const ApplicationProjectCreatedPayload = Schema.Struct({
   title: TrimmedNonEmptyString,
   titleIsCustom: Schema.optional(Schema.Boolean),
   workspaceRoot: Schema.NullOr(TrimmedNonEmptyString),
+  internalWorkspaceRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   // Per-project override for where new threads start; optional so persisted
@@ -48,6 +49,7 @@ export const ApplicationProjectMetaUpdatedPayload = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
   titleIsCustom: Schema.optional(Schema.Boolean),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  internalWorkspaceRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   // Absent = leave unchanged; null = clear the override.

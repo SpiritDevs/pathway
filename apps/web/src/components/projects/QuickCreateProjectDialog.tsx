@@ -49,7 +49,6 @@ import {
   EMPTY_ATTACH_PROJECT_DIRECTORY_DRAFT,
   EMPTY_QUICK_CREATE_PROJECT_DRAFT,
   planQuickCreateProject,
-  scratchWorkspaceRoot,
   type QuickCreateProjectDraft,
   type QuickCreateProjectResult,
 } from "./projectWorkspace.logic";
@@ -155,15 +154,7 @@ export function QuickCreateProjectDialog({
           cloudProjectId: selectedTarget?.cloudProjectId ?? null,
           ...(choice?.kind === "new" ? { matchRepository: false } : {}),
         });
-        const creationPlan =
-          startThread && plan.workspaceRoot === null
-            ? {
-                ...plan,
-                workspaceRoot: scratchWorkspaceRoot({ id: projectId, title: plan.title }),
-                createWorkspaceRootIfMissing: true,
-              }
-            : plan;
-        const outcome = await quickCreateProject({ environmentId, plan: creationPlan, projectId });
+        const outcome = await quickCreateProject({ environmentId, plan, projectId });
         if (!outcome.ok) {
           setWriteError(outcome.message);
           return;
@@ -190,6 +181,7 @@ export function QuickCreateProjectDialog({
             id: outcome.value.projectId,
             title: outcome.value.title,
             workspaceRoot: outcome.value.workspaceRoot,
+            internalWorkspaceRoot: outcome.value.internalWorkspaceRoot ?? null,
             repositoryIdentity: outcome.value.repositoryIdentity ?? null,
           },
         });
@@ -283,7 +275,7 @@ export function QuickCreateProjectDialog({
           <DialogTitle>New project</DialogTitle>
           <DialogDescription>
             {startThread
-              ? "Name your project. A workspace folder will be created so you can start your thread."
+              ? "Name your project. Files are kept in Pathway until you attach your own directory."
               : "A project can be a name on its own. Attach a directory whenever the work needs one."}
           </DialogDescription>
         </DialogHeader>

@@ -247,6 +247,19 @@ describe("ThreadDetailsPanel", () => {
     expect(versionControlIndex).toBeGreaterThan(-1);
     expect(issuesIndex).toBeGreaterThan(runtimeIndex);
     expect(issuesIndex).toBeLessThan(versionControlIndex);
+
+    const internalWorkspaceHtml = renderToStaticMarkup(
+      <ThreadDetailsPanel
+        {...props}
+        activeProjectScripts={[]}
+        showOpenInPicker={true}
+        hasAttachedDirectory={false}
+      />,
+    );
+    expect(internalWorkspaceHtml).not.toContain("Version Control");
+    expect(internalWorkspaceHtml).not.toContain("Add project script");
+    expect(internalWorkspaceHtml).not.toContain("Open in");
+    expect(internalWorkspaceHtml).toContain("terminal-controls-sentinel");
   });
 
   it("restores provider usage for the active environment", () => {

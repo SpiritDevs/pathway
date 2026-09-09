@@ -514,6 +514,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             title: event.payload.title,
             titleIsCustom: event.payload.titleIsCustom === true ? 1 : 0,
             workspaceRoot: event.payload.workspaceRoot,
+            internalWorkspaceRoot: event.payload.internalWorkspaceRoot ?? null,
             defaultModelSelection: event.payload.defaultModelSelection,
             defaultThreadEnvMode: null,
             faviconPath: event.payload.faviconPath ?? null,
@@ -536,6 +537,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
             ...(event.payload.titleIsCustom !== undefined
               ? { titleIsCustom: event.payload.titleIsCustom ? 1 : 0 }
+              : {}),
+            ...(event.payload.internalWorkspaceRoot !== undefined
+              ? { internalWorkspaceRoot: event.payload.internalWorkspaceRoot }
               : {}),
             ...(event.payload.workspaceRoot !== undefined
               ? { workspaceRoot: event.payload.workspaceRoot }

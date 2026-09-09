@@ -34,17 +34,17 @@ export interface ProjectWorkspaceTarget {
   readonly id: ProjectId;
   readonly title: string;
   readonly workspaceRoot: string | null;
+  readonly internalWorkspaceRoot?: string | null | undefined;
 }
 
 export type EnsureProjectWorkspaceDecision =
   /** No project at all — the caller has nothing to prompt about, so it should bail silently. */
   | { readonly kind: "unavailable" }
   | { readonly kind: "ready"; readonly workspaceRoot: string }
-  /** No directory yet: provision one below the user's home rather than asking. */
+  /** No directory yet: ask the environment to provision an internal workspace. */
   | {
       readonly kind: "provision";
       readonly project: ProjectWorkspaceTarget;
-      readonly workspaceRoot: string;
     }
   | { readonly kind: "prompt"; readonly project: ProjectWorkspaceTarget };
 
@@ -68,7 +68,7 @@ export function ensureProjectWorkspaceDecision(
   }
   const workspaceRoot = project.workspaceRoot?.trim() ?? "";
   if (workspaceRoot.length === 0) {
-    return { kind: "provision", project, workspaceRoot: scratchWorkspaceRoot(project) };
+    return { kind: "provision", project };
   }
   return { kind: "ready", workspaceRoot };
 }
@@ -126,7 +126,7 @@ export interface AttachProjectDirectoryDraft {
 
 export const EMPTY_ATTACH_PROJECT_DIRECTORY_DRAFT: AttachProjectDirectoryDraft = {
   path: "",
-  createIfMissing: true,
+  createIfMissing: false,
   initializeGit: false,
 };
 
@@ -233,6 +233,7 @@ export type QuickCreateProjectPlan =
       readonly kind: "create";
       readonly title: string;
       readonly workspaceRoot: string | null;
+      readonly internalWorkspaceRoot?: string | null | undefined;
       readonly createWorkspaceRootIfMissing: boolean;
       readonly initializeGit: boolean;
     };
@@ -288,48 +289,6 @@ export function planQuickCreateProject(input: {
 
 // ── Scratch workspaces ────────────────────────────────────
 
-/**
- * Where Pathway puts a directory it makes for you, below the user's home.
- *
- * `~` rather than an absolute path: the server expands it, so the same value is correct on a Mac,
- * on Windows, and on a remote environment whose home the client has never seen.
- */
-export const SCRATCH_WORKSPACE_PARENT = "~/Pathway Projects";
-
-const UNSAFE_FOLDER_CHARACTERS = /[<>:"/\\|?*\u0000-\u001F]/g;
-
-/**
- * A directory name safe on every platform this runs on.
- *
- * Windows reserves several punctuation characters, and it silently strips a trailing dot or space,
- * which would quietly fold two distinct project names into one directory.
- */
-export function scratchWorkspaceFolderName(title: string, projectId: string): string {
-  const cleaned = title
-    .replaceAll(UNSAFE_FOLDER_CHARACTERS, " ")
-    .replaceAll(/\s+/g, " ")
-    .trim()
-    .replace(/[. ]+$/, "");
-  // A title made entirely of punctuation leaves nothing to name a folder after, and a short id
-  // beats a folder called "-".
-  return cleaned.length === 0 ? `project-${projectId.slice(0, 8)}` : cleaned;
-}
-
-/**
- * The workspace root to create for a project that has none.
- *
- * A project without a repository still needs somewhere to put scratch files, so rather than
- * refusing the action or making someone choose a folder before they have decided anything,
- * Pathway provisions one. Stable per project rather than per session: files left there have to
- * still be there next time, which a `mkdtemp` directory would not be.
- */
-export function scratchWorkspaceRoot(project: {
-  readonly id: string;
-  readonly title: string;
-}): string {
-  return `${SCRATCH_WORKSPACE_PARENT}/${scratchWorkspaceFolderName(project.title, project.id)}`;
-}
-
 // ── Dialog result plumbing ─────────────────────────────────────────────
 
 /**
@@ -343,6 +302,7 @@ export interface QuickCreateProjectResult {
   readonly projectId: ProjectId;
   readonly title: string;
   readonly workspaceRoot: string | null;
+  readonly internalWorkspaceRoot?: string | null | undefined;
   readonly repositoryIdentity?: RepositoryIdentity | null;
 }
 

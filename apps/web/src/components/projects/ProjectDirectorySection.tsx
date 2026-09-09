@@ -34,26 +34,10 @@ export function ProjectDirectorySection({
         currentProjectCwd={currentProjectCwd}
         disabled={disabled}
         environmentId={environmentId}
-        onChange={(path) => onChange({ ...draft, path })}
+        onChange={(path, createIfMissing) => onChange({ ...draft, path, createIfMissing })}
         platform={platform}
         value={draft.path}
       />
-      <label className="flex cursor-pointer items-start gap-2.5">
-        <Checkbox
-          checked={draft.createIfMissing}
-          className="mt-0.5"
-          disabled={disabled}
-          onCheckedChange={(checked) => onChange({ ...draft, createIfMissing: checked === true })}
-        />
-        <span className="min-w-0">
-          <span className="block text-xs font-medium text-foreground">
-            Create the directory if it does not exist
-          </span>
-          <span className="block text-xs leading-snug text-muted-foreground">
-            Otherwise the path has to already be there.
-          </span>
-        </span>
-      </label>
       <label className="flex cursor-pointer items-start gap-2.5">
         <Checkbox
           checked={draft.initializeGit}

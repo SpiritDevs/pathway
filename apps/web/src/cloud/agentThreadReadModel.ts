@@ -228,6 +228,7 @@ export function cloudEnvironmentProjectsFromReplicas(
         id: value.localProjectId,
         title: project.name,
         workspaceRoot: value.localWorkspaceRoot,
+        internalWorkspaceRoot: value.internalWorkspaceRoot ?? null,
         ...(value.repositoryIdentity === undefined
           ? {}
           : { repositoryIdentity: value.repositoryIdentity }),

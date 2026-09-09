@@ -48,6 +48,7 @@ import { resolveActionPaletteSections, type ActionPaletteSectionId } from "./act
 export interface ThreadDetailsPanelProps {
   mode: "inline" | "popover";
   onClose?: () => void;
+  onOpenDirectory?: ((cwd: string) => void) | undefined;
   environmentId: EnvironmentId;
   environmentConnection: EnvironmentConnectionPresentation | null;
   threadId: ThreadId;
@@ -65,6 +66,7 @@ export interface ThreadDetailsPanelProps {
   showOpenInPicker: boolean;
   gitCwd: string | null;
   isGitRepo: boolean;
+  hasAttachedDirectory?: boolean;
   autoPlacement?: AutoPlacementOption | undefined;
   environmentLocked?: boolean | undefined;
   envLocked: boolean;
@@ -167,6 +169,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     props.environmentConnection?.phase === "reconnecting";
   const branchToolbarProps = {
     showGitControls: props.isGitRepo,
+    onOpenDirectory: props.onOpenDirectory,
     environmentId: props.environmentId,
     threadId: props.threadId,
     ...(props.draftId ? { draftId: props.draftId } : {}),
@@ -252,7 +255,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 />
               ) : null}
               <BranchToolbar layout="panel" panelSection="workspace" {...branchToolbarProps} />
-              {props.showOpenInPicker ? (
+              {props.showOpenInPicker && props.hasAttachedDirectory !== false ? (
                 <OpenInPicker
                   environmentId={props.environmentId}
                   keybindings={props.keybindings}
@@ -265,7 +268,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           </section>
         );
       case "actions":
-        return (
+        return props.hasAttachedDirectory === false ? null : (
           <ThreadDetailsActionsSection
             key={sectionId}
             activeProjectScripts={props.activeProjectScripts}
@@ -329,7 +332,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           />
         );
       case "version-control":
-        return props.gitCwd ? (
+        return props.gitCwd && props.hasAttachedDirectory !== false ? (
           <section
             key={sectionId}
             aria-labelledby="thread-details-version-control-heading"

@@ -75,6 +75,11 @@ export function useEnvironmentBrowsePlatform(environmentId: EnvironmentId | null
   }, [environmentId, environments]);
 }
 
+const INITIAL_DIRECTORY_DRAFT: AttachProjectDirectoryDraft = {
+  ...EMPTY_ATTACH_PROJECT_DIRECTORY_DRAFT,
+  path: "~/",
+};
+
 export function AttachProjectDirectoryDialog({
   open,
   project,
@@ -94,15 +99,15 @@ export function AttachProjectDirectoryDialog({
   const platform = useEnvironmentBrowsePlatform(environmentId);
   const occupiedWorkspaceRoots = useOccupiedWorkspaceRoots(environmentId, project?.id);
   const attachDirectory = useAttachProjectDirectory();
-  const [draft, setDraft] = useState<AttachProjectDirectoryDraft>(
-    EMPTY_ATTACH_PROJECT_DIRECTORY_DRAFT,
-  );
+  const [draft, setDraft] = useState<AttachProjectDirectoryDraft>(INITIAL_DIRECTORY_DRAFT);
+  const [copyFiles, setCopyFiles] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [writeError, setWriteError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    setDraft(EMPTY_ATTACH_PROJECT_DIRECTORY_DRAFT);
+    setDraft(INITIAL_DIRECTORY_DRAFT);
+    setCopyFiles(false);
     setSubmitting(false);
     setWriteError(null);
   }, [open, project?.id]);
@@ -127,6 +132,7 @@ export function AttachProjectDirectoryDialog({
         environmentId: project.environmentId,
         projectId: project.id,
         plan,
+        copyInternalWorkspaceFiles: copyFiles,
       });
       setSubmitting(false);
       if (!outcome.ok) {
@@ -163,6 +169,23 @@ export function AttachProjectDirectoryDialog({
             onChange={setDraft}
             platform={platform}
           />
+          {project?.internalWorkspaceRoot ? (
+            <div className="space-y-2 text-xs text-muted-foreground">
+              <label className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  checked={copyFiles}
+                  disabled={submitting}
+                  onChange={(event) => setCopyFiles(event.target.checked)}
+                />
+                Copy files from the Pathway workspace into this directory
+              </label>
+              <p>
+                The Pathway workspace stays connected for reference. Existing files in the
+                destination will not be overwritten.
+              </p>
+            </div>
+          ) : null}
           {plan.kind === "invalid" ? (
             <p className="text-xs text-destructive-foreground">{plan.message}</p>
           ) : writeError !== null ? (
@@ -185,7 +208,13 @@ export function AttachProjectDirectoryDialog({
             size="sm"
             type="button"
           >
-            {submitting ? "Attaching…" : "Attach directory"}
+            {draft.createIfMissing
+              ? submitting
+                ? "Creating…"
+                : "Create Directory"
+              : submitting
+                ? "Attaching…"
+                : "Attach Directory"}
           </Button>
         </DialogFooter>
       </DialogPopup>

@@ -10,8 +10,8 @@ workspace is your only workspace, the dropdown is hidden. Connecting to an exist
 that project's owner.
 
 Creating a project from **Agent Threads** selects it for the current unassigned draft. **Name only**
-creates a workspace folder automatically so the thread is ready to use. Creating a project from an
-issue form can still leave the directory unset.
+uses an internal [Pathway workspace](project-workspaces.md), so the thread is ready to use without
+creating a folder in your home directory. You can attach your own directory later.
 
 A Pathway project can have connections on several computers. Pathway normally joins checkouts
 automatically when their Git repository matches.

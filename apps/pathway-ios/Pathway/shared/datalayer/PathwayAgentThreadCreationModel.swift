@@ -42,6 +42,7 @@ final class PathwayAgentThreadCreationModel {
     var workspaceRoot: String { binding?.binding.localWorkspaceRoot ?? "" }
     var bindingID: String { binding?.id ?? Self.conversationDraftKey(environment) }
     var isConversation: Bool { binding == nil }
+    var usesInternalWorkspace: Bool { binding?.binding.internalWorkspaceRoot == workspaceRoot }
     var supportsConversations: Bool {
         serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue?["threadConversations"]?.boolValue == true
     }
@@ -135,7 +136,7 @@ final class PathwayAgentThreadCreationModel {
     var startFromOrigin = true { didSet { saveDraft() } }
     var temporary = false {
         didSet {
-            if temporary && !isConversation { workspaceMode = "worktree" }
+            if temporary && !isConversation && !usesInternalWorkspace { workspaceMode = "worktree" }
             saveDraft()
         }
     }
@@ -468,8 +469,8 @@ final class PathwayAgentThreadCreationModel {
             prompt = stored.prompt; initialImageUploads = stored.initialImageUploads
             selectedProviderID = stored.selectedProviderID; selectedModelID = stored.selectedModelID
             optionValues = stored.optionValues; runtimeMode = stored.runtimeMode; interactionMode = stored.interactionMode
-            workspaceMode = stored.workspaceMode; baseReference = stored.baseReference
-            temporary = stored.temporary ?? false
+            workspaceMode = usesInternalWorkspace ? "local" : stored.workspaceMode; baseReference = stored.baseReference
+            temporary = usesInternalWorkspace ? false : (stored.temporary ?? false)
             branch = stored.branch; startFromOrigin = stored.startFromOrigin; launchAttempt = stored.attempt
             placementPinned = stored.placementPinned ?? false
             sentIDs = stored.sentAttachmentIDs ?? []

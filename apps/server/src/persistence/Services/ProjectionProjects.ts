@@ -27,6 +27,7 @@ export const ProjectionProject = Schema.Struct({
   titleIsCustom: Schema.optional(Schema.Number),
   // Null for a rootless project, whose directory is attached later.
   workspaceRoot: Schema.NullOr(Schema.String),
+  internalWorkspaceRoot: Schema.optional(Schema.NullOr(Schema.String)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.NullOr(ThreadEnvMode),
   faviconPath: Schema.optional(Schema.NullOr(Schema.String)),

@@ -165,6 +165,11 @@ export function useNewThreadHandler() {
       // query atom caches per project after the first call.
       const resolveDefaultEnvMode = async (): Promise<DraftThreadEnvMode> => {
         if (projectRef.projectId === null) return "local";
+        if (
+          project?.internalWorkspaceRoot != null &&
+          project.workspaceRoot === project.internalWorkspaceRoot
+        )
+          return "local";
         if (options?.temporary) return "worktree";
         // pathway.json is read out of the project directory; a rootless project has none to read.
         const consultProjectFile =

@@ -482,6 +482,7 @@ export const ensureEnvironmentProject = mutation({
     environmentId: v.string(),
     localProjectId: v.string(),
     localWorkspaceRoot: v.union(v.string(), v.null()),
+    internalWorkspaceRoot: v.optional(v.union(v.string(), v.null())),
     repositoryIdentity: v.optional(v.union(repositoryIdentityArg, v.null())),
     matchRepository: v.optional(v.boolean()),
     name: v.string(),
@@ -663,6 +664,7 @@ export const ensureEnvironmentProject = mutation({
         environmentId,
         localProjectId,
         localWorkspaceRoot,
+        internalWorkspaceRoot: args.internalWorkspaceRoot ?? null,
         ...(repositoryIdentity === undefined ? {} : { repositoryIdentity, repositoryKey }),
         status: "active",
         lastSeenAt: now,
@@ -681,6 +683,8 @@ export const ensureEnvironmentProject = mutation({
     } else if (
       binding !== null &&
       (binding.localWorkspaceRoot !== localWorkspaceRoot ||
+        (args.internalWorkspaceRoot !== undefined &&
+          (binding.internalWorkspaceRoot ?? null) !== args.internalWorkspaceRoot) ||
         binding.status !== (localWorkspaceRoot === null ? "missing" : "active") ||
         // A null identity means the environment's enrichment has not resolved (yet), not that the
         // checkout lost its repository: the publisher re-reports every project each minute, and
@@ -692,6 +696,9 @@ export const ensureEnvironmentProject = mutation({
     ) {
       await ctx.db.patch(binding._id, {
         ...(localWorkspaceRoot === null ? {} : { localWorkspaceRoot }),
+        ...(args.internalWorkspaceRoot === undefined
+          ? {}
+          : { internalWorkspaceRoot: args.internalWorkspaceRoot }),
         ...(repositoryIdentity == null ? {} : { repositoryIdentity, repositoryKey }),
         status: localWorkspaceRoot === null ? "missing" : "active",
         lastSeenAt: now,

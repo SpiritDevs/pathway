@@ -49,6 +49,7 @@ export const Project = Schema.Struct({
   // Optional on the wire so clients can still read snapshots from older servers.
   titleIsCustom: Schema.optional(Schema.Boolean),
   workspaceRoot: Schema.NullOr(TrimmedNonEmptyString),
+  internalWorkspaceRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
@@ -111,6 +112,9 @@ export const ProjectMutation = Schema.Union([
     title: Schema.optional(TrimmedNonEmptyString),
     titleIsCustom: Schema.optional(Schema.Boolean),
     workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+    useInternalWorkspace: Schema.optional(Schema.Boolean),
+    copyInternalWorkspaceFiles: Schema.optional(Schema.Boolean),
+    disconnectInternalWorkspace: Schema.optional(Schema.Boolean),
     createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
     defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
     defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
