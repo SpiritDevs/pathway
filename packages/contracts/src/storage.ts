@@ -32,6 +32,7 @@ export const StorageVolume = Schema.Struct({
   pressure: StoragePressure,
 });
 export const StorageThread = Schema.Struct({
+  hasMessages: Schema.optional(Schema.Boolean),
   threadId: ThreadId,
   title: Schema.String,
   conversationCompanyId: Schema.optional(Schema.NullOr(Schema.String)),

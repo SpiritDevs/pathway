@@ -81,8 +81,8 @@ describe("storage dashboard selection and reporting", () => {
       storageSelectionKey(EnvironmentId.make("two"), "/work/fix"),
     );
   });
-  it("includes snoozed projectless conversations by default and exposes active ones only when requested", () => {
-    expect(storageThreadMatches(thread, worktree, "inactive", "")).toBe(true);
+  it("excludes snoozed and active threads from the default filter", () => {
+    expect(storageThreadMatches(thread, worktree, "inactive", "")).toBe(false);
     expect(storageThreadMatches({ ...thread, status: "active" }, worktree, "inactive", "")).toBe(
       false,
     );

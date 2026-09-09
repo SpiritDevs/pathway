@@ -466,6 +466,7 @@ export const makeStorageService = Effect.gen(function* () {
           (entry) => entry.phase !== "pending" && entry.threadIds.includes(thread.id),
         );
         rows.push({
+          hasMessages: thread.latestUserMessageAt != null,
           threadId: thread.id,
           title: thread.title,
           conversationCompanyId: thread.conversationCompanyId ?? null,

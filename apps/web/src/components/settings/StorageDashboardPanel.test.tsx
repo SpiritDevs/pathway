@@ -33,6 +33,7 @@ vi.mock("../../lib/storageDashboardState", () => ({
 vi.mock("../../lib/storagePreferences", () => ({
   useStorageDefaultPolicy: () => ({ canSave: false }),
 }));
+vi.mock("../../state/entities", () => ({ useActiveEnvironmentId: () => "remote-machine" }));
 vi.mock("../../state/server", () => ({ serverEnvironment: {} }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("../../hooks/useThreadActions", () => ({
@@ -92,12 +93,11 @@ function render() {
   return StorageDashboardPanel();
 }
 function requestDeletion() {
-  const row = visitElements(
-    render(),
-    (element) => element.props.thread === thread && typeof element.props.onAction === "function",
-  );
-  expect(row).not.toBeNull();
-  (row!.props.onAction as (action: "delete") => void)("delete");
+  const tab = visitElements(render(), (element) => element.props.children === "Archived threads");
+  (tab!.props.onClick as () => void)();
+  const button = visitElements(render(), (element) => element.props.children === "Delete thread…");
+  expect(button).not.toBeNull();
+  (button!.props.onClick as () => void)();
 }
 function deletionDialog() {
   return visitElements(
@@ -152,4 +152,30 @@ it("keeps ordinary Git worktree deletion on the existing generic confirmation pa
     scopeThreadRef(environmentId, thread.threadId),
   );
   expect(deletionDialog()).toBeNull();
+});
+
+it("defaults to the current environment and switches the thread list using a card", () => {
+  const other = {
+    ...(state.entries[0] as Record<string, unknown>),
+    environment: { environmentId: "other", label: "Other", connection: { phase: "connected" } },
+    snapshot: { ...(state.entries[0] as { snapshot: object }).snapshot, threads: [] },
+  };
+  state.entries.unshift(other);
+  const currentCard = visitElements(render(), (element) => element.props.selected === true);
+  expect(
+    (currentCard!.props.entry as { environment: { environmentId: string } }).environment
+      .environmentId,
+  ).toBe("remote-machine");
+  const otherCard = visitElements(
+    render(),
+    (element) => element.props.entry === other && typeof element.props.onSelect === "function",
+  );
+  (otherCard!.props.onSelect as () => void)();
+  expect(visitElements(render(), (element) => element.props.thread === thread)).toBeNull();
+  expect(
+    visitElements(
+      render(),
+      (element) => element.props.entry === other && element.props.selected === true,
+    ),
+  ).not.toBeNull();
 });

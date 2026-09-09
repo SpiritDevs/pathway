@@ -177,6 +177,7 @@ describe("storage service lifecycle", () => {
             Effect.provideService(ServerActivation, Effect.never),
           );
           const first = yield* service.snapshot;
+          expect(first.threads[0]?.hasMessages).toBe(false);
           const since = first.threads[0]!.eligibleSince!;
           expect(since).not.toBeNull();
           const later = Date.parse(since) + 31 * 86_400_000;
@@ -188,9 +189,14 @@ describe("storage service lifecycle", () => {
           });
           expect(preview.items[0]?.eligible).toBe(true);
           expect((yield* service.snapshot).threads[0]?.eligibleSince).toBe(since);
-          thread = { ...thread, status: "running" };
+          thread = {
+            ...thread,
+            status: "running",
+            latestUserMessageAt: DateTime.makeUnsafe(later),
+          };
           invalidateStorageInventory();
           expect((yield* service.snapshot).threads[0]?.eligibleSince).toBeNull();
+          expect((yield* service.snapshot).threads[0]?.hasMessages).toBe(true);
           thread = { ...thread, status: "idle" };
           invalidateStorageInventory();
           const reset = yield* service.snapshot;

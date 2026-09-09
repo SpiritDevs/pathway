@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   ArchiveRestoreIcon,
   CheckIcon,
-  ChevronDownIcon,
   HardDriveIcon,
   HistoryIcon,
   MoreHorizontalIcon,
@@ -28,6 +28,7 @@ import {
 import { formatStorageBytes, storagePressure } from "../../lib/storagePresentation";
 import { cn } from "../../lib/utils";
 import { useStorageDefaultPolicy } from "../../lib/storagePreferences";
+import { useActiveEnvironmentId } from "../../state/entities";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
@@ -44,7 +45,6 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
-import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { StorageAutoPlacementSetting } from "./LoadBalancingSettings";
@@ -106,7 +106,11 @@ function StateBadge({
 function EnvironmentCapacityCard({
   entry,
   onPolicy,
+  selected,
+  onSelect,
 }: {
+  selected: boolean;
+  onSelect: () => void;
   entry: StorageEnvironmentEntry;
   onPolicy: () => void;
 }) {
@@ -121,7 +125,8 @@ function EnvironmentCapacityCard({
   return (
     <article
       className={cn(
-        "min-w-0 rounded-xl border bg-card p-4",
+        "relative min-w-0 rounded-xl border bg-card p-4",
+        selected && "ring-2 ring-primary",
         pressure === "critical"
           ? "border-destructive/40"
           : pressure === "warning"
@@ -133,9 +138,15 @@ function EnvironmentCapacityCard({
         <div className="min-w-0">
           <h3 className="flex items-center gap-2 text-sm font-semibold">
             <HardDriveIcon className="size-4 shrink-0 text-muted-foreground" />
-            <span className="truncate" title={environment.label}>
+            <button
+              type="button"
+              aria-pressed={selected}
+              onClick={onSelect}
+              className="truncate text-left cursor-pointer after:absolute after:inset-0 after:rounded-xl focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-ring"
+              title={environment.label}
+            >
               {environment.label}
-            </span>
+            </button>
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
             {connected
@@ -238,7 +249,13 @@ function EnvironmentCapacityCard({
             "Cleanup policy unavailable"
           )}
         </div>
-        <Button size="sm" variant="ghost" disabled={!connected || !snapshot} onClick={onPolicy}>
+        <Button
+          className="relative z-10"
+          size="sm"
+          variant="ghost"
+          disabled={!connected || !snapshot}
+          onClick={onPolicy}
+        >
           <SlidersHorizontalIcon className="size-3.5" />
           Policy
         </Button>
@@ -400,13 +417,46 @@ function ThreadStorageRow({
   );
 }
 
+function StorageHeaderActions({
+  busy,
+  refresh,
+  canSave,
+  onEditDefaults,
+}: {
+  busy: boolean;
+  refresh: () => void;
+  canSave: boolean;
+  onEditDefaults: () => void;
+}) {
+  const [target, setTarget] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setTarget(document.getElementById("settings-header-actions"));
+  }, []);
+  return target
+    ? createPortal(
+        <>
+          <Button variant="outline" size="sm" disabled={!canSave || busy} onClick={onEditDefaults}>
+            Edit defaults
+          </Button>
+          <Button variant="outline" size="sm" disabled={busy} onClick={refresh}>
+            <RefreshCwIcon className="size-3.5" />
+            Refresh
+          </Button>
+        </>,
+        target,
+      )
+    : null;
+}
+
 export function StorageDashboardPanel() {
   const { entries, refresh } = useStorageDashboardState();
   const { defaultPolicy, saveDefaultPolicy, canSave } = useStorageDefaultPolicy();
   const [showDefaults, setShowDefaults] = useState(false);
-  const [selectedEnvironments, setSelectedEnvironments] =
-    useState<ReadonlySet<EnvironmentId> | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const activeEnvironmentId = useActiveEnvironmentId();
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<EnvironmentId | null>(null);
   const [selectedWorktrees, setSelectedWorktrees] = useState<ReadonlySet<string>>(new Set());
+  const [secondaryView, setSecondaryView] = useState<"unlinked" | "empty" | "archived">("unlinked");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<StorageThreadFilter>("inactive");
   const [page, setPage] = useState(0);
@@ -428,15 +478,11 @@ export function StorageDashboardPanel() {
   const recreateCommand = useAtomCommand(serverEnvironment.storageRecreate);
   const { confirmAndDeleteThread, deleteThread, unarchiveThread, unsettleThread, unsnoozeThread } =
     useThreadActions();
-  const visibleEntries = useMemo(
-    () =>
-      entries.filter(
-        (entry) =>
-          selectedEnvironments === null ||
-          selectedEnvironments.has(entry.environment.environmentId),
-      ),
-    [entries, selectedEnvironments],
-  );
+  const selectedEntry =
+    entries.find((entry) => entry.environment.environmentId === selectedEnvironmentId) ??
+    entries.find((entry) => entry.environment.environmentId === activeEnvironmentId) ??
+    entries[0];
+  const visibleEntries = useMemo(() => (selectedEntry ? [selectedEntry] : []), [selectedEntry]);
   const rows = useMemo(
     () =>
       visibleEntries
@@ -447,7 +493,9 @@ export function StorageDashboardPanel() {
           return (entry.snapshot?.threads ?? []).flatMap((thread) => {
             const worktree =
               thread.worktreeId === null ? undefined : worktreesById.get(thread.worktreeId);
-            return storageThreadMatches(thread, worktree, filter, query)
+            return worktree?.kind === "worktree" &&
+              !worktree.removed &&
+              storageThreadMatches(thread, worktree, filter, query)
               ? [{ entry, thread, worktree }]
               : [];
           });
@@ -659,87 +707,23 @@ export function StorageDashboardPanel() {
   return (
     <SettingsPageContainer className="max-w-7xl gap-7">
       <section id="archive" tabIndex={-1} className="space-y-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Storage &amp; cleanup</h1>
-            <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground">
-              Keep space available on every environment. Reclaim worktrees while keeping your
-              conversations.
-            </p>
-          </div>
-          <Button variant="outline" disabled={busy} onClick={refresh}>
-            <RefreshCwIcon className="size-3.5" />
-            Refresh
-          </Button>
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Popover>
-            <PopoverTrigger render={<Button variant="outline" />}>
-              <HardDriveIcon />
-              {selectedEnvironments === null
-                ? "All environments"
-                : `${selectedEnvironments.size} environments`}
-              <ChevronDownIcon />
-            </PopoverTrigger>
-            <PopoverPopup align="start" className="w-72">
-              <div className="space-y-3">
-                <label className="flex items-center gap-2 text-sm font-medium">
-                  <Checkbox
-                    checked={selectedEnvironments === null}
-                    onCheckedChange={(checked) => {
-                      setSelectedEnvironments(checked ? null : new Set());
-                      setPage(0);
-                      setSelectedWorktrees(new Set());
-                    }}
-                  />
-                  All environments
-                </label>
-                {entries.map(({ environment }) => (
-                  <label
-                    key={environment.environmentId}
-                    className="flex items-center gap-2 text-sm"
-                  >
-                    <Checkbox
-                      checked={
-                        selectedEnvironments === null ||
-                        selectedEnvironments.has(environment.environmentId)
-                      }
-                      onCheckedChange={(checked) => {
-                        setSelectedEnvironments((previous) => {
-                          const next = new Set(
-                            previous ?? entries.map((entry) => entry.environment.environmentId),
-                          );
-                          if (checked) next.add(environment.environmentId);
-                          else next.delete(environment.environmentId);
-                          return next;
-                        });
-                        setPage(0);
-                        setSelectedWorktrees(new Set());
-                      }}
-                    />
-                    <span className="truncate">{environment.label}</span>
-                    {environment.connection.phase !== "connected" && (
-                      <span className="ml-auto text-xs text-muted-foreground">Offline</span>
-                    )}
-                  </label>
-                ))}
-              </div>
-            </PopoverPopup>
-          </Popover>
-          <p className="text-xs text-muted-foreground">
-            {visibleEntries.length} environments ·{" "}
-            {
-              visibleEntries.filter((entry) => entry.environment.connection.phase === "connected")
-                .length
-            }{" "}
-            connected
-          </p>
-        </div>
+        <StorageHeaderActions
+          busy={busy}
+          refresh={refresh}
+          canSave={canSave}
+          onEditDefaults={() => setShowDefaults(true)}
+        />
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {visibleEntries.map((entry) => (
+          {entries.map((entry) => (
             <EnvironmentCapacityCard
               key={entry.environment.environmentId}
               entry={entry}
+              selected={entry === selectedEntry}
+              onSelect={() => {
+                setSelectedEnvironmentId(entry.environment.environmentId);
+                setPage(0);
+                setSelectedWorktrees(new Set());
+              }}
               onPolicy={() => setPolicyEnvironmentId(entry.environment.environmentId)}
             />
           ))}
@@ -761,22 +745,6 @@ export function StorageDashboardPanel() {
           </div>
         )}
         <div className="rounded-xl border px-1">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
-            <div>
-              <h3 className="text-sm font-medium">Cleanup defaults</h3>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Saved on this client for your account. Apply to environments when you are ready.
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!canSave || busy}
-              onClick={() => setShowDefaults(true)}
-            >
-              Edit defaults
-            </Button>
-          </div>
           <StorageAutoPlacementSetting />
         </div>
       </section>
@@ -789,13 +757,6 @@ export function StorageDashboardPanel() {
               Conversation estimates exclude shared database pages, provider logs and attachments.
             </p>
           </div>
-          <Button
-            disabled={busy || selectedWorktrees.size === 0}
-            onClick={() => void showPreview(selectedGroups())}
-          >
-            <Trash2Icon />
-            Review cleanup{selectedWorktrees.size > 0 ? ` (${selectedWorktrees.size})` : ""}
-          </Button>
         </div>
         <div className="flex flex-wrap gap-3">
           <div className="relative min-w-48 flex-1">
@@ -823,14 +784,14 @@ export function StorageDashboardPanel() {
             <SelectTrigger className="w-56" aria-label="Filter thread state">
               <SelectValue>
                 {filter === "inactive"
-                  ? "Archived, settled & snoozed"
+                  ? "Archived & settled"
                   : filter === "all"
                     ? "All threads"
                     : filter.charAt(0).toUpperCase() + filter.slice(1)}
               </SelectValue>
             </SelectTrigger>
             <SelectPopup>
-              <SelectItem value="inactive">Archived, settled &amp; snoozed</SelectItem>
+              <SelectItem value="inactive">Archived &amp; settled</SelectItem>
               <SelectItem value="all">All threads</SelectItem>
               <SelectItem value="archived">Archived</SelectItem>
               <SelectItem value="settled">Settled</SelectItem>
@@ -838,6 +799,12 @@ export function StorageDashboardPanel() {
               <SelectItem value="active">Active</SelectItem>
             </SelectPopup>
           </Select>
+          {selectedWorktrees.size > 0 ? (
+            <Button disabled={busy} onClick={() => void showPreview(selectedGroups())}>
+              <Trash2Icon />
+              Review cleanup ({selectedWorktrees.size})
+            </Button>
+          ) : null}
         </div>
         <div className="overflow-x-auto rounded-xl border">
           <table className="w-full min-w-[800px] text-left">
@@ -947,12 +914,31 @@ export function StorageDashboardPanel() {
           )}
         </div>
       </section>
-      {orphanRows.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-lg font-semibold tracking-tight">Unlinked worktrees</h2>
-          <p className="text-xs text-muted-foreground">
-            These folders have no linked conversation. Review them manually before cleanup.
-          </p>
+      <section className="space-y-3">
+        <div
+          className="inline-flex max-w-full flex-wrap gap-1 rounded-xl border border-border bg-muted p-1"
+          role="group"
+          aria-label="Other cleanup items"
+        >
+          {(
+            [
+              ["unlinked", "Unlinked worktrees"],
+              ["empty", "Empty threads"],
+              ["archived", "Archived threads"],
+            ] as const
+          ).map(([value, label]) => (
+            <Button
+              key={value}
+              variant={secondaryView === value ? "default" : "ghost"}
+              className="rounded-lg px-4 aria-pressed:shadow-sm"
+              aria-pressed={secondaryView === value}
+              onClick={() => setSecondaryView(value)}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+        {secondaryView === "unlinked" ? (
           <div className="divide-y rounded-xl border">
             {orphanRows.map(({ entry, worktree }) => (
               <div
@@ -993,105 +979,164 @@ export function StorageDashboardPanel() {
                 </Button>
               </div>
             ))}
+            {orphanRows.length === 0 && (
+              <p className="p-5 text-sm text-muted-foreground">No unlinked worktrees</p>
+            )}
           </div>
-        </section>
-      )}
-      <section className="space-y-3">
-        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
-          <HistoryIcon className="size-4 text-muted-foreground" />
-          Cleanup history
-        </h2>
-        {jobs.length === 0 ? (
-          <p className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">
-            Manual and scheduled cleanup results will appear here.
-          </p>
         ) : (
           <div className="divide-y rounded-xl border">
-            {jobs.slice(0, 30).map(({ entry, job }) => {
-              const removed = job.items.filter((item) => item.status === "removed").length;
-              const retryIds = storageJobRetryIds(job);
-              const actualBytes = storageJobReclaimedBytes(job);
-              return (
-                <details
-                  key={`${entry.environment.environmentId}:${job.id}`}
-                  className="p-4"
-                  open={job.status === "running"}
-                >
-                  <summary className="cursor-pointer text-sm">
-                    <span className="font-medium">{entry.environment.label}</span>
-                    <span className="ml-2 text-muted-foreground">
-                      {job.mode === "scheduled"
-                        ? "Scheduled cleanup"
-                        : job.mode === "emergency"
-                          ? "Emergency cleanup"
-                          : "Manual cleanup"}{" "}
-                      · {job.status} · {formatRelativeTimeLabel(job.startedAt)}
-                    </span>
-                    <span className="ml-2 text-xs">
-                      {removed} removed
-                      {actualBytes !== null
-                        ? ` · ${formatStorageBytes(Math.abs(actualBytes))} ${actualBytes < 0 ? "less" : "more"} free`
-                        : ""}
-                    </span>
-                  </summary>
-                  <div className="mt-3 space-y-2 pl-4 text-xs text-muted-foreground">
-                    {job.items.map((item) => (
-                      <p key={item.worktreeId} className="break-all">
-                        <span
-                          className={cn(
-                            "mr-2 font-medium",
-                            item.status === "failed" && "text-destructive",
-                          )}
-                        >
-                          {item.status}
-                        </span>
-                        {item.worktreeId}
-                        {item.message ? ` · ${item.message}` : ""}
-                      </p>
-                    ))}
-                    <div className="flex gap-2 pt-2">
-                      {job.status === "running" && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={busy || entry.environment.connection.phase !== "connected"}
-                          onClick={() =>
-                            void runAction(async () => {
-                              resultValue(
-                                await cancelCommand({
-                                  environmentId: entry.environment.environmentId,
-                                  input: { jobId: job.id },
-                                }),
-                              );
-                            })
-                          }
-                        >
-                          Cancel remaining
-                        </Button>
-                      )}
-                      {retryIds.length > 0 && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={busy}
-                          onClick={() => void showPreview([{ entry, worktreeIds: retryIds }])}
-                        >
-                          Retry {retryIds.length} failed
-                        </Button>
-                      )}
-                    </div>
-                    {job.status === "running" && (
-                      <p>
-                        Cancellation stops before the next worktree. Removed worktrees cannot be
-                        restored by cancelling.
-                      </p>
-                    )}
+            {visibleEntries.flatMap((entry) =>
+              (entry.snapshot?.threads ?? [])
+                .filter((thread) =>
+                  secondaryView === "empty"
+                    ? thread.hasMessages === false
+                    : thread.status === "archived",
+                )
+                .map((thread) => (
+                  <div key={thread.threadId} className="flex items-center gap-3 p-4">
+                    <Link
+                      className="min-w-0 flex-1 truncate text-sm hover:underline"
+                      to="/threads/$environmentId/$threadId"
+                      params={{
+                        environmentId: entry.environment.environmentId,
+                        threadId: thread.threadId,
+                      }}
+                    >
+                      {thread.title}
+                    </Link>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy || entry.environment.connection.phase !== "connected"}
+                      onClick={() => void threadAction("delete", entry, thread)}
+                    >
+                      Delete thread…
+                    </Button>
                   </div>
-                </details>
-              );
-            })}
+                )),
+            )}
+            {!visibleEntries.some((entry) =>
+              entry.snapshot?.threads.some((thread) =>
+                secondaryView === "empty"
+                  ? thread.hasMessages === false
+                  : thread.status === "archived",
+              ),
+            ) && <p className="p-5 text-sm text-muted-foreground">No {secondaryView} threads</p>}
           </div>
         )}
+      </section>
+      <section className="space-y-3" aria-labelledby="cleanup-history-heading">
+        <div className="flex items-center justify-between gap-3">
+          <h2
+            id="cleanup-history-heading"
+            className="inline-flex items-center gap-2 text-lg font-semibold tracking-tight"
+          >
+            <HistoryIcon className="size-4 text-muted-foreground" />
+            Cleanup history
+          </h2>
+          <Button
+            size="sm"
+            variant="outline"
+            aria-expanded={showHistory}
+            aria-controls="cleanup-history-content"
+            onClick={() => setShowHistory((shown) => !shown)}
+          >
+            {showHistory ? "Hide" : "Show"}
+          </Button>
+        </div>
+        <div id="cleanup-history-content" hidden={!showHistory}>
+          {jobs.length === 0 ? (
+            <p className="rounded-xl border border-dashed p-5 text-sm text-muted-foreground">
+              Manual and scheduled cleanup results will appear here.
+            </p>
+          ) : (
+            <div className="divide-y rounded-xl border">
+              {jobs.slice(0, 30).map(({ entry, job }) => {
+                const removed = job.items.filter((item) => item.status === "removed").length;
+                const retryIds = storageJobRetryIds(job);
+                const actualBytes = storageJobReclaimedBytes(job);
+                return (
+                  <details
+                    key={`${entry.environment.environmentId}:${job.id}`}
+                    className="p-4"
+                    open={job.status === "running"}
+                  >
+                    <summary className="cursor-pointer text-sm">
+                      <span className="font-medium">{entry.environment.label}</span>
+                      <span className="ml-2 text-muted-foreground">
+                        {job.mode === "scheduled"
+                          ? "Scheduled cleanup"
+                          : job.mode === "emergency"
+                            ? "Emergency cleanup"
+                            : "Manual cleanup"}{" "}
+                        · {job.status} · {formatRelativeTimeLabel(job.startedAt)}
+                      </span>
+                      <span className="ml-2 text-xs">
+                        {removed} removed
+                        {actualBytes !== null
+                          ? ` · ${formatStorageBytes(Math.abs(actualBytes))} ${actualBytes < 0 ? "less" : "more"} free`
+                          : ""}
+                      </span>
+                    </summary>
+                    <div className="mt-3 space-y-2 pl-4 text-xs text-muted-foreground">
+                      {job.items.map((item) => (
+                        <p key={item.worktreeId} className="break-all">
+                          <span
+                            className={cn(
+                              "mr-2 font-medium",
+                              item.status === "failed" && "text-destructive",
+                            )}
+                          >
+                            {item.status}
+                          </span>
+                          {item.worktreeId}
+                          {item.message ? ` · ${item.message}` : ""}
+                        </p>
+                      ))}
+                      <div className="flex gap-2 pt-2">
+                        {job.status === "running" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy || entry.environment.connection.phase !== "connected"}
+                            onClick={() =>
+                              void runAction(async () => {
+                                resultValue(
+                                  await cancelCommand({
+                                    environmentId: entry.environment.environmentId,
+                                    input: { jobId: job.id },
+                                  }),
+                                );
+                              })
+                            }
+                          >
+                            Cancel remaining
+                          </Button>
+                        )}
+                        {retryIds.length > 0 && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() => void showPreview([{ entry, worktreeIds: retryIds }])}
+                          >
+                            Retry {retryIds.length} failed
+                          </Button>
+                        )}
+                      </div>
+                      {job.status === "running" && (
+                        <p>
+                          Cancellation stops before the next worktree. Removed worktrees cannot be
+                          restored by cancelling.
+                        </p>
+                      )}
+                    </div>
+                  </details>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </section>
       {(policyEntry || showDefaults) && (
         <StoragePolicyDialog

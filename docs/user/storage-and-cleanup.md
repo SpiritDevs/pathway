@@ -45,3 +45,5 @@ The card opens the storage dashboard so you can review estimates and choose what
 Cleanup history records manual and scheduled runs for each environment. Successful removals stay completed even if another removal fails. Retry targets failed worktrees, and each retry gets another eligibility review. Offline environments are skipped; Pathway does not queue their deletion for a later reconnection.
 
 **Cancel remaining** stops before the next worktree. It cannot restore worktrees already removed. If cleanup cannot recover enough space, use the remaining blockers and disk readings to decide what to clean up next.
+
+The main Threads table lists threads with existing Git worktrees. It defaults to archived and settled threads; select Snoozed or All threads to include snoozed worktrees. Below it, switch between Unlinked worktrees, Empty threads (no user messages), and Archived threads. These lists follow the selected environment. Older environments that do not report whether a thread has messages cannot populate the Empty threads list until updated.
