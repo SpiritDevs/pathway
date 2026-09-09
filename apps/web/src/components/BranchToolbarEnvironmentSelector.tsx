@@ -1,3 +1,4 @@
+import { EnvironmentStorageIcon } from "./navigation/EnvironmentStorageIcon";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import { CloudIcon, MonitorIcon, PlusIcon } from "lucide-react";
 import { memo, useMemo } from "react";
@@ -108,6 +109,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
             {activeEnvironment?.label ?? "Run on"}
           </span>
         </span>
+        <EnvironmentStorageIcon environmentId={environmentId} />
       </span>
     );
   }
@@ -167,6 +169,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
             {autoPlacement?.active ? autoPlacement.label : <SelectValue />}
           </span>
         </span>
+        {!autoPlacement?.active ? <EnvironmentStorageIcon environmentId={environmentId} /> : null}
       </SelectTrigger>
       <SelectPopup
         {...(displayMode === "panel"
@@ -188,13 +191,14 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
           )}
           {availableEnvironments.map((env) => (
             <SelectItem key={env.environmentId} value={env.environmentId}>
-              <span className="inline-flex items-center gap-1.5">
+              <span className="flex w-full min-w-0 items-center gap-1.5">
                 {env.isPrimary ? (
                   <MonitorIcon className="size-3" />
                 ) : (
                   <CloudIcon className="size-3" />
                 )}
-                {env.label}
+                <span className="min-w-0 flex-1 truncate">{env.label}</span>
+                <EnvironmentStorageIcon environmentId={env.environmentId} />
               </span>
             </SelectItem>
           ))}

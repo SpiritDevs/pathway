@@ -94,7 +94,7 @@ export function useConversationStorage(input: {
     snapshot.data?.threads.find((thread) => thread.threadId === threadId)?.reclaimedAt != null;
 
   const allowed = !isStartingConversation || allowedScope === scope;
-  const canSend = !reclaimed && (pressure !== "critical" || allowed);
+  const canSend = !reclaimed;
   const checkCanSend = useCallback(
     (onBlocked: (reclaimed: boolean) => void) => {
       if (canSend) return true;

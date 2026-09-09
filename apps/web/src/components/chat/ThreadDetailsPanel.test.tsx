@@ -8,6 +8,9 @@ import type {
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+vi.mock("@clerk/react", () => ({ useAuth: () => ({ userId: "test-user" }) }));
+vi.mock("../../hooks/useStoragePressure", () => ({ useStoragePressure: () => [] }));
+
 const testState = vi.hoisted(() => ({
   actionPaletteSections: [] as Array<{ id: string; visible: boolean }>,
   usePathwayProjectFileScripts: vi.fn(),

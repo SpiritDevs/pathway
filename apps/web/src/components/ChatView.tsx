@@ -2,7 +2,6 @@ import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { useLoadBalancedDraft } from "../hooks/useLoadBalancedDraft";
 import { useConversationStorage } from "../hooks/useConversationStorage";
 import { conversationStorageBanner } from "./chat/ConversationStorageBanner";
-import { Select, SelectItem, SelectPopup, SelectTrigger } from "./ui/select";
 import {
   addQuestionAttachments,
   clearQuestionAttachments,
@@ -442,7 +441,6 @@ import {
   loadQueuedComposerImages,
   reconcileMountedTerminalThreadIds,
   resolveDraftEnvironmentProjectRef,
-  filterStorageEnvironmentOptions,
   resolveEditableV2UserMessageId,
   resolveRetryableV2UserMessageId,
   resolvePanelSurfaceOwnerThreadRef,
@@ -3340,15 +3338,11 @@ function ChatViewContent(props: ChatViewProps) {
   });
   const requireConversationStorage = useCallback(
     () =>
-      conversationStorage.checkCanSend((reclaimed) => {
+      conversationStorage.checkCanSend(() => {
         toastManager.add({
           type: "warning",
-          title: reclaimed
-            ? "Recreate the worktree before continuing"
-            : "This environment is critically low on storage",
-          description: reclaimed
-            ? "Your input is preserved. Use Recreate worktree above the composer."
-            : "Choose Clean up, another environment, or Continue anyway above the composer. Your input is preserved.",
+          title: "Recreate the worktree before continuing",
+          description: "Your input is preserved. Use Recreate worktree above the composer.",
         });
       }),
     [conversationStorage.checkCanSend],
@@ -3810,86 +3804,10 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
-  const storageEnvironmentOptions = filterStorageEnvironmentOptions(
-    activeProject
-      ? logicalProjectEnvironments
-      : environments.map((item) => ({
-          environmentId: item.environmentId,
-          projectId: null,
-          label: item.label,
-        })),
-    environmentById,
-  );
-  const storageChoiceStartsConversation =
-    envLocked || draftPlacement.locked || activeProject === null;
-  const chooseStorageEnvironment = (nextEnvironmentId: EnvironmentId) => {
-    if (!storageChoiceStartsConversation) {
-      onEnvironmentChange(nextEnvironmentId);
-      return;
-    }
-    const destination = storageEnvironmentOptions.find(
-      (item) => item.environmentId === nextEnvironmentId,
-    );
-    if (!destination) return;
-    // Changing an existing conversation's machine starts an explicit new draft.
-    // Its current history and draft remain on their original environment.
-    const nextDraftId = newDraftId();
-    useComposerDraftStore
-      .getState()
-      .setProjectDraftThreadId(
-        { environmentId: destination.environmentId, projectId: destination.projectId },
-        nextDraftId,
-        {
-          threadId: newThreadId(),
-          conversationCompanyId:
-            destination.projectId === null
-              ? (activeThread?.conversationCompanyId ?? activeCompanyId)
-              : null,
-          temporary: activeThread?.temporary ?? false,
-        },
-      );
-    useComposerDraftStore.getState().setDraftThreadContext(nextDraftId, {
-      placement: { mode: "manual", providerPinned: false, resolvedKey: null },
-    });
-    void navigate({
-      to: "/threads/draft/$draftId",
-      params: buildDraftThreadRouteParams(nextDraftId),
-    });
-  };
   const storageBannerItem = conversationStorageBanner({
     storage: conversationStorage,
     environmentLabel: activeEnvironment?.label ?? "This environment",
-    chooseEnvironment: (
-      <Select<EnvironmentId>
-        value={null}
-        onValueChange={(value) => {
-          if (value) chooseStorageEnvironment(value);
-        }}
-      >
-        <SelectTrigger size="xs" aria-label="Choose another environment">
-          Choose another environment
-        </SelectTrigger>
-        <SelectPopup>
-          {storageEnvironmentOptions
-            .filter(
-              (item) =>
-                item.environmentId !== environmentId &&
-                environmentById.get(item.environmentId)?.connection.phase === "connected",
-            )
-            .map((item) => (
-              <SelectItem key={item.environmentId} value={item.environmentId}>
-                {item.label}
-                {storageChoiceStartsConversation ? " · New conversation" : ""}
-              </SelectItem>
-            ))}
-          <p className="px-3 py-2 text-xs text-muted-foreground">
-            {storageChoiceStartsConversation
-              ? "Choose a machine to start a new conversation. This conversation and its draft stay here."
-              : "Only connected environments with this project are available."}
-          </p>
-        </SelectPopup>
-      </Select>
-    ),
+    hasMessages: activeMessageCount > 0 || (isServerThread && serverProjection == null),
   });
 
   const activeTerminalGroup =

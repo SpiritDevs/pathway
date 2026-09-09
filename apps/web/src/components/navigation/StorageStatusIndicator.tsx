@@ -1,16 +1,18 @@
 import { useAuth } from "@clerk/react";
 import { useNavigate } from "@tanstack/react-router";
 import { isInAlertQuietHours } from "@spiritdevs/client-runtime/thread-alerts";
-import type { StoragePressure } from "@spiritdevs/contracts";
+import type { EnvironmentId, StoragePressure } from "@spiritdevs/contracts";
 import { HardDriveIcon } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useClientSettings, useClientSettingsHydrated } from "../../hooks/useSettings";
 import { useStoragePressure } from "../../hooks/useStoragePressure";
-import { storagePressureTransition } from "../../lib/storagePresentation";
+import { formatStorageBytes, storagePressureTransition } from "../../lib/storagePresentation";
 import { showThreadAlert } from "../../threadAlerts/delivery";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
 
 const lastPressures = new Map<string, StoragePressure>();
 
@@ -44,6 +46,7 @@ export function StorageStatusIndicator() {
   const settingsReady = useClientSettingsHydrated();
   const pressures = useStoragePressure(isSignedIn ? userId : null);
   const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
   const low = pressures.flatMap((entry) => {
     const displayedPressure = entry.pressure === "unknown" ? entry.last?.pressure : entry.pressure;
     return displayedPressure === "critical" || displayedPressure === "warning"
@@ -101,33 +104,123 @@ export function StorageStatusIndicator() {
     };
   }, [isSignedIn, userId, settingsReady, settings, pressures, navigate]);
 
-  if (low.length === 0) return null;
+  if (pressures.length === 0) return null;
   const critical = low.some((entry) => entry.displayedPressure === "critical");
-  const label = `${low.length} ${low.length === 1 ? "environment" : "environments"} ${critical ? "critically low" : "low"} on storage${low.some((entry) => entry.stale) ? ". Includes a last-known reading." : ""}`;
+  const color = critical
+    ? "text-destructive"
+    : low.length
+      ? "text-warning"
+      : "text-muted-foreground";
   return (
-    <Tooltip>
-      <TooltipTrigger
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
         render={
           <Button
             variant="ghost"
-            size="sm"
-            className={`[-webkit-app-region:no-drag] ${critical ? "text-destructive" : "text-warning"}`}
-            aria-label={label}
-            onClick={() => void navigate({ to: "/settings/archived" })}
+            size="icon-sm"
+            className={`[-webkit-app-region:no-drag] ${color}`}
+            aria-label="Environment storage"
           >
-            <HardDriveIcon className="size-4" />
-            <span className="text-xs">Storage{low.length > 1 ? ` · ${low.length}` : ""}</span>
+            <HardDriveIcon className={`size-4 ${color}`} />
           </Button>
         }
       />
-      <TooltipPopup>
-        {low
-          .map(
-            (entry) =>
-              `${entry.environment.label}: ${entry.displayedPressure}${entry.stale ? ` at ${new Date(entry.last!.sampledAt).toLocaleString()} · current capacity unavailable` : ""}`,
-          )
-          .join(" · ")}
-      </TooltipPopup>
-    </Tooltip>
+      <PopoverPopup align="end" className="w-80">
+        <div className="w-full min-w-0">
+          <h3 className="px-3 pt-3 pb-2 text-sm font-medium">Environment storage</h3>
+          <div className="max-h-80 overflow-y-auto px-3">
+            {pressures.map(({ environment, pressure, last }) => (
+              <StorageEnvironmentRow
+                key={environment.environmentId}
+                environmentId={environment.environmentId}
+                label={environment.label}
+                pressure={pressure}
+                lastPressure={last?.pressure}
+                enabled={
+                  open &&
+                  environment.connection.phase === "connected" &&
+                  environment.serverConfig?.environment.capabilities.storageManagement === true
+                }
+              />
+            ))}
+          </div>
+          <div className="border-t p-2">
+            <Button
+              className="w-full"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setOpen(false);
+                void navigate({ to: "/settings/archived" });
+              }}
+            >
+              Storage &amp; cleanup settings
+            </Button>
+          </div>
+        </div>
+      </PopoverPopup>
+    </Popover>
+  );
+}
+
+function StorageEnvironmentRow({
+  environmentId,
+  label,
+  pressure,
+  lastPressure,
+  enabled,
+}: {
+  environmentId: EnvironmentId;
+  label: string;
+  pressure: StoragePressure;
+  lastPressure: StoragePressure | undefined;
+  enabled: boolean;
+}) {
+  const snapshot = useEnvironmentQuery(
+    enabled ? serverEnvironment.storageSnapshot({ environmentId, input: {} }) : null,
+  );
+  const displayedPressure = pressure === "unknown" ? lastPressure : pressure;
+  const color =
+    displayedPressure === "critical"
+      ? "text-destructive"
+      : displayedPressure === "warning"
+        ? "text-warning"
+        : "text-muted-foreground";
+  const status =
+    displayedPressure === "critical"
+      ? "Critical storage"
+      : displayedPressure === "warning"
+        ? "Low storage"
+        : displayedPressure === "healthy"
+          ? "Healthy"
+          : "Unavailable";
+  return (
+    <div className="space-y-1 border-t py-2 first:border-t-0">
+      <div className="flex min-w-0 items-center gap-2">
+        <HardDriveIcon className={`size-4 shrink-0 ${color}`} />
+        <span className="min-w-0 flex-1 truncate text-sm" title={label}>
+          {label}
+        </span>
+        <span className={`shrink-0 text-xs ${color}`}>{status}</span>
+      </div>
+      {pressure === "unknown" ? (
+        <p className="text-xs text-muted-foreground">
+          {lastPressure
+            ? "Last known reading · current storage unavailable"
+            : "Current storage unavailable"}
+        </p>
+      ) : snapshot.data?.volumes.length ? (
+        snapshot.data.volumes.map((volume) => (
+          <p key={volume.id} className="truncate text-xs text-muted-foreground" title={volume.path}>
+            {volume.path}: {formatStorageBytes(volume.availableBytes)} free of{" "}
+            {formatStorageBytes(volume.totalBytes)}
+          </p>
+        ))
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          {snapshot.isPending ? "Loading capacity…" : "Capacity unavailable"}
+        </p>
+      )}
+    </div>
   );
 }

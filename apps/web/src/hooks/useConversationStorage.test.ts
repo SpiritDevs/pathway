@@ -268,16 +268,16 @@ describe("conversation storage", () => {
       input: { environmentId, input: { mode: "emergency", worktreeIds: ["eligible"] } },
     });
   });
-  it("requires an explicit choice for critical storage on new conversations", () => {
-    expect(render().canSend).toBe(false);
+  it("allows sending under critical storage on drafts and existing threads", () => {
+    expect(render().canSend).toBe(true);
     render().allow();
     expect(render().canSend).toBe(true);
-    expect(render({ threadId: ThreadId.make("other") }).canSend).toBe(false);
-    expect(render({ environmentId: EnvironmentId.make("other") }).canSend).toBe(false);
+    expect(render({ threadId: ThreadId.make("other") }).canSend).toBe(true);
+    expect(render({ environmentId: EnvironmentId.make("other") }).canSend).toBe(true);
     expect(mocks.start).not.toHaveBeenCalled();
   });
   it("stops gating and previewing cleanup once the conversation starts, including after reopening", () => {
-    expect(render().canSend).toBe(false);
+    expect(render().canSend).toBe(true);
     mocks.query.mockClear();
     const started = render({ isStartingConversation: false });
     const blocked = vi.fn();
@@ -288,12 +288,12 @@ describe("conversation storage", () => {
 
     reactHookHarness.reset();
     expect(render({ isStartingConversation: false }).canSend).toBe(true);
-    expect(render({ threadId: ThreadId.make("new-draft") }).canSend).toBe(false);
+    expect(render({ threadId: ThreadId.make("new-draft") }).canSend).toBe(true);
   });
   it("checks imperative responses and recovery actions again after permission or workspace state changes", () => {
     const blocked = vi.fn();
-    expect(render().checkCanSend(blocked)).toBe(false);
-    expect(blocked).toHaveBeenLastCalledWith(false);
+    expect(render().checkCanSend(blocked)).toBe(true);
+    expect(blocked).not.toHaveBeenCalled();
     render().allow();
     blocked.mockClear();
     expect(render().checkCanSend(blocked)).toBe(true);
@@ -319,9 +319,7 @@ describe("conversation storage", () => {
     expect(blocked).toHaveBeenLastCalledWith(true);
     snapshot = { ...snapshot!, threads: [{ ...snapshot!.threads[0]!, reclaimedAt: null }] };
     expect(render().checkCanSend(blocked)).toBe(true);
-    expect(render({ environmentId: EnvironmentId.make("other") }).checkCanSend(blocked)).toBe(
-      false,
-    );
+    expect(render({ environmentId: EnvironmentId.make("other") }).checkCanSend(blocked)).toBe(true);
   });
   it("does not block unknown or stale readings or legacy environments", () => {
     snapshotError = "Connection lost";
@@ -343,7 +341,7 @@ describe("conversation storage", () => {
       input: { mode: "emergency", worktreeIds: ["eligible"] },
     });
     expect(render().job?.id).toBe("job");
-    expect(render().canSend).toBe(false);
+    expect(render().canSend).toBe(true);
   });
   it("cannot submit a conversation while its worktree is reclaimed, even after continuing anyway", async () => {
     snapshot = {
@@ -363,7 +361,7 @@ describe("conversation storage", () => {
       ],
     };
     render().allow();
-    expect(render().canSend).toBe(false);
+    expect(render().canSend).toBe(true);
     expect(render({ isStartingConversation: false }).canSend).toBe(false);
     await render().recreateWorktree();
     expect(mocks.recreate).toHaveBeenCalledExactlyOnceWith({ environmentId, input: { threadId } });

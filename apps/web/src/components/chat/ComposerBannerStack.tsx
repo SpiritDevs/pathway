@@ -81,9 +81,9 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
   }
   const stackedItems = items.slice(1);
   const hasStack = stackedItems.length > 0;
-  const frontItemIsLip = frontItem.presentation === "lip" && !hasStack;
+  const frontItemIsLip = frontItem.presentation === "lip";
   const showCollapsedStackCap = hasStack && exitingItemId !== frontItem.id;
-  const firstStackedItem = stackedItems[0];
+  const peekingItems = stackedItems.slice(0, 2);
 
   const requestDismiss = (item: ComposerBannerStackItem) => {
     if (!item.onDismiss || exitingItemId) {
@@ -102,30 +102,39 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
   return (
     <div
       className={cn(
-        "group/banner-stack chat-content-lane",
-        frontItemIsLip ? "-mb-2 px-8 pt-1 sm:px-10" : "mb-2",
+        "group/banner-stack mx-auto w-full min-w-0 max-w-3xl",
+        "px-[1.375rem]",
+        frontItemIsLip ? "-mb-2 pt-1" : "mb-2",
+        hasStack ? "pt-5" : null,
         className,
       )}
     >
       <div
         className={cn(
-          "relative flex flex-col-reverse",
+          "relative flex flex-col-reverse transition-transform duration-150 ease-out group-hover/banner-stack:-translate-y-1 group-focus-within/banner-stack:-translate-y-1 motion-reduce:transition-none",
           hasStack ? "group-hover/banner-stack:z-50 group-focus-within/banner-stack:z-50" : null,
         )}
       >
-        {showCollapsedStackCap && firstStackedItem ? (
-          <div
-            className={cn(
-              "pointer-events-none absolute inset-x-0 -top-3 z-0 mx-auto h-3 rounded-t-[22px]",
-              "border border-b-0 bg-background/96 shadow-[0_6px_18px_rgba(0,0,0,0.06)]",
-              stackCapBorderClass[firstStackedItem.variant],
-              "transition-opacity duration-150 ease-out",
-              "group-hover/banner-stack:opacity-0 group-focus-within/banner-stack:opacity-0",
-            )}
-            style={{ width: "96%" }}
-            aria-hidden="true"
-          />
-        ) : null}
+        {showCollapsedStackCap
+          ? peekingItems.map((item, index) => (
+              <div
+                key={item.id}
+                data-composer-banner-stack-peek={index + 1}
+                className={cn(
+                  "pointer-events-none absolute inset-x-0 mx-auto h-8 rounded-t-[14px] border border-b-0 bg-background shadow-sm",
+                  stackCapBorderClass[item.variant],
+                  "transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                  "group-hover/banner-stack:opacity-0 group-focus-within/banner-stack:opacity-0",
+                )}
+                style={{
+                  width: `${100 - (index + 1) * 4}%`,
+                  top: -(index + 1) * 8,
+                  zIndex: 2 - index,
+                }}
+                aria-hidden="true"
+              />
+            ))
+          : null}
         <div
           className={cn(
             "relative z-10",
@@ -138,6 +147,7 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
         >
           <ComposerBannerStackAlert
             item={frontItem}
+            attachedToComposer={frontItemIsLip}
             presentation={frontItemIsLip ? "lip" : "banner"}
             exiting={exitingItemId === frontItem.id}
             onDismissRequest={() => requestDismiss(frontItem)}
@@ -147,36 +157,42 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
           <div
             data-composer-banner-stack-expanded-items="true"
             className={cn(
-              "relative z-20 grid grid-rows-[0fr] transition-[grid-template-rows] duration-150 ease-out",
+              "relative z-20 grid grid-rows-[0fr] transition-[grid-template-rows] duration-150 ease-out motion-reduce:transition-none",
               "group-hover/banner-stack:grid-rows-[1fr] group-focus-within/banner-stack:grid-rows-[1fr]",
             )}
           >
             <div className="min-h-0 overflow-hidden">
               <div
                 className={cn(
-                  "invisible pointer-events-none space-y-2 pb-2 opacity-0",
-                  "translate-y-1 transform-gpu transition-[opacity,transform] duration-150 ease-out will-change-[opacity,transform]",
+                  "invisible pointer-events-none opacity-0",
+                  "translate-y-1 transform-gpu transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none",
                   "group-hover/banner-stack:visible group-hover/banner-stack:pointer-events-auto group-hover/banner-stack:translate-y-0 group-hover/banner-stack:opacity-100",
                   "group-focus-within/banner-stack:visible group-focus-within/banner-stack:pointer-events-auto group-focus-within/banner-stack:translate-y-0 group-focus-within/banner-stack:opacity-100",
                 )}
               >
-                {stackedItems.map((item) => (
-                  <div
-                    key={item.id}
-                    className={cn(exitingItemId === item.id ? "pointer-events-none" : null)}
-                    style={{
-                      ...exitTransitionStyle,
-                      ...(exitingItemId === item.id ? stackedExitStyle : restingStyle),
-                    }}
-                  >
-                    <ComposerBannerStackAlert
-                      item={item}
-                      presentation="banner"
-                      exiting={exitingItemId === item.id}
-                      onDismissRequest={() => requestDismiss(item)}
-                    />
-                  </div>
-                ))}
+                {stackedItems
+                  .map((item, index) => (
+                    <div
+                      key={item.id}
+                      className={cn(
+                        "mx-auto",
+                        exitingItemId === item.id ? "pointer-events-none" : null,
+                      )}
+                      style={{
+                        width: `${100 - Math.min(index + 1, 2) * 4}%`,
+                        ...exitTransitionStyle,
+                        ...(exitingItemId === item.id ? stackedExitStyle : restingStyle),
+                      }}
+                    >
+                      <ComposerBannerStackAlert
+                        item={item}
+                        presentation="lip"
+                        exiting={exitingItemId === item.id}
+                        onDismissRequest={() => requestDismiss(item)}
+                      />
+                    </div>
+                  ))
+                  .toReversed()}
               </div>
             </div>
           </div>
@@ -187,11 +203,13 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
 }
 
 function ComposerBannerStackAlert({
+  attachedToComposer = false,
   item,
   presentation,
   exiting,
   onDismissRequest,
 }: {
+  readonly attachedToComposer?: boolean;
   readonly item: ComposerBannerStackItem;
   readonly presentation: "banner" | "lip";
   readonly exiting: boolean;
@@ -205,8 +223,11 @@ function ComposerBannerStackAlert({
       className={cn(
         "alert-glass",
         presentation === "lip"
-          ? "min-h-8 rounded-b-none rounded-t-[14px] border-b-0 px-2.5 pt-1 pb-3 text-[11px] shadow-none transition-transform duration-150 ease-out group-hover/banner-stack:-translate-y-1 group-focus-within/banner-stack:-translate-y-1 motion-reduce:transition-none"
-          : "rounded-[22px]",
+          ? "min-h-8 rounded-b-none rounded-t-[14px] border-b-0 px-2.5 pt-1 text-[11px] shadow-none"
+          : item.presentation === "lip"
+            ? "min-h-8 rounded-[14px] px-2.5 py-1 text-[11px] shadow-none"
+            : "rounded-[22px]",
+        presentation === "lip" && (attachedToComposer ? "pb-3" : "pb-1"),
         item.className,
       )}
       data-presentation={presentation}

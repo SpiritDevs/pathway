@@ -34,9 +34,9 @@ Cleanup runs on that environment even when the dashboard is closed. Each environ
 
 The default warning limits are **20 GB or 10% available**. The default critical limits are **10 GB or 5% available**. Either limit can trigger the corresponding warning. Adjust them in the environment's policy.
 
-Pathway shows low-storage status outside this dashboard and alerts you when an environment crosses a threshold. Before a new conversation starts on a critically low machine, it offers **Clean up**, **Choose another environment**, and **Continue anyway**. Once the conversation starts, this prompt stays hidden and low storage does not block follow-up messages.
+The storage icon in the top bar turns amber for low storage and red for critical storage. Click it to see each environment’s status and available capacity, or open Storage & cleanup settings. Low and critical storage icons also appear beside environments in the workspace selector. Offline environments show their last known status. Pathway alerts you when an environment crosses a threshold. Before the first message, a compact **Critical Storage** card offers **Cleanup** to open the storage dashboard. You can dismiss the card or send your message immediately. The warning never blocks sending and does not appear in conversations that already have messages.
 
-The conversation cleanup action shows an estimate before you click. It reclaims the oldest eligible worktrees until available space exceeds both warning limits. It can bypass the scheduled age limit, but retains the other protections. It keeps your draft and does not send your message. Emergency cleanup always requires your click. Scheduled tasks continue under their existing scheduling rules.
+The card opens the storage dashboard so you can review estimates and choose what to clean up. Opening the dashboard does not remove files or send your draft. Scheduled tasks continue under their existing scheduling rules.
 
 **Avoid critically low environments in Auto** starts off. Enable it to prefer another eligible machine for new conversations when a healthy alternative exists. Existing conversations stay on their environment.
 

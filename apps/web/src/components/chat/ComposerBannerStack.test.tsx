@@ -80,21 +80,35 @@ describe("ComposerBannerStack", () => {
       />,
     );
 
-    expect(markup).toContain("-mb-2 px-8 pt-1 sm:px-10");
+    expect(markup).toContain("px-[1.375rem]");
+    expect(markup).toContain("-mb-2 pt-1");
     expect(markup).toContain('data-presentation="lip"');
     expect(markup).toContain("min-h-8 rounded-b-none rounded-t-[14px]");
     expect(markup).not.toContain("rounded-[22px]");
   });
 
-  it("renders lip items as regular banners when notices are stacked", () => {
+  it("keeps the front lip attached when notices are stacked", () => {
     const markup = renderToStaticMarkup(
       <ComposerBannerStack
         items={[{ ...banner("version"), presentation: "lip" }, banner("connection")]}
       />,
     );
 
-    expect(markup).not.toContain('data-presentation="lip"');
-    expect(markup).not.toContain("rounded-b-none");
-    expect(markup).toContain("rounded-[22px]");
+    expect(markup).toContain('data-presentation="lip"');
+    expect(markup).toContain("rounded-b-none");
+    expect(markup).not.toContain("rounded-[22px]");
+    expect(markup).not.toContain("space-y-2 pb-2");
+  });
+  it("shows at most two progressively smaller peeks while keeping every notice available", () => {
+    const markup = renderToStaticMarkup(
+      <ComposerBannerStack
+        items={[banner("front"), banner("second"), banner("third"), banner("fourth")]}
+      />,
+    );
+    expect(markup.match(/data-composer-banner-stack-peek=/g)).toHaveLength(2);
+    expect(markup).toContain("width:96%;top:-8px");
+    expect(markup).toContain("width:92%;top:-16px");
+    expect(markup).toContain("fourth warning");
+    expect(markup.indexOf("fourth warning")).toBeLessThan(markup.indexOf("second warning"));
   });
 });

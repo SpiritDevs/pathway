@@ -1,3 +1,4 @@
+import { EnvironmentStorageIcon } from "./navigation/EnvironmentStorageIcon";
 import { InternalProjectWorkspace } from "./projects/InternalProjectWorkspace";
 import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
@@ -165,6 +166,9 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
         className="min-w-0 max-w-[48%] flex-1 justify-start text-muted-foreground/70 hover:text-foreground/80 md:hidden"
       >
         {triggerContent}
+        {showEnvironmentIndicator && !autoPlacement?.active ? (
+          <EnvironmentStorageIcon environmentId={environmentId} />
+        ) : null}
         <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
       </MenuTrigger>
       <MenuPopup align="start" side="top" className="w-64">
@@ -198,7 +202,8 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
                     >
                       <span className="flex min-w-0 items-center gap-1.5">
                         <Icon className="size-3" />
-                        <span className="min-w-0 truncate">{env.label}</span>
+                        <span className="min-w-0 flex-1 truncate">{env.label}</span>
+                        <EnvironmentStorageIcon environmentId={env.environmentId} />
                       </span>
                     </MenuRadioItem>
                   );
