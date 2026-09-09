@@ -67,7 +67,7 @@ describe("active pull request attachments", () => {
       id,
       pullRequestAction: action,
       pullRequest: { number, url: `https://github.com/SpiritDevs/pathway/pull/${number}` },
-    }) as Parameters<typeof resolveActivePullRequestAttachment>[0][number];
+    }) as Parameters<typeof sourceControlMarkerLabel>[0];
 
   it("retains multiple PRs, deduplicates links, and unlinks just the selected PR", () => {
     const first = marker("attach-1", "attached", 1);
