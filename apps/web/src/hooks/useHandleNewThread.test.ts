@@ -5,10 +5,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
-import { useNewThreadHandler } from "./useHandleNewThread";
+import { useHandleNewThread, useNewThreadHandler } from "./useHandleNewThread";
 import { selectSidebarDraftRows } from "../components/sidebarDrafts";
 
 const mocks = vi.hoisted(() => ({
+  activeThread: null as { environmentId: string; projectId: string } | null,
   readDefaults: vi.fn(),
   navigate: vi.fn().mockResolvedValue(undefined),
   routeParams: {} as Record<string, string>,
@@ -18,6 +19,8 @@ vi.mock("@effect/atom-react", () => ({
   useAtomValue: () => ({ defaultThreadEnvMode: "local", newWorktreesStartFromOrigin: false }),
 }));
 vi.mock("@tanstack/react-router", () => ({
+  useParams: ({ select }: { select: (params: Record<string, string>) => unknown }) =>
+    select(mocks.routeParams),
   useRouter: () => ({
     state: { matches: [{ params: mocks.routeParams }] },
     navigate: mocks.navigate,
@@ -30,10 +33,12 @@ vi.mock("../state/entities", () => ({
     { id: "project-a", environmentId: "env-a", workspaceRoot: "/repo-a" },
     { id: "project-b", environmentId: "env-b", workspaceRoot: "/repo-b" },
   ],
+  useThreadShell: () => mocks.activeThread,
   useServerConfigs: () => new Map(),
   readThreadShell: () => null,
 }));
 vi.mock("../logicalProject", () => ({
+  getProjectOrderKey: (project: { id: string }) => project.id,
   deriveLogicalProjectKeyFromSettings: () => "shared-project",
   selectProjectGroupingSettings: () => ({}),
 }));
@@ -155,4 +160,54 @@ describe("new-thread creation while project defaults load", () => {
       }
     },
   );
+});
+
+function readNewThreadContext() {
+  let context: ReturnType<typeof useHandleNewThread> | undefined;
+  function Harness() {
+    context = useHandleNewThread();
+    return null;
+  }
+  renderToStaticMarkup(createElement(Harness));
+  return context!;
+}
+
+describe("new-thread project after switching profiles", () => {
+  afterEach(() => {
+    mocks.activeThread = null;
+    mocks.routeParams = {};
+    useComposerDraftStore.persist.clearStorage();
+  });
+
+  it.each(["thread", "draft"])("ignores a %s from the previous profile", (kind) => {
+    const previousProject = scopeProjectRef(
+      EnvironmentId.make("old-env"),
+      ProjectId.make("old-project"),
+    );
+    if (kind === "thread") {
+      mocks.activeThread = previousProject;
+    } else {
+      const draftId = DraftId.make("previous-profile-draft");
+      useComposerDraftStore
+        .getState()
+        .setLogicalProjectDraftThreadId("old-profile", previousProject, draftId);
+      mocks.routeParams = { draftId };
+    }
+    const context = readNewThreadContext();
+    expect(context.activeThread).toBeNull();
+    expect(context.activeDraftThread).toBeNull();
+    expect(context.defaultProjectRef).toEqual(
+      scopeProjectRef(EnvironmentId.make("env-a"), ProjectId.make("project-a")),
+    );
+  });
+
+  it("retains the current project within the selected profile", () => {
+    mocks.activeThread = { environmentId: "env-b", projectId: "project-b" };
+    expect(readNewThreadContext().activeThread).toEqual(mocks.activeThread);
+  });
+
+  it("does not inherit a project from another environment with the same ID", () => {
+    mocks.activeThread = { environmentId: "old-env", projectId: "project-a" };
+    expect(readNewThreadContext().activeThread).toBeNull();
+  });
 });

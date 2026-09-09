@@ -436,6 +436,7 @@ export function useNewThreadHandler() {
 }
 
 export function useHandleNewThread() {
+  const activeCompanyId = useAtomValue(activeCompanyIdAtom);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const routeTarget = useParams({
     strict: false,
@@ -465,9 +466,19 @@ export function useHandleNewThread() {
   }, [projectOrder, projects]);
   const handleNewThread = useNewThreadHandler();
 
+  // A profile switch can leave the previous profile's thread on the route.
+  const isInActiveProfile = (thread: NonNullable<typeof activeThread> | DraftThreadState) =>
+    thread.projectId === null
+      ? activeCompanyId === null || thread.conversationCompanyId === activeCompanyId
+      : projects.some(
+          (project) =>
+            project.environmentId === thread.environmentId && project.id === thread.projectId,
+        );
+
   return {
-    activeDraftThread,
-    activeThread,
+    activeDraftThread:
+      activeDraftThread && isInActiveProfile(activeDraftThread) ? activeDraftThread : null,
+    activeThread: activeThread && isInActiveProfile(activeThread) ? activeThread : null,
     defaultProjectRef: orderedProjects[0]
       ? scopeProjectRef(orderedProjects[0].environmentId, orderedProjects[0].id)
       : null,
