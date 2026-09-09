@@ -1,6 +1,5 @@
 import * as StorageManagement from "./storage/StorageService.ts";
 import { EnvironmentHttpApi } from "@spiritdevs/contracts";
-import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -557,12 +556,11 @@ const EmailProjectCatalogLayerLive = EmailProjectCatalog.layer.pipe(
   Layer.provide(RuntimeCoreDependenciesLive),
 );
 
-const EmailCaptureLayerLive = EmailCapture.layer.pipe(
+const EmailCaptureLayerLive = EmailCapture.startedLayer.pipe(
   Layer.provideMerge(EmailStore.layer),
   Layer.provideMerge(EmailWaitStore.layer),
   Layer.provideMerge(EmailProjectCatalogLayerLive),
   Layer.provide(ServerSettingsLayerLive),
-  Layer.tap((context) => Context.get(context, EmailCapture.EmailCaptureService).start),
 );
 
 const EmailTriggerLayerLive = EmailTrigger.layer.pipe(Layer.provide(RuntimeCoreDependenciesLive));

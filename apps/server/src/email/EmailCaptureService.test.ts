@@ -25,7 +25,11 @@ import * as Stream from "effect/Stream";
 import nodemailer from "nodemailer";
 
 import * as ServerSettings from "../serverSettings.ts";
-import { EmailCaptureService, layer as emailCaptureLayer } from "./EmailCaptureService.ts";
+import {
+  EmailCaptureService,
+  layer as emailCaptureLayer,
+  startedLayer,
+} from "./EmailCaptureService.ts";
 import * as EmailProjectCatalog from "./EmailProjectCatalog.ts";
 import { EmailStore, layerAtPath as emailStoreLayerAtPath } from "./EmailStore.ts";
 import { layerAtPath as emailWaitStoreLayerAtPath } from "./EmailWaitStore.ts";
@@ -67,7 +71,7 @@ const freePort = Effect.acquireUseRelease(
     }),
 );
 
-const layerFor = (databasePath: string, port: number) => {
+const layerFor = (databasePath: string, port: number, captureLayer = emailCaptureLayer) => {
   const dependencies = Layer.mergeAll(
     emailStoreLayerAtPath(databasePath),
     emailWaitStoreLayerAtPath(databasePath),
@@ -83,7 +87,7 @@ const layerFor = (databasePath: string, port: number) => {
       },
     }),
   );
-  return Layer.merge(dependencies, emailCaptureLayer.pipe(Layer.provide(dependencies)));
+  return Layer.merge(dependencies, captureLayer.pipe(Layer.provide(dependencies)));
 };
 
 const sendMail = (input: {
@@ -164,6 +168,48 @@ const sendAndReceive = Effect.fn("sendAndReceive")(function* (
 });
 
 describe("EmailCaptureService SMTP listener", () => {
+  it.effect(
+    "starts one listener when the running service has concurrent layer consumers",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const directory = yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "pathway-smtp-startup-")),
+            ),
+            (path) => Effect.sync(() => NodeFS.rmSync(path, { recursive: true, force: true })),
+          );
+          const port = yield* freePort;
+          const running = layerFor(NodePath.join(directory, "mail.sqlite"), port, startedLayer);
+          const consumer = Layer.effectDiscard(
+            Effect.gen(function* () {
+              const capture = yield* EmailCaptureService;
+              expect((yield* capture.status).state).toBe("listening");
+            }),
+          ).pipe(Layer.provide(running));
+          yield* Effect.gen(function* () {
+            const capture = yield* EmailCaptureService;
+            const receipt = yield* sendAndReceive(capture, {
+              port,
+              to: "person@alpha.test",
+              subject: "Shared startup",
+            });
+            const store = yield* EmailStore;
+            expect((yield* store.getMessage(receipt.messageId))?.parsedHeaders.subject).toBe(
+              "Shared startup",
+            );
+          }).pipe(
+            Effect.provide(
+              Layer.merge(running, consumer).pipe(
+                Layer.provide(Layer.merge(NodeCrypto.layer, NodeServices.layer)),
+              ),
+            ),
+          );
+        }),
+      ),
+    { timeout: 10_000 },
+  );
+
   it.effect("captures real mail for every routing rule, malformed MIME, and attachments", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -719,3 +719,10 @@ const make = Effect.fn("EmailCaptureService.make")(function* () {
 });
 
 export const layer = Layer.effect(EmailCaptureService, make());
+
+// Keep startup inside the memoized acquisition: Layer.tap runs for each consumer
+// and concurrent starts can close the listener before its listening callback fires.
+export const startedLayer = Layer.effect(
+  EmailCaptureService,
+  make().pipe(Effect.tap((service) => service.start)),
+);
