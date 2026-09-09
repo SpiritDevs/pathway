@@ -62,6 +62,7 @@ Full docs live in [docs/](./docs). There's no docs site yet.
 - [Install and first run](./docs/user/install.md)
 - [Permission modes](./docs/user/permission-modes.md)
 - [Keyboard shortcuts](./docs/user/keybindings.md)
+- [SnapShots: capture a window and its app context](./docs/user/snap-shot.md)
 - [Customize a project icon](./docs/user/project-settings.md)
 - [Appearance preferences](./docs/user/appearance.md)
 - [Thread alerts, sounds, and quiet hours](./docs/user/thread-alerts.md)

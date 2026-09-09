@@ -70,6 +70,7 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.backendCwd, "/repo");
       assert.equal(environment.appUserModelId, "com.spiritdevs.pathway.dev");
       assert.equal(environment.linuxWmClass, "pathway-dev");
+      assert.equal(environment.linuxDesktopEntryName, "com.spiritdevs.Pathway.Development.desktop");
       assert.deepEqual(
         Option.map(environment.devServerUrl, (url) => url.href),
         Option.some("http://localhost:5173/"),
@@ -101,6 +102,19 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.serverSettingsPath, "/tmp/pathway/userdata/settings.json");
       assert.equal(environment.userDataDirName, "pathway");
       assert.equal(environment.legacyUserDataDirName, "Pathway (Alpha)");
+    }),
+  );
+
+  it.effect("uses the stable desktop entry as the packaged Linux portal identity", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({
+        platform: "linux",
+        isPackaged: true,
+        appPath: "/tmp/.mount_pathway/resources/app.asar",
+        resourcesPath: "/tmp/.mount_pathway/resources",
+      });
+
+      assert.equal(environment.linuxDesktopEntryName, "com.spiritdevs.Pathway.desktop");
     }),
   );
 

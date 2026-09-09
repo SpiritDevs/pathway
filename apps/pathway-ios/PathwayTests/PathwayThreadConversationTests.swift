@@ -4,6 +4,25 @@ import Testing
 
 @MainActor
 struct PathwayThreadConversationTests {
+    @Test func captureMetadataSurvivesNativeDecodeCacheAndResend() throws {
+        let source: JSONValue = .object([
+            "kind": .string("snap-shot"), "appName": .string("Editor"),
+            "windowTitle": .string("main.swift"), "capturedAt": .string("2026-09-09T03:00:00.000Z"),
+            "accessibility": .object(["format": .string("flat-text"), "text": .string("let answer = 42"), "truncated": .bool(false)])
+        ])
+        let raw: JSONValue = .object([
+            "id": .string("capture-1"), "type": .string("image"), "name": .string("editor.png"),
+            "mimeType": .string("image/png"), "sizeBytes": .number(4), "source": source
+        ])
+        let attachment = try #require(PathwayTimelineItem.attachment(raw))
+        #expect(attachment.snapShotSource?["appName"]?.stringValue == "Editor")
+        let restored = try JSONDecoder().decode(PathwayMessageAttachment.self, from: JSONEncoder().encode(attachment))
+        #expect(restored.json == raw)
+        let older = PathwayMessageAttachment(id: "old", type: "image", name: "old.png", mimeType: "image/png", sizeBytes: 1)
+        #expect(older.snapShotSource == nil)
+        #expect(older.json.objectValue?["source"] == nil)
+    }
+
     @Test(arguments: ["preparing", "starting", "running", "waiting", "completed", "failed"])
     func browserTakeoverMatchesTheServerRunEligibility(status: String) {
         let thread = makeModel { _, _ in .object([:]) }

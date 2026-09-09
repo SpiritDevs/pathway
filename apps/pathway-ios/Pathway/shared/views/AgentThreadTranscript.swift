@@ -191,8 +191,17 @@ private struct AgentTranscriptAttachment: View {
                         switch phase {
                         case .success(let image):
                             Button { showPreview = true } label: {
-                                image.resizable().scaledToFit().frame(maxWidth: 280, maxHeight: 210)
-                                    .clipShape(.rect(cornerRadius: 12))
+                                VStack(alignment: .leading, spacing: 5) {
+                                    image.resizable().scaledToFit().frame(maxWidth: 280, maxHeight: 210)
+                                        .clipShape(.rect(cornerRadius: 12))
+                                    if let source = attachment.snapShotSource {
+                                        Label(source["appName"]?.stringValue ?? "SnapShot", systemImage: "macwindow")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                        if let title = source["windowTitle"]?.stringValue, !title.isEmpty {
+                                            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                        }
+                                    }
+                                }
                             }.buttonStyle(.plain)
                         case .failure:
                             unavailable("This image couldn’t be loaded.")
@@ -279,6 +288,11 @@ private struct AgentTranscriptAttachmentPreview: View {
                 } else { ProgressView() }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .safeAreaInset(edge: .bottom) {
+                if let source = attachment.snapShotSource {
+                    AgentSnapShotDetails(source: source)
+                }
+            }
             .navigationTitle(attachment.name).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }

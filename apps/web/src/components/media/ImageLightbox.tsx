@@ -1,3 +1,9 @@
+import type { SnapShotSource } from "@spiritdevs/contracts";
+import {
+  SnapShotAccessibilityData,
+  SnapShotContentsButton,
+  snapShotAccessibilityDetails,
+} from "../chat/SnapShotAttachmentDetails";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -37,6 +43,7 @@ import { copyImageToClipboard, downloadImageFile } from "./imageTransfer";
 export interface LightboxImage {
   readonly src: string;
   readonly name: string;
+  readonly source?: SnapShotSource | undefined;
 }
 
 /** A call-site action, rendered in the footer beside the built-in ones. */
@@ -127,6 +134,7 @@ export const ImageLightbox = memo(function ImageLightbox({
   const [commentOpen, setCommentOpen] = useState(false);
   const [commentBody, setCommentBody] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showContents, setShowContents] = useState(false);
   const viewportRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const commentRef = useRef<HTMLTextAreaElement>(null);
@@ -136,6 +144,7 @@ export const ImageLightbox = memo(function ImageLightbox({
   const multiple = images.length > 1;
 
   const resetView = useCallback(() => {
+    setShowContents(false);
     setZoom(MIN_IMAGE_ZOOM);
     setPan(ORIGIN);
   }, []);
@@ -253,6 +262,11 @@ export const ImageLightbox = memo(function ImageLightbox({
   };
 
   if (image === undefined) return null;
+  const contents =
+    showContents && image.source ? snapShotAccessibilityDetails(image.source) : undefined;
+  const hasContents = Boolean(
+    image.source && (image.source.accessibility || image.source.accessibleText?.trim()),
+  );
 
   const submitComment = () => {
     const body = commentBody.trim();
@@ -320,25 +334,32 @@ export const ImageLightbox = memo(function ImageLightbox({
           className="pointer-events-none relative flex size-full items-center justify-center p-4"
           ref={viewportRef}
         >
-          <img
-            alt={image.name}
-            className={cn(
-              "pointer-events-auto max-h-full max-w-full select-none object-contain",
-              zoom === MIN_IMAGE_ZOOM ? "cursor-zoom-in" : "cursor-grab active:cursor-grabbing",
-            )}
-            draggable={false}
-            onDoubleClick={() => (zoom === MIN_IMAGE_ZOOM ? changeZoom(1) : resetView())}
-            onError={() => onImageError?.(image, index)}
-            onPointerCancel={endDrag}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={endDrag}
-            ref={imageRef}
-            src={image.src}
-            style={{
-              transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
-            }}
-          />
+          {showContents && contents ? (
+            <SnapShotAccessibilityData
+              details={contents}
+              className="pointer-events-auto h-full w-full max-w-3xl rounded-lg bg-background p-4 text-xs leading-5 text-foreground"
+            />
+          ) : (
+            <img
+              alt={image.name}
+              className={cn(
+                "pointer-events-auto max-h-full max-w-full select-none object-contain",
+                zoom === MIN_IMAGE_ZOOM ? "cursor-zoom-in" : "cursor-grab active:cursor-grabbing",
+              )}
+              draggable={false}
+              onDoubleClick={() => (zoom === MIN_IMAGE_ZOOM ? changeZoom(1) : resetView())}
+              onError={() => onImageError?.(image, index)}
+              onPointerCancel={endDrag}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={endDrag}
+              ref={imageRef}
+              src={image.src}
+              style={{
+                transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
+              }}
+            />
+          )}
         </div>
         {multiple ? (
           <>
@@ -419,6 +440,22 @@ export const ImageLightbox = memo(function ImageLightbox({
             <CopyIcon />
             Copy
           </Button>
+          {hasContents ? (
+            <Button
+              aria-pressed={showContents}
+              onClick={() => setShowContents((current) => !current)}
+              size="sm"
+              variant="outline"
+            >
+              {showContents
+                ? "Show screenshot"
+                : image.source?.accessibility?.format === "element-tree"
+                  ? "Show accessibility JSON"
+                  : "Show extracted text"}
+            </Button>
+          ) : image.source ? (
+            <SnapShotContentsButton source={image.source} side="top" />
+          ) : null}
           {actions.map((action) => (
             <Button
               disabled={action.disabled === true}

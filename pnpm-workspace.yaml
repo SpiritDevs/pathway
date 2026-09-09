@@ -73,6 +73,8 @@ minimumReleaseAgeExclude:
   - "@legendapp/list@3.3.5"
 
 overrides:
+  # dbus-next uses native Unix sockets instead of the obsolete usocket addon.
+  "dbus-next>usocket": "-"
   "@clerk/backend": "catalog:"
   "@clerk/clerk-js": "catalog:"
   "@clerk/clerk-js>@base-org/account": "-"
@@ -110,6 +112,7 @@ packageExtensions:
       vite: "catalog:"
 
 patchedDependencies:
+  dbus-next@0.10.2: patches/dbus-next@0.10.2.patch
   "@effect/vitest@4.0.0-beta.103": patches/@effect__vitest@4.0.0-beta.103.patch
   "@ff-labs/fff-node@0.9.4": patches/@ff-labs__fff-node@0.9.4.patch
   "@legendapp/list@3.3.5": patches/@legendapp__list@3.3.5.patch

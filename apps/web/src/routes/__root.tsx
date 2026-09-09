@@ -1,3 +1,4 @@
+import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { type AuthSessionState, type ServerLifecycleWelcomePayload } from "@spiritdevs/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import {
@@ -403,6 +404,7 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
         <ConnectOnboardingDialog />
         <SshPasswordPromptDialog />
+        <SnapShotCoordinator />
         <ConfirmDialogHost />
         <TemporaryThreadDiscardDialog />
         <WorkspaceCleanupNoticeHost />

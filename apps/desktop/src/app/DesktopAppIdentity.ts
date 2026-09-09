@@ -129,10 +129,6 @@ export const make = Effect.gen(function* () {
     if (environment.platform === "win32") {
       yield* electronApp.setAppUserModelId(environment.appUserModelId);
     }
-
-    if (environment.platform === "linux") {
-      yield* electronApp.setDesktopName(environment.linuxDesktopEntryName);
-    }
   }).pipe(Effect.withSpan("desktop.appIdentity.configure"));
 
   return DesktopAppIdentity.of({

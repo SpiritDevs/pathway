@@ -42,6 +42,13 @@ struct PathwayMessageAttachment: Codable, Equatable, Identifiable, Sendable {
     let name: String
     let mimeType: String
     let sizeBytes: Int
+    var source: JSONValue? = nil
+
+    var snapShotSource: [String: JSONValue]? {
+        guard type == "image", let fields = source?.objectValue,
+              fields["kind"]?.stringValue == "snap-shot" else { return nil }
+        return fields
+    }
 }
 
 struct PathwayTimelineItem: Codable, Equatable, Identifiable, Sendable {
@@ -134,7 +141,8 @@ struct PathwayTimelineItem: Codable, Equatable, Identifiable, Sendable {
             type: type,
             name: name,
             mimeType: object["mimeType"]?.stringValue ?? "application/octet-stream",
-            sizeBytes: object["sizeBytes"]?.intValue ?? 0
+            sizeBytes: object["sizeBytes"]?.intValue ?? 0,
+            source: object["source"]
         )
     }
 

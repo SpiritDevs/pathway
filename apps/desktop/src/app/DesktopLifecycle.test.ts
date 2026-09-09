@@ -79,7 +79,9 @@ describe("DesktopLifecycle", () => {
         handleBackendReady: () => Effect.void,
         handleBackendNotReady: Effect.void,
         flushMainWindowBounds: Effect.void,
+        prepareCaptureReveal: Effect.void,
         dispatchMenuAction: () => Effect.void,
+        dispatchSnapShotEvent: () => Effect.void,
         zoomMain: () => Effect.void,
         syncAppearance: Effect.void,
       });
@@ -101,6 +103,7 @@ describe("DesktopLifecycle", () => {
             focusedMainOrFirst: Effect.succeed(Option.none()),
             setMain: () => Effect.void,
             clearMain: () => Effect.void,
+            prepareReveal: () => Effect.succeed(false),
             reveal: () => Effect.void,
             sendAll: () => Effect.void,
             destroyAll: Effect.sync(() => {

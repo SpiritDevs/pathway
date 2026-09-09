@@ -81,7 +81,9 @@ describe("DesktopEarlyElectronStartup", () => {
     });
 
     assert.deepEqual(options, {
+      isDevelopment: true,
       linuxWmClass: "pathway-dev",
+      linuxDesktopEntryName: "com.spiritdevs.Pathway.Development.desktop",
       passwordStore: "gnome-libsecret",
     });
   });

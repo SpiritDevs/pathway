@@ -1986,6 +1986,73 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
     }),
   );
 
+  it.effect("rebuilds SnapShot image metadata from durable V2 message events", () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const projectionStore = yield* ProjectionStoreV2;
+      const maintenance = yield* ProjectionMaintenanceV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:snapshot-rebuild");
+      const attachments = [
+        {
+          type: "image" as const,
+          id: "snapshot-00000000-0000-4000-8000-000000000001",
+          name: "Browser.png",
+          mimeType: "image/png",
+          sizeBytes: 4,
+          source: {
+            kind: "snap-shot" as const,
+            capturedAt: "2026-09-09T00:00:00.000Z",
+            appName: "Browser",
+            windowTitle: "Checkout",
+            appIdentifier: "com.example.browser",
+            appIconDataUrl: "data:image/png;base64,aWNvbg==",
+            accessibility: { format: "flat-text" as const, text: "Pay now", truncated: false },
+          },
+        },
+      ];
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("event:snapshot-rebuild:thread"),
+            type: "thread.created",
+            threadId,
+            occurredAt: now,
+            payload: makeThread(threadId, now),
+          },
+          {
+            id: EventId.make("event:snapshot-rebuild:message"),
+            type: "message.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: MessageId.make("message:snapshot-rebuild"),
+              threadId,
+              runId: null,
+              nodeId: null,
+              createdBy: "user",
+              creationSource: "web",
+              role: "user",
+              text: "Explain this window",
+              attachments,
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+      assert.deepEqual(
+        (yield* projectionStore.getThreadProjection(threadId)).messages[0]?.attachments,
+        attachments,
+      );
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      const replayed = yield* projectionStore.getThreadProjection(threadId);
+      assert.equal(replayed.messages[0]?.text, "Explain this window");
+      assert.deepEqual(replayed.messages[0]?.attachments, attachments);
+    }),
+  );
+
   it.effect("compacts only superseded V2 full-state events", () =>
     Effect.gen(function* () {
       const eventSink = yield* EventSinkV2;

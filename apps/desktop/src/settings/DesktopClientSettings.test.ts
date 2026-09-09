@@ -17,6 +17,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
+  ...DEFAULT_CLIENT_SETTINGS,
   threadAlerts: DEFAULT_CLIENT_SETTINGS.threadAlerts,
   activeTurnSendMode: "steer",
   actionPaletteSections: [],

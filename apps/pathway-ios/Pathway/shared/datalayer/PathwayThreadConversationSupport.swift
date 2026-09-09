@@ -77,7 +77,11 @@ struct PathwayThreadAttachmentDraft: Codable, Identifiable, Equatable, Sendable 
 }
 
 extension PathwayMessageAttachment {
-    var json: JSONValue { .object(["id": .string(id), "type": .string(type), "name": .string(name), "mimeType": .string(mimeType), "sizeBytes": .number(Double(sizeBytes))]) }
+    var json: JSONValue {
+        var fields: [String: JSONValue] = ["id": .string(id), "type": .string(type), "name": .string(name), "mimeType": .string(mimeType), "sizeBytes": .number(Double(sizeBytes))]
+        if let source { fields["source"] = source }
+        return .object(fields)
+    }
 }
 
 extension PathwayAgentThreadModel {

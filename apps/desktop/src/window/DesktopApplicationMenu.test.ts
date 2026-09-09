@@ -89,6 +89,8 @@ const makeDesktopWindowLayer = (selectedActions: Array<string>) =>
     handleBackendReady: () => Effect.void,
     handleBackendNotReady: Effect.void,
     flushMainWindowBounds: Effect.void,
+    prepareCaptureReveal: Effect.void,
+    dispatchSnapShotEvent: () => Effect.void,
     dispatchMenuAction: (action) =>
       Effect.sync(() => {
         selectedActions.push(action);

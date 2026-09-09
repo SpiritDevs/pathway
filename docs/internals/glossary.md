@@ -179,3 +179,11 @@ A cloud-synced record that marks one Attention Event read after the user selects
 
 **Notifications Settings**:
 The settings page for global thread-alert events, logical-project overrides, this client's delivery channels and sound, and this client's Quiet Hours.
+
+## SnapShots
+
+A **SnapShot** is a desktop window image attached to a draft with its application, window, capture
+time, and available accessibility context. Capture happens on the desktop client's computer, even
+when the thread runs in a remote environment. Pending captures stay on that computer until the
+draft is saved or the user discards them. See [SnapShots](snap-shot.md) for delivery and provider
+boundaries and [the user guide](../user/snap-shot.md) for setup.

@@ -1,3 +1,4 @@
+import { CameraIcon } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -84,6 +85,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/general": Settings2Icon,
   "/settings/appearance": PaletteIcon,
   "/settings/keybindings": KeyboardIcon,
+  "/settings/snap-shot": CameraIcon,
   "/settings/projects": FolderIcon,
   "/settings/members-teams": UsersIcon,
   "/settings/company-members": UserRoundIcon,

@@ -2,6 +2,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Sink from "effect/Sink";
@@ -19,6 +21,7 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
+  LINUX_CAPTURE_EXTRA_RESOURCES,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
@@ -45,6 +48,7 @@ import {
   resolveMockUpdateServerUrl,
   resolvePackageManagerUserAgent,
   stageLinuxIconSize,
+  stageLinuxCaptureHelper,
   STAGE_INSTALL_ARGS,
   WINDOWS_ASAR_UNPACK,
 } from "./build-desktop-artifact.ts";
@@ -89,6 +93,51 @@ function iconResizeSpawnerLayer(
 }
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it.effect("stages the selected Linux capture binary and its protocol notices", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repoRoot = yield* fs.makeTempDirectoryScoped();
+      const stageResourcesDir = path.join(repoRoot, "stage");
+      const crate = path.join(repoRoot, "native", "hyprland-snap-shot");
+      const output = path.join(crate, "target", "aarch64-unknown-linux-gnu", "release");
+      yield* fs.makeDirectory(output, { recursive: true });
+      yield* fs.makeDirectory(path.join(crate, "protocols"));
+      yield* fs.writeFileString(path.join(output, "pathway-hyprland-snap-shot"), "helper");
+      yield* fs.writeFileString(path.join(crate, "protocols", "capture.xml"), "BSD notice");
+      const commands: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+      yield* stageLinuxCaptureHelper({
+        backend: "hyprland",
+        repoRoot,
+        stageResourcesDir,
+        arch: "arm64",
+        verbose: false,
+      }).pipe(Effect.provide(iconResizeSpawnerLayer(commands, [0])));
+      assert.deepStrictEqual(commands[0]?.args, [
+        "build",
+        "--locked",
+        "--release",
+        "--manifest-path",
+        path.join(crate, "Cargo.toml"),
+        "--target",
+        "aarch64-unknown-linux-gnu",
+      ]);
+      const staged = path.join(stageResourcesDir, "hyprland-capture");
+      assert.equal(
+        yield* fs.readFileString(path.join(staged, "pathway-hyprland-snap-shot")),
+        "helper",
+      );
+      assert.equal(
+        yield* fs.readFileString(path.join(staged, "protocols", "capture.xml")),
+        "BSD notice",
+      );
+      assert.notEqual(
+        (yield* fs.stat(path.join(staged, "pathway-hyprland-snap-shot"))).mode & 0o111,
+        0,
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it("resolves the dedicated nightly updater channel from nightly versions", () => {
     assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42"), "nightly");
     assert.equal(resolveDesktopUpdateChannel("0.0.17"), "latest");
@@ -315,6 +364,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it("limits Electron locales and excludes the unused Claude SDK executable", () => {
     assert.deepStrictEqual(DESKTOP_ELECTRON_LANGUAGES, ["en-US"]);
     assert.deepStrictEqual(DESKTOP_FILE_EXCLUSIONS, [
+      "!apps/desktop/gnome-extension",
+      "!apps/desktop/gnome-extension/**/*",
       "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
     ]);
   });
@@ -352,6 +403,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.notProperty(mac, "asarUnpack");
       assert.notProperty(linux, "asarUnpack");
       assert.deepStrictEqual(win.asarUnpack, WINDOWS_ASAR_UNPACK);
+      assert.deepStrictEqual(mac.extraResources, DESKTOP_EXTRA_RESOURCES);
+      assert.deepStrictEqual(win.extraResources, DESKTOP_EXTRA_RESOURCES);
+      assert.deepStrictEqual(linux.extraResources, [
+        ...DESKTOP_EXTRA_RESOURCES,
+        ...LINUX_CAPTURE_EXTRA_RESOURCES,
+      ]);
+      assert.deepStrictEqual(
+        LINUX_CAPTURE_EXTRA_RESOURCES.map((resource) => resource.to),
+        ["hyprland-capture", "kde-capture", "gnome-extension"],
+      );
+      assert.propertyVal(
+        (mac.mac as { extendInfo: Record<string, unknown> }).extendInfo,
+        "NSScreenCaptureUsageDescription",
+        "Pathway captures the active window when you use the SnapShots shortcut.",
+      );
       // Linux must register the renderer schemes so the generated .desktop
       // entry advertises MimeType=x-scheme-handler/pathway; for OAuth deep links.
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
@@ -536,6 +602,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         { name: "Pathway", schemes: ["pathway", "pathway-dev"] },
       ]);
       assert.deepStrictEqual(mac.extendInfo, {
+        NSScreenCaptureUsageDescription:
+          "Pathway captures the active window when you use the SnapShots shortcut.",
         NSLocalNetworkUsageDescription:
           "Pathway connects to development servers running on your local network.",
       });
