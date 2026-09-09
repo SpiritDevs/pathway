@@ -1,4 +1,7 @@
 import { useLoadBalancedDraft } from "../hooks/useLoadBalancedDraft";
+import { useConversationStorage } from "../hooks/useConversationStorage";
+import { conversationStorageBanner } from "./chat/ConversationStorageBanner";
+import { Select, SelectItem, SelectPopup, SelectTrigger } from "./ui/select";
 import {
   addQuestionAttachments,
   clearQuestionAttachments,
@@ -3553,6 +3556,7 @@ function ChatViewContent(props: ChatViewProps) {
   const draftPlacement = useLoadBalancedDraft({
     draftId: isServerThread ? null : draftId,
     enabled: settings.loadBalancingEnabled,
+    avoidCriticalStorage: settings.loadBalancingAvoidCriticalStorage,
     weights: settings.loadBalancingWeights,
     project: activeProject,
     projects: allProjects,
@@ -3776,6 +3780,92 @@ function ChatViewContent(props: ChatViewProps) {
       logicalProjectEnvironments,
     ],
   );
+
+  const conversationStorage = useConversationStorage({
+    environmentId,
+    threadId,
+    enabled:
+      activeEnvironmentConnectionPhase === "connected" &&
+      activeEnvironment?.serverConfig?.environment.capabilities.storageManagement === true,
+  });
+  const storageEnvironmentOptions = activeProject
+    ? logicalProjectEnvironments
+    : environments.map((item) => ({
+        environmentId: item.environmentId,
+        projectId: null,
+        label: item.label,
+      }));
+  const storageChoiceStartsConversation =
+    envLocked || draftPlacement.locked || activeProject === null;
+  const chooseStorageEnvironment = (nextEnvironmentId: EnvironmentId) => {
+    if (!storageChoiceStartsConversation) {
+      onEnvironmentChange(nextEnvironmentId);
+      return;
+    }
+    const destination = storageEnvironmentOptions.find(
+      (item) => item.environmentId === nextEnvironmentId,
+    );
+    if (!destination) return;
+    // Changing an existing conversation's machine starts an explicit new draft.
+    // Its current history and draft remain on their original environment.
+    const nextDraftId = newDraftId();
+    useComposerDraftStore
+      .getState()
+      .setProjectDraftThreadId(
+        { environmentId: destination.environmentId, projectId: destination.projectId },
+        nextDraftId,
+        {
+          threadId: newThreadId(),
+          conversationCompanyId:
+            destination.projectId === null
+              ? (activeThread?.conversationCompanyId ?? activeCompanyId)
+              : null,
+          temporary: activeThread?.temporary ?? false,
+        },
+      );
+    useComposerDraftStore.getState().setDraftThreadContext(nextDraftId, {
+      placement: { mode: "manual", providerPinned: false, resolvedKey: null },
+    });
+    void navigate({
+      to: "/threads/draft/$draftId",
+      params: buildDraftThreadRouteParams(nextDraftId),
+    });
+  };
+  const storageBannerItem = conversationStorageBanner({
+    storage: conversationStorage,
+    environmentLabel: activeEnvironment?.label ?? "This environment",
+    chooseEnvironment: (
+      <Select<EnvironmentId>
+        value={null}
+        onValueChange={(value) => {
+          if (value) chooseStorageEnvironment(value);
+        }}
+      >
+        <SelectTrigger size="xs" aria-label="Choose another environment">
+          Choose another environment
+        </SelectTrigger>
+        <SelectPopup>
+          {storageEnvironmentOptions
+            .filter(
+              (item) =>
+                item.environmentId !== environmentId &&
+                environmentById.get(item.environmentId)?.connection.phase === "connected",
+            )
+            .map((item) => (
+              <SelectItem key={item.environmentId} value={item.environmentId}>
+                {item.label}
+                {storageChoiceStartsConversation ? " · New conversation" : ""}
+              </SelectItem>
+            ))}
+          <p className="px-3 py-2 text-xs text-muted-foreground">
+            {storageChoiceStartsConversation
+              ? "Choose a machine to start a new conversation. This conversation and its draft stay here."
+              : "Only connected environments with this project are available."}
+          </p>
+        </SelectPopup>
+      </Select>
+    ),
+  });
 
   const activeTerminalGroup =
     terminalUiState.terminalGroups.find(
@@ -6111,6 +6201,7 @@ function ChatViewContent(props: ChatViewProps) {
       resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
+        ...(storageBannerItem ? [storageBannerItem] : []),
         ...systemComposerBannerItems,
         ...browserTakeoverItems,
         ...resumeCompactionItems,
@@ -6118,6 +6209,7 @@ function ChatViewContent(props: ChatViewProps) {
       ];
     }
     return [
+      ...(storageBannerItem ? [storageBannerItem] : []),
       ...systemComposerBannerItems,
       ...browserTakeoverItems,
       {
@@ -6172,6 +6264,7 @@ function ChatViewContent(props: ChatViewProps) {
     resumeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
+    storageBannerItem,
   ]);
 
   useEffect(() => {
@@ -7251,6 +7344,18 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
       onAdvanceActivePendingUserInput();
+      return;
+    }
+    if (!conversationStorage.canSend) {
+      toastManager.add({
+        type: "warning",
+        title: conversationStorage.reclaimed
+          ? "Recreate the worktree before continuing"
+          : "This environment is critically low on storage",
+        description: conversationStorage.reclaimed
+          ? "Your draft is preserved. Use Recreate worktree above the composer."
+          : "Choose Clean up, another environment, or Continue anyway above the composer. Your draft is preserved.",
+      });
       return;
     }
     const sendCtx = composerRef.current?.getSendContext();
@@ -8584,6 +8689,14 @@ function ChatViewContent(props: ChatViewProps) {
     interactionMode: "default" | "plan";
   }) {
     if (!activeThread || !isServerThread || isSendBusy || isConnecting || sendInFlightRef.current) {
+      return;
+    }
+    if (!conversationStorage.canSend) {
+      toastManager.add({
+        type: "warning",
+        title: "Review storage before continuing",
+        description: "Use the storage notice above the composer. Your draft is preserved.",
+      });
       return;
     }
 

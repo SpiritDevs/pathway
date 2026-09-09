@@ -211,6 +211,7 @@ final class PathwayAgentThreadCreationModel {
         selectedProvider?.models.first { $0.id == selectedModelID }
     }
 
+    var storageAllowsLaunch = true
     var canLaunch: Bool {
         (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !initialImageUploads.isEmpty || !attachments.drafts.isEmpty)
             && prompt.count <= 120_000 && attachments.isReady && initialImageUploads.count + attachments.drafts.count <= 8
@@ -219,6 +220,7 @@ final class PathwayAgentThreadCreationModel {
             && selectedModel != nil
             && (!(isConversation || temporary) || supportsConversations)
             && connectionState == .live
+            && storageAllowsLaunch
             && !isLaunching && !isImportingCapture && !isTransferringDraft
             && (isConversation || (workspaceMode != "worktree" && !temporary)
                 || !baseReference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -263,7 +265,7 @@ final class PathwayAgentThreadCreationModel {
     }
 
     func launch() async -> String? {
-        guard canLaunch, rpc != nil || injectedRequest != nil, let selectedProvider, let selectedModel else { return nil }
+        guard canLaunch, storageAllowsLaunch, rpc != nil || injectedRequest != nil, let selectedProvider, let selectedModel else { return nil }
         isLaunching = true
         errorMessage = nil
         defer { isLaunching = false }

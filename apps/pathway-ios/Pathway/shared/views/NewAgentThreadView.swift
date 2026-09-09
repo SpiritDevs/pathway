@@ -354,6 +354,7 @@ struct NewAgentThreadView: View {
 }
 
 private struct NewAgentThreadComposer: View {
+    @Environment(PathwayAppModel.self) private var appModel
     let project: PathwayNewThreadProjectOption
     let model: PathwayAgentThreadCreationModel?
     @Binding var selectedBindingID: String
@@ -406,6 +407,10 @@ private struct NewAgentThreadComposer: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 4) {
                 if let model {
+                    if let selectedBinding, let connect = appModel.connect {
+                        PathwayConversationStorageNotice(environment: selectedBinding.environment, connect: connect,
+                            chooseEnvironment: chooseProject, onAvailabilityChanged: { model.storageAllowsLaunch = $0 }).id(selectedBinding.id)
+                    }
                     if !model.isConversation { workspaceSummary(model) }
                     composer(model).disabled(model.isImportingCapture || isResolvingPlacement || placementUnavailable)
                 } else {

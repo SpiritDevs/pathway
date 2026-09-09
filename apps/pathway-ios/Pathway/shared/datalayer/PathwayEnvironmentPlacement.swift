@@ -8,12 +8,14 @@ final class PathwayEnvironmentPlacementPreferences {
     static let shared = PathwayEnvironmentPlacementPreferences()
     static let weights = [0, 25, 50, 100]
     var enabled: Bool { didSet { defaults.set(enabled, forKey: "environmentPlacement.enabled") } }
+    var avoidCriticalStorage: Bool { didSet { defaults.set(avoidCriticalStorage, forKey: "environmentPlacement.avoidCriticalStorage") } }
     private(set) var environmentWeights: [String: Int]
     @ObservationIgnored private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         enabled = defaults.bool(forKey: "environmentPlacement.enabled")
+        avoidCriticalStorage = defaults.bool(forKey: "environmentPlacement.avoidCriticalStorage")
         environmentWeights = (defaults.dictionary(forKey: "environmentPlacement.weights") as? [String: Int] ?? [:])
             .filter { Self.weights.contains($0.value) }
     }
@@ -40,6 +42,13 @@ struct PathwayHostResources: Decodable, Sendable {
     let cpuCount: Int
     let availableMemoryBytes: Double
     let totalMemoryBytes: Double
+    var storagePressure: String? = nil
+    var storageSampledAt: Double? = nil
+
+    var hasFreshCriticalStorage: Bool {
+        guard storagePressure == "critical", let storageSampledAt else { return false }
+        return storageSampledAt.isFinite && sampledAt - storageSampledAt >= -5_000 && sampledAt - storageSampledAt <= 60_000
+    }
 
     /// Use receipt age because clocks on remote environments need not agree with this device.
     func score(weight: Int, receivedAt: Double, now: Double) -> Double? {
@@ -171,7 +180,9 @@ enum PathwayEnvironmentPlacement {
         }
         guard !Task.isCancelled else { return nil }
         let ordered = bindings.compactMap { option in candidates.first { $0.bindingID == option.id } }
-        return select(ordered, now: ProcessInfo.processInfo.systemUptime)
+        let alternatives = preferences.avoidCriticalStorage ? ordered.filter { !$0.resources.hasFreshCriticalStorage } : ordered
+        return select(alternatives, now: ProcessInfo.processInfo.systemUptime)
+            ?? select(ordered, now: ProcessInfo.processInfo.systemUptime)
     }
 
     @MainActor

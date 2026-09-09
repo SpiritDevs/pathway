@@ -1,3 +1,12 @@
+import { ThreadId } from "./baseSchemas.ts";
+import {
+  StorageSnapshot,
+  StoragePolicy,
+  StorageCleanupInput,
+  StoragePreview,
+  StorageJob,
+  StorageError,
+} from "./storage.ts";
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
@@ -459,6 +468,14 @@ export const WS_METHODS = {
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetHostResources: "server.getHostResources",
+  storageSnapshot: "storage.snapshot",
+  storageSetPolicy: "storage.setPolicy",
+  storageSetKeep: "storage.setKeep",
+  storagePreview: "storage.preview",
+  storageStart: "storage.start",
+  storageCancel: "storage.cancel",
+  storageRecreate: "storage.recreate",
+
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
   serverSignalProcess: "server.signalProcess",
@@ -657,6 +674,42 @@ export const WsServerGetProcessResourceHistoryRpc = Rpc.make(
     error: EnvironmentAuthorizationError,
   },
 );
+
+export const WsStorageSnapshotRpc = Rpc.make(WS_METHODS.storageSnapshot, {
+  payload: Schema.Struct({}),
+  success: StorageSnapshot,
+  error: Schema.Union([EnvironmentAuthorizationError, StorageError]),
+});
+export const WsStorageSetPolicyRpc = Rpc.make(WS_METHODS.storageSetPolicy, {
+  payload: Schema.Struct({ policy: StoragePolicy }),
+  success: StoragePolicy,
+  error: Schema.Union([EnvironmentAuthorizationError, StorageError]),
+});
+export const WsStorageSetKeepRpc = Rpc.make(WS_METHODS.storageSetKeep, {
+  payload: Schema.Struct({ threadId: ThreadId, keep: Schema.Boolean }),
+  success: Schema.Void,
+  error: Schema.Union([EnvironmentAuthorizationError, StorageError]),
+});
+export const WsStoragePreviewRpc = Rpc.make(WS_METHODS.storagePreview, {
+  payload: StorageCleanupInput,
+  success: StoragePreview,
+  error: Schema.Union([EnvironmentAuthorizationError, StorageError]),
+});
+export const WsStorageStartRpc = Rpc.make(WS_METHODS.storageStart, {
+  payload: StorageCleanupInput,
+  success: StorageJob,
+  error: Schema.Union([EnvironmentAuthorizationError, StorageError]),
+});
+export const WsStorageCancelRpc = Rpc.make(WS_METHODS.storageCancel, {
+  payload: Schema.Struct({ jobId: Schema.String }),
+  success: StorageJob,
+  error: Schema.Union([EnvironmentAuthorizationError, StorageError]),
+});
+export const WsStorageRecreateRpc = Rpc.make(WS_METHODS.storageRecreate, {
+  payload: Schema.Struct({ threadId: ThreadId }),
+  success: Schema.Struct({ path: Schema.String }),
+  error: Schema.Union([EnvironmentAuthorizationError, StorageError]),
+});
 
 export const WsServerGetHostResourcesRpc = Rpc.make(WS_METHODS.serverGetHostResources, {
   payload: Schema.Struct({}),
@@ -1961,6 +2014,14 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerGetHostResourcesRpc,
+  WsStorageSnapshotRpc,
+  WsStorageSetPolicyRpc,
+  WsStorageSetKeepRpc,
+  WsStoragePreviewRpc,
+  WsStorageStartRpc,
+  WsStorageCancelRpc,
+  WsStorageRecreateRpc,
+
   WsServerGetResourceTelemetryHistoryRpc,
   WsServerRetryResourceTelemetryRpc,
   WsServerGetUsageSummaryRpc,

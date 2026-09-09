@@ -4,6 +4,29 @@ import Testing
 
 @MainActor
 struct PathwayEnvironmentPlacementTests {
+    @Test func criticalStorageAvoidanceDefaultsOffAndPersistsWhenEnabled() throws {
+        let suite = "storage-placement-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = PathwayEnvironmentPlacementPreferences(defaults: defaults)
+        #expect(!preferences.avoidCriticalStorage)
+        preferences.avoidCriticalStorage = true
+        #expect(PathwayEnvironmentPlacementPreferences(defaults: defaults).avoidCriticalStorage)
+    }
+
+    @Test func staleOrMissingStorageDoesNotExcludeAnEnvironment() throws {
+        var resources = PathwayHostResources(sampledAt: 100_000, cpuUtilization: 0.1, cpuCount: 8,
+                                             availableMemoryBytes: 8_000_000_000, totalMemoryBytes: 16_000_000_000)
+        #expect(!resources.hasFreshCriticalStorage)
+        resources.storagePressure = "critical"
+        resources.storageSampledAt = 90_000
+        #expect(resources.hasFreshCriticalStorage)
+        resources.storageSampledAt = 10_000
+        #expect(!resources.hasFreshCriticalStorage)
+        resources.storageSampledAt = 200_000
+        #expect(!resources.hasFreshCriticalStorage)
+    }
+
     @Test func conversationPlacementPreservesExplicitEnvironmentWithoutProbingProjectLoadBalancing() async throws {
         let suite = "conversation-placement-tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

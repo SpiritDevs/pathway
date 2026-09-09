@@ -22,10 +22,12 @@ export function chooseLoadBalancedEnvironment(
   candidates: ReadonlyArray<LoadBalancingCandidate>,
   now: number,
   seed?: string,
+  options?: { readonly avoidCriticalStorage?: boolean },
 ): string | null {
   if (!Number.isFinite(now)) return null;
   let selected: string | null = null;
   let bestScore = 0;
+  let selectedCritical = false;
   for (const { environmentId, resources, receivedAt, weight } of candidates) {
     const sampledAt = receivedAt ?? resources?.sampledAt ?? 0;
     if (
@@ -52,15 +54,32 @@ export function chooseLoadBalancedEnvironment(
     if (memoryAvailable <= 0.05) continue;
     const score = weight * resources.cpuCount * (1 - resources.cpuUtilization) * memoryAvailable;
     if (!Number.isFinite(score)) continue;
+    const storageReceivedAt =
+      resources.storageSampledAt === undefined
+        ? null
+        : sampledAt + resources.storageSampledAt - resources.sampledAt;
+    // Storage remains advisory. Prefer a noncritical eligible machine when the
+    // user opts in, but retain a critical candidate if it is the only choice.
+    const critical =
+      options?.avoidCriticalStorage === true &&
+      resources.storagePressure === "critical" &&
+      storageReceivedAt !== null &&
+      Number.isFinite(storageReceivedAt) &&
+      now - storageReceivedAt <= 120_000 &&
+      storageReceivedAt <= now + 5_000;
     if (
-      score > bestScore ||
-      (score === bestScore &&
-        seed !== undefined &&
-        selected !== null &&
-        tieRank(seed, environmentId) > tieRank(seed, selected))
+      selected === null ||
+      (selectedCritical && !critical) ||
+      (selectedCritical === critical &&
+        (score > bestScore ||
+          (score === bestScore &&
+            seed !== undefined &&
+            selected !== null &&
+            tieRank(seed, environmentId) > tieRank(seed, selected))))
     ) {
       selected = environmentId;
       bestScore = score;
+      selectedCritical = critical;
     }
   }
   return selected;

@@ -78,6 +78,7 @@ struct PathwayConnectionOnboardingView: View {
         Section {
             Toggle("Auto balance new threads", isOn: $placementPreferences.enabled)
             if placementPreferences.enabled {
+                Toggle("Avoid critically low environments", isOn: $placementPreferences.avoidCriticalStorage)
                 ForEach(placementEnvironments) { environment in
                     Picker(environment.environment.label, selection: Binding(
                         get: { placementPreferences.weight(for: environment.environment.environmentId) },

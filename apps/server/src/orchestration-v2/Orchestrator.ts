@@ -1,3 +1,5 @@
+import { invalidateStorageInventory } from "../storage/pressureState.ts";
+import { useStorageWorkspace } from "../storage/workspaceLease.ts";
 import { ThreadWorkspaceService } from "./ThreadWorkspaceService.ts";
 import { ServerConfig } from "../config.ts";
 import * as FileSystem from "effect/FileSystem";
@@ -8818,12 +8820,71 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
 
   const dispatchWithReceipt = (command: OrchestrationV2Command) =>
-    threadDispatch.withLock(
-      commandThreadId(command),
-      command.type === "thread.settle" || command.type === "thread.delete"
-        ? withSubagentLocks(command.threadId, dispatchWithReceiptEffect(command))
-        : dispatchWithReceiptEffect(command),
-    );
+    threadDispatch
+      .withLock(
+        commandThreadId(command),
+        Effect.gen(function* () {
+          const startsWork = [
+            "thread.create",
+            "message.dispatch",
+            "message.edit-and-restart",
+            "thread.fork",
+            "thread.merge_back",
+            "thread.workspace-move.request",
+            "prepared-run.retry",
+            "prepared-run.release",
+            "runtime-request.respond",
+            "checkpoint.rollback",
+            "provider.switch",
+            "delegated_task.request",
+          ].includes(command.type);
+          const changesProtection = [
+            "thread.unarchive",
+            "thread.unsettle",
+            "thread.pin",
+            "thread.snooze",
+            "thread.temporary.set",
+            "thread.metadata.update",
+          ].includes(command.type);
+          if (!startsWork && !changesProtection)
+            return yield* command.type === "thread.settle" || command.type === "thread.delete"
+              ? withSubagentLocks(command.threadId, dispatchWithReceiptEffect(command))
+              : dispatchWithReceiptEffect(command);
+          const shell = yield* projectionStore
+            .getThreadShell(
+              command.type === "thread.fork" ? command.sourceThreadId : commandThreadId(command),
+            )
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestratorDispatchError({
+                    commandId: command.commandId,
+                    commandType: command.type,
+                    cause,
+                  }),
+              ),
+            );
+          const path =
+            command.type === "thread.create"
+              ? command.worktreePath
+              : (shell?.worktreePath ?? shell?.conversationPath);
+          if (!path) return yield* dispatchWithReceiptEffect(command);
+          return yield* Effect.acquireUseRelease(
+            Effect.try({
+              try: () => useStorageWorkspace(path, !startsWork),
+              catch: (cause) =>
+                new OrchestratorDispatchError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  cause,
+                }),
+            }),
+            () => dispatchWithReceiptEffect(command),
+            (release) => Effect.sync(release),
+          );
+        }),
+      )
+      .pipe(Effect.tap(() => Effect.sync(invalidateStorageInventory)));
 
   /** Complete the one-shot request only after every run and runtime request is
       terminal and the normalized background roster is empty. The dispatch

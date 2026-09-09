@@ -64,7 +64,12 @@ struct MainTabView: View {
                 )
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { PathwayWorkspaceCleanupNotice() }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                PathwayWorkspaceCleanupNotice()
+                PathwayStorageStatusNotice()
+            }
+        }
         .sheet(item: $presentedSheet) { sheet in
             switch sheet {
             case .agentOrchestrator:
@@ -493,7 +498,7 @@ struct PathwaySettingsView: View {
             Section("Appearance") {
                 NavigationLink("General") { PathwayGeneralSettingsView() }
                 NavigationLink("Appearance") { PathwayAppearanceSettingsView() }
-                NavigationLink("Storage") { PathwayStorageSettingsView() }
+                NavigationLink("Storage & cleanup") { PathwayEnvironmentStorageView() }
                 NavigationLink("Keyboard Shortcuts") { PathwayKeyboardSettingsView() }
             }
             Section("Account") {

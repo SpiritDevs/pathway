@@ -59,6 +59,22 @@ A versioned data file used for model metadata and classification. It does not pr
 
 ## Thread workspaces
 
+The storage cleanup terms below describe the dashboard design in progress, not shipped behavior.
+
+**Worktree reclamation**:
+Removal of a thread's entire eligible worktree while preserving its branch and conversation history. It is distinct from deleting the thread.
+_Avoid_: Delete thread, Clear history
+
+**Emergency cleanup**:
+User-initiated worktree reclamation to relieve critical storage pressure. Low storage never starts emergency cleanup automatically.
+_Avoid_: Automatic pressure cleanup
+
+**Keep worktree**:
+A user-selected protection that excludes a thread's worktree from scheduled reclamation and emergency cleanup.
+
+**Cleanup eligibility**:
+Whether a worktree may be reclaimed under the selected policy and current protections. Archived or settled status alone does not establish eligibility; snoozed and running threads remain protected.
+
 **Conversation**:
 A thread without an attached project. Its environment owns its history and dedicated working folder;
 the company selected at creation determines its visibility. Project attachment preserves its identity
