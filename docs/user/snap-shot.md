@@ -19,6 +19,12 @@ off but keeps anything you already installed, so you can resume where you left o
 - **Windows** needs no setup or permission.
 - **Linux** depends on your desktop. See [Linux desktops](#linux-desktops).
 
+On macOS, choose **Allow** beside **Screen Recording** or **Accessibility**. A small panel stays
+visible while System Settings opens. Drag the app from that panel into the permission list, then
+turn on its switch. You can also click the app to show it in Finder. Use the back arrow or return to
+Pathway to recheck access, and repeat for the other permission. If macOS asks you to quit and reopen
+Pathway after allowing Screen Recording, do so, then resume setup.
+
 Turning capture off releases the shortcut. It does not uninstall a helper or extension you installed.
 
 ## Taking a capture

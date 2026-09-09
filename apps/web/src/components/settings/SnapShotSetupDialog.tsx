@@ -297,7 +297,7 @@ export function SnapShotSetupDialog({
                       : macPermissions
                         ? macPermissionsReady
                           ? "Test a snapshot of the current window. If macOS asks to bypass its window picker, choose Allow. The test image is discarded."
-                          : "Allow each permission, then continue."
+                          : "Choose Allow, then drag the app into the permission list in System Settings and turn on its switch. Repeat for each permission, then return here."
                         : "Allow access when prompted to start capturing windows.",
                 };
   const title = step === "access" ? accessCopy.title : "Choose your shortcut";

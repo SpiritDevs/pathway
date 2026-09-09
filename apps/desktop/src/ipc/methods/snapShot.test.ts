@@ -6,6 +6,12 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import { vi } from "vite-plus/test";
+
+const showMacPermissionSetupMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("../../snapShot/MacPermissionSetup.ts", () => ({
+  showMacPermissionSetup: showMacPermissionSetupMock,
+}));
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
@@ -377,6 +383,53 @@ describe("window capture IPC", () => {
             setup: (action: string) =>
               Effect.sync(() => {
                 actions.push(action);
+              }),
+          } as unknown as DesktopSnapShot.DesktopSnapShot["Service"]),
+        ),
+      ),
+    );
+  });
+
+  it.effect("shows the app drag panel for both permissions only after setup succeeds", () => {
+    showMacPermissionSetupMock.mockClear();
+    const owner = { webContents: { id: 7 } };
+    const actions: string[] = [];
+    let fail = false;
+    return Effect.gen(function* () {
+      for (const action of ["allow-screen-recording", "allow-accessibility"] as const) {
+        const rejected = yield* Effect.exit(setupSnapShot.handler(action, { sender: { id: 8 } }));
+        assert(Exit.isFailure(rejected));
+        yield* setupSnapShot.handler(action, { sender: { id: 7 } });
+      }
+      assert.deepEqual(actions, ["allow-screen-recording", "allow-accessibility"]);
+      assert.deepEqual(showMacPermissionSetupMock.mock.calls, [
+        [owner, "allow-screen-recording"],
+        [owner, "allow-accessibility"],
+      ]);
+      fail = true;
+      const failed = yield* Effect.exit(
+        setupSnapShot.handler("allow-accessibility", { sender: { id: 7 } }),
+      );
+      assert(Exit.isFailure(failed));
+      assert.lengthOf(showMacPermissionSetupMock.mock.calls, 2);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(ElectronWindow.ElectronWindow, {
+            main: Effect.succeed(Option.some(owner)),
+          } as ElectronWindow.ElectronWindow["Service"]),
+          Layer.succeed(DesktopSnapShot.DesktopSnapShot, {
+            setup: (action: string) =>
+              Effect.suspend(() => {
+                if (fail)
+                  return Effect.fail(
+                    new DesktopSnapShot.DesktopSnapShotSetupError({
+                      action: "allow-accessibility",
+                      reason: "setup-failed",
+                    }),
+                  );
+                actions.push(action);
+                return Effect.void;
               }),
           } as unknown as DesktopSnapShot.DesktopSnapShot["Service"]),
         ),

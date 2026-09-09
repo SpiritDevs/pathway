@@ -19,6 +19,7 @@ import type * as Electron from "electron";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as DesktopSnapShot from "../../snapShot/DesktopSnapShot.ts";
+import { showMacPermissionSetup } from "../../snapShot/MacPermissionSetup.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 
@@ -160,8 +161,19 @@ export const setupSnapShot = DesktopIpc.makeIpcMethod({
   payload: DesktopSnapShotSetupAction,
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.snapShot.setup")(function* (action, event) {
-    yield* ensureTrustedSnapShotSender(event);
+    const window = yield* ensureTrustedSnapShotSender(event);
     yield* (yield* DesktopSnapShot.DesktopSnapShot).setup(action);
+    if (action === "allow-screen-recording" || action === "allow-accessibility") {
+      yield* Effect.tryPromise({
+        try: () => showMacPermissionSetup(window, action),
+        catch: (cause) =>
+          new DesktopSnapShot.DesktopSnapShotSetupError({
+            action,
+            reason: "setup-failed",
+            cause,
+          }),
+      });
+    }
   }),
 });
 
