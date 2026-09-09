@@ -4109,11 +4109,19 @@ export default function Sidebar() {
                     <SettingsIcon className="-mr-px size-4 shrink-0" />
                   </SidebarMenuButton>
                 ) : (
-                  <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
+                  <Menu
+                    open={projectScopeMenuOpen && activeFocusId !== CONVERSATIONS_FOCUS_ID}
+                    onOpenChange={setProjectScopeMenuOpen}
+                  >
                     <MenuTrigger
+                      disabled={activeFocusId === CONVERSATIONS_FOCUS_ID}
                       render={
                         <SidebarMenuButton
-                          aria-label="Filter threads by project"
+                          aria-label={
+                            activeFocusId === CONVERSATIONS_FOCUS_ID
+                              ? "Conversations"
+                              : "Filter threads by project"
+                          }
                           className="min-w-0 flex-1 ps-[calc(var(--sidebar-row-content-inset)-1px)] focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                         />
                       }
@@ -4133,7 +4141,9 @@ export default function Sidebar() {
                           ? "Conversations"
                           : (scopedProjectGroup?.displayName ?? "All projects")}
                       </span>
-                      <ChevronDownIcon className="-mr-px size-4 shrink-0" />
+                      {activeFocusId !== CONVERSATIONS_FOCUS_ID && (
+                        <ChevronDownIcon className="-mr-px size-4 shrink-0" />
+                      )}
                     </MenuTrigger>
                     <MenuPopup align="start" className="w-(--anchor-width)">
                       <MenuRadioGroup

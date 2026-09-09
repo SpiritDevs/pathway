@@ -65,3 +65,5 @@ The bell in the Focus Strip opens the notification tray. Pathway adds an attenti
 Opening the tray marks notifications as seen on all your machines. Selecting a notification marks it as read. The bell is hidden when there are no notifications, shows a grey dot when all are read, a green dot when unread notifications have been seen, and a count for new unread notifications since the tray was last opened. Read notifications remain
 for 7 days and unread notifications remain for 30 days. Pathway keeps at most 200 notifications per
 user and removes the oldest records first when the limit is reached.
+
+Starting a project thread from Conversations switches to the profile containing that project after the first successful send, or to All if the project has no profile.

@@ -1,4 +1,10 @@
-import { CONVERSATIONS_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
+import {
+  CONVERSATIONS_FOCUS_ID,
+  focusIdForThread,
+  focusAssignmentsAtom,
+  focusListAtom,
+} from "@spiritdevs/client-runtime/state/focuses";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { activeFocusIdAtom } from "../cloud/focusReadModel";
 import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { useLoadBalancedDraft } from "../hooks/useLoadBalancedDraft";
@@ -7840,8 +7846,27 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
-        if (isFirstMessage && activeThread.projectId === null)
-          setActiveFocusId(CONVERSATIONS_FOCUS_ID);
+        if (isFirstMessage) {
+          const currentFocusId = appAtomRegistry.get(activeFocusIdAtom);
+          if (activeThread.projectId === null) {
+            setActiveFocusId(CONVERSATIONS_FOCUS_ID);
+          } else if (currentFocusId === CONVERSATIONS_FOCUS_ID) {
+            setActiveFocusId(
+              focusIdForThread({
+                projectKey: scopedProjectKey(
+                  scopeProjectRef(activeThread.environmentId, activeThread.projectId),
+                ),
+                activeFocusId: currentFocusId,
+                focuses: appAtomRegistry.get(focusListAtom),
+                focusIdByProjectKey: new Map(
+                  appAtomRegistry
+                    .get(focusAssignmentsAtom)
+                    .map((assignment) => [assignment.projectKey, assignment.focusId]),
+                ),
+              }),
+            );
+          }
+        }
       }
     }
 
