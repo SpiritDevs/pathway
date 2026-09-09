@@ -103,7 +103,7 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
     <div
       className={cn(
         "group/banner-stack chat-content-lane",
-        frontItemIsLip ? "mb-0 px-4" : "mb-2",
+        frontItemIsLip ? "-mb-2 px-8 pt-1 sm:px-10" : "mb-2",
         className,
       )}
     >
@@ -205,7 +205,7 @@ function ComposerBannerStackAlert({
       className={cn(
         "alert-glass",
         presentation === "lip"
-          ? "min-h-8 rounded-b-none rounded-t-[14px] border-b-0 px-3 py-1.5 text-xs shadow-none"
+          ? "min-h-8 rounded-b-none rounded-t-[14px] border-b-0 px-2.5 pt-1 pb-3 text-[11px] shadow-none transition-transform duration-150 ease-out group-hover/banner-stack:-translate-y-1 group-focus-within/banner-stack:-translate-y-1 motion-reduce:transition-none"
           : "rounded-[22px]",
         item.className,
       )}
