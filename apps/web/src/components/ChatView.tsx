@@ -1,3 +1,5 @@
+import { CONVERSATIONS_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
+import { activeFocusIdAtom } from "../cloud/focusReadModel";
 import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { useLoadBalancedDraft } from "../hooks/useLoadBalancedDraft";
 import { useConversationStorage } from "../hooks/useConversationStorage";
@@ -1472,6 +1474,7 @@ function ChatViewContent(props: ChatViewProps) {
   const setThreadTemporary = useAtomCommand(threadEnvironment.setTemporary, {
     reportFailure: false,
   });
+  const setActiveFocusId = useAtomSet(activeFocusIdAtom);
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -7837,6 +7840,8 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        if (isFirstMessage && activeThread.projectId === null)
+          setActiveFocusId(CONVERSATIONS_FOCUS_ID);
       }
     }
 
@@ -9345,8 +9350,9 @@ function ChatViewContent(props: ChatViewProps) {
             aria-pressed={activeThread.temporary ?? false}
             className="me-2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground [-webkit-app-region:no-drag] hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:text-foreground"
             onClick={() => {
-              if (activeThread.temporary) setKeepConversationConfirmOpen(true);
-              else handleTemporaryChange(true);
+              if (activeThread.temporary && !canChangeTemporary)
+                setKeepConversationConfirmOpen(true);
+              else handleTemporaryChange(!activeThread.temporary);
             }}
           >
             <svg
@@ -9361,8 +9367,11 @@ function ChatViewContent(props: ChatViewProps) {
               strokeLinejoin="round"
               aria-hidden="true"
             >
-              <path d="M5.8 4.2a9 9 0 0 1 12.4 0M20.5 7.5a9 9 0 0 1-6 13.1M9 20.5a9 9 0 0 1-2.5-1.1L3 20l.6-3.5A9 9 0 0 1 3.5 7.5" />
-              {activeThread.temporary && <path d="m8 12 3 3 5-6" />}
+              <path
+                d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+                strokeDasharray="3 3"
+              />
+              {activeThread.temporary && <path d="m8 10 3 3 5-6" />}
             </svg>
           </button>
         }

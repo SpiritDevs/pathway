@@ -9,7 +9,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 
-import { MessageCircleIcon } from "lucide-react";
+import { MessageSquareIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
 import { ProjectFavicon } from "../ProjectFavicon";
@@ -182,7 +182,7 @@ export const ChatHeader = memo(function ChatHeader({
                   renderTrigger={(displayName) => (
                     <>
                       {activeProjectRef === null ? (
-                        <MessageCircleIcon
+                        <MessageSquareIcon
                           className="size-3.5"
                           strokeDasharray={temporary ? "3 3" : undefined}
                         />
@@ -206,7 +206,7 @@ export const ChatHeader = memo(function ChatHeader({
                     render={<span className="inline-flex min-w-0 items-center gap-1.5" />}
                   >
                     {activeProjectRef === null ? (
-                      <MessageCircleIcon
+                      <MessageSquareIcon
                         className="size-3.5"
                         strokeDasharray={temporary ? "3 3" : undefined}
                       />

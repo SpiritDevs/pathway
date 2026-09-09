@@ -278,10 +278,11 @@ export default defineSchema({
     .index("by_user_and_event", ["userId", "eventId"])
     .index("by_user_and_created_at", ["userId", "createdAt"]),
 
-  /** One cross-machine mark-all-read watermark plus the next bounded retention scan time. */
+  /** Cross-machine read and tray-open watermarks plus the next bounded retention scan time. */
   focusNotificationStates: defineTable({
     userId: v.string(),
     readThrough: v.number(),
+    seenThrough: v.optional(v.number()),
     nextCleanupAt: v.number(),
     updatedAt: v.number(),
   })

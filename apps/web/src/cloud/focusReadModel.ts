@@ -85,6 +85,8 @@ export const FOCUS_FUNCTION_REFERENCES = {
   notifications: queryReference<{ readonly limit?: number }, ReadonlyArray<FocusNotification>>(
     "focusNotifications:list",
   ),
+  clearAll: mutationReference<{}, null>("focusNotifications:clearAll"),
+  markAllSeen: mutationReference<{}, null>("focusNotifications:markAllSeen"),
   markAllRead: mutationReference<{}, null>("focusNotifications:markAllRead"),
   markRead: mutationReference<{ eventId: string }, null>("focusNotifications:markRead"),
 } as const;
@@ -116,6 +118,8 @@ export interface FocusMutations {
     readonly projectKey: FocusProjectKey;
   }) => Promise<null>;
   readonly unassignProject: (input: { readonly projectKey: FocusProjectKey }) => Promise<null>;
+  readonly clearAllNotifications: () => Promise<null>;
+  readonly markAllNotificationsSeen: () => Promise<null>;
   readonly markAllNotificationsRead: () => Promise<null>;
   readonly markNotificationRead?: (eventId: string) => Promise<null>;
 }
@@ -144,6 +148,8 @@ function makeFocusMutations(client: ConvexClient): FocusMutations {
     remove: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.remove, input),
     assignProject: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.assignProject, input),
     unassignProject: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.unassignProject, input),
+    clearAllNotifications: () => client.mutation(FOCUS_FUNCTION_REFERENCES.clearAll, {}),
+    markAllNotificationsSeen: () => client.mutation(FOCUS_FUNCTION_REFERENCES.markAllSeen, {}),
     markAllNotificationsRead: () => client.mutation(FOCUS_FUNCTION_REFERENCES.markAllRead, {}),
     markNotificationRead: (eventId) =>
       client.mutation(FOCUS_FUNCTION_REFERENCES.markRead, { eventId }),

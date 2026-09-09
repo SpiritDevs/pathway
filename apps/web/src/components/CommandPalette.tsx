@@ -718,7 +718,15 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         if (state.open || !isAgentThreadsPath(pathname)) return;
         event.preventDefault();
         event.stopPropagation();
-        setActiveFocusId(nextFocusId({ activeFocusId, visibleFocuses }));
+        setActiveFocusId(
+          nextFocusId({
+            activeFocusId,
+            visibleFocuses,
+            hasConversations: alertRegistry
+              .get(alertThreadShells.threadShellsAtom)
+              .some((thread) => thread.projectId === null),
+          }),
+        );
         return;
       }
       if (command === "themeEditor.toggle") {

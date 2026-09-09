@@ -1,3 +1,4 @@
+import { CONVERSATIONS_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
 import { GitPullRequestArrowIcon } from "lucide-react";
 import { ThreadPullRequestAction } from "./ThreadPullRequestAction";
 import { activeCompanyIdAtom } from "../cloud/activeCompany";
@@ -1403,6 +1404,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     return (
       <li
         data-thread-item
+        data-active-thread={props.isActive || undefined}
         className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
       >
         <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
@@ -1569,6 +1571,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   return (
     <li
       data-thread-item
+      data-active-thread={props.isActive || undefined}
       ref={sortable?.setNodeRef}
       style={
         sortable
@@ -2016,13 +2019,14 @@ export default function Sidebar() {
       }),
     [focuses, focusAssignments, visibleFocusProjectKeys],
   );
+  const threads = useThreadShells();
   const focusSwipe = useFocusSwipe({
+    hasConversations: threads.some((thread) => thread.projectId === null),
     activeFocusId,
     visibleFocuses: shownFocuses,
     onActiveFocusChange: setActiveFocusId,
   });
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const threads = useThreadShells();
   const threadTitlesByKey = useThreadTitlesByKey();
   const agentThreads = useMemo(
     () => threads.filter((thread) => threadIsVisibleAt(thread, "agents")),
@@ -2331,6 +2335,14 @@ export default function Sidebar() {
         : (projectGroups.find((project) => project.projectKey === projectScopeKey) ?? null),
     [projectGroups, projectScopeKey],
   );
+  useEffect(() => {
+    if (activeFocusId !== CONVERSATIONS_FOCUS_ID) return;
+    const frame = requestAnimationFrame(() => {
+      document.querySelector('[data-active-thread="true"]')?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeFocusId, routeThreadKey, agentThreads.length]);
+
   // A company project nothing has checked out is a real scope with no threads in it. Without this
   // it would look like an unknown key and the effect below would snap the menu back to All.
   const scopedCheckoutlessProject = useMemo(
@@ -2568,8 +2580,11 @@ export default function Sidebar() {
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   // Search is global within the active company. Neither the Focus nor the project picker narrows it.
   const searchableThreads = useMemo(
-    () => filterSidebarV2VisibleThreads(agentThreads, null),
-    [agentThreads],
+    () =>
+      filterSidebarV2VisibleThreads(agentThreads, null).filter(
+        (thread) => (thread.projectId === null) === (activeFocusId === CONVERSATIONS_FOCUS_ID),
+      ),
+    [agentThreads, activeFocusId],
   );
   const ungroupedThreadSearchResults = useMemo(
     () => searchSidebarThreadsByTitle(searchableThreads, threadSearchQuery),
@@ -2854,9 +2869,7 @@ export default function Sidebar() {
     (thread: EnvironmentThreadShell) => {
       setActiveFocusId(
         thread.projectId === null
-          ? focusIncludesConversations(focuses, activeFocusId)
-            ? activeFocusId
-            : ALL_FOCUS_ID
+          ? CONVERSATIONS_FOCUS_ID
           : (focusIdByProjectKey.get(`${thread.environmentId}:${thread.projectId}`) ??
               ALL_FOCUS_ID),
       );
@@ -4116,7 +4129,9 @@ export default function Sidebar() {
                         <FolderIcon className="size-4 shrink-0" />
                       )}
                       <span className="min-w-0 flex-1 truncate">
-                        {scopedProjectGroup?.displayName ?? "All projects"}
+                        {activeFocusId === CONVERSATIONS_FOCUS_ID
+                          ? "Conversations"
+                          : (scopedProjectGroup?.displayName ?? "All projects")}
                       </span>
                       <ChevronDownIcon className="-mr-px size-4 shrink-0" />
                     </MenuTrigger>
@@ -4293,7 +4308,11 @@ export default function Sidebar() {
                           ) : (
                             <Layers3Icon className="size-3 shrink-0" />
                           )}
-                          <span className="truncate">{group.focus?.name ?? "All"}</span>
+                          <span className="truncate">
+                            {group.focusId === CONVERSATIONS_FOCUS_ID
+                              ? "Conversations"
+                              : (group.focus?.name ?? "All")}
+                          </span>
                         </li>
                       ) : null}
                       {group.results.map((thread) => {
@@ -4715,6 +4734,7 @@ export default function Sidebar() {
         </SidebarGroup>
       </SidebarContent>
       <FocusStrip
+        hasConversations={agentThreads.some((thread) => thread.projectId === null)}
         focuses={focuses}
         assignments={focusAssignments}
         visibleProjectKeys={visibleFocusProjectKeys}

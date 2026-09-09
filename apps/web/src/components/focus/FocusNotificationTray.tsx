@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 
+import { Button } from "../ui/button";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { cn } from "../../lib/utils";
 import {
@@ -84,6 +85,8 @@ export function FocusNotificationTray(props: {
   readonly activeFocusId: ActiveFocusId;
   readonly threadTitlesByKey: ReadonlyMap<string, string>;
   readonly projectNamesByKey: ReadonlyMap<string, string>;
+  readonly onClearAll: () => void;
+  readonly clearing: boolean;
   readonly onSelect: (notification: FocusNotification) => void;
 }) {
   const groups = useMemo(
@@ -110,8 +113,13 @@ export function FocusNotificationTray(props: {
 
   return (
     <div className="w-[min(22rem,calc(100vw-1rem))]">
-      <div className="border-b border-border/60 px-3 py-2">
+      <div className="flex items-center justify-between border-b border-border/60 px-3 py-2">
         <div className="text-xs font-medium text-foreground">Notifications</div>
+        {props.notifications.length > 0 ? (
+          <Button variant="ghost" size="xs" disabled={props.clearing} onClick={props.onClearAll}>
+            {props.clearing ? "Clearing…" : "Clear all"}
+          </Button>
+        ) : null}
       </div>
       {groups.length === 0 ? (
         <div className="flex flex-col items-center gap-2 px-6 py-8 text-center text-xs text-muted-foreground/60">

@@ -9,6 +9,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ALL_FOCUS_ID,
+  CONVERSATIONS_FOCUS_ID,
   focusIsVisible,
   focusIncludesConversations,
   focusIdForThread,
@@ -87,13 +88,13 @@ describe("Focus carousel", () => {
 });
 
 describe("Focus project scoping", () => {
-  it("allows Conversations in several Focuses and keeps those Focuses visible without projects", () => {
+  it("keeps conversations exclusive to the built-in Conversations profile", () => {
     const focuses = [WORK, PERSONAL].map((id) => ({
       ...focus(id, id),
       includeConversations: true,
     }));
     for (const id of [WORK, PERSONAL]) {
-      expect(focusIncludesConversations(focuses, id)).toBe(true);
+      expect(focusIncludesConversations(focuses, id)).toBe(false);
       expect(
         resolveActiveFocusId({
           preferredId: id,
@@ -104,7 +105,8 @@ describe("Focus project scoping", () => {
       ).toBe(id);
     }
     expect(focusIncludesConversations([focus(WORK, "a")], WORK)).toBe(false);
-    expect(focusIncludesConversations([], ALL_FOCUS_ID)).toBe(true);
+    expect(focusIncludesConversations([], ALL_FOCUS_ID)).toBe(false);
+    expect(focusIncludesConversations([], CONVERSATIONS_FOCUS_ID)).toBe(true);
   });
 
   it("uses null for All and a project-key set for a user Focus", () => {
@@ -219,17 +221,16 @@ describe("conversation notification navigation", () => {
     { ...focus(PERSONAL, "b"), includeConversations: true },
   ];
   const input = { projectKey: null, focuses, focusIdByProjectKey: new Map([[WORK_PROJECT, WORK]]) };
-  it.each([WORK, PERSONAL])(
-    "preserves selected enabled Focus %s without inventing an exclusive membership",
-    (activeFocusId) => {
-      expect(focusIdForThread({ ...input, activeFocusId })).toBe(activeFocusId);
-    },
-  );
-  it("uses All when the selected Focus excludes conversations or no current thread is known", () => {
+  it.each([WORK, PERSONAL])("opens the Conversations profile from %s", (activeFocusId) => {
+    expect(focusIdForThread({ ...input, activeFocusId })).toBe(CONVERSATIONS_FOCUS_ID);
+  });
+  it("routes conversations to Conversations and unknown threads to All", () => {
     expect(focusIdForThread({ ...input, focuses: [focus(WORK, "a")], activeFocusId: WORK })).toBe(
-      ALL_FOCUS_ID,
+      CONVERSATIONS_FOCUS_ID,
     );
-    expect(focusIdForThread({ ...input, activeFocusId: ALL_FOCUS_ID })).toBe(ALL_FOCUS_ID);
+    expect(focusIdForThread({ ...input, activeFocusId: ALL_FOCUS_ID })).toBe(
+      CONVERSATIONS_FOCUS_ID,
+    );
     expect(focusIdForThread({ ...input, projectKey: undefined, activeFocusId: WORK })).toBe(
       ALL_FOCUS_ID,
     );
@@ -254,4 +255,16 @@ describe("conversation notification navigation", () => {
       }),
     ).toBe("environment-b:conversations");
   });
+});
+
+it("restores the built-in Conversations profile without a saved custom Focus", () => {
+  expect(
+    resolveActiveFocusId({
+      preferredId: CONVERSATIONS_FOCUS_ID,
+      focuses: [],
+      assignments: [],
+      visibleProjectKeys: new Set(),
+    }),
+  ).toBe(CONVERSATIONS_FOCUS_ID);
+  expect(scopedProjectKeysForFocus([], CONVERSATIONS_FOCUS_ID)?.size).toBe(0);
 });

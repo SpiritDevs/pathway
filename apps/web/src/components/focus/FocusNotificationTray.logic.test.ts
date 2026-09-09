@@ -1,3 +1,4 @@
+import { CONVERSATIONS_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
 import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import {
   AttentionEventId,
@@ -104,15 +105,15 @@ describe("Focus notification rows", () => {
         projectNamesByKey: new Map(),
       });
       expect(groups).toHaveLength(1);
-      expect(groups[0]?.focusId).toBe(activeFocusId);
+      expect(groups[0]?.focusId).toBe(CONVERSATIONS_FOCUS_ID);
       expect(groups[0]?.rows[0]).toMatchObject({
         projectName: "Conversation",
-        focusId: activeFocusId,
+        focusId: CONVERSATIONS_FOCUS_ID,
         unread: true,
       });
     },
   );
-  it("keeps Conversation notifications in All when the selected Focus excludes them", () => {
+  it("keeps Conversation notifications in Conversations regardless of the selected profile", () => {
     const groups = buildFocusNotificationRows({
       notifications: [
         notification("conversation", 10, {
@@ -126,7 +127,7 @@ describe("Focus notification rows", () => {
       threadTitlesByKey: new Map(),
       projectNamesByKey: new Map(),
     });
-    expect(groups.map((group) => group.focusId)).toEqual(["all"]);
+    expect(groups.map((group) => group.focusId)).toEqual([CONVERSATIONS_FOCUS_ID]);
     expect(groups[0]?.rows[0]?.projectName).toBe("Conversation");
   });
 

@@ -34,6 +34,7 @@ const notificationResult = v.object({
   alertProjectKey: v.optional(v.string()),
   alertEligibleAtCreation: v.boolean(),
   isRead: v.boolean(),
+  isSeen: v.boolean(),
 });
 
 const READ_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -59,7 +60,7 @@ function focusProjectKey(value: string): string {
   return projectKey;
 }
 
-function encodeNotification(row: Doc<"focusNotifications">, isRead: boolean) {
+function encodeNotification(row: Doc<"focusNotifications">, isRead: boolean, isSeen: boolean) {
   return {
     id: row.eventId,
     eventId: row.eventId,
@@ -71,6 +72,7 @@ function encodeNotification(row: Doc<"focusNotifications">, isRead: boolean) {
     ...(row.alertProjectKey === undefined ? {} : { alertProjectKey: row.alertProjectKey }),
     alertEligibleAtCreation: row.alertEligibleAtCreation ?? false,
     isRead,
+    isSeen,
   };
 }
 
@@ -178,7 +180,11 @@ export const record = mutation({
       if (duplicate !== null) continue;
 
       const state = await stateForUser(ctx, userId);
-      const createdAt = Math.max(now, (state?.readThrough ?? -1) + 1);
+      const createdAt = Math.max(
+        now,
+        (state?.readThrough ?? -1) + 1,
+        (state?.seenThrough ?? -1) + 1,
+      );
 
       const [globalPolicy, projectPolicy, threadPolicy] = await Promise.all([
         policyForScope(ctx, userId, "global", "global"),
@@ -266,6 +272,7 @@ export const list = query({
       encodeNotification(
         row,
         row.createdAt <= (state?.readThrough ?? 0) || acknowledged.has(row.eventId),
+        row.createdAt <= (state?.seenThrough ?? state?.readThrough ?? 0),
       ),
     );
   },
@@ -315,6 +322,32 @@ export const markRead = mutation({
   },
 });
 
+export const markAllSeen = mutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const user = await requireUser(ctx);
+    const latest = await ctx.db
+      .query("focusNotifications")
+      .withIndex("by_user_and_created_at", (q) => q.eq("userId", user.clerkSubject))
+      .order("desc")
+      .first();
+    const state = await stateForUser(ctx, user.clerkSubject);
+    const now = Date.now();
+    const seenThrough = Math.max(now, latest?.createdAt ?? 0, state?.seenThrough ?? 0);
+    if (state !== null) await ctx.db.patch(state._id, { seenThrough, updatedAt: now });
+    else
+      await ctx.db.insert("focusNotificationStates", {
+        userId: user.clerkSubject,
+        readThrough: 0,
+        seenThrough,
+        nextCleanupAt: NO_CLEANUP_DUE,
+        updatedAt: now,
+      });
+    return null;
+  },
+});
+
 export const markAllRead = mutation({
   args: {},
   returns: v.null(),
@@ -347,6 +380,24 @@ export const markAllRead = mutation({
       });
     } else {
       await ctx.db.patch(state._id, { readThrough, nextCleanupAt, updatedAt: now });
+    }
+    return null;
+  },
+});
+
+export const clearAll = mutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const user = await requireUser(ctx);
+    const rows = await ctx.db
+      .query("focusNotifications")
+      .withIndex("by_user_and_created_at", (q) => q.eq("userId", user.clerkSubject))
+      .collect();
+    for (const row of rows) await deleteNotification(ctx, row);
+    const state = await stateForUser(ctx, user.clerkSubject);
+    if (state !== null) {
+      await ctx.db.patch(state._id, { nextCleanupAt: NO_CLEANUP_DUE, updatedAt: Date.now() });
     }
     return null;
   },

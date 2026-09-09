@@ -6,6 +6,7 @@ import { createFocusSwipeHandler, type FocusSwipeDirection } from "./focusSwipe"
 
 /** Attach only to the thread-list viewport, leaving the header and focus strip scrollable. */
 export function useFocusSwipe(input: {
+  readonly hasConversations?: boolean;
   readonly activeFocusId: ActiveFocusId;
   readonly visibleFocuses: ReadonlyArray<Pick<Focus, "id">>;
   readonly onActiveFocusChange: (id: ActiveFocusId) => void;
@@ -16,7 +17,7 @@ export function useFocusSwipe(input: {
     focusId: ActiveFocusId;
     direction: FocusSwipeDirection;
   } | null>(null);
-  const enabled = input.visibleFocuses.length > 0;
+  const enabled = input.visibleFocuses.length > 0 || input.hasConversations === true;
 
   const selectAdjacentFocus = useEffectEvent((direction: FocusSwipeDirection) => {
     const focusId = nextFocusId({ ...input, direction });
