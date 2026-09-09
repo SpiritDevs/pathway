@@ -8,7 +8,7 @@ Automatic agent sessions belong to the account of the person who registered the 
 
 Successfully creating an issue records at least one minute. If you actively compose it for longer, that active time is recorded instead. After 30 seconds without interaction, composition stops adding time until you interact again. Leaving the app pauses composition immediately. Cancelled drafts and failed creations add no time. Creating a sub-issue follows the same rule.
 
-The clock beside your profile opens the active timers on web and desktop. Timers are grouped by project and show whether each agent is working or paused. Open Time Tracker for manual controls, analytics, and history. On Apple clients, the native Time Tracker includes the active agent list and analytics.
+The clock beside your profile appears only while at least one timer is running on web and desktop. It opens the active timers, grouped by project, and shows whether each agent is working or paused. Open Time Tracker from the sidebar for manual controls, analytics, and history, even when no timers are running. On Apple clients, the native Time Tracker includes the active agent list and analytics.
 
 Analytics separates combined work from elapsed activity. Eight agents working simultaneously for 30 minutes add four hours of combined work and 30 minutes of elapsed activity. Manual work and issue creation appear separately from agent work. An issue's one-minute minimum does not invent an extra minute of elapsed activity.
 

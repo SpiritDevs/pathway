@@ -150,7 +150,7 @@ function ConfiguredTimeTrackerIndicator() {
     (sum, session) => sum + trackedActivityDuration(session, now),
     0,
   );
-  if (!cloud.client) return null;
+  if (!cloud.client || running === 0) return null;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
@@ -193,20 +193,8 @@ function ConfiguredTimeTrackerIndicator() {
             <p role="alert" className="text-sm text-destructive">
               {result.error}
             </p>
-          ) : !result.value ? (
-            <p className="text-sm text-muted-foreground">Loading timers…</p>
-          ) : sessions.length ? (
-            <TrackedActivityList sessions={sessions} now={now} />
           ) : (
-            <div className="py-5 text-center">
-              <Clock3Icon className="mx-auto mb-3 size-6 text-muted-foreground/60" />
-              <p className="text-sm font-medium">No timers running</p>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                Agent work is tracked automatically.
-                <br />
-                Start a manual timer in Time Tracker.
-              </p>
-            </div>
+            <TrackedActivityList sessions={sessions} now={now} />
           )}
           {result.value && !result.value.complete ? (
             <p role="status" className="mt-3 text-xs text-muted-foreground">
