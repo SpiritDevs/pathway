@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { planClaudeSkillDispatch } from "./ClaudeSkillDispatch.ts";
+import { hasClaudeSkillMention, planClaudeSkillDispatch } from "./ClaudeSkillDispatch.ts";
 
 const SKILLS = new Set(["implement", "review", "re-release-version"]);
 
@@ -38,4 +38,20 @@ describe("planClaudeSkillDispatch", () => {
   it("ignores a dollar token glued to other text", () => {
     expect(planClaudeSkillDispatch("cost is 5$implement", SKILLS)).toBeUndefined();
   });
+});
+
+describe("hasClaudeSkillMention", () => {
+  it.each(["The budget is $100", "cost $1,000", "a lone $", "cost is 5$implement", "echo ${HOME}"])(
+    "skips discovery for %s",
+    (prompt) => {
+      expect(hasClaudeSkillMention(prompt)).toBe(false);
+    },
+  );
+  it.each(["$implement", "please $review the diff", "$plugin:review\nnow", "$review $implement"])(
+    "discovers possible skills in %s",
+    (prompt) => {
+      expect(hasClaudeSkillMention(prompt)).toBe(true);
+      expect(hasClaudeSkillMention(prompt)).toBe(true);
+    },
+  );
 });

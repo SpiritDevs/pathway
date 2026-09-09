@@ -1570,6 +1570,18 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.serverGetComposerCatalog]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverGetComposerCatalog,
+            Effect.gen(function* () {
+              const instance = yield* providerInstanceRegistry.getInstance(input.instanceId);
+              if (!instance || !instance.enabled) return { skills: [], slashCommands: [] };
+              if (instance.getComposerCatalog) return yield* instance.getComposerCatalog(input.cwd);
+              const snapshot = yield* instance.snapshot.getSnapshot;
+              return { skills: snapshot.skills, slashCommands: snapshot.slashCommands };
+            }),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,

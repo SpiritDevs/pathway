@@ -79,7 +79,10 @@ import { compileClaudeModelSelection } from "../../claudeModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import { makeClaudeEnvironment } from "../../provider/Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "../../provider/Drivers/ClaudeSkills.ts";
-import { planClaudeSkillDispatch } from "../../provider/Drivers/ClaudeSkillDispatch.ts";
+import {
+  hasClaudeSkillMention,
+  planClaudeSkillDispatch,
+} from "../../provider/Drivers/ClaudeSkillDispatch.ts";
 import { getClaudeModelCapabilities } from "../../provider/Layers/ClaudeProvider.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
@@ -1174,7 +1177,7 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   readonly environment: NodeJS.ProcessEnv;
   readonly cwd: string | null;
 }) {
-  const skills = input.text.includes("$")
+  const skills = hasClaudeSkillMention(input.text)
     ? yield* discoverClaudeSkills(input.settings, input.cwd ?? undefined, input.environment).pipe(
         Effect.provideService(FileSystem.FileSystem, input.fileSystem),
         Effect.provide(NodePath.layer),

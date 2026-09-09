@@ -101,6 +101,12 @@ export const ServerProviderSkill = Schema.Struct({
 });
 export type ServerProviderSkill = typeof ServerProviderSkill.Type;
 
+export const ServerProviderComposerCatalog = Schema.Struct({
+  skills: Schema.Array(ServerProviderSkill),
+  slashCommands: Schema.Array(ServerProviderSlashCommand),
+});
+export type ServerProviderComposerCatalog = typeof ServerProviderComposerCatalog.Type;
+
 /**
  * Availability of a configured provider instance from the runtime's POV.
  *

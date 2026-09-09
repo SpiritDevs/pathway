@@ -1060,21 +1060,23 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     ? yield* resolveCapabilities(claudeSettings).pipe(Effect.orElseSucceed(() => undefined))
     : undefined;
   const skills = yield* discoverClaudeSkills(claudeSettings, cwd, resolvedEnvironment);
-  const slashCommands = [
+  const nativeSlashCommands = [
     {
       name: "compact",
       description: "Summarize the conversation and reduce context usage",
     },
-    ...(capabilities?.slashCommands ?? []),
   ];
   const unavailableSkillNames = new Set(
     skills
       .filter((skill) => !skill.enabled || skill.userInvocable === false)
       .map((skill) => skill.name),
   );
-  const dedupedSlashCommands = dedupeSlashCommands(slashCommands).filter(
-    (command) => !unavailableSkillNames.has(command.name),
-  );
+  const dedupedSlashCommands = dedupeSlashCommands([
+    ...nativeSlashCommands,
+    ...(capabilities?.slashCommands ?? []).filter(
+      (command) => !unavailableSkillNames.has(command.name),
+    ),
+  ]);
 
   const authProbe =
     capabilities?.apiProvider === "bedrock"

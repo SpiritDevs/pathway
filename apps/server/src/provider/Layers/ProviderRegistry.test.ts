@@ -2320,7 +2320,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           const fs = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
           const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-claude-menu-" });
-          for (const name of ["disabled", "agent-only", "user-only"]) {
+          for (const name of ["disabled", "agent-only", "user-only", "compact"]) {
             yield* fs.makeDirectory(path.join(homePath, "skills", name), { recursive: true });
             yield* fs.writeFileString(
               path.join(homePath, "skills", name, "SKILL.md"),
@@ -2331,7 +2331,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           }
           yield* fs.writeFileString(
             path.join(homePath, "settings.json"),
-            '{"skillOverrides":{"disabled":"off"}}',
+            '{"skillOverrides":{"disabled":"off","compact":"off"}}',
           );
           const status = yield* checkClaudeProviderStatus(
             { ...defaultClaudeSettings, homePath },

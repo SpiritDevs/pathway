@@ -23,6 +23,7 @@
  */
 import type {
   ProviderDriverKind,
+  ServerProviderComposerCatalog,
   ProviderInstanceEnvironment,
   ProviderInstanceId,
 } from "@spiritdevs/contracts";
@@ -70,6 +71,10 @@ export interface ProviderInstance {
   readonly accentColor?: string | undefined;
   readonly enabled: boolean;
   readonly snapshot: ServerProviderShape;
+  /** Workspace-specific composer entries, separate from environment-wide status. */
+  readonly getComposerCatalog?: (
+    cwd: string | null,
+  ) => Effect.Effect<ServerProviderComposerCatalog>;
   readonly orchestrationAdapter: ProviderAdapterV2Shape;
   readonly textGeneration: TextGenerationShape;
   readonly authentication?: ProviderAuthenticationShape | undefined;

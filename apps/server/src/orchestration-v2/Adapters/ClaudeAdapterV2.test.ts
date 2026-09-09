@@ -715,129 +715,139 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
 });
 
 describe("ClaudeAdapterV2 attachments", () => {
-  it.effect("forwards persisted images on initial turns and live steering", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const idAllocator = yield* IdAllocatorV2;
-        const path = yield* Path.Path;
-        const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "pathway-claude-v2-attachments-",
-        });
-        const offeredMessages: Array<SDKUserMessage> = [];
-        const adapter = makeClaudeAdapterV2({
-          instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
-          settings: DEFAULT_CLAUDE_SETTINGS,
-          environment: {},
-          attachmentsDir,
-          fileSystem,
-          idAllocator,
-          queryRunner: {
-            allocateSessionId: Effect.succeed("native-thread-claude-attachments"),
-            open: () =>
-              Effect.succeed({
-                messages: Stream.never,
-                offer: (message) =>
-                  Effect.sync(() => {
-                    offeredMessages.push(message);
-                  }),
-                setModel: () => Effect.void,
-                interrupt: Effect.void,
-                close: Effect.void,
-              }),
-            forkSession: () => Effect.die("unused forkSession"),
-            assertComplete: Effect.void,
-          },
-        });
-        const threadId = ThreadId.make("thread-claude-attachments");
-        const providerSessionId = ProviderSessionId.make("provider-session-claude-attachments");
-        const runtime = yield* adapter.openSession({
-          threadId,
-          providerSessionId,
-          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-        });
-        const providerThread = yield* runtime.ensureThread({
-          threadId,
-          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-        });
-        const attachment = ChatImageAttachment.make({
-          type: "image",
-          id: ChatAttachmentId.make(
-            "thread-claude-attachments-12345678-1234-1234-1234-123456789abc",
-          ),
-          name: "diagram.png",
-          mimeType: "image/png",
-          sizeBytes: 4,
-        });
-        yield* fileSystem.writeFile(
-          path.join(attachmentsDir, attachmentRelativePath(attachment)),
-          Uint8Array.from([1, 2, 3, 4]),
-        );
-        const attemptId = RunAttemptId.make("attempt-claude-attachments");
-        const now = yield* DateTime.now;
-
-        yield* runtime.startTurn(
-          makeClaudeTestTurnInput({
+  for (const initialText of ["What's in this image?", "The budget is $100"]) {
+    it.effect(`forwards images without skill discovery for ${initialText}`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const idAllocator = yield* IdAllocatorV2;
+          const path = yield* Path.Path;
+          const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "pathway-claude-v2-attachments-",
+          });
+          let skillDirectoryReads = 0;
+          const offeredMessages: Array<SDKUserMessage> = [];
+          const adapter = makeClaudeAdapterV2({
+            instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
+            settings: DEFAULT_CLAUDE_SETTINGS,
+            environment: {},
+            attachmentsDir,
+            fileSystem: {
+              ...fileSystem,
+              readDirectory: (...args) => {
+                skillDirectoryReads += 1;
+                return fileSystem.readDirectory(...args);
+              },
+            },
+            idAllocator,
+            queryRunner: {
+              allocateSessionId: Effect.succeed("native-thread-claude-attachments"),
+              open: () =>
+                Effect.succeed({
+                  messages: Stream.never,
+                  offer: (message) =>
+                    Effect.sync(() => {
+                      offeredMessages.push(message);
+                    }),
+                  setModel: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Effect.void,
+                }),
+              forkSession: () => Effect.die("unused forkSession"),
+              assertComplete: Effect.void,
+            },
+          });
+          const threadId = ThreadId.make("thread-claude-attachments");
+          const providerSessionId = ProviderSessionId.make("provider-session-claude-attachments");
+          const runtime = yield* adapter.openSession({
             threadId,
+            providerSessionId,
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+          });
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+          });
+          const attachment = ChatImageAttachment.make({
+            type: "image",
+            id: ChatAttachmentId.make(
+              "thread-claude-attachments-12345678-1234-1234-1234-123456789abc",
+            ),
+            name: "diagram.png",
+            mimeType: "image/png",
+            sizeBytes: 4,
+          });
+          yield* fileSystem.writeFile(
+            path.join(attachmentsDir, attachmentRelativePath(attachment)),
+            Uint8Array.from([1, 2, 3, 4]),
+          );
+          const attemptId = RunAttemptId.make("attempt-claude-attachments");
+          const now = yield* DateTime.now;
+
+          yield* runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId,
+              providerThread,
+              now,
+              attemptId,
+              text: initialText,
+              attachments: [attachment],
+            }),
+          );
+
+          const expectedImageBlock = {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: "AQIDBA==",
+            },
+          } as const;
+          const expectedAttachmentPath = path.join(
+            attachmentsDir,
+            attachmentRelativePath(attachment),
+          );
+          assert.deepEqual(offeredMessages[0]?.message.content, [
+            {
+              type: "text",
+              text: `Ultrathink:\n${initialText}\n\n[Attached image "diagram.png" is saved at: ${expectedAttachmentPath}]`,
+            },
+            expectedImageBlock,
+          ]);
+
+          const providerTurnId = idAllocator.derive.providerTurn({
+            driver: CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${attemptId}`,
+          });
+          yield* runtime.steerTurn({
+            threadId,
+            runId: RunId.make("run-claude-attachments"),
             providerThread,
-            now,
-            attemptId,
-            text: "What's in this image?",
-            attachments: [attachment],
-          }),
-        );
+            providerTurnId,
+            message: {
+              createdBy: "user",
+              creationSource: "web",
+              messageId: MessageId.make("message-claude-attachments-steer"),
+              text: "Focus on the diagram labels.",
+              attachments: [attachment],
+            },
+          });
 
-        const expectedImageBlock = {
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: "image/png",
-            data: "AQIDBA==",
-          },
-        } as const;
-        const expectedAttachmentPath = path.join(
-          attachmentsDir,
-          attachmentRelativePath(attachment),
-        );
-        assert.deepEqual(offeredMessages[0]?.message.content, [
-          {
-            type: "text",
-            text: `Ultrathink:\nWhat's in this image?\n\n[Attached image "diagram.png" is saved at: ${expectedAttachmentPath}]`,
-          },
-          expectedImageBlock,
-        ]);
-
-        const providerTurnId = idAllocator.derive.providerTurn({
-          driver: CLAUDE_PROVIDER,
-          nativeTurnId: `turn:${attemptId}`,
-        });
-        yield* runtime.steerTurn({
-          threadId,
-          runId: RunId.make("run-claude-attachments"),
-          providerThread,
-          providerTurnId,
-          message: {
-            createdBy: "user",
-            creationSource: "web",
-            messageId: MessageId.make("message-claude-attachments-steer"),
-            text: "Focus on the diagram labels.",
-            attachments: [attachment],
-          },
-        });
-
-        assert.equal(offeredMessages[1]?.priority, "now");
-        assert.deepEqual(offeredMessages[1]?.message.content, [
-          {
-            type: "text",
-            text: `Ultrathink:\nFocus on the diagram labels.\n\n[Attached image "diagram.png" is saved at: ${expectedAttachmentPath}]`,
-          },
-          expectedImageBlock,
-        ]);
-      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
-    ),
-  );
+          assert.equal(offeredMessages[1]?.priority, "now");
+          assert.deepEqual(offeredMessages[1]?.message.content, [
+            {
+              type: "text",
+              text: `Ultrathink:\nFocus on the diagram labels.\n\n[Attached image "diagram.png" is saved at: ${expectedAttachmentPath}]`,
+            },
+            expectedImageBlock,
+          ]);
+          assert.equal(skillDirectoryReads, 0);
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+    );
+  }
 
   for (const scenario of [
     {

@@ -304,6 +304,7 @@ import {
 } from "./previewAutomation.ts";
 import {
   ServerConfigStreamEvent,
+  ServerProviderComposerCatalog,
   DesktopUpdateCommitInput,
   ServerConfig,
   ServerProviderAuthenticationCancelInput,
@@ -439,6 +440,7 @@ export const WS_METHODS = {
   // Server meta
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
+  serverGetComposerCatalog: "server.getComposerCatalog",
   serverRefreshProviders: "server.refreshProviders",
   serverStartProviderAuthentication: "server.startProviderAuthentication",
   serverCompleteProviderAuthentication: "server.completeProviderAuthentication",
@@ -536,6 +538,12 @@ export const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   payload: Schema.Struct({}),
   success: ServerConfig,
   error: Schema.Union([KeybindingsConfigError, ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerGetComposerCatalogRpc = Rpc.make(WS_METHODS.serverGetComposerCatalog, {
+  payload: Schema.Struct({ instanceId: ProviderInstanceId, cwd: Schema.NullOr(Schema.String) }),
+  success: ServerProviderComposerCatalog,
+  error: EnvironmentAuthorizationError,
 });
 
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
@@ -1931,6 +1939,7 @@ export const EmailRpcs = RpcGroup.make(
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
+  WsServerGetComposerCatalogRpc,
   WsServerRefreshProvidersRpc,
   WsServerStartProviderAuthenticationRpc,
   WsServerCompleteProviderAuthenticationRpc,
