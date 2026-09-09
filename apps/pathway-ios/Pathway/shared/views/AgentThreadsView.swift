@@ -906,7 +906,7 @@ struct AgentThreadConversationView: View {
             .safeAreaInset(edge: .bottom, spacing: 4) {
                 VStack(spacing: 8) {
                     if let connect = appModel.connect {
-                        PathwayConversationStorageNotice(environment: model.environment, connect: connect, threadID: model.thread.threadId,
+                        PathwayConversationStorageNotice(environment: model.environment, connect: connect, threadID: model.thread.threadId, isStartingConversation: false,
                             chooseEnvironment: { showsAlternateEnvironment = true },
                             onAvailabilityChanged: { model.storageAllowsSend = $0 })
                             .id(model.environment.id)

@@ -3333,6 +3333,7 @@ function ChatViewContent(props: ChatViewProps) {
   const conversationStorage = useConversationStorage({
     environmentId,
     threadId,
+    isStartingConversation: isLocalDraftThread && localDispatchStartedAt === null,
     enabled:
       activeEnvironmentConnectionPhase === "connected" &&
       activeEnvironment?.serverConfig?.environment.capabilities.storageManagement === true,
