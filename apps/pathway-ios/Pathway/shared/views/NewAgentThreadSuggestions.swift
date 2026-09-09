@@ -45,7 +45,7 @@ struct NewAgentThreadSuggestions: View {
             } }
         case .skill:
             candidates = (provider["skills"]?.arrayValue ?? []).compactMap { value in
-                guard let fields = value.objectValue, fields["enabled"]?.boolValue == true, let name = fields["name"]?.stringValue else { return nil }
+                guard let fields = value.objectValue, fields["enabled"]?.boolValue == true, fields["userInvocable"]?.boolValue != false, let name = fields["name"]?.stringValue else { return nil }
                 return .init(id: "skill:\(name)", title: fields["displayName"]?.stringValue ?? name,
                     detail: fields["shortDescription"]?.stringValue ?? fields["description"]?.stringValue ?? "$\(name)", symbol: "sparkles", action: .insert("$\(name) "))
             }
@@ -55,7 +55,7 @@ struct NewAgentThreadSuggestions: View {
                 candidates += [.init(id: "builtin:plan", title: "/plan", detail: "Plan the work", symbol: "list.bullet.clipboard", action: .mode("plan")),
                     .init(id: "builtin:default", title: "/default", detail: "Work mode", symbol: "text.bubble", action: .mode("default"))]
             }
-            candidates += (provider["slashCommands"]?.arrayValue ?? []).compactMap { value in
+            candidates += (trigger.range.location == 0 ? provider["slashCommands"]?.arrayValue ?? [] : []).compactMap { value in
                 guard let fields = value.objectValue, let name = fields["name"]?.stringValue else { return nil }
                 return .init(id: "command:\(name)", title: "/\(name)", detail: fields["description"]?.stringValue ?? "Provider command",
                     symbol: "terminal", action: .insert("/\(name) "))

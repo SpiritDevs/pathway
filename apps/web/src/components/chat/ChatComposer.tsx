@@ -1190,10 +1190,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       );
       const query = composerTrigger.query.trim().toLowerCase();
       const slashCommandItems = [...builtInSlashCommandItems, ...providerSlashCommandItems];
-      if (!query) {
-        return slashCommandItems;
-      }
-      return searchSlashCommandItems(slashCommandItems, query);
+      return searchSlashCommandItems(slashCommandItems, query, composerTrigger.rangeStart === 0);
     }
     if (composerTrigger.kind === "skill") {
       return searchProviderSkills(selectedProviderStatus?.skills ?? [], composerTrigger.query).map(

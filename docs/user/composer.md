@@ -28,3 +28,18 @@ When you send the first message with **New worktree** selected, a workspace prep
 appears beside your message. It shows preparation, checkout progress, and the setup action as
 they happen. Once the workspace is ready for the agent, the card disappears and the Working
 timer starts. Setup failures stay visible so you can inspect them.
+
+Type `$` to pick a skill. With Claude, Pathway translates the selected `$name` into
+a direct skill invocation, including when it appears mid-message. Skills reserved
+for direct user invocation remain available. Skills switched off in Claude's
+settings or reserved for the agent are omitted from the composer menus.
+
+Claude runs one skill directly per message. If you mention several, the last
+one runs directly and earlier mentions become requests for Claude's Skill tool.
+Earlier user-only skills cannot run through that tool, so send each in its own message.
+Claude skill names come from their directory names, and a user skill takes precedence
+over a project skill with the same name.
+
+Provider slash commands appear only when `/` starts the whole message, where the
+provider can expand them. Pathway's `/model`, `/plan`, and `/default` commands
+remain available at the beginning of any line.

@@ -71,7 +71,7 @@ export function searchProviderSkills(
   query: string,
   limit = Number.POSITIVE_INFINITY,
 ): ServerProviderSkill[] {
-  const enabledSkills = skills.filter((skill) => skill.enabled);
+  const enabledSkills = skills.filter((skill) => skill.enabled && skill.userInvocable !== false);
   const normalizedQuery = normalizeSearchQuery(query, { trimLeadingPattern: /^\$+/ });
 
   if (!normalizedQuery) {

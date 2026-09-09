@@ -87,7 +87,7 @@ struct AgentThreadComposerSuggestions: View {
             }
         case .skill:
             candidates = (provider["skills"]?.arrayValue ?? []).compactMap { value in
-                guard let fields = value.objectValue, fields["enabled"]?.boolValue == true,
+                guard let fields = value.objectValue, fields["enabled"]?.boolValue == true, fields["userInvocable"]?.boolValue != false,
                       let name = fields["name"]?.stringValue else { return nil }
                 return .init(id: "skill:\(name)", title: fields["displayName"]?.stringValue ?? name,
                              detail: fields["shortDescription"]?.stringValue ?? fields["description"]?.stringValue ?? "$\(name)",
@@ -104,7 +104,7 @@ struct AgentThreadComposerSuggestions: View {
                     ]
                 }
             }
-            commands += (provider["slashCommands"]?.arrayValue ?? []).compactMap { value in
+            commands += (trigger.range.location == 0 ? provider["slashCommands"]?.arrayValue ?? [] : []).compactMap { value in
                 guard let fields = value.objectValue, let name = fields["name"]?.stringValue else { return nil }
                 return .init(id: "command:\(name)", title: "/\(name)",
                              detail: fields["description"]?.stringValue ?? fields["input"]?.objectValue?["hint"]?.stringValue ?? "Provider command",

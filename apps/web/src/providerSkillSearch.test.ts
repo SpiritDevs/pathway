@@ -48,6 +48,15 @@ describe("searchProviderSkills", () => {
     expect(searchProviderSkills(skills, "gfc").map((skill) => skill.name)).toEqual(["gh-fix-ci"]);
   });
 
+  it("keeps user-only skills and hides agent-only skills", () => {
+    const skills = [
+      makeSkill({ name: "deploy", userInvocationOnly: true }),
+      makeSkill({ name: "context", userInvocable: false }),
+    ];
+    expect(searchProviderSkills(skills, "").map((skill) => skill.name)).toEqual(["deploy"]);
+    expect(searchProviderSkills(skills, "context")).toEqual([]);
+  });
+
   it("omits disabled skills from results", () => {
     const skills = [
       makeSkill({ name: "ui", displayName: "Ui", enabled: false }),

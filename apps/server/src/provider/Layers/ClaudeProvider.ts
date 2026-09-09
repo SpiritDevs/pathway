@@ -1067,7 +1067,14 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     },
     ...(capabilities?.slashCommands ?? []),
   ];
-  const dedupedSlashCommands = dedupeSlashCommands(slashCommands);
+  const unavailableSkillNames = new Set(
+    skills
+      .filter((skill) => !skill.enabled || skill.userInvocable === false)
+      .map((skill) => skill.name),
+  );
+  const dedupedSlashCommands = dedupeSlashCommands(slashCommands).filter(
+    (command) => !unavailableSkillNames.has(command.name),
+  );
 
   const authProbe =
     capabilities?.apiProvider === "bedrock"

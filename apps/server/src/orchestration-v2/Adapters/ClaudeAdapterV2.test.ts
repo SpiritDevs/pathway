@@ -839,6 +839,204 @@ describe("ClaudeAdapterV2 attachments", () => {
     ),
   );
 
+  for (const scenario of [
+    {
+      name: "a mid-message skill",
+      text: "ok, now $review the changes",
+      leading: "Ultrathink:\nok, now",
+      command: "/review the changes",
+      image: false,
+    },
+    {
+      name: "a skill with an image",
+      text: "$review this image",
+      leading: "Ultrathink:",
+      command: "/review this image",
+      image: true,
+    },
+    {
+      name: "a native slash command with an image",
+      text: "/compact focus on auth",
+      leading: "",
+      command: "/compact focus on auth",
+      image: true,
+    },
+  ]) {
+    it.effect(`dispatches ${scenario.name} on initial turns and live steering`, () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const idAllocator = yield* IdAllocatorV2;
+          const path = yield* Path.Path;
+          const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "pathway-claude-v2-attachments-",
+          });
+          const skillHome = path.join(attachmentsDir, "claude-home");
+          yield* fileSystem.makeDirectory(path.join(skillHome, "skills", "review"), {
+            recursive: true,
+          });
+          yield* fileSystem.writeFileString(
+            path.join(skillHome, "skills", "review", "SKILL.md"),
+            "---\ndisable-model-invocation: true\n---\nReview the work.",
+          );
+          const offeredMessages: Array<SDKUserMessage> = [];
+          const adapter = makeClaudeAdapterV2({
+            instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
+            settings: { ...DEFAULT_CLAUDE_SETTINGS, homePath: skillHome },
+            environment: {},
+            attachmentsDir,
+            fileSystem,
+            idAllocator,
+            queryRunner: {
+              allocateSessionId: Effect.succeed("native-thread-claude-attachments"),
+              open: () =>
+                Effect.succeed({
+                  messages: Stream.never,
+                  offer: (message) =>
+                    Effect.sync(() => {
+                      offeredMessages.push(message);
+                    }),
+                  setModel: () => Effect.void,
+                  interrupt: Effect.void,
+                  close: Effect.void,
+                }),
+              forkSession: () => Effect.die("unused forkSession"),
+              assertComplete: Effect.void,
+            },
+          });
+          const threadId = ThreadId.make("thread-claude-attachments");
+          const providerSessionId = ProviderSessionId.make("provider-session-claude-attachments");
+          const runtime = yield* adapter.openSession({
+            threadId,
+            providerSessionId,
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+          });
+          const providerThread = yield* runtime.ensureThread({
+            threadId,
+            modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+            runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+          });
+          const attachment = ChatImageAttachment.make({
+            type: "image",
+            id: ChatAttachmentId.make(
+              "thread-claude-attachments-12345678-1234-1234-1234-123456789abc",
+            ),
+            name: "diagram.png",
+            mimeType: "image/png",
+            sizeBytes: 4,
+          });
+          yield* fileSystem.writeFile(
+            path.join(attachmentsDir, attachmentRelativePath(attachment)),
+            Uint8Array.from([1, 2, 3, 4]),
+          );
+          const attemptId = RunAttemptId.make("attempt-claude-attachments");
+          const now = yield* DateTime.now;
+
+          yield* runtime.startTurn(
+            makeClaudeTestTurnInput({
+              threadId,
+              providerThread,
+              now,
+              attemptId,
+              text: scenario.text,
+              attachments: scenario.image ? [attachment] : [],
+            }),
+          );
+
+          const expectedImageBlock = {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: "AQIDBA==",
+            },
+          } as const;
+          const expectedAttachmentPath = path.join(
+            attachmentsDir,
+            attachmentRelativePath(attachment),
+          );
+          const expectedBlocks: Exclude<SDKUserMessage["message"]["content"], string> = [
+            ...(scenario.leading ? [{ type: "text" as const, text: scenario.leading }] : []),
+            ...(scenario.image ? [expectedImageBlock] : []),
+            {
+              type: "text",
+              text:
+                scenario.command +
+                (scenario.image
+                  ? `\n\n[Attached image "diagram.png" is saved at: ${expectedAttachmentPath}]`
+                  : ""),
+            },
+          ];
+          assert.deepEqual(offeredMessages[0]?.message.content, expectedBlocks);
+
+          const providerTurnId = idAllocator.derive.providerTurn({
+            driver: CLAUDE_PROVIDER,
+            nativeTurnId: `turn:${attemptId}`,
+          });
+          yield* runtime.steerTurn({
+            threadId,
+            runId: RunId.make("run-claude-attachments"),
+            providerThread,
+            providerTurnId,
+            message: {
+              createdBy: "user",
+              creationSource: "web",
+              messageId: MessageId.make("message-claude-attachments-steer"),
+              text: scenario.text,
+              attachments: scenario.image ? [attachment] : [],
+            },
+          });
+
+          assert.equal(offeredMessages[1]?.priority, "now");
+          assert.deepEqual(offeredMessages[1]?.message.content, expectedBlocks);
+
+          // A stale composer pick must respect settings changed during this session.
+          yield* fileSystem.writeFileString(
+            path.join(skillHome, "settings.json"),
+            '{"skillOverrides":{"review":"off"}}',
+          );
+          yield* runtime.steerTurn({
+            threadId,
+            runId: RunId.make("run-claude-disabled"),
+            providerThread,
+            providerTurnId,
+            message: {
+              createdBy: "user",
+              creationSource: "web",
+              messageId: MessageId.make("message-claude-disabled"),
+              text: "please $review",
+              attachments: [],
+            },
+          });
+          assert.equal(offeredMessages[2]?.message.content, "Ultrathink:\nplease $review");
+          yield* fileSystem.writeFileString(path.join(skillHome, "settings.json"), "{}");
+          yield* fileSystem.writeFileString(
+            path.join(skillHome, "skills", "review", "SKILL.md"),
+            "---\nuser-invocable: false\n---\nContext.",
+          );
+          yield* runtime.steerTurn({
+            threadId,
+            runId: RunId.make("run-claude-agent-only"),
+            providerThread,
+            providerTurnId,
+            message: {
+              createdBy: "user",
+              creationSource: "web",
+              messageId: MessageId.make("message-claude-agent-only"),
+              text: "please $review and $UNKNOWN",
+              attachments: [],
+            },
+          });
+          assert.equal(
+            offeredMessages[3]?.message.content,
+            "Ultrathink:\nplease $review and $UNKNOWN",
+          );
+        }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+      ),
+    );
+  }
+
   it.effect("rejects unsupported image types before opening a provider query", () =>
     Effect.scoped(
       Effect.gen(function* () {
