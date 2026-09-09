@@ -1,5 +1,18 @@
 # Project connections
 
+Projects belong to your personal workspace by default. Existing projects without an owner are
+assigned there automatically, without a prompt when you start the app or sign in.
+
+If you belong to a company, **Add project** shows a workspace dropdown above the creation options.
+It starts with the company selected in your profile menu, or your personal workspace when
+**All Companies** is selected. You can change it before creating the project. If your personal
+workspace is your only workspace, the dropdown is hidden. Connecting to an existing project keeps
+that project's owner.
+
+Creating a project from **Agent Threads** selects it for the current unassigned draft. **Name only**
+creates a workspace folder automatically so the thread is ready to use. Creating a project from an
+issue form can still leave the directory unset.
+
 A Pathway project can have connections on several computers. Pathway normally joins checkouts
 automatically when their Git repository matches.
 

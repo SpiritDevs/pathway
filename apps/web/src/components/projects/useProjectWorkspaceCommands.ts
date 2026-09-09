@@ -101,6 +101,7 @@ export function useQuickCreateProject() {
     async (input: {
       readonly environmentId: EnvironmentId;
       readonly plan: Extract<QuickCreateProjectPlan, { kind: "create" }>;
+      readonly projectId?: ProjectId;
     }): Promise<ProjectWorkspaceWriteOutcome<QuickCreateProjectResult>> => {
       const { environmentId, plan } = input;
       if (plan.workspaceRoot !== null && plan.initializeGit) {
@@ -112,7 +113,7 @@ export function useQuickCreateProject() {
           return failureOutcome(initResult);
         }
       }
-      const projectId = newProjectId();
+      const projectId = input.projectId ?? newProjectId();
       const createResult = await createProject({
         environmentId,
         input: {

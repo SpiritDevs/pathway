@@ -33,7 +33,7 @@ import { TemporaryThreadDiscardDialog } from "../components/TemporaryThreadDisca
 import { WorkspaceCleanupNoticeHost } from "../components/WorkspaceCleanupNoticeHost";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { PullRequestAgentReviewHost } from "../components/pullRequest/PullRequestAgentReviewHost";
-import { AssignProjectCompanyDialog } from "../components/projects/AssignProjectCompanyDialog";
+import { AssignPersonalProjectOwnership } from "../components/projects/AssignPersonalProjectOwnership";
 import { AttachProjectDirectoryHost } from "../components/projects/AttachProjectDirectoryDialog";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
@@ -411,7 +411,7 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         {/* A rootless project prompts for a directory just in time, from anywhere in the app. */}
         <AttachProjectDirectoryHost />
         {/* Every project needs an owning company before it can carry issues. */}
-        {primaryEnvironmentAuthenticated ? <AssignProjectCompanyDialog /> : null}
+        {primaryEnvironmentAuthenticated ? <AssignPersonalProjectOwnership /> : null}
         <SlowRpcRequestToastCoordinator />
         <PullRequestAgentReviewHost />
         <HostedStaticEnvironmentBootstrap />

@@ -982,6 +982,35 @@ describe("environment registry", () => {
     expect(await feedRows(t)).toHaveLength(0);
   });
 
+  it.each(["questionAttachments", "storageManagement"] as const)(
+    "accepts and republishes %s capability changes",
+    async (capability) => {
+      const t = harness();
+      await seedRegistration(t);
+      const base = descriptor();
+      const args = {
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        descriptor: { ...base, capabilities: { ...base.capabilities, [capability]: true } },
+        relayLinkState: "linked" as const,
+        managedEndpointAvailable: true,
+      };
+      await asEnvironment(t).mutation(api.environments.register, args);
+      const firstFeedCount = (await feedRows(t)).length;
+      await asEnvironment(t).mutation(api.environments.register, args);
+      expect(await feedRows(t)).toHaveLength(firstFeedCount);
+      await asEnvironment(t).mutation(api.environments.register, {
+        ...args,
+        descriptor: { ...base, capabilities: { ...base.capabilities, [capability]: false } },
+      });
+      expect(await feedRows(t)).toHaveLength(firstFeedCount + 1);
+      expect((await feedRows(t)).at(-1)).toMatchObject({
+        entityKind: "environmentRegistration",
+        payload: { descriptor: { capabilities: { [capability]: false } } },
+      });
+    },
+  );
+
   it("publishes conversation capability changes to existing environment registrations", async () => {
     const t = harness();
     await seedRegistration(t);

@@ -21,7 +21,7 @@ const identity = {
 };
 
 describe("project repository choices", () => {
-  it("binds a new project automatically only when one workspace is available", () => {
+  it("binds a new project to the creation workspace with multiple choices", () => {
     const personal = CompanyId.make("company-personal");
     const organization = CompanyId.make("company-organization");
 
@@ -40,7 +40,7 @@ describe("project repository choices", () => {
         activeCompanyId: personal,
         availableCompanyIds: [personal, organization],
       }),
-    ).toBeNull();
+    ).toEqual({ companyId: personal, cloudProjectId: null });
   });
 
   it("keeps an explicit repository choice authoritative", () => {

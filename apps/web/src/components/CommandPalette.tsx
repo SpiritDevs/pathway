@@ -1,5 +1,10 @@
 "use client";
 
+import { ProjectOwnerSelect, useProjectOwner } from "./projects/ProjectOwnerSelect";
+import { useComposerDraftStore } from "../composerDraftStore";
+import type { QuickCreateProjectResult } from "./projects/projectWorkspace.logic";
+import { PERSONAL_PROJECT_OWNER } from "./projects/projectOwner.logic";
+
 import { canSettle } from "@spiritdevs/client-runtime/state/thread-settled";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { threadEnvironment } from "../state/threads";
@@ -110,6 +115,7 @@ import {
   useProjects,
   useUnscopedProjects,
   useThreadShells,
+  readProject,
   waitForProject,
   waitForUnscopedProject,
 } from "../state/entities";
@@ -190,7 +196,11 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
-import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
+import {
+  deriveLogicalProjectKeyFromSettings,
+  getProjectOrderKey,
+  selectProjectGroupingSettings,
+} from "../logicalProject";
 import { legacyProjectCwdPreferenceKeys, useUiStateStore } from "../uiStateStore";
 import {
   buildSidebarProjectPickerEntries,
@@ -583,14 +593,56 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   // and a dialog mounted inside a closing popup would unmount with it.
   const [quickCreateProjectEnvironmentId, setQuickCreateProjectEnvironmentId] =
     useState<EnvironmentId | null>(null);
+  const [quickCreateProjectOwner, setQuickCreateProjectOwner] = useState<string | undefined>();
   const [quickCreateProjectOpen, setQuickCreateProjectOpen] = useState(false);
+  const { routeDraftId, handleNewThread: openCreatedProjectThread } = useHandleNewThread();
+  const creationGroupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const creationActiveCompanyId = useAtomValue(activeCompanyIdAtom);
+  const setCreationActiveCompanyId = useAtomSet(activeCompanyIdAtom);
+  const handleQuickProjectCreated = async (
+    created: QuickCreateProjectResult,
+    companyId: CompanyId,
+  ) => {
+    if (creationActiveCompanyId !== null && creationActiveCompanyId !== companyId) {
+      setCreationActiveCompanyId(companyId);
+    }
+    const projectRef = scopeProjectRef(created.environmentId, created.projectId);
+    if (!(await waitForProject(projectRef))) {
+      throw new Error(
+        "Project created, but its connection is still syncing. Open it from the project picker once it appears.",
+      );
+    }
+    const store = useComposerDraftStore.getState();
+    const session = routeDraftId === null ? null : store.getDraftSession(routeDraftId);
+    if (
+      routeDraftId !== null &&
+      session &&
+      session.projectId === null &&
+      !session.pendingSend &&
+      !session.promotedTo
+    ) {
+      const project = readProject(projectRef);
+      store.setLogicalProjectDraftThreadId(
+        project
+          ? deriveLogicalProjectKeyFromSettings(project, creationGroupingSettings)
+          : scopedProjectKey(projectRef),
+        projectRef,
+        routeDraftId,
+        session.temporary ? { envMode: "worktree", worktreePath: null } : undefined,
+      );
+      return;
+    }
+    await openCreatedProjectThread(projectRef);
+  };
+
   // Like quick-create, this must outlive the command popup. A nested dialog makes the parent close
   // on focus transfer, which immediately unmounts the repository decision.
   const [repositoryChoiceOverlay, setRepositoryChoiceOverlay] =
     useState<ProjectRepositoryChoiceOverlay | null>(null);
   const [repositoryChoiceSubmitting, setRepositoryChoiceSubmitting] = useState(false);
   const openQuickCreateProject = useCallback(
-    (environmentId: EnvironmentId) => {
+    (environmentId: EnvironmentId, owner: string) => {
+      setQuickCreateProjectOwner(owner);
       setQuickCreateProjectEnvironmentId(environmentId);
       setQuickCreateProjectOpen(true);
       setOpen(false);
@@ -734,6 +786,11 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       >
         {children}
         <QuickCreateProjectDialog
+          {...(quickCreateProjectOwner === undefined
+            ? {}
+            : { initialOwner: quickCreateProjectOwner })}
+          startThread
+          onCreated={handleQuickProjectCreated}
           environmentId={quickCreateProjectEnvironmentId}
           onOpenChange={setQuickCreateProjectOpen}
           open={quickCreateProjectOpen}
@@ -777,7 +834,7 @@ function CommandPaletteDialog(props: {
   readonly setOpen: (open: boolean) => void;
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
-  readonly onQuickCreateProject: (environmentId: EnvironmentId) => void;
+  readonly onQuickCreateProject: (environmentId: EnvironmentId, owner: string) => void;
   readonly onRepositoryChoice: (overlay: ProjectRepositoryChoiceOverlay) => void;
 }) {
   const composerHandleRef = useComposerHandleContext();
@@ -829,7 +886,7 @@ function OpenCommandPaletteDialog(props: {
   readonly setOpen: (open: boolean) => void;
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
-  readonly onQuickCreateProject: (environmentId: EnvironmentId) => void;
+  readonly onQuickCreateProject: (environmentId: EnvironmentId, owner: string) => void;
   readonly onRepositoryChoice: (overlay: ProjectRepositoryChoiceOverlay) => void;
 }) {
   const navigate = useNavigate();
@@ -850,6 +907,11 @@ function OpenCommandPaletteDialog(props: {
   const activeCompanyId = useAtomValue(activeCompanyIdAtom);
   const setActiveCompanyId = useAtomSet(activeCompanyIdAtom);
   const companies = useAtomValue(companyListAtom);
+  const {
+    owner: projectOwner,
+    setSelectedOwner: setProjectOwner,
+    options: projectOwnerOptions,
+  } = useProjectOwner();
   const { activeFocusId, setActiveFocusId, visibleFocuses } = useFocusSelection();
   const environmentControl = useEnvironmentControl();
   const workspaceProjects = useWorkspaceProjects();
@@ -1595,10 +1657,10 @@ function OpenCommandPaletteDialog(props: {
           value: `action:add-project:${environmentId}:rootless`,
           searchTerms: ["name", "empty", "no directory", "rootless", "planning"],
           title: "Name only",
-          description: "Create a project now, attach a directory later",
+          description: "Create a project from a name",
           icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
           run: async () => {
-            onQuickCreateProject(environmentId);
+            onQuickCreateProject(environmentId, projectOwner);
           },
         },
       ];
@@ -1674,7 +1736,13 @@ function OpenCommandPaletteDialog(props: {
 
       return [{ value: `sources:${environmentId}`, label: "Sources", items: sourceItems }];
     },
-    [onQuickCreateProject, openSourceControlSettings, startAddProjectBrowse, startAddProjectClone],
+    [
+      onQuickCreateProject,
+      projectOwner,
+      openSourceControlSettings,
+      startAddProjectBrowse,
+      startAddProjectClone,
+    ],
   );
 
   const openAddProjectSourceSelection = useCallback(
@@ -2290,7 +2358,30 @@ function OpenCommandPaletteDialog(props: {
         workspaceProjectCount: workspaceProjects.length,
       });
       // #endregion DEBUG
+      if (environmentControl === null) return false;
+      let ownerCompanyId: CompanyId;
+      try {
+        ownerCompanyId =
+          projectOwner === PERSONAL_PROJECT_OWNER
+            ? await environmentControl.provisionPersonalWorkspace()
+            : CompanyId.make(projectOwner);
+      } catch (cause) {
+        toastManager.add({
+          type: "error",
+          title: "Could not prepare project workspace",
+          description: cause instanceof Error ? cause.message : "An error occurred.",
+        });
+        return false;
+      }
       const projectId = newProjectId();
+      const automaticAssignmentProjectKey = scopedProjectKey(
+        scopeProjectRef(input.environmentId, projectId),
+      );
+      markProjectAutomaticAssignmentPending(automaticAssignmentProjectKey, {
+        companyId: input.existingTarget?.companyId ?? ownerCompanyId,
+        cloudProjectId: input.existingTarget?.cloudProjectId ?? null,
+        ...(input.choice?.kind === "new" ? { matchRepository: false } : {}),
+      });
       const targetEnvironmentProviders =
         environments.find((environment) => environment.environmentId === input.environmentId)
           ?.serverConfig?.providers ??
@@ -2348,7 +2439,7 @@ function OpenCommandPaletteDialog(props: {
       const bindingTarget = resolveCreatedProjectBindingTarget({
         choice: input.choice,
         existingTarget: input.existingTarget ?? null,
-        activeCompanyId,
+        activeCompanyId: ownerCompanyId,
         availableCompanyIds: companies.map((company) => company.id),
       });
       // #region DEBUG
@@ -2379,6 +2470,9 @@ function OpenCommandPaletteDialog(props: {
             },
           });
 
+          if (activeCompanyId !== null && activeCompanyId !== bindingTarget.companyId) {
+            setActiveCompanyId(bindingTarget.companyId);
+          }
           const projectVisible = await waitForProject(projectRef);
           // #region DEBUG
           debugAgentThreadProjectCreate("H13", "agent-project-binding-projected", {
@@ -2440,6 +2534,8 @@ function OpenCommandPaletteDialog(props: {
     [
       clientSettings,
       createProject,
+      projectOwner,
+      setActiveCompanyId,
       activeCompanyId,
       companies,
       environmentControl,
@@ -2534,7 +2630,11 @@ function OpenCommandPaletteDialog(props: {
         currentWorkspaceProject?.companyIds[0] === undefined
           ? null
           : CompanyId.make(currentWorkspaceProject.companyIds[0]);
-      const newProjectCompanyId = currentCompanyId ?? activeCompanyId;
+      const newProjectCompanyId =
+        currentCompanyId ??
+        (projectOwner === PERSONAL_PROJECT_OWNER
+          ? ((await environmentControl?.provisionPersonalWorkspace()) ?? null)
+          : CompanyId.make(projectOwner));
       const selectedTarget =
         choice.kind === "existing"
           ? request.candidates.find((candidate) => candidate.group.projectKey === choice.projectKey)
@@ -2591,7 +2691,7 @@ function OpenCommandPaletteDialog(props: {
       return openExistingProject(existing);
     },
     [
-      activeCompanyId,
+      projectOwner,
       clientSettings,
       environmentControl,
       openExistingProject,
@@ -3348,6 +3448,16 @@ function OpenCommandPaletteDialog(props: {
     <CommandPaletteContent
       key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${addProjectCloneFlow?.step ?? "none"}`}
       aria-label="Command palette"
+      header={
+        addProjectEnvironmentId !== null || isAddProjectEnvironmentSelectionView || isBrowsing ? (
+          <ProjectOwnerSelect
+            owner={projectOwner}
+            options={projectOwnerOptions}
+            onChange={setProjectOwner}
+            disabled={isRemoteProjectPending}
+          />
+        ) : null
+      }
       autoHighlight={isBrowsing || isRemoteProjectCloneFlow ? false : "always"}
       footerActionLabel={footerActionLabel}
       footerCompleteLabel={isBrowsing ? "Complete" : undefined}

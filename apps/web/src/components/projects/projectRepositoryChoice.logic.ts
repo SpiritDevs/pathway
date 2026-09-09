@@ -12,13 +12,7 @@ export interface ProjectBindingTarget {
   readonly cloudProjectId: string | null;
 }
 
-/**
- * Resolve ownership before opening a newly-created project.
- *
- * Repository choices are authoritative. Without one, a sole available workspace is the only
- * possible answer and can be applied immediately; multiple workspaces deliberately return null so
- * the global ownership dialog asks the user instead of guessing.
- */
+/** Existing repository ownership wins; new projects use the creation workspace. */
 export function resolveCreatedProjectBindingTarget(input: {
   readonly choice: ProjectRepositoryChoice | null;
   readonly existingTarget: ProjectBindingTarget | null;
@@ -26,7 +20,7 @@ export function resolveCreatedProjectBindingTarget(input: {
   readonly availableCompanyIds: ReadonlyArray<CompanyId>;
 }): ProjectBindingTarget | null {
   if (input.choice?.kind === "existing") return input.existingTarget;
-  if (input.choice?.kind === "new") {
+  if (input.activeCompanyId !== null) {
     return input.activeCompanyId === null
       ? null
       : { companyId: input.activeCompanyId, cloudProjectId: null };

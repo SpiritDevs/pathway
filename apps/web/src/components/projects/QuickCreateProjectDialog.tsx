@@ -9,14 +9,20 @@
  *
  * @module components/projects/QuickCreateProjectDialog
  */
-import { useAtomValue } from "@effect/atom-react";
+import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
+import { newProjectId } from "~/lib/utils";
+import { ProjectOwnerSelect, useProjectOwner } from "./ProjectOwnerSelect";
+import { PERSONAL_PROJECT_OWNER } from "./projectOwner.logic";
+import {
+  markProjectAutomaticAssignmentPending,
+  clearProjectAutomaticAssignmentPending,
+} from "./projectAutomaticAssignmentState";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
-import { activeCompanyIdAtom } from "~/cloud/activeCompany";
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
 import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
 import { useEnvironments } from "~/state/environments";
@@ -43,6 +49,7 @@ import {
   EMPTY_ATTACH_PROJECT_DIRECTORY_DRAFT,
   EMPTY_QUICK_CREATE_PROJECT_DRAFT,
   planQuickCreateProject,
+  scratchWorkspaceRoot,
   type QuickCreateProjectDraft,
   type QuickCreateProjectResult,
 } from "./projectWorkspace.logic";
@@ -61,12 +68,17 @@ export function QuickCreateProjectDialog({
   environmentId,
   onOpenChange,
   onCreated,
+  initialOwner,
+  startThread = false,
 }: {
   open: boolean;
+  initialOwner?: string;
+  /** Agent Threads needs a runnable folder; issue creation can stay planning-only. */
+  startThread?: boolean;
   /** Where the project lands. Issues are environment-scoped, so callers pass the primary id. */
   environmentId: EnvironmentId | null;
   onOpenChange: (open: boolean) => void;
-  onCreated?: (result: QuickCreateProjectResult) => void;
+  onCreated?: (result: QuickCreateProjectResult, companyId: CompanyId) => void | Promise<void>;
 }) {
   const platform = useEnvironmentBrowsePlatform(environmentId);
   const occupiedWorkspaceRoots = useOccupiedWorkspaceRoots(environmentId);
@@ -77,7 +89,7 @@ export function QuickCreateProjectDialog({
   const { environments } = useEnvironments();
   const projectGroups = useProjectGroups();
   const workspaceProjects = useWorkspaceProjects();
-  const activeCompanyId = useAtomValue(activeCompanyIdAtom);
+  const { owner, setSelectedOwner, options } = useProjectOwner(initialOwner);
   const environmentControl = useEnvironmentControl();
   const clientSettings = useClientSettings();
   const updateClientSettings = useUpdateClientSettings();
@@ -95,13 +107,14 @@ export function QuickCreateProjectDialog({
 
   useEffect(() => {
     if (!open) return;
+    setSelectedOwner(initialOwner ?? null);
     setDraft(EMPTY_QUICK_CREATE_PROJECT_DRAFT);
     setSubmitting(false);
     setWriteError(null);
     setRepositoryChoiceCandidates([]);
     const frame = window.requestAnimationFrame(() => nameRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
-  }, [open]);
+  }, [open, initialOwner, setSelectedOwner]);
 
   const plan = useMemo(
     () =>
@@ -119,63 +132,88 @@ export function QuickCreateProjectDialog({
     setSubmitting(true);
     setWriteError(null);
     void (async () => {
-      const outcome = await quickCreateProject({ environmentId, plan });
-      setSubmitting(false);
-      if (!outcome.ok) {
-        setWriteError(outcome.message);
+      if (environmentControl === null) {
+        setWriteError("Connect to Pathway Cloud to create a project.");
+        setSubmitting(false);
         return;
       }
-      if (choice !== null && outcome.value.workspaceRoot !== null) {
-        updateClientSettings(
-          projectRepositoryChoiceSettings({
-            settings: clientSettings,
-            environmentId,
-            workspaceRoot: outcome.value.workspaceRoot,
-            choice,
-          }),
-        );
+      const projectId = newProjectId();
+      const assignmentKey = scopedProjectKey(scopeProjectRef(environmentId, projectId));
+      try {
+        const companyId =
+          owner === PERSONAL_PROJECT_OWNER
+            ? await environmentControl.provisionPersonalWorkspace()
+            : CompanyId.make(owner);
         const selectedTarget =
-          choice.kind === "existing"
+          choice?.kind === "existing"
             ? repositoryChoiceCandidates.find(
                 (candidate) => candidate.group.projectKey === choice.projectKey,
               )
             : null;
-        const bindingTarget =
-          selectedTarget?.companyId != null && selectedTarget.cloudProjectId !== null
+        markProjectAutomaticAssignmentPending(assignmentKey, {
+          companyId: selectedTarget?.companyId ?? companyId,
+          cloudProjectId: selectedTarget?.cloudProjectId ?? null,
+          ...(choice?.kind === "new" ? { matchRepository: false } : {}),
+        });
+        const creationPlan =
+          startThread && plan.workspaceRoot === null
             ? {
-                companyId: selectedTarget.companyId,
-                cloudProjectId: selectedTarget.cloudProjectId,
+                ...plan,
+                workspaceRoot: scratchWorkspaceRoot({ id: projectId, title: plan.title }),
+                createWorkspaceRootIfMissing: true,
               }
-            : choice.kind === "new" && activeCompanyId !== null
-              ? { companyId: activeCompanyId, cloudProjectId: null }
-              : null;
-        if (environmentControl !== null && bindingTarget !== null) {
-          try {
-            await environmentControl.ensureEnvironmentProject({
-              companyId: bindingTarget.companyId,
-              ...(bindingTarget.cloudProjectId === null
-                ? { matchRepository: false }
-                : { cloudProjectId: bindingTarget.cloudProjectId }),
-              project: {
-                environmentId: outcome.value.environmentId,
-                id: outcome.value.projectId,
-                title: outcome.value.title,
-                workspaceRoot: outcome.value.workspaceRoot,
-                repositoryIdentity: outcome.value.repositoryIdentity ?? null,
-              },
-            });
-          } catch (cause) {
-            toastManager.add({
-              type: "error",
-              title: "Project added, but its connection could not be saved",
-              description: cause instanceof Error ? cause.message : "An error occurred.",
-            });
-          }
+            : plan;
+        const outcome = await quickCreateProject({ environmentId, plan: creationPlan, projectId });
+        if (!outcome.ok) {
+          setWriteError(outcome.message);
+          return;
         }
+        if (choice !== null && outcome.value.workspaceRoot !== null) {
+          updateClientSettings(
+            projectRepositoryChoiceSettings({
+              settings: clientSettings,
+              environmentId,
+              workspaceRoot: outcome.value.workspaceRoot,
+              choice,
+            }),
+          );
+        }
+        await environmentControl.ensureEnvironmentProject({
+          companyId: selectedTarget?.companyId ?? companyId,
+          ...(selectedTarget?.cloudProjectId != null
+            ? { cloudProjectId: selectedTarget.cloudProjectId }
+            : choice?.kind === "new"
+              ? { matchRepository: false }
+              : {}),
+          project: {
+            environmentId: outcome.value.environmentId,
+            id: outcome.value.projectId,
+            title: outcome.value.title,
+            workspaceRoot: outcome.value.workspaceRoot,
+            repositoryIdentity: outcome.value.repositoryIdentity ?? null,
+          },
+        });
+        setRepositoryChoiceCandidates([]);
+        try {
+          await onCreated?.(outcome.value, selectedTarget?.companyId ?? companyId);
+        } catch (cause) {
+          toastManager.add({
+            type: "error",
+            title: "Project created, but the thread could not open",
+            description: cause instanceof Error ? cause.message : "An error occurred.",
+          });
+        }
+        onOpenChange(false);
+      } catch (cause) {
+        toastManager.add({
+          type: "error",
+          title: "Could not save project ownership",
+          description: cause instanceof Error ? cause.message : "An error occurred.",
+        });
+      } finally {
+        clearProjectAutomaticAssignmentPending(assignmentKey);
+        setSubmitting(false);
       }
-      setRepositoryChoiceCandidates([]);
-      onCreated?.(outcome.value);
-      onOpenChange(false);
     })();
   };
 
@@ -235,10 +273,18 @@ export function QuickCreateProjectDialog({
       open={open}
     >
       <DialogPopup className="max-w-md">
+        <ProjectOwnerSelect
+          owner={owner}
+          options={options}
+          onChange={setSelectedOwner}
+          disabled={submitting}
+        />
         <DialogHeader>
           <DialogTitle>New project</DialogTitle>
           <DialogDescription>
-            A project can be a name on its own. Attach a directory whenever the work needs one.
+            {startThread
+              ? "Name your project. A workspace folder will be created so you can start your thread."
+              : "A project can be a name on its own. Attach a directory whenever the work needs one."}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">
