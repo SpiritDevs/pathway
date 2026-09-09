@@ -5,6 +5,53 @@ import Testing
 
 @MainActor
 struct PathwayNewThreadDraftRecoveryTests {
+    @Test func criticalStorageBlocksModelLaunchWithoutMountedBannerUntilExplicitOverride() async throws {
+        var methods: [String] = []
+        let model = creation("a", directory: nil) { method, _ in
+            methods.append(method)
+            if method == "storage.snapshot" {
+                let now = Date().ISO8601Format()
+                return .object(["sampledAt": .string(now), "volumes": .array([.object(["pressure": .string("critical"), "sampledAt": .string(now)])])])
+            }
+            return .object(["threadId": .string("created")])
+        }
+        configure(model, storageManagement: true)
+        model.prompt = "Work on this issue"
+        #expect(model.canLaunch)
+        #expect(await model.launch() == nil)
+        #expect(methods == ["storage.snapshot"])
+        #expect(model.prompt == "Work on this issue")
+        #expect(model.errorMessage?.contains("Continue anyway") == true)
+
+        // A healthy/stale view callback is not explicit approval to launch on a critical host.
+        model.storageAllowsLaunch = true
+        #expect(await model.launch() == nil)
+        #expect(!methods.contains("orchestration.launchThread"))
+        model.continueDespiteCriticalStorage()
+        #expect(await model.launch() == "created")
+        #expect(methods.filter { $0 == "orchestration.launchThread" }.count == 1)
+    }
+
+    @Test func unavailableAndStaleStorageRemainAdvisory() async throws {
+        for unavailable in [true, false] {
+            var launches = 0
+            let model = creation("a", directory: nil) { method, _ in
+                if method == "storage.snapshot" {
+                    if unavailable { throw PathwayRPCError.disconnected }
+                    let stale = Date().addingTimeInterval(-300).ISO8601Format()
+                    return .object(["sampledAt": .string(stale), "volumes": .array([
+                        .object(["pressure": .string("critical"), "sampledAt": .string(stale)])])])
+                }
+                if method == "orchestration.launchThread" { launches += 1 }
+                return .object(["threadId": .string("created")])
+            }
+            configure(model, storageManagement: true)
+            model.prompt = "Work on this issue"
+            #expect(await model.launch() == "created")
+            #expect(launches == 1)
+        }
+    }
+
     @Test func expiredInitialUploadRequiresRetryAndRetainsLocalBytes() async throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -201,8 +248,9 @@ struct PathwayNewThreadDraftRecoveryTests {
                 return .object([:])
             })
     }
-    private func configure(_ model: PathwayAgentThreadCreationModel) {
+    private func configure(_ model: PathwayAgentThreadCreationModel, storageManagement: Bool = false) {
         model.applySubscriptionValue(.object(["type": .string("snapshot"), "config": .object([
+            "environment": .object(["capabilities": .object(["storageManagement": .bool(storageManagement)])]),
             "settings": .object(["defaultThreadEnvMode": .string("local"), "newWorktreesStartFromOrigin": .bool(false)]),
             "providers": .array([.object(["instanceId": .string("codex"), "driver": .string("codex"), "enabled": .bool(true), "installed": .bool(true),
                 "models": .array([.object(["slug": .string("model"), "name": .string("Model"), "isDefault": .bool(true)])])])])

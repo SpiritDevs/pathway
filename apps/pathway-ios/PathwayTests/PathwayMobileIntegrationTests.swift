@@ -3,6 +3,38 @@ import Foundation
 import Testing
 
 struct PathwayMobileIntegrationTests {
+    @Test @MainActor func offlineStoragePressureRestoresOnlyTheCurrentAccountAndEnvironments() throws {
+        let suite = "storage-pressure-test-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("critical", forKey: PathwayStoragePressureCache.key(account: "one", environmentID: "host"))
+        defaults.set("warning", forKey: PathwayStoragePressureCache.key(account: "two", environmentID: "host"))
+        defaults.set("invalid", forKey: PathwayStoragePressureCache.key(account: "one", environmentID: "invalid"))
+        #expect(PathwayStoragePressureCache.restore(account: "one",
+            environments: [("binding", "host"), ("unknown", "missing"), ("bad", "invalid")], defaults: defaults) == ["binding": "critical"])
+        #expect(PathwayStoragePressureCache.restore(account: "two",
+            environments: [("binding", "host")], defaults: defaults) == ["binding": "warning"])
+        #expect(PathwayStoragePressureCache.restore(account: "three",
+            environments: [("binding", "host")], defaults: defaults).isEmpty)
+    }
+
+    @Test func storageNotificationCarriesASeparateAccountScopedDestination() {
+        let destination = PathwayStorageNotificationDestination(account: "account", environmentID: "host")
+        #expect(PathwayStorageNotificationDestination(notification: destination.userInfo) == destination)
+        #expect(PathwayProductLink(notification: destination.userInfo) == nil)
+        #expect(PathwayStorageNotificationDestination(notification: ["environmentId": "host"]) == nil)
+        #expect(PathwayStorageNotificationDestination(notification: ["destination": "storage", "account": "", "environmentId": "host"]) == nil)
+    }
+
+    @Test func conversationFindsRunningCleanupBehindNewerCompletedJobs() {
+        let completed = PathwayStorageJob(id: "new", mode: "manual", status: "completed", startedAt: "", finishedAt: "", items: [])
+        let running = PathwayStorageJob(id: "old", mode: "manual", status: "running", startedAt: "", finishedAt: nil, items: [])
+        let snapshot = PathwayStorageSnapshot(sampledAt: "", volumes: [], worktrees: [], threads: [],
+            policy: .init(enabled: false, afterDays: 30, warningBytes: 20, criticalBytes: 10,
+                warningPercent: 10, criticalPercent: 5), jobs: [completed, running], scanError: nil)
+        #expect(snapshot.runningJob?.id == "old")
+    }
+
     @Test func clearingHistoryPreservesDraftsAndOtherAccounts() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         let account = root.appending(path: "one")

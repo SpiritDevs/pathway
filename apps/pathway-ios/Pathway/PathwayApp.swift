@@ -115,6 +115,11 @@ struct PathwayApp: App {
                 .environment(appModel)
                 .onOpenURL(perform: handleOpenURL)
                 .task {
+                    notificationDelegate.onOpenStorage = { appModel.pendingStorageNotification = $0 }
+                    if let storage = notificationDelegate.pendingStorage {
+                        appModel.pendingStorageNotification = storage
+                        notificationDelegate.pendingStorage = nil
+                    }
                     notificationDelegate.onOpenThread = { appModel.openProductLink($0) }
                     if let link = notificationDelegate.pendingLink {
                         appModel.openProductLink(link)

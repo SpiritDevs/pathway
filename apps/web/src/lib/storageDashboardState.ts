@@ -12,6 +12,7 @@ import { readStorageSnapshots, writeStorageSnapshot } from "./storageSnapshotCac
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { type EnvironmentPresentation, useEnvironments } from "../state/environments";
 import { serverEnvironment } from "../state/server";
+import { storageDashboardHasRunningJob, storageDashboardQueryKey } from "./storageDashboardPolling";
 
 export interface StorageEnvironmentEntry {
   readonly environment: EnvironmentPresentation;
@@ -54,11 +55,7 @@ export function useStorageDashboardState({ refreshIntervalMs = 30_000, polling =
     .map((environment) => environment.environmentId)
     .toSorted()
     .join("\n");
-  const environmentKey = environments
-    .filter((environment) => environment.connection.phase === "connected")
-    .map((environment) => environment.environmentId)
-    .toSorted()
-    .join("\n");
+  const environmentKey = storageDashboardQueryKey(environments);
   const results = useAtomValue(snapshotsAtom(environmentKey));
   const [cache, setCache] = useState<{
     accountId: string | null;
@@ -113,16 +110,24 @@ export function useStorageDashboardState({ refreshIntervalMs = 30_000, polling =
     () =>
       environments.map((environment) => {
         const result = results.find((entry) => entry.environmentId === environment.environmentId);
-        const snapshot =
-          result?.snapshot ??
-          (cache.accountId === accountId ? cache.snapshots.get(environment.environmentId) : null) ??
-          null;
+        const unsupported =
+          environment.connection.phase === "connected" &&
+          environment.serverConfig?.environment.capabilities.storageManagement !== true;
+        const snapshot = unsupported
+          ? null
+          : (result?.snapshot ??
+            (cache.accountId === accountId
+              ? cache.snapshots.get(environment.environmentId)
+              : null) ??
+            null);
         return {
           environment,
           snapshot: snapshot
             ? companyScopedStorageSnapshot(snapshot, companyId, replicas, environment.environmentId)
             : null,
-          error: result?.error ?? null,
+          error: unsupported
+            ? "Update this environment's server to view storage and manage cleanup."
+            : (result?.error ?? null),
           isLoading: result?.isLoading ?? false,
         };
       }),
@@ -135,9 +140,7 @@ export function useStorageDashboardState({ refreshIntervalMs = 30_000, polling =
       );
     }
   }, [environmentKey]);
-  const hasRunningJob = entries.some((entry) =>
-    entry.snapshot?.jobs.some((job) => job.status === "running"),
-  );
+  const hasRunningJob = storageDashboardHasRunningJob(results);
   useEffect(() => {
     if (!polling) return;
     const timer = window.setInterval(

@@ -95,6 +95,7 @@ struct PathwayStorageSnapshot: Codable, Sendable {
     let policy: PathwayStoragePolicy
     let jobs: [PathwayStorageJob]
     let scanError: String?
+    var runningJob: PathwayStorageJob? { jobs.first { $0.status == "running" } }
     var critical: Bool { volumes.contains { $0.pressure == "critical" } }
 }
 

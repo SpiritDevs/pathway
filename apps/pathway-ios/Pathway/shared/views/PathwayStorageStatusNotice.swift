@@ -34,14 +34,22 @@ struct PathwayStorageStatusNotice: View {
             }
         }
         .task(id: "\(scenePhase):\(appModel.localStorageDirectory?.path ?? ""):\(appModel.cloud.environments.map(\.id).joined())") {
-            guard scenePhase == .active, let connect = appModel.connect,
-                  let account = appModel.localStorageDirectory?.lastPathComponent else { return }
+            guard let account = appModel.localStorageDirectory?.lastPathComponent else {
+                pressures = [:]; stale = []; notice = nil
+                return
+            }
+            pressures = PathwayStoragePressureCache.restore(account: account,
+                environments: appModel.cloud.environments.map { ($0.id, $0.environment.environmentId) })
+            stale = Set(pressures.keys)
+            notice = nil
+            guard scenePhase == .active, let connect = appModel.connect else { return }
             while !Task.isCancelled {
                 var seen = Set<String>()
                 for environment in appModel.cloud.environments {
                     guard !Task.isCancelled, seen.insert(environment.environment.environmentId).inserted else { continue }
                     do {
                         let value = try await PathwayEnvironmentStorageModel.request(environment: environment, connect: connect, method: "server.getHostResources")
+                        guard !Task.isCancelled else { return }
                         let resources = try JSONDecoder().decode(PathwayHostResources.self, from: JSONEncoder().encode(value))
                         guard let pressure = resources.storagePressure, ["healthy", "warning", "critical"].contains(pressure),
                               let storageAt = resources.storageSampledAt, storageAt.isFinite,
@@ -50,7 +58,7 @@ struct PathwayStorageStatusNotice: View {
                             continue
                         }
                         stale.remove(environment.id)
-                        let key = "pathway.storagePressure.\(account).\(environment.environment.environmentId)"
+                        let key = PathwayStoragePressureCache.key(account: account, environmentID: environment.environment.environmentId)
                         let previous = UserDefaults.standard.string(forKey: key)
                         pressures[environment.id] = pressure
                         guard previous != pressure else { continue }
@@ -61,11 +69,16 @@ struct PathwayStorageStatusNotice: View {
                         if PathwayNotifications.shared.preferences.notificationsEnabled,
                            await UNUserNotificationCenter.current().notificationSettings().authorizationStatus == .authorized {
                             let content = UNMutableNotificationContent()
+                            content.userInfo = PathwayStorageNotificationDestination(account: account,
+                                environmentID: environment.environment.environmentId).userInfo
                             content.title = title
                             content.body = "Open Storage & cleanup to review capacity. Emergency cleanup runs only when you request it."
                             try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: key, content: content, trigger: nil))
                         }
-                    } catch { stale.insert(environment.id) }
+                    } catch {
+                        guard !Task.isCancelled else { return }
+                        stale.insert(environment.id)
+                    }
                 }
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
             }
@@ -76,5 +89,24 @@ struct PathwayStorageStatusNotice: View {
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { showsStorage = false } } }
             }
         }
+    }
+}
+
+/// Persisted readings are display-only until a fresh telemetry response arrives.
+enum PathwayStoragePressureCache {
+    static func key(account: String, environmentID: String) -> String {
+        "pathway.storagePressure.\(account).\(environmentID)"
+    }
+
+    static func restore(account: String, environments: [(id: String, environmentID: String)],
+                        defaults: UserDefaults = .standard) -> [String: String] {
+        var pressures: [String: String] = [:]
+        for environment in environments {
+            if let pressure = defaults.string(forKey: key(account: account, environmentID: environment.environmentID)),
+               ["healthy", "warning", "critical"].contains(pressure) {
+                pressures[environment.id] = pressure
+            }
+        }
+        return pressures
     }
 }

@@ -22,7 +22,7 @@ Use the thread's action menu to select **Keep worktree** or **Allow worktree cle
 
 After reclamation, the thread says that its worktree was removed to free space. Choose **Recreate worktree** before continuing work. Dependencies and generated files may need rebuilding.
 
-Unlinked worktrees appear in a separate section for manual review. For a projectless working folder, use **Delete thread** to remove the conversation and its folder together. These folders are excluded from worktree reclamation because they do not have a Git branch from which to recreate their files. Temporary threads retain their existing policy of deleting the conversation on settlement.
+Unlinked worktrees appear in a separate section for manual review. For a projectless working folder, use **Delete thread** to remove the conversation and its folder together. A required preview shows the environment, folder path, and size estimates before deletion, even if ordinary thread-delete confirmations are disabled. These folders are excluded from worktree reclamation because they do not have a Git branch from which to recreate their files. Temporary threads retain their existing policy of deleting the conversation on settlement.
 
 ## Schedule cleanup
 

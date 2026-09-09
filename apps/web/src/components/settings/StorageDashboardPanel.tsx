@@ -49,6 +49,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { toastManager } from "../ui/toast";
 import { StorageAutoPlacementSetting } from "./LoadBalancingSettings";
 import { StoragePolicyDialog } from "./StoragePolicyDialog";
+import { ConversationFolderDeleteDialog } from "./ConversationFolderDeleteDialog";
 import { SettingsPageContainer } from "./settingsLayout";
 import {
   storageJobReclaimedBytes,
@@ -412,6 +413,11 @@ export function StorageDashboardPanel() {
   const [policyEnvironmentId, setPolicyEnvironmentId] = useState<EnvironmentId | null>(null);
   const [previews, setPreviews] = useState<ReadonlyArray<PreviewGroup> | null>(null);
   const [busy, setBusy] = useState(false);
+  const [folderDeletion, setFolderDeletion] = useState<{
+    entry: StorageEnvironmentEntry;
+    thread: StorageThreadRow;
+    worktree: StorageWorktreeRow;
+  } | null>(null);
   const [startedJobs, setStartedJobs] = useState<
     ReadonlyArray<{ environmentId: EnvironmentId; job: StorageJob }>
   >([]);
@@ -420,7 +426,7 @@ export function StorageDashboardPanel() {
   const cancelCommand = useAtomCommand(serverEnvironment.storageCancel);
   const keepCommand = useAtomCommand(serverEnvironment.storageSetKeep);
   const recreateCommand = useAtomCommand(serverEnvironment.storageRecreate);
-  const { confirmAndDeleteThread, unarchiveThread, unsettleThread, unsnoozeThread } =
+  const { confirmAndDeleteThread, deleteThread, unarchiveThread, unsettleThread, unsnoozeThread } =
     useThreadActions();
   const visibleEntries = useMemo(
     () =>
@@ -591,8 +597,13 @@ export function StorageDashboardPanel() {
     action: "keep" | "delete" | "restore" | "recreate",
     entry: StorageEnvironmentEntry,
     thread: StorageThreadRow,
-  ) =>
-    runAction(async () => {
+  ) => {
+    const worktree = entry.snapshot?.worktrees.find((item) => item.id === thread.worktreeId);
+    if (action === "delete" && worktree?.kind === "conversation" && !worktree.removed) {
+      setFolderDeletion({ entry, thread, worktree });
+      return Promise.resolve();
+    }
+    return runAction(async () => {
       const environmentId = entry.environment.environmentId;
       const threadRef = scopeThreadRef(environmentId, thread.threadId);
       if (action === "keep")
@@ -621,6 +632,7 @@ export function StorageDashboardPanel() {
               : unsettleThread(threadRef)),
         );
     });
+  };
   const jobs = visibleEntries
     .flatMap((entry) => {
       const snapshotJobs = entry.snapshot?.jobs ?? [];
@@ -809,7 +821,13 @@ export function StorageDashboardPanel() {
             }}
           >
             <SelectTrigger className="w-56" aria-label="Filter thread state">
-              <SelectValue />
+              <SelectValue>
+                {filter === "inactive"
+                  ? "Archived, settled & snoozed"
+                  : filter === "all"
+                    ? "All threads"
+                    : filter.charAt(0).toUpperCase() + filter.slice(1)}
+              </SelectValue>
             </SelectTrigger>
             <SelectPopup>
               <SelectItem value="inactive">Archived, settled &amp; snoozed</SelectItem>
@@ -1087,6 +1105,32 @@ export function StorageDashboardPanel() {
             setShowDefaults(false);
           }}
           onSaved={refresh}
+        />
+      )}
+      {folderDeletion && (
+        <ConversationFolderDeleteDialog
+          environmentLabel={folderDeletion.entry.environment.label}
+          thread={folderDeletion.thread}
+          worktree={folderDeletion.worktree}
+          busy={busy}
+          onClose={() => setFolderDeletion(null)}
+          onDelete={() =>
+            void runAction(async () => {
+              if (folderDeletion.entry.environment.connection.phase !== "connected")
+                throw new Error(
+                  "Reconnect this environment before deleting the conversation and folder.",
+                );
+              resultValue<unknown>(
+                await deleteThread(
+                  scopeThreadRef(
+                    folderDeletion.entry.environment.environmentId,
+                    folderDeletion.thread.threadId,
+                  ),
+                ),
+              );
+              setFolderDeletion(null);
+            })
+          }
         />
       )}
       <Dialog

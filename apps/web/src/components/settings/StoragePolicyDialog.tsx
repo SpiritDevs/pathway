@@ -67,6 +67,10 @@ export function StoragePolicyDialog({
           failures.push(`${environment.label}: offline, no changes were queued.`);
           return;
         }
+        if (environment.serverConfig?.environment.capabilities.storageManagement !== true) {
+          failures.push(`${environment.label}: update the server to configure cleanup.`);
+          return;
+        }
         const result = await savePolicy({
           environmentId: environment.environmentId,
           input: { policy: effectivePolicy },

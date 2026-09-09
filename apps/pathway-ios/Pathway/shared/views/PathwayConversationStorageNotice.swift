@@ -7,13 +7,15 @@ struct PathwayConversationStorageNotice: View {
     @State private var showsDashboard = false
     let threadID: String?
     var chooseEnvironment: (() -> Void)?
+    var onContinueAnyway: (() -> Void)?
     var onAvailabilityChanged: ((Bool) -> Void)?
 
     init(environment: PathwayCompanyEnvironment, connect: PathwayConnectClient,
-         threadID: String? = nil, chooseEnvironment: (() -> Void)? = nil, onAvailabilityChanged: ((Bool) -> Void)? = nil) {
+         threadID: String? = nil, chooseEnvironment: (() -> Void)? = nil, onContinueAnyway: (() -> Void)? = nil, onAvailabilityChanged: ((Bool) -> Void)? = nil) {
         _model = State(initialValue: PathwayEnvironmentStorageModel(environment: environment, connect: connect))
         self.threadID = threadID
         self.chooseEnvironment = chooseEnvironment
+        self.onContinueAnyway = onContinueAnyway
         self.onAvailabilityChanged = onAvailabilityChanged
     }
 
@@ -52,14 +54,14 @@ struct PathwayConversationStorageNotice: View {
                 HStack {
                     Button("Review storage") { showsDashboard = true }
                     if let chooseEnvironment { Button("Choose another environment", action: chooseEnvironment) }
-                    Button("Continue anyway") { continued = true }
+                    Button("Continue anyway") { continued = true; onContinueAnyway?() }
                 }.font(.caption)
                 if threadID != nil, chooseEnvironment != nil {
                     Text("Choosing another environment starts a new conversation. Your current conversation and draft stay here.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if let job = model.snapshot?.jobs.first, job.status == "running" {
+            if let job = model.snapshot?.runningJob {
                 HStack {
                     ProgressView("Reclaiming worktrees…")
                     Button("Cancel") { Task { await model.cancel(job) } }
@@ -84,7 +86,7 @@ struct PathwayConversationStorageNotice: View {
                     }.map(\.id)
                     if !model.performingAction { await model.prepare(mode: "emergency", ids: ids) }
                 } else { continued = false }
-                do { try await Task.sleep(for: .seconds(model.snapshot?.jobs.contains { $0.status == "running" } == true ? 2 : 30)) }
+                do { try await Task.sleep(for: .seconds(model.snapshot?.runningJob != nil ? 2 : 30)) }
                 catch { return }
             }
         }

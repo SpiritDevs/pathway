@@ -167,6 +167,39 @@ describe("conversation storage", () => {
     expect(render({ environmentId: EnvironmentId.make("other") }).canSend).toBe(false);
     expect(mocks.start).not.toHaveBeenCalled();
   });
+  it("checks imperative responses and recovery actions again after permission or workspace state changes", () => {
+    const blocked = vi.fn();
+    expect(render().checkCanSend(blocked)).toBe(false);
+    expect(blocked).toHaveBeenLastCalledWith(false);
+    render().allow();
+    blocked.mockClear();
+    expect(render().checkCanSend(blocked)).toBe(true);
+    expect(blocked).not.toHaveBeenCalled();
+
+    snapshot = {
+      ...snapshot!,
+      threads: [
+        {
+          threadId,
+          title: "Reclaimed",
+          projectId: "project",
+          worktreeId: "eligible",
+          status: "settled",
+          keepWorktree: false,
+          threadDataBytes: 0,
+          eligibleSince: null,
+          reclaimedAt: snapshot!.sampledAt,
+        },
+      ],
+    };
+    expect(render().checkCanSend(blocked)).toBe(false);
+    expect(blocked).toHaveBeenLastCalledWith(true);
+    snapshot = { ...snapshot!, threads: [{ ...snapshot!.threads[0]!, reclaimedAt: null }] };
+    expect(render().checkCanSend(blocked)).toBe(true);
+    expect(render({ environmentId: EnvironmentId.make("other") }).checkCanSend(blocked)).toBe(
+      false,
+    );
+  });
   it("does not block unknown or stale readings or legacy environments", () => {
     snapshotError = "Connection lost";
     expect(render().canSend).toBe(true);

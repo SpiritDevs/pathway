@@ -10,6 +10,7 @@ enum MainTabSheet: String, Identifiable {
     case settings
     case systemRequest
     case sharedDrafts
+    case storage
 
     var id: Self { self }
 }
@@ -99,6 +100,13 @@ struct MainTabView: View {
                         }
                     }
                 }
+            case .storage:
+                NavigationStack {
+                    PathwayEnvironmentStorageView()
+                        .toolbar { ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { presentedSheet = nil }
+                        } }
+                }
             case .settings:
                 NavigationStack {
                     PathwaySettingsView()
@@ -123,6 +131,12 @@ struct MainTabView: View {
             systemRequest = request
             PathwaySystemEntry.shared.request = nil
             presentedSheet = .systemRequest
+        }
+        .onChange(of: appModel.pendingStorageNotification, initial: true) { _, destination in
+            guard let destination else { return }
+            appModel.pendingStorageNotification = nil
+            guard destination.account == appModel.localStorageDirectory?.lastPathComponent else { return }
+            presentedSheet = .storage
         }
         .onChange(of: appModel.pendingThreadRoute) { _, route in
             guard route != nil else { return }

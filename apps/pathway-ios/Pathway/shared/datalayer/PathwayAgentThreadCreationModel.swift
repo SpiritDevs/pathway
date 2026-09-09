@@ -212,6 +212,50 @@ final class PathwayAgentThreadCreationModel {
     }
 
     var storageAllowsLaunch = true
+    private var continuedDespiteCriticalStorage = false
+
+    func continueDespiteCriticalStorage() {
+        continuedDespiteCriticalStorage = true
+        storageAllowsLaunch = true
+    }
+
+    /// Every launch entry point checks the destination before persisting attachments or starting work.
+    func checkStorageBeforeLaunch() async -> Bool {
+        guard connectionState == .live else {
+            errorMessage = "Connect to the environment before starting work."
+            return false
+        }
+        guard serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue?["storageManagement"]?.boolValue == true else { return true }
+        do {
+            let snapshot = try await request("storage.snapshot", payload: .object([:]))
+            guard let fields = snapshot.objectValue, Self.storageMeasurementIsFresh(fields["sampledAt"]?.stringValue),
+                  let volumes = fields["volumes"]?.arrayValue else { return true }
+            let critical = volumes.contains {
+                $0.objectValue?["pressure"]?.stringValue == "critical"
+                    && Self.storageMeasurementIsFresh($0.objectValue?["sampledAt"]?.stringValue)
+            }
+            if !critical { continuedDespiteCriticalStorage = false }
+            guard !critical || continuedDespiteCriticalStorage else {
+                storageAllowsLaunch = false
+                errorMessage = "This environment is critically low on storage. Free up space or choose Continue anyway before starting work."
+                return false
+            }
+            return true
+        } catch {
+            // Missing telemetry is advisory; the storage notice exposes unavailable readings.
+            return true
+        }
+    }
+
+    private static func storageMeasurementIsFresh(_ value: String?) -> Bool {
+        guard let value else { return false }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let measured = formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value) else { return false }
+        let age = Date().timeIntervalSince(measured)
+        return age >= -5 && age <= 120
+    }
+
     var canLaunch: Bool {
         (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !initialImageUploads.isEmpty || !attachments.drafts.isEmpty)
             && prompt.count <= 120_000 && attachments.isReady && initialImageUploads.count + attachments.drafts.count <= 8
@@ -282,6 +326,8 @@ final class PathwayAgentThreadCreationModel {
         do {
             if usesAutomaticPlacement, launchAttempt == nil { try await validatePlacement?() }
             try Task.checkCancellation()
+            guard await checkStorageBeforeLaunch() else { return nil }
+            try Task.checkCancellation()
             let userUploads = attachments.uploads
             let selectedAttachmentIDs = Set(attachments.drafts.map(\.id))
             let initialUploads = initialImageUploads
@@ -343,6 +389,7 @@ final class PathwayAgentThreadCreationModel {
             await attachments.didSend(ids: selectedAttachmentIDs)
             sentAttachmentIDs = []
             await persistDraftNow()
+            continuedDespiteCriticalStorage = false
             return threadID
         } catch {
             errorMessage = error.localizedDescription

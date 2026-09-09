@@ -62,6 +62,16 @@ export function useConversationStorage(input: {
   const reclaimed =
     snapshot.data?.threads.find((thread) => thread.threadId === threadId)?.reclaimedAt != null;
 
+  const canSend = !reclaimed && (pressure !== "critical" || allowedScope === scope);
+  const checkCanSend = useCallback(
+    (onBlocked: (reclaimed: boolean) => void) => {
+      if (canSend) return true;
+      onBlocked(reclaimed);
+      return false;
+    },
+    [canSend, reclaimed],
+  );
+
   useEffect(() => {
     if (pressure === "healthy" || pressure === "warning") setAllowedScope(null);
   }, [pressure]);
@@ -147,7 +157,8 @@ export function useConversationStorage(input: {
     reclaimed,
     error: error?.scope === scope ? error.message : preview.error,
     allowed: allowedScope === scope,
-    canSend: !reclaimed && (pressure !== "critical" || allowedScope === scope),
+    canSend,
+    checkCanSend,
     allow: () => setAllowedScope(scope),
     cleanup,
     cancelCleanup,

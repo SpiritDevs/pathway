@@ -441,6 +441,7 @@ import {
   loadQueuedComposerImages,
   reconcileMountedTerminalThreadIds,
   resolveDraftEnvironmentProjectRef,
+  filterStorageEnvironmentOptions,
   resolveEditableV2UserMessageId,
   resolveRetryableV2UserMessageId,
   resolvePanelSurfaceOwnerThreadRef,
@@ -3327,8 +3328,32 @@ function ChatViewContent(props: ChatViewProps) {
       threadId,
     ],
   );
+  const conversationStorage = useConversationStorage({
+    environmentId,
+    threadId,
+    enabled:
+      activeEnvironmentConnectionPhase === "connected" &&
+      activeEnvironment?.serverConfig?.environment.capabilities.storageManagement === true,
+  });
+  const requireConversationStorage = useCallback(
+    () =>
+      conversationStorage.checkCanSend((reclaimed) => {
+        toastManager.add({
+          type: "warning",
+          title: reclaimed
+            ? "Recreate the worktree before continuing"
+            : "This environment is critically low on storage",
+          description: reclaimed
+            ? "Your input is preserved. Use Recreate worktree above the composer."
+            : "Choose Clean up, another environment, or Continue anyway above the composer. Your input is preserved.",
+        });
+      }),
+    [conversationStorage.checkCanSend],
+  );
+
   const onControlWorkspacePreparation = useCallback(
     async (runId: RunId, action: "cancel" | "work_locally" | "retry") => {
+      if (action !== "cancel" && !requireConversationStorage()) return;
       if (!activeProject || !serverProjection) throw new Error("This thread is unavailable.");
       if (action === "work_locally" && serverProjection.thread.temporary)
         throw new Error(
@@ -3386,6 +3411,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeProject,
       serverProjection,
       serverAttachmentUrlById,
+      requireConversationStorage,
       controlWorkspacePreparation,
       environmentId,
       threadId,
@@ -3781,20 +3807,16 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
-  const conversationStorage = useConversationStorage({
-    environmentId,
-    threadId,
-    enabled:
-      activeEnvironmentConnectionPhase === "connected" &&
-      activeEnvironment?.serverConfig?.environment.capabilities.storageManagement === true,
-  });
-  const storageEnvironmentOptions = activeProject
-    ? logicalProjectEnvironments
-    : environments.map((item) => ({
-        environmentId: item.environmentId,
-        projectId: null,
-        label: item.label,
-      }));
+  const storageEnvironmentOptions = filterStorageEnvironmentOptions(
+    activeProject
+      ? logicalProjectEnvironments
+      : environments.map((item) => ({
+          environmentId: item.environmentId,
+          projectId: null,
+          label: item.label,
+        })),
+    environmentById,
+  );
   const storageChoiceStartsConversation =
     envLocked || draftPlacement.locked || activeProject === null;
   const chooseStorageEnvironment = (nextEnvironmentId: EnvironmentId) => {
@@ -7128,6 +7150,7 @@ function ChatViewContent(props: ChatViewProps) {
       ) {
         return;
       }
+      if (request.kind !== "handoff" && !requireConversationStorage()) return;
       setContinuationPending(true);
       if (request.kind === "recovery") {
         if (activeLatestRun?.runId !== request.sourceRunId || activeLatestRun.status !== "failed") {
@@ -7271,6 +7294,7 @@ function ChatViewContent(props: ChatViewProps) {
       activePendingApproval,
       activePendingUserInput,
       activeThread,
+      requireConversationStorage,
       continuationPending,
       continuationRequest,
       environmentId,
@@ -7338,24 +7362,13 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return;
     }
+    if (!requireConversationStorage()) return;
     if (activePendingProgress) {
       if (directAnnotation) {
         notifyDirectAnnotationAttached();
         return;
       }
       onAdvanceActivePendingUserInput();
-      return;
-    }
-    if (!conversationStorage.canSend) {
-      toastManager.add({
-        type: "warning",
-        title: conversationStorage.reclaimed
-          ? "Recreate the worktree before continuing"
-          : "This environment is critically low on storage",
-        description: conversationStorage.reclaimed
-          ? "Your draft is preserved. Use Recreate worktree above the composer."
-          : "Choose Clean up, another environment, or Continue anyway above the composer. Your draft is preserved.",
-      });
       return;
     }
     const sendCtx = composerRef.current?.getSendContext();
@@ -8155,6 +8168,8 @@ function ChatViewContent(props: ChatViewProps) {
         return false;
       }
 
+      if (!requireConversationStorage()) return false;
+
       const sendCtx = composerRef.current?.getSendContext();
       if (!sendCtx?.providerAvailable) {
         toastManager.add(
@@ -8248,6 +8263,7 @@ function ChatViewContent(props: ChatViewProps) {
       activePendingApproval,
       activePendingUserInput,
       activeThread,
+      requireConversationStorage,
       beginLocalDispatch,
       composerRef,
       environmentId,
@@ -8400,6 +8416,7 @@ function ChatViewContent(props: ChatViewProps) {
       ) {
         return false;
       }
+      if (!requireConversationStorage()) return false;
       sendInFlightRef.current = true;
       setThreadError(activeThread.id, null);
       const result = await editAndRestartMessage({
@@ -8423,6 +8440,7 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [
       activeThread,
+      requireConversationStorage,
       editAndRestartMessage,
       editableUserMessageId,
       environmentId,
@@ -8449,6 +8467,8 @@ function ChatViewContent(props: ChatViewProps) {
       )
         return;
 
+      if (decision !== "cancel" && !requireConversationStorage()) return;
+
       setRespondingRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
       );
@@ -8470,7 +8490,14 @@ function ChatViewContent(props: ChatViewProps) {
       setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
       return result;
     },
-    [activeThreadId, environmentId, pendingApprovals, respondToThreadApproval, setThreadError],
+    [
+      activeThreadId,
+      environmentId,
+      pendingApprovals,
+      respondToThreadApproval,
+      requireConversationStorage,
+      setThreadError,
+    ],
   );
 
   const onRespondToUserInput = useCallback(
@@ -8478,6 +8505,7 @@ function ChatViewContent(props: ChatViewProps) {
       if (!activeThreadId) return;
       const request = allPendingUserInputs.find((input) => input.requestId === requestId);
       if (!request || request.responseCapability === "not_resumable") return;
+      if (!requireConversationStorage()) return;
       const draftKey = questionAttachmentDraftKey(environmentId, activeThreadId, requestId);
       const attachmentsByQuestionId = readyQuestionAttachments(
         useQuestionAttachmentDrafts.getState().byRequest[draftKey] ?? [],
@@ -8522,6 +8550,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeThreadId,
       environmentId,
       allPendingUserInputs,
+      requireConversationStorage,
       respondToThreadUserInput,
       setResumeCompactionPermanentlyDismissed,
       setThreadError,
@@ -8691,14 +8720,7 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThread || !isServerThread || isSendBusy || isConnecting || sendInFlightRef.current) {
       return;
     }
-    if (!conversationStorage.canSend) {
-      toastManager.add({
-        type: "warning",
-        title: "Review storage before continuing",
-        description: "Use the storage notice above the composer. Your draft is preserved.",
-      });
-      return;
-    }
+    if (!requireConversationStorage()) return;
 
     const trimmed = text.trim();
     if (!trimmed) {
@@ -8848,6 +8870,8 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
 
+    if (!requireConversationStorage()) return;
+
     const sendCtx = composerRef.current?.getSendContext();
     if (!sendCtx?.providerAvailable) {
       return;
@@ -8978,6 +9002,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread,
     beginLocalDispatch,
     activeEnvironmentUnavailable,
+    requireConversationStorage,
     createThread,
     deleteThread,
     isConnecting,

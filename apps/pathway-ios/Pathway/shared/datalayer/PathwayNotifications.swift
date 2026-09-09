@@ -224,6 +224,8 @@ struct PathwayNotificationPreferences: Codable, Equatable {
 
 final class PathwayNotificationDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     @MainActor var onOpenThread: ((PathwayProductLink) -> Void)?
+    @MainActor var onOpenStorage: ((PathwayStorageNotificationDestination) -> Void)?
+    @MainActor var pendingStorage: PathwayStorageNotificationDestination?
     @MainActor var pendingLink: PathwayProductLink?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
@@ -242,6 +244,12 @@ final class PathwayNotificationDelegate: NSObject, UIApplicationDelegate, UNUser
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions { [.banner, .sound, .list] }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        if let storage = PathwayStorageNotificationDestination(notification: response.notification.request.content.userInfo) {
+            await MainActor.run {
+                if let onOpenStorage { onOpenStorage(storage) } else { pendingStorage = storage }
+            }
+            return
+        }
         guard let link = PathwayProductLink(notification: response.notification.request.content.userInfo) else { return }
         await MainActor.run {
             if let onOpenThread { onOpenThread(link) } else { pendingLink = link }

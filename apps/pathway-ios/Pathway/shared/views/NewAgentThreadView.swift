@@ -409,7 +409,7 @@ private struct NewAgentThreadComposer: View {
                 if let model {
                     if let selectedBinding, let connect = appModel.connect {
                         PathwayConversationStorageNotice(environment: selectedBinding.environment, connect: connect,
-                            chooseEnvironment: chooseProject, onAvailabilityChanged: { model.storageAllowsLaunch = $0 }).id(selectedBinding.id)
+                            chooseEnvironment: chooseProject, onContinueAnyway: { model.continueDespiteCriticalStorage() }, onAvailabilityChanged: { model.storageAllowsLaunch = $0 }).id(selectedBinding.id)
                     }
                     if !model.isConversation { workspaceSummary(model) }
                     composer(model).disabled(model.isImportingCapture || isResolvingPlacement || placementUnavailable)
