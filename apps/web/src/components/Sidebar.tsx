@@ -672,7 +672,10 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
               className="size-3 shrink-0 text-amber-600 dark:text-amber-300/80"
             />
             {session.projectId === null ? (
-              <MessageSquareIcon className="size-4 shrink-0" />
+              <MessageSquareIcon
+                className="size-4 shrink-0"
+                strokeDasharray={session.temporary ? "3 3" : undefined}
+              />
             ) : (
               <ProjectFavicon
                 environmentId={session.environmentId}
@@ -1436,7 +1439,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 cwd={props.projectCwd ?? ""}
                 faviconPath={props.projectFaviconPath}
                 className="size-4"
-                fallbackIcon={MessageSquareIcon}
+                fallbackIcon={thread.temporary ? TemporaryConversationIcon : MessageSquareIcon}
               />
             </span>
             {title}
@@ -1604,7 +1607,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               {thread.projectId === null ? (
-                <MessageSquareIcon className="size-4 shrink-0" />
+                <MessageSquareIcon
+                  className="size-4 shrink-0"
+                  strokeDasharray={thread.temporary ? "3 3" : undefined}
+                />
               ) : (
                 <ProjectFavicon
                   environmentId={thread.environmentId}
@@ -1944,7 +1950,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
             cwd={props.projectCwd ?? ""}
             faviconPath={props.projectFaviconPath}
             className="size-4 shrink-0"
-            fallbackIcon={MessageSquareIcon}
+            fallbackIcon={thread.temporary ? TemporaryConversationIcon : MessageSquareIcon}
           />
           <span className="min-w-0 flex-1 truncate">{thread.title}</span>
           <span className="shrink-0 text-xs text-muted-foreground/55 tabular-nums">
@@ -4724,4 +4730,8 @@ export default function Sidebar() {
       />
     </>
   );
+}
+
+function TemporaryConversationIcon({ className }: { className?: string }) {
+  return <MessageSquareIcon className={className} strokeDasharray="3 3" />;
 }

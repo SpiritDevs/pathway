@@ -16,6 +16,7 @@ import { Atom } from "effect/unstable/reactivity";
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import type { Project } from "../types";
+import { isElectron } from "../env";
 import type { EnvironmentPresentation } from "../state/environments";
 import { serverEnvironment } from "../state/server";
 import { environmentSession } from "../state/session";
@@ -43,6 +44,7 @@ export function useLoadBalancedDraft(input: {
   selection: ModelSelection | null;
 }) {
   const { draftId, enabled, weights, project, projects, environments, replicas, selection } = input;
+  const fallbackEnvironmentId = isElectron ? project?.environmentId : null;
   const registry = useContext(RegistryContext);
   const draft = useComposerDraftStore((store) => (draftId ? store.getDraftSession(draftId) : null));
   const attachments = useComposerDraftStore((store) =>
@@ -103,14 +105,14 @@ export function useLoadBalancedDraft(input: {
         ? environments.filter(
             (environment) =>
               environment.connection.phase === "connected" &&
-              (environment.environmentId === project.environmentId ||
+              (environment.environmentId === fallbackEnvironmentId ||
                 (weights[environment.environmentId] ?? 50) > 0) &&
               placementProjects.some(
                 (target) => target.environmentId === environment.environmentId,
               ),
           )
         : [],
-    [canBalance, project, environments, weights, placementProjects],
+    [canBalance, project, environments, weights, placementProjects, fallbackEnvironmentId],
   );
   const accessAtom = useMemo(
     () =>
@@ -148,7 +150,7 @@ export function useLoadBalancedDraft(input: {
       if (
         environment?.connection.phase !== "connected" ||
         !environment.serverConfig ||
-        (target.environmentId !== project.environmentId &&
+        (target.environmentId !== fallbackEnvironmentId &&
           (weights[target.environmentId] ?? 50) <= 0)
       )
         return [];
@@ -172,7 +174,16 @@ export function useLoadBalancedDraft(input: {
         },
       ];
     });
-  }, [canBalance, project, selection, environments, placementProjects, weights, sessions]);
+  }, [
+    canBalance,
+    project,
+    selection,
+    environments,
+    placementProjects,
+    weights,
+    sessions,
+    fallbackEnvironmentId,
+  ]);
   const measurementsAtom = useMemo(
     () =>
       Atom.make((get) =>
@@ -212,11 +223,12 @@ export function useLoadBalancedDraft(input: {
         )
       : null;
   // Resource readings and placement weights guide moving work. If none of the
-  // machines score, keep the current checkout with its verified access/provider.
+  // machines score, desktop keeps the current checkout with verified access/provider.
+  // A browser has no implicit machine to fall back to.
   const recommended = candidates.find(
     (candidate) =>
       candidate.environmentId ===
-      (resolved ? recommendedEnvironmentId : (measuredEnvironmentId ?? project?.environmentId)),
+      (resolved ? recommendedEnvironmentId : (measuredEnvironmentId ?? fallbackEnvironmentId)),
   );
 
   useEffect(() => {

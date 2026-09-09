@@ -5714,6 +5714,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadRef, unsnoozeThreadMutation]);
   const [isRestoringThreadBranch, setIsRestoringThreadBranch] = useState(false);
   const [branchRestoreConfirmOpen, setBranchRestoreConfirmOpen] = useState(false);
+  const [keepConversationConfirmOpen, setKeepConversationConfirmOpen] = useState(false);
   const [workspaceMoveOpen, setWorkspaceMoveOpen] = useState(false);
   useEffect(
     () =>
@@ -9335,48 +9336,41 @@ function ChatViewContent(props: ChatViewProps) {
   const retentionControlVisible =
     supportsConversations && (canChangeTemporary || activeThread.temporary === true);
   const threadRetentionControl = retentionControlVisible ? (
-    canChangeTemporary ? (
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <button
-              type="button"
-              aria-label="Temporary conversation"
-              aria-pressed={activeThread.temporary ?? false}
-              className="me-2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground [-webkit-app-region:no-drag] hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:text-foreground"
-              onClick={() => handleTemporaryChange(!(activeThread.temporary ?? false))}
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label="Temporary conversation"
+            aria-pressed={activeThread.temporary ?? false}
+            className="me-2 inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground [-webkit-app-region:no-drag] hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring aria-pressed:text-foreground"
+            onClick={() => {
+              if (activeThread.temporary) setKeepConversationConfirmOpen(true);
+              else handleTemporaryChange(true);
+            }}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M5.8 4.2a9 9 0 0 1 12.4 0M20.5 7.5a9 9 0 0 1-6 13.1M9 20.5a9 9 0 0 1-2.5-1.1L3 20l.6-3.5A9 9 0 0 1 3.5 7.5" />
-                {activeThread.temporary && <path d="m8 12 3 3 5-6" />}
-              </svg>
-            </button>
-          }
-        />
-        <TooltipPopup side="bottom">
-          Temporary conversation {activeThread.temporary ? "on" : "off"}
-        </TooltipPopup>
-      </Tooltip>
-    ) : (
-      <button
-        type="button"
-        className="shrink-0 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
-        onClick={() => handleTemporaryChange(false, true)}
-      >
-        Keep conversation
-      </button>
-    )
+              <path d="M5.8 4.2a9 9 0 0 1 12.4 0M20.5 7.5a9 9 0 0 1-6 13.1M9 20.5a9 9 0 0 1-2.5-1.1L3 20l.6-3.5A9 9 0 0 1 3.5 7.5" />
+              {activeThread.temporary && <path d="m8 12 3 3 5-6" />}
+            </svg>
+          </button>
+        }
+      />
+      <TooltipPopup side="bottom">
+        Temporary conversation {activeThread.temporary ? "on" : "off"}
+      </TooltipPopup>
+    </Tooltip>
   ) : null;
   const panelToggleControlProps = {
     threadRetentionControl,
@@ -9502,6 +9496,7 @@ function ChatViewContent(props: ChatViewProps) {
               activeThreadEnvironmentId={activeThread.environmentId}
               activeThreadId={activeThread.id}
               activeThreadTitle={activeThread.title}
+              temporary={activeThread.temporary ?? false}
               activeProjectName={activeProject?.title}
               activeProjectCwd={activeProject?.workspaceRoot ?? null}
               activeProjectRef={activeProjectRef}
@@ -9925,6 +9920,32 @@ function ChatViewContent(props: ChatViewProps) {
                 inlineDetailsPanelOpen={inlineThreadPanelOpen}
               />
             ) : null}
+
+            <AlertDialog
+              open={keepConversationConfirmOpen}
+              onOpenChange={setKeepConversationConfirmOpen}
+            >
+              <AlertDialogPopup>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Make this chat permanent?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This conversation will be kept in your history instead of being automatically
+                    removed.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+                  <Button
+                    onClick={() => {
+                      setKeepConversationConfirmOpen(false);
+                      handleTemporaryChange(false, !canChangeTemporary);
+                    }}
+                  >
+                    Make permanent
+                  </Button>
+                </AlertDialogFooter>
+              </AlertDialogPopup>
+            </AlertDialog>
 
             <AlertDialog open={branchRestoreConfirmOpen} onOpenChange={setBranchRestoreConfirmOpen}>
               <AlertDialogPopup>

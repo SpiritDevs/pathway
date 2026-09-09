@@ -25,11 +25,17 @@ import { getComposerProviderState } from "../components/chat/composerProviderSta
 import { useLoadBalancedDraft } from "./useLoadBalancedDraft";
 
 const mocks = vi.hoisted(() => ({
+  isElectron: true,
   atomValue: vi.fn(),
   context: vi.fn(),
   resources: vi.fn(),
   session: vi.fn(),
   effects: [] as Array<() => void>,
+}));
+vi.mock("../env", () => ({
+  get isElectron() {
+    return mocks.isElectron;
+  },
 }));
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -183,6 +189,7 @@ function flushEffects() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.isElectron = true;
   reactHookHarness.reset();
   mocks.effects.length = 0;
   vi.spyOn(Date, "now").mockReturnValue(20_000);
@@ -218,6 +225,54 @@ afterEach(() => {
 });
 
 describe("useLoadBalancedDraft", () => {
+  it.each(["busy", "missing resources", "manual only", "offline"])(
+    "does not fall back to the selected project's environment in a browser: %s",
+    (reason) => {
+      mocks.isElectron = false;
+      const resources =
+        reason === "missing resources"
+          ? AsyncResult.failure<HostResourcesSnapshot, never>(Cause.die("resources unavailable"))
+          : AsyncResult.success({ ...snapshot, cpuUtilization: 0.99 }, { timestamp: 20_000 });
+      registry.set(localResources, resources);
+      registry.set(remoteResources, resources);
+      const input = {
+        ...base(),
+        weights: reason === "manual only" ? { local: 0, remote: 0 } : {},
+        environments:
+          reason === "offline"
+            ? environments.map((environment) => ({
+                ...environment,
+                connection: { ...environment.connection, phase: "offline" as const },
+              }))
+            : environments,
+      };
+      render(input);
+      flushEffects();
+      const result = render(input);
+      expect(result.label).toBe(
+        reason === "missing resources"
+          ? "Auto: could not check resources"
+          : "Auto: no available machine",
+      );
+      expect(result.blocked).toBe(true);
+      expect(result.validate(selection)).toBe(false);
+      expect(readDraft().placement?.resolvedKey).toBeFalsy();
+    },
+  );
+
+  it("still selects a qualifying remote environment in a browser", () => {
+    mocks.isElectron = false;
+    expect(render().label).toBe("Auto: remote");
+    flushEffects();
+    const result = render({
+      ...base(),
+      project: remote,
+      selection: { ...selection, instanceId: remoteProvider.instanceId },
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.validate({ ...selection, instanceId: remoteProvider.instanceId })).toBe(true);
+  });
+
   it("only avoids critical storage when opted in and preserves a resolved destination", () => {
     registry.set(
       remoteResources,
