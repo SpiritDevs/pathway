@@ -13,6 +13,10 @@ const snapshot = (navStatus: PreviewSessionSnapshot["navStatus"]): PreviewSessio
 });
 
 describe("shouldShowPreviewEmptyState", () => {
+  it("keeps a native blank popup visible for document.write and sign-in flows", () => {
+    expect(shouldShowPreviewEmptyState(snapshot({ _tag: "Idle" }), true)).toBe(false);
+    expect(shouldShowPreviewEmptyState(null, true)).toBe(true);
+  });
   it("shows quick-open options for a new idle browser tab", () => {
     expect(shouldShowPreviewEmptyState(snapshot({ _tag: "Idle" }))).toBe(true);
   });

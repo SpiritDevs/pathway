@@ -67,9 +67,8 @@ export function usePreviewBridge(input: {
     return unsubscribe;
   }, [bridge, clearBrowserPointer, reportStatus, runtimeTabId, tabId, threadRef]);
 
-  // Popups the guest page requested (window.open / target="_blank"). The
-  // desktop denies the native window and forwards the URL; open it as a new
-  // sibling tab, matching what a regular browser would do.
+  // Native popup adoption is coordinated by ElectronBrowserHost. Keep blocked
+  // requests and URL-only events from older desktop bridges on this path.
   const openPreview = useAtomCommand(previewEnvironment.open, "preview popup new tab");
   useEffect(() => {
     if (!bridge || typeof window === "undefined") return;
@@ -78,7 +77,7 @@ export function usePreviewBridge(input: {
       if (event.blockedReason) {
         toastManager.add({
           type: "warning",
-          title: "Sign-in popup could not open",
+          title: "Browser popup could not open",
           description: event.blockedReason,
         });
         return;

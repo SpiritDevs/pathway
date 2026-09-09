@@ -67,6 +67,45 @@ it.layer(PreviewManager.layer)("PreviewManager", (it) => {
     }),
   );
 
+  it.effect("uses a requested tab id and rejects collisions without overwriting", () =>
+    Effect.gen(function* () {
+      const threadId = freshThreadId();
+      const manager = yield* PreviewManager.PreviewManager;
+      const first = yield* manager.open({ threadId, requestedTabId: "popup-reserved" });
+      expect(first.tabId).toBe("popup-reserved");
+
+      const collision = yield* Effect.flip(
+        manager.open({
+          threadId,
+          requestedTabId: "popup-reserved",
+          url: "https://example.com/replacement",
+        }),
+      );
+      expect(collision._tag).toBe("PreviewTabCollisionError");
+      const listed = yield* manager.list({ threadId });
+      expect(listed.sessions).toEqual([first]);
+    }),
+  );
+
+  it.effect("emits foreground and background activation hints", () =>
+    Effect.gen(function* () {
+      const threadId = freshThreadId();
+      const manager = yield* PreviewManager.PreviewManager;
+      const collector = yield* collectEvents;
+      yield* manager.open({ threadId, requestedTabId: "popup-fg" });
+      yield* manager.open({
+        threadId,
+        requestedTabId: "popup-bg",
+        activation: "background",
+      });
+      const events = yield* collector.drain;
+      expect(events.map((event) => (event.type === "opened" ? event.activation : null))).toEqual([
+        "foreground",
+        "background",
+      ]);
+    }),
+  );
+
   it.effect("orders list snapshots and events with one monotonic revision", () =>
     Effect.gen(function* () {
       const threadId = freshThreadId();

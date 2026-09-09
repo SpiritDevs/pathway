@@ -107,6 +107,29 @@ describe("previewStateStore (single-tab)", () => {
     expect(state.snapshot?.tabId).toBe(b.tabId);
   });
 
+  it("a background opened event adds the tab without changing the active tab", () => {
+    const active = makeSnapshot({ tabId: "tab_a" });
+    const background = makeSnapshot({ tabId: "tab_b" });
+    applyPreviewServerEvent(ref, {
+      type: "opened",
+      threadId: "thread-1",
+      tabId: active.tabId,
+      createdAt: active.updatedAt,
+      snapshot: active,
+    });
+    applyPreviewServerEvent(ref, {
+      type: "opened",
+      threadId: "thread-1",
+      tabId: background.tabId,
+      createdAt: background.updatedAt,
+      activation: "background",
+      snapshot: background,
+    });
+    const state = readThreadPreviewState(ref);
+    expect(state.activeTabId).toBe(active.tabId);
+    expect(state.sessions[background.tabId]).toEqual(background);
+  });
+
   it("navigated event updates the snapshot URL", () => {
     const snapshot = makeSnapshot();
     applyPreviewServerEvent(ref, {

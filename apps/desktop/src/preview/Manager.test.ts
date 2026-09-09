@@ -1,3 +1,4 @@
+import * as NodeEvents from "node:events";
 import * as NodeUtil from "node:util";
 import { it as effectIt } from "@effect/vitest";
 import type { DesktopPreviewRecordingFrame } from "@spiritdevs/contracts";
@@ -73,7 +74,7 @@ describe("previewWindowOpenAction", () => {
     for (const url of ["", "about:blank"]) {
       const details = { url, disposition: "new-window" as const };
       expect(PreviewManager.previewWindowOpenAction(details, safePreferences)).toBe("popup");
-      expect(PreviewManager.previewWindowOpenAction(details)).toBe("tab");
+      expect(PreviewManager.previewWindowOpenAction(details)).toBe("blocked");
       for (const key of [
         "sandbox",
         "nodeIntegration",
@@ -86,15 +87,41 @@ describe("previewWindowOpenAction", () => {
             ...safePreferences,
             [key]: !safePreferences[key],
           }),
-        ).toBe("tab");
-        expect(
-          PreviewManager.previewWindowOpenAction(details, { ...safePreferences, [key]: undefined }),
-        ).toBe("tab");
+        ).toBe("blocked");
+        if (key !== "nodeIntegrationInWorker") {
+          expect(
+            PreviewManager.previewWindowOpenAction(details, {
+              ...safePreferences,
+              [key]: undefined,
+            }),
+          ).toBe("blocked");
+        }
       }
     }
   });
 
-  it("keeps scripted OAuth windows alive while links open as tabs", () => {
+  it("accepts Electron's actual getter shape while rejecting exposed worker integration", () => {
+    const preferences = {
+      sandbox: true,
+      contextIsolation: false,
+      nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      webviewTag: false,
+    };
+    const details = { url: "about:blank", disposition: "new-window" as const };
+    expect(PreviewManager.previewWindowOpenAction(details, preferences)).toBe("popup");
+    expect(
+      PreviewManager.previewWindowOpenAction(details, {
+        ...preferences,
+        nodeIntegrationInWorker: true,
+      }),
+    ).toBe("blocked");
+    expect(
+      PreviewManager.previewWindowOpenAction(details, { ...preferences, sandbox: false }),
+    ).toBe("blocked");
+  });
+
+  it("preserves native contents for scripted windows and foreground or background tabs", () => {
     expect(
       PreviewManager.previewWindowOpenAction({
         url: "https://accounts.example.com/login",
@@ -104,11 +131,11 @@ describe("previewWindowOpenAction", () => {
     for (const disposition of ["foreground-tab", "background-tab"] as const) {
       expect(
         PreviewManager.previewWindowOpenAction({ url: "https://example.com", disposition }),
-      ).toBe("tab");
+      ).toBe("popup");
     }
     for (const url of ["about:blank", "file:///etc/passwd", "javascript:alert(1)", "invalid"]) {
       expect(PreviewManager.previewWindowOpenAction({ url, disposition: "new-window" })).toBe(
-        "tab",
+        "blocked",
       );
     }
   });
@@ -133,6 +160,8 @@ describe("boundAccessibilityTree", () => {
 
 const {
   browserWindowConstructor,
+  webContentsViewConstructor,
+  windowFromWebContents,
   createFromPath,
   fromId,
   getFocusedWebContents,
@@ -143,6 +172,8 @@ const {
   writeImage,
 } = vi.hoisted(() => ({
   browserWindowConstructor: vi.fn(),
+  webContentsViewConstructor: vi.fn(),
+  windowFromWebContents: vi.fn(),
   createFromPath: vi.fn((): { readonly isEmpty: () => boolean } => ({ isEmpty: () => false })),
   fromId: vi.fn((_id?: number) => null),
   getFocusedWebContents: vi.fn(() => null),
@@ -154,7 +185,10 @@ const {
 }));
 
 vi.mock("electron", () => ({
-  BrowserWindow: browserWindowConstructor,
+  BrowserWindow: Object.assign(browserWindowConstructor, {
+    fromWebContents: windowFromWebContents,
+  }),
+  WebContentsView: webContentsViewConstructor,
   clipboard: {
     writeImage,
   },
@@ -290,9 +324,128 @@ const makeTestPictureInPictureWindow = (loadURL: () => Promise<void> = async () 
   return { pictureInPictureWindow, send };
 };
 
+const makePopupFixture = () => {
+  const makeContents = (id: number) => {
+    let destroyed = false;
+    let zoomFactor = 1;
+    const contents = Object.assign(new NodeEvents.EventEmitter(), {
+      id,
+      session: { name: "preview-session" },
+      hostWebContents: undefined as Electron.WebContents | undefined,
+      getLastWebPreferences: () => ({
+        sandbox: true,
+        nodeIntegration: false,
+        nodeIntegrationInSubFrames: false,
+        nodeIntegrationInWorker: false,
+        webviewTag: false,
+      }),
+      isDestroyed: () => destroyed,
+      getType: () => "webview",
+      getURL: () => "https://example.com/child",
+      getTitle: () => "Child",
+      isLoading: () => false,
+      isDevToolsOpened: () => false,
+      getZoomFactor: () => zoomFactor,
+      setZoomFactor: vi.fn((value: number) => {
+        zoomFactor = value;
+      }),
+      enableDeviceEmulation: vi.fn(),
+      disableDeviceEmulation: vi.fn(),
+      loadURL: vi.fn(async () => undefined),
+      setWindowOpenHandler: vi.fn(),
+      setIgnoreMenuShortcuts: vi.fn(),
+      focus: vi.fn(),
+      send: vi.fn(),
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      ipc: new NodeEvents.EventEmitter(),
+      debugger: {
+        isAttached: () => false,
+        attach: vi.fn(),
+        detach: vi.fn(),
+        sendCommand: vi.fn(
+          async (_method: string, _params?: Record<string, unknown>): Promise<unknown> => undefined,
+        ),
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+      close: vi.fn(() => {
+        destroyed = true;
+        contents.emit("destroyed");
+      }),
+    });
+    return contents;
+  };
+  const owner = makeContents(1);
+  const source = makeContents(42);
+  source.hostWebContents = owner as unknown as Electron.WebContents;
+  const popup = makeContents(43);
+  const view = { webContents: popup, setBounds: vi.fn() };
+  const window = {
+    isDestroyed: () => false,
+    contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+  };
+  windowFromWebContents.mockReturnValue(window);
+  webContentsViewConstructor.mockImplementation(function () {
+    return view;
+  });
+  fromId.mockImplementation(
+    (id) => (id === source.id ? source : id === popup.id ? popup : null) as never,
+  );
+  const request = (
+    url = "https://example.com/child",
+    disposition: Electron.HandlerDetails["disposition"] = "foreground-tab",
+    postBody?: Electron.PostBody,
+  ) => {
+    const handler = source.setWindowOpenHandler.mock.calls[0]?.[0] as (
+      details: Pick<
+        Electron.HandlerDetails,
+        "url" | "disposition" | "frameName" | "referrer" | "postBody"
+      >,
+    ) => Electron.WindowOpenHandlerResponse;
+    return handler({
+      url,
+      disposition,
+      frameName: "child-window",
+      referrer: { url: "https://example.com/source", policy: "strict-origin-when-cross-origin" },
+      ...(postBody ? { postBody } : {}),
+    });
+  };
+  const open = (
+    url?: string,
+    disposition?: Electron.HandlerDetails["disposition"],
+    suppliedGuest = true,
+    postBody?: Electron.PostBody,
+  ) => {
+    const response = request(url, disposition, postBody);
+    expect(response.action).toBe("allow");
+    if (!response.createWindow) throw new Error("Missing native popup creation callback");
+    const options: Electron.BrowserWindowConstructorOptions &
+      Electron.WebContentsViewConstructorOptions = {
+      webPreferences: { nodeIntegration: true, partition: "unsafe", preload: "/unsafe.js" },
+      ...(suppliedGuest ? { webContents: popup as unknown as Electron.WebContents } : {}),
+    };
+    const contents = response.createWindow(options);
+    expect(contents).toBe(popup);
+    const payload = owner.send.mock.calls.find(
+      ([channel]) => channel === "desktop:preview-popup-request",
+    )?.[1] as {
+      popupId: string;
+      sourceRuntimeTabId: string;
+      url: string;
+      disposition: string;
+      frameName: string;
+    };
+    expect(payload).toBeDefined();
+    return payload;
+  };
+  return { owner, source, popup, view, window, request, open };
+};
+
 describe("PreviewManager", () => {
   beforeEach(() => {
     browserWindowConstructor.mockReset();
+    webContentsViewConstructor.mockReset();
+    windowFromWebContents.mockReset();
     fromId.mockClear();
     getFocusedWebContents.mockReset();
     getFocusedWebContents.mockReturnValue(null);
@@ -450,72 +603,545 @@ describe("PreviewManager", () => {
     ),
   );
 
-  effectIt.effect("routes guest popup requests to open-in-new-tab events", () =>
+  effectIt.effect(
+    "adopts the original popup page and session without replaying its navigation",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const fixture = makePopupFixture();
+          yield* manager.createTab("source");
+          yield* manager.registerWebview("source", 42);
+          const request = fixture.open("https://example.com/form-result", "background-tab");
+          expect(request).toMatchObject({
+            sourceRuntimeTabId: "source",
+            url: "https://example.com/form-result",
+            disposition: "background-tab",
+            frameName: "child-window",
+          });
+          expect(webContentsViewConstructor).toHaveBeenCalledWith({
+            webContents: fixture.popup,
+            webPreferences: expect.objectContaining({
+              session: fixture.source.session,
+              preload: "/tmp/pathway/desktop/preview-pick-preload.cjs",
+              sandbox: true,
+              nodeIntegration: false,
+              nodeIntegrationInSubFrames: false,
+              nodeIntegrationInWorker: false,
+              webviewTag: false,
+              webSecurity: true,
+            }),
+          });
+          expect(webContentsViewConstructor.mock.calls[0]?.[0].webPreferences).not.toHaveProperty(
+            "partition",
+          );
+          yield* manager.adoptPopup(request.popupId, "child");
+          yield* manager.adoptPopup(request.popupId, "child");
+          expect((yield* manager.automationStatus("child")).available).toBe(true);
+          expect(fixture.source.loadURL).not.toHaveBeenCalled();
+          expect(fixture.popup.loadURL).not.toHaveBeenCalled();
+          const bounds = { x: 25, y: 90, width: 720, height: 600 };
+          yield* manager.presentNativeTab("child", bounds);
+          expect(fixture.view.setBounds).toHaveBeenCalledWith(bounds);
+          expect(fixture.window.contentView.addChildView).toHaveBeenCalledOnce();
+          yield* manager.presentNativeTab("child", bounds);
+          expect(fixture.window.contentView.addChildView).toHaveBeenCalledOnce();
+          yield* manager.presentNativeTab("child", null);
+          expect(fixture.window.contentView.removeChildView).toHaveBeenCalledOnce();
+          yield* manager.closeTab("source");
+          expect(fixture.popup.close).not.toHaveBeenCalled();
+          yield* manager.closeTab("child");
+          expect(fixture.popup.close).toHaveBeenCalledOnce();
+          expect(
+            fixture.owner.send.mock.calls.some(
+              ([channel]) => channel === "desktop:preview-popup-closed",
+            ),
+          ).toBe(false);
+        }),
+      ),
+  );
+
+  effectIt.effect("sets safe popup preferences before Electron creates the native child", () =>
     withManager((manager) =>
       Effect.gen(function* () {
-        const setWindowOpenHandler = vi.fn();
-        fromId.mockReturnValue({
-          id: 42,
-          isDestroyed: () => false,
-          getType: () => "webview",
-          getURL: () => "https://example.com",
-          getTitle: () => "Example",
-          isLoading: () => false,
-          getZoomFactor: () => 1,
-          setZoomFactor: vi.fn(),
-          on: vi.fn(),
-          off: vi.fn(),
-          ipc: { on: vi.fn(), off: vi.fn() },
-          send: webviewSend,
-          navigationHistory: { canGoBack: () => false, canGoForward: () => false },
-          setWindowOpenHandler,
-          setIgnoreMenuShortcuts: vi.fn(),
-          debugger: {
-            isAttached: () => false,
-            attach: vi.fn(),
-            sendCommand: vi.fn(async () => undefined),
-            on: vi.fn(),
-            off: vi.fn(),
+        const fixture = makePopupFixture();
+        yield* manager.createTab("source");
+        yield* manager.registerWebview("source", 42);
+        expect(fixture.request().overrideBrowserWindowOptions).toMatchObject({
+          webPreferences: {
+            session: fixture.source.session,
+            preload: "/tmp/pathway/desktop/preview-pick-preload.cjs",
+            sandbox: true,
+            contextIsolation: false,
+            nodeIntegration: false,
+            nodeIntegrationInSubFrames: false,
+            nodeIntegrationInWorker: false,
+            webviewTag: false,
           },
-        } as never);
-        const events: Array<{ tabId: string; url: string }> = [];
+        });
+        const postBody: Electron.PostBody = {
+          contentType: "application/x-www-form-urlencoded",
+          data: [{ type: "rawData", bytes: Buffer.from("proof=preserved") }],
+        };
+        const request = fixture.open("https://example.com/post", "foreground-tab", true, postBody);
+        expect(webContentsViewConstructor.mock.calls[0]?.[0].webContents).toBe(fixture.popup);
+        yield* manager.adoptPopup(request.popupId, "child");
+        expect(fixture.popup.loadURL).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+
+  effectIt.effect(
+    "starts background navigation once when Electron does not supply guest contents",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const fixture = makePopupFixture();
+          yield* manager.createTab("source");
+          yield* manager.registerWebview("source", 42);
+          const request = fixture.open("https://example.com/background", "background-tab", false);
+          yield* Effect.yieldNow;
+          expect(webContentsViewConstructor.mock.calls[0]?.[0]).not.toHaveProperty("webContents");
+          expect(fixture.popup.loadURL).toHaveBeenCalledWith("https://example.com/background", {
+            httpReferrer: {
+              url: "https://example.com/source",
+              policy: "strict-origin-when-cross-origin",
+            },
+          });
+          yield* manager.adoptPopup(request.popupId, "child");
+          expect(fixture.popup.loadURL).toHaveBeenCalledOnce();
+          expect(fixture.source.loadURL).not.toHaveBeenCalled();
+        }),
+      ),
+  );
+
+  effectIt.effect(
+    "preserves multipart POST body and headers for browser-initiated popup navigation",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const fixture = makePopupFixture();
+          yield* manager.createTab("source");
+          yield* manager.registerWebview("source", 42);
+          const postBody: Electron.PostBody = {
+            contentType: "multipart/form-data",
+            boundary: "test-boundary",
+            data: [
+              {
+                type: "rawData",
+                bytes: Buffer.from("--test-boundary\\r\\nproof\\r\\n--test-boundary--"),
+              },
+            ],
+          };
+          fixture.open("https://example.com/post", "background-tab", false, postBody);
+          yield* Effect.yieldNow;
+          expect(fixture.popup.loadURL).toHaveBeenCalledWith("https://example.com/post", {
+            httpReferrer: {
+              url: "https://example.com/source",
+              policy: "strict-origin-when-cross-origin",
+            },
+            postData: postBody.data,
+            extraHeaders: "Content-Type: multipart/form-data; boundary=test-boundary",
+          });
+        }),
+      ),
+  );
+
+  effectIt.effect("keeps logical zoom while fitting a native popup to a scaled viewport", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const fixture = makePopupFixture();
+        yield* manager.createTab("source");
+        yield* manager.registerWebview("source", 42);
+        const request = fixture.open();
+        yield* manager.adoptPopup(request.popupId, "child");
+        const bounds = { x: 10, y: 20, width: 500, height: 300 };
+        yield* manager.presentNativeTab("child", { ...bounds, scale: 0.5 });
+        expect(fixture.view.setBounds).toHaveBeenCalledWith(bounds);
+        expect(fixture.popup.enableDeviceEmulation).toHaveBeenCalledWith({
+          screenPosition: "desktop",
+          screenSize: { width: 0, height: 0 },
+          viewPosition: { x: 0, y: 0 },
+          deviceScaleFactor: 0,
+          viewSize: { width: 1000, height: 600 },
+          scale: 0.5,
+        });
+        expect(fixture.popup.setZoomFactor).not.toHaveBeenCalled();
+        expect(fixture.popup.getZoomFactor()).toBe(1);
+        yield* manager.zoomIn("child");
+        expect(fixture.popup.getZoomFactor()).toBe(1.1);
+        const synced = yield* Deferred.make<number>();
+        yield* manager.subscribeStateChanges((tabId, state) =>
+          tabId === "child"
+            ? Deferred.succeed(synced, state.zoomFactor).pipe(Effect.asVoid)
+            : Effect.void,
+        );
+        fixture.popup.emit("did-stop-loading");
+        expect(yield* Deferred.await(synced)).toBe(1.1);
+        yield* manager.presentNativeTab("child", bounds);
+        expect(fixture.popup.getZoomFactor()).toBe(1.1);
+        expect(fixture.popup.disableDeviceEmulation).toHaveBeenCalledOnce();
+      }),
+    ),
+  );
+
+  effectIt.effect("focuses native contents only for an explicit tab selection", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const fixture = makePopupFixture();
+        yield* manager.createTab("source");
+        yield* manager.registerWebview("source", 42);
+        const request = fixture.open(undefined, "background-tab");
+        yield* manager.adoptPopup(request.popupId, "child");
+        expect(fixture.popup.focus).not.toHaveBeenCalled();
+        const bounds = { x: 10, y: 20, width: 500, height: 300 };
+        yield* manager.presentNativeTab("child", { ...bounds, focus: true });
+        expect(fixture.popup.focus).toHaveBeenCalledOnce();
+        expect(fixture.view.setBounds).toHaveBeenCalledWith(bounds);
+        yield* manager.presentNativeTab("child", bounds);
+        yield* manager.presentNativeTab("child", null);
+        yield* manager.presentNativeTab("child", bounds);
+        expect(fixture.popup.focus).toHaveBeenCalledOnce();
+        yield* manager.presentNativeTab("child", { ...bounds, focus: true });
+        expect(fixture.popup.focus).toHaveBeenCalledTimes(2);
+      }),
+    ),
+  );
+
+  effectIt.effect(
+    "positions native tabs in window pixels while preserving their CSS viewport at app zoom",
+    () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const fixture = makePopupFixture();
+          yield* manager.createTab("source");
+          yield* manager.registerWebview("source", 42);
+          const request = fixture.open();
+          yield* manager.adoptPopup(request.popupId, "child");
+          fixture.owner.setZoomFactor(1.5);
+          yield* manager.presentNativeTab("child", {
+            x: 10,
+            y: 20,
+            width: 500,
+            height: 300,
+            scale: 0.5,
+          });
+          expect(fixture.view.setBounds).toHaveBeenCalledWith({
+            x: 15,
+            y: 30,
+            width: 750,
+            height: 450,
+          });
+          expect(fixture.popup.enableDeviceEmulation).toHaveBeenCalledWith(
+            expect.objectContaining({
+              viewSize: { width: 1000, height: 600 },
+              scale: 0.75,
+            }),
+          );
+          expect(fixture.popup.getZoomFactor()).toBe(1);
+          expect(fixture.popup.send).toHaveBeenCalledWith(
+            "preview:native-browser-overlay",
+            expect.objectContaining({ kind: "appearance", scale: 0.5 }),
+          );
+        }),
+      ),
+  );
+
+  effectIt.effect("sends native pointer and zoom feedback into the original guest contents", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const fixture = makePopupFixture();
+        fixture.popup.debugger.sendCommand.mockImplementation(async (method) =>
+          method === "Runtime.evaluate"
+            ? { result: { value: { width: 800, height: 600 } } }
+            : undefined,
+        );
+        yield* manager.createTab("source");
+        yield* manager.registerWebview("source", 42);
+        const request = fixture.open();
+        yield* manager.adoptPopup(request.popupId, "child");
+        yield* manager.presentNativeTab("child", {
+          x: 0,
+          y: 50,
+          width: 400,
+          height: 300,
+          scale: 0.5,
+        });
+        const phases: string[] = [];
+        const moved = yield* Deferred.make<void>();
+        const clicked = yield* Deferred.make<void>();
+        yield* manager.subscribePointerEvents((event) =>
+          Effect.gen(function* () {
+            phases.push(event.phase);
+            yield* Deferred.succeed(event.phase === "move" ? moved : clicked, undefined);
+          }),
+        );
+        const click = yield* manager
+          .automationClick("child", { x: 120, y: 80 })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(moved);
+        yield* TestClock.adjust(160);
+        yield* Deferred.await(clicked);
+        yield* TestClock.adjust(40);
+        yield* Fiber.join(click);
+        expect(phases).toEqual(["move", "click"]);
+        expect(fixture.popup.send).toHaveBeenCalledWith(
+          "preview:native-browser-overlay",
+          expect.objectContaining({ kind: "pointer", x: 120, y: 80, scale: 0.5 }),
+        );
+        fixture.popup.emit("did-navigate-in-page");
+        expect(fixture.popup.send).toHaveBeenCalledWith(
+          "preview:native-browser-overlay",
+          expect.objectContaining({ kind: "hide-pointer" }),
+        );
+        yield* manager.zoomIn("child");
+        expect(fixture.popup.send).toHaveBeenCalledWith(
+          "preview:native-browser-overlay",
+          expect.objectContaining({ kind: "zoom", zoomFactor: 1.1, scale: 0.55 }),
+        );
+        expect(
+          fixture.source.send.mock.calls.some(
+            ([channel]) => channel === "preview:native-browser-overlay",
+          ),
+        ).toBe(false);
+      }),
+    ),
+  );
+
+  effectIt.effect("preserves safe blank sign-in windows and blocks unsupported schemes", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const fixture = makePopupFixture();
+        yield* manager.createTab("source");
+        yield* manager.registerWebview("source", 42);
+        const events: Array<{ blockedReason?: string | undefined }> = [];
         yield* manager.subscribeOpenInNewTab((event) =>
           Effect.sync(() => {
             events.push(event);
           }),
         );
+        expect(fixture.request("file:///etc/passwd")).toEqual({ action: "deny" });
+        expect(fixture.request("javascript:alert(1)")).toEqual({ action: "deny" });
+        yield* Effect.yieldNow;
+        expect(events).toHaveLength(2);
+        expect(events.every((event) => event.blockedReason)).toBe(true);
+        const request = fixture.open("", "new-window");
+        expect(request.url).toBe("about:blank");
+        yield* manager.discardPopup(request.popupId);
+        expect(fixture.popup.close).toHaveBeenCalledOnce();
+        expect(fixture.owner.listenerCount("destroyed")).toBe(0);
+        expect(fixture.source.listenerCount("destroyed")).toBe(0);
+      }),
+    ),
+  );
 
-        yield* manager.createTab("tab_popup");
-        yield* manager.registerWebview("tab_popup", 42);
-
-        const handler = setWindowOpenHandler.mock.calls[0]?.[0] as (details: {
-          url: string;
-          disposition?: string;
-        }) => {
-          action: string;
-        };
-        expect(handler).toBeTypeOf("function");
+  effectIt.effect("expires unclaimed popups and rejects later adoption", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const fixture = makePopupFixture();
+        yield* manager.createTab("source");
+        yield* manager.registerWebview("source", 42);
+        const request = fixture.open();
+        yield* TestClock.adjust(15_000);
+        expect(fixture.popup.close).toHaveBeenCalledOnce();
         expect(
-          handler({ url: "https://accounts.example.com/oauth", disposition: "new-window" }),
-        ).toMatchObject({
-          action: "allow",
-          overrideBrowserWindowOptions: {
-            webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
-          },
+          Exit.isFailure(yield* Effect.exit(manager.adoptPopup(request.popupId, "child"))),
+        ).toBe(true);
+        expect(fixture.owner.listenerCount("destroyed")).toBe(0);
+      }),
+    ),
+  );
+
+  effectIt.effect("closes unclaimed popups when their source closes", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const fixture = makePopupFixture();
+        yield* manager.createTab("source");
+        yield* manager.registerWebview("source", 42);
+        fixture.open();
+        yield* manager.closeTab("source");
+        expect(fixture.popup.close).toHaveBeenCalledOnce();
+      }),
+    ),
+  );
+
+  effectIt.effect("removes native popup views when the owning window closes", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const fixture = makePopupFixture();
+        yield* manager.createTab("source");
+        yield* manager.registerWebview("source", 42);
+        const request = fixture.open();
+        yield* manager.adoptPopup(request.popupId, "child");
+        fixture.owner.close();
+        yield* Effect.yieldNow;
+        expect(fixture.popup.close).toHaveBeenCalledOnce();
+        expect((yield* manager.automationStatus("child")).available).toBe(false);
+      }),
+    ),
+  );
+
+  for (const ownerEvent of ["did-start-navigation", "render-process-gone"] as const) {
+    effectIt.effect(`discards unclaimed popups after owner ${ownerEvent}`, () =>
+      withManager((manager) =>
+        Effect.gen(function* () {
+          const fixture = makePopupFixture();
+          yield* manager.createTab("source");
+          yield* manager.registerWebview("source", 42);
+          const request = fixture.open();
+          fixture.owner.emit(ownerEvent, { isMainFrame: true, isSameDocument: false });
+          expect(fixture.popup.close).toHaveBeenCalledOnce();
+          expect(
+            Exit.isFailure(yield* Effect.exit(manager.adoptPopup(request.popupId, "child"))),
+          ).toBe(true);
+          expect(fixture.owner.listenerCount("did-start-navigation")).toBe(0);
+          expect(fixture.owner.listenerCount("render-process-gone")).toBe(0);
+        }),
+      ),
+    );
+
+    effectIt.effect(
+      `removes adopted views after owner ${ownerEvent} while keeping guest navigation`,
+      () =>
+        withManager((manager) =>
+          Effect.gen(function* () {
+            const fixture = makePopupFixture();
+            yield* manager.createTab("source");
+            yield* manager.registerWebview("source", 42);
+            const request = fixture.open();
+            yield* manager.adoptPopup(request.popupId, "child");
+            yield* manager.presentNativeTab("child", { x: 0, y: 50, width: 600, height: 400 });
+            fixture.popup.emit("did-start-navigation", {
+              isMainFrame: true,
+              isSameDocument: false,
+            });
+            fixture.source.emit("did-start-navigation", {
+              isMainFrame: true,
+              isSameDocument: false,
+            });
+            fixture.owner.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+            fixture.owner.emit("did-start-navigation", {
+              isMainFrame: false,
+              isSameDocument: false,
+            });
+            expect(fixture.popup.close).not.toHaveBeenCalled();
+            const closed = yield* Deferred.make<void>();
+            yield* manager.subscribeStateChanges((tabId, state) =>
+              tabId === "child" && state.webContentsId === null
+                ? Deferred.succeed(closed, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+            );
+            fixture.owner.emit(ownerEvent, { isMainFrame: true, isSameDocument: false });
+            yield* Deferred.await(closed);
+            expect(fixture.popup.close).toHaveBeenCalledOnce();
+            expect(fixture.window.contentView.removeChildView).toHaveBeenCalledWith(fixture.view);
+            expect(fixture.owner.listenerCount("did-start-navigation")).toBe(0);
+            expect(fixture.owner.listenerCount("render-process-gone")).toBe(0);
+            expect((yield* manager.automationStatus("child")).available).toBe(false);
+          }),
+        ),
+    );
+  }
+
+  effectIt.effect("forwards window.close so the renderer can remove its tab metadata", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const fixture = makePopupFixture();
+        yield* manager.createTab("source");
+        yield* manager.registerWebview("source", 42);
+        const request = fixture.open();
+        yield* manager.adoptPopup(request.popupId, "child");
+        const closed = yield* Deferred.make<void>();
+        yield* manager.subscribeStateChanges((tabId, state) =>
+          tabId === "child" && state.webContentsId === null
+            ? Deferred.succeed(closed, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        );
+        fixture.popup.close();
+        yield* Deferred.await(closed);
+        expect(fixture.owner.send).toHaveBeenCalledWith("desktop:preview-popup-closed", {
+          runtimeTabId: "child",
         });
+        expect((yield* manager.automationStatus("child")).available).toBe(false);
+      }),
+    ),
+  );
 
-        expect(handler({ url: "https://example.com/documents/1" })).toEqual({ action: "deny" });
-        yield* Effect.yieldNow;
-        expect(events).toEqual([{ tabId: "tab_popup", url: "https://example.com/documents/1" }]);
+  effectIt.effect("closes an adopted popup when its renderer exits", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const fixture = makePopupFixture();
+        yield* manager.createTab("source");
+        yield* manager.registerWebview("source", 42);
+        const request = fixture.open();
+        yield* manager.adoptPopup(request.popupId, "child");
+        const closed = yield* Deferred.make<void>();
+        yield* manager.subscribeStateChanges((tabId, state) =>
+          tabId === "child" && state.webContentsId === null
+            ? Deferred.succeed(closed, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        );
+        fixture.popup.emit("render-process-gone");
+        yield* Deferred.await(closed);
+        expect(fixture.owner.send).toHaveBeenCalledWith("desktop:preview-popup-closed", {
+          runtimeTabId: "child",
+        });
+        expect(fixture.popup.close).toHaveBeenCalledOnce();
+        expect((yield* manager.automationStatus("child")).available).toBe(false);
+      }),
+    ),
+  );
 
-        expect(handler({ url: "about:blank" })).toEqual({ action: "deny" });
-        expect(handler({ url: "" })).toEqual({ action: "deny" });
-        yield* Effect.yieldNow;
-        expect(events).toHaveLength(3);
-        expect(events.slice(1)).toEqual([
-          expect.objectContaining({ tabId: "tab_popup", blockedReason: expect.any(String) }),
-          expect.objectContaining({ tabId: "tab_popup", blockedReason: expect.any(String) }),
-        ]);
+  effectIt.effect("rolls back adoption when its source closes during tab creation", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const fixture = makePopupFixture();
+        yield* manager.createTab("source");
+        yield* manager.registerWebview("source", 42);
+        const request = fixture.open();
+        const creating = yield* Deferred.make<void>();
+        const continueCreation = yield* Deferred.make<void>();
+        const states: Array<{ tabId: string; webContentsId: number | null }> = [];
+        yield* manager.subscribeStateChanges((tabId, state) =>
+          Effect.gen(function* () {
+            states.push({ tabId, webContentsId: state.webContentsId });
+            if (tabId === "child" && states.filter((item) => item.tabId === "child").length === 1) {
+              yield* Deferred.succeed(creating, undefined);
+              yield* Deferred.await(continueCreation);
+            }
+          }),
+        );
+        const adoption = yield* manager.adoptPopup(request.popupId, "child").pipe(Effect.forkChild);
+        yield* Deferred.await(creating);
+        fixture.source.close();
+        yield* Deferred.succeed(continueCreation, undefined);
+        expect(Exit.isFailure(yield* Fiber.await(adoption))).toBe(true);
+        expect(fixture.popup.close).toHaveBeenCalledOnce();
+        const registration = yield* manager.registerWebview("child", 42).pipe(Effect.exit);
+        expect(Exit.isFailure(registration)).toBe(true);
+        if (Exit.isFailure(registration)) {
+          const error = Cause.findErrorOption(registration.cause);
+          expect(Option.isSome(error) ? error.value : null).toMatchObject({
+            _tag: "PreviewTabNotFoundError",
+          });
+        }
+        expect((yield* manager.automationStatus("child")).available).toBe(false);
+      }),
+    ),
+  );
+
+  effectIt.effect("refuses adoption into an occupied tab without closing its existing page", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const fixture = makePopupFixture();
+        yield* manager.createTab("source");
+        yield* manager.registerWebview("source", 42);
+        const request = fixture.open();
+        expect(
+          Exit.isFailure(yield* Effect.exit(manager.adoptPopup(request.popupId, "source"))),
+        ).toBe(true);
+        expect(fixture.source.close).not.toHaveBeenCalled();
+        expect((yield* manager.automationStatus("source")).available).toBe(true);
+        expect(fixture.popup.close).toHaveBeenCalledOnce();
       }),
     ),
   );

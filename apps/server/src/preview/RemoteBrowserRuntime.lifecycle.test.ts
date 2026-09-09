@@ -19,7 +19,7 @@ function deferred<T = void>() {
   });
   return { promise, resolve };
 }
-function browserFixture() {
+function browserFixture(opener?: Page) {
   const pageEvents = new NodeEvents.EventEmitter();
   const contextEvents = new NodeEvents.EventEmitter();
   const cdpEvents = new NodeEvents.EventEmitter();
@@ -57,7 +57,7 @@ function browserFixture() {
     getByText: () => ({ first: () => locator }),
     waitForURL: vi.fn(async (_predicate: unknown, _options?: { timeout?: number }) => undefined),
     on: pageEvents.on.bind(pageEvents),
-    opener: async () => null,
+    opener: async () => opener ?? null,
     isClosed: () => closed,
     url: () => url,
     title: vi.fn(async () => "Example"),
@@ -86,7 +86,18 @@ function browserFixture() {
   const launch = vi.fn(
     async () => context as unknown as BrowserContext,
   ) as unknown as typeof chromium.launchPersistentContext;
-  return { page, pageEvents, mainFrame, locator, cdp, cdpEvents, context, launch, documentState };
+  return {
+    page,
+    pageEvents,
+    mainFrame,
+    locator,
+    cdp,
+    cdpEvents,
+    context,
+    contextEvents,
+    launch,
+    documentState,
+  };
 }
 const threadId = ThreadId.make("browser-lifecycle-test");
 
@@ -112,6 +123,45 @@ describe("RemoteBrowserRuntime lifecycle", () => {
     await runtime.command({ action: "open", threadId, url: "https://example.com" });
     expect(frames.at(-1)?.tabs?.[0]?.url).toBe("https://example.com/");
     expect(frames.every((frame) => frame.data === "")).toBe(true);
+    await unsubscribe();
+  });
+
+  it("publishes popup tabs with their opener and keeps the opener when the popup closes", async () => {
+    const fixture = browserFixture();
+    const popup = browserFixture(fixture.page as unknown as Page);
+    popup.page.context = () => fixture.context;
+    runtime = new RemoteBrowserRuntime(directory, directory, fixture.launch);
+    const opened = await runtime.command({ action: "open", threadId, url: "https://example.com" });
+    const openerTabId = opened.tabs[0]!.tabId;
+    const popupPublished = deferred<PreviewRemoteFrame>();
+    const popupRemoved = deferred<PreviewRemoteFrame>();
+    const unsubscribe = await runtime.subscribe(threadId, undefined, (frame) => {
+      if (frame.tabs?.some((tab) => tab.openerTabId === openerTabId)) popupPublished.resolve(frame);
+      if (popup.page.isClosed() && frame.tabs?.length === 1) popupRemoved.resolve(frame);
+    });
+
+    await popup.page.goto("https://example.com/popup");
+    fixture.contextEvents.emit("page", popup.page);
+    fixture.contextEvents.emit("page", popup.page);
+    const popupFrame = await popupPublished.promise;
+    expect(popupFrame.tabs).toHaveLength(2);
+    const popupTab = popupFrame.tabs!.find((tab) => tab.tabId !== openerTabId)!;
+    expect(popupTab).toMatchObject({
+      url: "https://example.com/popup",
+      openerTabId,
+    });
+    expect(popupFrame.data).toBe("");
+    expect((await runtime.list(threadId)).tabs).toEqual(popupFrame.tabs);
+    expect(fixture.context.newPage).not.toHaveBeenCalled();
+
+    await popup.page.close();
+    const closedFrame = await popupRemoved.promise;
+    expect(closedFrame.tabs).toEqual([expect.objectContaining({ tabId: openerTabId })]);
+    expect(closedFrame.metadataRevision!).toBeGreaterThan(popupFrame.metadataRevision!);
+    expect((await runtime.list(threadId)).selectedTabId).toBe(openerTabId);
+    expect(fixture.page.isClosed()).toBe(false);
+    expect(fixture.context.close).not.toHaveBeenCalled();
+    expect(fixture.launch).toHaveBeenCalledOnce();
     await unsubscribe();
   });
 

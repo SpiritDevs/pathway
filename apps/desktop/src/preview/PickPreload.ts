@@ -22,8 +22,13 @@ import {
   ANNOTATION_THEME_CHANNEL,
   CANCEL_PICK_CHANNEL,
   ELEMENT_PICKED_CHANNEL,
+  NATIVE_BROWSER_OVERLAY_CHANNEL,
   START_PICK_CHANNEL,
 } from "./GuestProtocol.ts";
+import {
+  createNativeBrowserOverlay,
+  type NativeBrowserOverlayUpdate,
+} from "./NativeBrowserOverlay.ts";
 const OVERLAY_ATTRIBUTE = "data-pathway-annotation-ui";
 const Z_INDEX_OVERLAY = 2147483646;
 const PRIMARY = "var(--pathway-primary)";
@@ -70,6 +75,7 @@ interface AnnotationSession {
 let activeSession: AnnotationSession | null = null;
 let idSequence = 0;
 let annotationTheme: DesktopPreviewAnnotationTheme | null = null;
+let nativeBrowserOverlay: ReturnType<typeof createNativeBrowserOverlay> | undefined;
 
 const applyAnnotationTheme = (
   host: HTMLElement,
@@ -1306,5 +1312,10 @@ ipcRenderer.on(
 ipcRenderer.on(ANNOTATION_THEME_CHANNEL, (_event, theme: DesktopPreviewAnnotationTheme) => {
   annotationTheme = theme;
   activeSession?.applyTheme(theme);
+  nativeBrowserOverlay?.setTheme(theme);
+});
+ipcRenderer.on(NATIVE_BROWSER_OVERLAY_CHANNEL, (_event, update: NativeBrowserOverlayUpdate) => {
+  nativeBrowserOverlay ??= createNativeBrowserOverlay();
+  nativeBrowserOverlay.update(update);
 });
 ipcRenderer.on(CANCEL_PICK_CHANNEL, () => activeSession?.teardown(false));

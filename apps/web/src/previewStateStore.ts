@@ -197,7 +197,10 @@ export function applyPreviewServerEvent(ref: ScopedThreadRef, event: PreviewEven
               ? current.recentlySeenUrls
               : dedupeRecentUrls(current.recentlySeenUrls, snapshot.navStatus.url);
           const sessions = { ...current.sessions, [snapshot.tabId]: snapshot };
-          const activeTabId = event.type === "opened" ? snapshot.tabId : current.activeTabId;
+          const activeTabId =
+            event.type === "opened" && event.activation !== "background"
+              ? snapshot.tabId
+              : current.activeTabId;
           const activeSnapshot = sessions[activeTabId ?? snapshot.tabId] ?? snapshot;
           return {
             ...current,

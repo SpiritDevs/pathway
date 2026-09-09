@@ -55,6 +55,61 @@ describe("preview IPC methods", () => {
     ),
   );
 
+  effectIt.effect(
+    "passes native popup adoption, presentation, and discard through the validated bridge",
+    () =>
+      Effect.gen(function* () {
+        const adoptPopup = vi.fn(() => Effect.void);
+        const presentNativeTab = vi.fn(() => Effect.void);
+        const discardPopup = vi.fn(() => Effect.void);
+        const manager = {
+          adoptPopup,
+          presentNativeTab,
+          discardPopup,
+        } as unknown as PreviewManager.PreviewManager["Service"];
+        yield* PreviewIpc.adoptPopup
+          .handler({ popupId: "popup-1", runtimeTabId: "child-1" })
+          .pipe(Effect.provideService(PreviewManager.PreviewManager, manager));
+        const bounds = { x: 5, y: 10, width: 600, height: 400 };
+        yield* PreviewIpc.presentNativeTab
+          .handler({ runtimeTabId: "child-1", bounds })
+          .pipe(Effect.provideService(PreviewManager.PreviewManager, manager));
+        yield* PreviewIpc.presentNativeTab
+          .handler({ runtimeTabId: "child-1", bounds: null })
+          .pipe(Effect.provideService(PreviewManager.PreviewManager, manager));
+        yield* PreviewIpc.discardPopup
+          .handler({ popupId: "popup-1" })
+          .pipe(Effect.provideService(PreviewManager.PreviewManager, manager));
+        expect(adoptPopup).toHaveBeenCalledWith("popup-1", "child-1");
+        expect(presentNativeTab).toHaveBeenCalledWith("child-1", bounds);
+        expect(presentNativeTab).toHaveBeenCalledWith("child-1", null);
+        expect(discardPopup).toHaveBeenCalledWith("popup-1");
+      }),
+  );
+
+  effectIt.effect("rejects malformed popup requests before resolving the preview service", () =>
+    Effect.gen(function* () {
+      const requests = [
+        PreviewIpc.adoptPopup.handler({ popupId: "", runtimeTabId: "child-1" }),
+        PreviewIpc.presentNativeTab.handler({
+          runtimeTabId: "child-1",
+          bounds: { x: 0, y: 0, width: 0, height: 400 },
+        }),
+        PreviewIpc.discardPopup.handler({ popupId: "" }),
+      ];
+      for (const request of requests) {
+        const exit = yield* request.pipe(
+          Effect.provideService(PreviewManager.PreviewManager, null as never),
+          Effect.exit,
+        );
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isSuccess(exit)) continue;
+        const error = Cause.findErrorOption(exit.cause);
+        expect(Option.isSome(error) && Schema.isSchemaError(error.value)).toBe(true);
+      }
+    }),
+  );
+
   effectIt.effect("discards malformed credential payloads without retaining secret values", () =>
     Effect.map(
       PreviewIpc.autofillLogin

@@ -1,7 +1,10 @@
 import type { PreviewSessionSnapshot, ProjectScript } from "@spiritdevs/contracts";
 
-export function shouldShowPreviewEmptyState(snapshot: PreviewSessionSnapshot | null): boolean {
-  return snapshot === null || snapshot.navStatus._tag === "Idle";
+export function shouldShowPreviewEmptyState(
+  snapshot: PreviewSessionSnapshot | null,
+  nativePopup = false,
+): boolean {
+  return snapshot === null || (snapshot.navStatus._tag === "Idle" && !nativePopup);
 }
 
 export function getConfiguredPreviewUrls(

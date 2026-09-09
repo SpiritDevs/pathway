@@ -5,6 +5,11 @@ import type {
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
 } from "@spiritdevs/contracts";
+import {
+  DesktopPreviewPopupClosedEventSchema,
+  DesktopPreviewPopupRequestSchema,
+} from "@spiritdevs/contracts";
+import * as Schema from "effect/Schema";
 import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer } from "electron";
 
@@ -169,6 +174,41 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     closeTab: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_CLOSE_TAB_CHANNEL, { tabId }),
     registerWebview: (tabId, webContentsId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_REGISTER_WEBVIEW_CHANNEL, { tabId, webContentsId }),
+    adoptPopup: (popupId, runtimeTabId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_ADOPT_POPUP_CHANNEL, { popupId, runtimeTabId }),
+    discardPopup: (popupId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_DISCARD_POPUP_CHANNEL, { popupId }),
+    presentNativeTab: (runtimeTabId, bounds) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_PRESENT_NATIVE_TAB_CHANNEL, {
+        runtimeTabId,
+        bounds,
+      }),
+    onPopupRequest: (listener) => {
+      const decode = Schema.decodeUnknownSync(DesktopPreviewPopupRequestSchema);
+      const wrappedListener = (_event: Electron.IpcRendererEvent, raw: unknown) => {
+        try {
+          listener(decode(raw));
+        } catch {
+          // Ignore malformed main-to-renderer payloads at the trust boundary.
+        }
+      };
+      ipcRenderer.on(IpcChannels.PREVIEW_POPUP_REQUEST_CHANNEL, wrappedListener);
+      return () =>
+        ipcRenderer.removeListener(IpcChannels.PREVIEW_POPUP_REQUEST_CHANNEL, wrappedListener);
+    },
+    onPopupClosed: (listener) => {
+      const decode = Schema.decodeUnknownSync(DesktopPreviewPopupClosedEventSchema);
+      const wrappedListener = (_event: Electron.IpcRendererEvent, raw: unknown) => {
+        try {
+          listener(decode(raw));
+        } catch {
+          // Ignore malformed main-to-renderer payloads at the trust boundary.
+        }
+      };
+      ipcRenderer.on(IpcChannels.PREVIEW_POPUP_CLOSED_CHANNEL, wrappedListener);
+      return () =>
+        ipcRenderer.removeListener(IpcChannels.PREVIEW_POPUP_CLOSED_CHANNEL, wrappedListener);
+    },
     navigate: (tabId, url) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_NAVIGATE_CHANNEL, { tabId, url }),
     goBack: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_GO_BACK_CHANNEL, { tabId }),
