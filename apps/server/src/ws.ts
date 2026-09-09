@@ -293,6 +293,9 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
           name: attachment.name,
           mimeType: attachment.mimeType,
           sizeBytes: attachment.sizeBytes,
+          ...(attachment.type === "image" && "source" in attachment && attachment.source
+            ? { source: attachment.source }
+            : {}),
         };
       }
       const parsed = parseBase64DataUrl(attachment.dataUrl);
@@ -321,13 +324,8 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
           message: "Could not allocate an attachment identifier.",
         });
       }
-      const persisted = {
-        type: attachment.type,
-        id: ChatAttachmentId.make(rawId),
-        name: attachment.name,
-        mimeType: attachment.mimeType,
-        sizeBytes: attachment.sizeBytes,
-      };
+      const { dataUrl: _, ...metadata } = attachment;
+      const persisted = { ...metadata, id: ChatAttachmentId.make(rawId) };
       yield* fileSystem
         .writeFile(path.join(config.attachmentsDir, attachmentRelativePath(persisted)), bytes)
         .pipe(
@@ -344,6 +342,8 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
     { concurrency: 2 },
   );
 });
+
+export { persistChatAttachments };
 
 function projectEntriesFailureContext(error: WorkspaceEntries.WorkspaceEntriesError): {
   readonly failure: ProjectEntriesFailure;

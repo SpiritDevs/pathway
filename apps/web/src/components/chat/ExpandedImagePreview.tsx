@@ -1,6 +1,9 @@
+import type { SnapShotSource } from "@spiritdevs/contracts";
+
 export interface ExpandedImageItem {
   src: string;
   name: string;
+  source?: SnapShotSource | undefined;
 }
 
 export interface ExpandedImagePreview {
@@ -9,11 +12,18 @@ export interface ExpandedImagePreview {
 }
 
 export function buildExpandedImagePreview(
-  images: ReadonlyArray<{ id: string; name: string; previewUrl?: string }>,
+  images: ReadonlyArray<{
+    id: string;
+    name: string;
+    previewUrl?: string;
+    source?: SnapShotSource | undefined;
+  }>,
   selectedImageId: string,
 ): ExpandedImagePreview | null {
   const previewableImages = images.flatMap((image) =>
-    image.previewUrl ? [{ id: image.id, src: image.previewUrl, name: image.name }] : [],
+    image.previewUrl
+      ? [{ id: image.id, src: image.previewUrl, name: image.name, source: image.source }]
+      : [],
   );
   if (previewableImages.length === 0) {
     return null;
@@ -26,6 +36,7 @@ export function buildExpandedImagePreview(
     images: previewableImages.map((image) => ({
       src: image.src,
       name: image.name,
+      ...(image.source?.kind === "snap-shot" ? { source: image.source } : {}),
     })),
     index: selectedIndex,
   };

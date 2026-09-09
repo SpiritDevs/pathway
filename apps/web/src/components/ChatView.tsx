@@ -1,3 +1,4 @@
+import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { useLoadBalancedDraft } from "../hooks/useLoadBalancedDraft";
 import { useConversationStorage } from "../hooks/useConversationStorage";
 import { conversationStorageBanner } from "./chat/ConversationStorageBanner";
@@ -1647,6 +1648,7 @@ function ChatViewContent(props: ChatViewProps) {
   const focusComposer = useCallback(() => {
     composerRef.current?.focusAtEnd();
   }, [composerRef]);
+  useEffect(() => subscribeSnapShotComposerFocus(focusComposer), [focusComposer]);
   const scheduleComposerFocus = useCallback(() => {
     window.requestAnimationFrame(() => {
       focusComposer();
@@ -7659,6 +7661,7 @@ function ChatViewContent(props: ChatViewProps) {
             mimeType: image.mimeType,
             sizeBytes: image.sizeBytes,
             dataUrl: await readFileAsDataUrl(image.file),
+            ...(image.source ? { source: image.source } : {}),
           };
         }),
       );
@@ -7670,6 +7673,7 @@ function ChatViewContent(props: ChatViewProps) {
       mimeType: image.mimeType,
       sizeBytes: image.sizeBytes,
       previewUrl: image.previewUrl,
+      ...(image.type === "image" && image.source ? { source: image.source } : {}),
     }));
     if (sendsToCurrentThread && !shouldQueueBehindActiveRun) {
       // A sent turn returns to the live edge and anchors its new transcript

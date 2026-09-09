@@ -1,3 +1,18 @@
+import type { ComponentProps } from "react";
+import type { SnapShotSource } from "@spiritdevs/contracts";
+import {
+  SNAP_SHOT_ATTACHMENT_FRAME_CLASS,
+  SnapShotAttachmentDetails,
+} from "./SnapShotAttachmentDetails";
+import {
+  getPendingSnapShotAnimations,
+  pendingSnapShotAnimationIdsForTarget,
+  scheduleSnapShotAnimationDestination,
+  setSnapShotAnimationDestination,
+  shouldAnimateSnapShotArrival,
+  subscribeToPendingSnapShotAnimations,
+} from "../../lib/snapShotAnimation";
+import { resizeSnapShotSource } from "../../lib/snapShotSource";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import type {
@@ -39,6 +54,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -628,6 +644,46 @@ export interface ChatComposerProps {
 // Component
 // --------------------------------------------------------------------------
 
+function SnapShotAttachmentFrame({
+  animationId,
+  animationSource,
+  arrival,
+  animateArrival,
+  className,
+  ...props
+}: ComponentProps<"div"> & {
+  readonly animationId?: string | undefined;
+  readonly animationSource?: SnapShotSource | undefined;
+  readonly arrival?: boolean | undefined;
+  readonly animateArrival?: boolean | undefined;
+}) {
+  const frameRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    if (!frame || (!animationId && !arrival)) return;
+    frame.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (!animationId) return;
+
+    return scheduleSnapShotAnimationDestination(animationId, () =>
+      setSnapShotAnimationDestination(animationId, frame, animationSource),
+    );
+  }, [animationId, animationSource, arrival]);
+
+  return (
+    <div
+      ref={frameRef}
+      className={cn(
+        animateArrival &&
+          !animationId &&
+          "origin-center transition-[opacity,scale] duration-300 ease-[cubic-bezier(.2,.8,.2,1)] starting:scale-95 starting:opacity-0 motion-reduce:transition-none motion-reduce:starting:scale-100 motion-reduce:starting:opacity-100",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
 export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps) {
   const {
     composerDraftTarget,
@@ -729,6 +785,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerPreviewAnnotations = composerDraft.previewAnnotations;
   const composerReviewComments = composerDraft.reviewComments;
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
+  const pendingSnapShotAnimations = useSyncExternalStore(
+    subscribeToPendingSnapShotAnimations,
+    getPendingSnapShotAnimations,
+    getPendingSnapShotAnimations,
+  );
+  const pendingSnapShotIds = useMemo(
+    () => pendingSnapShotAnimationIdsForTarget(pendingSnapShotAnimations, composerDraftTarget),
+    [composerDraftTarget, pendingSnapShotAnimations],
+  );
+  const pendingSnapShotIdSet = useMemo(() => new Set(pendingSnapShotIds), [pendingSnapShotIds]);
+  const uncommittedSnapShotIds = pendingSnapShotIds.filter(
+    (id) => !composerImages.some((image) => image.id === id),
+  );
 
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
@@ -1593,6 +1662,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 mimeType: image.mimeType,
                 sizeBytes: image.sizeBytes,
                 dataUrl,
+                ...(image.source ? { source: image.source } : {}),
               });
             } catch {
               const existingPersisted = existingPersistedById.get(image.id);
@@ -2413,6 +2483,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           mimeType: result.image.mimeType,
           sizeBytes: result.image.sizeBytes,
           dataUrl: result.image.dataUrl,
+          ...(image.source
+            ? { source: resizeSnapShotSource(image.source, result.image.imageSize) }
+            : {}),
         } satisfies PersistedComposerImageAttachment;
         encodedImageAttachments.push(attachment);
         usedAttachmentChars += attachment.dataUrl.length;
@@ -3191,10 +3264,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
               {!isComposerApprovalState &&
                 pendingUserInputs.length === 0 &&
-                composerImages.some(
-                  (image) =>
-                    !composerPreviewAnnotations.some((annotation) => annotation.id === image.id),
-                ) && (
+                (uncommittedSnapShotIds.length > 0 ||
+                  composerImages.some(
+                    (image) =>
+                      !composerPreviewAnnotations.some((annotation) => annotation.id === image.id),
+                  )) && (
                   <div className="mb-3 flex flex-wrap gap-2">
                     {composerImages
                       .filter(
@@ -3204,13 +3278,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           ),
                       )
                       .map((image) => (
-                        <div
+                        <SnapShotAttachmentFrame
                           key={image.id}
+                          data-chat-composer-expanded-image="true"
+                          animationId={pendingSnapShotIdSet.has(image.id) ? image.id : undefined}
+                          animationSource={image.type === "image" ? image.source : undefined}
+                          aria-hidden={pendingSnapShotIdSet.has(image.id) || undefined}
+                          inert={pendingSnapShotIdSet.has(image.id) || undefined}
+                          arrival={
+                            image.type === "image" &&
+                            image.source !== undefined &&
+                            shouldAnimateSnapShotArrival(image.source.capturedAt)
+                          }
+                          animateArrival={settings.snapShotAnimations}
                           className={cn(
                             "relative overflow-hidden rounded-lg border border-border/80 bg-background",
+                            pendingSnapShotIdSet.has(image.id) && "invisible",
                             image.type === "file"
                               ? "flex h-16 w-48 items-center gap-2 px-2.5"
-                              : "h-16 w-16",
+                              : image.source
+                                ? SNAP_SHOT_ATTACHMENT_FRAME_CLASS
+                                : "h-16 w-16",
                           )}
                         >
                           {image.type === "file" ? (
@@ -3292,6 +3380,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               {image.name}
                             </div>
                           )}
+                          {image.type === "image" && image.source ? (
+                            <SnapShotAttachmentDetails source={image.source} />
+                          ) : null}
                           {nonPersistedComposerImageIdSet.has(image.id) && (
                             <Tooltip>
                               <TooltipTrigger
@@ -3323,8 +3414,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           >
                             <XIcon />
                           </Button>
-                        </div>
+                        </SnapShotAttachmentFrame>
                       ))}
+                    {uncommittedSnapShotIds.map((captureId) => (
+                      <SnapShotAttachmentFrame
+                        key={captureId}
+                        aria-hidden="true"
+                        animationId={captureId}
+                        animationSource={
+                          pendingSnapShotAnimations.find((capture) => capture.id === captureId)
+                            ?.source
+                        }
+                        className={cn(SNAP_SHOT_ATTACHMENT_FRAME_CLASS, "invisible bg-background")}
+                      />
+                    ))}
                   </div>
                 )}
             </div>

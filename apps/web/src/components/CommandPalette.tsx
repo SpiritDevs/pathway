@@ -57,6 +57,7 @@ import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  CameraIcon,
   CircleDotIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
@@ -95,6 +96,8 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
+import { useSnapShotAccountId } from "../lib/snapShotAccount";
+import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
@@ -1895,6 +1898,27 @@ function OpenCommandPaletteDialog(props: {
   const alertPolicies = useAtomValue(threadAlertPoliciesAtom);
   const alertPoliciesReady = useAtomValue(threadAlertPoliciesReadyAtom);
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+  const snapShotAccountId = useSnapShotAccountId();
+  const snapShotBridge = getDesktopSnapShotBridge();
+  if (snapShotAccountId && snapShotBridge?.captureSnapShot) {
+    actionItems.push({
+      kind: "action",
+      value: "action:snap-shot",
+      searchTerms: ["screenshot", "window capture", "app shots", "snapshots"],
+      title: "Take snapshot",
+      icon: <CameraIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        if (!clientSettings.snapShotEnabled) {
+          await navigate({ to: "/settings/snap-shot" });
+          return;
+        }
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        );
+        await snapShotBridge.captureSnapShot?.();
+      },
+    });
+  }
   actionItems.push({
     kind: "action",
     value: "action:notification-settings",

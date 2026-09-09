@@ -1,4 +1,5 @@
 import { withConversationWorkspace } from "./conversationWorkspace.ts";
+import { appendSnapShotPromptText } from "../attachmentPrompt.ts";
 import {
   ModelSelection,
   OrchestrationV2DomainEvent,
@@ -1260,7 +1261,14 @@ export const layerWithOptions = (
               }),
             ).pipe(
               Effect.andThen(observeActivity(providerSessionId, markBusy(providerSessionId))),
-              Effect.andThen(runtime.startTurn(withConversationWorkspace(input))),
+              Effect.andThen(
+                runtime.startTurn(
+                  withConversationWorkspace({
+                    ...input,
+                    message: { ...input.message, text: appendSnapShotPromptText(input.message) },
+                  }),
+                ),
+              ),
               Effect.catch((error) =>
                 observeActivity(providerSessionId, markIdle(providerSessionId)).pipe(
                   Effect.andThen(Effect.fail(error)),
@@ -1269,7 +1277,12 @@ export const layerWithOptions = (
             ),
           steerTurn: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(
-              Effect.andThen(runtime.steerTurn(input)),
+              Effect.andThen(
+                runtime.steerTurn({
+                  ...input,
+                  message: { ...input.message, text: appendSnapShotPromptText(input.message) },
+                }),
+              ),
             ),
           interruptTurn: (input) =>
             observeActivity(providerSessionId, touchActivity(providerSessionId)).pipe(

@@ -111,6 +111,8 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     focusedMainOrFirst: Effect.succeed(Option.none()),
     setMain: () => Effect.void,
     clearMain: () => Effect.void,
+    prepareReveal: () => Effect.succeed(false),
+    cancelPreparedReveal: () => Effect.void,
     reveal: () => Effect.void,
     sendAll: (_channel, state) =>
       Effect.sync(() => {

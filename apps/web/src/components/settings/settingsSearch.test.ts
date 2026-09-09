@@ -284,6 +284,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/notifications",
       "/settings/appearance",
       "/settings/keybindings",
+      "/settings/snap-shot",
       "/settings/projects",
     ]);
     expect(searchSettings("projects")[0]).toMatchObject({
@@ -328,5 +329,14 @@ describe("SETTINGS_NAV_GROUPS", () => {
       to: "/settings/email",
       targetId: "email-project-capture",
     });
+  });
+});
+
+it("finds snapshot capture and metadata settings", () => {
+  expect(searchSettings("screenshot")[0]?.id).toBe("snap-shot-enabled");
+  expect(searchSettings("app shots")[0]?.id).toBe("snap-shot-enabled");
+  expect(searchSettings("capture accessibility data")[0]).toMatchObject({
+    id: "snap-shot-accessibility",
+    targetId: "snap-shot-enabled",
   });
 });

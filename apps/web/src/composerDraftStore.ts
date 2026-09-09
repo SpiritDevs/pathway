@@ -1,3 +1,4 @@
+import { SnapShotSource } from "@spiritdevs/contracts";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import {
   DEFAULT_MODEL,
@@ -66,6 +67,7 @@ import { createDebouncedJSONStorage, createMemoryStorage } from "./lib/storage";
 import { getDefaultServerModel } from "./providerModels";
 import { UnifiedSettings } from "@spiritdevs/contracts/settings";
 import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
+const isSnapShotSource = Schema.is(SnapShotSource);
 const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
@@ -100,6 +102,7 @@ export const PersistedComposerImageAttachment = Schema.Struct({
   name: Schema.String,
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
+  source: Schema.optionalKey(SnapShotSource),
   dataUrl: Schema.optionalKey(Schema.String),
   attachmentId: Schema.optionalKey(Schema.String),
   environmentId: Schema.optionalKey(Schema.String),
@@ -583,7 +586,7 @@ interface ComposerDraftStoreState {
     threadRef: ComposerThreadTarget,
     interactionMode: ProviderInteractionMode | null | undefined,
   ) => void;
-  addImage: (threadRef: ComposerThreadTarget, image: ComposerAttachment) => void;
+  addImage: (threadRef: ComposerThreadTarget, image: ComposerAttachment) => boolean;
   addImages: (threadRef: ComposerThreadTarget, images: ComposerAttachment[]) => void;
   removeImage: (threadRef: ComposerThreadTarget, imageId: string) => void;
   setFileUpload: (
@@ -644,7 +647,7 @@ interface ComposerDraftStoreState {
   syncPersistedAttachments: (
     threadRef: ComposerThreadTarget,
     attachments: PersistedComposerImageAttachment[],
-  ) => void;
+  ) => Promise<void>;
   /** Moves the user-authored payload between composers without revoking image previews. */
   moveComposerContent: (source: ComposerThreadTarget, destination: ComposerThreadTarget) => boolean;
   clearComposerContent: (threadRef: ComposerThreadTarget) => void;
@@ -1347,6 +1350,7 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerImageAtt
     name,
     mimeType,
     sizeBytes,
+    ...(isSnapShotSource(candidate.source) ? { source: candidate.source } : {}),
     ...(hasDataUrl ? { dataUrl } : {}),
     ...(hasUploadedFileMarker ? { attachmentId, environmentId } : {}),
   };
@@ -2504,6 +2508,7 @@ export function hydrateImagesFromPersisted(
             sizeBytes: attachment.sizeBytes,
             previewUrl: attachment.dataUrl ?? "",
             file: file!,
+            ...(attachment.source ? { source: attachment.source } : {}),
           } satisfies ComposerImageAttachment),
     ];
   });
@@ -3371,11 +3376,17 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           const threadId = resolveComposerThreadId(get(), threadRef);
           if (!threadKey || !threadId) {
-            return;
+            return false;
           }
+          const alreadyAdded =
+            get().draftsByThreadKey[threadKey]?.images.some(({ id }) => id === image.id) ?? false;
           get().addImages(typeof threadRef === "string" ? DraftId.make(threadKey) : threadRef, [
             image,
           ]);
+          return (
+            !alreadyAdded &&
+            (get().draftsByThreadKey[threadKey]?.images.some(({ id }) => id === image.id) ?? false)
+          );
         },
         addImages: (threadRef, images) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
@@ -3874,7 +3885,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
-        syncPersistedAttachments: (threadRef, attachments) => {
+        syncPersistedAttachments: async (threadRef, attachments) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           if (!threadKey) {
             return;
@@ -3901,9 +3912,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             }
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
-          Promise.resolve().then(() => {
-            verifyPersistedAttachments(threadKey, attachments, set);
-          });
+          await Promise.resolve();
+          verifyPersistedAttachments(threadKey, attachments, set);
         },
         moveComposerContent: (source, destination) => {
           const sourceKey = resolveComposerDraftKey(get(), source);
@@ -4092,6 +4102,7 @@ export function captureComposerDraft(
         mimeType: image.mimeType,
         sizeBytes: image.sizeBytes,
         ...(image.previewUrl.startsWith("data:") ? { dataUrl: image.previewUrl } : {}),
+        ...(image.type === "image" && image.source ? { source: image.source } : {}),
         ...(image.type === "file"
           ? { attachmentId: image.uploadedAttachmentId, environmentId: image.uploadEnvironmentId }
           : {}),

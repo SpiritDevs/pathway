@@ -16,6 +16,7 @@ export * from "./providerUsage.ts";
 export * from "./providerPolicy.ts";
 export * from "./modelSelection.ts";
 export * from "./chatAttachment.ts";
+export * from "./snapShot.ts";
 export * from "./checkpointDiff.ts";
 export * from "./cloudProject.ts";
 export * from "./calendar.ts";

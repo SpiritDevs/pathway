@@ -139,16 +139,32 @@ async function hydrateClientSettings(): Promise<void> {
   return clientSettingsHydrationPromise;
 }
 
-function persistClientSettings(settings: ClientSettings): void {
-  replaceClientSettingsSnapshot(settings);
-  void ensureLocalApi()
-    .persistence.setClientSettings(settings)
-    .catch((error) => {
+let clientSettingsPersistenceQueue = Promise.resolve();
+
+/** Persist a client patch before reporting success to native setup flows. */
+export function persistClientSettingsPatch(
+  patch: ClientSettingsPatch,
+  persist: (settings: ClientSettings) => Promise<void> = (settings) =>
+    ensureLocalApi().persistence.setClientSettings(settings),
+): Promise<void> {
+  const operation = clientSettingsPersistenceQueue.then(async () => {
+    await hydrateClientSettings();
+    const previous = getClientSettingsSnapshot();
+    const next = { ...previous, ...patch };
+    replaceClientSettingsSnapshot(next);
+    try {
+      await persist(next);
+    } catch (error) {
+      replaceClientSettingsSnapshot(previous);
       console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} persist failed`, {
         operation: "persist",
         ...safeErrorLogAttributes(error),
       });
-    });
+      throw error;
+    }
+  });
+  clientSettingsPersistenceQueue = operation.catch(() => undefined);
+  return operation;
 }
 
 // ── Key sets for routing patches ─────────────────────────────────────
@@ -303,10 +319,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
         }
       }
       if (Object.keys(clientPatch).length > 0) {
-        persistClientSettings({
-          ...getClientSettingsSnapshot(),
-          ...clientPatch,
-        });
+        void persistClientSettingsPatch(clientPatch).catch(() => undefined);
       }
     },
     [environmentId, persistServerSettings],
@@ -325,14 +338,12 @@ export function useUpdatePrimarySettings() {
 
 export function useUpdateClientSettings() {
   return useCallback((patch: ClientSettingsPatch) => {
-    persistClientSettings({
-      ...getClientSettingsSnapshot(),
-      ...patch,
-    });
+    return persistClientSettingsPatch(patch).catch(() => undefined);
   }, []);
 }
 
 export function __resetClientSettingsPersistenceForTests(): void {
+  clientSettingsPersistenceQueue = Promise.resolve();
   clientSettingsHydrationGeneration += 1;
   clientSettingsSnapshot = DEFAULT_CLIENT_SETTINGS;
   clientSettingsHydrated = false;
@@ -342,6 +353,7 @@ export function __resetClientSettingsPersistenceForTests(): void {
 }
 
 export function __setClientSettingsForTests(settings: ClientSettings): void {
+  clientSettingsPersistenceQueue = Promise.resolve();
   clientSettingsHydrationGeneration += 1;
   clientSettingsSnapshot = settings;
   clientSettingsHydrated = true;

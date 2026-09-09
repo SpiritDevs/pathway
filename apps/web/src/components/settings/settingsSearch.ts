@@ -3,6 +3,7 @@ export type SettingsPath =
   | "/settings/general"
   | "/settings/appearance"
   | "/settings/keybindings"
+  | "/settings/snap-shot"
   | "/settings/projects"
   | "/settings/members-teams"
   | "/settings/company-members"
@@ -33,6 +34,7 @@ export interface SettingsSearchItem {
   readonly title: string;
   readonly to: SettingsSearchPath;
   readonly targetId?: string;
+  readonly searchTerms?: ReadonlyArray<string>;
 }
 
 export function settingsSectionPathForSearchPath(path: SettingsSearchPath): SettingsPath {
@@ -86,6 +88,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/notifications": "Notifications",
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
+  "/settings/snap-shot": "SnapShots",
   "/settings/projects": "Projects",
   "/settings/members-teams": "Members & Teams",
   "/settings/company-members": "Members",
@@ -125,6 +128,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/notifications",
       "/settings/appearance",
       "/settings/keybindings",
+      "/settings/snap-shot",
       "/settings/projects",
     ],
   },
@@ -427,6 +431,43 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "projects",
   },
   {
+    id: "snap-shot-enabled",
+    searchTerms: ["window capture screenshot", "app shots"],
+    title: "SnapShots",
+    to: "/settings/snap-shot",
+  },
+  {
+    id: "snap-shot-accessibility",
+    searchTerms: ["capture accessibility data", "privacy app text"],
+    title: "Include app text",
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "snap-shot-shortcut",
+    title: "Capture shortcut",
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "snap-shot-sound",
+    title: "Capture sound",
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "snap-shot-flash",
+    title: "Capture flash",
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "snap-shot-animations",
+    title: "Capture animations",
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
     id: "providers",
     title: "Providers",
     to: "/settings/providers",
@@ -602,5 +643,9 @@ export function searchSettings(
   const normalizedQuery = normalizeSearchText(query);
   if (normalizedQuery.length === 0) return [];
 
-  return items.filter((item) => normalizeSearchText(item.title).includes(normalizedQuery));
+  return items.filter((item) =>
+    [item.title, ...(item.searchTerms ?? [])].some((text) =>
+      normalizeSearchText(text).includes(normalizedQuery),
+    ),
+  );
 }
