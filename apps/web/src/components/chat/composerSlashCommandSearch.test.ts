@@ -42,6 +42,34 @@ describe("searchSlashCommandItems", () => {
     ]);
   });
 
+  it("only offers provider commands at the start of the message", () => {
+    const items = [
+      {
+        id: "model",
+        type: "slash-command",
+        command: "model",
+        label: "/model",
+        description: "Switch model",
+      },
+      {
+        id: "compact",
+        type: "provider-slash-command",
+        provider: claudeDriver,
+        command: { name: "compact" },
+        label: "/compact",
+        description: "Compact",
+      },
+    ] satisfies Array<
+      Extract<ComposerCommandItem, { type: "slash-command" | "provider-slash-command" }>
+    >;
+    expect(searchSlashCommandItems(items, "", false).map((item) => item.id)).toEqual(["model"]);
+    expect(searchSlashCommandItems(items, "compact", false)).toEqual([]);
+    expect(searchSlashCommandItems(items, "", true).map((item) => item.id)).toEqual([
+      "model",
+      "compact",
+    ]);
+  });
+
   it("supports fuzzy provider command matches", () => {
     const items = [
       {

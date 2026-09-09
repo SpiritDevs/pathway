@@ -1010,6 +1010,12 @@ export function createServerEnvironmentAtoms<R, E>(
           Stream.mapAccum(Option.none<ServerLifecycleWelcomePayload>, projectServerWelcome),
         ),
     }),
+    composerCatalog: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:composer-catalog",
+      tag: WS_METHODS.serverGetComposerCatalog,
+      staleTimeMs: 0,
+      idleTtlMs: 0,
+    }),
     refreshProviders: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-providers",
       tag: WS_METHODS.serverRefreshProviders,

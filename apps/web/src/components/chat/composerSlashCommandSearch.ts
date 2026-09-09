@@ -47,10 +47,14 @@ export function searchSlashCommandItems(
     Extract<ComposerCommandItem, { type: "slash-command" | "provider-slash-command" }>
   >,
   query: string,
+  isAtPromptStart = true,
 ): Array<Extract<ComposerCommandItem, { type: "slash-command" | "provider-slash-command" }>> {
+  const availableItems = isAtPromptStart
+    ? items
+    : items.filter((item) => item.type !== "provider-slash-command");
   const normalizedQuery = normalizeSearchQuery(query, { trimLeadingPattern: /^\/+/ });
   if (!normalizedQuery) {
-    return [...items];
+    return [...availableItems];
   }
 
   const ranked: Array<{
@@ -59,7 +63,7 @@ export function searchSlashCommandItems(
     tieBreaker: string;
   }> = [];
 
-  for (const item of items) {
+  for (const item of availableItems) {
     const score = scoreSlashCommandItem(item, normalizedQuery);
     if (score === null) {
       continue;

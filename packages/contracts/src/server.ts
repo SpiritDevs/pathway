@@ -94,8 +94,18 @@ export const ServerProviderSkill = Schema.Struct({
   enabled: Schema.Boolean,
   displayName: Schema.optional(TrimmedNonEmptyString),
   shortDescription: Schema.optional(TrimmedNonEmptyString),
+  /** The provider allows only the user to start this skill. */
+  userInvocationOnly: Schema.optional(Schema.Boolean),
+  /** False when the provider reserves this skill for the agent. */
+  userInvocable: Schema.optional(Schema.Boolean),
 });
 export type ServerProviderSkill = typeof ServerProviderSkill.Type;
+
+export const ServerProviderComposerCatalog = Schema.Struct({
+  skills: Schema.Array(ServerProviderSkill),
+  slashCommands: Schema.Array(ServerProviderSlashCommand),
+});
+export type ServerProviderComposerCatalog = typeof ServerProviderComposerCatalog.Type;
 
 /**
  * Availability of a configured provider instance from the runtime's POV.

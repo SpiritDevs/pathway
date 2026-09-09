@@ -4,6 +4,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
@@ -2296,6 +2298,53 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               input: { hint: "pr-or-branch" },
             },
           ]);
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "auth status")
+                return {
+                  stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("omits disabled and agent-only skills from probed slash commands", () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-claude-menu-" });
+          for (const name of ["disabled", "agent-only", "user-only", "compact"]) {
+            yield* fs.makeDirectory(path.join(homePath, "skills", name), { recursive: true });
+            yield* fs.writeFileString(
+              path.join(homePath, "skills", name, "SKILL.md"),
+              name === "agent-only"
+                ? "---\nuser-invocable: false\n---\nContext"
+                : "---\ndisable-model-invocation: true\n---\nRelease",
+            );
+          }
+          yield* fs.writeFileString(
+            path.join(homePath, "settings.json"),
+            '{"skillOverrides":{"disabled":"off","compact":"off"}}',
+          );
+          const status = yield* checkClaudeProviderStatus(
+            { ...defaultClaudeSettings, homePath },
+            claudeCapabilities({
+              subscriptionType: "maxplan",
+              slashCommands: [{ name: "disabled" }, { name: "agent-only" }, { name: "user-only" }],
+            }),
+          );
+
+          assert.deepStrictEqual(
+            status.slashCommands.map((command) => command.name),
+            ["compact", "user-only"],
+          );
         }).pipe(
           Effect.provide(
             mockSpawnerLayer((args) => {

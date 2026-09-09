@@ -24,6 +24,7 @@ import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { loadClaudeComposerCatalog } from "./ClaudeComposerCatalog.ts";
 import { makeClaudeTextGeneration } from "../../textGeneration/ClaudeTextGeneration.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
@@ -335,6 +336,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
+        getComposerCatalog: (workspaceCwd) =>
+          snapshot.getSnapshot.pipe(
+            Effect.flatMap((current) =>
+              loadClaudeComposerCatalog(effectiveConfig, workspaceCwd, processEnv, current),
+            ),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+          ),
         orchestrationAdapter,
         textGeneration,
         authentication: authenticationWithCacheRefresh,

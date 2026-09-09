@@ -1,3 +1,5 @@
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
 import type {
   EnvironmentId,
   ModelSelection,
@@ -1142,6 +1144,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     query: isPathTrigger ? pathTriggerQuery : null,
   });
 
+  const needsClaudeCatalog =
+    selectedProvider === "claudeAgent" &&
+    (composerTriggerKind === "skill" || composerTriggerKind === "slash-command");
+  const scopedCatalog = useEnvironmentQuery(
+    needsClaudeCatalog && environmentId !== null
+      ? serverEnvironment.composerCatalog({
+          environmentId,
+          input: { instanceId: selectedInstanceId, cwd: gitCwd },
+        })
+      : null,
+  );
+  // Never fall back to the startup project's skills while a scoped request loads or fails.
+  const composerCatalog =
+    selectedProvider === "claudeAgent" ? scopedCatalog.data : selectedProviderStatus;
+
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
@@ -1178,25 +1195,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           description: "Switch this thread back to normal build mode",
         },
       ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
-      const providerSlashCommandItems = (selectedProviderStatus?.slashCommands ?? []).map(
-        (command) => ({
-          id: `provider-slash-command:${selectedProvider}:${command.name}`,
-          type: "provider-slash-command" as const,
-          provider: selectedProvider,
-          command,
-          label: `/${command.name}`,
-          description: command.description ?? command.input?.hint ?? "Run provider command",
-        }),
-      );
+      const providerSlashCommandItems = (composerCatalog?.slashCommands ?? []).map((command) => ({
+        id: `provider-slash-command:${selectedProvider}:${command.name}`,
+        type: "provider-slash-command" as const,
+        provider: selectedProvider,
+        command,
+        label: `/${command.name}`,
+        description: command.description ?? command.input?.hint ?? "Run provider command",
+      }));
       const query = composerTrigger.query.trim().toLowerCase();
       const slashCommandItems = [...builtInSlashCommandItems, ...providerSlashCommandItems];
-      if (!query) {
-        return slashCommandItems;
-      }
-      return searchSlashCommandItems(slashCommandItems, query);
+      return searchSlashCommandItems(slashCommandItems, query, composerTrigger.rangeStart === 0);
     }
     if (composerTrigger.kind === "skill") {
-      return searchProviderSkills(selectedProviderStatus?.skills ?? [], composerTrigger.query).map(
+      return searchProviderSkills(composerCatalog?.skills ?? [], composerTrigger.query).map(
         (skill) => ({
           id: `skill:${selectedProvider}:${skill.name}`,
           type: "skill" as const,
@@ -1211,7 +1223,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       );
     }
     return [];
-  }, [composerTrigger, selectedProvider, selectedProviderStatus, workspaceEntries.entries]);
+  }, [composerTrigger, selectedProvider, composerCatalog, workspaceEntries.entries]);
 
   const composerMenuOpen = Boolean(composerTrigger);
   const composerMenuSearchKey = composerTrigger
@@ -1268,15 +1280,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ]);
 
   const isComposerMenuLoading =
-    composerTriggerKind === "path" && pathTriggerQuery.length > 0 && workspaceEntries.isPending;
+    (composerTriggerKind === "path" && pathTriggerQuery.length > 0 && workspaceEntries.isPending) ||
+    (needsClaudeCatalog && scopedCatalog.isPending);
   const composerMenuEmptyState = useMemo(() => {
+    if (needsClaudeCatalog && scopedCatalog.error)
+      return "Could not load this project's commands. Close and reopen the menu to retry.";
     if (composerTriggerKind === "skill") {
       return "No skills found. Try / to browse provider commands.";
     }
     return composerTriggerKind === "path"
       ? "No matching files or folders."
       : "No matching command.";
-  }, [composerTriggerKind]);
+  }, [composerTriggerKind, needsClaudeCatalog, scopedCatalog.error]);
 
   // ------------------------------------------------------------------
   // Provider traits UI
@@ -3341,7 +3356,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       ? composerTerminalContexts
                       : []
                   }
-                  skills={selectedProviderStatus?.skills ?? []}
+                  skills={composerCatalog?.skills ?? []}
                   className="min-h-[1lh] max-h-[min(6lh,22dvh)] overscroll-contain"
                   onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
                   onChange={onPromptChange}

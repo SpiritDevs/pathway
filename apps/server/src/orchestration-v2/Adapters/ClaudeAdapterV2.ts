@@ -1,3 +1,4 @@
+import * as NodePath from "@effect/platform-node/NodePath";
 import {
   type CanUseTool,
   forkSession as forkClaudeSession,
@@ -77,6 +78,11 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { compileClaudeModelSelection } from "../../claudeModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import { makeClaudeEnvironment } from "../../provider/Drivers/ClaudeHome.ts";
+import { discoverClaudeSkills } from "../../provider/Drivers/ClaudeSkills.ts";
+import {
+  hasClaudeSkillMention,
+  planClaudeSkillDispatch,
+} from "../../provider/Drivers/ClaudeSkillDispatch.ts";
 import { getClaudeModelCapabilities } from "../../provider/Layers/ClaudeProvider.ts";
 import type { EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
@@ -1167,8 +1173,24 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   readonly priority?: SDKUserMessage["priority"];
   readonly attachmentsDir: string;
   readonly fileSystem: FileSystem.FileSystem;
+  readonly settings: ClaudeSettings;
+  readonly environment: NodeJS.ProcessEnv;
+  readonly cwd: string | null;
 }) {
-  if (input.attachments.length === 0) {
+  const skills = hasClaudeSkillMention(input.text)
+    ? yield* discoverClaudeSkills(input.settings, input.cwd ?? undefined, input.environment).pipe(
+        Effect.provideService(FileSystem.FileSystem, input.fileSystem),
+        Effect.provide(NodePath.layer),
+      )
+    : [];
+  const skillNames = new Set(
+    skills
+      .filter((skill) => skill.enabled && skill.userInvocable !== false)
+      .map((skill) => skill.name),
+  );
+  const skillDispatch = planClaudeSkillDispatch(input.text, skillNames);
+  const isSlashCommand = /^\/[^\s/]+(?:\s|$)/u.test(input.text);
+  if (input.attachments.length === 0 && !skillDispatch && !isSlashCommand) {
     return makeClaudeUserMessage({
       text: input.text,
       ...(input.priority === undefined ? {} : { priority: input.priority }),
@@ -1192,8 +1214,21 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
     .join("\n\n");
 
   const content: Array<ClaudeUserContentBlock> = [];
-  if (textWithAttachmentPaths.length > 0) {
-    content.push({ type: "text", text: textWithAttachmentPaths });
+  // Claude expands only the final command block. Keep effort instructions and
+  // images before it so neither can turn a selected command into plain text.
+  const dispatch = skillDispatch
+    ? {
+        ...skillDispatch,
+        commandText: [skillDispatch.commandText, attachmentPathLines.join("\n")]
+          .filter((part) => part.length > 0)
+          .join("\n\n"),
+      }
+    : isSlashCommand
+      ? { leadingText: undefined, commandText: textWithAttachmentPaths }
+      : undefined;
+  const leadingText = dispatch ? (dispatch.leadingText ?? "") : textWithAttachmentPaths;
+  if (leadingText.length > 0) {
+    content.push({ type: "text", text: leadingText });
   }
 
   for (const attachment of input.attachments) {
@@ -1234,6 +1269,10 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
         data: Buffer.from(bytes).toString("base64"),
       },
     });
+  }
+
+  if (dispatch) {
+    content.push({ type: "text", text: dispatch.commandText });
   }
 
   return {
@@ -5196,6 +5235,9 @@ export function makeClaudeAdapterV2(
             const userMessage = isContinuationTurn
               ? null
               : yield* makeClaudeUserMessageWithAttachments({
+                  settings: adapterOptions.settings,
+                  environment: adapterOptions.environment,
+                  cwd: turnInput.runtimePolicy.cwd,
                   text: applyClaudePromptEffortPrefix(
                     turnInput.message.text,
                     compileClaudeModelSelection(turnInput.modelSelection).promptEffort,
@@ -5378,6 +5420,9 @@ export function makeClaudeAdapterV2(
               });
             }
             const userMessage = yield* makeClaudeUserMessageWithAttachments({
+              settings: adapterOptions.settings,
+              environment: adapterOptions.environment,
+              cwd: currentTurn.input.runtimePolicy.cwd,
               text: applyClaudePromptEffortPrefix(
                 turnInput.message.text,
                 compileClaudeModelSelection(currentTurn.input.modelSelection).promptEffort,
