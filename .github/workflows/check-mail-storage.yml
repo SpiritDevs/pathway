@@ -1,0 +1,42 @@
+name: Check private mail storage
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mail-storage-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  check_mail_storage:
+    name: Check production private storage
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 5
+    environment:
+      name: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=pathway-relay...
+
+      - name: Check storage with a temporary synthetic file
+        run: node infra/relay/scripts/check-mail-storage.ts
+        env:
+          MAIL_ENABLED: "true"
+          MAIL_UPLOADTHING_API_KEY: ${{ secrets.MAIL_UPLOADTHING_API_KEY }}
