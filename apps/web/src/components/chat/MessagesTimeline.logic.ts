@@ -22,7 +22,7 @@ import {
   resolvePathwayMcpToolPresentation,
   type PathwayMcpToolPresentation,
 } from "@spiritdevs/shared/pathwayMcpToolPresentation";
-import { resolveActivePullRequestAttachment } from "@spiritdevs/shared/sourceControl";
+import { resolveActivePullRequestAttachments } from "@spiritdevs/shared/sourceControl";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 1;
 export const TIMELINE_MINIMAP_ITEM_SPACING = 8;
@@ -276,15 +276,17 @@ export interface StableMessagesTimelineRowsState {
   result: MessagesTimelineRow[];
 }
 
-export function resolveActiveAttachedPullRequestItemId(
+export function resolveActiveAttachedPullRequestItemIds(
   rows: ReadonlyArray<MessagesTimelineRow>,
-): string | null {
+): ReadonlySet<string> {
   const localItems = rows.flatMap((row) =>
     row.kind === "event" && row.projectedItem.visibility === "local"
       ? [row.projectedItem.item]
       : [],
   );
-  return resolveActivePullRequestAttachment(localItems)?.itemId ?? null;
+  return new Set(
+    resolveActivePullRequestAttachments(localItems).map((attachment) => attachment.itemId),
+  );
 }
 
 export function computeMessageDurationStart(

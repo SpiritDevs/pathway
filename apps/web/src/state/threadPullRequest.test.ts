@@ -1,10 +1,13 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/shell";
 import { EnvironmentId, ProjectId } from "@spiritdevs/contracts";
 import { Atom, AtomRegistry, AsyncResult } from "effect/unstable/reactivity";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   attachedPullRequestQueryTarget,
+  aggregateThreadPullRequestState,
+  attachedPullRequestsAtom,
   currentThreadChangeRequestState,
   threadChangeRequestSource,
   useAttachedPullRequest,
@@ -12,12 +15,23 @@ import {
   sameAttachedPullRequest,
 } from "./threadPullRequest";
 
-const mocks = vi.hoisted(() => ({ detail: vi.fn(), environment: vi.fn(), query: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  detail: vi.fn(),
+  environment: vi.fn(),
+  query: vi.fn(),
+  projects: vi.fn(),
+}));
+vi.mock("./entities", () => ({ useProjects: mocks.projects }));
+vi.mock("./projects", async () => {
+  const { Atom } = await import("effect/unstable/reactivity");
+  return { environmentProjects: { projectsAtom: Atom.make(() => mocks.projects()) } };
+});
 vi.mock("./environments", () => ({ useEnvironment: mocks.environment }));
 vi.mock("./query", () => ({ useEnvironmentQuery: mocks.query }));
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.environment.mockReturnValue(null);
+  mocks.projects.mockReturnValue(projects);
   mocks.query.mockReturnValue({ data: null, error: null, isPending: false });
 });
 vi.mock("./pullRequests", () => ({ pullRequestEnvironment: { detail: mocks.detail } }));
@@ -28,20 +42,58 @@ const thread = {
   attachedPullRequest: { number: 110, url: "https://github.com/SpiritDevs/pathway/pull/110" },
 };
 
+const projects = [
+  {
+    environmentId: thread.environmentId,
+    id: thread.projectId,
+    repositoryIdentity: {
+      provider: "github",
+      canonicalKey: "github.com/SpiritDevs/pathway",
+      displayName: "SpiritDevs/pathway",
+    },
+  },
+] as unknown as ReadonlyArray<EnvironmentProject>;
+
 afterEach(() => vi.useRealTimers());
 
 describe("attached pull request lookup", () => {
   it("uses the thread's environment and the attached repository and number without a branch", () => {
-    expect(attachedPullRequestQueryTarget(thread)).toEqual({
+    expect(attachedPullRequestQueryTarget(thread, projects)).toEqual({
       environmentId: thread.environmentId,
       input: { projectId: thread.projectId, repository: "spiritdevs/pathway", number: 110 },
     });
   });
 
-  it("does not query after detaching or when there is no project", () => {
-    expect(attachedPullRequestQueryTarget({ ...thread, attachedPullRequest: null })).toBeNull();
-    expect(attachedPullRequestQueryTarget({ ...thread, projectId: null })).toBeNull();
-    expect(attachedPullRequestQueryTarget(null)).toBeNull();
+  it("does not query after detaching or when there is no matching project", () => {
+    expect(
+      attachedPullRequestQueryTarget({ ...thread, attachedPullRequest: null }, projects),
+    ).toBeNull();
+    expect(attachedPullRequestQueryTarget(thread, [])).toBeNull();
+    expect(attachedPullRequestQueryTarget(null, projects)).toBeNull();
+  });
+
+  it("routes each attachment to its matching project in the owning environment", () => {
+    const other = {
+      ...projects[0]!,
+      id: ProjectId.make("other"),
+      repositoryIdentity: { ...projects[0]!.repositoryIdentity!, displayName: "SpiritDevs/other" },
+    };
+    const elsewhere = {
+      ...other,
+      id: ProjectId.make("wrong-environment"),
+      environmentId: EnvironmentId.make("elsewhere"),
+    };
+    const target = {
+      ...thread,
+      attachedPullRequest: {
+        number: 110,
+        url: thread.attachedPullRequest.url.replace("pathway", "other"),
+      },
+    };
+    expect(
+      attachedPullRequestQueryTarget(target, [elsewhere, ...projects, other])?.input.projectId,
+    ).toBe(other.id);
+    expect(attachedPullRequestQueryTarget(target, [elsewhere, ...projects])).toBeNull();
   });
 
   it("compares repository, host and number while allowing URL fragments and casing", () => {
@@ -78,7 +130,7 @@ describe("attached pull request lookup", () => {
     const read = vi.fn(() => AsyncResult.success({ ...thread.attachedPullRequest, state }));
     const source = Atom.make(read).pipe(Atom.setIdleTTL("5 minutes"));
     mocks.detail.mockReturnValue(source);
-    const target = attachedPullRequestQueryTarget(thread)!;
+    const target = attachedPullRequestQueryTarget(thread, projects)!;
     const atom = liveAttachedPullRequestDetail(target);
     expect(liveAttachedPullRequestDetail({ ...target, input: { ...target.input } })).toBe(atom);
     const registry = AtomRegistry.make();
@@ -190,4 +242,100 @@ describe("attachment query subscriptions", () => {
       registry.dispose();
     }
   });
+});
+
+describe("multiple PR settlement", () => {
+  it.each([
+    [["merged", "open"], "open"],
+    [["merged", "closed"], "closed"],
+    [["merged", null], null],
+    [["merged", "merged"], "merged"],
+    [[], null],
+  ] as const)("aggregates %j as %s", (states, expected) => {
+    expect(aggregateThreadPullRequestState(states)).toBe(expected);
+  });
+
+  it("invalidates settlement when any link is added, removed or unlinked", () => {
+    const original = {
+      ...thread,
+      branch: "main",
+      worktreePath: null,
+      attachedPullRequests: [thread.attachedPullRequest],
+    };
+    const cached = { source: threadChangeRequestSource(original), state: "merged" as const };
+    expect(
+      currentThreadChangeRequestState({ ...original, attachedPullRequests: [] }, cached),
+    ).toBeNull();
+    expect(
+      currentThreadChangeRequestState(
+        {
+          ...original,
+          attachedPullRequests: [
+            ...original.attachedPullRequests,
+            { number: 111, url: thread.attachedPullRequest.url.replace("110", "111") },
+          ],
+        },
+        cached,
+      ),
+    ).toBeNull();
+    expect(
+      currentThreadChangeRequestState(
+        { ...original, detachedPullRequestUrls: [thread.attachedPullRequest.url] },
+        cached,
+      ),
+    ).toBeNull();
+  });
+});
+
+it("observes every linked PR through the shared cache and waits for the last merge", () => {
+  let secondState: "open" | "merged" = "open";
+  const other = {
+    ...projects[0]!,
+    id: ProjectId.make("other"),
+    repositoryIdentity: { ...projects[0]!.repositoryIdentity!, displayName: "SpiritDevs/other" },
+  };
+  mocks.projects.mockReturnValue([...projects, other]);
+  const source = Atom.family((number: number) =>
+    Atom.make(() =>
+      AsyncResult.success({
+        number,
+        url: `https://github.com/SpiritDevs/${number === 110 ? "pathway" : "other"}/pull/${number}`,
+        state: number === 110 ? "merged" : secondState,
+      }),
+    ),
+  );
+  mocks.detail.mockImplementation((target) => source(target.input.number));
+  const atom = attachedPullRequestsAtom(
+    JSON.stringify({
+      thread: {
+        ...thread,
+        attachedPullRequests: [
+          thread.attachedPullRequest,
+          { number: 111, url: "https://github.com/SpiritDevs/other/pull/111" },
+        ],
+      },
+      poll: false,
+      supported: true,
+    }),
+  );
+  const registry = AtomRegistry.make();
+  try {
+    const unsubscribe = registry.subscribe(atom, () => {});
+    expect(registry.get(atom).map((entry) => entry.data?.number)).toEqual([110, 111]);
+    expect(mocks.detail.mock.calls.map(([target]) => target.input.projectId)).toEqual([
+      thread.projectId,
+      other.id,
+    ]);
+    expect(
+      aggregateThreadPullRequestState(registry.get(atom).map((entry) => entry.data?.state ?? null)),
+    ).toBe("open");
+    secondState = "merged";
+    registry.refresh(source(111));
+    expect(
+      aggregateThreadPullRequestState(registry.get(atom).map((entry) => entry.data?.state ?? null)),
+    ).toBe("merged");
+    unsubscribe();
+  } finally {
+    registry.dispose();
+  }
 });

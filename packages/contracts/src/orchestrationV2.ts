@@ -970,7 +970,7 @@ export type OrchestrationV2ProviderFailure = typeof OrchestrationV2ProviderFailu
 
 const validSourceControlPullRequestAction = Schema.makeFilter(
   (input: {
-    readonly pullRequestAction?: "attached" | "detached" | undefined;
+    readonly pullRequestAction?: "attached" | "detached" | "detected" | undefined;
     readonly pullRequest: { readonly number: number; readonly url: string } | null;
   }) =>
     input.pullRequestAction === undefined ||
@@ -1212,7 +1212,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("source_control"),
     committed: Schema.Boolean,
-    pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached"])),
+    pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached", "detected"])),
     // Absent on historical markers and pushes that had nothing new to commit.
     commitSha: Schema.optional(TrimmedNonEmptyString),
     pullRequest: Schema.NullOr(OrchestrationV2PullRequestAttachment),
@@ -1531,7 +1531,10 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pendingRuntimeRequest: Schema.NullOr(OrchestrationV2PendingRuntimeRequestSummary),
   latestVisibleMessage: Schema.NullOr(OrchestrationV2LatestVisibleMessageSummary),
   latestUserMessageAt: Schema.NullOr(Schema.DateTimeUtc),
-  /** Current manual attachment, if one has not subsequently been detached. */
+  /** All linked PRs, including created PRs, minus explicitly detached links. */
+  detachedPullRequestUrls: Schema.optional(Schema.Array(Schema.String)),
+  attachedPullRequests: Schema.optional(Schema.Array(OrchestrationV2PullRequestAttachment)),
+  /** Latest attachment for older clients. */
   attachedPullRequest: Schema.optional(Schema.NullOr(OrchestrationV2PullRequestAttachment)).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1976,7 +1979,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("source_control"),
     committed: Schema.Boolean,
-    pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached"])),
+    pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached", "detected"])),
     // Absent on historical markers and pushes that had nothing new to commit.
     commitSha: Schema.optional(TrimmedNonEmptyString),
     pullRequest: Schema.NullOr(OrchestrationV2PullRequestAttachment),
@@ -2323,7 +2326,7 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     committed: Schema.Boolean,
-    pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached"])),
+    pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached", "detected"])),
     commitSha: Schema.optional(TrimmedNonEmptyString),
     pullRequest: Schema.NullOr(OrchestrationV2PullRequestAttachment),
   }).check(validSourceControlPullRequestAction),

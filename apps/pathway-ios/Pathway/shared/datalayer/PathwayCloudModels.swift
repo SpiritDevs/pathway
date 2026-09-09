@@ -65,6 +65,7 @@ struct PathwayEnvironmentBinding: Decodable, Equatable, Identifiable, Sendable {
     let environmentId: String
     let localProjectId: String
     let localWorkspaceRoot: String
+    var repositoryIdentity: JSONValue? = nil
     let status: String
     let lastSeenAt: Double?
 }
@@ -133,6 +134,11 @@ struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
     let latestVisibleMessage: PathwayLatestMessageSummary?
     let latestUserMessageAt: String?
     let attachedPullRequest: PathwayPullRequestAttachment?
+    var attachedPullRequests: [PathwayPullRequestAttachment]? = nil
+    var detachedPullRequestUrls: [String]? = nil
+    var linkedPullRequests: [PathwayPullRequestAttachment] {
+        attachedPullRequests ?? attachedPullRequest.map { [$0] } ?? []
+    }
     let hasActionableProposedPlan: Bool
     let itemCount: Int
     let visibleItemCount: Int

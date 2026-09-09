@@ -5,6 +5,8 @@ import {
   getChangeRequestTerminologyFromUrl,
   getChangeRequestTerminologyForKind,
   resolveActivePullRequestAttachment,
+  resolveActivePullRequestAttachments,
+  resolveDetachedPullRequestUrls,
   resolveChangeRequestPresentation,
   sourceControlMarkerLabel,
 } from "./sourceControl.ts";
@@ -66,6 +68,48 @@ describe("active pull request attachments", () => {
       pullRequestAction: action,
       pullRequest: { number, url: `https://github.com/SpiritDevs/pathway/pull/${number}` },
     }) as Parameters<typeof resolveActivePullRequestAttachment>[0][number];
+
+  it("retains multiple PRs, deduplicates links, and unlinks just the selected PR", () => {
+    const first = marker("attach-1", "attached", 1);
+    const second = marker("attach-2", "attached", 2);
+    expect(
+      resolveActivePullRequestAttachments([first, second, first]).map(
+        (entry) => entry.pullRequest.number,
+      ),
+    ).toEqual([1, 2]);
+    expect(
+      resolveActivePullRequestAttachments([first, second, marker("detach-2", "detached", 2)]).map(
+        (entry) => entry.pullRequest.number,
+      ),
+    ).toEqual([1]);
+  });
+
+  it("does not rediscover an unlinked PR, but explicit attaching restores it", () => {
+    const detached = marker("detach-1", "detached", 1);
+    const detected = {
+      ...marker("detected-1", "attached", 1),
+      pullRequestAction: "detected" as const,
+    };
+    expect(resolveActivePullRequestAttachments([detached, detected])).toEqual([]);
+    expect(resolveDetachedPullRequestUrls([detached, detected])).toEqual([
+      detached.pullRequest!.url,
+    ]);
+    expect(
+      resolveActivePullRequestAttachments([detached, detected, marker("attach-1", "attached", 1)]),
+    ).toHaveLength(1);
+    expect(
+      resolveDetachedPullRequestUrls([detached, detected, marker("attach-1", "attached", 1)]),
+    ).toEqual([]);
+  });
+
+  it("includes PRs created by source-control actions and keeps equal numbers in different repositories", () => {
+    const { pullRequestAction: _, ...created } = marker("created", "attached", 1);
+    const other = {
+      ...marker("other", "attached", 1),
+      pullRequest: { number: 1, url: "https://github.com/another/repo/pull/1" },
+    };
+    expect(resolveActivePullRequestAttachments([created, other])).toHaveLength(2);
+  });
 
   it("keeps a newer attachment when a stale detach arrives", () => {
     expect(

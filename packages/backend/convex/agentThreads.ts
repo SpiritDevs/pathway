@@ -53,6 +53,8 @@ export const AGENT_THREAD_SHELL_FIELDS = new Set([
   "latestVisibleMessage",
   "latestUserMessageAt",
   "attachedPullRequest",
+  "attachedPullRequests",
+  "detachedPullRequestUrls",
   "hasActionableProposedPlan",
   "pendingBackgroundTasks",
   "itemCount",

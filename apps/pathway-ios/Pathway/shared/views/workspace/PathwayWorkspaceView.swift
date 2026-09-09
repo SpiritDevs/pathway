@@ -66,6 +66,7 @@ struct PathwayWorkspaceGitView: View {
 
     var body: some View {
         List {
+            PathwayThreadPullRequestsSection(client: client)
             if let error { Section { Text(error).foregroundStyle(.red) } }
             if let notice { Section { Text(notice) } }
             if client.context.projectID == nil {

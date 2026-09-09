@@ -9,6 +9,7 @@ struct PathwayWorkspacePullRequestsView: View {
     @State private var state = "open"
     var body: some View {
         List {
+            PathwayThreadPullRequestsSection(client: client, postHTTP: postHTTP)
             Picker("State", selection: $state) {
                 Text("Open").tag("open"); Text("Closed").tag("closed"); Text("Merged").tag("merged"); Text("All").tag("all")
             }
@@ -281,6 +282,103 @@ struct PathwayWorkspaceReviewThreadView: View {
         do {
             var payload = row.payload; payload["threadId"] = .string(thread.id); payload["body"] = .string(reply)
             _ = try await client.run("pullRequests.replyToThread", payload); posted.append(PostedReply(body: reply)); reply = ""; error = nil
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+
+struct PathwayThreadPullRequestsSection: View {
+    let client: PathwayWorkspaceClient
+    var postHTTP: PathwayWorkspacePostHTTP?
+    var body: some View {
+        if !client.context.linkedPullRequests.isEmpty {
+            Section("Linked pull requests") {
+                ForEach(client.context.linkedPullRequests, id: \.url) { attachment in
+                    PathwayThreadPullRequestRow(client: client, attachment: attachment, postHTTP: postHTTP)
+                }
+            }
+        }
+    }
+}
+
+private struct PathwayThreadPullRequestRow: View {
+    let client: PathwayWorkspaceClient
+    let attachment: PathwayPullRequestAttachment
+    var postHTTP: PathwayWorkspacePostHTTP?
+    @State private var detail: PathwayWorkspacePullRequestDetail?
+    @State private var error: String?
+    @State private var busy = false
+    @State private var unlinked = false
+    @State private var confirmMerge = false
+    @State private var mergeMethod = "squash"
+    private var row: PathwayWorkspacePullRequestRow? {
+        guard let reference = PathwayAttachedPullRequestReference(attachment), let projectID = client.context.linkedPullRequestProjectIDs[attachment.url] else { return nil }
+        return .init(host: reference.host, projectId: projectID, repository: reference.repository,
+            number: attachment.number, title: detail?.title ?? "#\(attachment.number)", state: detail?.state ?? "open", isDraft: detail?.isDraft ?? false, url: attachment.url)
+    }
+    var body: some View {
+        if !unlinked {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    if let row {
+                        NavigationLink {
+                            PathwayWorkspacePullRequestView(client: client, row: row, postHTTP: postHTTP)
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Text("#\(attachment.number): \(detail?.title ?? "Pull request")").lineLimit(2)
+                                Text(detail?.state.capitalized ?? "Checking status").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    } else { Text("#\(attachment.number)") }
+                    if detail?.availableActions.contains("merge") == true {
+                        Button("Merge") { confirmMerge = true }.buttonStyle(.borderless).disabled(busy || !client.context.canMutate)
+                    }
+                    Menu {
+                        if let url = URL(string: attachment.url) { Link("Open on provider", destination: url); ShareLink("Share link", item: url) }
+                        if let methods = detail?.availableMergeMethods, !methods.isEmpty {
+                            Picker("Merge method", selection: $mergeMethod) { ForEach(methods, id: \.self) { Text($0.capitalized).tag($0) } }
+                        }
+                        if client.context.supportsPullRequestAttachments {
+                            Button("Unlink from thread") { Task { await unlink() } }.disabled(busy || !client.context.canMutate)
+                        }
+                    } label: { Image(systemName: "ellipsis") }
+                    .accessibilityLabel("Actions for pull request \(attachment.number)")
+                }
+                if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            }
+            .task(id: "\(row?.projectId ?? ""):\(client.context.supportsPullRequests)") { await refresh() }
+            .confirmationDialog("Merge pull request #\(attachment.number)?", isPresented: $confirmMerge) {
+                Button("Merge using \(mergeMethod)") { Task { await merge() } }
+                Button("Cancel", role: .cancel) { }
+            }
+        }
+    }
+    private func refresh() async {
+        guard let row, client.context.supportsPullRequests else { error = "Live pull request status is unavailable for this attachment."; return }
+        do {
+            detail = try await client.call("pullRequests.detail", row.payload)
+            if let methods = detail?.availableMergeMethods, !methods.contains(mergeMethod) { mergeMethod = methods.first ?? "squash" }
+            error = nil
+        } catch { self.error = error.localizedDescription }
+    }
+    private func merge() async {
+        guard let row, !busy else { return }
+        busy = true; defer { busy = false }
+        do {
+            let latest: PathwayWorkspacePullRequestDetail = try await client.call("pullRequests.detail", row.payload)
+            guard latest.availableActions.contains("merge"), latest.availableMergeMethods.contains(mergeMethod) else {
+                detail = latest; throw PathwayRPCError.remote("This pull request is not ready to merge.")
+            }
+            var payload = row.payload; payload["action"] = .string("merge"); payload["mergeMethod"] = .string(mergeMethod)
+            _ = try await client.run("pullRequests.runAction", payload)
+            await refresh()
+        } catch { self.error = error.localizedDescription }
+    }
+    private func unlink() async {
+        guard !busy else { return }; busy = true; defer { busy = false }
+        do {
+            _ = try await client.run("orchestration.dispatchCommand", ["type": .string("thread.source-control.record"), "commandId": .string(UUID().uuidString), "threadId": .string(client.context.threadID), "committed": .bool(false), "pullRequestAction": .string("detached"), "pullRequest": .object(["number": .number(Double(attachment.number)), "url": .string(attachment.url)])])
+            unlinked = true
         } catch { self.error = error.localizedDescription }
     }
 }

@@ -2,6 +2,8 @@
 
 Settle a thread when you are finished with it and want to move it out of your active list.
 
+An idle thread with linked pull requests settles automatically when all of them are merged. An open, closed without merging, or unknown PR status keeps it active. Unlink a PR from the thread if it should no longer count toward settlement.
+
 If the agent is still working, hold Control while hovering over **Settle** to reveal **Settle after completion**. Control-click the button to schedule the thread to settle only after the agent has returned its final response and no queued or background work remains. You can also choose **Settle after completion** from the thread action menu, including on touch devices.
 
 While this is scheduled, a blue timer appears beside the thread controls and beside the working status in the sidebar. Click the blue timer in the thread controls, or Control-click **Settle** again, to cancel it.

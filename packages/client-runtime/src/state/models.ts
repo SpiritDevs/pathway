@@ -91,6 +91,8 @@ export interface EnvironmentThreadShell {
   readonly latestRun: ThreadRunSummary | null;
   readonly runtime: ThreadRuntimeSummary | null;
   readonly latestUserMessageAt: string | null;
+  readonly detachedPullRequestUrls?: OrchestrationV2ThreadShell["detachedPullRequestUrls"];
+  readonly attachedPullRequests?: OrchestrationV2ThreadShell["attachedPullRequests"];
   readonly attachedPullRequest: NonNullable<
     OrchestrationV2ThreadShell["attachedPullRequest"]
   > | null;
@@ -216,6 +218,12 @@ export function presentThreadShell(
     runtime: shellRuntime(thread),
     latestUserMessageAt: nullableIso(thread.latestUserMessageAt),
     attachedPullRequest: thread.attachedPullRequest ?? null,
+    ...(thread.detachedPullRequestUrls === undefined
+      ? {}
+      : { detachedPullRequestUrls: thread.detachedPullRequestUrls }),
+    ...(thread.attachedPullRequests === undefined
+      ? {}
+      : { attachedPullRequests: thread.attachedPullRequests }),
     hasPendingApprovals:
       thread.pendingRuntimeRequest !== null &&
       thread.pendingRuntimeRequest.kind !== "user_input" &&

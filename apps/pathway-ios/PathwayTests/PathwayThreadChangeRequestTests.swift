@@ -13,10 +13,26 @@ struct PathwayThreadChangeRequestTests {
         ))
     }
 
+    private func binding(projectID: String = "project-1", repository: String = "SpiritDevs/pathway", environmentID: String = "environment-1") -> PathwayCompanyEnvironmentBinding {
+        .init(companyId: "company-1", binding: .init(id: projectID, cloudProjectId: "cloud-project-1",
+            environmentId: environmentID, localProjectId: projectID, localWorkspaceRoot: "/repo",
+            repositoryIdentity: .object(["canonicalKey": .string("github.com/\(repository)"), "displayName": .string(repository)]),
+            status: "active", lastSeenAt: nil))
+    }
+
+    @Test func routesAttachmentsToTheirOwnProjectWithinTheEnvironment() throws {
+        let thread = makeAgentThread(attachedPullRequest: attachment)
+        let other = PathwayPullRequestAttachment(number: 111, url: "https://github.com/SpiritDevs/other/pull/111")
+        let bindings = [binding(projectID: "wrong", repository: "SpiritDevs/other", environmentID: "elsewhere"), binding(), binding(projectID: "other", repository: "SpiritDevs/other")]
+        let request = try #require(PathwayThreadChangeRequestResolver.request(for: thread, environment: environment(), bindings: bindings, attachment: other))
+        #expect(request.payload.objectValue?["projectId"] == .string("other"))
+        #expect(PathwayThreadChangeRequestResolver.request(for: thread, environment: environment(), bindings: Array(bindings.prefix(2)), attachment: other) == nil)
+    }
+
     @Test(arguments: [nil, "main"])
     func attachedStatusUsesIdentityWithoutCheckout(branch: String?) throws {
         let thread = makeAgentThread(attachedPullRequest: attachment, branch: branch)
-        let request = try #require(PathwayThreadChangeRequestResolver.request(for: thread, environment: environment(), bindings: []))
+        let request = try #require(PathwayThreadChangeRequestResolver.request(for: thread, environment: environment(), bindings: [binding()]))
         #expect(request.method == "pullRequests.detail")
         #expect(request.payload == .object(["projectId": .string("project-1"), "repository": .string("spiritdevs/pathway"), "number": .number(110)]))
         let status = request.status(from: .object(["url": .string(attachment.url), "number": .number(110), "state": .string("merged")]))
@@ -27,12 +43,12 @@ struct PathwayThreadChangeRequestTests {
     @Test(arguments: [nil, JSONValue.bool(false)])
     func unsupportedEnvironmentDoesNotProbeOrUseUnrelatedBranch(capability: JSONValue?) {
         let thread = makeAgentThread(attachedPullRequest: attachment, branch: "main", worktreePath: "/project")
-        #expect(PathwayThreadChangeRequestResolver.request(for: thread, environment: environment(capability: capability), bindings: []) == nil)
+        #expect(PathwayThreadChangeRequestResolver.request(for: thread, environment: environment(capability: capability), bindings: [binding()]) == nil)
     }
 
     @Test(arguments: ["failure", "cancelled", "pending", "success"])
     func attachedChecksReachBadgeStatus(check: String) throws {
-        let request = try #require(PathwayThreadChangeRequestResolver.request(for: makeAgentThread(attachedPullRequest: attachment), environment: environment(), bindings: []))
+        let request = try #require(PathwayThreadChangeRequestResolver.request(for: makeAgentThread(attachedPullRequest: attachment), environment: environment(), bindings: [binding()]))
         let status = request.status(from: .object([
             "url": .string(attachment.url), "number": .number(110), "state": .string("open"),
             "checks": .array([.object(["status": .string(check)])])
@@ -44,7 +60,7 @@ struct PathwayThreadChangeRequestTests {
     }
 
     @Test func unrelatedDetailsCannotSettleAttachedThread() throws {
-        let request = try #require(PathwayThreadChangeRequestResolver.request(for: makeAgentThread(attachedPullRequest: attachment), environment: environment(), bindings: []))
+        let request = try #require(PathwayThreadChangeRequestResolver.request(for: makeAgentThread(attachedPullRequest: attachment), environment: environment(), bindings: [binding()]))
         for url in [attachment.url.replacingOccurrences(of: "github.com", with: "github.example.com"), attachment.url.replacingOccurrences(of: "pathway", with: "another"), attachment.url.replacingOccurrences(of: "110", with: "111")] {
             let status = request.status(from: .object(["url": .string(url), "number": .number(110), "state": .string("merged")]))
             #expect(status.state == nil)
@@ -54,7 +70,7 @@ struct PathwayThreadChangeRequestTests {
 
     @Test func detachedThreadReturnsToBranchLookupAndPreservesBranchGuard() throws {
         let thread = makeAgentThread(branch: "main", worktreePath: "/project")
-        let request = try #require(PathwayThreadChangeRequestResolver.request(for: thread, environment: environment(capability: nil), bindings: []))
+        let request = try #require(PathwayThreadChangeRequestResolver.request(for: thread, environment: environment(capability: nil), bindings: [binding()]))
         #expect(request.method == "vcs.refreshStatus")
         #expect(request.payload == .object(["cwd": .string("/project")]))
         #expect(request.status(from: .object(["refName": .string("feature"), "pr": .object(["state": .string("merged")])])).state == nil)
@@ -75,6 +91,27 @@ struct PathwayThreadChangeRequestTests {
         #expect(makeAgentThread(settledOverride: "active", attachedPullRequest: attachment).lifecycleSection(at: now, changeRequestState: .merged) == .active)
         #expect(makeAgentThread(pendingRequestKind: "approval", attachedPullRequest: attachment).lifecycleSection(at: now, changeRequestState: .merged) == .active)
         #expect(makeAgentThread(settledOverride: "settled", attachedPullRequest: attachment).lifecycleSection(at: now) == .settled)
+    }
+
+    @Test func multiplePullRequestsOnlySettleWhenEveryStatusIsMerged() {
+        for remaining in [PathwayChangeRequestState.open, .closed] {
+            #expect(PathwayThreadChangeRequestResolver.aggregate([.init(state: .merged), .init(state: remaining)]).state != .merged)
+        }
+        #expect(PathwayThreadChangeRequestResolver.aggregate([.init(state: .merged), .init(unavailable: true)]).state == nil)
+        #expect(PathwayThreadChangeRequestResolver.aggregate([.init(state: .merged), .init(state: .merged)]).state == .merged)
+        #expect(PathwayThreadChangeRequestResolver.aggregate([]).state == nil)
+    }
+
+    @Test func multipleLinksSurviveShellEncodingAndInvalidateSettlementSource() throws {
+        let original = makeAgentThread(attachedPullRequest: attachment).shell
+        var shell = original
+        let second = PathwayPullRequestAttachment(number: 111, url: attachment.url.replacingOccurrences(of: "110", with: "111"))
+        shell.attachedPullRequests = [attachment, second]
+        let decoded = try JSONDecoder().decode(PathwayAgentThreadShell.self, from: JSONEncoder().encode(shell))
+        #expect(decoded.linkedPullRequests == [attachment, second])
+        #expect(PathwayThreadChangeRequestSource(shell) != PathwayThreadChangeRequestSource(original))
+        shell.attachedPullRequests = []
+        #expect(shell.linkedPullRequests.isEmpty)
     }
 
     @Test func parsesGitLabSubgroupsAndNormalizesGitHubIdentity() {

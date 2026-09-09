@@ -1,3 +1,5 @@
+import { GitPullRequestArrowIcon } from "lucide-react";
+import { ThreadPullRequestAction } from "./ThreadPullRequestAction";
 import { activeCompanyIdAtom } from "../cloud/activeCompany";
 import { selectSidebarDraftRows, type SidebarDraftRowData } from "./sidebarDrafts";
 import { DraftSendReconciliation } from "./DraftSendReconciliation";
@@ -149,7 +151,8 @@ import { vcsEnvironment } from "../state/vcs";
 import {
   currentThreadChangeRequestState,
   threadChangeRequestSource,
-  useAttachedPullRequest,
+  useAttachedPullRequests,
+  aggregateThreadPullRequestState,
   type ThreadChangeRequestState,
 } from "../state/threadPullRequest";
 import { threadEnvironment } from "../state/threads";
@@ -201,6 +204,7 @@ import {
   settledPrHoverColorClass,
   terminalStatusFromRunningIds,
   type TerminalStatusIndicator,
+  type ThreadPr,
 } from "./ThreadStatusIndicators";
 import {
   resolveSnoozePresets,
@@ -351,6 +355,7 @@ function terminalProcessLabel(count: number): string {
 
 function SidebarThreadTooltip({
   thread,
+  branchPullRequest,
   issue,
   projectTitle,
   projectCwd,
@@ -367,6 +372,7 @@ function SidebarThreadTooltip({
   onOpenIssue,
 }: {
   thread: SidebarThreadSummary;
+  branchPullRequest?: ThreadPr;
   issue: Issue | null;
   projectTitle: string | null;
   projectCwd: string | null;
@@ -386,20 +392,24 @@ function SidebarThreadTooltip({
   onOpenIssue: (issueKey: string) => void;
 }) {
   return (
-    <TooltipPopup
+    <PopoverPopup
       side="right"
       align="start"
       sideOffset={4}
-      variant="glass"
-      className={cn(
-        "max-w-80 text-left whitespace-normal [&_[data-slot=tooltip-viewport]]:p-0",
-        (issue !== null || sideChats.length > 0) && "pointer-events-auto",
-      )}
+      initialFocus={false}
+      finalFocus={false}
+      viewportClassName="p-0"
+      className={cn("max-w-80 text-left whitespace-normal", "pointer-events-auto")}
     >
       <div className="flex min-w-0 max-w-80 flex-col gap-2 p-[var(--floating-content-inset)]">
         <div className="min-w-0 truncate text-xs leading-none font-medium text-foreground">
           {thread.title}
         </div>
+        <ThreadPullRequestAction
+          thread={thread}
+          isPanel
+          branchPullRequest={branchPullRequest ?? null}
+        />
         <div className="grid gap-1.5 pl-0.5 text-xs text-muted-foreground">
           {projectTitle ? (
             <div className="flex min-w-0 items-center gap-2">
@@ -497,7 +507,7 @@ function SidebarThreadTooltip({
           </div>
         </div>
       ) : null}
-    </TooltipPopup>
+    </PopoverPopup>
   );
 }
 
@@ -926,17 +936,32 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     threadBranch: thread.branch,
     gitStatus: gitStatus.data,
   });
-  const attachedQuery = useAttachedPullRequest(thread, { poll: props.isActive });
-  const displayedPrBadge = resolveThreadPrBadge({
-    branchPullRequest: pr,
-    attachedPullRequest: thread.attachedPullRequest,
-    attachedDetail: attachedQuery.data,
-    attachedError: attachedQuery.error,
-    provider: gitStatus.data?.sourceControlProvider,
-  });
+  const attachedQueries = useAttachedPullRequests(thread, { poll: props.isActive });
+  const visibleBranchPr = pr && !thread.detachedPullRequestUrls?.includes(pr.url) ? pr : null;
+  const badges = attachedQueries.map(
+    (query) =>
+      resolveThreadPrBadge({
+        branchPullRequest: visibleBranchPr,
+        attachedPullRequest: query.attachment,
+        attachedDetail: query.data,
+        attachedError: query.error,
+        provider: gitStatus.data?.sourceControlProvider,
+      })!,
+  );
+  if (visibleBranchPr && !badges.some((badge) => badge.pullRequest.url === visibleBranchPr.url)) {
+    badges.push(
+      resolveThreadPrBadge({
+        branchPullRequest: visibleBranchPr,
+        attachedPullRequest: null,
+        provider: gitStatus.data?.sourceControlProvider,
+      })!,
+    );
+  }
+  const displayedPrBadge =
+    badges.find((badge) => badge.changeRequestState !== "merged") ?? badges.at(-1) ?? null;
   const displayedPr = displayedPrBadge?.pullRequest ?? null;
   const displayedPrStatus = displayedPrBadge?.status ?? null;
-  const prState = displayedPrBadge?.changeRequestState ?? null;
+  const prState = aggregateThreadPullRequestState(badges.map((badge) => badge.changeRequestState));
   const prSource = threadChangeRequestSource(thread);
 
   // Same semantics as the legacy sidebar (never-visited counts as read):
@@ -1055,6 +1080,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const detailsTooltip = (
     <SidebarThreadTooltip
       thread={thread}
+      branchPullRequest={visibleBranchPr}
       issue={props.issue}
       projectTitle={props.projectTitle}
       projectCwd={props.projectCwd}
@@ -1225,8 +1251,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   useEffect(() => {
     if (!showSnoozeButton) setSnoozeMenuOpen(false);
   }, [showSnoozeButton]);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const handlePrClick = useCallback(
     (event: ReactMouseEvent<HTMLElement>) => {
+      if (badges.length > 1) {
+        event.preventDefault();
+        event.stopPropagation();
+        setDetailsOpen(true);
+        return;
+      }
       if (!displayedPr?.url) return;
       const openedInRightPanel = openPrLink(
         event,
@@ -1238,6 +1271,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       }
     },
     [
+      badges.length,
       displayedPr,
       onThreadActivate,
       openPrLink,
@@ -1325,9 +1359,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               : cn("text-secondary-label transition-colors", settledPrHoverClass)
             : displayedPrStatus.colorClass,
         )}
-        aria-label={displayedPrStatus.tooltip}
+        aria-label={
+          badges.length > 1 ? `${badges.length} pull requests` : displayedPrStatus.tooltip
+        }
       >
-        #{displayedPr.number}
+        {badges.length > 1 ? (
+          <span
+            className="inline-flex items-center gap-0.5"
+            aria-label={`${badges.length} pull requests`}
+          >
+            <GitPullRequestArrowIcon className="size-3.5" />
+            {badges.length}
+          </span>
+        ) : (
+          `#${displayedPr.number}`
+        )}
       </button>
     ) : null;
   const terminalStatusIcon = terminalStatus ? (
@@ -1356,8 +1402,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         data-thread-item
         className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
       >
-        <Tooltip>
-          <TooltipTrigger
+        <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
+          <PopoverTrigger
+            nativeButton={false}
+            openOnHover
+            delay={400}
+            closeDelay={200}
             render={
               <div
                 role="button"
@@ -1503,9 +1553,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               </span>
             </span>
             {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
-          </TooltipTrigger>
+          </PopoverTrigger>
           {detailsTooltip}
-        </Tooltip>
+        </Popover>
       </li>
     );
   }
@@ -1531,8 +1581,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         sortable?.isDragging && "z-20 opacity-80",
       )}
     >
-      <Tooltip>
-        <TooltipTrigger
+      <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <PopoverTrigger
+          nativeButton={false}
+          openOnHover
+          delay={400}
+          closeDelay={200}
           render={
             <div
               role="button"
@@ -1787,9 +1841,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             </div>
           </div>
           {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
-        </TooltipTrigger>
+        </PopoverTrigger>
         {detailsTooltip}
-      </Tooltip>
+      </Popover>
     </li>
   );
 });
@@ -1856,8 +1910,11 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   return (
     <li role="presentation" className="list-none">
-      <Tooltip>
-        <TooltipTrigger
+      <Popover>
+        <PopoverTrigger
+          openOnHover
+          delay={400}
+          closeDelay={200}
           render={
             <button
               id={props.resultId}
@@ -1893,7 +1950,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           <span className="shrink-0 text-xs text-muted-foreground/55 tabular-nums">
             {threadTimeLabel(thread)}
           </span>
-        </TooltipTrigger>
+        </PopoverTrigger>
         <SidebarThreadTooltip
           thread={thread}
           issue={props.issue}
@@ -1913,7 +1970,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
           }
           onOpenIssue={props.onOpenIssue}
         />
-      </Tooltip>
+      </Popover>
     </li>
   );
 });

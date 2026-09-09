@@ -29,6 +29,27 @@ struct PathwayWorkspaceScopeTests {
         }
     }
 
+    @Test func crossProjectPullRequestActionsRequireAnExactCurrentAttachment() throws {
+        let reference: JSONValue = .object(["projectId": .string("other"), "repository": .string("spiritdevs/other"), "number": .number(111)])
+        try PathwayWorkspaceScope.validate(method: "pullRequests.runAction", payload: reference,
+            expected: scope, current: scope, canMutate: true, linkedPullRequests: [reference])
+        for method in ["projects.writeFile", "orchestration.dispatchCommand"] {
+            #expect(throws: PathwayWorkspaceScopeError.self) {
+                try PathwayWorkspaceScope.validate(method: method, payload: reference,
+                    expected: scope, current: scope, canMutate: true, linkedPullRequests: [reference])
+            }
+        }
+        #expect(throws: PathwayWorkspaceScopeError.self) {
+            try PathwayWorkspaceScope.validate(method: "pullRequests.runAction", payload: reference,
+                expected: scope, current: scope, canMutate: true, linkedPullRequests: [])
+        }
+        let different: JSONValue = .object(["projectId": .string("other"), "repository": .string("spiritdevs/other"), "number": .number(112)])
+        #expect(throws: PathwayWorkspaceScopeError.self) {
+            try PathwayWorkspaceScope.validate(method: "pullRequests.runAction", payload: different,
+                expected: scope, current: scope, canMutate: true, linkedPullRequests: [reference])
+        }
+    }
+
     @Test func terminalOpenUsesProjectRootAndExplicitWorktree() throws {
         try PathwayWorkspaceScope.validate(method: "terminal.open", payload: .object([
             "threadId": .string("thread"), "cwd": .string("/repo"), "worktreePath": .string("/worktrees/one")

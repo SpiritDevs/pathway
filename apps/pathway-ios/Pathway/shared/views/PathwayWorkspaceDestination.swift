@@ -46,6 +46,20 @@ struct PathwayWorkspaceDestination: View {
                      threadID: currentThread.threadId, projectID: projectID,
                      projectRoot: binding.binding.localWorkspaceRoot, worktreePath: currentThread.shell.worktreePath)
     }
+    private var linkedPullRequestProjectIDs: [String: String] {
+        guard let currentThread else { return [:] }
+        return Dictionary(uniqueKeysWithValues: currentThread.shell.linkedPullRequests.compactMap { attachment in
+            PathwayThreadChangeRequestResolver.projectID(for: attachment, thread: currentThread,
+                bindings: appModel.cloud.environmentBindings).map { (attachment.url, $0) }
+        })
+    }
+    private var linkedPullRequestReferences: [JSONValue] {
+        linkedPullRequestProjectIDs.compactMap { url, projectID in
+            guard let attachment = currentThread?.shell.linkedPullRequests.first(where: { $0.url == url }),
+                  let reference = PathwayAttachedPullRequestReference(attachment) else { return nil }
+            return .object(["projectId": .string(projectID), "repository": .string(reference.repository), "number": .number(Double(reference.number))])
+        }
+    }
     private var canMutate: Bool {
         currentThread?.isRunning == false && currentScope != nil
             && currentEnvironment.map { appModel.cloud.connectedEnvironmentIDs.contains($0.id) } == true
@@ -55,7 +69,10 @@ struct PathwayWorkspaceDestination: View {
         return PathwayWorkspaceContext(threadID: scope.threadID, projectID: scope.projectID,
             cwd: scope.cwd, projectRoot: scope.projectRoot,
             supportsPullRequests: scope.projectID != nil && capabilities?["pullRequests"]?.boolValue == true,
-            canMutate: canMutate, scripts: scripts)
+            canMutate: canMutate, scripts: scripts,
+            linkedPullRequests: currentThread?.shell.linkedPullRequests ?? [],
+            supportsPullRequestAttachments: capabilities?["threadPullRequestAttachments"]?.boolValue == true,
+            linkedPullRequestProjectIDs: linkedPullRequestProjectIDs)
     }
 
     var body: some View {
@@ -84,7 +101,7 @@ struct PathwayWorkspaceDestination: View {
         PathwayWorkspaceView(context: context(scope),
             request: { method, payload in
                 try PathwayWorkspaceScope.validate(method: method, payload: payload, expected: scope,
-                    current: currentScope, canMutate: canMutate)
+                    current: currentScope, canMutate: canMutate, linkedPullRequests: linkedPullRequestReferences)
                 var fields = payload.objectValue ?? [:]
                 if method == "review.getDiffPreview" { fields["ignoreWhitespace"] = .bool(PathwayGeneralPreferences.shared.ignoreDiffWhitespace) }
                 return try await appModel.cloud.environmentRequest(environment: environment, method: method, payload: .object(fields))
@@ -94,7 +111,7 @@ struct PathwayWorkspaceDestination: View {
                     throw PathwayWorkspaceError.unavailable
                 }
                 try PathwayWorkspaceScope.validate(method: method, payload: payload, expected: scope,
-                    current: currentScope, canMutate: canMutate)
+                    current: currentScope, canMutate: canMutate, linkedPullRequests: linkedPullRequestReferences)
                 return await appModel.cloud.environmentSubscription(environment: environment, method: method, payload: payload)
             },
             assetURL: { path in
@@ -102,14 +119,14 @@ struct PathwayWorkspaceDestination: View {
                 return try await PathwayEnvironmentHTTP.assetURL(path, threadID: scope.threadID,
                     environment: environment, connect: connect, request: { method, payload in
                         try PathwayWorkspaceScope.validate(method: method, payload: payload, expected: scope,
-                            current: currentScope, canMutate: canMutate)
+                            current: currentScope, canMutate: canMutate, linkedPullRequests: linkedPullRequestReferences)
                         return try await appModel.cloud.environmentRequest(environment: environment, method: method, payload: payload)
                     })
             },
             postHTTP: { path, payload in
                 guard path == "/api/pull-requests/diff", let connect = appModel.connect else { throw URLError(.badURL) }
                 try PathwayWorkspaceScope.validate(method: "/api/pull-requests/diff", payload: payload, expected: scope,
-                    current: currentScope, canMutate: canMutate)
+                    current: currentScope, canMutate: canMutate, linkedPullRequests: linkedPullRequestReferences)
                 return try await PathwayEnvironmentHTTP.request(environment: environment, connect: connect, method: "POST", path: path, payload: payload)
             }, initialSection: initialSection)
             .task(id: scope) {
@@ -190,7 +207,7 @@ struct PathwayWorkspaceScope: Equatable {
         "assets.createUrl", "terminal.attach", "/api/pull-requests/diff"
     ]
 
-    static func validate(method: String, payload: JSONValue, expected: Self, current: Self?, canMutate: Bool) throws {
+    static func validate(method: String, payload: JSONValue, expected: Self, current: Self?, canMutate: Bool, linkedPullRequests: [JSONValue] = []) throws {
         guard current == expected else { throw PathwayWorkspaceScopeError.changed }
         guard readMethods.contains(method) || canMutate else { throw PathwayWorkspaceError.unavailable }
         guard let fields = payload.objectValue else { throw PathwayWorkspaceScopeError.changed }
@@ -200,7 +217,11 @@ struct PathwayWorkspaceScope: Equatable {
             if let provided = fields[key], provided != .string(value) { throw PathwayWorkspaceScopeError.changed }
         }
         if let provided = fields["projectId"], provided != (expected.projectID.map(JSONValue.string) ?? .null) {
-            throw PathwayWorkspaceScopeError.changed
+            let isPullRequestMethod = method.hasPrefix("pullRequests.") || method == "/api/pull-requests/diff"
+            guard isPullRequestMethod, linkedPullRequests.contains(where: { reference in
+                guard let reference = reference.objectValue else { return false }
+                return ["projectId", "repository", "number"].allSatisfy { fields[$0] == reference[$0] }
+            }) else { throw PathwayWorkspaceScopeError.changed }
         }
         let expectedWorktree: JSONValue = expected.worktreePath.map(JSONValue.string) ?? .null
         for key in ["worktreePath", "expectedWorktreePath"] {

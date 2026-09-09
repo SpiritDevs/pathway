@@ -25,19 +25,22 @@ struct PathwayThreadChangeRequestSource: Equatable, Sendable {
     let projectID: String?
     let branch: String?
     let cwd: String?
-    let attachment: PathwayPullRequestAttachment?
+    let attachments: [PathwayPullRequestAttachment]
+    let detachedURLs: [String]
 
     init(_ shell: PathwayAgentThreadShell) {
         projectID = shell.projectId
         branch = shell.branch
         cwd = shell.worktreePath
-        attachment = shell.attachedPullRequest
+        attachments = shell.linkedPullRequests
+        detachedURLs = shell.detachedPullRequestUrls ?? []
     }
 }
 
 struct PathwayThreadChangeRequestResolution: Sendable {
     let threadID: String
     let status: PathwayThreadChangeRequestStatus
+    var pullRequests: [String: PathwayThreadChangeRequestStatus] = [:]
 }
 
 struct PathwayAttachedPullRequestReference: Equatable, Sendable {
@@ -98,14 +101,29 @@ enum PathwayThreadChangeRequestResolver {
         }
     }
 
+    static func projectID(for attachment: PathwayPullRequestAttachment, thread: PathwayAgentThread,
+                          bindings: [PathwayCompanyEnvironmentBinding]) -> String? {
+        guard let reference = PathwayAttachedPullRequestReference(attachment) else { return nil }
+        let matches = bindings.filter {
+            guard $0.companyId == thread.companyId, $0.binding.environmentId == thread.environmentId,
+                  $0.binding.status == "active", let identity = $0.binding.repositoryIdentity?.objectValue,
+                  let host = identity["canonicalKey"]?.stringValue?.split(separator: "/").first else { return false }
+            let repository = identity["displayName"]?.stringValue
+                ?? [identity["owner"]?.stringValue, identity["name"]?.stringValue].compactMap { $0 }.joined(separator: "/")
+            return host.lowercased() == reference.host && repository.lowercased() == reference.repository
+        }
+        return (matches.first { $0.binding.localProjectId == thread.shell.projectId } ?? matches.first)?.binding.localProjectId
+    }
+
     static func request(
         for thread: PathwayAgentThread,
         environment: PathwayCompanyEnvironment,
-        bindings: [PathwayCompanyEnvironmentBinding]
+        bindings: [PathwayCompanyEnvironmentBinding],
+        attachment selectedAttachment: PathwayPullRequestAttachment? = nil
     ) -> Request? {
-        if let attachment = thread.shell.attachedPullRequest {
+        if let attachment = selectedAttachment ?? thread.shell.linkedPullRequests.first {
             guard environment.environment.descriptor.capabilities?["pullRequests"] == .bool(true),
-                  let projectID = thread.shell.projectId,
+                  let projectID = projectID(for: attachment, thread: thread, bindings: bindings),
                   let reference = PathwayAttachedPullRequestReference(attachment) else { return nil }
             return Request(
                 method: "pullRequests.detail",
@@ -134,9 +152,14 @@ enum PathwayThreadChangeRequestResolver {
             guard !thread.isRunning,
                   let environment = environments.first(where: {
                       $0.companyId == thread.companyId && $0.environment.environmentId == thread.environmentId
-                  }),
-                  let request = request(for: thread, environment: environment, bindings: bindings) else { return nil }
-            return Candidate(threadID: thread.id, environment: environment, request: request)
+                  }) else { return nil }
+            let attachments = thread.shell.linkedPullRequests
+            let request = request(for: thread, environment: environment, bindings: bindings)
+            guard request != nil || !attachments.isEmpty else { return nil }
+            let requests = attachments.isEmpty ? [request] : attachments.map { attachment in
+                self.request(for: thread, environment: environment, bindings: bindings, attachment: attachment)
+            }
+            return Candidate(threadID: thread.id, environment: environment, requests: requests, attachments: attachments, detachedURLs: thread.shell.detachedPullRequestUrls ?? [])
         }
         return await withTaskGroup(of: [PathwayThreadChangeRequestResolution].self) { group in
             for candidates in Dictionary(grouping: candidates, by: \.environment.id).values {
@@ -151,7 +174,16 @@ enum PathwayThreadChangeRequestResolver {
     private struct Candidate: Sendable {
         let threadID: String
         let environment: PathwayCompanyEnvironment
-        let request: Request
+        let requests: [Request?]
+        let attachments: [PathwayPullRequestAttachment]
+        let detachedURLs: [String]
+    }
+
+    static func aggregate(_ statuses: [PathwayThreadChangeRequestStatus]) -> PathwayThreadChangeRequestStatus {
+        let states = statuses.map(\.state)
+        let state: PathwayChangeRequestState? = !states.isEmpty && states.allSatisfy { $0 == .merged } ? .merged
+            : states.contains(.open) ? .open : states.contains(.closed) ? .closed : nil
+        return .init(state: state, checksFailed: statuses.contains { $0.checksFailed }, checksPending: statuses.contains { $0.checksPending }, isDraft: statuses.contains { $0.isDraft }, unavailable: statuses.contains { $0.unavailable })
     }
 
     private static func resolve(candidates: [Candidate], connect: PathwayConnectClient) async -> [PathwayThreadChangeRequestResolution] {
@@ -161,21 +193,28 @@ enum PathwayThreadChangeRequestResolver {
         var responses: [String: JSONValue] = [:]
         for candidate in candidates {
             guard !Task.isCancelled else { break }
-            do {
-                let request = candidate.request
-                let value: JSONValue
-                if let cached = responses[request.cacheKey] { value = cached }
-                else {
-                    value = try await rpc.request(request.method, payload: request.payload)
-                    responses[request.cacheKey] = value
+            var statuses: [PathwayThreadChangeRequestStatus] = []
+            var linked: [String: PathwayThreadChangeRequestStatus] = [:]
+            for (index, request) in candidate.requests.enumerated() {
+                var status = PathwayThreadChangeRequestStatus(unavailable: true)
+                if let request {
+                    do {
+                        let value: JSONValue
+                        if let cached = responses[request.cacheKey] { value = cached }
+                        else {
+                            value = try await rpc.request(request.method, payload: request.payload)
+                            responses[request.cacheKey] = value
+                        }
+                        let branchURL = value.objectValue?["pr"]?.objectValue?["url"]?.stringValue
+                        status = branchURL.map { candidate.detachedURLs.contains($0) } == true ? .init() : request.status(from: value)
+                    } catch is CancellationError { break }
+                    catch { status = .init(unavailable: true) }
                 }
-                resolutions.append(.init(threadID: candidate.threadID, status: request.status(from: value)))
-            } catch is CancellationError { break }
-            catch {
-                if candidate.request.attachment != nil {
-                    resolutions.append(.init(threadID: candidate.threadID, status: .init(unavailable: true)))
-                }
+                statuses.append(status)
+                if candidate.attachments.indices.contains(index) { linked[candidate.attachments[index].url] = status }
             }
+            guard !Task.isCancelled else { break }
+            resolutions.append(.init(threadID: candidate.threadID, status: aggregate(statuses), pullRequests: linked))
         }
         await rpc.stop()
         return resolutions

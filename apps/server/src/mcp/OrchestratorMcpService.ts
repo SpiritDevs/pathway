@@ -633,7 +633,10 @@ function turnItemText(item: OrchestrationV2TurnItem): string | null {
       return `Forked to thread ${item.targetThreadId}.`;
     case "source_control": {
       const commit = item.commitSha === undefined ? "" : ` Commit ${item.commitSha}.`;
-      if (item.pullRequestAction === "attached" && item.pullRequest !== null) {
+      if (
+        (item.pullRequestAction === "attached" || item.pullRequestAction === "detected") &&
+        item.pullRequest !== null
+      ) {
         const label = getChangeRequestTerminologyFromUrl(item.pullRequest.url).shortLabel;
         return `${label} attached: #${item.pullRequest.number} (${item.pullRequest.url}).`;
       }

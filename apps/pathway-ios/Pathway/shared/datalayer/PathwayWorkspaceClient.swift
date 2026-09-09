@@ -8,6 +8,9 @@ struct PathwayWorkspaceContext: Equatable {
     var supportsPullRequests = false
     var canMutate = true
     var scripts: [PathwayWorkspaceScript] = []
+    var linkedPullRequests: [PathwayPullRequestAttachment] = []
+    var supportsPullRequestAttachments = false
+    var linkedPullRequestProjectIDs: [String: String] = [:]
 }
 
 struct PathwayWorkspaceScript: Decodable, Identifiable, Equatable {
