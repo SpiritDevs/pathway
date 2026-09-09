@@ -70,6 +70,7 @@ import {
   ComboboxTrigger,
 } from "./ui/combobox";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import { describeBranchCheckoutError } from "./branchCheckoutError";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 interface BranchToolbarBranchSelectorProps {
@@ -500,12 +501,13 @@ export function BranchToolbarBranchSelector({
     onComposerFocusRequest?.();
     beginPendingBranchSelection(selectedBranchName);
 
-    runBranchAction(async () => {
+    const attemptCheckout = async (localChanges?: "stash" | "discard") => {
       const checkoutResult = await switchRef({
         environmentId,
         input: {
           cwd: selectionTarget.checkoutCwd,
           refName: refName.name,
+          ...(localChanges ? { localChanges } : {}),
         },
       });
       if (checkoutResult._tag === "Success") {
@@ -527,15 +529,53 @@ export function BranchToolbarBranchSelector({
       }
       clearPendingBranchSelection();
       if (!isAtomCommandInterrupted(checkoutResult)) {
-        toastManager.add(
+        const diagnostic = toBranchActionErrorMessage(squashAtomCommandFailure(checkoutResult));
+        const conflict =
+          /(?:local changes to the following files|untracked working tree files) would be overwritten by checkout:/i.test(
+            diagnostic,
+          );
+        let retryStarted = false;
+        const retry = (resolution: "stash" | "discard") => {
+          if (retryStarted) return;
+          retryStarted = true;
+          toastManager.close(toastId);
+          beginPendingBranchSelection(selectedBranchName);
+          runBranchAction(() => attemptCheckout(resolution));
+        };
+        const toastId = toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to switch ref.",
-            description: toBranchActionErrorMessage(squashAtomCommandFailure(checkoutResult)),
+            ...describeBranchCheckoutError(diagnostic),
+            ...(conflict
+              ? {
+                  timeout: 0,
+                  description:
+                    "Stash saves your changes for later. Override discards uncommitted changes and switches branches.",
+                  actionProps: { children: "Stash & switch", onClick: () => retry("stash") },
+                }
+              : {}),
+            data: {
+              ...(conflict
+                ? {
+                    secondaryActionVariant: "destructive-outline" as const,
+                    secondaryActionProps: {
+                      children: "Override & switch",
+                      onClick: () => retry("discard"),
+                    },
+                  }
+                : {}),
+              expandableLabels: { expand: "Show Git details", collapse: "Hide Git details" },
+              expandableContent: (
+                <pre className="whitespace-pre-wrap break-words font-mono text-xs">
+                  {diagnostic}
+                </pre>
+              ),
+            },
           }),
         );
       }
-    });
+    };
+    runBranchAction(() => attemptCheckout());
   };
 
   const createRef = (rawName: string) => {

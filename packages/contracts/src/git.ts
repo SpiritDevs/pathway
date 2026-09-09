@@ -182,6 +182,7 @@ export type VcsCreateRefResult = typeof VcsCreateRefResult.Type;
 export const VcsSwitchRefInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   refName: TrimmedNonEmptyStringSchema,
+  localChanges: Schema.optional(Schema.Literals(["stash", "discard"])),
 });
 export type VcsSwitchRefInput = typeof VcsSwitchRefInput.Type;
 
