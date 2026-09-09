@@ -297,13 +297,16 @@ describe("useLoadBalancedDraft", () => {
     expect(render().validate(selection)).toBe(true);
   });
 
-  it("distinguishes failed resource reads from machines with no headroom", () => {
+  it("falls back to the current environment when resource reads fail", () => {
     const failure = AsyncResult.failure<HostResourcesSnapshot, never>(
       Cause.die("resources failed"),
     );
     registry.set(localResources, failure);
     registry.set(remoteResources, failure);
-    expect(render().label).toBe("Auto: could not check resources");
+    expect(render().label).toBe("Auto: local");
+    flushEffects();
+    expect(render().blocked).toBe(false);
+    expect(render().validate(selection)).toBe(true);
   });
 
   it("keeps projectless conversations on their selected environment without project balancing", () => {
@@ -677,13 +680,15 @@ describe("useLoadBalancedDraft", () => {
     expect(readDraft().environmentId).toBe(local.environmentId);
     expect(render().validate(selection)).toBe(true);
   });
-  it("blocks Auto when a restored file's environment is unavailable instead of moving it", () => {
+  it("keeps restored uploads on the current environment even with zero weight", () => {
     restoreUploadedFile();
     const result = render({ ...base(), weights: { local: 0 } });
     flushEffects();
     expect(result.blocked).toBe(true);
     expect(result.locked).toBe(false);
-    expect(result.label).toBe("Auto: no available machine");
+    expect(result.label).toBe("Auto: local");
+    expect(render({ ...base(), weights: { local: 0 } }).blocked).toBe(false);
+    expect(render({ ...base(), weights: { local: 0 } }).validate(selection)).toBe(true);
     expect(readDraft().environmentId).toBe(local.environmentId);
   });
   it("can move an uploaded file when its local bytes are still available", () => {
@@ -736,23 +741,83 @@ describe("useLoadBalancedDraft", () => {
     expect(readDraft().placement?.dispatched).toBe(true);
     expect(readDraft().environmentId).toBe(local.environmentId);
   });
-  it("requires an explicit manual choice when no host has measurable headroom", () => {
-    registry.set(
-      localResources,
-      AsyncResult.success({ ...snapshot, cpuUtilization: null }, { timestamp: 20_000 }),
-    );
-    registry.set(
-      remoteResources,
-      AsyncResult.success({ ...snapshot, cpuUtilization: 0.99 }, { timestamp: 20_000 }),
-    );
-    const result = render();
+  it.each([{ cpuUtilization: null }, { cpuUtilization: 0.99 }, { availableMemoryBytes: 10 }])(
+    "falls back to the current checkout without headroom: %j",
+    (resources) => {
+      registry.set(
+        localResources,
+        AsyncResult.success({ ...snapshot, ...resources }, { timestamp: 20_000 }),
+      );
+      registry.set(
+        remoteResources,
+        AsyncResult.success({ ...snapshot, cpuUtilization: 0.99 }, { timestamp: 20_000 }),
+      );
+      store().setDraftThreadContext(draftId, { branch: "feature", envMode: "worktree" });
+      expect(render().label).toBe("Auto: local");
+      flushEffects();
+      expect(readDraft()).toMatchObject({
+        environmentId: local.environmentId,
+        projectId: local.id,
+        branch: "feature",
+        envMode: "worktree",
+        placement: { mode: "auto" },
+      });
+      expect(render().blocked).toBe(false);
+      expect(render().validate(selection)).toBe(true);
+    },
+  );
+
+  it("falls back when resource readings are stale and keeps the resolved destination", () => {
+    vi.mocked(Date.now).mockReturnValue(40_000);
+    expect(render().label).toBe("Auto: local");
     flushEffects();
-    expect(result.blocked).toBe(true);
-    store().setDraftThreadContext(draftId, {
-      placement: { mode: "manual", providerPinned: false, resolvedKey: null },
-    });
-    expect(render().blocked).toBe(false);
+    registry.set(remoteResources, AsyncResult.success(snapshot, { timestamp: 40_000 }));
+    expect(render().label).toBe("Auto: local");
+    expect(render().validate(selection)).toBe(true);
   });
+
+  it.each(["offline", "access", "provider", "binding"])(
+    "falls back to the current environment when a remote fails %s eligibility",
+    (reason) => {
+      registry.set(localResources, AsyncResult.failure(Cause.die("resources unavailable")));
+      if (reason === "access") {
+        const writable = Atom.make(
+          AsyncResult.success({ authenticated: true, scopes: [AuthOrchestrationOperateScope] }),
+        );
+        const failed = Atom.make(AsyncResult.failure(Cause.die("remote inaccessible")));
+        mocks.session.mockImplementation((id: string) => (id === "local" ? writable : failed));
+      }
+      const input = {
+        ...base(),
+        replicas: reason === "binding" ? new Map() : replicas,
+        environments: environments.map((environment) =>
+          environment.environmentId !== remote.environmentId
+            ? environment
+            : reason === "offline"
+              ? {
+                  ...environment,
+                  connection: { ...environment.connection, phase: "offline" as const },
+                }
+              : reason === "provider"
+                ? { ...environment, serverConfig: { ...environment.serverConfig!, providers: [] } }
+                : environment,
+        ),
+      };
+      expect(render(input).label).toBe("Auto: local");
+      flushEffects();
+      expect(render(input).validate(selection)).toBe(true);
+    },
+  );
+
+  it("keeps a zero-weight current environment as fallback without competing with remote machines", () => {
+    expect(render({ ...base(), weights: { local: 0 } }).label).toBe("Auto: remote");
+    mocks.effects.length = 0;
+    const input = { ...base(), weights: { local: 0, remote: 0 } };
+    expect(render(input).label).toBe("Auto: local");
+    flushEffects();
+    expect(render(input).validate(selection)).toBe(true);
+  });
+
   it("shows the chosen machine in the Auto label on a new draft", () => {
     render();
     flushEffects();

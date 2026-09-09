@@ -103,7 +103,8 @@ export function useLoadBalancedDraft(input: {
         ? environments.filter(
             (environment) =>
               environment.connection.phase === "connected" &&
-              (weights[environment.environmentId] ?? 50) > 0 &&
+              (environment.environmentId === project.environmentId ||
+                (weights[environment.environmentId] ?? 50) > 0) &&
               placementProjects.some(
                 (target) => target.environmentId === environment.environmentId,
               ),
@@ -147,7 +148,8 @@ export function useLoadBalancedDraft(input: {
       if (
         environment?.connection.phase !== "connected" ||
         !environment.serverConfig ||
-        (weights[target.environmentId] ?? 50) <= 0
+        (target.environmentId !== project.environmentId &&
+          (weights[target.environmentId] ?? 50) <= 0)
       )
         return [];
       const providers = (
@@ -209,9 +211,12 @@ export function useLoadBalancedDraft(input: {
           { avoidCriticalStorage: input.avoidCriticalStorage === true },
         )
       : null;
+  // Resource readings and placement weights guide moving work. If none of the
+  // machines score, keep the current checkout with its verified access/provider.
   const recommended = candidates.find(
     (candidate) =>
-      candidate.environmentId === (resolved ? recommendedEnvironmentId : measuredEnvironmentId),
+      candidate.environmentId ===
+      (resolved ? recommendedEnvironmentId : (measuredEnvironmentId ?? project?.environmentId)),
   );
 
   useEffect(() => {

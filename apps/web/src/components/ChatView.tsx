@@ -9818,7 +9818,11 @@ function ChatViewContent(props: ChatViewProps) {
                             activeThread={activeThread}
                             isServerThread={isServerThread}
                             isLocalDraftThread={isLocalDraftThread}
-                            projectSelectionRequired={isLocalDraftThread && activeProject === null}
+                            projectSelectionRequired={
+                              isLocalDraftThread &&
+                              activeThread.projectId !== null &&
+                              activeProject === null
+                            }
                             phase={phase}
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy || draftPlacement.blocked}
