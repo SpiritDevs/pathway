@@ -203,7 +203,11 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     switch (sectionId) {
       case "workspace":
         return (
-          <section key={sectionId} aria-labelledby="thread-details-workspace-heading">
+          <section
+            key={sectionId}
+            aria-labelledby="thread-details-workspace-heading"
+            className={cn(!connectionIssue && "has-[[data-slot=workspace-controls]:empty]:hidden")}
+          >
             <div className="flex min-h-10 items-center justify-between gap-3 px-3.5 pb-1 pt-3">
               <h3
                 id="thread-details-workspace-heading"
@@ -240,7 +244,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               </div>
             ) : null}
 
-            <div className="flex flex-col px-2 pb-2.5">
+            <div data-slot="workspace-controls" className="flex flex-col px-2 pb-2.5">
               {props.availableEnvironments.length > 0 ? (
                 <BranchToolbarEnvironmentSelector
                   autoPlacement={props.autoPlacement}
