@@ -16,8 +16,7 @@ name: Web Preview
 # self-identify as the hosted app.
 
 on:
-  pull_request:
-    types: [labeled, synchronize, reopened]
+  workflow_dispatch:
 
 permissions:
   contents: read

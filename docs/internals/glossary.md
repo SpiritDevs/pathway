@@ -26,6 +26,22 @@ A versioned data file used for model metadata and classification. It does not pr
 
 ## Thread workspaces
 
+The following four terms describe the [conversation and temporary-thread draft](../adr/0015-conversations-and-temporary-threads.md), not shipped support.
+
+**Conversation**:
+A thread without an attached project. It appears in the normal thread list and in All by default. The proposed Conversations checkbox can include projectless conversations in selected Focuses. Attachment to a project is allowed on the same environment while no work is running or queued; the attached thread then follows its project's Focus.
+
+**Conversation folder**:
+The dedicated working folder created for a projectless conversation beneath its owning environment's Pathway userdata. After project attachment, its files stay there and the agent retains explicit access to both this folder and the project workspace. Thread deletion and normal thread cleanup remove it; ordinary settlement of a retained conversation does not.
+
+**Temporary thread**:
+A thread selected as temporary before its first message is sent and deleted upon manual settlement or settlement after a merged PR. It may have an attached project or be a Conversation. It skips inactivity settlement. Uncommitted changes and unpushed commits block automatic settlement; manual settling offers Review changes, Cancel, and Discard and delete. Conversation files outside Git are deleted without an extra warning.
+
+A temporary thread attached to a project always uses a new dedicated worktree, whether attached at creation or later.
+
+**Keep conversation**:
+The action that makes a temporary thread permanent before settlement. It preserves its history, files, and workspace references. Attaching a project does not implicitly perform this action. After its first message has been sent, a kept thread cannot be made temporary again.
+
 **Workspace move**:
 The durable server workflow that moves an existing thread and the source checkout's tracked and untracked non-ignored changes into a new linked Git worktree. It is not a client-side sequence of Git calls.
 _Avoid_: Worktree copy, Repo copy, Workspace switch

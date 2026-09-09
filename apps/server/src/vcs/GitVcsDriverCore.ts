@@ -446,6 +446,40 @@ function isMissingWorktreeStderr(stderr: string): boolean {
   );
 }
 
+function worktreeAddFailureDetail(stderr: string): string {
+  // Git can include hook output and credentials in stderr. Only return known,
+  // static diagnostics to clients rather than forwarding the raw output.
+  const normalized = stderr.toLowerCase();
+  if (
+    normalized.includes("no space left on device") ||
+    normalized.includes("disk quota exceeded")
+  ) {
+    return "Not enough disk space to create the worktree. Free space on the environment's drive, then try again.";
+  }
+  if (normalized.includes("permission denied") || normalized.includes("read-only file system")) {
+    return "Git could not write the worktree. Check write access to the repository and worktree folders, then try again.";
+  }
+  if (
+    normalized.includes("already checked out") ||
+    normalized.includes("already used by worktree")
+  ) {
+    return "The branch is already checked out in another worktree. Use that worktree or choose a different branch.";
+  }
+  if (/a branch named .+ already exists/.test(normalized)) {
+    return "The new branch name already exists. Choose a different branch name or use its existing worktree.";
+  }
+  if (
+    normalized.includes("already exists") ||
+    normalized.includes("is a missing but already registered worktree")
+  ) {
+    return "The worktree destination already exists or is still registered with Git. Use a different destination or resolve the existing worktree first.";
+  }
+  if (normalized.includes("invalid reference") || normalized.includes("not a valid object name")) {
+    return "Git could not find the worktree's base reference. Fetch the repository or choose an existing base branch, then try again.";
+  }
+  return "git worktree add failed";
+}
+
 interface Trace2Monitor {
   readonly env: NodeJS.ProcessEnv;
   readonly flush: Effect.Effect<void, never>;
@@ -2786,7 +2820,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       : ["worktree", "add", worktreePath, input.refName];
 
     let lastPercent = -5;
-    yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
+    const result = yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
       env: { LC_ALL: "C", GIT_PROGRESS_DELAY: "0" },
       progress: {
         onStderrLine: (line) => {
@@ -2804,9 +2838,19 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           return onCheckoutProgress(percent);
         },
       },
-      fallbackErrorDetail: "git worktree add failed",
+      allowNonZeroExit: true,
       timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
     });
+
+    if (result.exitCode !== 0) {
+      return yield* new GitCommandError({
+        ...gitCommandContext({ operation: "GitVcsDriver.createWorktree", cwd: input.cwd, args }),
+        detail: worktreeAddFailureDetail(result.stderr),
+        ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
+        stdoutLength: result.stdout.length,
+        stderrLength: result.stderr.length,
+      });
+    }
 
     if (input.newRefName && input.baseRefName) {
       const remoteNames = yield* listRemoteNames(input.cwd).pipe(Effect.orElseSucceed(() => []));
