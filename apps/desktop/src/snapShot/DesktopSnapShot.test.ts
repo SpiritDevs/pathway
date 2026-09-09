@@ -1522,7 +1522,7 @@ it.effect("matches Windows accessibility windows on a scaled display", () => {
       yield* service.configure(enabledSettings());
       yield* service.capture;
       const saved = yield* decodePendingMetadata(metadata);
-      assert.include(saved.source.accessibleText, "Scaled text");
+      assert.notProperty(saved.source, "accessibleText");
       assert.deepEqual(
         saved.source.accessibility?.format === "element-tree"
           ? saved.source.accessibility.root.children[0]?.bounds
@@ -1693,7 +1693,7 @@ it.effect.each(["gnome", "niri", "kde", "hyprland"] as const)(
         const saved = yield* decodePendingMetadata(metadata);
         assert.equal(saved.source.appName, "Text Editor");
         assert.equal(saved.source.appIdentifier, window.appIdentifier);
-        assert.include(saved.source.accessibleText, "Verified text");
+        assert.notProperty(saved.source, "accessibleText");
         assert.deepInclude(saved.source.accessibility, {
           format: "element-tree",
           coordinateSpace: "captured-image",

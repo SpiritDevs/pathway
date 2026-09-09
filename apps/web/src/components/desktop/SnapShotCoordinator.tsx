@@ -297,6 +297,7 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
   const routeDraftId = activeDraftThread ? rawRouteDraftId : null;
   const activeCompanyId = useAtomValue(activeCompanyIdAtom);
   const lastCompanyIdRef = useRef(activeCompanyId);
+  const lastEnvironmentIdRef = useRef(activeEnvironmentId);
   const captureSound = useClientSettings((settings) =>
     settings.snapShotPlaySound ? settings.snapShotSound : null,
   );
@@ -304,19 +305,27 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
   const captureTargetsRef = useRef(new Map<string, Promise<CaptureTarget | null>>());
   const lastTargetRef = useRef<CaptureTarget | null>(null);
   const targetResolutionRef = useRef<Promise<CaptureTarget | null> | null>(null);
+  const targetContextVersionRef = useRef(0);
   const drainingRef = useRef<Promise<void> | null>(null);
   const rerunRequestedRef = useRef(false);
   const soundedCaptureIdsRef = useRef(new Set<string>());
   const pendingAnimationStartsRef = useRef(new Set<string>());
 
-  if (lastCompanyIdRef.current !== activeCompanyId) {
+  if (
+    lastCompanyIdRef.current !== activeCompanyId ||
+    lastEnvironmentIdRef.current !== activeEnvironmentId
+  ) {
     lastCompanyIdRef.current = activeCompanyId;
+    lastEnvironmentIdRef.current = activeEnvironmentId;
     lastTargetRef.current = null;
+    targetResolutionRef.current = null;
+    targetContextVersionRef.current += 1;
   }
   const currentTarget = routeThreadRef ?? routeDraftId;
   if (currentTarget) lastTargetRef.current = currentTarget;
 
   const resolveTarget = useCallback(async (): Promise<CaptureTarget | null> => {
+    const targetContextVersion = targetContextVersionRef.current;
     const lastTarget = lastTargetRef.current;
     if (lastTarget) {
       const existingTarget = resolveExistingSnapShotTarget(lastTarget, routeThreadRef);
@@ -329,7 +338,8 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
     const projectRef = resolveThreadActionProjectRef({
       activeDraftThread,
       activeThread: activeThread ?? undefined,
-      defaultProjectRef,
+      defaultProjectRef:
+        defaultProjectRef?.environmentId === defaultEnvironmentId ? defaultProjectRef : null,
       handleNewThread,
     });
     const destination =
@@ -338,7 +348,9 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
     if (!destination) return null;
     const created = await handleNewThread(destination);
     if (!created) return null;
-    lastTargetRef.current = created.draftId;
+    if (targetContextVersionRef.current === targetContextVersion) {
+      lastTargetRef.current = created.draftId;
+    }
     return created.draftId;
   }, [
     activeDraftThread,
@@ -349,9 +361,11 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
     routeThreadRef,
   ]);
 
+  const latestResolveTargetRef = useRef(resolveTarget);
+  latestResolveTargetRef.current = resolveTarget;
   const resolveCaptureTarget = useCallback(
-    () => resolveSnapShotTargetOnce(targetResolutionRef, resolveTarget),
-    [resolveTarget],
+    () => resolveSnapShotTargetOnce(targetResolutionRef, () => latestResolveTargetRef.current()),
+    [],
   );
 
   const playCaptureSound = useCallback(

@@ -530,7 +530,7 @@ async function captureSource({
           throw new DesktopSnapShotError({ operation: "signed-out", captureId });
         }
         const [selected] = await Electron.desktopCapturer.getSources({
-          types: ["window", "screen"],
+          types: ["window"],
           thumbnailSize: snapShotThumbnailSize(active),
           fetchWindowIcons: true,
         });
@@ -1013,12 +1013,11 @@ export const make = Effect.gen(function* () {
               active?.title.trim() || linuxWindow?.title.trim() || source.name,
               1_000,
             ) ?? "",
-          ...(accessibilityContext?.accessibleText
-            ? { accessibleText: accessibilityContext.accessibleText }
-            : {}),
           ...(accessibilityContext?.accessibility
             ? { accessibility: accessibilityContext.accessibility }
-            : {}),
+            : accessibilityContext?.accessibleText
+              ? { accessibleText: accessibilityContext.accessibleText }
+              : {}),
           ...(appIdentifier ? { appIdentifier } : {}),
           ...(appIconDataUrl ? { appIconDataUrl } : {}),
         },
