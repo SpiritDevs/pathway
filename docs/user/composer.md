@@ -15,7 +15,9 @@ back without losing your draft. Branch and checkout selections reset for the sel
 
 Choose **New Thread** to start a separate message. Your unfinished message stays saved under
 its original project in the sidebar, where you can return to it later. Changing the project in
-the new composer only moves that new draft.
+the new composer only moves that new draft. After switching profiles, New Thread selects the
+first project in your project ordering for the selected profile if the previous thread's project
+is outside that profile.
 
 Checkout and branch controls sit above the input. Model, reasoning, and permission controls stay below the input. Narrow windows put additional
 controls in the options menu. These menus do not expand the composer. The same layout applies

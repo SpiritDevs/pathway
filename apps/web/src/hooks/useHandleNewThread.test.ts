@@ -5,10 +5,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { DraftId, useComposerDraftStore } from "../composerDraftStore";
-import { useNewThreadHandler } from "./useHandleNewThread";
+import { useHandleNewThread, useNewThreadHandler } from "./useHandleNewThread";
 import { selectSidebarDraftRows } from "../components/sidebarDrafts";
 
 const mocks = vi.hoisted(() => ({
+  activeThread: null as { environmentId: string; projectId: string } | null,
+  readShell: vi.fn(),
   readDefaults: vi.fn(),
   navigate: vi.fn().mockResolvedValue(undefined),
   routeParams: {} as Record<string, string>,
@@ -18,6 +20,8 @@ vi.mock("@effect/atom-react", () => ({
   useAtomValue: () => ({ defaultThreadEnvMode: "local", newWorktreesStartFromOrigin: false }),
 }));
 vi.mock("@tanstack/react-router", () => ({
+  useParams: ({ select }: { select: (params: Record<string, string>) => unknown }) =>
+    select(mocks.routeParams),
   useRouter: () => ({
     state: { matches: [{ params: mocks.routeParams }] },
     navigate: mocks.navigate,
@@ -30,10 +34,12 @@ vi.mock("../state/entities", () => ({
     { id: "project-a", environmentId: "env-a", workspaceRoot: "/repo-a" },
     { id: "project-b", environmentId: "env-b", workspaceRoot: "/repo-b" },
   ],
+  useThreadShell: () => mocks.activeThread,
   useServerConfigs: () => new Map(),
-  readThreadShell: () => null,
+  readThreadShell: mocks.readShell,
 }));
 vi.mock("../logicalProject", () => ({
+  getProjectOrderKey: (project: { id: string }) => project.id,
   deriveLogicalProjectKeyFromSettings: () => "shared-project",
   selectProjectGroupingSettings: () => ({}),
 }));
@@ -54,6 +60,7 @@ function createHandler() {
 describe("new-thread creation while project defaults load", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.readShell.mockReset().mockReturnValue(null);
     mocks.routeParams = {};
     useComposerDraftStore.setState({
       draftsByThreadKey: {},
@@ -67,6 +74,56 @@ describe("new-thread creation while project defaults load", () => {
   afterEach(() => {
     useComposerDraftStore.persist.clearStorage();
   });
+
+  it.each([
+    ["draft", "thread", false],
+    ["draft", "composer", false],
+    ["server", "thread", false],
+    ["server", "composer", false],
+    ["draft", "thread", true],
+    ["draft", "composer", true],
+    ["server", "thread", true],
+    ["server", "composer", true],
+  ] as const)(
+    "%s route with %s settings only carries working modes within the active profile (%s)",
+    async (routeKind, settingsSource, sameProfile) => {
+      const store = useComposerDraftStore.getState();
+      const sourceProject = scopeProjectRef(
+        EnvironmentId.make(sameProfile ? "env-a" : "old-env"),
+        ProjectId.make(sameProfile ? "project-a" : "old-project"),
+      );
+      const sourceId = DraftId.make("mode-source");
+      store.setLogicalProjectDraftThreadId("mode-source-project", sourceProject, sourceId, {
+        runtimeMode: settingsSource === "thread" ? "approval-required" : "full-access",
+        interactionMode: settingsSource === "thread" ? "plan" : "default",
+      });
+      const source = store.getDraftSession(sourceId)!;
+      const composerRef =
+        routeKind === "draft"
+          ? sourceId
+          : { environmentId: source.environmentId, threadId: source.threadId };
+      if (routeKind === "draft") {
+        mocks.routeParams = { draftId: sourceId };
+      } else {
+        mocks.routeParams = { environmentId: source.environmentId, threadId: source.threadId };
+        mocks.readShell.mockImplementation((ref: { threadId: string }) =>
+          ref.threadId === source.threadId ? source : null,
+        );
+      }
+      if (settingsSource === "composer") {
+        store.setRuntimeMode(composerRef, "approval-required");
+        store.setInteractionMode(composerRef, "plan");
+      }
+      const opened = await createHandler()(
+        scopeProjectRef(EnvironmentId.make("env-b"), ProjectId.make("project-b")),
+        { envMode: "local" },
+      );
+      expect(store.getDraftSession(opened!.draftId)).toMatchObject({
+        runtimeMode: sameProfile ? "approval-required" : "full-access",
+        interactionMode: sameProfile ? "plan" : "default",
+      });
+    },
+  );
 
   it("leaves the current message in the sidebar when New Thread starts a separate draft", async () => {
     const projectA = scopeProjectRef(EnvironmentId.make("env-a"), ProjectId.make("project-a"));
@@ -155,4 +212,54 @@ describe("new-thread creation while project defaults load", () => {
       }
     },
   );
+});
+
+function readNewThreadContext() {
+  let context: ReturnType<typeof useHandleNewThread> | undefined;
+  function Harness() {
+    context = useHandleNewThread();
+    return null;
+  }
+  renderToStaticMarkup(createElement(Harness));
+  return context!;
+}
+
+describe("new-thread project after switching profiles", () => {
+  afterEach(() => {
+    mocks.activeThread = null;
+    mocks.routeParams = {};
+    useComposerDraftStore.persist.clearStorage();
+  });
+
+  it.each(["thread", "draft"])("ignores a %s from the previous profile", (kind) => {
+    const previousProject = scopeProjectRef(
+      EnvironmentId.make("old-env"),
+      ProjectId.make("old-project"),
+    );
+    if (kind === "thread") {
+      mocks.activeThread = previousProject;
+    } else {
+      const draftId = DraftId.make("previous-profile-draft");
+      useComposerDraftStore
+        .getState()
+        .setLogicalProjectDraftThreadId("old-profile", previousProject, draftId);
+      mocks.routeParams = { draftId };
+    }
+    const context = readNewThreadContext();
+    expect(context.activeThread).toBeNull();
+    expect(context.activeDraftThread).toBeNull();
+    expect(context.defaultProjectRef).toEqual(
+      scopeProjectRef(EnvironmentId.make("env-a"), ProjectId.make("project-a")),
+    );
+  });
+
+  it("retains the current project within the selected profile", () => {
+    mocks.activeThread = { environmentId: "env-b", projectId: "project-b" };
+    expect(readNewThreadContext().activeThread).toEqual(mocks.activeThread);
+  });
+
+  it("does not inherit a project from another environment with the same ID", () => {
+    mocks.activeThread = { environmentId: "old-env", projectId: "project-a" };
+    expect(readNewThreadContext().activeThread).toBeNull();
+  });
 });
