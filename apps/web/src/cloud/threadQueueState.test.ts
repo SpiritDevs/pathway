@@ -2,7 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { MessageId, ThreadId } from "@spiritdevs/contracts";
 import type { ThreadQueueThread } from "@spiritdevs/contracts/threadQueue";
 import { buildThreadQueueSubmission } from "@spiritdevs/client-runtime/operations";
-import { mergeThreadQueueEntries, reconcileQueuedThreadReceipts } from "./threadQueueState";
+import {
+  findQueuedThread,
+  parseQueuedThreadSearch,
+  mergeThreadQueueEntries,
+  reconcileQueuedThreadReceipts,
+} from "./threadQueueState";
 const cloud: ThreadQueueThread = {
   threadId: "thread",
   environmentId: "environment",
@@ -43,6 +48,13 @@ const pending = {
   ),
 };
 describe("queued sidebar handoff", () => {
+  it("keeps stable queue identities in canonical links and rejects malformed search values", () => {
+    expect(parseQueuedThreadSearch({ queueId: "durable-queue", unrelated: true })).toEqual({
+      queueId: "durable-queue",
+    });
+    expect(parseQueuedThreadSearch({ queueId: ["bad"] })).toEqual({});
+    expect(parseQueuedThreadSearch({ queueId: "" })).toEqual({});
+  });
   it("keeps legacy company conversation followups in the conversations list while offline", () => {
     const [entry] = mergeThreadQueueEntries(
       [],
@@ -69,5 +81,24 @@ describe("queued sidebar handoff", () => {
   it("retains canceled device-only work without claiming cloud durability", () => {
     const [entry] = mergeThreadQueueEntries([], [{ ...pending, canceled: true }]);
     expect(entry).toMatchObject({ state: "canceled", cloudSaved: false, waitingToSync: false });
+  });
+  it("keeps matching thread IDs in separate environments independent", () => {
+    const other = { ...cloud, environmentId: "other", queueId: "other-queue" };
+    const first = { ...cloud, queueId: "first-queue" };
+    const entries = mergeThreadQueueEntries([first, other], [pending]);
+    expect(entries).toHaveLength(2);
+    expect(entries.find((row) => row.queueId === "first-queue")?.waitingToSync).toBe(true);
+    expect(entries.find((row) => row.queueId === "other-queue")?.waitingToSync).toBe(false);
+    expect(findQueuedThread(entries, "other", "thread")?.queueId).toBe("other-queue");
+    expect(findQueuedThread(entries, "missing", "thread")).toBeUndefined();
+  });
+  it("merges a moved receipt by stable queue identity", () => {
+    const before = { ...cloud, queueId: "queue", originEnvironmentId: "environment" };
+    const moved = { ...before, environmentId: "replacement", revision: 3 };
+    const merged = reconcileQueuedThreadReceipts([before], new Map([["queue", moved]]));
+    expect(merged.rows).toEqual([moved]);
+    expect(mergeThreadQueueEntries([moved], [{ ...pending, queueId: "queue" }])).toHaveLength(1);
+    expect(mergeThreadQueueEntries([moved], [pending])).toHaveLength(1);
+    expect(findQueuedThread([moved], "environment", "thread")).toEqual(moved);
   });
 });

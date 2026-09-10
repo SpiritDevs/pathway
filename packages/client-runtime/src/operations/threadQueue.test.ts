@@ -125,3 +125,15 @@ it("preserves the exact active turn targeted by explicit steering and restart", 
     "active turn is no longer available",
   );
 });
+
+it("preserves explicit checkout branch metadata on queued followups", () => {
+  expect(buildThreadQueueSubmission({ ...input, branch: "current-checkout" }, [])).toMatchObject({
+    kind: "message",
+    branch: "current-checkout",
+  });
+  expect(buildThreadQueueSubmission({ ...input, branch: null }, [])).toMatchObject({
+    kind: "message",
+    branch: null,
+  });
+  expect(buildThreadQueueSubmission(input, [])).not.toHaveProperty("branch");
+});

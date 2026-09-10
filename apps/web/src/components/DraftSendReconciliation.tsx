@@ -1,5 +1,9 @@
 import { useThreadRefs } from "../state/entities";
-import { threadQueueEntriesAtom, threadQueueHydratedAtom } from "../cloud/threadQueueState";
+import {
+  threadQueueEntriesAtom,
+  threadQueueHydratedAtom,
+  queuedThreadEnvironmentKeys,
+} from "../cloud/threadQueueState";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import * as Option from "effect/Option";
@@ -29,7 +33,7 @@ function EnvironmentDraftSendReconciliation(props: {
           .filter((ref) => ref.environmentId === props.environmentId)
           .map((ref) => ref.threadId),
       ),
-      queuedThreadIds: new Set(queuedThreads.map((row) => row.threadId)),
+      queuedThreadKeys: queuedThreadEnvironmentKeys(queuedThreads),
       queueHydrated,
       acceptedThreadIds: new Set(
         threads.filter((thread) => thread.latestUserMessageAt !== null).map((thread) => thread.id),

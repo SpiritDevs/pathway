@@ -1,5 +1,9 @@
 import { QueuedThreadSidebar } from "./QueuedThreadSidebar";
-import { threadQueueEntriesAtom, threadQueueDestinationsAtom } from "../cloud/threadQueueState";
+import {
+  threadQueueEntriesAtom,
+  threadQueueDestinationsAtom,
+  queuedThreadEnvironmentKeys,
+} from "../cloud/threadQueueState";
 import { CONVERSATIONS_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
 import { GitPullRequestArrowIcon } from "lucide-react";
 import { ThreadPullRequestAction } from "./ThreadPullRequestAction";
@@ -58,8 +62,8 @@ import {
   threadIsVisibleAt,
   type Issue,
   type ScopedThreadRef,
-  type ThreadId,
-  type EnvironmentId,
+  ThreadId,
+  EnvironmentId,
 } from "@spiritdevs/contracts";
 import type { TimestampFormat } from "@spiritdevs/contracts/settings";
 import {
@@ -733,8 +737,8 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
   const threadRefs = useThreadRefs();
   const queuedThreads = useAtomValue(threadQueueEntriesAtom);
-  const queuedThreadIds = useMemo(
-    () => new Set(queuedThreads.map((row) => row.threadId)),
+  const queuedThreadKeys = useMemo(
+    () => queuedThreadEnvironmentKeys(queuedThreads),
     [queuedThreads],
   );
   const serverThreadKeys = useMemo(() => new Set(threadRefs.map(scopedThreadKey)), [threadRefs]);
@@ -772,7 +776,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
         draftThreadsByThreadKey,
         draftsByThreadKey,
         serverThreadKeys,
-        queuedThreadIds,
+        queuedThreadKeys,
         frozenActive,
         routeDraftId: props.routeDraftId,
         scopedProjectKeys: props.scopedProjectKeys,
@@ -783,7 +787,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
       draftThreadsByThreadKey,
       draftsByThreadKey,
       serverThreadKeys,
-      queuedThreadIds,
+      queuedThreadKeys,
       frozenActive,
       props.routeDraftId,
       props.scopedProjectKeys,
@@ -2400,8 +2404,8 @@ export default function Sidebar() {
   // an open never-left draft, which only softens the empty state.
   const routeDraftIdForRows = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
   const queuedThreadRows = useAtomValue(threadQueueEntriesAtom);
-  const queuedThreadIds = useMemo(
-    () => new Set(queuedThreadRows.map((row) => row.threadId)),
+  const queuedThreadKeys = useMemo(
+    () => queuedThreadEnvironmentKeys(queuedThreadRows),
     [queuedThreadRows],
   );
   const queuedStatusByThreadId = useMemo(
@@ -2410,7 +2414,9 @@ export default function Sidebar() {
         queuedThreadRows
           .filter((row) => row.waitingToSync || row.queuedCount > 0 || row.state === "blocked")
           .map((row) => [
-            row.threadId,
+            scopedThreadKey(
+              scopeThreadRef(EnvironmentId.make(row.environmentId), ThreadId.make(row.threadId)),
+            ),
             row.waitingToSync
               ? "Waiting to sync"
               : row.state === "blocked"
@@ -2429,7 +2435,10 @@ export default function Sidebar() {
   const visibleDraftSessionCount = useComposerDraftStore((store) => {
     let count = 0;
     for (const [draftKey, session] of Object.entries(store.draftThreadsByThreadKey)) {
-      if (session.promotedTo != null || queuedThreadIds.has(session.threadId)) {
+      if (
+        session.promotedTo != null ||
+        queuedThreadKeys.has(`${session.environmentId}:${session.threadId}`)
+      ) {
         continue;
       }
       if (!threadIsVisibleAt(session, "agents")) {
@@ -2513,7 +2522,7 @@ export default function Sidebar() {
       const supportsSnooze =
         serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      if (queuedStatusByThreadId.has(thread.id) && thread.pinnedAt == null) {
+      if (queuedStatusByThreadId.has(threadKey) && thread.pinnedAt == null) {
         active.push(thread);
         continue;
       }
@@ -4511,7 +4520,11 @@ export default function Sidebar() {
                     const rowVariant = isCard ? "card" : "slim";
                     return (
                       <SidebarThreadRow
-                        queuedStatusLabel={queuedStatusByThreadId.get(thread.id) ?? null}
+                        queuedStatusLabel={
+                          queuedStatusByThreadId.get(
+                            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                          ) ?? null
+                        }
                         alertPolicies={alertPolicies}
                         alertModifierHeld={shortcutModifiers.ctrlKey || shortcutModifiers.metaKey}
                         alertProjectKey={

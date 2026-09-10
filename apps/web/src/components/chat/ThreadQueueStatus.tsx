@@ -33,8 +33,24 @@ export function ThreadQueueStatus({ queue }: { queue: ReturnType<typeof useThrea
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!moving || !row?.cloudSaved) return;
-    return subscribeQueueDestinations(row.threadId, setDestinations);
-  }, [moving, row?.cloudSaved, row?.threadId, account]);
+    return subscribeQueueDestinations(
+      {
+        threadId: row.threadId,
+        ...(row.companyId ? { companyId: row.companyId } : {}),
+        environmentId: row.environmentId,
+        ...(row.queueId ? { queueId: row.queueId } : {}),
+      },
+      setDestinations,
+    );
+  }, [
+    moving,
+    row?.cloudSaved,
+    row?.threadId,
+    row?.environmentId,
+    row?.queueId,
+    row?.companyId,
+    account,
+  ]);
   if (!row) return null;
   const destination = registered.find(
     (destination) => destination.environmentId === row.environmentId,
@@ -203,6 +219,8 @@ export function ThreadQueueStatus({ queue }: { queue: ReturnType<typeof useThrea
                 setError(null);
                 void mutateQueuedThread("reassign", {
                   threadId: row.threadId,
+                  ...(row.companyId ? { companyId: row.companyId } : {}),
+                  ...(row.queueId ? { queueId: row.queueId } : {}),
                   revision: row.revision,
                   environmentId: target.destination.environmentId,
                   localProjectId: target.project?.localProjectId ?? null,

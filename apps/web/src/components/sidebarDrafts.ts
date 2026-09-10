@@ -20,6 +20,7 @@ export function selectSidebarDraftRows(input: {
   serverThreadKeys: ReadonlySet<string>;
   /** Cloud queue identities stay stable when an unstarted thread moves environments. */
   queuedThreadIds?: ReadonlySet<string>;
+  queuedThreadKeys?: ReadonlySet<string>;
   routeDraftId: string | null;
   scopedProjectKeys: ReadonlySet<string> | null;
   includeConversations?: boolean;
@@ -30,6 +31,7 @@ export function selectSidebarDraftRows(input: {
   for (const [draftKey, session] of Object.entries(input.draftThreadsByThreadKey)) {
     if (
       input.queuedThreadIds?.has(session.threadId) ||
+      input.queuedThreadKeys?.has(`${session.environmentId}:${session.threadId}`) ||
       input.serverThreadKeys.has(
         scopedThreadKey(scopeThreadRef(session.environmentId, session.threadId)),
       ) ||

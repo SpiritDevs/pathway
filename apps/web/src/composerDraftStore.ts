@@ -4129,6 +4129,7 @@ export function reconcilePendingDraftSends(input: {
   acceptedThreadIds: ReadonlySet<ThreadId>;
   visibleThreadIds?: ReadonlySet<ThreadId>;
   queuedThreadIds?: ReadonlySet<string>;
+  queuedThreadKeys?: ReadonlySet<string>;
   queueHydrated?: boolean;
   activeDraftId: string | null;
 }) {
@@ -4179,7 +4180,8 @@ export function reconcilePendingDraftSends(input: {
       } else if (
         session.pendingSendNeedsReconciliation &&
         input.queueHydrated !== false &&
-        !input.queuedThreadIds?.has(session.threadId)
+        !input.queuedThreadIds?.has(session.threadId) &&
+        !input.queuedThreadKeys?.has(`${session.environmentId}:${session.threadId}`)
       ) {
         const restored = toHydratedThreadDraft(
           session.pendingSend.recoveryDraft ?? {

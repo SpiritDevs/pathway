@@ -32,6 +32,7 @@ export interface QueuedChatMessage {
   localKey: string | null;
   submissionStarted: boolean;
   acceptedAt: number | null;
+  rejection?: "command" | "initial-message" | null;
   createdAt: number;
   error: string | null;
 }
@@ -56,6 +57,15 @@ export function canEditQueuedChatMessage(message: QueuedChatMessage) {
     message.acceptedAt === null &&
     !message.submissionStarted &&
     (message.state === "queued" || message.state === "blocked" || message.state === "canceled")
+  );
+}
+
+export function canCancelQueuedChatMessage(message: QueuedChatMessage) {
+  return (
+    !message.submissionStarted &&
+    message.state !== "canceled" &&
+    (canEditQueuedChatMessage(message) ||
+      (message.state === "blocked" && message.rejection != null))
   );
 }
 

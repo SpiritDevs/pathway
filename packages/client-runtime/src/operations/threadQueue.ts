@@ -73,6 +73,7 @@ export function buildThreadQueueSubmission(
     );
   return {
     kind: "message",
+    ...(input.branch === undefined ? {} : { branch: input.branch }),
     runtimeMode: input.runtimeMode,
     interactionMode: input.interactionMode,
     input: {

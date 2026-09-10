@@ -62,6 +62,7 @@ import {
   resolveDefaultProviderModelSelection,
   sortProviderInstanceEntries,
 } from "~/providerInstances";
+import { useEnvironments } from "~/state/environments";
 import { useProjects, useThreadShells } from "~/state/entities";
 import { useEnvironmentQuery } from "~/state/query";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
@@ -323,6 +324,9 @@ export function PullRequestDetailPanel({
   });
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [startingReview, setStartingReview] = useState(false);
+  const { presentationById } = useEnvironments();
+  const reviewEnvironmentConnected =
+    presentationById.get(environmentId)?.connection.phase === "connected";
   const [launchedReview, setLaunchedReview] = useState<{
     readonly pullRequestKey: string;
     readonly threadId: ThreadId;
@@ -482,6 +486,13 @@ export function PullRequestDetailPanel({
       readonly publishComments: boolean;
     }) => {
       if (detail === null || startingReview) return;
+      if (!reviewEnvironmentConnected) {
+        toastManager.add({
+          type: "error",
+          title: "Connect the environment to prepare the review checkout.",
+        });
+        return;
+      }
       setStartingReview(true);
       const toastId = toastManager.add({
         type: "loading",
@@ -598,6 +609,7 @@ export function PullRequestDetailPanel({
       prepareReviewThread,
       pullRequestKey,
       startReviewTurn,
+      reviewEnvironmentConnected,
       startingReview,
       renderActions,
     ],
@@ -766,14 +778,19 @@ export function PullRequestDetailPanel({
           </span>
         </span>
       </MenuItem>
-      <MenuItem disabled={startingReview} onClick={() => setReviewDialogOpen(true)}>
+      <MenuItem
+        disabled={startingReview || !reviewEnvironmentConnected}
+        onClick={() => setReviewDialogOpen(true)}
+      >
         <ScanSearchIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
         <span className="flex min-w-0 flex-col">
           <span>
             {activeReview === null ? "Review with an agent" : "Start another agent review"}
           </span>
           <span className="text-xs text-muted-foreground">
-            Choose an agent, model, reasoning, and speed.
+            {reviewEnvironmentConnected
+              ? "Choose an agent, model, reasoning, and speed."
+              : "Connect the environment to prepare the review checkout."}
           </span>
         </span>
       </MenuItem>

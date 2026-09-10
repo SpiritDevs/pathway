@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { threadQueueEntriesAtom } from "../cloud/threadQueueState";
+import { threadQueueEntriesAtom, findQueuedThread } from "../cloud/threadQueueState";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { useEffect } from "react";
@@ -32,7 +32,11 @@ function DraftChatThreadRouteView() {
   const draftId = DraftId.make(rawDraftId);
   const draftSession = useComposerDraftStore((store) => store.getDraftSession(draftId));
   const queuedThreads = useAtomValue(threadQueueEntriesAtom);
-  const queuedThread = queuedThreads.find((row) => row.threadId === draftSession?.threadId);
+  const queuedThread = findQueuedThread(
+    queuedThreads,
+    draftSession?.environmentId,
+    draftSession?.threadId,
+  );
   const threadRefs = useThreadRefs();
   const inferredThreadRef = draftSession
     ? (threadRefs.find(
@@ -67,6 +71,7 @@ function DraftChatThreadRouteView() {
     void navigate({
       to: "/threads/$environmentId/$threadId",
       params: { environmentId: queuedThread.environmentId, threadId: queuedThread.threadId },
+      search: queuedThread.queueId ? { queueId: queuedThread.queueId } : {},
       replace: true,
     });
   }, [navigate, queuedThread, draftSession]);

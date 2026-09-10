@@ -34,10 +34,14 @@ export function QueuedThreadSidebar(props: {
             ? (workspace.branch ?? workspace.baseRef)
             : workspace?.branch;
         return (
-          <li key={row.threadId} className="list-none py-0.5">
+          <li
+            key={row.queueId ?? `${row.environmentId}:${row.threadId}`}
+            className="list-none py-0.5"
+          >
             <Link
               to="/threads/$environmentId/$threadId"
               params={{ environmentId: row.environmentId, threadId: row.threadId }}
+              search={row.queueId ? { queueId: row.queueId } : {}}
               activeProps={{ className: "bg-sidebar-row-active" }}
               title={environment?.label}
               className="block rounded-md px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)] hover:bg-sidebar-row-hover"

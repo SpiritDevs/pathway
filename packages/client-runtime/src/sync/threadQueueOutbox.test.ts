@@ -145,3 +145,30 @@ it("a duplicate local submission cannot replace content or clear an uncertain de
   expect(stored).toMatchObject({ submission: { text: "Original" }, submissionStarted: true });
   await removeQueuedIntent(row.key);
 });
+
+it("canceling one environment does not cancel a same-ID thread on another environment", async () => {
+  const launch = {
+    key: "scoped-cancel-a",
+    accountId: "scoped-cancel",
+    companyId: "company",
+    environmentId: "a",
+    threadId: "same",
+    commandId: "first",
+    submission: {},
+    attachments: [],
+    createdAt: 1,
+    revision: 1,
+  };
+  await saveQueuedIntent(launch);
+  await saveQueuedIntent({
+    ...launch,
+    key: "scoped-cancel-b",
+    environmentId: "b",
+    submissionStarted: true,
+  });
+  await cancelLocalQueuedThread(launch.key, 1);
+  const rows = await readQueuedIntents(launch.accountId);
+  expect(rows.find((row) => row.environmentId === "a")?.canceled).toBe(true);
+  expect(rows.find((row) => row.environmentId === "b")?.canceled).toBeUndefined();
+  for (const row of rows) await removeQueuedIntent(row.key);
+});

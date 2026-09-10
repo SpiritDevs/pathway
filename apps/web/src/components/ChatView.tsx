@@ -300,11 +300,7 @@ import {
   useEffectiveComposerModelState,
   DraftId,
 } from "../composerDraftStore";
-import {
-  releasePersistedAttachmentUpload,
-  releaseDraftAttachment,
-  uploadStandaloneFileAttachment,
-} from "../lib/attachmentUploadQueue";
+import { releaseDraftAttachment } from "../lib/attachmentUploadQueue";
 import { useProvisionInternalWorkspace } from "./projects/useProjectWorkspaceCommands";
 import {
   appendTerminalContextsToPrompt,
@@ -1546,7 +1542,7 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
   );
   const serverThread = useThreadShell(routeThreadRef);
-  const queuedChat = useThreadQueueChat(threadId);
+  const queuedChat = useThreadQueueChat(environmentId, threadId);
   const queueDestinations = useAtomValue(threadQueueDestinationsAtom);
   const queueDestination = queueDestinations.find(
     (destination) => destination.environmentId === environmentId,
@@ -6742,7 +6738,6 @@ function ChatViewContent(props: ChatViewProps) {
       const replacementMessageId = newMessageId();
       let replacementCreated = false;
       let originalDeleted = false;
-      const pendingAttachmentIds: string[] = [];
       try {
         const targetProject = allProjects.find(
           (project) =>
@@ -6762,28 +6757,18 @@ function ChatViewContent(props: ChatViewProps) {
         const attachments = await copyMessageAttachmentsForNewThread(
           firstUserMessage.attachments,
           serverAttachmentUrlById,
-          async (file, attachment) => {
-            const pending = await uploadStandaloneFileAttachment({
-              environmentId: projectRef.environmentId,
-              file,
-              name: attachment.name,
-              mimeType: attachment.mimeType,
-              sizeBytes: attachment.sizeBytes,
-            });
-            pendingAttachmentIds.push(pending.id);
-            return pending;
-          },
         );
         const createdAt = new Date().toISOString();
         const startResult = await startThreadTurn({
           environmentId: projectRef.environmentId,
+          durableAttachments: attachments,
           input: {
             threadId: replacementThreadId,
             message: {
               messageId: replacementMessageId,
               role: "user",
               text: firstUserMessage.text,
-              attachments,
+              attachments: [],
             },
             modelSelection: activeThread.modelSelection,
             titleSeed: activeThread.title,
@@ -6873,12 +6858,6 @@ function ChatViewContent(props: ChatViewProps) {
           setThreadError(activeThread.id, description);
         }
       } finally {
-        for (const attachmentId of pendingAttachmentIds) {
-          releasePersistedAttachmentUpload({
-            environmentId: projectRef.environmentId,
-            attachmentId,
-          });
-        }
         projectSwitchInFlightRef.current = false;
       }
     },
@@ -7788,6 +7767,9 @@ function ChatViewContent(props: ChatViewProps) {
           blob: attachment.file!,
         })),
         input: {
+          ...(target === "current" && localCheckoutBranchMismatch
+            ? { branch: localCheckoutBranchMismatch.currentBranch }
+            : {}),
           onLaunchDispatch: () => {
             if (pendingDraftTarget !== null) {
               const store = useComposerDraftStore.getState();

@@ -5,6 +5,7 @@ export interface ThreadQueueOutboxRecord<Submission = unknown> {
   readonly companyId: string;
   readonly environmentId: string;
   readonly threadId: string;
+  readonly queueId?: string;
   readonly commandId: string;
   readonly threadTitle?: string;
   readonly localProjectId?: string | null;
@@ -151,7 +152,10 @@ export async function cancelLocalQueuedThread(key: string, revision: number): Pr
           (row) =>
             row.accountId === launch.accountId &&
             row.companyId === launch.companyId &&
-            row.threadId === launch.threadId,
+            row.threadId === launch.threadId &&
+            (launch.queueId
+              ? row.queueId === launch.queueId
+              : row.environmentId === launch.environmentId),
         );
         if (threadRows.some((row) => row.submissionStarted))
           throw new Error(

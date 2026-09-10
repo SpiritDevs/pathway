@@ -4,6 +4,7 @@ import { CompanyId } from "@spiritdevs/contracts/company";
 import { buildThreadQueueSubmission } from "@spiritdevs/client-runtime/operations";
 import {
   canEditQueuedChatMessage,
+  canCancelQueuedChatMessage,
   canRetryQueuedChatMessage,
   queueDestinationProject,
   queueDestinationProviders,
@@ -118,6 +119,10 @@ describe("queue records in ordinary chat", () => {
     const blocked = { ...local, localKey: null, state: "blocked" as const, acceptedAt: 5 };
     expect(canEditQueuedChatMessage(blocked)).toBe(false);
     expect(canRetryQueuedChatMessage(blocked)).toBe(true);
+    expect(canCancelQueuedChatMessage(blocked)).toBe(false);
+    expect(canCancelQueuedChatMessage({ ...blocked, rejection: "command" })).toBe(true);
+    expect(canCancelQueuedChatMessage({ ...blocked, rejection: "initial-message" })).toBe(true);
+    expect(canEditQueuedChatMessage({ ...blocked, rejection: "command" })).toBe(false);
   });
   it("supplies the normal model picker and project context without a connected server snapshot", () => {
     expect(queueDestinationProviders(destination)[0]).toMatchObject({

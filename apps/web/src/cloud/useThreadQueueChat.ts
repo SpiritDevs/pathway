@@ -8,6 +8,7 @@ import {
   localThreadQueueAtom,
   threadQueueAccountAtom,
   threadQueueEntriesAtom,
+  findQueuedThread,
 } from "./threadQueueState";
 import {
   mutateLocalQueuedMessage,
@@ -17,6 +18,7 @@ import {
 } from "./threadQueue";
 import {
   canEditQueuedChatMessage,
+  canCancelQueuedChatMessage,
   canRetryQueuedChatMessage,
   queuedChatMessages,
   queuedLocalChatMessage,
@@ -24,12 +26,12 @@ import {
 } from "./threadQueueChat";
 
 /** Queue records feed the same messages and controls as environment-backed chat history. */
-export function useThreadQueueChat(threadId: string) {
+export function useThreadQueueChat(environmentId: string, threadId: string) {
   const rows = useAtomValue(threadQueueEntriesAtom);
   const local = useAtomValue(localThreadQueueAtom);
   const account = useAtomValue(threadQueueAccountAtom);
-  const row = rows.find((row) => row.threadId === threadId);
-  const key = `${account}:${threadId}`;
+  const row = findQueuedThread(rows, environmentId, threadId);
+  const key = `${account}:${environmentId}:${threadId}`;
   const [detailState, setDetailState] = useState<{ key: string; value: ThreadQueueDetail | null }>({
     key,
     value: null,
@@ -37,8 +39,13 @@ export function useThreadQueueChat(threadId: string) {
   const detail = detailState.key === key ? detailState.value : null;
   const [error, setError] = useState<string | null>(null);
   const localMessages = useMemo(
-    () => local.filter((row) => row.threadId === threadId),
-    [local, threadId],
+    () =>
+      local.filter(
+        (local) =>
+          local.threadId === threadId &&
+          (local.queueId ? local.queueId === row?.queueId : local.environmentId === environmentId),
+      ),
+    [local, threadId, environmentId, row?.queueId],
   );
   const [observedLocal, setObservedLocal] = useState<{
     key: string;
@@ -85,32 +92,40 @@ export function useThreadQueueChat(threadId: string) {
     setError(null);
     if (!row?.cloudSaved) return;
     let active = true;
-    const unsubscribe = subscribeQueuedThread(threadId, (next) => {
-      if (!active) return;
-      setDetailState((previousState) => {
-        const previous = previousState.key === key ? previousState.value : null;
-        if (!next || !previous) return { key, value: next };
-        const received = new Set(next.messages.map((message) => message.commandId));
-        return {
-          key,
-          value: {
-            ...next,
-            attachmentUrls: { ...previous.attachmentUrls, ...next.attachmentUrls },
-            messages: [
-              ...previous.messages
-                .filter((message) => !received.has(message.commandId))
-                .map((message) => ({ ...message, state: "delivered" as const })),
-              ...next.messages,
-            ],
-          },
-        };
-      });
-    });
+    const unsubscribe = subscribeQueuedThread(
+      {
+        threadId,
+        environmentId,
+        ...(row.queueId ? { queueId: row.queueId } : {}),
+        ...(row.companyId ? { companyId: row.companyId } : {}),
+      },
+      (next) => {
+        if (!active) return;
+        setDetailState((previousState) => {
+          const previous = previousState.key === key ? previousState.value : null;
+          if (!next || !previous) return { key, value: next };
+          const received = new Set(next.messages.map((message) => message.commandId));
+          return {
+            key,
+            value: {
+              ...next,
+              attachmentUrls: { ...previous.attachmentUrls, ...next.attachmentUrls },
+              messages: [
+                ...previous.messages
+                  .filter((message) => !received.has(message.commandId))
+                  .map((message) => ({ ...message, state: "delivered" as const })),
+                ...next.messages,
+              ],
+            },
+          };
+        });
+      },
+    );
     return () => {
       active = false;
       unsubscribe();
     };
-  }, [threadId, account, key, row?.cloudSaved]);
+  }, [threadId, environmentId, account, key, row?.cloudSaved, row?.queueId, row?.companyId]);
   const messages = useMemo<readonly QueuedChatMessage[]>(() => {
     const cloud = detail?.thread.threadId === threadId ? detail.messages : [];
     const ids = new Set(cloud.map((message) => message.commandId));
@@ -156,7 +171,7 @@ export function useThreadQueueChat(threadId: string) {
           message.messageId,
           {
             editable: canEditQueuedChatMessage(message),
-            cancelable: canEditQueuedChatMessage(message) && message.state !== "canceled",
+            cancelable: canCancelQueuedChatMessage(message),
             retryable: canRetryQueuedChatMessage(message),
             state: message.state,
             waitingToSync: message.localKey !== null,
@@ -173,7 +188,9 @@ export function useThreadQueueChat(threadId: string) {
         !message ||
         !(action === "retry"
           ? canRetryQueuedChatMessage(message)
-          : canEditQueuedChatMessage(message))
+          : action === "cancel"
+            ? canCancelQueuedChatMessage(message)
+            : canEditQueuedChatMessage(message))
       )
         return false;
       setError(null);
@@ -183,6 +200,9 @@ export function useThreadQueueChat(threadId: string) {
         else
           await mutateQueuedThread(action, {
             threadId,
+            environmentId,
+            ...(row?.companyId ? { companyId: row.companyId } : {}),
+            ...(row?.queueId ? { queueId: row.queueId } : {}),
             commandId: message.commandId,
             revision: message.revision,
             ...(text === undefined ? {} : { text }),
@@ -193,7 +213,7 @@ export function useThreadQueueChat(threadId: string) {
         return false;
       }
     },
-    [messageById, threadId],
+    [messageById, threadId, environmentId, row?.queueId, row?.companyId],
   );
   return { row, messages, chatMessages, attachmentUrls, controls, mutateMessage, error };
 }

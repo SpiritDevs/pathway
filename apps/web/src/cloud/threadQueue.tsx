@@ -12,9 +12,10 @@ import {
   type ChatAttachment,
   type EnvironmentId,
 } from "@spiritdevs/contracts";
-import type { CompanyId } from "@spiritdevs/contracts/company";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import type {
   ThreadQueueDetail,
+  ThreadQueuePage,
   ThreadQueueSubmission,
   ThreadQueueThread,
   ThreadQueueDestination,
@@ -26,7 +27,12 @@ import * as Schema from "effect/Schema";
 import { useCallback, useEffect } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { readThreadShell } from "../state/entities";
-import { activeCompanyIdAtom } from "./activeCompany";
+import { subscribeThreadQueuePages } from "./threadQueuePages";
+import { isDefinitiveQueueRejection } from "./threadQueueErrors";
+import { scopedCompanyRegistryReplicasAtom } from "./activeCompany";
+import { cloudAgentThreadCompanyId, cloudAgentProjectCompanyId } from "./agentThreadReadModel";
+import { companyRegistryReplicasAtom } from "./companyRegistryReplica";
+import { activeCompanyIdAtom, companyListAtom } from "./activeCompany";
 import { resolveCloudSyncConvexUrl } from "./publicConfig";
 import { makeClerkConvexTokenFetcher } from "./syncTransportAuth";
 import { mapEnvironmentControlError } from "./environmentControl";
@@ -48,6 +54,9 @@ import {
   threadQueueAccountAtom,
   threadQueueDestinationsAtom,
   reconcileQueuedThreadReceipts,
+  queuedThreadKey,
+  findQueuedThread,
+  mergeQueueDestinations,
 } from "./threadQueueState";
 export {
   threadQueueRowsAtom,
@@ -58,12 +67,14 @@ export {
 const decodeQueueLaunch = Schema.decodeUnknownSync(OrchestrationV2ThreadLaunchInput);
 const decodeQueueMessage = Schema.decodeUnknownSync(OrchestrationV2Command);
 const ref = {
-  list: makeFunctionReference<"query", { companyId: string }, ReadonlyArray<ThreadQueueThread>>(
-    "threadQueue:list",
-  ),
+  listPage: makeFunctionReference<
+    "query",
+    { companyId: string; paginationOpts: { numItems: number; cursor: string | null } },
+    ThreadQueuePage
+  >("threadQueue:listPage"),
   getThread: makeFunctionReference<
     "query",
-    { companyId: string; threadId: string },
+    { companyId: string; threadId: string; environmentId?: string; queueId?: string },
     ThreadQueueDetail | null
   >("threadQueue:getThread"),
   enqueue: makeFunctionReference<
@@ -72,6 +83,7 @@ const ref = {
       companyId: string;
       environmentId: string;
       threadId: string;
+      queueId?: string;
       submission: ThreadQueueSubmission;
       attachmentIds: string[];
     },
@@ -86,30 +98,6 @@ const ref = {
     string
   >("threadQueue:registerAttachment"),
 };
-const definitiveQueueRejections = new Set([
-  "invalid-arguments",
-  "binding-unavailable",
-  "permission-denied",
-  "thread-unavailable",
-  "attachment-unavailable",
-  "invalid-command-state",
-  "destination-changed",
-  "provider-unavailable",
-  "environment-unavailable",
-  "not-a-member",
-  "company-unavailable",
-  "user-not-provisioned",
-]);
-function isDefinitiveQueueRejection(error: unknown) {
-  return (
-    error instanceof ConvexError &&
-    error.data !== null &&
-    typeof error.data === "object" &&
-    "code" in error.data &&
-    typeof error.data.code === "string" &&
-    definitiveQueueRejections.has(error.data.code)
-  );
-}
 
 export function threadQueueErrorMessage(error: unknown) {
   if (error instanceof ConvexError) return mapEnvironmentControlError(error).message;
@@ -119,7 +107,7 @@ export function threadQueueErrorMessage(error: unknown) {
 let session: {
   client: ConvexClient;
   accountId: string;
-  companyId: CompanyId;
+  companyId: CompanyId | null;
   receipts: Map<string, ThreadQueueThread>;
   outboxLoaded: boolean;
   listLoaded: boolean;
@@ -138,7 +126,7 @@ const announce = async (accountId: string) => {
   if (session?.accountId === accountId) {
     appAtomRegistry.set(
       localThreadQueueAtom,
-      rows.filter((row) => row.companyId === session?.companyId),
+      rows.filter((row) => !session?.companyId || row.companyId === session.companyId),
     );
     session.outboxLoaded = true;
     appAtomRegistry.set(threadQueueHydratedAtom, session.listLoaded);
@@ -160,7 +148,14 @@ export function flushThreadQueue(): Promise<void> {
     const blocked = new Set<string>();
     for (let row of rows) {
       if (!stillCurrent()) return;
-      const threadKey = `${row.companyId}:${row.threadId}`;
+      const knownThread = findQueuedThread(
+        appAtomRegistry
+          .get(threadQueueRowsAtom)
+          .filter((thread) => !thread.companyId || thread.companyId === row.companyId),
+        row.environmentId,
+        row.threadId,
+      );
+      const threadKey = `${row.companyId}:${queuedThreadKey(knownThread ?? row)}`;
       if (blocked.has(threadKey)) continue;
       if (row.canceled) {
         if (row.submission.kind === "launch") blocked.add(threadKey);
@@ -231,12 +226,16 @@ export function flushThreadQueue(): Promise<void> {
           companyId: row.companyId,
           environmentId: row.environmentId,
           threadId: row.threadId,
+          ...(row.queueId ? { queueId: row.queueId } : {}),
           submission: row.submission,
           attachmentIds,
         });
         if (!stillCurrent()) return;
-        if (row.companyId === current.companyId) {
-          current.receipts.set(accepted.thread.threadId, accepted.thread);
+        if (!current.companyId || row.companyId === current.companyId) {
+          current.receipts.set(queuedThreadKey(accepted.thread), {
+            ...accepted.thread,
+            companyId: row.companyId,
+          });
           const merged = reconcileQueuedThreadReceipts(
             appAtomRegistry.get(threadQueueRowsAtom),
             current.receipts,
@@ -275,9 +274,20 @@ export function flushThreadQueue(): Promise<void> {
 export function ThreadQueueRuntime() {
   const { getToken, isSignedIn, userId } = useAuth({ treatPendingAsSignedOut: false });
   const companyId = useAtomValue(activeCompanyIdAtom);
+  const companies = useAtomValue(companyListAtom);
+  const companyIdsKey = JSON.stringify(
+    companyId ? [companyId] : companies.map((company) => company.id).sort(),
+  );
+  const cloudShellRevision = useAtomValue(scopedCompanyRegistryReplicasAtom);
+  useEffect(() => {
+    if (appAtomRegistry.get(localThreadQueueAtom).length === 0) return;
+    if (drain) drainAgain = true;
+    void flushThreadQueue();
+  }, [cloudShellRevision]);
   useEffect(() => {
     const url = resolveCloudSyncConvexUrl();
-    if (!isSignedIn || !userId || !companyId || !url) return;
+    if (!isSignedIn || !userId || !url) return;
+    const companyIds = (JSON.parse(companyIdsKey) as string[]).map((id) => CompanyId.make(id));
     const client = new ConvexClient(url);
     client.setAuth(makeClerkConvexTokenFetcher(getToken));
     const current = {
@@ -295,18 +305,52 @@ export function ThreadQueueRuntime() {
       if (session === current) void announce(userId).then(() => flushThreadQueue());
     });
     appAtomRegistry.set(threadQueueAccountAtom, `${userId}:${companyId}`);
-    const unsubscribe = client.onUpdate(ref.list, { companyId }, (rows) => {
-      if (session !== current) return;
-      const merged = reconcileQueuedThreadReceipts(rows, current.receipts);
-      current.receipts = merged.pending;
-      appAtomRegistry.set(threadQueueRowsAtom, merged.rows);
-      current.listLoaded = true;
-      appAtomRegistry.set(threadQueueHydratedAtom, current.outboxLoaded);
-      void flushThreadQueue();
-    });
-    const unsubscribeDestinations = subscribeQueueDestinations(undefined, (destinations) => {
-      if (session === current) appAtomRegistry.set(threadQueueDestinationsAtom, destinations);
-    });
+    const companyRows = new Map<string, readonly ThreadQueueThread[]>();
+    const loadedCompanies = new Set<string>();
+    const companyDestinations = new Map<string, readonly ThreadQueueDestination[]>();
+    const unsubscribes = companyIds.flatMap((scopeCompanyId) => [
+      subscribeThreadQueuePages(
+        (cursor, receive) =>
+          client.onUpdate(
+            ref.listPage,
+            {
+              companyId: scopeCompanyId,
+              paginationOpts: { numItems: 128, cursor },
+            },
+            receive,
+          ),
+        (rows, hydrated) => {
+          if (session !== current) return;
+          companyRows.set(
+            scopeCompanyId,
+            rows.map((row) => ({ ...row, companyId: scopeCompanyId })),
+          );
+          if (hydrated) loadedCompanies.add(scopeCompanyId);
+          else loadedCompanies.delete(scopeCompanyId);
+          const merged = reconcileQueuedThreadReceipts(
+            [...companyRows.values()].flat(),
+            current.receipts,
+          );
+          current.receipts = merged.pending;
+          appAtomRegistry.set(threadQueueRowsAtom, merged.rows);
+          current.listLoaded = loadedCompanies.size === companyIds.length;
+          appAtomRegistry.set(threadQueueHydratedAtom, current.listLoaded && current.outboxLoaded);
+          void flushThreadQueue();
+        },
+      ),
+      subscribeQueueDestinations(
+        undefined,
+        (destinations) => {
+          if (session !== current) return;
+          companyDestinations.set(scopeCompanyId, destinations);
+          appAtomRegistry.set(
+            threadQueueDestinationsAtom,
+            mergeQueueDestinations([...companyDestinations.values()].flat()),
+          );
+        },
+        scopeCompanyId,
+      ),
+    ]);
     const reconnect = () => {
       void flushThreadQueue();
     };
@@ -317,9 +361,8 @@ export function ThreadQueueRuntime() {
     window.addEventListener("focus", reconnect);
     void announce(userId).then(reconnect);
     return () => {
-      unsubscribe();
+      for (const unsubscribe of unsubscribes) unsubscribe();
       unsubscribeConnection();
-      unsubscribeDestinations();
       channel.close();
       if (queueChannel === channel) queueChannel = null;
       window.removeEventListener("online", reconnect);
@@ -334,7 +377,7 @@ export function ThreadQueueRuntime() {
       }
       void client.close();
     };
-  }, [companyId, getToken, isSignedIn, userId]);
+  }, [companyId, companyIdsKey, getToken, isSignedIn, userId]);
   return null;
 }
 
@@ -349,7 +392,7 @@ export interface QueuedThreadTurnTarget {
 
 export async function queueThreadTurn(target: QueuedThreadTurnTarget) {
   const current = session;
-  if (!current) throw new Error("Sign in to Pathway Cloud and select a company before sending.");
+  if (!current) throw new Error("Sign in to Pathway Cloud before sending.");
   const files = target.durableAttachments
     ? target.durableAttachments.map((file, index) => ({
         ...file,
@@ -373,10 +416,35 @@ export async function queueThreadTurn(target: QueuedThreadTurnTarget) {
           };
         }),
       );
+  if (session !== current)
+    throw new Error(
+      "The account changed while saving this message. Send it again from the current account.",
+    );
   const existingThread = readThreadShell({
     environmentId: target.environmentId,
     threadId: target.input.threadId,
   });
+  const queuedThread = findQueuedThread(
+    appAtomRegistry.get(threadQueueRowsAtom),
+    target.environmentId,
+    target.input.threadId,
+  );
+  const companyId =
+    cloudAgentThreadCompanyId(
+      appAtomRegistry.get(companyRegistryReplicasAtom),
+      target.environmentId,
+      target.input.threadId,
+    ) ??
+    (queuedThread?.companyId ? CompanyId.make(queuedThread.companyId) : null) ??
+    target.input.bootstrap?.createThread?.conversationCompanyId ??
+    existingThread?.conversationCompanyId ??
+    cloudAgentProjectCompanyId(
+      appAtomRegistry.get(companyRegistryReplicasAtom),
+      target.environmentId,
+      target.input.bootstrap?.createThread?.projectId ?? existingThread?.projectId,
+    ) ??
+    current.companyId;
+  if (!companyId) throw new Error("Select the company that owns this thread before sending.");
   const submission = buildThreadQueueSubmission(
     target.input,
     files.map((file) => file.metadata),
@@ -386,12 +454,14 @@ export async function queueThreadTurn(target: QueuedThreadTurnTarget) {
   // Refuse invalid commands before clearing the composer or creating an unretryable outbox row.
   if (submission.kind === "launch") decodeQueueLaunch(submission.input);
   else decodeQueueMessage(submission.input);
+  const queueId = queuedThread?.queueId;
   const record: ThreadQueueOutboxRecord<ThreadQueueSubmission> = {
-    key: `${current.accountId}:${current.companyId}:${submission.input.commandId}`,
+    key: `${current.accountId}:${companyId}:${target.environmentId}:${submission.input.commandId}`,
     accountId: current.accountId,
-    companyId: current.companyId,
+    companyId,
     environmentId: target.environmentId,
     threadId: target.input.threadId,
+    ...(queueId ? { queueId } : {}),
     commandId: submission.input.commandId,
     ...(existingThread
       ? { threadTitle: existingThread.title, localProjectId: existingThread.projectId }
@@ -419,13 +489,13 @@ export function useQueuedStartThreadTurn() {
 }
 
 export function subscribeQueuedThread(
-  threadId: string,
+  identity: { threadId: string; environmentId: string; queueId?: string; companyId?: string },
   onChange: (detail: ThreadQueueDetail | null) => void,
 ): () => void {
   if (!session) return () => {};
   return session.client.onUpdate(
     ref.getThread,
-    { companyId: session.companyId, threadId },
+    { ...identity, companyId: identity.companyId ?? session.companyId ?? "" },
     onChange,
   );
 }
@@ -443,17 +513,20 @@ export async function mutateQueuedThread(
 
 export type { ThreadQueueDestination } from "@spiritdevs/contracts/threadQueue";
 export function subscribeQueueDestinations(
-  threadId: string | undefined,
+  identity:
+    | { threadId: string; environmentId: string; queueId?: string; companyId?: string }
+    | undefined,
   onChange: (destinations: readonly ThreadQueueDestination[]) => void,
+  companyId?: string,
 ) {
   if (!session) return () => {};
   return session.client.onUpdate(
     makeFunctionReference<
       "query",
-      { companyId: string; threadId?: string },
+      { companyId: string; threadId?: string; environmentId?: string; queueId?: string },
       readonly ThreadQueueDestination[]
     >("threadQueue:destinations"),
-    { companyId: session.companyId, ...(threadId ? { threadId } : {}) },
+    { ...identity, companyId: companyId ?? identity?.companyId ?? session.companyId ?? "" },
     onChange,
   );
 }
@@ -470,14 +543,19 @@ export async function mutateLocalQueuedMessage(
     current.accountId,
   )) as readonly ThreadQueueOutboxRecord<ThreadQueueSubmission>[];
   if (session !== current) return;
-  const local = localRows.find((row) => row.key === key && row.companyId === current.companyId);
+  const local = localRows.find(
+    (row) => row.key === key && (!current.companyId || row.companyId === current.companyId),
+  );
   if (!local)
     throw new Error("The pending message is no longer on this device. Refresh the thread.");
   if (action === "cancel" && local.submission.kind === "launch")
     await cancelLocalQueuedThread(key, revision);
   else
     await editLocalQueuedIntent(key, revision, (stored) => {
-      if (stored.accountId !== current.accountId || stored.companyId !== current.companyId)
+      if (
+        stored.accountId !== current.accountId ||
+        (current.companyId && stored.companyId !== current.companyId)
+      )
         throw new Error("This message belongs to another account or company.");
       const submission = stored.submission as ThreadQueueSubmission;
       const updated =

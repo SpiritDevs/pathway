@@ -200,6 +200,8 @@ interface StartThreadBootstrap {
 }
 
 export interface StartThreadTurnInput extends ThreadCommandInput {
+  /** Root checkout metadata to persist before this turn runs. */
+  readonly branch?: string | null;
   /** Local notification after preparation, immediately before a launch request can reach the server. */
   readonly onLaunchDispatch?: () => void;
   readonly message: {
