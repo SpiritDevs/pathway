@@ -44,3 +44,9 @@ The visionOS build retained an existing camera-usage-description warning. Provid
 reconnection ownership were verified with focused server tests, not a live provider through a
 production tunnel. Desktop uses the tested web implementation; no separate Electron shell pass
 was performed.
+
+The destination picker now disables its model field and explains when an environment has not
+published its model catalogue, or has no enabled, available models. Verified in the retained
+Helium window at its natural viewport size; targeted lint passed.
+
+![Destination without published models](missing-models.png)

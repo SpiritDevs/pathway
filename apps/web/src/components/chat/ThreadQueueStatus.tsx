@@ -154,9 +154,19 @@ export function ThreadQueueStatus({ queue }: { queue: ReturnType<typeof useThrea
                 aria-label="Destination model"
                 className="mt-1 w-full rounded-md border bg-background p-2"
                 value={modelKey}
+                disabled={!target || models.length === 0}
+                aria-describedby={
+                  target && models.length === 0 ? "queue-destination-model-status" : undefined
+                }
                 onChange={(event) => setModelKey(event.target.value)}
               >
-                <option value="">Choose model</option>
+                <option value="">
+                  {!target
+                    ? "Choose a destination first"
+                    : models.length === 0
+                      ? "No models available"
+                      : "Choose model"}
+                </option>
                 {models.map((model) => (
                   <option key={model.key} value={model.key}>
                     {model.provider.displayName} · {model.model}
@@ -164,6 +174,17 @@ export function ThreadQueueStatus({ queue }: { queue: ReturnType<typeof useThrea
                 ))}
               </select>
             </label>
+            {target && models.length === 0 ? (
+              <p
+                id="queue-destination-model-status"
+                role="status"
+                className="text-sm text-muted-foreground"
+              >
+                {target.destination.providers.length === 0
+                  ? "This environment has not published its models yet. Connect it to Pathway Cloud, or choose another destination."
+                  : "This environment has no enabled, available models. Check its provider settings, or choose another destination."}
+              </p>
+            ) : null}
             {error ? (
               <p role="alert" className="text-sm text-destructive">
                 {error}
