@@ -10,6 +10,7 @@ export type ThreadQueueSubmission =
   | { readonly kind: "launch"; readonly input: OrchestrationV2ThreadLaunchInput }
   | {
       readonly kind: "message";
+      readonly branch?: string | null;
       readonly input: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>;
       readonly runtimeMode?: RuntimeMode;
       readonly interactionMode?: ProviderInteractionMode;
@@ -18,6 +19,10 @@ export type ThreadQueueSubmission =
 export type ThreadQueueState = "queued" | "accepted" | "delivered" | "blocked" | "canceled";
 
 export interface ThreadQueueThread {
+  /** Stable cloud intent identity; unchanged when its destination moves. */
+  readonly queueId?: string;
+  readonly originEnvironmentId?: string;
+  readonly companyId?: string;
   readonly threadId: string;
   readonly environmentId: string;
   readonly localProjectId: string | null;
@@ -58,6 +63,7 @@ export interface ThreadQueueDetail {
 
 /** Authoritative receipt identity for reconciling a send whose response was lost. */
 export interface ThreadQueueSubmissionStatus {
+  readonly queueId?: string;
   readonly threadId: string;
   readonly commandId: string;
   readonly messageId: string;
@@ -67,6 +73,7 @@ export interface ThreadQueueSubmissionStatus {
 }
 
 export interface ThreadQueueHead {
+  readonly queueId?: string;
   /** Advances only after the environment proves the previous command was durably rejected. */
   readonly deliveryAttempt?: number;
   /** Present on current backends so a failed preflight can retain an existing acceptance fence. */
@@ -102,4 +109,10 @@ export interface ThreadQueueDestination {
     readonly enabled: boolean;
     readonly available: boolean;
   }[];
+}
+
+export interface ThreadQueuePage {
+  readonly page: readonly ThreadQueueThread[];
+  readonly isDone: boolean;
+  readonly continueCursor: string;
 }

@@ -3,9 +3,10 @@
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vite-plus/test";
 
-import { api } from "../convex/_generated/api.js";
+import { api, internal } from "../convex/_generated/api.js";
 import type { Id } from "../convex/_generated/dataModel.js";
 import schema from "../convex/schema.ts";
+import type { ThreadQueuePage } from "@spiritdevs/contracts/threadQueue";
 
 const RELAY_ISSUER = "https://relay.example.test";
 const CLERK_ISSUER = "https://clerk.example.test";
@@ -15,6 +16,7 @@ process.env.PATHWAY_RELAY_JWKS_URL = `${RELAY_ISSUER}/.well-known/jwks.json`;
 const modules = {
   "../convex/_generated/api.js": () => import("../convex/_generated/api.js"),
   "../convex/_generated/server.js": () => import("../convex/_generated/server.js"),
+  "../convex/agentThreads.ts": () => import("../convex/agentThreads.ts"),
   "../convex/threadQueue.ts": () => import("../convex/threadQueue.ts"),
   "../convex/sync.ts": () => import("../convex/sync.ts"),
 };
@@ -248,6 +250,370 @@ async function capabilities(t: Harness) {
 }
 
 describe("durable thread queue", () => {
+  it("isolates identical thread and command IDs by environment while preserving stable queue IDs", async () => {
+    const t = harness();
+    await seed(t);
+    await capabilities(t);
+    const first = await enqueue(t);
+    const client = asMember(t, "manager");
+    const second = await client.mutation(api.threadQueue.enqueue, {
+      ...queueIdentity,
+      environmentId: ENVIRONMENT_TWO,
+      submission: launch(),
+      attachmentIds: [],
+    });
+    expect(first.thread.queueId).toBeTruthy();
+    expect(second.thread.queueId).not.toBe(first.thread.queueId);
+    await expect(client.query(api.threadQueue.getThread, queueIdentity)).rejects.toThrow(
+      "ambiguous-queue",
+    );
+    expect(
+      (
+        await client.query(api.threadQueue.getThread, {
+          ...queueIdentity,
+          environmentId: ENVIRONMENT_TWO,
+        })
+      ).thread.queueId,
+    ).toBe(second.thread.queueId);
+    await client.mutation(api.threadQueue.edit, {
+      ...firstFence,
+      queueId: first.thread.queueId!,
+      text: "Only the first environment",
+    });
+    expect(
+      (
+        await client.query(api.threadQueue.getThread, {
+          ...queueIdentity,
+          queueId: second.thread.queueId!,
+        })
+      ).messages[0]?.revision,
+    ).toBe(1);
+    await expect(
+      client.mutation(api.threadQueue.reassign, {
+        ...queueIdentity,
+        queueId: first.thread.queueId!,
+        revision: 1,
+        environmentId: ENVIRONMENT_TWO,
+        localProjectId: null,
+      }),
+    ).rejects.toThrow("destination-conflict");
+    const heads = await asEnvironment(t, ENVIRONMENT_TWO).query(api.threadQueue.environmentHead, {
+      companyId: COMPANY_ID,
+    });
+    expect(heads).toHaveLength(1);
+    expect(heads[0]?.queueId).toBe(second.thread.queueId);
+    expect(
+      await asEnvironment(t).mutation(api.threadQueue.accept, {
+        ...firstFence,
+        queueId: second.thread.queueId!,
+      }),
+    ).toBeNull();
+    await asEnvironment(t, ENVIRONMENT_TWO).mutation(api.threadQueue.accept, {
+      ...firstFence,
+      queueId: second.thread.queueId!,
+    });
+    expect(
+      (
+        await client.query(api.threadQueue.submissionStatus, {
+          ...queueIdentity,
+          queueId: first.thread.queueId!,
+          commandId: "launch-one",
+        })
+      )?.state,
+    ).toBe("queued");
+  });
+
+  it("keeps a queue identity and its original submission receipt after reassignment", async () => {
+    const t = harness();
+    await seed(t);
+    await capabilities(t);
+    const first = await enqueue(t);
+    const moved = await asMember(t, "manager").mutation(api.threadQueue.reassign, {
+      ...queueIdentity,
+      queueId: first.thread.queueId!,
+      revision: 1,
+      environmentId: ENVIRONMENT_TWO,
+      localProjectId: null,
+    });
+    expect(moved.queueId).toBe(first.thread.queueId);
+    const replay = await enqueue(t);
+    expect(replay.thread.queueId).toBe(first.thread.queueId);
+    expect(replay.thread.environmentId).toBe(ENVIRONMENT_TWO);
+    expect(
+      (
+        await asEnvironment(t, ENVIRONMENT_TWO).query(api.threadQueue.environmentHead, {
+          companyId: COMPANY_ID,
+        })
+      )[0]?.queueId,
+    ).toBe(first.thread.queueId);
+  });
+
+  it("paginates retained queue history without losing delivered receipts", async () => {
+    const t = harness();
+    await seed(t);
+    await enqueue(t);
+    await asEnvironment(t).mutation(api.threadQueue.accept, firstFence);
+    await asEnvironment(t).mutation(api.threadQueue.acknowledge, firstFence);
+    await t.run(async (ctx) => {
+      const row = (await ctx.db.query("threadQueueThreads").first())!;
+      const { _id, _creationTime, ...metadata } = row;
+      for (let i = 0; i < 260; i++)
+        await ctx.db.insert("threadQueueThreads", { ...metadata, threadId: `history-${i}` });
+    });
+    const client = asMember(t, "manager");
+    expect(await client.query(api.threadQueue.list, { companyId: COMPANY_ID })).toHaveLength(128);
+    let cursor: string | null = null;
+    const seen = new Set<string>();
+    for (;;) {
+      const page: ThreadQueuePage = await client.query(api.threadQueue.listPage, {
+        companyId: COMPANY_ID,
+        paginationOpts: { numItems: 64, cursor },
+      });
+      expect(page.page.length).toBeLessThanOrEqual(64);
+      for (const thread of page.page) seen.add(thread.queueId!);
+      if (page.isDone) break;
+      cursor = page.continueCursor;
+    }
+    expect(seen.size).toBe(261);
+    expect(
+      (
+        await client.query(api.threadQueue.submissionStatus, {
+          ...queueIdentity,
+          commandId: "launch-one",
+        })
+      )?.state,
+    ).toBe("delivered");
+    await expect(
+      client.query(api.threadQueue.listPage, {
+        companyId: COMPANY_ID,
+        paginationOpts: { numItems: 1000, cursor: null },
+      }),
+    ).rejects.toThrow("128");
+  });
+
+  it("retains pending handoffs and canceled content while retiring published delivered rows", async () => {
+    const t = harness();
+    await seed(t);
+    const saved = await enqueue(t);
+    await t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find(
+        (row) => row.id === MANAGER_ROLE_ID,
+      )!;
+      await ctx.db.patch(role._id, { permissions: [...role.permissions, "projects.manage"] });
+      const environment = (await ctx.db.query("environmentRegistrations").collect()).find(
+        (row) => row.environmentId === ENVIRONMENT_ONE,
+      )!;
+      await ctx.db.patch(environment._id, { serviceRoleIds: [role.id] });
+    });
+    const client = asMember(t, "manager");
+    await asEnvironment(t).mutation(api.threadQueue.accept, firstFence);
+    await asEnvironment(t).mutation(api.threadQueue.acknowledge, firstFence);
+    expect(await client.query(api.threadQueue.list, { companyId: COMPANY_ID })).toHaveLength(1);
+    const beforePublication = await t.run((ctx) =>
+      ctx.db.get(saved.thread.queueId! as Id<"threadQueueThreads">),
+    );
+    expect(beforePublication?.listingExpiresAt).toBe(Number.MAX_SAFE_INTEGER);
+    await asEnvironment(t).mutation(api.agentThreads.upsert, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ONE,
+      threadId: "thread-one",
+      localProjectId: null,
+      shell: { id: "thread-one", projectId: null, conversationCompanyId: COMPANY_ID },
+    });
+    const published = await t.run((ctx) =>
+      ctx.db.get(saved.thread.queueId! as Id<"threadQueueThreads">),
+    );
+    expect(published!.listingExpiresAt).toBeLessThan(Number.MAX_SAFE_INTEGER);
+    await t.run((ctx) => ctx.db.patch(published!._id, { listingExpiresAt: Date.now() - 1 }));
+    expect(await client.query(api.threadQueue.list, { companyId: COMPANY_ID })).toHaveLength(0);
+    expect(
+      (
+        await client.query(api.threadQueue.submissionStatus, {
+          ...queueIdentity,
+          commandId: "launch-one",
+          queueId: saved.thread.queueId!,
+        })
+      )?.state,
+    ).toBe("delivered");
+    // A duplicate publisher snapshot cannot resurrect expired receipt-only history.
+    await asEnvironment(t).mutation(api.agentThreads.upsert, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ONE,
+      threadId: "thread-one",
+      localProjectId: null,
+      shell: { id: "thread-one", projectId: null, conversationCompanyId: COMPANY_ID },
+    });
+    expect(await client.query(api.threadQueue.list, { companyId: COMPANY_ID })).toHaveLength(0);
+    await client.mutation(api.threadQueue.enqueue, {
+      ...queueIdentity,
+      queueId: saved.thread.queueId!,
+      environmentId: ENVIRONMENT_ONE,
+      submission: followup(),
+      attachmentIds: [],
+    });
+    expect(await client.query(api.threadQueue.list, { companyId: COMPANY_ID })).toHaveLength(1);
+    await client.mutation(api.threadQueue.cancel, {
+      ...queueIdentity,
+      queueId: saved.thread.queueId!,
+      commandId: "followup-one",
+      revision: 1,
+    });
+    expect((await t.run((ctx) => ctx.db.get(published!._id)))?.listingExpiresAt).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
+  });
+
+  it("migrates preview listing metadata without changing legacy receipt identity", async () => {
+    const t = harness();
+    await seed(t);
+    const saved = await enqueue(t);
+    await t.run(async (ctx) => {
+      const row = (await ctx.db.query("threadQueueThreads").first())!;
+      const {
+        _id,
+        _creationTime,
+        queueVersion: _queueVersion,
+        originEnvironmentId: _originEnvironmentId,
+        listingExpiresAt: _listingExpiresAt,
+        ...legacy
+      } = row;
+      await ctx.db.replace(_id, legacy);
+      const message = (await ctx.db.query("threadQueueMessages").first())!;
+      const {
+        _id: messageId,
+        _creationTime: _messageCreated,
+        queueThreadId: _queueThreadId,
+        issuedByMembershipDomainId: _issuedByMembershipDomainId,
+        ...legacyMessage
+      } = message;
+      await ctx.db.replace(messageId, legacyMessage);
+    });
+    expect(await t.mutation(internal.threadQueue.migrateListing, {})).toBe(1);
+    const client = asMember(t, "manager");
+    expect((await client.query(api.threadQueue.list, { companyId: COMPANY_ID }))[0]?.queueId).toBe(
+      saved.thread.queueId,
+    );
+    expect((await client.query(api.threadQueue.getThread, queueIdentity)).messages).toHaveLength(1);
+    await asEnvironment(t).mutation(api.threadQueue.accept, firstFence);
+    await asEnvironment(t).mutation(api.threadQueue.acknowledge, firstFence);
+    expect(
+      (
+        await client.query(api.threadQueue.submissionStatus, {
+          ...queueIdentity,
+          commandId: "launch-one",
+        })
+      )?.state,
+    ).toBe("delivered");
+  });
+
+  it("validates queued checkout metadata before storing it", async () => {
+    const t = harness();
+    await seed(t);
+    await enqueue(t);
+    await expect(
+      asMember(t, "manager").mutation(api.threadQueue.enqueue, {
+        ...queueIdentity,
+        environmentId: ENVIRONMENT_ONE,
+        submission: { ...followup(), branch: 42 },
+        attachmentIds: [],
+      }),
+    ).rejects.toThrow("Invalid checkout branch");
+  });
+
+  it("lets the issuer read and cancel saved intent after dispatch permission is revoked", async () => {
+    const t = harness();
+    await seed(t);
+    await enqueue(t);
+    await t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find(
+        (row) => row.id === MANAGER_ROLE_ID,
+      )!;
+      await ctx.db.patch(role._id, { permissions: [] });
+    });
+    const client = asMember(t, "manager");
+    expect(await client.query(api.threadQueue.list, { companyId: COMPANY_ID })).toHaveLength(1);
+    expect((await client.query(api.threadQueue.getThread, queueIdentity)).messages).toHaveLength(1);
+    await expect(asEnvironment(t).mutation(api.threadQueue.accept, firstFence)).rejects.toThrow(
+      "remoteAgents.dispatch",
+    );
+    await expect(
+      client.mutation(api.threadQueue.edit, { ...firstFence, text: "Changed" }),
+    ).rejects.toThrow("remoteAgents.dispatch");
+    await client.mutation(api.threadQueue.cancel, firstFence);
+    expect((await client.query(api.threadQueue.getThread, queueIdentity)).thread.state).toBe(
+      "canceled",
+    );
+    await expect(
+      client.mutation(api.threadQueue.retry, { ...firstFence, revision: 2 }),
+    ).rejects.toThrow("remoteAgents.dispatch");
+  });
+
+  it("reconciles accepted work after its issuer membership and permissions are revoked", async () => {
+    const t = harness();
+    await seed(t);
+    await enqueue(t);
+    const environment = asEnvironment(t);
+    await environment.mutation(api.threadQueue.accept, firstFence);
+    await t.run(async (ctx) => {
+      const membership = (await ctx.db.query("memberships").collect()).find(
+        (row) => row.id === MANAGER_MEMBERSHIP_ID,
+      )!;
+      await ctx.db.delete(membership._id);
+    });
+    const candidate = await environment.query(api.threadQueue.prepare, firstFence);
+    expect(candidate).toMatchObject({
+      state: "accepted",
+      issuedByMembershipId: MANAGER_MEMBERSHIP_ID,
+    });
+    await environment.mutation(api.threadQueue.accept, firstFence);
+    await environment.mutation(api.threadQueue.acknowledge, firstFence);
+    expect(
+      await environment.query(api.threadQueue.environmentHead, { companyId: COMPANY_ID }),
+    ).toEqual([]);
+  });
+
+  it("cancels a proven rejected initial message and unblocks its followup without permitting unsafe cancellation", async () => {
+    const t = harness();
+    await seed(t);
+    await enqueue(t);
+    const client = asMember(t, "manager");
+    await client.mutation(api.threadQueue.enqueue, {
+      ...queueIdentity,
+      environmentId: ENVIRONMENT_ONE,
+      submission: followup(),
+      attachmentIds: [],
+    });
+    const environment = asEnvironment(t);
+    await environment.mutation(api.threadQueue.accept, firstFence);
+    await environment.mutation(api.threadQueue.reportBlocked, {
+      ...firstFence,
+      phase: "delivery",
+      error: "Unknown delivery result",
+    });
+    await expect(client.mutation(api.threadQueue.cancel, firstFence)).rejects.toThrow(
+      "already accepted",
+    );
+    await client.mutation(api.threadQueue.retry, firstFence);
+    await environment.mutation(api.threadQueue.accept, firstFence);
+    await environment.mutation(api.threadQueue.reportBlocked, {
+      ...firstFence,
+      phase: "delivery",
+      rejection: "initial-message",
+      error: "Target turn ended",
+    });
+    await expect(
+      client.mutation(api.threadQueue.edit, { ...firstFence, text: "Changed" }),
+    ).rejects.toThrow("already accepted");
+    await client.mutation(api.threadQueue.cancel, firstFence);
+    expect(
+      (await environment.query(api.threadQueue.environmentHead, { companyId: COMPANY_ID }))[0]
+        ?.commandId,
+    ).toBe("followup-one");
+    expect(
+      (await client.query(api.threadQueue.getThread, queueIdentity)).thread.acceptedAt,
+    ).not.toBeNull();
+  });
+
   it("normalizes a synthetic conversation project before saving or delivering its launch", async () => {
     const t = harness();
     await seed(t);
@@ -308,7 +674,7 @@ describe("durable thread queue", () => {
     await asEnvironment(t).mutation(api.threadQueue.accept, firstFence);
     await asEnvironment(t).mutation(api.threadQueue.acknowledge, firstFence);
     expect((await client.query(api.threadQueue.getThread, queueIdentity)).messages).toEqual([]);
-    expect(await client.query(api.threadQueue.submissionStatus, statusArgs)).toEqual({
+    expect(await client.query(api.threadQueue.submissionStatus, statusArgs)).toMatchObject({
       threadId: "thread-one",
       commandId: "launch-one",
       messageId: "message-launch-one",
@@ -343,7 +709,10 @@ describe("durable thread queue", () => {
       asMember(t, "dispatcher").query(api.threadQueue.getThread, queueIdentity),
     ).rejects.toThrow("another member");
     await expect(
-      asEnvironment(t, ENVIRONMENT_TWO).query(api.threadQueue.getThread, queueIdentity),
+      asEnvironment(t, ENVIRONMENT_TWO).query(api.threadQueue.getThread, {
+        ...queueIdentity,
+        queueId: first.thread.queueId!,
+      }),
     ).rejects.toThrow("another environment");
   });
 
@@ -360,7 +729,7 @@ describe("durable thread queue", () => {
     const environment = asEnvironment(t);
     expect(
       await environment.query(api.threadQueue.environmentHead, { companyId: COMPANY_ID }),
-    ).toEqual([
+    ).toMatchObject([
       {
         threadId: "thread-one",
         commandId: "launch-one",
@@ -379,7 +748,7 @@ describe("durable thread queue", () => {
     await environment.mutation(api.threadQueue.acknowledge, firstFence);
     expect(
       await environment.query(api.threadQueue.environmentHead, { companyId: COMPANY_ID }),
-    ).toEqual([
+    ).toMatchObject([
       {
         threadId: "thread-one",
         commandId: "followup-one",

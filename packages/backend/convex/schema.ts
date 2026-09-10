@@ -1178,6 +1178,9 @@ export default defineSchema({
   threadQueueThreads: defineTable({
     companyId: v.id("companies"),
     threadId: v.string(),
+    queueVersion: v.optional(v.literal(1)),
+    listingExpiresAt: v.optional(v.number()),
+    originEnvironmentId: v.optional(v.string()),
     environmentId: v.string(),
     localProjectId: v.union(v.string(), v.null()),
     cloudProjectId: v.union(v.id("cloudProjects"), v.null()),
@@ -1201,14 +1204,20 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_company", ["companyId"])
+    .index("by_company_and_listing_expiration", ["companyId", "listingExpiresAt"])
+    .index("by_listing_expiration", ["listingExpiresAt"])
     .index("by_company_and_thread", ["companyId", "threadId"])
     .index("by_company_and_member", ["companyId", "issuedByMembershipId"])
     .index("by_company_and_environment", ["companyId", "environmentId"])
+    .index("by_company_environment_and_thread", ["companyId", "environmentId", "threadId"])
+    .index("by_company_origin_and_thread", ["companyId", "originEnvironmentId", "threadId"])
     .index("by_company_environment_and_state", ["companyId", "environmentId", "state"]),
 
   threadQueueMessages: defineTable({
     companyId: v.id("companies"),
     threadId: v.string(),
+    queueThreadId: v.optional(v.id("threadQueueThreads")),
+    issuedByMembershipDomainId: v.optional(v.string()),
     commandId: v.string(),
     messageId: v.string(),
     issuedByMembershipId: v.id("memberships"),
@@ -1234,6 +1243,10 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   })
+    .index("by_queue_and_command", ["companyId", "queueThreadId", "commandId"])
+    .index("by_queue_and_message", ["companyId", "queueThreadId", "messageId"])
+    .index("by_queue_and_sequence", ["companyId", "threadId", "queueThreadId", "sequence"])
+    .index("by_queue_and_state", ["companyId", "threadId", "queueThreadId", "state", "sequence"])
     .index("by_company_and_command", ["companyId", "commandId"])
     .index("by_company_and_message", ["companyId", "messageId"])
     .index("by_company_thread_and_sequence", ["companyId", "threadId", "sequence"])

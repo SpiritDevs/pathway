@@ -84,6 +84,13 @@ export function decodeQueueSubmission(value: unknown, threadId: string): ThreadQ
   ) {
     throw new Error("Only ordinary user messages can be queued.");
   }
+  if (
+    submission.kind === "message" &&
+    submission.branch !== undefined &&
+    submission.branch !== null &&
+    (typeof submission.branch !== "string" || submission.branch.length > 1024)
+  )
+    throw new Error("Invalid checkout branch.");
   if (input.modelSelection !== undefined) validateModelSelection(input.modelSelection);
   const runtimeMode = submission.kind === "launch" ? input.runtimeMode : submission.runtimeMode;
   const interactionMode =
