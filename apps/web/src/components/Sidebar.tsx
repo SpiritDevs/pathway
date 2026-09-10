@@ -2021,7 +2021,9 @@ export default function Sidebar() {
   );
   const threads = useThreadShells();
   const focusSwipe = useFocusSwipe({
-    hasConversations: threads.some((thread) => thread.projectId === null),
+    hasConversations: threads.some(
+      (thread) => thread.projectId === null && thread.archivedAt === null,
+    ),
     activeFocusId,
     visibleFocuses: shownFocuses,
     onActiveFocusChange: setActiveFocusId,
@@ -3630,6 +3632,66 @@ export default function Sidebar() {
     ],
   );
 
+  const conversationsBulkActionInFlight = useRef(false);
+  const handleConversationsContextMenu = useCallback(
+    async (position: { x: number; y: number }) => {
+      const api = readLocalApi();
+      if (!api || conversationsBulkActionInFlight.current) return;
+      const conversations = agentThreads.filter(
+        (thread) => thread.projectId === null && thread.archivedAt === null,
+      );
+      if (conversations.length === 0) return;
+      conversationsBulkActionInFlight.current = true;
+      try {
+        const clicked = await settlePromise(() =>
+          api.contextMenu.show(
+            [
+              { id: "archive", label: "Archive All" },
+              { id: "delete", label: "Delete All Chats", destructive: true },
+            ],
+            position,
+          ),
+        );
+        if (
+          clicked._tag === "Failure" ||
+          (clicked.value !== "archive" && clicked.value !== "delete")
+        )
+          return;
+        const deleting = clicked.value === "delete";
+        if (deleting || confirmThreadArchive) {
+          const confirmed = await settlePromise(() =>
+            api.dialogs.confirm(
+              deleting
+                ? `Delete all ${conversations.length} chats?\nThis permanently clears their conversation history.`
+                : `Archive all ${conversations.length} chats?`,
+              deleting ? { variant: "destructive" } : undefined,
+            ),
+          );
+          if (confirmed._tag === "Failure" || !confirmed.value) return;
+        }
+        let failed = 0;
+        for (const thread of conversations) {
+          const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+          const result = deleting ? await deleteThread(threadRef) : await archiveThread(threadRef);
+          if (result._tag === "Failure") failed += 1;
+        }
+        if (failed > 0) {
+          toastManager.add({
+            type: "error",
+            title: `Could not ${deleting ? "delete" : "archive"} ${failed} chats`,
+            description:
+              "Some chats may be running or their environment may be disconnected. They remain available so you can try again.",
+          });
+        } else {
+          setActiveFocusId(ALL_FOCUS_ID);
+        }
+      } finally {
+        conversationsBulkActionInFlight.current = false;
+      }
+    },
+    [agentThreads, archiveThread, deleteThread, confirmThreadArchive, setActiveFocusId],
+  );
+
   const handleThreadContextMenu = useCallback(
     (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
       void (async () => {
@@ -4744,7 +4806,9 @@ export default function Sidebar() {
         </SidebarGroup>
       </SidebarContent>
       <FocusStrip
-        hasConversations={agentThreads.some((thread) => thread.projectId === null)}
+        hasConversations={agentThreads.some(
+          (thread) => thread.projectId === null && thread.archivedAt === null,
+        )}
         focuses={focuses}
         assignments={focusAssignments}
         visibleProjectKeys={visibleFocusProjectKeys}
@@ -4755,6 +4819,7 @@ export default function Sidebar() {
         notifications={focusNotifications}
         threadTitlesByKey={threadTitlesByKey}
         projectNamesByKey={projectDisplayNameByKey}
+        onConversationsContextMenu={(position) => void handleConversationsContextMenu(position)}
         onNotificationSelect={selectFocusNotification}
         mutations={focusMutations}
       />

@@ -19,7 +19,7 @@ Focus shows **Moving from _Focus name_** and moves the project when you save. Yo
 project from the **Focus** section in its project menu. Choose **None** there to remove its Focus
 assignment.
 
-**Conversations** appears in the strip when you have normal or temporary conversations. These
+**Conversations** appears in the strip when you have unarchived normal or temporary conversations. These
 threads appear only in Conversations, including when All is selected. Sending the first message
 in a new conversation switches to Conversations and brings the thread into view. Conversations
 remain scoped to the company selected at creation. Attaching a project makes the thread follow
@@ -67,3 +67,5 @@ for 7 days and unread notifications remain for 30 days. Pathway keeps at most 20
 user and removes the oldest records first when the limit is reached.
 
 Starting a project thread from Conversations switches to the profile containing that project after the first successful send, or to All if the project has no profile.
+
+Right-click the Conversations button to **Archive All** or **Delete All Chats** in the current conversation list. Deletion asks for confirmation and permanently removes their history. When no unarchived conversations remain, the button disappears and the sidebar returns to All. Archived chats remain available in Storage & cleanup.

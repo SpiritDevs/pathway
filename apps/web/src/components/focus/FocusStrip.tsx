@@ -162,6 +162,7 @@ export function FocusStrip(props: {
   readonly notifications: ReadonlyArray<FocusNotification>;
   readonly threadTitlesByKey: ReadonlyMap<string, string>;
   readonly projectNamesByKey: ReadonlyMap<string, string>;
+  readonly onConversationsContextMenu: (position: { x: number; y: number }) => void;
   readonly onNotificationSelect: (notification: FocusNotification) => void;
   readonly mutations: FocusMutations | null;
 }) {
@@ -355,6 +356,17 @@ export function FocusStrip(props: {
             <button
               type="button"
               role="button"
+              onContextMenu={(event) => {
+                event.preventDefault();
+                props.onConversationsContextMenu({ x: event.clientX, y: event.clientY });
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                  event.preventDefault();
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  props.onConversationsContextMenu({ x: bounds.right, y: bounds.top });
+                }
+              }}
               aria-label="Conversations"
               title="Conversations"
               aria-pressed={props.activeFocusId === CONVERSATIONS_FOCUS_ID}
