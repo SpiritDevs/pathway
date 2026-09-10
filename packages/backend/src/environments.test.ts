@@ -982,7 +982,7 @@ describe("environment registry", () => {
     expect(await feedRows(t)).toHaveLength(0);
   });
 
-  it.each(["questionAttachments", "storageManagement"] as const)(
+  it.each(["questionAttachments", "storageManagement", "durableThreadQueue"] as const)(
     "accepts and republishes %s capability changes",
     async (capability) => {
       const t = harness();

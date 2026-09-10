@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as threadQueue from "../threadQueue.js";
 import type * as agentThreads from "../agentThreads.js";
 import type * as browserPasswords from "../browserPasswords.js";
 import type * as calendarAccounts from "../calendarAccounts.js";
@@ -61,6 +62,7 @@ import type * as trustedEmailSenders from "../trustedEmailSenders.js";
 import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  threadQueue: typeof threadQueue;
   agentThreads: typeof agentThreads;
   browserPasswords: typeof browserPasswords;
   calendarAccounts: typeof calendarAccounts;

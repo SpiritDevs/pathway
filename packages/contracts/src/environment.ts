@@ -91,6 +91,8 @@ export const ServerSelfUpdateCapability = Schema.Literals([
 export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
+  /** Can consume cloud-persisted thread and message submissions after reconnecting. */
+  durableThreadQueue: Schema.optionalKey(Schema.Boolean),
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** Server can resolve repository identity for an arbitrary directory before project creation. */
   projectDirectoryInspection: Schema.optionalKey(Schema.Boolean),
