@@ -223,6 +223,7 @@ import {
 import { InlineRightPanelPortal } from "./preview/InlineRightPanelPresence";
 import { TerminalCardPortal } from "./terminal/TerminalCardPortal";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
+import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
@@ -2397,6 +2398,29 @@ function ChatViewContent(props: ChatViewProps) {
     });
     return envs;
   }, [activeProject, allProjects, projectGroupingSettings, primaryEnvironmentId, environmentById]);
+  const selectableEnvironments = useMemo(
+    () =>
+      activeThread?.projectId === null
+        ? environments
+            .filter(
+              (environment) =>
+                environment.environmentId === activeThread.environmentId ||
+                environment.serverConfig?.environment.capabilities.threadConversations === true,
+            )
+            .map((environment) => ({
+              environmentId: environment.environmentId,
+              label: environment.label,
+              isPrimary: environment.environmentId === primaryEnvironmentId,
+            }))
+        : logicalProjectEnvironments,
+    [
+      activeThread?.projectId,
+      activeThread?.environmentId,
+      environments,
+      primaryEnvironmentId,
+      logicalProjectEnvironments,
+    ],
+  );
   // The environment picker stays usable with a single environment: its last row
   // opens the same "add a connection" flow as project settings, so linking a
   // second machine does not require leaving the composer.
@@ -3795,6 +3819,15 @@ function ChatViewContent(props: ChatViewProps) {
   const onEnvironmentChange = useCallback(
     (nextEnvironmentId: EnvironmentId) => {
       if (envLocked || !draftId || draftPlacement.locked) return;
+      if (activeThread?.projectId === null) {
+        const ref = { environmentId: nextEnvironmentId, projectId: null };
+        setLogicalProjectDraftThreadId(
+          `${draftProjectKey(ref)}:${activeThread.conversationCompanyId ?? "unassigned"}`,
+          ref,
+          draftId,
+        );
+        return;
+      }
       const target = resolveDraftEnvironmentProjectRef(
         activeProject,
         nextEnvironmentId,
@@ -3808,6 +3841,9 @@ function ChatViewContent(props: ChatViewProps) {
       draftId,
       draftPlacement.locked,
       draftPlacement.selectEnvironment,
+      activeThread?.projectId,
+      activeThread?.conversationCompanyId,
+      setLogicalProjectDraftThreadId,
       envLocked,
       logicalProjectEnvironments,
     ],
@@ -9307,10 +9343,10 @@ function ChatViewContent(props: ChatViewProps) {
     isGitRepo,
     envLocked,
     environmentLocked: envLocked || draftPlacement.locked,
-    availableEnvironments: logicalProjectEnvironments,
+    availableEnvironments: selectableEnvironments,
     autoPlacement,
     onEnvironmentChange,
-    onLinkEnvironmentRequest,
+    ...(activeProject ? { onLinkEnvironmentRequest } : {}),
     onEnvModeChange,
     ...(canOverrideServerThreadEnvMode ? { effectiveEnvModeOverride: envMode } : {}),
     ...(canOverrideServerThreadEnvMode
@@ -9801,6 +9837,16 @@ function ChatViewContent(props: ChatViewProps) {
                       <div className="relative z-10 w-full">
                         <div className="relative z-10">
                           <ChatComposer
+                            environmentControl={
+                              activeThread.projectId === null ? (
+                                <BranchToolbarEnvironmentSelector
+                                  environmentId={activeThread.environmentId}
+                                  availableEnvironments={selectableEnvironments}
+                                  envLocked={envLocked || draftPlacement.locked}
+                                  onEnvironmentChange={onEnvironmentChange}
+                                />
+                              ) : undefined
+                            }
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}

@@ -4,7 +4,7 @@ Creating a project by name gives it a private working folder inside Pathway on t
 environment. Files stay there across app restarts. Pathway does not create a project folder in
 your home directory, and a name-only project does not need a Git repository.
 
-In the action palette’s Workspace section, choose **Add directory** when you want to use your
+In the action palette’s Environment section, choose **Add directory** when you want to use your
 own folder. You can keep earlier files in the Pathway workspace or copy them into the attached
 directory. Copying never overwrites existing destination files. Stop any active agent work before
 changing directories.

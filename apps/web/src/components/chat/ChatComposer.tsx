@@ -360,7 +360,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   showInteractionModeToggle: boolean;
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
-  showPlanToggle: boolean;
+  hideInteractionModeLabel: boolean;
   disabledReason?: string;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -396,7 +396,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
             ) : (
               <ComposerControlIcon icon={BotIcon} opticalSize="large" />
             )}
-            <span className="sr-only sm:not-sr-only">
+            <span className={props.hideInteractionModeLabel ? "sr-only" : "sr-only sm:not-sr-only"}>
               {props.interactionMode === "plan" ? "Plan" : "Build"}
             </span>
           </ComposerControl>
@@ -513,6 +513,7 @@ export interface ChatComposerHandle {
 // --------------------------------------------------------------------------
 
 export interface ChatComposerProps {
+  environmentControl?: ReactNode;
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   maxFileAttachmentBytes: number | null;
@@ -3590,7 +3591,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     interactionMode={interactionMode}
                     runtimeMode={runtimeMode}
-                    showPlanToggle={false}
+                    hideInteractionModeLabel={Boolean(props.environmentControl)}
                     {...(composerControlsDisabledReason
                       ? { disabledReason: composerControlsDisabledReason }
                       : {})}
@@ -3599,6 +3600,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   />
                 </>
               )}
+              {props.environmentControl ? (
+                <>
+                  <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+                  {props.environmentControl}
+                </>
+              ) : null}
             </div>
 
             {isPreparingWorktree ? (

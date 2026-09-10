@@ -31,7 +31,7 @@ interface BranchToolbarEnvironmentSelectorProps {
   autoPlacement?: AutoPlacementOption | undefined;
   envLocked: boolean;
   environmentId: EnvironmentId;
-  availableEnvironments: readonly EnvironmentOption[];
+  availableEnvironments: readonly Omit<EnvironmentOption, "projectId">[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
   /** Opens the flow that attaches this project to another environment. */
   onLinkEnvironmentRequest?: () => void;

@@ -15,7 +15,7 @@ export interface ActionPaletteSectionDefinition {
 export const ACTION_PALETTE_SECTION_DEFINITIONS = [
   {
     id: "workspace",
-    label: "Workspace",
+    label: "Environment",
     description: "Environment, branch, and editor controls.",
     defaultVisible: true,
     defaultPosition: 0,
