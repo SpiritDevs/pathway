@@ -50,3 +50,10 @@ published its model catalogue, or has no enabled, available models. Verified in 
 Helium window at its natural viewport size; targeted lint passed.
 
 ![Destination without published models](missing-models.png)
+
+Review fixes passed 219 focused web/shared tests, 29 backend tests, 24 server tests, and 21 native
+queue tests. Web, shared client-runtime, backend, contracts, and server typechecks passed; targeted
+lint and iPad/visionOS builds passed. The local preview migration backfilled three existing queue
+rows, and a new follow-up was saved to cloud in the retained ordinary conversation and composer.
+
+![Follow-up after review fixes and preview migration](after-review.png)
