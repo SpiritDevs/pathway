@@ -42,7 +42,7 @@ export function conversationStorageBanner({
         </Button>
       ),
     };
-  if (!storage.isStartingConversation || hasMessages || storage.pressure !== "critical" || storage.allowed) return null;
+  if (hasMessages || storage.pressure !== "critical" || storage.allowed) return null;
   return {
     id: "storage-critical",
     variant: "warning",

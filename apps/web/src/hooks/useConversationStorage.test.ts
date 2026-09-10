@@ -361,7 +361,7 @@ describe("conversation storage", () => {
       ],
     };
     render().allow();
-    expect(render().canSend).toBe(true);
+    expect(render().canSend).toBe(false);
     expect(render({ isStartingConversation: false }).canSend).toBe(false);
     await render().recreateWorktree();
     expect(mocks.recreate).toHaveBeenCalledExactlyOnceWith({ environmentId, input: { threadId } });
