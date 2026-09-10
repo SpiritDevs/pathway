@@ -3820,9 +3820,12 @@ function ChatViewContent(props: ChatViewProps) {
     (nextEnvironmentId: EnvironmentId) => {
       if (envLocked || !draftId || draftPlacement.locked) return;
       if (activeThread?.projectId === null) {
-        setDraftThreadContext(draftId, {
-          projectRef: { environmentId: nextEnvironmentId, projectId: null },
-        });
+        const ref = { environmentId: nextEnvironmentId, projectId: null };
+        setLogicalProjectDraftThreadId(
+          `${draftProjectKey(ref)}:${activeThread.conversationCompanyId ?? "unassigned"}`,
+          ref,
+          draftId,
+        );
         return;
       }
       const target = resolveDraftEnvironmentProjectRef(
@@ -3839,7 +3842,8 @@ function ChatViewContent(props: ChatViewProps) {
       draftPlacement.locked,
       draftPlacement.selectEnvironment,
       activeThread?.projectId,
-      setDraftThreadContext,
+      activeThread?.conversationCompanyId,
+      setLogicalProjectDraftThreadId,
       envLocked,
       logicalProjectEnvironments,
     ],

@@ -63,6 +63,7 @@ import {
   COMPOSER_DRAFT_STORAGE_KEY,
   clearComposerDraftsEnvironment,
   captureComposerDraft,
+  draftProjectKey,
   reconcilePendingDraftSends,
   finalizePromotedDraftThreadByRef,
   hydrateImagesFromPersisted,
@@ -2622,6 +2623,43 @@ describe("conversation draft retention", () => {
       temporary: true,
       conversationCompanyId: "company-1",
     });
+  });
+
+  it("remaps a conversation to its new environment while preserving company and draft contents", () => {
+    const store = useComposerDraftStore.getState();
+    const draftId = DraftId.make("moving-conversation");
+    const companyId = CompanyId.make("company-1");
+    const source = { environmentId: TEST_ENVIRONMENT_ID, projectId: null };
+    const destination = { environmentId: EnvironmentId.make("remote"), projectId: null };
+    const sourceKey = `${draftProjectKey(source)}:${companyId}`;
+    const destinationKey = `${draftProjectKey(destination)}:${companyId}`;
+    store.setLogicalProjectDraftThreadId(sourceKey, source, draftId, {
+      conversationCompanyId: companyId,
+      temporary: true,
+      interactionMode: "plan",
+    });
+    store.setPrompt(draftId, "Keep my conversation");
+
+    store.setLogicalProjectDraftThreadId(destinationKey, destination, draftId);
+
+    expect(store.getDraftSessionByLogicalProjectKey(sourceKey)).toBeNull();
+    expect(store.getDraftSessionByLogicalProjectKey(destinationKey)).toMatchObject({
+      draftId,
+      environmentId: destination.environmentId,
+      projectId: null,
+      conversationCompanyId: companyId,
+      logicalProjectKey: destinationKey,
+      temporary: true,
+      interactionMode: "plan",
+    });
+    expect(store.getComposerDraft(draftId)?.prompt).toBe("Keep my conversation");
+
+    const newSourceDraftId = DraftId.make("new-source-conversation");
+    store.setLogicalProjectDraftThreadId(sourceKey, source, newSourceDraftId, {
+      conversationCompanyId: companyId,
+    });
+    expect(store.getDraftSessionByLogicalProjectKey(sourceKey)?.draftId).toBe(newSourceDraftId);
+    expect(store.getDraftSessionByLogicalProjectKey(destinationKey)?.draftId).toBe(draftId);
   });
 
   it("preserves retention and composer contents when a draft acquires a project", () => {
