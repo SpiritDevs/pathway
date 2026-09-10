@@ -6,7 +6,9 @@ it on another device.
 
 Queued and disconnected threads use the same conversation view and composer as running threads.
 Your pending messages appear in the conversation, with their delivery status and available
-recovery actions. You can continue writing and attaching files in the usual composer.
+recovery actions. You can continue writing and attaching files in the usual composer. While saved
+messages load, a small indicator appears above the composer. Empty conversations leave the message
+area clear.
 When starting work from an issue, Pathway links the thread to the issue after the thread is saved
 to the cloud. A message saved only on this device does not mark the issue as started.
 
