@@ -224,6 +224,7 @@ export const makeThreadQueueBackend = Effect.fn("cloud.thread_queue.backend")(fu
   const call = <A>(issue: () => Promise<A>) =>
     Effect.tryPromise({ try: issue, catch: (error) => error });
   const args = (head: ThreadQueueHead) => ({
+    ...(head.queueId === undefined ? {} : { queueId: head.queueId }),
     companyId: input.companyId,
     threadId: head.threadId,
     commandId: head.commandId,
@@ -464,6 +465,13 @@ export const makeLocalThreadQueueExecutor = Effect.fn("cloud.thread_queue.execut
           .pipe(Effect.asVoid);
       }
       return Effect.gen(function* () {
+        if (submission.branch !== undefined)
+          yield* threads.dispatch({
+            type: "thread.metadata.update",
+            commandId: CommandId.make(`${receiptId}:branch`),
+            threadId: ThreadId.make(accepted.threadId),
+            branch: submission.branch,
+          });
         if (submission.runtimeMode !== undefined)
           yield* threads.dispatch({
             type: "thread.runtime-mode.set",

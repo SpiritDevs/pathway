@@ -1,8 +1,9 @@
 # Durable thread submission
 
 Convex owns pending thread intent and ordered user submissions. The environment owns execution and
-full conversation history. Cloud queue identity is company plus thread ID, independent of its
-current destination. Existing environment-published `agentThreads` shells remain the discovery
+full conversation history. Cloud queue identity is a stable `queueId`. Initial lookup includes company, environment, and
+thread ID; reassignment preserves `queueId`, so equal thread IDs on different environments remain
+distinct. Existing environment-published `agentThreads` shells remain the discovery
 read model for accepted threads.
 
 Clients persist an account-scoped outbox entry and attachment bytes before making network requests.
@@ -15,7 +16,10 @@ company change feed. List queries expose summaries; opening a queue loads messag
 queries keep unpublished conversations private to the issuing membership. Published conversations
 share their queue under existing environment read and dispatch permissions; controls require
 environment control permission. Environment requests are restricted to their registered destination.
-Each message retains its issuer, whose authorization is rechecked when queued work is accepted.
+Each message retains its issuer, whose authorization is rechecked before initial acceptance.
+Accepted deliveries retain access to receipt reconciliation if permissions or project bindings
+subsequently change. Issuers can still read and safely cancel their own saved work after losing
+dispatch permission.
 
 ## Delivery and ownership
 
@@ -33,7 +37,7 @@ A failure after acceptance retains ownership and becomes actionable rather than 
 possibly executing submission for reassignment.
 
 A durable rejection receipt proves that a particular delivery did not execute. An explicit retry
-can then increment its delivery attempt while retaining the same message and thread identity.
+can then cancel the rejected head or increment its delivery attempt while retaining the same message and thread identity.
 Unknown outcomes keep the original delivery identity. Retrying a canceled message appends it to
 the queue, so it cannot preempt a later message already accepted by the environment.
 
@@ -54,7 +58,8 @@ Client draft cleanup waits for a thread that is actually visible in the company-
 not merely a raw environment shell. Queue placeholders remain until the canonical shell is
 available. The cloud publisher subscribes to live events while initial and periodic reconciliation
 run independently, closing the former startup window that could postpone new shells until the
-15-second reconciliation interval.
+15-second reconciliation interval. Snapshot scans re-read each shell under the live publication
+mutation lock; reconciliation also refreshes the ID set before removing cloud rows.
 
 The useful latency boundaries are local persistence, cloud enqueue acknowledgement, environment
 acceptance, local durable delivery, shell publication, and provider start. Provider startup time
@@ -63,12 +68,20 @@ must not be reported as thread creation time.
 ## Boundaries
 
 Queued prompts and attachments are cloud content; full environment conversation history is not
-replicated by this feature. Queue metadata and delivered submissions are retained for reconciliation
-and recovery. A future retention policy must preserve retries and must not recreate the handoff
-gap by deleting a summary before a client receives its replacement. The metadata list currently
-retains delivered rows, so pagination/retention needs review as usage grows.
+replicated by this feature. Reactive listings paginate actionable entries and retain delivered
+summaries for seven days after their published shell is available. Delivered entries without a
+replacement shell remain discoverable. Older delivered records and receipts remain available for
+direct reconciliation without subscribing every client to the entire delivery history.
 
 Roll out the Convex schema/functions, then environment workers, then clients. Old clients using
 direct environment submission are outside cloud queue ordering; update every active surface before
 relying on cross-device ordering. Local, relay and tunnel connections share the same cloud queue;
 the transport used to read a running conversation does not change delivery ownership.
+
+## Preview data migration
+
+Deploy the backend before updated clients. For a preview deployment containing queue rows from
+before the listing-expiration index, run `vp exec convex run threadQueue:migrateListing '{}'`
+from `packages/backend` against that deployment. The internal migration backfills 128 rows per
+batch and schedules the remaining batches. Existing message ownership and receipt identities are
+preserved; ambiguous legacy lookups require a destination or stable queue ID.

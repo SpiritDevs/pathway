@@ -4,6 +4,14 @@ import { CommandId, MessageId, ThreadId, ProviderInstanceId, RunId } from "@spir
 import type { ThreadQueueAcceptance, ThreadQueueHead } from "@spiritdevs/contracts/threadQueue";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import type { CompanyId } from "@spiritdevs/contracts/company";
+import type { OrchestrationV2Command } from "@spiritdevs/contracts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
+import * as Receipts from "../orchestration-v2/CommandReceiptStore.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import * as Queue from "effect/Queue";
@@ -16,6 +24,7 @@ import * as ServerConfig from "../config.ts";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 
 import {
+  makeLocalThreadQueueExecutor,
   threadQueueDeliveryCommandId,
   threadQueueDispatchMode,
   persistThreadQueueAttachment,
@@ -422,3 +431,77 @@ it("preserves explicit steering and restart targets while ordering ordinary mess
     type: "queue_after_active",
   });
 });
+
+it.effect("persists the queued checkout branch before dispatching a follow-up", () =>
+  Effect.gen(function* () {
+    const commands: OrchestrationV2Command[] = [];
+    const selection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" };
+    const submission: ThreadQueueAcceptance = {
+      ...accepted,
+      submission: {
+        kind: "message",
+        branch: "release-review",
+        input: {
+          type: "message.dispatch",
+          commandId: CommandId.make(head.commandId),
+          threadId: ThreadId.make(head.threadId),
+          messageId: MessageId.make("follow-up"),
+          text: "Review this checkout",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+          modelSelection: selection,
+          dispatchMode: { type: "queue_after_active" },
+        },
+      },
+    };
+    const executor = yield* makeLocalThreadQueueExecutor("company" as CompanyId).pipe(
+      Effect.provideService(ThreadManagement.ThreadManagementService, {
+        streamDomainEvents: Stream.empty,
+        getThreadProjection: () =>
+          Effect.succeed({ thread: { modelSelection: selection }, runs: [] }),
+        dispatch: (command: OrchestrationV2Command) =>
+          Effect.sync(() => {
+            commands.push(command);
+          }),
+      } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+      Effect.provideService(
+        ThreadLaunch.ThreadLaunchService,
+        {} as ThreadLaunch.ThreadLaunchService["Service"],
+      ),
+      Effect.provideService(Receipts.CommandReceiptStoreV2, {
+        getByCommandId: () => Effect.succeed(Option.none()),
+      } as unknown as Receipts.CommandReceiptStoreV2["Service"]),
+      Effect.provideService(
+        ProjectService.ProjectService,
+        {} as ProjectService.ProjectService["Service"],
+      ),
+      Effect.provideService(ProviderRegistry.ProviderRegistry, {
+        getProviders: Effect.succeed([
+          {
+            ...selection,
+            enabled: true,
+            installed: true,
+            availability: "available",
+            auth: { status: "authenticated" },
+          },
+        ]),
+      } as unknown as ProviderRegistry.ProviderRegistry["Service"]),
+      Effect.provideService(FileSystem.FileSystem, {} as FileSystem.FileSystem),
+      Effect.provideService(ServerConfig.ServerConfig, {} as ServerConfig.ServerConfig["Service"]),
+      Effect.provideService(HttpClient.HttpClient, {} as HttpClient.HttpClient),
+    );
+    const dispatch = yield* executor.prepare(submission);
+    expect(commands).toEqual([]);
+    expect(dispatch).not.toBeNull();
+    if (dispatch) yield* dispatch;
+    expect(commands.map((command) => command.type)).toEqual([
+      "thread.metadata.update",
+      "message.dispatch",
+    ]);
+    expect(commands[0]).toMatchObject({
+      branch: "release-review",
+      commandId: "queued-command:branch",
+    });
+  }),
+);

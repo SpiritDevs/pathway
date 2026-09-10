@@ -359,3 +359,72 @@ it.effect("publishes a newly created thread while startup reconciliation is stil
     yield* Fiber.interrupt(worker);
   }),
 );
+
+for (const change of ["edited", "deleted"] as const) {
+  it.effect(`does not restore a stale startup snapshot after a thread is ${change}`, () =>
+    Effect.gen(function* () {
+      const scanning = yield* Deferred.make<void>();
+      const finishScan = yield* Deferred.make<void>();
+      const livePublished = yield* Deferred.make<void>();
+      const reconciled = yield* Deferred.make<void>();
+      const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+      const stale = shellOf("changed-during-scan", "project-one", "Old title");
+      const current = change === "deleted" ? null : { ...stale, title: "New title" };
+      const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+      const client: ConvexClientLike = {
+        setAuth: () => {},
+        query: (() => Promise.reject(new Error("unexpected query"))) as ConvexClientLike["query"],
+        mutation: ((reference: FunctionReference<"mutation">, args: Record<string, unknown>) => {
+          const name = getFunctionName(reference);
+          calls.push({ name, args });
+          Deferred.doneUnsafe(
+            name === "agentThreads:reconcile" ? reconciled : livePublished,
+            Effect.void,
+          );
+          return Promise.resolve(name === "agentThreads:upsert" ? { outcome: "published" } : null);
+        }) as ConvexClientLike["mutation"],
+      };
+      let firstSnapshot = true;
+      const service = {
+        streamDomainEvents: Stream.fromQueue(events),
+        getShellSnapshot: () =>
+          Effect.gen(function* () {
+            if (firstSnapshot) {
+              firstSnapshot = false;
+              yield* Deferred.succeed(scanning, undefined);
+              yield* Deferred.await(finishScan);
+              return { threads: [stale], archivedThreads: [] };
+            }
+            return { threads: current ? [current] : [], archivedThreads: [] };
+          }),
+        getThreadShell: () => Effect.succeed(current),
+      } as unknown as ThreadManagement.ThreadManagementService["Service"];
+      const worker = yield* runCloudAgentThreadPublisher({
+        companyId: COMPANY_ID,
+        environmentId: ENVIRONMENT_ID,
+        convexUrl: "https://convex.example.test",
+        tokens,
+        client,
+      }).pipe(
+        Effect.provideService(ThreadManagement.ThreadManagementService, service),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(scanning);
+      yield* Queue.offer(events, {
+        type: change === "deleted" ? "thread.deleted" : "thread.metadata-updated",
+        threadId: stale.id,
+      } as OrchestrationV2DomainEvent);
+      yield* Deferred.await(livePublished);
+      yield* Deferred.succeed(finishScan, undefined);
+      yield* Deferred.await(reconciled);
+      const upserts = calls.filter((call) => call.name === "agentThreads:upsert");
+      expect(upserts.map((call) => (call.args["shell"] as { title: string }).title)).toEqual(
+        current ? ["New title"] : [],
+      );
+      expect(
+        calls.find((call) => call.name === "agentThreads:reconcile")?.args["currentThreadIds"],
+      ).toEqual(current ? [current.id] : []);
+      yield* Fiber.interrupt(worker);
+    }),
+  );
+}

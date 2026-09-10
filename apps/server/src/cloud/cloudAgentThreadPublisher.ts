@@ -255,32 +255,43 @@ export const runCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publis
         }),
       );
 
-    const reconcile = Effect.gen(function* () {
-      const snapshot = yield* threads.getShellSnapshot();
-      const shells = [...snapshot.threads, ...snapshot.archivedThreads].filter(
+    const mutationLock = yield* Semaphore.make(1);
+    const publishThread = (threadId: ThreadId) =>
+      mutationLock
+        .withPermits(1)(
+          threads
+            .getThreadShell(threadId)
+            .pipe(
+              Effect.flatMap((shell) =>
+                shell === null ? publisher.remove(threadId) : publisher.publish(shell),
+              ),
+            ),
+        )
+        .pipe(reportFailure("publish", threadId));
+
+    const companyShells = (snapshot: {
+      threads: ReadonlyArray<OrchestrationV2ThreadShell>;
+      archivedThreads: ReadonlyArray<OrchestrationV2ThreadShell>;
+    }) =>
+      [...snapshot.threads, ...snapshot.archivedThreads].filter(
         (shell) => shell.projectId !== null || shell.conversationCompanyId === options.companyId,
       );
-      // One unpublishable shell (a thread whose project binding was revoked,
-      // a shell the deployed validator rejects) must not abort the cycle:
-      // every other shell still publishes and stale removals below still run.
-      yield* Effect.forEach(
-        shells,
-        (shell) => publisher.publish(shell).pipe(reportFailure("publish", shell.id)),
-        {
-          concurrency: 4,
-          discard: true,
-        },
-      );
-      yield* publisher.reconcileIds(shells.map((shell) => shell.id));
-    }).pipe(reportFailure("reconcile"));
 
-    const publishThread = (threadId: ThreadId) =>
-      threads.getThreadShell(threadId).pipe(
-        Effect.flatMap((shell) =>
-          shell === null ? publisher.remove(threadId) : publisher.publish(shell),
-        ),
-        reportFailure("publish", threadId),
+    const reconcile = Effect.gen(function* () {
+      const snapshot = yield* threads.getShellSnapshot();
+      // Snapshot IDs are scan work only. Read each current shell under the same mutation lock
+      // as live events, so delayed scans cannot overwrite edits or resurrect deleted threads.
+      yield* Effect.forEach(companyShells(snapshot), (shell) => publishThread(shell.id), {
+        concurrency: 4,
+        discard: true,
+      });
+      yield* mutationLock.withPermits(1)(
+        Effect.gen(function* () {
+          const current = yield* threads.getShellSnapshot();
+          yield* publisher.reconcileIds(companyShells(current).map((shell) => shell.id));
+        }),
       );
+    }).pipe(reportFailure("reconcile"));
 
     // Start the live tail before scanning existing threads. Reconciliation can involve hundreds
     // of cloud calls, and must not postpone subscribing to or processing newly created threads.
