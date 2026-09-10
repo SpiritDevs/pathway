@@ -1,6 +1,5 @@
 import type {
   EnvironmentId,
-  ProjectId,
   ServerProvider,
   PathwayProjectFileScript,
   ThreadId,
@@ -182,7 +181,6 @@ describe("ThreadDetailsPanel", () => {
       availableEnvironments: [
         {
           environmentId,
-          projectId: "project:pathway" as ProjectId,
           label: "Corey's MacBook Pro",
           isPrimary: true,
         },
@@ -422,7 +420,7 @@ describe("ThreadDetailsPanel", () => {
 
       const html = renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
 
-      expect(html.indexOf("issues-panel-sentinel")).toBeLessThan(html.indexOf("Workspace"));
+      expect(html.indexOf("issues-panel-sentinel")).toBeLessThan(html.indexOf("Environment"));
       expect(html).not.toContain("development-controls-sentinel");
       expect(html).toContain("terminal-controls-sentinel");
       expect(testState.developmentControls).not.toHaveBeenCalled();

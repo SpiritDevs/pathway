@@ -70,7 +70,7 @@ export interface ThreadDetailsPanelProps {
   autoPlacement?: AutoPlacementOption | undefined;
   environmentLocked?: boolean | undefined;
   envLocked: boolean;
-  availableEnvironments: readonly EnvironmentOption[];
+  availableEnvironments: readonly Omit<EnvironmentOption, "projectId">[];
   onEnvironmentChange: (environmentId: EnvironmentId) => void;
   onLinkEnvironmentRequest?: () => void;
   onEnvModeChange: (mode: EnvMode) => void;
@@ -213,7 +213,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 id="thread-details-workspace-heading"
                 className="text-[11px] font-medium text-muted-foreground"
               >
-                Workspace
+                Environment
               </h3>
             </div>
 

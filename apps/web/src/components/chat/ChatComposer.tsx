@@ -513,6 +513,7 @@ export interface ChatComposerHandle {
 // --------------------------------------------------------------------------
 
 export interface ChatComposerProps {
+  environmentControl?: ReactNode;
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   maxFileAttachmentBytes: number | null;
@@ -3570,7 +3571,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 <CompactComposerControlsMenu
                   interactionMode={interactionMode}
                   runtimeMode={runtimeMode}
-                  showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
+                  showInteractionModeToggle={
+                    !props.environmentControl && composerProviderControls.showInteractionModeToggle
+                  }
                   traitsMenuContent={providerTraitsMenuContent}
                   {...(composerControlsDisabledReason
                     ? { disabledReason: composerControlsDisabledReason }
@@ -3587,7 +3590,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     </>
                   ) : null}
                   <ComposerFooterModeControls
-                    showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
+                    showInteractionModeToggle={
+                      !props.environmentControl &&
+                      composerProviderControls.showInteractionModeToggle
+                    }
                     interactionMode={interactionMode}
                     runtimeMode={runtimeMode}
                     showPlanToggle={false}
@@ -3599,6 +3605,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   />
                 </>
               )}
+              {props.environmentControl ? (
+                <>
+                  <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+                  {props.environmentControl}
+                </>
+              ) : null}
             </div>
 
             {isPreparingWorktree ? (
