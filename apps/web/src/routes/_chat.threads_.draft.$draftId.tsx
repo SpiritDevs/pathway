@@ -1,3 +1,8 @@
+import { OfflineThreadComposer } from "../components/OfflineThreadComposer";
+import { environmentServerConfigsAtom } from "../state/server";
+import { useAtomValue } from "@effect/atom-react";
+import { threadQueueEntriesAtom } from "../cloud/threadQueueState";
+import { QueuedThreadPanel } from "../components/QueuedThreadPanel";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { useEffect } from "react";
@@ -29,6 +34,10 @@ function DraftChatThreadRouteView() {
   const { draftId: rawDraftId } = Route.useParams();
   const draftId = DraftId.make(rawDraftId);
   const draftSession = useComposerDraftStore((store) => store.getDraftSession(draftId));
+  const configurations = useAtomValue(environmentServerConfigsAtom);
+  const serverConfig = draftSession ? configurations.get(draftSession.environmentId) : null;
+  const queuedThreads = useAtomValue(threadQueueEntriesAtom);
+  const queuedThread = queuedThreads.find((row) => row.threadId === draftSession?.threadId);
   const threadRefs = useThreadRefs();
   const inferredThreadRef = draftSession
     ? (threadRefs.find(
@@ -48,7 +57,7 @@ function DraftChatThreadRouteView() {
       ? null
       : Option.getOrNull(unfilteredEnvironmentShell.data.snapshot);
   const promotedThreadUnavailable = promotedDraftThreadIsUnavailable({
-    hasPromotedThread: draftSession?.promotedTo != null,
+    hasPromotedThread: draftSession?.promotedTo != null && !queuedThread,
     promotedThreadExists:
       serverThreadRef !== null &&
       (unfilteredSnapshot?.threads.some((thread) => thread.id === serverThreadRef.threadId) ??
@@ -56,6 +65,16 @@ function DraftChatThreadRouteView() {
     promotedThreadVisible: serverThread !== null,
     promotedThreadDeleted: serverThreadStatus === "deleted",
   });
+  useEffect(() => {
+    if (!queuedThread) return;
+    const currentEnvironmentId = draftSession?.environmentId;
+    if (queuedThread.environmentId === currentEnvironmentId) return;
+    void navigate({
+      to: "/threads/$environmentId/$threadId",
+      params: { environmentId: queuedThread.environmentId, threadId: queuedThread.threadId },
+      replace: true,
+    });
+  }, [navigate, queuedThread, draftSession]);
   const serverThreadStarted = threadHasStarted(serverThread);
   const serverVisibleTurnItems = useThreadVisibleTurnItems(serverThreadRef);
   // ChatView owns the optimistic first message while this draft route stays
@@ -115,13 +134,19 @@ function DraftChatThreadRouteView() {
 
   return (
     <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
-      <ChatView
-        draftId={draftId}
-        environmentId={draftSession.environmentId}
-        threadId={draftSession.threadId}
-        routeKind="draft"
-        forceExpandedMobileComposer
-      />
+      {queuedThread && !canonicalThreadRef ? (
+        <QueuedThreadPanel threadId={queuedThread.threadId} />
+      ) : !serverConfig ? (
+        <OfflineThreadComposer draftId={draftId} />
+      ) : (
+        <ChatView
+          draftId={draftId}
+          environmentId={draftSession.environmentId}
+          threadId={draftSession.threadId}
+          routeKind="draft"
+          forceExpandedMobileComposer
+        />
+      )}
     </SidebarInset>
   );
 }

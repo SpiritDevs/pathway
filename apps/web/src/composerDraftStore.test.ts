@@ -1202,11 +1202,16 @@ describe("composerDraftStore project draft thread mapping", () => {
       title: "Build the feature",
       createdAt: "2026-09-08T00:00:00.000Z",
     };
-    const rows = (routeDraftId: string | null, serverThreadKeys = new Set<string>()) =>
+    const rows = (
+      routeDraftId: string | null,
+      serverThreadKeys = new Set<string>(),
+      queuedThreadIds = new Set<string>(),
+    ) =>
       selectSidebarDraftRows({
         ...useComposerDraftStore.getState(),
         routeDraftId,
         serverThreadKeys,
+        queuedThreadIds,
         scopedProjectKeys: null,
         frozenActive: { routeDraftId: null, row: null },
       });
@@ -1227,6 +1232,13 @@ describe("composerDraftStore project draft thread mapping", () => {
         new Set([scopedThreadKey(scopeThreadRef(OTHER_TEST_ENVIRONMENT_ID, threadId))]),
       ).map((row) => row.draftId),
     ).toEqual([draftId]);
+    expect(
+      rows(
+        otherDraftId,
+        new Set([scopedThreadKey(scopeThreadRef(OTHER_TEST_ENVIRONMENT_ID, threadId))]),
+        new Set([threadId]),
+      ),
+    ).toEqual([]);
     expect(store.getDraftSession(draftId)?.pendingSend).toMatchObject(pendingSend);
     expect(
       flushComposerDraftStorage().draftThreadsByThreadKey?.[draftId]?.pendingSend,
@@ -1386,6 +1398,34 @@ describe("composerDraftStore project draft thread mapping", () => {
       "first",
       "second",
     ]);
+  });
+
+  it("keeps a sent draft after navigation until its accepted thread is visible in the company sidebar", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setDraftPendingSend(draftId, {
+      messageId: MessageId.make("accepted-before-cloud"),
+      text: "Keep me",
+      title: "Keep me",
+      createdAt: "2026-09-10T00:00:00.000Z",
+    });
+    store.clearComposerContent(draftId);
+    reconcilePendingDraftSends({
+      status: "live",
+      environmentId: TEST_ENVIRONMENT_ID,
+      acceptedThreadIds: new Set([threadId]),
+      visibleThreadIds: new Set(),
+      activeDraftId: otherDraftId,
+    });
+    expect(store.getDraftSession(draftId)?.pendingSend?.text).toBe("Keep me");
+    reconcilePendingDraftSends({
+      status: "live",
+      environmentId: TEST_ENVIRONMENT_ID,
+      acceptedThreadIds: new Set([threadId]),
+      visibleThreadIds: new Set([threadId]),
+      activeDraftId: otherDraftId,
+    });
+    expect(store.getDraftSession(draftId)).toBeNull();
   });
 
   it("finalizes an unvisited accepted send and cannot resurrect it after server deletion", () => {

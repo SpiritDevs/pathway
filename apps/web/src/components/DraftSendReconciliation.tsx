@@ -1,3 +1,5 @@
+import { useThreadRefs } from "../state/entities";
+import { threadQueueEntriesAtom } from "../cloud/threadQueueState";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import * as Option from "effect/Option";
@@ -9,6 +11,8 @@ function EnvironmentDraftSendReconciliation(props: {
   environmentId: EnvironmentId;
   activeDraftId: string | null;
 }) {
+  const threadRefs = useThreadRefs();
+  const queuedThreads = useAtomValue(threadQueueEntriesAtom);
   const shell = useAtomValue(environmentShell.stateValueAtom(props.environmentId));
   const drafts = useComposerDraftStore((state) => state.draftThreadsByThreadKey);
   useEffect(() => {
@@ -19,11 +23,17 @@ function EnvironmentDraftSendReconciliation(props: {
       status: shell.status,
       environmentId: props.environmentId,
       activeDraftId: props.activeDraftId,
+      visibleThreadIds: new Set(
+        threadRefs
+          .filter((ref) => ref.environmentId === props.environmentId)
+          .map((ref) => ref.threadId),
+      ),
+      queuedThreadIds: new Set(queuedThreads.map((row) => row.threadId)),
       acceptedThreadIds: new Set(
         threads.filter((thread) => thread.latestUserMessageAt !== null).map((thread) => thread.id),
       ),
     });
-  }, [drafts, shell, props.environmentId, props.activeDraftId]);
+  }, [drafts, shell, props.environmentId, props.activeDraftId, threadRefs, queuedThreads]);
   return null;
 }
 

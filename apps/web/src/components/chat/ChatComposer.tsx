@@ -149,18 +149,12 @@ import { basenameOfPath } from "../../pierre-icons";
 import { formatAttachmentSizeLabel } from "../../lib/attachmentSize";
 import {
   getUploadedFileAttachments,
-  cancelAttachmentUpload,
   readAttachmentUpload,
   releaseDraftAttachment,
   releasePersistedAttachmentUpload,
   retryAttachmentUpload,
-  startAttachmentUpload,
-  useAttachmentUploadStore,
 } from "../../lib/attachmentUploadQueue";
-import {
-  attachmentUploadBlockReason,
-  formatAttachmentUploadProgress,
-} from "../../lib/attachmentUploadState";
+import { formatAttachmentUploadProgress } from "../../lib/attachmentUploadState";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
 
@@ -1159,7 +1153,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ),
     [composerImages],
   );
-  const uploadsByAttachmentId = useAttachmentUploadStore((state) => state.uploadsByAttachmentId);
   const fileAttachmentBlockReason = useMemo(() => {
     if (composerFileAttachments.length === 0) return null;
     if (maxFileAttachmentBytes === null) {
@@ -1180,27 +1173,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     ) {
       return "Attach the unavailable files again or remove them before sending.";
     }
-    return attachmentUploadBlockReason({
-      fileIds: composerFileAttachments.map((file) => file.id),
-      uploadsByAttachmentId,
-      environmentId,
-    });
-  }, [composerFileAttachments, environmentId, maxFileAttachmentBytes, uploadsByAttachmentId]);
-
-  useEffect(() => {
-    if (maxFileAttachmentBytes === null) {
-      for (const file of composerFileAttachments) cancelAttachmentUpload(file.id);
-      return;
-    }
-    for (const file of composerFileAttachments) {
-      if (file.sizeBytes > maxFileAttachmentBytes || composerFileNeedsReattach(file)) continue;
-      startAttachmentUpload({
-        environmentId,
-        file,
-        draftTarget: composerDraftTarget,
-      });
-    }
-  }, [composerDraftTarget, composerFileAttachments, environmentId, maxFileAttachmentBytes]);
+    // Queued submissions upload the original file to cloud storage after device persistence.
+    return null;
+  }, [composerFileAttachments, environmentId, maxFileAttachmentBytes]);
 
   // ------------------------------------------------------------------
   // Derived: composer trigger / menu

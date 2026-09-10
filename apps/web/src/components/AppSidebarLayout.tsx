@@ -1,3 +1,4 @@
+import { ThreadQueueRuntime } from "../cloud/threadQueue";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
@@ -212,6 +213,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       hoverReveal
       style={sidebarProviderStyle}
     >
+      <ThreadQueueRuntime />
       <ProjectProjectionRetention />
       <PrimaryNavigationRail
         expanded={isPrimaryNavigationExpanded}

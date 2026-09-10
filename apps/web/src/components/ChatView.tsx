@@ -1,3 +1,6 @@
+import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
+import { QueuedThreadPanel } from "./QueuedThreadPanel";
+import { useQueuedStartThreadTurn } from "../cloud/threadQueue";
 import {
   CONVERSATIONS_FOCUS_ID,
   focusIdForThread,
@@ -291,8 +294,6 @@ import {
   DraftId,
 } from "../composerDraftStore";
 import {
-  awaitAttachmentUploads,
-  getUploadedFileAttachments,
   releasePersistedAttachmentUpload,
   releaseDraftAttachment,
   uploadStandaloneFileAttachment,
@@ -450,14 +451,12 @@ import {
   PullRequestDialogState,
   cloneComposerAttachmentForRetry,
   deriveLockedProvider,
-  readFileAsDataUrl,
   loadQueuedComposerImages,
   reconcileMountedTerminalThreadIds,
   resolveDraftEnvironmentProjectRef,
   resolveEditableV2UserMessageId,
   resolveRetryableV2UserMessageId,
   resolvePanelSurfaceOwnerThreadRef,
-  resolveThreadMetadataUpdateForNextTurn,
   visibleTurnItemsForThreadPresentation,
   resolveSendEnvMode,
   shortcutScopeOwnsEvent,
@@ -1492,13 +1491,7 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
-  const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
-    reportFailure: false,
-  });
-  const setThreadInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode, {
-    reportFailure: false,
-  });
-  const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const startThreadTurn = useQueuedStartThreadTurn();
   const controlWorkspacePreparation = useAtomCommand(
     threadEnvironment.controlWorkspacePreparation,
     { reportFailure: false },
@@ -2402,20 +2395,15 @@ function ChatViewContent(props: ChatViewProps) {
     });
     return envs;
   }, [activeProject, allProjects, projectGroupingSettings, primaryEnvironmentId, environmentById]);
+  const queueDestinations = useAtomValue(threadQueueDestinationsAtom);
   const selectableEnvironments = useMemo(
     () =>
       activeThread?.projectId === null
-        ? environments
-            .filter(
-              (environment) =>
-                environment.environmentId === activeThread.environmentId ||
-                environment.serverConfig?.environment.capabilities.threadConversations === true,
-            )
-            .map((environment) => ({
-              environmentId: environment.environmentId,
-              label: environment.label,
-              isPrimary: environment.environmentId === primaryEnvironmentId,
-            }))
+        ? queueDestinations.map((environment) => ({
+            environmentId: environment.environmentId as EnvironmentId,
+            label: environment.label,
+            isPrimary: environment.environmentId === primaryEnvironmentId,
+          }))
         : logicalProjectEnvironments,
     [
       activeThread?.projectId,
@@ -2423,6 +2411,7 @@ function ChatViewContent(props: ChatViewProps) {
       environments,
       primaryEnvironmentId,
       logicalProjectEnvironments,
+      queueDestinations,
     ],
   );
   // The environment picker stays usable with a single environment: its last row
@@ -4893,83 +4882,6 @@ function ChatViewContent(props: ChatViewProps) {
       }),
     [toggleBrowserPanel, togglePreviewPanel],
   );
-  const persistThreadSettingsForNextTurn = useCallback(
-    async (input: {
-      threadId: ThreadId;
-      createdAt: string;
-      modelSelection?: ModelSelection;
-      branch?: string;
-      runtimeMode: RuntimeMode;
-      interactionMode: ProviderInteractionMode;
-    }): Promise<AtomCommandResult<void, unknown>> => {
-      if (!serverThread) {
-        return AsyncResult.success(undefined);
-      }
-
-      let result: AtomCommandResult<void, unknown> = AsyncResult.success(undefined);
-      const metadataUpdate = resolveThreadMetadataUpdateForNextTurn({
-        currentModelSelection: serverThread.modelSelection,
-        ...(input.modelSelection ? { nextModelSelection: input.modelSelection } : {}),
-        currentBranch: serverThread.branch,
-        ...(input.branch ? { nextBranch: input.branch } : {}),
-      });
-      if (metadataUpdate) {
-        result = mapAtomCommandResult(
-          await updateThreadMetadata({
-            environmentId,
-            input: {
-              threadId: input.threadId,
-              ...metadataUpdate,
-            },
-          }),
-          () => undefined,
-        );
-        if (result._tag === "Failure") {
-          return result;
-        }
-      }
-
-      if (input.runtimeMode !== serverThread.runtimeMode) {
-        result = mapAtomCommandResult(
-          await setThreadRuntimeMode({
-            environmentId,
-            input: {
-              threadId: input.threadId,
-              runtimeMode: input.runtimeMode,
-              createdAt: input.createdAt,
-            },
-          }),
-          () => undefined,
-        );
-        if (result._tag === "Failure") {
-          return result;
-        }
-      }
-
-      if (input.interactionMode !== serverThread.interactionMode) {
-        result = mapAtomCommandResult(
-          await setThreadInteractionMode({
-            environmentId,
-            input: {
-              threadId: input.threadId,
-              interactionMode: input.interactionMode,
-              createdAt: input.createdAt,
-            },
-          }),
-          () => undefined,
-        );
-      }
-      return result;
-    },
-    [
-      environmentId,
-      serverThread,
-      setThreadInteractionMode,
-      setThreadRuntimeMode,
-      updateThreadMetadata,
-    ],
-  );
-
   // Debounce *showing* the scroll-to-bottom pill so it doesn't flash during
   // thread switches. LegendList fires scroll events with isAtEnd=false while
   // initialScrollAtEnd is settling; hiding is always immediate.
@@ -7145,15 +7057,7 @@ function ChatViewContent(props: ChatViewProps) {
         beginLocalDispatch({ preparingWorktree: false });
         setThreadError(activeThread.id, null);
         try {
-          const settingsResult = await persistThreadSettingsForNextTurn({
-            threadId: activeThread.id,
-            createdAt,
-            modelSelection,
-            runtimeMode,
-            interactionMode,
-          });
-          let failure: AtomCommandResult<unknown, unknown> | null =
-            settingsResult._tag === "Failure" ? settingsResult : null;
+          let failure: AtomCommandResult<unknown, unknown> | null = null;
           if (failure === null) {
             const startResult = await startThreadTurn({
               environmentId,
@@ -7286,7 +7190,6 @@ function ChatViewContent(props: ChatViewProps) {
       latestRunSettled,
       launchThreadContinuation,
       beginLocalDispatch,
-      persistThreadSettingsForNextTurn,
       resetLocalDispatch,
       runtimeMode,
       setComposerDraftModelSelection,
@@ -7328,8 +7231,6 @@ function ChatViewContent(props: ChatViewProps) {
       !activeThread ||
       isSendBusy ||
       isContextCompacting ||
-      isConnecting ||
-      activeEnvironmentUnavailable ||
       sendInFlightRef.current ||
       (target === "side-chat" && (!isServerThread || latestSideChatSourceRun === null))
     ) {
@@ -7376,7 +7277,6 @@ function ChatViewContent(props: ChatViewProps) {
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
-      persistableModelSelection: ctxPersistableModelSelection,
     } = sendCtx;
     const activeProjectionRun = serverProjection?.runs.find(
       (run) => run.id === activeLatestRun?.runId,
@@ -7572,7 +7472,7 @@ function ChatViewContent(props: ChatViewProps) {
         resolveDockStarted?.();
       });
       void dockTransition.catch(() => resolveDockStarted?.());
-      await dockStarted;
+      void dockStarted;
     }
     beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
 
@@ -7615,36 +7515,13 @@ function ChatViewContent(props: ChatViewProps) {
     const composerFileAttachmentsSnapshot = composerImagesSnapshot.filter(
       (attachment): attachment is ComposerFileAttachment => attachment.type === "file",
     );
-    const turnAttachmentsPromise = (async () => {
-      await awaitAttachmentUploads(composerFileAttachmentsSnapshot.map((file) => file.id));
-      const uploadedFiles = getUploadedFileAttachments({
-        environmentId,
-        files: composerFileAttachmentsSnapshot,
-      });
-      if (uploadedFiles === null) {
-        throw new Error("Wait for file attachments to finish uploading, then try again.");
+    const turnAttachmentsPromise = Promise.resolve().then(() => {
+      for (const attachment of composerImagesSnapshot) {
+        if (attachment.file === null)
+          throw new Error(`Attach ${attachment.name} again to save it to the cloud.`);
       }
-      const uploadedByComposerId = new Map(
-        composerFileAttachmentsSnapshot.map((file, index) => [file.id, uploadedFiles[index]]),
-      );
-      return Promise.all(
-        composerImagesSnapshot.map(async (image) => {
-          if (image.type === "file") {
-            const uploaded = uploadedByComposerId.get(image.id);
-            if (!uploaded) throw new Error(`'${image.name}' is not ready to send.`);
-            return uploaded;
-          }
-          return {
-            type: "image" as const,
-            name: normalizeComposerAttachmentName(image.name, image.type),
-            mimeType: image.mimeType,
-            sizeBytes: image.sizeBytes,
-            dataUrl: await readFileAsDataUrl(image.file),
-            ...(image.source ? { source: image.source } : {}),
-          };
-        }),
-      );
-    })();
+      return [];
+    });
     const optimisticAttachments = composerImagesSnapshot.map((image) => ({
       type: image.type,
       id: image.id,
@@ -7732,44 +7609,7 @@ function ChatViewContent(props: ChatViewProps) {
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
 
-    if (failure === null && sendsToCurrentThread && isServerThread) {
-      const settingsResult = await persistThreadSettingsForNextTurn({
-        threadId: threadIdForSend,
-        createdAt: messageCreatedAt,
-        ...(ctxSelectedModel && ctxPersistableModelSelection
-          ? { modelSelection: ctxPersistableModelSelection }
-          : {}),
-        ...(localCheckoutBranchMismatch
-          ? { branch: localCheckoutBranchMismatch.currentBranch }
-          : {}),
-        runtimeMode,
-        interactionMode,
-      });
-      if (settingsResult._tag === "Failure") {
-        failure = settingsResult;
-      }
-    }
-
     const turnAttachmentsResult = await settlePromise(() => turnAttachmentsPromise);
-    if (pendingDraftTarget !== null && turnAttachmentsResult._tag === "Success") {
-      const store = useComposerDraftStore.getState();
-      const pending = store.getDraftThread(pendingDraftTarget)?.pendingSend;
-      if (pending?.recoveryDraft)
-        store.setDraftPendingSend(pendingDraftTarget, {
-          ...pending,
-          recoveryDraft: {
-            ...pending.recoveryDraft,
-            attachments: pending.recoveryDraft.attachments.map((attachment, index) => {
-              const uploaded = turnAttachmentsResult.value[index];
-              if (uploaded && "dataUrl" in uploaded)
-                return { ...attachment, dataUrl: uploaded.dataUrl };
-              return uploaded && "id" in uploaded
-                ? { ...attachment, attachmentId: uploaded.id, environmentId }
-                : attachment;
-            }),
-          },
-        });
-    }
     if (failure === null && turnAttachmentsResult._tag === "Failure") {
       failure = turnAttachmentsResult;
     }
@@ -7849,6 +7689,19 @@ function ChatViewContent(props: ChatViewProps) {
             : undefined;
       const startResult = await startThreadTurn({
         environmentId,
+        durableAttachments: composerImagesSnapshot.map((attachment) => ({
+          metadata: {
+            type: attachment.type,
+            id: attachment.id,
+            name: normalizeComposerAttachmentName(attachment.name, attachment.type),
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            ...(attachment.type === "image" && attachment.source
+              ? { source: attachment.source }
+              : {}),
+          },
+          blob: attachment.file!,
+        })),
         input: {
           onLaunchDispatch: () => {
             if (pendingDraftTarget !== null) {
@@ -7915,25 +7768,14 @@ function ChatViewContent(props: ChatViewProps) {
 
     let targetPresentationFailure: unknown = null;
     if (turnStartSucceeded && target === "new-chat") {
-      const startedResult = await settlePromise(() =>
-        waitForStartedServerThread(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
+      const navigateResult = await settlePromise(() =>
+        navigate({
+          to: "/threads/$environmentId/$threadId",
+          params: { environmentId: activeThread.environmentId, threadId: threadIdForSend },
+        }),
       );
-      if (startedResult._tag === "Failure") {
-        targetPresentationFailure = squashAtomCommandFailure(startedResult);
-      } else {
-        const navigateResult = await settlePromise(() =>
-          navigate({
-            to: "/threads/$environmentId/$threadId",
-            params: {
-              environmentId: activeThread.environmentId,
-              threadId: threadIdForSend,
-            },
-          }),
-        );
-        if (navigateResult._tag === "Failure") {
-          targetPresentationFailure = squashAtomCommandFailure(navigateResult);
-        }
-      }
+      if (navigateResult._tag === "Failure")
+        targetPresentationFailure = squashAtomCommandFailure(navigateResult);
     }
 
     if (turnStartSucceeded && target === "side-chat") {
@@ -8075,6 +7917,7 @@ function ChatViewContent(props: ChatViewProps) {
       );
     }
     sendInFlightRef.current = false;
+    resetLocalDispatch();
     if (!turnStartSucceeded || !sendsToCurrentThread) {
       setDockedDraftHeroThreadKey((currentThreadKey) =>
         currentThreadKey === activeThreadKey ? null : currentThreadKey,
@@ -8202,17 +8045,7 @@ function ChatViewContent(props: ChatViewProps) {
       beginLocalDispatch({ preparingWorktree: false });
       setThreadError(activeThread.id, null);
       try {
-        const settingsResult = await persistThreadSettingsForNextTurn({
-          threadId: activeThread.id,
-          createdAt,
-          ...(sendCtx.persistableModelSelection
-            ? { modelSelection: sendCtx.persistableModelSelection }
-            : {}),
-          runtimeMode,
-          interactionMode: "default",
-        });
-        let failure: AtomCommandResult<unknown, unknown> | null =
-          settingsResult._tag === "Failure" ? settingsResult : null;
+        let failure: AtomCommandResult<unknown, unknown> | null = null;
 
         if (failure === null) {
           const startResult = await startThreadTurn({
@@ -8276,7 +8109,6 @@ function ChatViewContent(props: ChatViewProps) {
       isServerThread,
       isWorking,
       latestRunSettled,
-      persistThreadSettingsForNextTurn,
       resetLocalDispatch,
       runtimeMode,
       setThreadError,
@@ -8741,7 +8573,6 @@ function ChatViewContent(props: ChatViewProps) {
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
-      persistableModelSelection: ctxPersistableModelSelection,
     } = sendCtx;
 
     const threadIdForSend = activeThread.id;
@@ -8786,16 +8617,7 @@ function ChatViewContent(props: ChatViewProps) {
       },
     ]);
 
-    const settingsResult = await persistThreadSettingsForNextTurn({
-      threadId: threadIdForSend,
-      createdAt: messageCreatedAt,
-      ...(ctxPersistableModelSelection ? { modelSelection: ctxPersistableModelSelection } : {}),
-      ...(localCheckoutBranchMismatch ? { branch: localCheckoutBranchMismatch.currentBranch } : {}),
-      runtimeMode,
-      interactionMode: nextInteractionMode,
-    });
-    let failure: AtomCommandResult<unknown, unknown> | null =
-      settingsResult._tag === "Failure" ? settingsResult : null;
+    let failure: AtomCommandResult<unknown, unknown> | null = null;
 
     if (failure === null) {
       // Keep the mode toggle and plan-follow-up banner in sync immediately
@@ -9627,6 +9449,11 @@ function ChatViewContent(props: ChatViewProps) {
                 </div>
               </div>
             ) : null}
+            <QueuedThreadPanel
+              threadId={threadId}
+              compact
+              allowCompose={activeEnvironmentUnavailable}
+            />
             {/* Provider status overlays the timeline without changing its content height. */}
             <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
               <ProviderStatusBanner
@@ -9914,10 +9741,10 @@ function ChatViewContent(props: ChatViewProps) {
                               activeProject === null
                             }
                             phase={phase}
-                            isConnecting={isConnecting}
+                            isConnecting={false}
                             isSendBusy={isSendBusy || draftPlacement.blocked}
                             isPreparingWorktree={isPreparingWorktree}
-                            environmentUnavailable={activeEnvironmentUnavailableState}
+                            environmentUnavailable={null}
                             activePendingApproval={activePendingApproval}
                             pendingApprovals={pendingApprovals}
                             pendingUserInputs={pendingUserInputs}

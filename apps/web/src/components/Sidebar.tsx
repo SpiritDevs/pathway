@@ -1,3 +1,5 @@
+import { QueuedThreadSidebar } from "./QueuedThreadSidebar";
+import { threadQueueEntriesAtom, threadQueueDestinationsAtom } from "../cloud/threadQueueState";
 import { CONVERSATIONS_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
 import { GitPullRequestArrowIcon } from "lucide-react";
 import { ThreadPullRequestAction } from "./ThreadPullRequestAction";
@@ -57,6 +59,7 @@ import {
   type Issue,
   type ScopedThreadRef,
   type ThreadId,
+  type EnvironmentId,
 } from "@spiritdevs/contracts";
 import type { TimestampFormat } from "@spiritdevs/contracts/settings";
 import {
@@ -729,6 +732,11 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   const draftsByThreadKey = useComposerDraftStore((store) => store.draftsByThreadKey);
   const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
   const threadRefs = useThreadRefs();
+  const queuedThreads = useAtomValue(threadQueueEntriesAtom);
+  const queuedThreadIds = useMemo(
+    () => new Set(queuedThreads.map((row) => row.threadId)),
+    [queuedThreads],
+  );
   const serverThreadKeys = useMemo(() => new Set(threadRefs.map(scopedThreadKey)), [threadRefs]);
   // The open draft's row is FROZEN at the moment the draft became the route:
   // it stays visible (like a thread row) but never repaints while the user
@@ -764,6 +772,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
         draftThreadsByThreadKey,
         draftsByThreadKey,
         serverThreadKeys,
+        queuedThreadIds,
         frozenActive,
         routeDraftId: props.routeDraftId,
         scopedProjectKeys: props.scopedProjectKeys,
@@ -774,6 +783,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
       draftThreadsByThreadKey,
       draftsByThreadKey,
       serverThreadKeys,
+      queuedThreadIds,
       frozenActive,
       props.routeDraftId,
       props.scopedProjectKeys,
@@ -823,6 +833,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
 });
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+  queuedStatusLabel?: string | null;
   alertProjectKey: string | null;
   alertPolicies: readonly AlertPolicyRow[] | null;
   alertModifierHeld: boolean;
@@ -986,8 +997,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Status hues follow the system-wide convention set by sidebar v1 and the
   // mobile Live Activity/widgets (amber approval, indigo input, sky working)
   // so a thread reads the same color everywhere it surfaces.
-  const topStatus =
-    status === "working"
+  const topStatus = props.queuedStatusLabel
+    ? { label: props.queuedStatusLabel, icon: null, className: "text-muted-foreground" }
+    : status === "working"
       ? {
           label: "Working",
           icon: "working" as const,
@@ -1696,7 +1708,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             wrapper around the ticking duration would make
                             screen readers announce every second. */}
                         <span role="status">{topStatus.label}</span>
-                        {status === "working" ? (
+                        {status === "working" && !props.queuedStatusLabel ? (
                           <span aria-hidden>
                             <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
                           </span>
@@ -2197,7 +2209,11 @@ export default function Sidebar() {
     () => filterSidebarWorkspaceProjectsForFocus(workspaceProjects, activeFocusProjectKeys),
     [activeFocusProjectKeys, workspaceProjects],
   );
-  const threadStartAvailability = workspaceThreadStartAvailability(workspaceProjects);
+  const queueDestinations = useAtomValue(threadQueueDestinationsAtom);
+  const threadStartAvailability =
+    queueDestinations.length > 0
+      ? "available"
+      : workspaceThreadStartAvailability(workspaceProjects);
 
   useEffect(() => {
     // #region DEBUG
@@ -2383,10 +2399,37 @@ export default function Sidebar() {
   // (every non-promoted session with content); it can overcount by one for
   // an open never-left draft, which only softens the empty state.
   const routeDraftIdForRows = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
+  const queuedThreadRows = useAtomValue(threadQueueEntriesAtom);
+  const queuedThreadIds = useMemo(
+    () => new Set(queuedThreadRows.map((row) => row.threadId)),
+    [queuedThreadRows],
+  );
+  const queuedStatusByThreadId = useMemo(
+    () =>
+      new Map(
+        queuedThreadRows
+          .filter((row) => row.waitingToSync || row.queuedCount > 0 || row.state === "blocked")
+          .map((row) => [
+            row.threadId,
+            row.waitingToSync
+              ? "Waiting to sync"
+              : row.state === "blocked"
+                ? "Needs attention"
+                : "Queued",
+          ]),
+      ),
+    [queuedThreadRows],
+  );
+  const visibleQueuedThreadCount = queuedThreadRows.filter((row) =>
+    row.localProjectId === null
+      ? includeConversations
+      : scopedProjectKeys === null ||
+        scopedProjectKeys.has(`${row.environmentId}:${row.localProjectId}`),
+  ).length;
   const visibleDraftSessionCount = useComposerDraftStore((store) => {
     let count = 0;
     for (const [draftKey, session] of Object.entries(store.draftThreadsByThreadKey)) {
-      if (session.promotedTo != null) {
+      if (session.promotedTo != null || queuedThreadIds.has(session.threadId)) {
         continue;
       }
       if (!threadIsVisibleAt(session, "agents")) {
@@ -2470,6 +2513,10 @@ export default function Sidebar() {
       const supportsSnooze =
         serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      if (queuedStatusByThreadId.has(thread.id) && thread.pinnedAt == null) {
+        active.push(thread);
+        continue;
+      }
       const changeRequestState = currentThreadChangeRequestState(
         thread,
         changeRequestStateByKey.get(threadKey),
@@ -2532,6 +2579,7 @@ export default function Sidebar() {
     serverConfigs,
     snoozeWakeTick,
     agentThreads,
+    queuedStatusByThreadId,
   ]);
 
   // Drag-to-reorder for the active inbox. Purely client-local (this device
@@ -4463,6 +4511,7 @@ export default function Sidebar() {
                     const rowVariant = isCard ? "card" : "slim";
                     return (
                       <SidebarThreadRow
+                        queuedStatusLabel={queuedStatusByThreadId.get(thread.id) ?? null}
                         alertPolicies={alertPolicies}
                         alertModifierHeld={shortcutModifiers.ctrlKey || shortcutModifiers.metaKey}
                         alertProjectKey={
@@ -4583,6 +4632,11 @@ export default function Sidebar() {
                   // reorder-capable rows register as sortable (legacy-server
                   // pins render in place as plain rows).
                   const items: ReactNode[] = [
+                    <QueuedThreadSidebar
+                      key="cloud-queued-threads"
+                      scopedProjectKeys={scopedProjectKeys}
+                      includeConversations={includeConversations}
+                    />,
                     <SidebarDraftBlock
                       key="draft-sessions"
                       projectDisplayNameByKey={projectDisplayNameByKey}
@@ -4765,6 +4819,7 @@ export default function Sidebar() {
           ) : null}
           {!isSearchingThreads &&
           visibleDraftSessionCount === 0 &&
+          visibleQueuedThreadCount === 0 &&
           pinnedThreads.length +
             activeThreads.length +
             snoozedThreads.length +
