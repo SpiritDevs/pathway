@@ -1027,12 +1027,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
   const composerProviderControls = useMemo(
     () => ({
-      showInteractionModeToggle: getProviderInteractionModeToggle(
-        providerStatuses,
-        selectedProvider,
-      ),
+      showInteractionModeToggle:
+        activeThread?.projectId !== null &&
+        getProviderInteractionModeToggle(providerStatuses, selectedProvider),
     }),
-    [providerStatuses, selectedProvider],
+    [activeThread?.projectId, providerStatuses, selectedProvider],
   );
   const selectedModelSelection = useMemo<ModelSelection>(
     () => createModelSelection(selectedInstanceId, selectedModel, selectedModelOptionsForDispatch),

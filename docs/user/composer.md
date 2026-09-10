@@ -23,6 +23,9 @@ Checkout and branch controls sit above the input. Model, reasoning, and permissi
 controls in the options menu. These menus do not expand the composer. The same layout applies
 to new threads and existing conversations, including phone-sized web windows.
 
+Conversations without a project omit the Build/Plan toggle from the web and desktop
+composer, including its compact options menu.
+
 Notices above the checkout controls form a stack, with each card behind the first appearing
 narrower. Hover over the notices or focus their controls to lift the stack and reveal more notices.
 
