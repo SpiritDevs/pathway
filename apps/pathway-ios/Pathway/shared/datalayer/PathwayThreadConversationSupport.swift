@@ -235,6 +235,7 @@ extension PathwayAgentThreadModel {
     }
 
     func attachmentURL(_ attachment: PathwayMessageAttachment) async throws -> URL {
+        if let url = cloudQueueAttachmentURLs[attachment.id] { return url }
         let value = try await request("assets.createUrl", payload: .object(["resource": .object([
             "_tag": .string("attachment"), "attachmentId": .string(attachment.id), "fileName": .string(attachment.name), "mimeType": .string(attachment.mimeType)
         ])]), reportsErrors: false)

@@ -73,8 +73,14 @@ struct PathwayLocalQueueEntry: Codable, Sendable, Identifiable {
 actor PathwayThreadQueueStore {
     let url: URL
     private var revision: UInt64 = 0
-    private var filesDirectory: URL { url.deletingLastPathComponent().appending(path: "ThreadQueueAttachments") }
+    private nonisolated var filesDirectory: URL { url.deletingLastPathComponent().appending(path: "ThreadQueueAttachments") }
     init(directory: URL) { url = directory.appending(path: "ThreadQueue.json") }
+
+    nonisolated func attachmentURL(entryID: String, attachmentID: String) -> URL {
+        let identity = entryID + ":" + attachmentID
+        let name = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+        return filesDirectory.appending(path: name)
+    }
 
     func load() throws -> [PathwayLocalQueueEntry] {
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
@@ -134,6 +140,7 @@ final class PathwayThreadQueueModel {
     @ObservationIgnored private var local: [PathwayLocalQueueEntry] = []
     @ObservationIgnored private var captures: Set<String> = []
     @ObservationIgnored private var remote: [String: [PathwayQueuedThread]] = [:]
+    @ObservationIgnored private var detailCache: [String: JSONValue] = [:]
     @ObservationIgnored private var acknowledgedRows: [String: PathwayQueuedThread] = [:]
     @ObservationIgnored private var observers: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var drain: Task<Void, Never>?
@@ -203,7 +210,7 @@ final class PathwayThreadQueueModel {
             task.cancel()
         }
         observers = [:]; stopDrain(); companyIDs = []; captures = []
-        if clear { local = []; remote = [:]; acknowledgedRows = [:]; threads = []; store = nil; storageReady = false; errorMessage = nil }
+        if clear { local = []; remote = [:]; detailCache = [:]; acknowledgedRows = [:]; threads = []; store = nil; storageReady = false; errorMessage = nil }
     }
 
     func enqueue(companyID: String, environmentID: String, threadID: String, submission: JSONValue, files: [PathwayQueueFile] = []) async throws {
@@ -242,8 +249,33 @@ final class PathwayThreadQueueModel {
         }
     }
 
+    /// A conversation can render immediately from local state while cloud reconciliation runs.
+    func cachedDetail(_ thread: PathwayQueuedThread) -> JSONValue {
+        guard companyIDs.contains(thread.companyID) else { return .object(["messages": .array([])]) }
+        var result = detailCache[thread.id]?.objectValue ?? [:]
+        result["thread"] = .object(thread.fields)
+        let confirmed = result["messages"]?.arrayValue ?? []
+        let confirmedIDs = Set(confirmed.compactMap { $0.objectValue?["commandId"]?.stringValue })
+        var messages = confirmed
+        var urls = result["attachmentUrls"]?.objectValue ?? [:]
+        for entry in local where entry.companyID == thread.companyID && entry.threadID == thread.threadID && !confirmedIDs.contains(entry.commandID) {
+            messages.append(.object(["commandId": .string(entry.commandID), "submission": entry.submission,
+                                     "state": .string("local"), "revision": .number(Double(entry.localRevision ?? 0)),
+                                     "editable": .bool(entry.submissionStarted != true), "acceptedAt": .null,
+                                     "error": entry.error.map(JSONValue.string) ?? .null]))
+            for file in entry.files {
+                if let id = file.metadata.objectValue?["id"]?.stringValue, let store {
+                    urls[id] = .string(store.attachmentURL(entryID: entry.id, attachmentID: id).absoluteString)
+                }
+            }
+        }
+        result["messages"] = .array(messages)
+        result["attachmentUrls"] = .object(urls)
+        return .object(result)
+    }
+
     // Each cloud await must keep its account fence and local receipt reconciliation visible.
-    // swiftlint:disable:next cyclomatic_complexity
+    // swiftlint:disable:next cyclomatic_complexity function_body_length
     func detail(_ thread: PathwayQueuedThread) async throws -> JSONValue {
         let current = generation
         guard companyIDs.contains(thread.companyID) else { throw CancellationError() }
@@ -254,13 +286,14 @@ final class PathwayThreadQueueModel {
                               "editable": .bool($0.submissionStarted != true), "acceptedAt": .null,
                               "error": $0.error.map(JSONValue.string) ?? .null])
         }
-        var result: [String: JSONValue] = ["thread": .object(thread.fields), "messages": .array([])]
+        var result = detailCache[thread.id]?.objectValue ?? ["thread": .object(thread.fields), "messages": .array([])]
         if thread.state != "local" || localEntries.contains(where: { $0.submissionStarted == true }) {
             do {
                 result = try await request("query", "threadQueue:getThread", .object(["companyId": .string(thread.companyID), "threadId": .string(thread.threadID)])).objectValue ?? result
             } catch { if pending.isEmpty { throw error } }
         }
         guard current == generation, companyIDs.contains(thread.companyID) else { throw CancellationError() }
+        detailCache[thread.id] = .object(result)
         let confirmed = result["messages"]?.arrayValue ?? []
         var ids = Set(confirmed.compactMap { $0.objectValue?["commandId"]?.stringValue })
         // Queue detail omits delivered bodies. Check each uncertain command's indexed receipt
@@ -287,6 +320,18 @@ final class PathwayThreadQueueModel {
             guard current == generation, !Task.isCancelled else { throw CancellationError() }
             rebuild(); flush()
         }
+        var urls = result["attachmentUrls"]?.objectValue ?? [:]
+        if let store {
+            for entry in localEntries where !ids.contains(entry.commandID) {
+                for file in entry.files {
+                    guard let id = file.metadata.objectValue?["id"]?.stringValue else { continue }
+                    let url = store.attachmentURL(entryID: entry.id, attachmentID: id)
+                    guard current == generation else { throw CancellationError() }
+                    if urls[id] == nil { urls[id] = .string(url.absoluteString) }
+                }
+            }
+        }
+        result["attachmentUrls"] = .object(urls)
         result["messages"] = .array(confirmed + pending.filter { !ids.contains($0.objectValue?["commandId"]?.stringValue ?? "") })
         return .object(result)
     }
@@ -375,12 +420,16 @@ final class PathwayThreadQueueModel {
             guard added.insert(id).inserted else { continue }
             let input = entry.submission.objectValue?["input"]?.objectValue ?? [:]
             rows.append(PathwayQueuedThread(companyID: entry.companyID, fields: ["threadId": .string(entry.threadID), "environmentId": .string(entry.environmentID),
-                                                                                 "title": input["title"] ?? .string("Pending message"), "state": .string("local"), "error": entry.error.map(JSONValue.string) ?? .null]))
+                                                                                 "title": input["title"] ?? .string("Pending message"), "launch": entry.submission.objectValue?["kind"]?.stringValue == "launch" ? .object(input) : .null,
+                                                                                 "localProjectId": input["projectId"] ?? .null, "state": .string("local"), "error": entry.error.map(JSONValue.string) ?? .null]))
         }
         rows = rows.map { row in
-            let count = local.count(where: { $0.companyID == row.companyID && $0.threadID == row.threadID })
-            guard count > 0 else { return row }
-            var fields = row.fields; fields["localCount"] = .number(Double(count))
+            let entries = local.filter { $0.companyID == row.companyID && $0.threadID == row.threadID }
+            guard !entries.isEmpty else { return row }
+            var fields = row.fields; fields["localCount"] = .number(Double(entries.count))
+            fields["localState"] = .array(entries.map { .object(["commandId": .string($0.commandID),
+                                                                 "revision": .number(Double($0.localRevision ?? 0)), "submitted": .bool($0.submissionStarted == true),
+                                                                 "error": $0.error.map(JSONValue.string) ?? .null]) })
             return PathwayQueuedThread(companyID: row.companyID, fields: fields)
         }
         threads = rows.sorted { ($0.fields["updatedAt"]?.intValue ?? 0) > ($1.fields["updatedAt"]?.intValue ?? 0) }
@@ -433,12 +482,14 @@ final class PathwayThreadQueueModel {
                     entry.submissionStarted = true; local[position] = entry
                     try await queueStore.save(local)
                     try check(entry.companyID)
+                    rebuild()
                     _ = try await request("mutation", "threadQueue:enqueue", .object(["companyId": .string(entry.companyID), "environmentId": .string(entry.environmentID), "threadId": .string(entry.threadID), "submission": entry.submission, "attachmentIds": .array(entry.files.compactMap { $0.cloudID.map(JSONValue.string) })]))
                     try check(entry.companyID)
                     // Retain an acknowledged row until the subscription supplies its cloud replacement.
                     if !(remote[entry.companyID] ?? []).contains(where: { $0.threadID == entry.threadID }) {
                         let input = entry.submission.objectValue?["input"]?.objectValue ?? [:]
-                        let row = PathwayQueuedThread(companyID: entry.companyID, fields: ["threadId": .string(entry.threadID), "environmentId": .string(entry.environmentID), "title": input["title"] ?? .string("Pending message"), "state": .string("queued")])
+                        let row = PathwayQueuedThread(companyID: entry.companyID, fields: ["threadId": .string(entry.threadID), "environmentId": .string(entry.environmentID), "title": input["title"] ?? .string("Pending message"), "launch": entry.submission.objectValue?["kind"]?.stringValue == "launch" ? .object(input) : .null,
+                                                                                           "localProjectId": input["projectId"] ?? .null, "state": .string("queued")])
                         acknowledgedRows[row.id] = row
                     }
                     local.removeAll { $0.id == entry.id }

@@ -47,7 +47,9 @@ struct AgentThreadsView: View {
             }
         }
         .navigationTitle("Agent Threads")
-        .sheet(item: $queuedThread) { thread in NavigationStack { PathwayQueuedThreadView(thread: thread) } }
+        .navigationDestination(isPresented: Binding(get: { queuedThread != nil }, set: { if !$0 { queuedThread = nil } })) {
+            if let queuedThread { PathwayQueuedThreadView(thread: queuedThread) }
+        }
         .searchable(text: $query, prompt: "Search threads")
         .toolbar {
             ToolbarItem(placement: .primaryAction) { focusMenu }
@@ -145,14 +147,14 @@ struct AgentThreadsView: View {
     @ViewBuilder
     private var threadList: some View {
         List {
-            if !pendingQueueThreads.isEmpty {
-                Section("Queued") {
-                    ForEach(pendingQueueThreads) { thread in
-                        Button { queuedThread = thread } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(thread.title).foregroundStyle(.primary)
-                                Text(thread.status).font(.caption).foregroundStyle(.secondary)
-                            }
+            ForEach(pendingQueueThreads) { queued in
+                Button { queuedThread = queued } label: {
+                    if let thread = try? queued.conversationThread(detail: .object(["thread": .object(queued.fields)])) {
+                        AgentThreadRow(thread: thread, provider: threadProviders.provider(for: thread))
+                    } else {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(queued.title).foregroundStyle(.primary)
+                            Text(queued.status).font(.caption).foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -256,8 +258,9 @@ struct AgentThreadsView: View {
     }
 
     private var pendingQueueThreads: [PathwayQueuedThread] {
-        appModel.cloud.threadQueue.threads.filter { queued in
-            queued.state != "delivered" || !appModel.cloud.threads.contains {
+        guard listFilter != .archived else { return [] }
+        return appModel.cloud.threadQueue.threads.filter { queued in
+            !appModel.cloud.threads.contains {
                 $0.companyId == queued.companyID && $0.threadId == queued.threadID && $0.environmentId == queued.environmentID
             }
         }
@@ -731,7 +734,11 @@ private struct AgentThreadRow: View {
 
     @ViewBuilder
     private var statusIndicator: some View {
-        if thread.needsAction {
+        if let queued = appModel.cloud.threadQueue.threads.first(where: {
+            $0.companyID == thread.companyId && $0.threadID == thread.threadId && $0.state != "delivered"
+        }) {
+            Text(queued.status).font(.caption).foregroundStyle(.secondary)
+        } else if thread.needsAction {
             Image(systemName: "person.crop.circle.badge.exclamationmark")
                 .foregroundStyle(.orange)
                 .accessibilityLabel("Needs you")
@@ -860,6 +867,7 @@ struct AgentThreadConversationView: View {
     @State private var showsUnfinishedGit = false
     @State private var showsGitReview = false
     @State private var showsAlternateEnvironment = false
+    @State private var showsQueueMove = false
     @FocusState private var isComposerFocused: Bool
 
     init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient, workspaceRoot: String? = nil, storageDirectory: URL? = nil, initiallyReviewChanges: Bool = false) {
@@ -878,12 +886,25 @@ struct AgentThreadConversationView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     connectionBanner
-                    if let queued = appModel.cloud.threadQueue.threads.first(where: {
-                        $0.companyID == model.thread.companyId && $0.threadID == model.threadID && $0.state != "delivered"
-                    }) {
-                        NavigationLink { PathwayQueuedThreadView(thread: queued) } label: {
+                    if let queued = queuedConversation, queued.state != "delivered" {
+                        HStack {
                             Label(queued.status, systemImage: "tray.and.arrow.up")
+                            Spacer()
+                            Menu {
+                                Button("Try syncing again", systemImage: "arrow.clockwise") { appModel.cloud.threadQueue.retry() }
+                                if queued.fields["acceptedAt"] == .null, queued.fields["launch"] != .null {
+                                    Button("Move to another environment", systemImage: "desktopcomputer") { showsQueueMove = true }
+                                }
+                            } label: { Image(systemName: "ellipsis") }
+                            .accessibilityLabel("Message delivery actions")
                         }
+                        .font(.footnote).foregroundStyle(.secondary)
+                        if model.environment.environment.descriptor.capabilities?["durableThreadQueue"]?.boolValue != true {
+                            Text("Update Pathway on this environment to run queued messages.").font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                    if let error = model.cloudQueueError {
+                        Text(error).font(.footnote).foregroundStyle(.red)
                     }
                     AgentThreadTranscript(model: model, onOpenChild: openChild)
                 }
@@ -915,10 +936,10 @@ struct AgentThreadConversationView: View {
                     proxy.scrollTo("agent-transcript-bottom", anchor: .bottom)
                 }
             }
-            .onChange(of: model.items.last?.text) { _, _ in
+            .onChange(of: model.conversationItems.last?.text) { _, _ in
                 if followsLatest && !userIsScrolling { proxy.scrollTo("agent-transcript-bottom", anchor: .bottom) }
             }
-            .onChange(of: model.items.last?.id) { _, _ in
+            .onChange(of: model.conversationItems.last?.id) { _, _ in
                 if followsLatest && !userIsScrolling { proxy.scrollTo("agent-transcript-bottom", anchor: .bottom) }
             }
             .overlay(alignment: .bottom) {
@@ -1055,6 +1076,23 @@ struct AgentThreadConversationView: View {
             if deletedAt != nil { dismiss() }
         }
         .task { model.threadQueue = appModel.cloud.threadQueue; model.start() }
+        .task(id: model.environment.id) {
+            if model.providers.isEmpty { await model.loadSavedQueueProviders(using: appModel.cloud.threadQueue, companyID: model.thread.companyId) }
+        }
+        .task(id: queuedConversation) {
+            model.threadQueue = appModel.cloud.threadQueue
+            if let queued = queuedConversation { await model.updateCloudQueue(queued) }
+        }
+        .task(id: appModel.cloud.threads.contains { $0.companyId == model.thread.companyId && $0.threadId == model.threadID }) {
+            if model.cloudQueuedThread != nil, !model.isSubscriptionReady {
+                await model.stop()
+                guard !Task.isCancelled else { return }
+                model.start()
+            }
+        }
+        .sheet(isPresented: $showsQueueMove) {
+            if let queued = queuedConversation { PathwayQueuedThreadMoveView(thread: queued) }
+        }
         .onDisappear {
             compactThreadChrome?.leaveThreadDetail()
             Task { await model.stop() }
@@ -1115,7 +1153,15 @@ struct AgentThreadConversationView: View {
             catch { navigationError = error.localizedDescription }
         }
     }
+    private var queuedConversation: PathwayQueuedThread? {
+        appModel.cloud.threadQueue.threads.first { $0.companyID == model.thread.companyId && $0.threadID == model.threadID }
+    }
+
     @ViewBuilder private var connectionBanner: some View {
+        if queuedConversation != nil, !model.isSubscriptionReady {
+            Label(model.items.isEmpty ? "Messages will appear here when the environment reconnects." : "Showing saved messages while the environment reconnects", systemImage: "wifi.slash")
+                .font(.footnote).foregroundStyle(.secondary)
+        } else {
         switch model.connectionState {
         case .connecting:
             HStack(spacing: 8) { ProgressView(); Text("Connecting to the environment…") }
@@ -1126,6 +1172,7 @@ struct AgentThreadConversationView: View {
         case let .failed(message):
             Label(message, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
         default: EmptyView()
+        }
         }
     }
 }

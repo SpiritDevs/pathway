@@ -4,6 +4,10 @@ Sending saves your thread and message before its environment starts work. A queu
 Agent Threads when you leave the conversation or close the app. After cloud sync, you can reopen
 it on another device.
 
+Queued and disconnected threads use the same conversation view and composer as running threads.
+Your pending messages appear in the conversation, with their delivery status and available
+recovery actions. You can continue writing and attaching files in the usual composer.
+
 **Waiting to sync** means the message is saved on this device and still needs a cloud connection.
 Keep this device's application data until it finishes syncing. **Queued · Saved to cloud** means
 Pathway Cloud has saved the message and its attachments. The selected environment can pick it up
@@ -17,8 +21,8 @@ Open a queued thread to read its pending messages. You can edit or cancel a mess
 environment accepts it. Canceling the first message of an unstarted thread cancels its pending
 follow-ups as well. Canceled messages remain available to retry; retrying places them at the end
 of the queue. If a send's acknowledgement is uncertain, reconnect before changing that message
-so Pathway can confirm whether it was accepted. If a prerequisite is missing, the thread stays saved with the reason and a
-retry action. A connection failure does not discard your work.
+so Pathway can confirm whether it was accepted. If a prerequisite is missing, the thread stays
+saved with the reason and a retry action. A connection failure does not discard your work.
 
 ## Move an unstarted thread
 

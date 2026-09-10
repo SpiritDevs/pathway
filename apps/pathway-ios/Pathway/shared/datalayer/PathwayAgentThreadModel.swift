@@ -264,6 +264,9 @@ final class PathwayAgentThreadModel {
     var providers: [PathwayServerProvider] = []
     var modelCatalog: [PathwayServerProvider] = []
     var currentModelSelection: PathwayModelSelection
+    @ObservationIgnored private var hasComposerModelOverride = false
+    @ObservationIgnored private var hasComposerRuntimeOverride = false
+    @ObservationIgnored private var hasComposerInteractionOverride = false
     private(set) var runtimeMode: String
     private(set) var interactionMode: String
     private(set) var activeRunID: String?
@@ -293,6 +296,10 @@ final class PathwayAgentThreadModel {
     @ObservationIgnored var threadQueue: PathwayThreadQueueModel? {
         didSet { if threadQueue != nil { supportsAttachmentUploads = true; maximumFileAttachmentBytes = 50 * 1024 * 1024 } }
     }
+    var cloudQueuedThread: PathwayQueuedThread?
+    var cloudQueueMessages: [JSONValue] = []
+    var cloudQueueError: String?
+    var cloudQueueAttachmentURLs: [String: URL] = [:]
     var storageAllowsSend = true
     var canSend: Bool {
         (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftAttachments.isEmpty)
@@ -562,19 +569,27 @@ final class PathwayAgentThreadModel {
     }
     func changeModelSelection(_ selection: PathwayModelSelection) async throws {
         guard !isConfigurationLocked else { throw PathwayThreadConversationError.message("This subagent is managed by its parent thread.") }
-        try await dispatch("thread.model-selection.set", fields: ["modelSelection": try Self.json(selection)])
+        if threadQueue == nil { try await dispatch("thread.model-selection.set", fields: ["modelSelection": try Self.json(selection)]) }
         currentModelSelection = selection
+        hasComposerModelOverride = threadQueue != nil
+        saveDraft()
         if providers.first(where: { $0.id == selection.instanceId })?.showsInteractionMode == false && interactionMode != "default" {
             try await setInteractionMode("default")
         }
     }
     func setRuntimeMode(_ value: String) async throws {
         guard !isConfigurationLocked else { throw PathwayThreadConversationError.message("This subagent is managed by its parent thread.") }
-        try await dispatch("thread.runtime-mode.set", fields: ["runtimeMode": .string(value)]); runtimeMode = value
+        if threadQueue == nil { try await dispatch("thread.runtime-mode.set", fields: ["runtimeMode": .string(value)]) }
+        runtimeMode = value
+        hasComposerRuntimeOverride = threadQueue != nil
+        saveDraft()
     }
     func setInteractionMode(_ value: String) async throws {
         guard !isConfigurationLocked else { throw PathwayThreadConversationError.message("This subagent is managed by its parent thread.") }
-        try await dispatch("thread.interaction-mode.set", fields: ["interactionMode": .string(value)]); interactionMode = value
+        if threadQueue == nil { try await dispatch("thread.interaction-mode.set", fields: ["interactionMode": .string(value)]) }
+        interactionMode = value
+        hasComposerInteractionOverride = threadQueue != nil
+        saveDraft()
     }
     var pendingAsyncQuestions: [PathwayTimelineItem] {
         items.filter { item in
@@ -811,9 +826,9 @@ final class PathwayAgentThreadModel {
         }
         if let value = object["browserTakeover"] { browserTakeover = value.objectValue }
         if let value = object["title"]?.stringValue { threadTitle = value }
-        if let value = object["runtimeMode"]?.stringValue { runtimeMode = value }
-        if let value = object["interactionMode"]?.stringValue { interactionMode = value }
-        if let value = object["modelSelection"], let selection = try? JSONDecoder().decode(PathwayModelSelection.self, from: JSONEncoder().encode(value)) { currentModelSelection = selection }
+        if !hasComposerRuntimeOverride, let value = object["runtimeMode"]?.stringValue { runtimeMode = value }
+        if !hasComposerInteractionOverride, let value = object["interactionMode"]?.stringValue { interactionMode = value }
+        if !hasComposerModelOverride, let value = object["modelSelection"], let selection = try? JSONDecoder().decode(PathwayModelSelection.self, from: JSONEncoder().encode(value)) { currentModelSelection = selection }
         deriveActiveRun()
         applyChildRosterSelection()
     }
@@ -854,9 +869,22 @@ final class PathwayAgentThreadModel {
         guard let restored = await draftStore.load(expirePendingUploads: true) else { return }
         // Do not overwrite a draft the user already started while disk I/O was pending.
         guard draft.isEmpty, draftAttachments.isEmpty else { return }
+        if let selection = restored.composerModelSelection, !hasComposerModelOverride {
+            currentModelSelection = selection; hasComposerModelOverride = true
+        }
+        if let value = restored.composerRuntimeMode, !hasComposerRuntimeOverride {
+            runtimeMode = value; hasComposerRuntimeOverride = true
+        }
+        if let value = restored.composerInteractionMode, !hasComposerInteractionOverride {
+            interactionMode = value; hasComposerInteractionOverride = true
+        }
         draft = restored.text
         attachmentData = restored.data
-        draftAttachments = restored.attachments
+        draftAttachments = restored.attachments.map { attachment in
+            var restoredAttachment = attachment
+            if threadQueue != nil, restored.data[attachment.id] != nil { restoredAttachment.state = .ready }
+            return restoredAttachment
+        }
         preparedSend = restored.preparedSend
         preparedNewSend = restored.preparedNewSend
     }
@@ -873,7 +901,10 @@ final class PathwayAgentThreadModel {
 
     private func draftSnapshot() -> PathwayConversationDraftSnapshot {
         PathwayConversationDraftSnapshot(text: draft, attachments: draftAttachments, data: attachmentData,
-            preparedSend: preparedSend, preparedNewSend: preparedNewSend, revision: DispatchTime.now().uptimeNanoseconds)
+            preparedSend: preparedSend, preparedNewSend: preparedNewSend, revision: DispatchTime.now().uptimeNanoseconds,
+            composerModelSelection: hasComposerModelOverride ? currentModelSelection : nil,
+            composerRuntimeMode: hasComposerRuntimeOverride ? runtimeMode : nil,
+            composerInteractionMode: hasComposerInteractionOverride ? interactionMode : nil)
     }
 
     func persistDraftNow() async {

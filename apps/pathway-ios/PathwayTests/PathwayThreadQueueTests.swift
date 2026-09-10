@@ -191,3 +191,109 @@ extension PathwayThreadQueueTests {
         model.stop(clear: true)
     }
 }
+
+extension PathwayThreadQueueTests {
+    @Test func queuedConversationUsesSavedThreadSettings() throws {
+        let queued = PathwayQueuedThread(companyID: "company", fields: [
+            "threadId": .string("thread"), "environmentId": .string("offline"), "title": .string("Saved conversation"),
+            "launch": .object(["modelSelection": .object(["instanceId": .string("saved-provider"), "model": .string("saved-model")]),
+                               "runtimeMode": .string("approval-required"), "interactionMode": .string("plan")]), "localProjectId": .string("project")
+        ])
+        let thread = try queued.conversationThread(detail: .object([:]))
+        #expect(thread.shell.id == "thread")
+        #expect(thread.shell.projectId == "project")
+        #expect(thread.shell.modelSelection.instanceId == "saved-provider")
+        #expect(thread.shell.runtimeMode == "approval-required")
+        #expect(thread.shell.interactionMode == "plan")
+    }
+
+    @Test func queuedMessagesUseNormalTimelineAndDeduplicateAsEnvironmentHistoryArrives() throws {
+        let model = queueConversationModel()
+        model.cloudQueueMessages = [.object(["commandId": .string("command"), "state": .string("queued"), "acceptedAt": .null,
+                                             "submission": .object(["kind": .string("message"), "input": .object(["messageId": .string("message"), "text": .string("Saved prompt"),
+                                                                                                                  "attachments": .array([.object(["id": .string("file"), "type": .string("file"), "name": .string("context.txt"), "mimeType": .string("text/plain"), "sizeBytes": .number(7)])])])])])]
+        let item = try #require(model.conversationItems.first)
+        #expect(item.isUserMessage)
+        #expect(item.text == "Saved prompt")
+        #expect(item.attachments.first?.name == "context.txt")
+        #expect(model.canEditCloudQueueMessage(item))
+        var canceled = model.cloudQueueMessages[0].objectValue ?? [:]
+        canceled["state"] = .string("canceled")
+        model.cloudQueueMessages[0] = .object(canceled)
+        #expect(model.canEditCloudQueueMessage(item))
+        model.installSnapshot(.object(["thread": .object(["id": .string(model.threadID)]), "visibleTurnItems": .array([
+            .object(["item": .object(["id": .string("environment-item"), "type": .string("user_message"), "messageId": .string("message"), "text": .string("Saved prompt")])])
+        ])]), sequence: 1)
+        #expect(model.conversationItems.count == 1)
+        #expect(model.conversationItems.first?.id == "environment-item")
+    }
+
+    @Test func ordinaryComposerQueuesOfflineWithSelectedSettingsAndAttachmentBytes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let queue = PathwayThreadQueueModel(request: { _, _, _ in throw URLError(.notConnectedToInternet) },
+                                            subscribe: { _, _ in AsyncThrowingStream { _ in } })
+        await queue.configure(directory: directory)
+        queue.observe(companies: ["company-1"])
+        let model = queueConversationModel()
+        model.threadQueue = queue
+        try await model.setRuntimeMode("approval-required")
+        try await model.changeModelSelection(PathwayModelSelection(instanceId: "saved-provider", model: "saved-model", options: nil))
+        model.installSnapshot(.object(["thread": .object(["id": .string(model.threadID), "runtimeMode": .string("full-access"),
+                                                          "modelSelection": .object(["instanceId": .string("old-provider"), "model": .string("old-model")])])]), sequence: 1)
+        #expect(model.currentModelSelection.instanceId == "saved-provider")
+        #expect(model.runtimeMode == "approval-required")
+        await model.addAttachment(data: Data("context".utf8), name: "context.txt", mimeType: "text/plain")
+        model.draft = "An ordinary offline message"
+        #expect(model.canSend)
+        await model.send()
+        #expect(model.draft.isEmpty)
+        let entries = try await PathwayThreadQueueStore(directory: directory).load()
+        #expect(entries.count == 1)
+        #expect(entries.first?.files.first?.data == Data("context".utf8))
+        let queued = try #require(queue.threads.first)
+        let cached = queue.cachedDetail(queued)
+        #expect(cached.objectValue?["messages"]?.arrayValue?.first?.objectValue?["submission"]?.objectValue?["input"]?.objectValue?["text"] == .string("An ordinary offline message"))
+        let fileURL = try #require(cached.objectValue?["attachmentUrls"]?.objectValue?.values.first?.stringValue.flatMap(URL.init(string:)))
+        #expect(try Data(contentsOf: fileURL) == Data("context".utf8))
+        #expect(entries.first?.submission.objectValue?["runtimeMode"] == .string("approval-required"))
+        #expect(entries.first?.submission.objectValue?["input"]?.objectValue?["modelSelection"]?.objectValue?["instanceId"] == .string("saved-provider"))
+        queue.stop(clear: true)
+    }
+
+    @Test func offlineComposerDraftAndSettingsSurviveReturningToConversation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let queue = PathwayThreadQueueModel(request: { _, _, _ in throw URLError(.notConnectedToInternet) },
+                                            subscribe: { _, _ in AsyncThrowingStream { _ in } })
+        let model = queueConversationModel(directory: directory)
+        model.threadQueue = queue
+        await model.restoreDraft()
+        try await model.setRuntimeMode("approval-required")
+        try await model.changeModelSelection(PathwayModelSelection(instanceId: "saved-provider", model: "saved-model", options: nil))
+        await model.addAttachment(data: Data("context".utf8), name: "context.txt", mimeType: "text/plain")
+        model.draft = "Keep this unsent draft"
+        await model.stop()
+        let restored = queueConversationModel(directory: directory)
+        restored.threadQueue = queue
+        await restored.restoreDraft()
+        #expect(restored.draft == "Keep this unsent draft")
+        #expect(restored.currentModelSelection.instanceId == "saved-provider")
+        #expect(restored.runtimeMode == "approval-required")
+        #expect(restored.draftAttachments.first?.state == .ready)
+        #expect(restored.attachmentData.values.first == Data("context".utf8))
+        await restored.stop()
+    }
+
+    private func queueConversationModel(directory: URL? = nil) -> PathwayAgentThreadModel {
+        let thread = makeAgentThread()
+        let environment = PathwayCompanyEnvironment(companyId: thread.companyId,
+                                                    environment: PathwayEnvironment(id: "environment", environmentId: thread.environmentId,
+                                                                                    descriptor: PathwayEnvironmentDescriptor(environmentId: thread.environmentId, label: "Mac", serverVersion: "test"),
+                                                                                    relayLinkState: "disconnected", managedEndpointAvailable: false, lastSeenAt: nil, state: "active"))
+        return PathwayAgentThreadModel(thread: thread, environment: environment, request: { _, _ in
+            Issue.record("The ordinary offline composer must save to the outbox without calling the environment.")
+            throw URLError(.notConnectedToInternet)
+        }, storageDirectory: directory)
+    }
+}

@@ -1,134 +1,69 @@
 import SwiftUI
 
-/// A queued thread remains readable while its destination is disconnected.
+/// Queued threads open the same conversation screen as environment-backed threads.
 struct PathwayQueuedThreadView: View {
     @Environment(PathwayAppModel.self) private var appModel
     let thread: PathwayQueuedThread
-    @State private var messages: [JSONValue] = []
+    @State private var model: PathwayAgentThreadModel?
     @State private var errorMessage: String?
-    @State private var editingCommand: String?
-    @State private var editingRevision = 0
-    @State private var editText = ""
-    @State private var isEditing = false
-    @State private var showMove = false
-    @State private var nextMessage = ""
-    @State private var sending = false
 
     private var current: PathwayQueuedThread { appModel.cloud.threadQueue.threads.first { $0.id == thread.id } ?? thread }
 
     var body: some View {
-        List {
-            Section {
-                Label(current.status, systemImage: "tray.and.arrow.up")
-                if let environment = appModel.cloud.environments.first(where: {
-                    $0.companyId == current.companyID && $0.environment.environmentId == current.environmentID
-                }) {
-                    Text(environment.environment.label).foregroundStyle(.secondary)
-                    if environment.environment.descriptor.capabilities?["durableThreadQueue"]?.boolValue != true {
-                        Label("Update Pathway on this environment to run queued messages.", systemImage: "arrow.down.circle")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
+        Group {
+            if let model {
+                AgentThreadConversationView(model: model)
+                    .id(model.environment.environment.environmentId)
+            } else if let errorMessage {
+                ContentUnavailableView {
+                    Label("Conversation unavailable", systemImage: "bubble.left.and.bubble.right")
+                } description: { Text(errorMessage) } actions: {
+                    Button("Try again") { Task { await loadConversation() } }
                 }
-                if let error = current.fields["error"]?.stringValue { Text(error).foregroundStyle(.red) }
-                Text("Queued messages run when this environment reconnects, even if you close the app.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            Section("Messages") {
-                ForEach(Array(messages.enumerated()), id: \.element.queueCommandID) { _, value in
-                    let fields = value.objectValue ?? [:]
-                    let submission = fields["submission"]?.objectValue ?? [:]
-                    let input = submission["input"]?.objectValue ?? [:]
-                    let text = input["initialMessage"]?.objectValue?["text"]?.stringValue ?? input["text"]?.stringValue ?? ""
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(text).textSelection(.enabled)
-                        Text(fields["state"]?.stringValue ?? "queued").font(.caption).foregroundStyle(.secondary)
-                        if let error = fields["error"]?.stringValue { Text(error).font(.caption).foregroundStyle(.red) }
-                        if fields["editable"]?.boolValue == true || (["queued", "blocked"].contains(fields["state"]?.stringValue ?? "") && fields["acceptedAt"] == .null) {
-                            HStack {
-                                Button("Edit") {
-                                    editingCommand = fields["commandId"]?.stringValue
-                                    editingRevision = fields["revision"]?.intValue ?? 0
-                                    editText = text; isEditing = true
-                                }
-                                Button("Cancel", role: .destructive) {
-                                    perform("cancel", fields: ["commandId": fields["commandId"] ?? .null,
-                                                               "revision": fields["revision"] ?? .number(0)])
-                                }
-                                if fields["state"]?.stringValue == "blocked" {
-                                    Button("Retry") { perform("retry", fields: ["commandId": fields["commandId"] ?? .null, "revision": fields["revision"] ?? .number(0)]) }
-                                }
-                            }.buttonStyle(.borderless)
-                        } else if ["blocked", "canceled"].contains(fields["state"]?.stringValue ?? "") {
-                            Button("Retry") { perform("retry", fields: ["commandId": fields["commandId"] ?? .null, "revision": fields["revision"] ?? .number(0)]) }
-                        }
-                    }.padding(.vertical, 4)
-                }
-            }
-            Section {
-                TextField("Add a message to the queue", text: $nextMessage, axis: .vertical)
-                Button("Queue message") { Task { await send() } }
-                    .disabled(nextMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending)
-            }
-            if current.state == "local" {
-                Button("Try syncing again") { appModel.cloud.threadQueue.retry() }
-            } else if current.fields["acceptedAt"] == .null, current.fields["launch"] != .null {
-                Button("Move to another environment") { showMove = true }
-            }
-            if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
+            } else { ProgressView("Opening conversation…") }
         }
-        .navigationTitle(current.title)
-        .task(id: "\(current.revision):\(current.state):\(current.fields["updatedAt"]?.intValue ?? 0):\(current.fields["localCount"]?.intValue ?? 0)") { await reload() }
-        .refreshable { await reload(); appModel.cloud.threadQueue.retry() }
-        .alert("Edit queued message", isPresented: $isEditing) {
-            TextField("Message", text: $editText)
-            Button("Save") { if let editingCommand { perform("edit", fields: ["commandId": .string(editingCommand), "revision": .number(Double(editingRevision)), "text": .string(editText)]) } }
-            Button("Cancel", role: .cancel) {}
-        }
-        .sheet(isPresented: $showMove) { PathwayQueuedThreadMoveView(thread: current) }
+        .task(id: current.environmentID) { await loadConversation() }
     }
 
-    private func reload() async {
+    private func loadConversation() async {
+        let queued = current
+        guard let connect = appModel.connect,
+              let environment = appModel.cloud.environments.first(where: {
+                  $0.companyId == queued.companyID && $0.environment.environmentId == queued.environmentID
+              })
+        else {
+            errorMessage = "The saved environment details are unavailable. Your messages remain saved."
+            return
+        }
         do {
-            let result = try await appModel.cloud.threadQueue.detail(current)
-            messages = result.objectValue?["messages"]?.arrayValue ?? []
-        } catch { errorMessage = error.localizedDescription }
-    }
-
-    private func perform(_ action: String, fields: [String: JSONValue]) {
-        Task {
-            do {
-                try await appModel.cloud.threadQueue.mutate(action, thread: current, fields: fields)
-                await reload()
-            } catch { errorMessage = error.localizedDescription }
-        }
-    }
-
-    private func send() async {
-        sending = true
-        defer { sending = false }
-        do {
-            guard let source = messages.first?.objectValue?["submission"]?.objectValue?["input"]?.objectValue,
-                  let selection = source["modelSelection"] else { throw PathwayThreadConversationError.message("Wait for the saved thread settings to load.") }
-            let id = UUID().uuidString.lowercased()
-            let text = nextMessage
-            try await appModel.cloud.threadQueue.enqueue(companyID: current.companyID, environmentID: current.environmentID,
-                                                         threadID: current.threadID, submission: .object(["kind": .string("message"), "input": .object([
-                                                             "type": .string("message.dispatch"), "commandId": .string(id), "messageId": .string(id),
-                                                             "threadId": .string(current.threadID), "text": .string(text), "attachments": .array([]),
-                                                             "modelSelection": selection, "createdBy": .string("user"), "creationSource": .string("mobile"),
-                                                             "dispatchMode": .object(["type": .string("queue_after_active")])
-                                                         ])]))
-            if nextMessage == text { nextMessage = "" }
-            await reload()
-        } catch { errorMessage = error.localizedDescription }
+            let detail = appModel.cloud.threadQueue.cachedDetail(queued)
+            guard !Task.isCancelled, current.environmentID == queued.environmentID else { return }
+            let thread = try appModel.cloud.threads.first(where: {
+                $0.companyId == queued.companyID && $0.threadId == queued.threadID && $0.environmentId == queued.environmentID
+            }) ?? queued.conversationThread(detail: detail)
+            let next = PathwayAgentThreadModel(thread: thread, environment: environment, connect: connect,
+                                               storageDirectory: appModel.localStorageDirectory)
+            next.threadQueue = appModel.cloud.threadQueue
+            await next.restoreDraft()
+            if let model, model.environment.environment.environmentId != queued.environmentID {
+                await model.stop()
+                next.draft = model.draft
+                next.draftAttachments = model.draftAttachments
+                next.attachmentData = model.attachmentData
+                try await next.changeModelSelection(thread.shell.modelSelection)
+                try await next.setRuntimeMode(model.runtimeMode)
+                try await next.setInteractionMode(model.interactionMode)
+                await next.persistDraftNow()
+            }
+            next.installCloudQueueDetail(queued, detail: detail, authoritative: false)
+            guard !Task.isCancelled, current.environmentID == queued.environmentID else { return }
+            model = next
+            errorMessage = nil
+        } catch { if !Task.isCancelled { errorMessage = error.localizedDescription } }
     }
 }
 
-private extension JSONValue {
-    var queueCommandID: String { objectValue?["commandId"]?.stringValue ?? "" }
-}
-
-private struct PathwayQueuedThreadMoveView: View {
+struct PathwayQueuedThreadMoveView: View {
     @Environment(PathwayAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
     let thread: PathwayQueuedThread
