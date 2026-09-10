@@ -75,10 +75,12 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
   item,
   environmentId,
   onControl,
+  awaitingRun = false,
 }: {
   item: PreparationItem;
   environmentId: EnvironmentId;
   onControl?: (action: "cancel" | "work_locally" | "retry") => Promise<void>;
+  awaitingRun?: boolean;
 }) {
   const presentation = workspacePreparationPresentation(item);
   const preparation = item.workspacePreparation;
@@ -91,7 +93,7 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
   const canControl =
     (item.status === "running" || canRecover) &&
     preparation?.workspaceKind === "worktree" &&
-    onControl;
+    (onControl || awaitingRun);
   async function control(action: "cancel" | "work_locally" | "retry") {
     if (pending || !onControl) return;
     setPending(action);
@@ -205,7 +207,7 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
           <div className="float-right mt-3 ml-4 flex flex-wrap justify-end gap-4 text-muted-foreground">
             <button
               type="button"
-              disabled={pendingAction !== null}
+              disabled={pendingAction !== null || !onControl}
               onClick={() => void control("work_locally")}
               className="flex items-center gap-2 rounded py-1 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
             >
@@ -214,7 +216,7 @@ export const WorkspacePreparationCard = memo(function WorkspacePreparationCard({
             </button>
             <button
               type="button"
-              disabled={pendingAction !== null}
+              disabled={pendingAction !== null || !onControl}
               onClick={() => void control(canRecover ? "retry" : "cancel")}
               className="flex items-center gap-2 rounded py-1 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
             >

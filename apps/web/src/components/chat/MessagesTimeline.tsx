@@ -2078,6 +2078,12 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
       <WorkspacePreparationCard
         item={item}
         environmentId={ctx.activeThreadEnvironmentId}
+        awaitingRun={
+          visibility === "local" &&
+          item.runId === null &&
+          item.id === `workspace-preparation:optimistic:${item.threadId}` &&
+          Boolean(ctx.onControlWorkspacePreparation)
+        }
         {...(visibility === "local" &&
         item.runId &&
         ctx.onControlWorkspacePreparation &&

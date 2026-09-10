@@ -18,7 +18,7 @@ The card stays in the conversation after creation. If preparation fails or is in
 
 **Worktree created** means the files are ready and the setup script has been started. The script runs in its terminal while the agent begins, so this status does not mean dependency installation or other script commands have finished.
 
-While a new worktree is being prepared, choose **Cancel** to return the submitted message and attachments to a new compose draft. The provisional conversation is removed. Text you typed while cancellation was in progress is kept with the restored message. If you have queued follow-up messages, remove them before cancelling.
+**Work locally** and **Cancel** appear throughout preparation, including **Preparing workspace**. They become available once the connected environment registers the run. Choose **Cancel** to return the submitted message and attachments to a new compose draft. The provisional conversation is removed. Text you typed while cancellation was in progress is kept with the restored message. If you have queued follow-up messages, remove them before cancelling.
 
 Choose **Work locally** to run the submitted message in the project's original folder instead. Pathway skips the remaining worktree setup and removes the worktree it created before starting the agent locally. Existing project folders and existing worktrees are never removed by these actions.
 

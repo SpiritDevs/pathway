@@ -10,6 +10,7 @@ import { createRef, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import type { LegendListRef } from "@legendapp/list/react";
+import { withOptimisticWorkspacePreparation } from "../../session-logic";
 
 vi.mock("@legendapp/list/react", async () => {
   const legendListTestId = "legend-list";
@@ -2435,6 +2436,22 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("lucide-x");
     expect(markup).toContain('aria-label="Tool call failed"');
   });
+});
+
+it("keeps workspace controls visible while the initial run is being registered", async () => {
+  const { MessagesTimeline } = await import("./MessagesTimeline");
+  const markup = renderToStaticMarkup(
+    <MessagesTimeline
+      {...buildProps()}
+      onControlWorkspacePreparation={async () => {}}
+      timelineEntries={withOptimisticWorkspacePreparation([], {
+        threadId: ThreadId.make("thread-1"),
+        startedAt: MESSAGE_CREATED_AT,
+      })}
+    />,
+  );
+  expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>.*?Work locally<\/button>/);
+  expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>.*?Cancel<\/button>/);
 });
 
 it("offers workspace recovery only on the latest local run", async () => {

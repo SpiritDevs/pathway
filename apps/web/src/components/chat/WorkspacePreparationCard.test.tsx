@@ -106,6 +106,22 @@ describe("WorkspacePreparationCard", () => {
   });
 });
 
+it.each(["preparing", "worktree", "setup"] as const)(
+  "enables both controls during the %s stage",
+  (phase) => {
+    const html = renderToStaticMarkup(
+      <WorkspacePreparationCard
+        item={{ ...item, workspacePreparation: { phase, workspaceKind: "worktree" } }}
+        environmentId={EnvironmentId.make("env")}
+        onControl={async () => {}}
+      />,
+    );
+    expect(html).toContain("Work locally");
+    expect(html).toContain(">Cancel</button>");
+    expect(html).not.toContain('disabled=""');
+  },
+);
+
 it("offers recovery after failure and cancellation while running", () => {
   for (const status of ["running", "completed", "failed", "interrupted"] as const) {
     const html = renderToStaticMarkup(
