@@ -43,6 +43,13 @@ worktree paths are not portable. Existing conversations are not movable through 
 
 ## Visibility and startup latency
 
+Pending submissions are presented by the ordinary conversation timeline and composer. Clients
+adapt queue metadata into their existing thread view model while the environment shell is absent,
+then reconcile messages by stable message ID as environment history arrives. Queue state adds
+delivery status and recovery actions to that view; it does not select a separate conversation UI.
+Registered destination metadata supplies offline model and workspace context without requiring an
+environment connection before composing.
+
 Client draft cleanup waits for a thread that is actually visible in the company-scoped sidebar,
 not merely a raw environment shell. Queue placeholders remain until the canonical shell is
 available. The cloud publisher subscribes to live events while initial and periodic reconciliation
