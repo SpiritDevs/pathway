@@ -1,3 +1,4 @@
+import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect } from "react";
@@ -20,7 +21,11 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 
 function ChatRouteGlobalShortcuts() {
   const workspaceProjects = useWorkspaceProjects();
-  const threadStartAvailability = workspaceThreadStartAvailability(workspaceProjects);
+  const queueDestinations = useAtomValue(threadQueueDestinationsAtom);
+  const threadStartAvailability =
+    queueDestinations.length > 0
+      ? "available"
+      : workspaceThreadStartAvailability(workspaceProjects);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const selectedThreadKeysSize = useThreadSelectionStore((state) => state.selectedThreadKeys.size);
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef } =

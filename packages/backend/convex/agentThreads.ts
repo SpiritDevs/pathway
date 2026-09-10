@@ -14,6 +14,7 @@ import {
   requireRecordPermission,
 } from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
+import { finishQueueListingHandoff } from "./lib/threadQueueRetention.ts";
 
 const MAX_RECONCILE_REMOVALS = 100;
 /** Must cover every field of the contracts `CloudAgentThreadShell`; upserts with unknown fields are rejected. */
@@ -204,6 +205,7 @@ export const upsert = mutation({
       if (existing?.localProjectId === null) await removeRows(ctx, actor, [existing]);
       return { outcome: "unbound" as const };
     }
+    await finishQueueListingHandoff(ctx, actor.company._id, environmentId, threadId);
     if (
       existing !== null &&
       existing.cloudProjectId === cloudProjectId &&

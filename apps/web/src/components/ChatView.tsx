@@ -1,3 +1,13 @@
+import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
+import { ThreadQueueStatus } from "./chat/ThreadQueueStatus";
+import { useThreadQueueChat } from "../cloud/useThreadQueueChat";
+import {
+  queueDestinationProject,
+  queueDestinationProviders,
+  queuedThreadShell,
+  mergeQueuedChatTimelineMessages,
+} from "../cloud/threadQueueChat";
+import { useQueuedStartThreadTurn } from "../cloud/threadQueue";
 import {
   CONVERSATIONS_FOCUS_ID,
   focusIdForThread,
@@ -28,7 +38,7 @@ import {
   type ChatAttachment,
   type CommandId,
   type EnvironmentId,
-  type MessageId,
+  MessageId,
   type ModelSelection,
   type OrchestrationV2ThreadProjection,
   type ProjectScript,
@@ -290,13 +300,7 @@ import {
   useEffectiveComposerModelState,
   DraftId,
 } from "../composerDraftStore";
-import {
-  awaitAttachmentUploads,
-  getUploadedFileAttachments,
-  releasePersistedAttachmentUpload,
-  releaseDraftAttachment,
-  uploadStandaloneFileAttachment,
-} from "../lib/attachmentUploadQueue";
+import { releaseDraftAttachment } from "../lib/attachmentUploadQueue";
 import { useProvisionInternalWorkspace } from "./projects/useProjectWorkspaceCommands";
 import {
   appendTerminalContextsToPrompt,
@@ -450,14 +454,12 @@ import {
   PullRequestDialogState,
   cloneComposerAttachmentForRetry,
   deriveLockedProvider,
-  readFileAsDataUrl,
   loadQueuedComposerImages,
   reconcileMountedTerminalThreadIds,
   resolveDraftEnvironmentProjectRef,
   resolveEditableV2UserMessageId,
   resolveRetryableV2UserMessageId,
   resolvePanelSurfaceOwnerThreadRef,
-  resolveThreadMetadataUpdateForNextTurn,
   visibleTurnItemsForThreadPresentation,
   resolveSendEnvMode,
   shortcutScopeOwnsEvent,
@@ -503,7 +505,6 @@ const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more files without additional text. Respond using the conversation context and the attached file(s).]";
 // Never part of timeline row data — see cancelTimelineLiveFollowForUserNavigation.
 const TIMELINE_SCROLL_CANCEL_SENTINEL = Object.freeze({});
-const EMPTY_PROVIDERS: ServerProvider[] = [];
 // During an active turn the thread's updatedAt advances several times per
 // second, and every server-side visit is a full command dispatch plus a
 // broadcast to all shell subscribers. Mid-turn bumps carry no unread signal
@@ -1492,13 +1493,7 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const switchGitRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
-  const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
-    reportFailure: false,
-  });
-  const setThreadInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode, {
-    reportFailure: false,
-  });
-  const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const startThreadTurn = useQueuedStartThreadTurn();
   const controlWorkspacePreparation = useAtomCommand(
     threadEnvironment.controlWorkspacePreparation,
     { reportFailure: false },
@@ -1547,6 +1542,25 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
   );
   const serverThread = useThreadShell(routeThreadRef);
+  const queuedChat = useThreadQueueChat(environmentId, threadId);
+  const queueDestinations = useAtomValue(threadQueueDestinationsAtom);
+  const queueDestination = queueDestinations.find(
+    (destination) => destination.environmentId === environmentId,
+  );
+  const queueProviderStatuses = useMemo(
+    () => queueDestinationProviders(queueDestination),
+    [queueDestination],
+  );
+  const queuedDisplayThread = useMemo(
+    () =>
+      queuedThreadShell(
+        queuedChat.row,
+        activeCompanyId,
+        queuedChat.messages,
+        queueProviderStatuses,
+      ),
+    [queuedChat.row, activeCompanyId, queuedChat.messages, queueProviderStatuses],
+  );
   const serverThreadStatus = useThreadStatus(routeThreadRef);
   const setThreadLoadEnabled = useAtomSet(
     environmentThreads.loadEnabledAtom(environmentId, threadId),
@@ -1554,7 +1568,7 @@ function ChatViewContent(props: ChatViewProps) {
   const threadLoadStopped = serverThreadStatus === "stopped";
   const routeThreadDetailRef = resolveThreadDetailRef(routeThreadRef, {
     shellExists: serverThread !== null,
-    waitForShell: draftThread !== null,
+    waitForShell: draftThread !== null || queuedChat.row !== undefined,
   });
   const serverThreadProjection = useThreadProjection(
     threadLoadStopped ? null : routeThreadDetailRef,
@@ -1579,6 +1593,15 @@ function ChatViewContent(props: ChatViewProps) {
   const committedServerMessageIds = useMemo(
     () => deriveCommittedServerUserMessageIds(presentedServerVisibleTurnItems),
     [presentedServerVisibleTurnItems],
+  );
+  const queuedMessageControls = useMemo(
+    () =>
+      new Map(
+        [...queuedChat.controls].filter(
+          ([messageId]) => !committedServerMessageIds.has(MessageId.make(messageId)),
+        ),
+      ),
+    [queuedChat.controls, committedServerMessageIds],
   );
   const projectedServerMessageIds = useMemo(
     () => new Set(serverProjection?.messages.map((message) => message.id) ?? []),
@@ -1680,17 +1703,23 @@ function ChatViewContent(props: ChatViewProps) {
   // The first send belongs to the draft, so returning after navigation can
   // still show it while the server is preparing the thread.
   const optimisticUserMessages = useMemo(() => {
+    const messages = new Map(localOptimisticUserMessages.map((message) => [message.id, message]));
     const pending = draftThread?.pendingSend;
-    if (
-      !pending ||
-      localOptimisticUserMessages.some((message) => message.id === pending.messageId) ||
-      serverProjection?.messages.some((message) => message.id === pending.messageId)
-    ) {
-      return localOptimisticUserMessages;
+    if (pending && !messages.has(pending.messageId)) {
+      const message = buildPendingDraftMessage(pending);
+      if (message) messages.set(message.id, message);
     }
-    const message = buildPendingDraftMessage(pending);
-    return message ? [message, ...localOptimisticUserMessages] : localOptimisticUserMessages;
-  }, [draftThread?.pendingSend, localOptimisticUserMessages, serverProjection?.messages]);
+    return mergeQueuedChatTimelineMessages(
+      [...messages.values()],
+      queuedChat.chatMessages,
+      committedServerMessageIds,
+    );
+  }, [
+    draftThread?.pendingSend,
+    localOptimisticUserMessages,
+    queuedChat.chatMessages,
+    committedServerMessageIds,
+  ]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
@@ -1871,17 +1900,23 @@ function ChatViewContent(props: ChatViewProps) {
         ? buildLocalDraftThread(
             threadId,
             draftThread,
-            fallbackDraftProject?.defaultModelSelection ?? NO_PROVIDER_MODEL_SELECTION,
+            fallbackDraftProject?.defaultModelSelection ??
+              (queueProviderStatuses[0]?.models[0]
+                ? {
+                    instanceId: queueProviderStatuses[0].instanceId,
+                    model: queueProviderStatuses[0].models[0].slug,
+                  }
+                : NO_PROVIDER_MODEL_SELECTION),
           )
         : undefined,
-    [draftThread, fallbackDraftProject?.defaultModelSelection, threadId],
+    [draftThread, fallbackDraftProject?.defaultModelSelection, queueProviderStatuses, threadId],
   );
   const isServerThread = serverThread !== null;
-  const activeThread = isServerThread ? serverThread : localDraftThread;
-  const isThreadProjectionPending = threadProjectionIsPending(
-    serverThread,
-    serverProjection !== null,
-  );
+  const activeThread = serverThread ?? queuedDisplayThread ?? localDraftThread;
+  const isThreadProjectionPending =
+    !queuedChat.row &&
+    environmentById.get(environmentId)?.connection.phase === "connected" &&
+    threadProjectionIsPending(serverThread, serverProjection !== null);
   const serverLatestRun = useMemo(
     () => (serverProjection === null ? null : deriveLatestThreadRun(serverProjection)),
     [serverProjection],
@@ -1997,7 +2032,7 @@ function ChatViewContent(props: ChatViewProps) {
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
-  const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
+  const isLocalDraftThread = !isServerThread && !queuedChat.row && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
   // Prefer the larger of turn-item-committed ids and projection messages so
@@ -2245,7 +2280,12 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread && activeThread.projectId !== null
       ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
       : null;
-  const activeProject = useProject(activeProjectRef);
+  const serverProject = useProject(activeProjectRef);
+  const queuedProject = useMemo(
+    () => queueDestinationProject(queueDestination, activeThread?.projectId),
+    [queueDestination, activeThread?.projectId],
+  );
+  const activeProject = serverProject ?? queuedProject;
   // Rootless projects stay selectable, so every surface below that needs a real directory —
   // terminals, project scripts, worktree bootstrap — resolves one through this rather than
   // going quiet. See docs/internals/decisions/0006-issue-tracker.md.
@@ -2395,27 +2435,49 @@ function ChatViewContent(props: ChatViewProps) {
         isPrimary,
       });
     }
+    const cloudProjectId = queueDestination?.projects.find(
+      (project) => project.localProjectId === activeProject.id,
+    )?.cloudProjectId;
+    for (const destination of queueDestinations) {
+      if (seen.has(destination.environmentId as EnvironmentId)) continue;
+      const project = destination.projects.find((project) =>
+        cloudProjectId
+          ? project.cloudProjectId === cloudProjectId
+          : destination.environmentId === activeProject.environmentId &&
+            project.localProjectId === activeProject.id,
+      );
+      if (!project) continue;
+      seen.add(destination.environmentId as EnvironmentId);
+      envs.push({
+        environmentId: destination.environmentId as EnvironmentId,
+        projectId: project.localProjectId as ProjectId,
+        label: destination.label,
+        isPrimary: destination.environmentId === primaryEnvironmentId,
+      });
+    }
     // Sort: primary first, then alphabetical
     envs.sort((a, b) => {
       if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
       return a.label.localeCompare(b.label);
     });
     return envs;
-  }, [activeProject, allProjects, projectGroupingSettings, primaryEnvironmentId, environmentById]);
+  }, [
+    activeProject,
+    allProjects,
+    projectGroupingSettings,
+    primaryEnvironmentId,
+    environmentById,
+    queueDestination,
+    queueDestinations,
+  ]);
   const selectableEnvironments = useMemo(
     () =>
       activeThread?.projectId === null
-        ? environments
-            .filter(
-              (environment) =>
-                environment.environmentId === activeThread.environmentId ||
-                environment.serverConfig?.environment.capabilities.threadConversations === true,
-            )
-            .map((environment) => ({
-              environmentId: environment.environmentId,
-              label: environment.label,
-              isPrimary: environment.environmentId === primaryEnvironmentId,
-            }))
+        ? queueDestinations.map((environment) => ({
+            environmentId: environment.environmentId as EnvironmentId,
+            label: environment.label,
+            isPrimary: environment.environmentId === primaryEnvironmentId,
+          }))
         : logicalProjectEnvironments,
     [
       activeThread?.projectId,
@@ -2423,6 +2485,7 @@ function ChatViewContent(props: ChatViewProps) {
       environments,
       primaryEnvironmentId,
       logicalProjectEnvironments,
+      queueDestinations,
     ],
   );
   // The environment picker stays usable with a single environment: its last row
@@ -2611,7 +2674,7 @@ function ChatViewContent(props: ChatViewProps) {
   const serverConfig = activeThread
     ? (activeEnvironment?.serverConfig ?? null)
     : (primaryEnvironment?.serverConfig ?? null);
-  const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;
+  const providerStatuses = serverConfig?.providers ?? queueProviderStatuses;
   const lockedProvider = deriveLockedProvider({
     thread: activeThread,
     selectedProvider: selectedProviderByThreadId,
@@ -2621,10 +2684,7 @@ function ChatViewContent(props: ChatViewProps) {
   const modelPickerLockedProvider = supportsProviderSwitchingViaHandoff ? null : lockedProvider;
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
-  const maxFileAttachmentBytes =
-    serverConfig?.environment.capabilities.attachmentUploads === true
-      ? (serverConfig.environment.capabilities.fileAttachments?.maxUploadBytes ?? null)
-      : null;
+  const maxFileAttachmentBytes = 50 * 1024 * 1024;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -2963,8 +3023,9 @@ function ChatViewContent(props: ChatViewProps) {
     threadError,
   });
   const isSendBusy =
-    isLocalSendBusy ||
+    (isLocalSendBusy && !queuedChat.row) ||
     (draftThread?.pendingSend != null &&
+      !queuedChat.row &&
       !serverProjection?.messages.some(
         (message) => message.id === draftThread.pendingSend?.messageId,
       ));
@@ -3217,7 +3278,7 @@ function ChatViewContent(props: ChatViewProps) {
     presentedServerVisibleTurnItems,
   ]);
   const timelineAttachmentUrlById = useMemo(() => {
-    const urls = new Map(serverAttachmentUrlById);
+    const urls = new Map([...queuedChat.attachmentUrls, ...serverAttachmentUrlById]);
     for (const row of presentedServerVisibleTurnItems) {
       if (row.item.type !== "user_message") continue;
       const handoffUrls = attachmentPreviewHandoffByMessageId[row.item.messageId];
@@ -3234,6 +3295,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [
     attachmentPreviewHandoffByMessageId,
     presentedServerVisibleTurnItems,
+    queuedChat.attachmentUrls,
     serverAttachmentUrlById,
   ]);
   const onEditQueuedMessage = useCallback(
@@ -3614,8 +3676,11 @@ function ChatViewContent(props: ChatViewProps) {
     [activeProviderStatus, usageSelectedModel, placementModelOptions],
   );
   const draftPlacement = useLoadBalancedDraft({
-    draftId: isServerThread ? null : draftId,
-    enabled: settings.loadBalancingEnabled,
+    draftId: isServerThread || queuedChat.row ? null : draftId,
+    enabled:
+      settings.loadBalancingEnabled &&
+      !queuedChat.row &&
+      activeEnvironmentConnectionPhase === "connected",
     avoidCriticalStorage: settings.loadBalancingAvoidCriticalStorage,
     weights: settings.loadBalancingWeights,
     project: activeProject,
@@ -3815,7 +3880,9 @@ function ChatViewContent(props: ChatViewProps) {
     revealPanelThreadAsPage,
   ]);
 
-  const envLocked = Boolean(activeThread && (activeMessageCount > 0 || activeRuntime !== null));
+  const envLocked = Boolean(
+    queuedChat.row || (activeThread && (activeMessageCount > 0 || activeRuntime !== null)),
+  );
 
   // Handle environment change for draft threads.  When the user picks a
   // different environment we update the draft context to point at the physical
@@ -4893,83 +4960,6 @@ function ChatViewContent(props: ChatViewProps) {
       }),
     [toggleBrowserPanel, togglePreviewPanel],
   );
-  const persistThreadSettingsForNextTurn = useCallback(
-    async (input: {
-      threadId: ThreadId;
-      createdAt: string;
-      modelSelection?: ModelSelection;
-      branch?: string;
-      runtimeMode: RuntimeMode;
-      interactionMode: ProviderInteractionMode;
-    }): Promise<AtomCommandResult<void, unknown>> => {
-      if (!serverThread) {
-        return AsyncResult.success(undefined);
-      }
-
-      let result: AtomCommandResult<void, unknown> = AsyncResult.success(undefined);
-      const metadataUpdate = resolveThreadMetadataUpdateForNextTurn({
-        currentModelSelection: serverThread.modelSelection,
-        ...(input.modelSelection ? { nextModelSelection: input.modelSelection } : {}),
-        currentBranch: serverThread.branch,
-        ...(input.branch ? { nextBranch: input.branch } : {}),
-      });
-      if (metadataUpdate) {
-        result = mapAtomCommandResult(
-          await updateThreadMetadata({
-            environmentId,
-            input: {
-              threadId: input.threadId,
-              ...metadataUpdate,
-            },
-          }),
-          () => undefined,
-        );
-        if (result._tag === "Failure") {
-          return result;
-        }
-      }
-
-      if (input.runtimeMode !== serverThread.runtimeMode) {
-        result = mapAtomCommandResult(
-          await setThreadRuntimeMode({
-            environmentId,
-            input: {
-              threadId: input.threadId,
-              runtimeMode: input.runtimeMode,
-              createdAt: input.createdAt,
-            },
-          }),
-          () => undefined,
-        );
-        if (result._tag === "Failure") {
-          return result;
-        }
-      }
-
-      if (input.interactionMode !== serverThread.interactionMode) {
-        result = mapAtomCommandResult(
-          await setThreadInteractionMode({
-            environmentId,
-            input: {
-              threadId: input.threadId,
-              interactionMode: input.interactionMode,
-              createdAt: input.createdAt,
-            },
-          }),
-          () => undefined,
-        );
-      }
-      return result;
-    },
-    [
-      environmentId,
-      serverThread,
-      setThreadInteractionMode,
-      setThreadRuntimeMode,
-      updateThreadMetadata,
-    ],
-  );
-
   // Debounce *showing* the scroll-to-bottom pill so it doesn't flash during
   // thread switches. LegendList fires scroll events with isAtEnd=false while
   // initialScrollAtEnd is settling; hiding is always immediate.
@@ -5615,7 +5605,9 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadPr, openThreadPullRequest]);
   const pullRequestSurfaceAvailable =
     supportsPullRequests && activeThreadPr !== null && threadRepository !== null;
-  const supportsConversations = serverConfig?.environment.capabilities.threadConversations === true;
+  const supportsConversations =
+    serverConfig?.environment.capabilities.threadConversations === true ||
+    queueDestination !== undefined;
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
   const supportsSettleAfterCompletion =
     serverConfig?.environment.capabilities.threadSettleAfterCompletion === true;
@@ -6746,7 +6738,6 @@ function ChatViewContent(props: ChatViewProps) {
       const replacementMessageId = newMessageId();
       let replacementCreated = false;
       let originalDeleted = false;
-      const pendingAttachmentIds: string[] = [];
       try {
         const targetProject = allProjects.find(
           (project) =>
@@ -6766,28 +6757,18 @@ function ChatViewContent(props: ChatViewProps) {
         const attachments = await copyMessageAttachmentsForNewThread(
           firstUserMessage.attachments,
           serverAttachmentUrlById,
-          async (file, attachment) => {
-            const pending = await uploadStandaloneFileAttachment({
-              environmentId: projectRef.environmentId,
-              file,
-              name: attachment.name,
-              mimeType: attachment.mimeType,
-              sizeBytes: attachment.sizeBytes,
-            });
-            pendingAttachmentIds.push(pending.id);
-            return pending;
-          },
         );
         const createdAt = new Date().toISOString();
         const startResult = await startThreadTurn({
           environmentId: projectRef.environmentId,
+          durableAttachments: attachments,
           input: {
             threadId: replacementThreadId,
             message: {
               messageId: replacementMessageId,
               role: "user",
               text: firstUserMessage.text,
-              attachments,
+              attachments: [],
             },
             modelSelection: activeThread.modelSelection,
             titleSeed: activeThread.title,
@@ -6877,12 +6858,6 @@ function ChatViewContent(props: ChatViewProps) {
           setThreadError(activeThread.id, description);
         }
       } finally {
-        for (const attachmentId of pendingAttachmentIds) {
-          releasePersistedAttachmentUpload({
-            environmentId: projectRef.environmentId,
-            attachmentId,
-          });
-        }
         projectSwitchInFlightRef.current = false;
       }
     },
@@ -7145,15 +7120,7 @@ function ChatViewContent(props: ChatViewProps) {
         beginLocalDispatch({ preparingWorktree: false });
         setThreadError(activeThread.id, null);
         try {
-          const settingsResult = await persistThreadSettingsForNextTurn({
-            threadId: activeThread.id,
-            createdAt,
-            modelSelection,
-            runtimeMode,
-            interactionMode,
-          });
-          let failure: AtomCommandResult<unknown, unknown> | null =
-            settingsResult._tag === "Failure" ? settingsResult : null;
+          let failure: AtomCommandResult<unknown, unknown> | null = null;
           if (failure === null) {
             const startResult = await startThreadTurn({
               environmentId,
@@ -7286,7 +7253,6 @@ function ChatViewContent(props: ChatViewProps) {
       latestRunSettled,
       launchThreadContinuation,
       beginLocalDispatch,
-      persistThreadSettingsForNextTurn,
       resetLocalDispatch,
       runtimeMode,
       setComposerDraftModelSelection,
@@ -7328,8 +7294,6 @@ function ChatViewContent(props: ChatViewProps) {
       !activeThread ||
       isSendBusy ||
       isContextCompacting ||
-      isConnecting ||
-      activeEnvironmentUnavailable ||
       sendInFlightRef.current ||
       (target === "side-chat" && (!isServerThread || latestSideChatSourceRun === null))
     ) {
@@ -7376,7 +7340,6 @@ function ChatViewContent(props: ChatViewProps) {
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
-      persistableModelSelection: ctxPersistableModelSelection,
     } = sendCtx;
     const activeProjectionRun = serverProjection?.runs.find(
       (run) => run.id === activeLatestRun?.runId,
@@ -7493,7 +7456,8 @@ function ChatViewContent(props: ChatViewProps) {
     if (activeProject && projectWorkspaceRootForSend === null) return;
     const sendsToCurrentThread = target === "current";
     const threadIdForSend = sendsToCurrentThread ? activeThread.id : newThreadId();
-    const isFirstMessage = sendsToCurrentThread && (!isServerThread || activeMessageCount === 0);
+    const isFirstMessage =
+      sendsToCurrentThread && !queuedChat.row && (!isServerThread || activeMessageCount === 0);
     const baseBranchForWorktree =
       isFirstMessage &&
       activeProject !== null &&
@@ -7572,7 +7536,7 @@ function ChatViewContent(props: ChatViewProps) {
         resolveDockStarted?.();
       });
       void dockTransition.catch(() => resolveDockStarted?.());
-      await dockStarted;
+      void dockStarted;
     }
     beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
 
@@ -7615,36 +7579,13 @@ function ChatViewContent(props: ChatViewProps) {
     const composerFileAttachmentsSnapshot = composerImagesSnapshot.filter(
       (attachment): attachment is ComposerFileAttachment => attachment.type === "file",
     );
-    const turnAttachmentsPromise = (async () => {
-      await awaitAttachmentUploads(composerFileAttachmentsSnapshot.map((file) => file.id));
-      const uploadedFiles = getUploadedFileAttachments({
-        environmentId,
-        files: composerFileAttachmentsSnapshot,
-      });
-      if (uploadedFiles === null) {
-        throw new Error("Wait for file attachments to finish uploading, then try again.");
+    const turnAttachmentsPromise = Promise.resolve().then(() => {
+      for (const attachment of composerImagesSnapshot) {
+        if (attachment.file === null)
+          throw new Error(`Attach ${attachment.name} again to save it to the cloud.`);
       }
-      const uploadedByComposerId = new Map(
-        composerFileAttachmentsSnapshot.map((file, index) => [file.id, uploadedFiles[index]]),
-      );
-      return Promise.all(
-        composerImagesSnapshot.map(async (image) => {
-          if (image.type === "file") {
-            const uploaded = uploadedByComposerId.get(image.id);
-            if (!uploaded) throw new Error(`'${image.name}' is not ready to send.`);
-            return uploaded;
-          }
-          return {
-            type: "image" as const,
-            name: normalizeComposerAttachmentName(image.name, image.type),
-            mimeType: image.mimeType,
-            sizeBytes: image.sizeBytes,
-            dataUrl: await readFileAsDataUrl(image.file),
-            ...(image.source ? { source: image.source } : {}),
-          };
-        }),
-      );
-    })();
+      return [];
+    });
     const optimisticAttachments = composerImagesSnapshot.map((image) => ({
       type: image.type,
       id: image.id,
@@ -7732,44 +7673,7 @@ function ChatViewContent(props: ChatViewProps) {
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
 
-    if (failure === null && sendsToCurrentThread && isServerThread) {
-      const settingsResult = await persistThreadSettingsForNextTurn({
-        threadId: threadIdForSend,
-        createdAt: messageCreatedAt,
-        ...(ctxSelectedModel && ctxPersistableModelSelection
-          ? { modelSelection: ctxPersistableModelSelection }
-          : {}),
-        ...(localCheckoutBranchMismatch
-          ? { branch: localCheckoutBranchMismatch.currentBranch }
-          : {}),
-        runtimeMode,
-        interactionMode,
-      });
-      if (settingsResult._tag === "Failure") {
-        failure = settingsResult;
-      }
-    }
-
     const turnAttachmentsResult = await settlePromise(() => turnAttachmentsPromise);
-    if (pendingDraftTarget !== null && turnAttachmentsResult._tag === "Success") {
-      const store = useComposerDraftStore.getState();
-      const pending = store.getDraftThread(pendingDraftTarget)?.pendingSend;
-      if (pending?.recoveryDraft)
-        store.setDraftPendingSend(pendingDraftTarget, {
-          ...pending,
-          recoveryDraft: {
-            ...pending.recoveryDraft,
-            attachments: pending.recoveryDraft.attachments.map((attachment, index) => {
-              const uploaded = turnAttachmentsResult.value[index];
-              if (uploaded && "dataUrl" in uploaded)
-                return { ...attachment, dataUrl: uploaded.dataUrl };
-              return uploaded && "id" in uploaded
-                ? { ...attachment, attachmentId: uploaded.id, environmentId }
-                : attachment;
-            }),
-          },
-        });
-    }
     if (failure === null && turnAttachmentsResult._tag === "Failure") {
       failure = turnAttachmentsResult;
     }
@@ -7849,7 +7753,23 @@ function ChatViewContent(props: ChatViewProps) {
             : undefined;
       const startResult = await startThreadTurn({
         environmentId,
+        durableAttachments: composerImagesSnapshot.map((attachment) => ({
+          metadata: {
+            type: attachment.type,
+            id: attachment.id,
+            name: normalizeComposerAttachmentName(attachment.name, attachment.type),
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            ...(attachment.type === "image" && attachment.source
+              ? { source: attachment.source }
+              : {}),
+          },
+          blob: attachment.file!,
+        })),
         input: {
+          ...(target === "current" && localCheckoutBranchMismatch
+            ? { branch: localCheckoutBranchMismatch.currentBranch }
+            : {}),
           onLaunchDispatch: () => {
             if (pendingDraftTarget !== null) {
               const store = useComposerDraftStore.getState();
@@ -7889,6 +7809,7 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        resetLocalDispatch();
         if (isFirstMessage) {
           const currentFocusId = appAtomRegistry.get(activeFocusIdAtom);
           if (activeThread.projectId === null) {
@@ -7915,25 +7836,14 @@ function ChatViewContent(props: ChatViewProps) {
 
     let targetPresentationFailure: unknown = null;
     if (turnStartSucceeded && target === "new-chat") {
-      const startedResult = await settlePromise(() =>
-        waitForStartedServerThread(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
+      const navigateResult = await settlePromise(() =>
+        navigate({
+          to: "/threads/$environmentId/$threadId",
+          params: { environmentId: activeThread.environmentId, threadId: threadIdForSend },
+        }),
       );
-      if (startedResult._tag === "Failure") {
-        targetPresentationFailure = squashAtomCommandFailure(startedResult);
-      } else {
-        const navigateResult = await settlePromise(() =>
-          navigate({
-            to: "/threads/$environmentId/$threadId",
-            params: {
-              environmentId: activeThread.environmentId,
-              threadId: threadIdForSend,
-            },
-          }),
-        );
-        if (navigateResult._tag === "Failure") {
-          targetPresentationFailure = squashAtomCommandFailure(navigateResult);
-        }
-      }
+      if (navigateResult._tag === "Failure")
+        targetPresentationFailure = squashAtomCommandFailure(navigateResult);
     }
 
     if (turnStartSucceeded && target === "side-chat") {
@@ -8075,6 +7985,7 @@ function ChatViewContent(props: ChatViewProps) {
       );
     }
     sendInFlightRef.current = false;
+    resetLocalDispatch();
     if (!turnStartSucceeded || !sendsToCurrentThread) {
       setDockedDraftHeroThreadKey((currentThreadKey) =>
         currentThreadKey === activeThreadKey ? null : currentThreadKey,
@@ -8202,17 +8113,7 @@ function ChatViewContent(props: ChatViewProps) {
       beginLocalDispatch({ preparingWorktree: false });
       setThreadError(activeThread.id, null);
       try {
-        const settingsResult = await persistThreadSettingsForNextTurn({
-          threadId: activeThread.id,
-          createdAt,
-          ...(sendCtx.persistableModelSelection
-            ? { modelSelection: sendCtx.persistableModelSelection }
-            : {}),
-          runtimeMode,
-          interactionMode: "default",
-        });
-        let failure: AtomCommandResult<unknown, unknown> | null =
-          settingsResult._tag === "Failure" ? settingsResult : null;
+        let failure: AtomCommandResult<unknown, unknown> | null = null;
 
         if (failure === null) {
           const startResult = await startThreadTurn({
@@ -8276,7 +8177,6 @@ function ChatViewContent(props: ChatViewProps) {
       isServerThread,
       isWorking,
       latestRunSettled,
-      persistThreadSettingsForNextTurn,
       resetLocalDispatch,
       runtimeMode,
       setThreadError,
@@ -8382,6 +8282,7 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onRequestEditUserMessage = useCallback(
     async (messageId: MessageId): Promise<boolean> => {
+      if (queuedChat.controls.get(messageId)?.editable) return true;
       if (!activeThread || editableUserMessageId !== messageId) return false;
       if (latestRunSettled) return true;
       const result = await interruptThreadTurn({
@@ -8399,6 +8300,7 @@ function ChatViewContent(props: ChatViewProps) {
       return false;
     },
     [
+      queuedChat.controls,
       activeThread,
       editableUserMessageId,
       environmentId,
@@ -8410,6 +8312,8 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onSubmitUserMessageEdit = useCallback(
     async (messageId: MessageId, text: string): Promise<boolean> => {
+      if (queuedChat.controls.get(messageId)?.editable)
+        return queuedChat.mutateMessage(messageId, "edit", text);
       if (
         !activeThread ||
         !isServerThread ||
@@ -8443,6 +8347,8 @@ function ChatViewContent(props: ChatViewProps) {
       return false;
     },
     [
+      queuedChat.controls,
+      queuedChat.mutateMessage,
       activeThread,
       requireConversationStorage,
       editAndRestartMessage,
@@ -8456,10 +8362,17 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onRetryUserMessage = useCallback(
     async (messageId: MessageId, text: string): Promise<boolean> => {
+      if (queuedChat.controls.get(messageId)?.retryable)
+        return queuedChat.mutateMessage(messageId, "retry");
       if (retryableUserMessageId !== messageId) return false;
       return onSubmitUserMessageEdit(messageId, text);
     },
-    [onSubmitUserMessageEdit, retryableUserMessageId],
+    [
+      onSubmitUserMessageEdit,
+      retryableUserMessageId,
+      queuedChat.controls,
+      queuedChat.mutateMessage,
+    ],
   );
 
   const onRespondToApproval = useCallback(
@@ -8741,7 +8654,6 @@ function ChatViewContent(props: ChatViewProps) {
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
       selectedModelSelection: ctxSelectedModelSelection,
-      persistableModelSelection: ctxPersistableModelSelection,
     } = sendCtx;
 
     const threadIdForSend = activeThread.id;
@@ -8786,16 +8698,7 @@ function ChatViewContent(props: ChatViewProps) {
       },
     ]);
 
-    const settingsResult = await persistThreadSettingsForNextTurn({
-      threadId: threadIdForSend,
-      createdAt: messageCreatedAt,
-      ...(ctxPersistableModelSelection ? { modelSelection: ctxPersistableModelSelection } : {}),
-      ...(localCheckoutBranchMismatch ? { branch: localCheckoutBranchMismatch.currentBranch } : {}),
-      runtimeMode,
-      interactionMode: nextInteractionMode,
-    });
-    let failure: AtomCommandResult<unknown, unknown> | null =
-      settingsResult._tag === "Failure" ? settingsResult : null;
+    let failure: AtomCommandResult<unknown, unknown> | null = null;
 
     if (failure === null) {
       // Keep the mode toggle and plan-follow-up banner in sync immediately
@@ -9323,6 +9226,15 @@ function ChatViewContent(props: ChatViewProps) {
     ) : null
   ) : null;
   const threadDetailsPanelProps: Omit<ThreadDetailsPanelProps, "mode"> = {
+    ...(!isServerThread && activeProject
+      ? {
+          workspaceContext: {
+            project: activeProject,
+            worktreePath: activeThread.worktreePath,
+            temporary: activeThread.temporary ?? false,
+          },
+        }
+      : {}),
     onOpenDirectory: openDirectorySurface,
     environmentId: activeThread.environmentId,
     environmentConnection: activeEnvironment?.connection ?? null,
@@ -9627,6 +9539,7 @@ function ChatViewContent(props: ChatViewProps) {
                 </div>
               </div>
             ) : null}
+
             {/* Provider status overlays the timeline without changing its content height. */}
             <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
               <ProviderStatusBanner
@@ -9655,6 +9568,10 @@ function ChatViewContent(props: ChatViewProps) {
                 timelineEntries={timelineEntries}
                 latestRun={activeActivityRun}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                queuedMessageControls={queuedMessageControls}
+                onCancelQueuedMessage={(messageId) => {
+                  void queuedChat.mutateMessage(messageId, "cancel");
+                }}
                 editableUserMessageId={editableUserMessageId}
                 canSubmitUserMessageEdit={editableUserMessageId !== null && latestRunSettled}
                 onRequestEditUserMessage={onRequestEditUserMessage}
@@ -9731,7 +9648,6 @@ function ChatViewContent(props: ChatViewProps) {
                 isDraftHeroState
                   ? "pointer-events-none absolute inset-0 z-20 flex items-center"
                   : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2",
-                isThreadProjectionPending && "hidden",
               )}
             >
               <div
@@ -9781,6 +9697,7 @@ function ChatViewContent(props: ChatViewProps) {
                       threadId={activeThread.id}
                     />
                   ) : null}
+                  <ThreadQueueStatus queue={queuedChat} />
                   <div
                     ref={draftHeroTransition.composerAnchorRef}
                     className="relative z-10"
@@ -9815,6 +9732,15 @@ function ChatViewContent(props: ChatViewProps) {
                           {renderComposerContextStrip && (
                             <div className="pointer-events-auto">
                               <BranchToolbar
+                                {...(!isServerThread && activeProject
+                                  ? {
+                                      workspaceContext: {
+                                        project: activeProject,
+                                        worktreePath: activeThread.worktreePath,
+                                        temporary: activeThread.temporary ?? false,
+                                      },
+                                    }
+                                  : {})}
                                 environmentId={activeThread.environmentId}
                                 threadId={activeThread.id}
                                 showGitControls={isGitRepo}
@@ -9914,10 +9840,10 @@ function ChatViewContent(props: ChatViewProps) {
                               activeProject === null
                             }
                             phase={phase}
-                            isConnecting={isConnecting}
+                            isConnecting={false}
                             isSendBusy={isSendBusy || draftPlacement.blocked}
                             isPreparingWorktree={isPreparingWorktree}
-                            environmentUnavailable={activeEnvironmentUnavailableState}
+                            environmentUnavailable={null}
                             activePendingApproval={activePendingApproval}
                             pendingApprovals={pendingApprovals}
                             pendingUserInputs={pendingUserInputs}
@@ -9939,7 +9865,9 @@ function ChatViewContent(props: ChatViewProps) {
                             composerControlsLocked={composerControlsLocked}
                             contextCompactionInProgress={isContextCompacting}
                             lockedProvider={modelPickerLockedProvider}
-                            providerCatalogLoaded={serverConfig !== null}
+                            providerCatalogLoaded={
+                              serverConfig !== null || queueDestination !== undefined
+                            }
                             providerStatuses={providerStatuses as ServerProvider[]}
                             activeProjectDefaultModelSelection={
                               activeProject?.defaultModelSelection

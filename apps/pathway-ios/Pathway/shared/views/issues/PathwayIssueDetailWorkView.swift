@@ -203,6 +203,7 @@ struct PathwayIssueWorkView: View {
               }) else { return }
         // Issue instructions belong to this sheet, not the binding's ordinary new-thread draft.
         let next = PathwayAgentThreadCreationModel(binding: binding, environment: environment, connect: connect, storageDirectory: nil)
+        next.threadQueue = appModel.cloud.threadQueue
         next.prompt = commentBody ?? workPrompt()
         next.runtimeMode = "approval-required"
         creation = next
@@ -238,6 +239,7 @@ struct PathwayIssueWorkView: View {
                 launchedThreadID = created
                 threadID = created
             }
+            try await creation.threadQueue?.requireCloudSavedThread(companyID: issue.companyId, environmentID: binding.binding.environmentId, threadID: threadID)
             _ = try await model.mutate(companyID: issue.companyId, kind: "issueThreadLink.create", entityID: linkID,
                                        args: ["issueId": .string(issue.id), "environmentId": .string(binding.binding.environmentId),
                                               "threadId": .string(threadID), "origin": .string(workPurpose == "implement" ? "start-work" : "manual")])
@@ -245,7 +247,7 @@ struct PathwayIssueWorkView: View {
             if workPurpose == "implement", let provider = creation.selectedProvider {
                 patch["assignee"] = .object(["kind": .string("agent"), "provider": .string(provider.driver)])
             }
-            if workPurpose == "implement", let status = model.statuses.first(where: { $0.companyId == issue.companyId && $0.category == "started" }) {
+            if workPurpose == "implement", creation.threadQueue == nil, let status = model.statuses.first(where: { $0.companyId == issue.companyId && $0.category == "started" }) {
                 patch["statusId"] = .string(status.id)
             }
             if !patch.isEmpty { try await model.update(issue, patch: patch) }

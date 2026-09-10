@@ -1,4 +1,5 @@
 "use client";
+import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
 
 import { ProjectOwnerSelect, useProjectOwner } from "./projects/ProjectOwnerSelect";
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -225,6 +226,7 @@ import {
   visibleFocusProjectKeysAtom,
 } from "../cloud/focusReadModel";
 import { useEnvironmentControl } from "../cloud/useEnvironmentControl";
+import { CONVERSATIONS_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 const EMPTY_REPOSITORY_CHOICE_CANDIDATES: ReadonlyArray<SidebarProjectSnapshot> = [];
@@ -951,6 +953,7 @@ function OpenCommandPaletteDialog(props: {
   });
   const environmentCatalogState = useAtomValue(environmentCatalog.catalogValueAtom);
   const { environments } = useEnvironments();
+  const queueDestinations = useAtomValue(threadQueueDestinationsAtom);
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
@@ -1462,30 +1465,52 @@ function OpenCommandPaletteDialog(props: {
             description: "Creates a folder for it",
             runProject: openCheckoutlessProject,
           }),
-          environments
-            .filter(
-              (environment) =>
-                environment.serverConfig?.environment.capabilities.threadConversations === true,
-            )
-            .map(
-              (environment): CommandPaletteActionItem => ({
-                kind: "action",
-                value: `new-conversation:${environment.environmentId}`,
-                searchTerms: ["conversation", "new chat", "without project", environment.label],
-                title: "Conversation",
-                description:
-                  activeCompanyId === null ? "Choose a company first" : environment.label,
-                disabled: activeCompanyId === null,
-                icon: <MessageSquareIcon />,
-                run: async () => {
-                  setActiveFocusId(ALL_FOCUS_ID);
-                  await handleNewThread({
-                    environmentId: environment.environmentId,
-                    projectId: null,
-                  });
-                },
-              }),
-            ),
+          queueDestinations.flatMap((environment) =>
+            environment.projects
+              .filter(
+                (project) =>
+                  !projects.some(
+                    (existing) =>
+                      existing.environmentId === environment.environmentId &&
+                      existing.id === project.localProjectId,
+                  ),
+              )
+              .map(
+                (project): CommandPaletteActionItem => ({
+                  kind: "action",
+                  value: `new-queued-project:${environment.environmentId}:${project.localProjectId}`,
+                  searchTerms: [project.title, project.workspaceRoot, environment.label],
+                  title: project.title,
+                  description: `${environment.label} · ${project.workspaceRoot}`,
+                  icon: <FolderIcon />,
+                  run: async () => {
+                    setActiveFocusId(ALL_FOCUS_ID);
+                    await handleNewThread({
+                      environmentId: environment.environmentId as EnvironmentId,
+                      projectId: project.localProjectId as ProjectId,
+                    });
+                  },
+                }),
+              ),
+          ),
+          queueDestinations.map(
+            (environment): CommandPaletteActionItem => ({
+              kind: "action",
+              value: `new-conversation:${environment.environmentId}`,
+              searchTerms: ["conversation", "new chat", "without project", environment.label],
+              title: "Conversation",
+              description: activeCompanyId === null ? "Choose a company first" : environment.label,
+              disabled: activeCompanyId === null,
+              icon: <MessageSquareIcon />,
+              run: async () => {
+                setActiveFocusId(CONVERSATIONS_FOCUS_ID);
+                await handleNewThread({
+                  environmentId: environment.environmentId as EnvironmentId,
+                  projectId: null,
+                });
+              },
+            }),
+          ),
         ),
       ),
     [
@@ -1497,6 +1522,8 @@ function OpenCommandPaletteDialog(props: {
       handleNewThread,
       openCheckoutlessProject,
       pickerProjects,
+      queueDestinations,
+      projects,
       projectEnvironmentLocationById,
       projectGroupByTargetKey,
     ],

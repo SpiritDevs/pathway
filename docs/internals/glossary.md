@@ -203,3 +203,15 @@ time, and available accessibility context. Capture happens on the desktop client
 when the thread runs in a remote environment. Pending captures stay on that computer until the
 draft is saved or the user discards them. See [SnapShots](snap-shot.md) for delivery and provider
 boundaries and [the user guide](../user/snap-shot.md) for setup.
+
+## Queued submission
+
+A cloud-saved user message and its attachment references, assigned to a thread and destination
+environment. Its stable command identity allows delivery to resume after disconnection without
+starting duplicate work. See [durable thread submission](durable-thread-queue.md).
+
+## Queue acceptance
+
+The atomic point at which an environment takes permanent delivery ownership of a queued
+submission. Editing, cancellation, and reassignment are available before acceptance. Acceptance
+is separate from durable local delivery and from provider startup.

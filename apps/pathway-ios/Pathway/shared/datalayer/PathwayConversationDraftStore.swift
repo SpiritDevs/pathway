@@ -8,6 +8,9 @@ struct PathwayConversationDraftSnapshot: Sendable {
     let preparedSend: PathwayThreadPreparedSend?
     let preparedNewSend: PathwayThreadPreparedNewSend?
     let revision: UInt64
+    var composerModelSelection: PathwayModelSelection? = nil
+    var composerRuntimeMode: String? = nil
+    var composerInteractionMode: String? = nil
 }
 
 /// Keeps attachment bytes out of text-edit writes and scopes every file to one account and thread.
@@ -19,6 +22,9 @@ actor PathwayConversationDraftStore {
         let preparedNewSend: PathwayThreadPreparedNewSend?
         /// First observed successful upload, keyed by the remote upload ID, not draft edits.
         var uploadedAt: [String: Date]? = nil
+        var composerModelSelection: PathwayModelSelection? = nil
+        var composerRuntimeMode: String? = nil
+        var composerInteractionMode: String? = nil
     }
 
     private let directory: URL
@@ -62,7 +68,9 @@ actor PathwayConversationDraftStore {
             return draft
         }
         return PathwayConversationDraftSnapshot(text: manifest.text, attachments: attachments, data: data,
-            preparedSend: manifest.preparedSend, preparedNewSend: manifest.preparedNewSend, revision: 0)
+            preparedSend: manifest.preparedSend, preparedNewSend: manifest.preparedNewSend, revision: 0,
+            composerModelSelection: manifest.composerModelSelection, composerRuntimeMode: manifest.composerRuntimeMode,
+            composerInteractionMode: manifest.composerInteractionMode)
     }
 
     /// Publishes a complete legacy text draft without replacing an existing account draft.
@@ -114,7 +122,9 @@ actor PathwayConversationDraftStore {
             return result
         }
         let manifest = Manifest(text: snapshot.text, attachments: metadata,
-            preparedSend: snapshot.preparedSend, preparedNewSend: snapshot.preparedNewSend, uploadedAt: uploadDates)
+            preparedSend: snapshot.preparedSend, preparedNewSend: snapshot.preparedNewSend, uploadedAt: uploadDates,
+            composerModelSelection: snapshot.composerModelSelection, composerRuntimeMode: snapshot.composerRuntimeMode,
+            composerInteractionMode: snapshot.composerInteractionMode)
         try JSONEncoder().encode(manifest).write(to: directory.appending(path: "draft.json"),
             options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         lastRevision = snapshot.revision

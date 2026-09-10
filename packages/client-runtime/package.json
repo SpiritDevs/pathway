@@ -214,6 +214,10 @@
     "./thread-alerts/storage": {
       "types": "./src/threadAlerts/storage.ts",
       "default": "./src/threadAlerts/storage.ts"
+    },
+    "./sync/thread-queue-outbox": {
+      "types": "./src/sync/threadQueueOutbox.ts",
+      "default": "./src/sync/threadQueueOutbox.ts"
     }
   },
   "scripts": {

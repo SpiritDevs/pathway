@@ -135,10 +135,20 @@
         }
 
         func issueRequest(kind: String, name: String, arguments: JSONValue) async throws -> JSONValue {
+            do {
             switch kind {
             case "action": return try await client.action(name, with: PathwayConvexJSON.arguments(arguments))
             case "mutation": return try await client.mutation(name, with: PathwayConvexJSON.arguments(arguments))
             default: return try await query(name, with: PathwayConvexJSON.arguments(arguments))
+            }
+            } catch let error as ClientError {
+                if name.hasPrefix("threadQueue:"), case let .ConvexError(data) = error,
+                   let bytes = data.data(using: .utf8),
+                   let fields = try? JSONDecoder().decode(JSONValue.self, from: bytes).objectValue {
+                    throw PathwayThreadQueueRejected(code: fields["code"]?.stringValue,
+                        message: fields["message"]?.stringValue ?? "The queued request was rejected.")
+                }
+                throw error
             }
         }
 

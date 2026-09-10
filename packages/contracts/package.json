@@ -50,6 +50,10 @@
     "./mail": {
       "types": "./src/mail.ts",
       "import": "./src/mail.ts"
+    },
+    "./threadQueue": {
+      "types": "./src/threadQueue.ts",
+      "import": "./src/threadQueue.ts"
     }
   },
   "scripts": {

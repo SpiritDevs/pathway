@@ -182,6 +182,16 @@ import {
 // changes only at the local day boundary so day-aware labels stay accurate.
 // ---------------------------------------------------------------------------
 
+interface QueuedMessageControl {
+  readonly editable: boolean;
+  readonly cancelable: boolean;
+  readonly retryable: boolean;
+  readonly state: "queued" | "accepted" | "delivered" | "blocked" | "canceled";
+  readonly waitingToSync: boolean;
+  readonly submissionStarted: boolean;
+}
+const EMPTY_QUEUED_MESSAGE_CONTROLS: ReadonlyMap<string, QueuedMessageControl> = new Map();
+
 interface TimelineRowSharedState {
   timestampFormat: TimestampFormat;
   timestampNowMs: number;
@@ -198,6 +208,8 @@ interface TimelineRowSharedState {
   /** Projection subagents, for labelling subagent cards with their model. */
   subagents: ReadonlyArray<SubagentTimelineModel>;
   activeThreadEnvironmentId: EnvironmentId;
+  queuedMessageControls: ReadonlyMap<string, QueuedMessageControl>;
+  onCancelQueuedMessage: (messageId: MessageId) => void;
   editableUserMessageId: MessageId | null;
   editingUserMessageId: MessageId | null;
   editingUserMessageDraft: string;
@@ -291,6 +303,8 @@ interface MessagesTimelineProps {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   latestRun: TimelineLatestRun | null;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  queuedMessageControls?: ReadonlyMap<string, QueuedMessageControl>;
+  onCancelQueuedMessage?: (messageId: MessageId) => void;
   editableUserMessageId?: MessageId | null;
   canSubmitUserMessageEdit?: boolean;
   onRequestEditUserMessage?: (messageId: MessageId) => Promise<boolean>;
@@ -376,6 +390,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   timelineEntries,
   latestRun,
   turnDiffSummaryByAssistantMessageId,
+  queuedMessageControls = EMPTY_QUEUED_MESSAGE_CONTROLS,
+  onCancelQueuedMessage = NOOP_PANEL_SURFACE_OPEN,
   editableUserMessageId = null,
   canSubmitUserMessageEdit = false,
   onRequestEditUserMessage = DEFAULT_ASYNC_FALSE,
@@ -539,14 +555,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const onBeginEditUserMessage = useCallback(
     (messageId: MessageId, text: string) => {
       void (async () => {
-        if (messageId !== editableUserMessageId || !(await onRequestEditUserMessage(messageId))) {
+        if (
+          (messageId !== editableUserMessageId &&
+            !queuedMessageControls.get(messageId)?.editable) ||
+          !(await onRequestEditUserMessage(messageId))
+        ) {
           return;
         }
         setEditingUserMessageId(messageId);
         setEditingUserMessageDraft(splitEditableUserMessageText(text).editableText);
       })();
     },
-    [editableUserMessageId, onRequestEditUserMessage],
+    [editableUserMessageId, onRequestEditUserMessage, queuedMessageControls],
   );
   const onCancelUserMessageEdit = useCallback(() => {
     if (isSubmittingUserMessageEdit) return;
@@ -559,8 +579,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         const nextText = replaceEditableUserMessageText(originalText, editingUserMessageDraft);
         if (
           messageId !== editingUserMessageId ||
-          messageId !== editableUserMessageId ||
-          !canSubmitUserMessageEdit ||
+          (messageId !== editableUserMessageId &&
+            !queuedMessageControls.get(messageId)?.editable) ||
+          (!canSubmitUserMessageEdit && !queuedMessageControls.get(messageId)?.editable) ||
           nextText === originalText ||
           editingUserMessageDraft.trim().length === 0
         ) {
@@ -577,6 +598,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     },
     [
       canSubmitUserMessageEdit,
+      queuedMessageControls,
       editableUserMessageId,
       editingUserMessageDraft,
       editingUserMessageId,
@@ -585,7 +607,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const retryUserMessage = useCallback(
     (messageId: MessageId, text: string) => {
-      if (messageId !== retryableUserMessageId || retryingUserMessageId !== null) return;
+      if (
+        (messageId !== retryableUserMessageId &&
+          !queuedMessageControls.get(messageId)?.retryable) ||
+        retryingUserMessageId !== null
+      )
+        return;
       void (async () => {
         setRetryingUserMessageId(messageId);
         try {
@@ -595,7 +622,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         }
       })();
     },
-    [onRetryUserMessage, retryableUserMessageId, retryingUserMessageId],
+    [onRetryUserMessage, retryableUserMessageId, retryingUserMessageId, queuedMessageControls],
   );
 
   // An in-session interrupt leaves its turn expanded so the user keeps their
@@ -813,6 +840,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       runs,
       subagents,
       activeThreadEnvironmentId,
+      queuedMessageControls,
+      onCancelQueuedMessage,
       editableUserMessageId,
       editingUserMessageId,
       editingUserMessageDraft,
@@ -861,6 +890,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       runs,
       subagents,
       activeThreadEnvironmentId,
+      queuedMessageControls,
+      onCancelQueuedMessage,
       editableUserMessageId,
       editingUserMessageId,
       editingUserMessageDraft,
@@ -1410,12 +1441,14 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const canEditMessage =
     !isGeneratedQuestionReply(row.message) &&
     row.message.createdBy === "user" &&
-    ctx.editableUserMessageId === row.message.id &&
+    (ctx.editableUserMessageId === row.message.id ||
+      ctx.queuedMessageControls.get(row.message.id)?.editable) &&
     hasEditableText;
   const isEditingMessage = canEditMessage && ctx.editingUserMessageId === row.message.id;
   const canRetryMessage =
     row.message.createdBy === "user" &&
-    ctx.retryableUserMessageId === row.message.id &&
+    (ctx.retryableUserMessageId === row.message.id ||
+      ctx.queuedMessageControls.get(row.message.id)?.retryable) &&
     hasMessageText;
 
   return (
@@ -1575,7 +1608,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       <div
         className={cn(
           "flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100",
-          canRetryMessage ? "opacity-100" : "opacity-0",
+          canRetryMessage || ctx.queuedMessageControls.has(row.message.id)
+            ? "opacity-100"
+            : "opacity-0",
         )}
       >
         <div className="flex shrink-0 items-center gap-2">
@@ -1592,11 +1627,25 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             </TooltipPopup>
           </Tooltip>
           <div className="flex items-center gap-0.5">
+            {ctx.queuedMessageControls.has(row.message.id) ? (
+              <QueuedMessageDelivery control={ctx.queuedMessageControls.get(row.message.id)!} />
+            ) : null}
             {canRetryMessage && !isEditingMessage ? (
               <RetryUserMessageButton messageId={row.message.id} text={row.message.text} />
             ) : null}
             {canEditMessage && !isEditingMessage ? (
               <EditUserMessageButton messageId={row.message.id} text={row.message.text} />
+            ) : null}
+            {ctx.queuedMessageControls.get(row.message.id)?.cancelable && !isEditingMessage ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                aria-label="Cancel queued message"
+                onClick={() => ctx.onCancelQueuedMessage(row.message.id)}
+              >
+                Cancel
+              </Button>
             ) : null}
             {canRevertAgentWork && <RevertUserMessageButton messageId={row.message.id} />}
             {copyText && <MessageCopyButton text={copyText} variant="ghost" />}
@@ -1604,6 +1653,33 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         </div>
       </div>
     </div>
+  );
+}
+
+function QueuedMessageDelivery({ control }: { control: QueuedMessageControl }) {
+  const label =
+    control.state === "canceled"
+      ? "Canceled"
+      : control.waitingToSync
+        ? "Waiting to sync"
+        : control.state === "accepted"
+          ? "Starting"
+          : control.state === "blocked"
+            ? "Needs attention"
+            : control.state === "delivered"
+              ? "Sent"
+              : "Queued";
+  return (
+    <span
+      className="px-1 text-[11px] text-muted-foreground"
+      title={
+        control.submissionStarted
+          ? "Waiting for confirmation before this message can be changed."
+          : undefined
+      }
+    >
+      {label}
+    </span>
   );
 }
 
@@ -1649,7 +1725,9 @@ function EditUserMessageButton({ messageId, text }: { messageId: MessageId; text
       >
         <PencilIcon className="size-3" />
       </TooltipTrigger>
-      <TooltipPopup side="top">Edit and restart</TooltipPopup>
+      <TooltipPopup side="top">
+        {ctx.queuedMessageControls.has(messageId) ? "Edit queued message" : "Edit and restart"}
+      </TooltipPopup>
     </Tooltip>
   );
 }
@@ -1668,8 +1746,9 @@ function InlineUserMessageEditor({
   const submitDisabled =
     editedText.length === 0 ||
     unchanged ||
-    !ctx.canSubmitUserMessageEdit ||
-    ctx.editableUserMessageId !== messageId ||
+    (!ctx.canSubmitUserMessageEdit && !ctx.queuedMessageControls.get(messageId)?.editable) ||
+    (ctx.editableUserMessageId !== messageId &&
+      !ctx.queuedMessageControls.get(messageId)?.editable) ||
     ctx.isSubmittingUserMessageEdit;
 
   useEffect(() => {
@@ -1720,7 +1799,13 @@ function InlineUserMessageEditor({
           disabled={submitDisabled}
           className="min-w-14 rounded-lg px-3"
         >
-          {ctx.isSubmittingUserMessageEdit ? "Sending…" : "Send"}
+          {ctx.queuedMessageControls.has(messageId)
+            ? ctx.isSubmittingUserMessageEdit
+              ? "Saving…"
+              : "Save"
+            : ctx.isSubmittingUserMessageEdit
+              ? "Sending…"
+              : "Send"}
         </Button>
       </div>
     </form>

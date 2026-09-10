@@ -14,7 +14,7 @@ import type { DraftId } from "../../composerDraftStore";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { usePathwayProjectFileScripts } from "../../hooks/usePathwayProjectFileScripts";
 import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
-import { BranchToolbar } from "../BranchToolbar";
+import { BranchToolbar, type BranchToolbarWorkspaceContext } from "../BranchToolbar";
 import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
 import {
   DevelopmentEnvironmentControls,
@@ -46,6 +46,7 @@ import { useClientSettings } from "../../hooks/useSettings";
 import { resolveActionPaletteSections, type ActionPaletteSectionId } from "./actionPaletteSections";
 
 export interface ThreadDetailsPanelProps {
+  workspaceContext?: BranchToolbarWorkspaceContext;
   mode: "inline" | "popover";
   onClose?: () => void;
   onOpenDirectory?: ((cwd: string) => void) | undefined;
@@ -168,6 +169,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     props.environmentConnection?.phase === "connecting" ||
     props.environmentConnection?.phase === "reconnecting";
   const branchToolbarProps = {
+    ...(props.workspaceContext ? { workspaceContext: props.workspaceContext } : {}),
     showGitControls: props.isGitRepo,
     onOpenDirectory: props.onOpenDirectory,
     environmentId: props.environmentId,

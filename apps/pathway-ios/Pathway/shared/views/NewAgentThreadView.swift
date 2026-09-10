@@ -249,6 +249,7 @@ struct NewAgentThreadView: View {
             connect: connect,
             storageDirectory: appModel.localStorageDirectory
         )
+        nextModel.threadQueue = appModel.cloud.threadQueue
         if let departing, appliedInitialPrompt || appliedCapture {
             do { try await departing.transferIncomingDraft(to: nextModel) }
             catch {

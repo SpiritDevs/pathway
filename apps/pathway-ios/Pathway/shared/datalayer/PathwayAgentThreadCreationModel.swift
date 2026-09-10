@@ -141,6 +141,9 @@ final class PathwayAgentThreadCreationModel {
         }
     }
 
+    @ObservationIgnored var threadQueue: PathwayThreadQueueModel? {
+        didSet { attachments.usesCloudQueue = threadQueue != nil; applyAttachmentCapabilities() }
+    }
     @ObservationIgnored private let binding: PathwayCompanyEnvironmentBinding?
     @ObservationIgnored private let environment: PathwayCompanyEnvironment
     typealias Request = @MainActor (String, JSONValue) async throws -> JSONValue
@@ -259,12 +262,12 @@ final class PathwayAgentThreadCreationModel {
 
     var canLaunch: Bool {
         (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !initialImageUploads.isEmpty || !attachments.drafts.isEmpty)
-            && prompt.count <= 120_000 && attachments.isReady && initialImageUploads.count + attachments.drafts.count <= 8
+            && prompt.count <= 120_000 && (threadQueue != nil || attachments.isReady) && initialImageUploads.count + attachments.drafts.count <= 8
             && automaticModelChoice == nil
             && selectedProvider != nil
             && selectedModel != nil
-            && (!(isConversation || temporary) || supportsConversations)
-            && connectionState == .live
+            && (!(isConversation || temporary) || supportsConversations || threadQueue != nil)
+            && (connectionState == .live || threadQueue != nil)
             && storageAllowsLaunch
             && !isLaunching && !isImportingCapture && !isTransferringDraft
             && (isConversation || (workspaceMode != "worktree" && !temporary)
@@ -310,6 +313,7 @@ final class PathwayAgentThreadCreationModel {
     }
 
     func launch() async -> String? {
+        if let threadQueue { return await enqueueLaunch(using: threadQueue) }
         guard canLaunch, storageAllowsLaunch, rpc != nil || injectedRequest != nil, let selectedProvider, let selectedModel else { return nil }
         isLaunching = true
         errorMessage = nil
@@ -402,6 +406,39 @@ final class PathwayAgentThreadCreationModel {
         optionValues[descriptor.id] = value
     }
 
+    private func enqueueLaunch(using queue: PathwayThreadQueueModel) async -> String? {
+        guard canLaunch, let provider = selectedProvider, let model = selectedModel else { return nil }
+        isLaunching = true
+        defer { isLaunching = false }
+        do {
+            let selection = PathwayModelSelection(instanceId: provider.id, model: model.id,
+                options: optionValues.map { PathwayModelOption(id: $0.key, value: $0.value) })
+            let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            let draft = PathwayThreadLaunchDraft(projectID: binding?.binding.localProjectId, prompt: text,
+                modelSelection: selection, runtimeMode: runtimeMode, interactionMode: interactionMode,
+                workspaceMode: workspaceMode, baseReference: baseReference, branch: branch,
+                startFromOrigin: startFromOrigin, temporary: temporary,
+                conversationCompanyID: isConversation ? environment.companyId : nil)
+            var fingerprintFields = PathwayAgentThreadCommands.launchThread(draft, identifier: "draft").objectValue ?? [:]
+            fingerprintFields["uploadsFingerprint"] = .object(["initial": .array(initialImageUploads), "files": .array(attachments.drafts.map { .string($0.id) })])
+            let fingerprint = JSONValue.object(fingerprintFields)
+            if launchAttempt?.fingerprint != fingerprint { launchAttempt = PathwayThreadLaunchAttempt(fingerprint: fingerprint) }
+            guard let attempt = launchAttempt else { return nil }
+            try await persistDraftChecked()
+            let selected = attachments.drafts
+            let initialUploads = initialImageUploads
+            let files = try initialUploads.map(PathwayQueueFile.captureUpload) + selected.map { try PathwayQueueFile.capture($0, bytes: attachments.bytes[$0.id]) }
+            try await queue.enqueue(companyID: environment.companyId, environmentID: environment.environment.environmentId,
+                threadID: attempt.threadID, submission: .object(["kind": .string("launch"), "input": attempt.launchPayload()]), files: files)
+            if prompt.trimmingCharacters(in: .whitespacesAndNewlines) == text { prompt = "" }
+            launchAttempt = nil
+            if initialImageUploads == initialUploads { initialImageUploads = [] }
+            await attachments.didSend(ids: Set(selected.map(\.id)))
+            try await persistDraftChecked()
+            return attempt.threadID
+        } catch { errorMessage = error.localizedDescription; return nil }
+    }
+
     func applySubscriptionValue(_ value: JSONValue) {
         guard let object = value.objectValue else { return }
         if object["_pathwayTransport"] != nil { connectionState = .connecting; attachments.isConnected = false; return }
@@ -425,6 +462,10 @@ final class PathwayAgentThreadCreationModel {
             return
         }
 
+        if let storageDirectory, !serverConfig.isEmpty, let data = try? JSONEncoder().encode(JSONValue.object(serverConfig)) {
+            let url = storageDirectory.appending(path: "ThreadProviderConfig-" + environment.environment.environmentId.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + ".json")
+            try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        }
         providers = isAutomaticPlacement ? PathwayEnvironmentPlacement.availableProviders(.object(serverConfig))
             : providerValues.compactMap(PathwayAgentThreadModel.provider).filter { $0.unavailableReason == nil && !$0.models.isEmpty }
         if let choice = automaticModelChoice {
@@ -448,8 +489,8 @@ final class PathwayAgentThreadCreationModel {
 
     private func applyAttachmentCapabilities() {
         let capabilities = serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue ?? [:]
-        attachments.supportsUploads = capabilities["attachmentUploads"]?.boolValue == true
-        attachments.maximumFileBytes = capabilities["fileAttachments"]?.objectValue?["maxUploadBytes"]?.intValue
+        attachments.supportsUploads = threadQueue != nil || capabilities["attachmentUploads"]?.boolValue == true
+        attachments.maximumFileBytes = threadQueue != nil ? 50 * 1024 * 1024 : capabilities["fileAttachments"]?.objectValue?["maxUploadBytes"]?.intValue
     }
 
     func request(_ method: String, payload: JSONValue) async throws -> JSONValue {
@@ -462,6 +503,13 @@ final class PathwayAgentThreadCreationModel {
     func restoreDraft() async {
         guard !didRestoreDraft else { return }
         didRestoreDraft = true
+        if let storageDirectory {
+            let url = storageDirectory.appending(path: "ThreadProviderConfig-" + environment.environment.environmentId.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + ".json")
+            if let data = try? Data(contentsOf: url), let config = try? JSONDecoder().decode(JSONValue.self, from: data) {
+                applySubscriptionValue(.object(["type": .string("snapshot"), "config": config]))
+                connectionState = .cached
+            }
+        }
         var sentIDs: [String] = []
         if let draftStore, let stored = await draftStore.load(), prompt.isEmpty, initialImageUploads.isEmpty {
             hasConfiguredDefaults = true
@@ -478,6 +526,15 @@ final class PathwayAgentThreadCreationModel {
         // The byte store needs the launch receipt before deciding whether an old upload is reusable.
         await attachments.restore(preservingPreparedUploadIDs: claimedUploadIDs)
         if !sentIDs.isEmpty { await attachments.didSend(ids: Set(sentIDs)) }
+        if providers.isEmpty, let threadQueue {
+            do {
+                let destinations = try await threadQueue.destinations(companyID: environment.companyId)
+                let destination = destinations.arrayValue?.first { $0.objectValue?["environmentId"]?.stringValue == environment.environment.environmentId }
+                providers = (destination?.objectValue?["providers"]?.arrayValue ?? []).compactMap(Self.cloudProvider)
+                preserveOrSelectDefaults()
+                attachments.supportsUploads = true
+            } catch { errorMessage = "Provider settings could not be loaded. Your draft remains saved. " + error.localizedDescription }
+        }
     }
 
     private var claimedUploadIDs: Set<String> {
@@ -641,6 +698,17 @@ final class PathwayAgentThreadCreationModel {
 }
 
 private extension PathwayAgentThreadCreationModel {
+    static func cloudProvider(_ value: JSONValue) -> PathwayServerProvider? {
+        guard let fields = value.objectValue, fields["enabled"]?.boolValue == true,
+              let id = fields["instanceId"]?.stringValue, let driver = fields["driver"]?.stringValue else { return nil }
+        let models = (fields["modelIds"]?.arrayValue ?? []).compactMap { value -> PathwayServerModel? in
+            guard let id = value.stringValue else { return nil }
+            return PathwayServerModel(id: id, name: id, isDefault: false, optionDescriptors: [])
+        }
+        return PathwayServerProvider(id: id, driver: driver, name: fields["displayName"]?.stringValue ?? driver,
+            models: models, showsInteractionMode: false)
+    }
+
     private static func provider(_ value: JSONValue) -> PathwayServerProvider? {
         guard
             let object = value.objectValue,

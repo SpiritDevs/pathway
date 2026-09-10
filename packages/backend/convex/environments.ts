@@ -69,6 +69,7 @@ const executionEnvironmentDescriptor = v.object({
   ),
   serverVersion: v.string(),
   capabilities: v.object({
+    durableThreadQueue: v.optional(v.boolean()),
     repositoryIdentity: v.boolean(),
     projectDirectoryInspection: v.optional(v.boolean()),
     connectionProbe: v.optional(v.boolean()),
@@ -167,6 +168,7 @@ function descriptorKey(value: Descriptor): string {
     value.device?.modelIdentifier,
     value.runtime?.mode,
     value.serverVersion,
+    capabilities["durableThreadQueue"],
     capabilities["repositoryIdentity"],
     capabilities["projectDirectoryInspection"],
     capabilities["connectionProbe"],

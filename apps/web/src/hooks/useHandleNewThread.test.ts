@@ -1,3 +1,4 @@
+import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
 import { EnvironmentId, MessageId, ProjectId, ThreadId } from "@spiritdevs/contracts";
 import { scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import { createElement } from "react";
@@ -9,6 +10,7 @@ import { useHandleNewThread, useNewThreadHandler } from "./useHandleNewThread";
 import { selectSidebarDraftRows } from "../components/sidebarDrafts";
 
 const mocks = vi.hoisted(() => ({
+  connected: true,
   activeThread: null as { environmentId: string; projectId: string } | null,
   readShell: vi.fn(),
   readDefaults: vi.fn(),
@@ -17,7 +19,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@effect/atom-react", () => ({
-  useAtomValue: () => ({ defaultThreadEnvMode: "local", newWorktreesStartFromOrigin: false }),
+  useAtomValue: (atom: unknown) =>
+    atom === threadQueueDestinationsAtom
+      ? []
+      : { defaultThreadEnvMode: "local", newWorktreesStartFromOrigin: false },
 }));
 vi.mock("@tanstack/react-router", () => ({
   useParams: ({ select }: { select: (params: Record<string, string>) => unknown }) =>
@@ -25,6 +30,14 @@ vi.mock("@tanstack/react-router", () => ({
   useRouter: () => ({
     state: { matches: [{ params: mocks.routeParams }] },
     navigate: mocks.navigate,
+  }),
+}));
+vi.mock("../state/environments", () => ({
+  useEnvironments: () => ({
+    environments: ["env-a", "env-b"].map((environmentId) => ({
+      environmentId,
+      connection: { phase: mocks.connected ? "connected" : "disconnected" },
+    })),
   }),
 }));
 vi.mock("../state/server", () => ({ primaryServerSettingsAtom: {} }));
@@ -62,6 +75,7 @@ describe("new-thread creation while project defaults load", () => {
     vi.clearAllMocks();
     mocks.readShell.mockReset().mockReturnValue(null);
     mocks.routeParams = {};
+    mocks.connected = true;
     useComposerDraftStore.setState({
       draftsByThreadKey: {},
       draftThreadsByThreadKey: {},
@@ -73,6 +87,15 @@ describe("new-thread creation while project defaults load", () => {
 
   afterEach(() => {
     useComposerDraftStore.persist.clearStorage();
+  });
+
+  it("creates an offline project draft without waiting for its filesystem defaults", async () => {
+    mocks.connected = false;
+    const opened = await createHandler()(
+      scopeProjectRef(EnvironmentId.make("env-b"), ProjectId.make("project-b")),
+    );
+    expect(opened).not.toBeNull();
+    expect(mocks.readDefaults).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -228,6 +251,7 @@ describe("new-thread project after switching profiles", () => {
   afterEach(() => {
     mocks.activeThread = null;
     mocks.routeParams = {};
+    mocks.connected = true;
     useComposerDraftStore.persist.clearStorage();
   });
 

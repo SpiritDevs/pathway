@@ -15,6 +15,8 @@ import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Schedule from "effect/Schedule";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import * as Ref from "effect/Ref";
@@ -253,44 +255,61 @@ export const runCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publis
         }),
       );
 
-    const reconcile = Effect.gen(function* () {
-      const snapshot = yield* threads.getShellSnapshot();
-      const shells = [...snapshot.threads, ...snapshot.archivedThreads].filter(
+    const mutationLock = yield* Semaphore.make(1);
+    const publishThread = (threadId: ThreadId) =>
+      mutationLock
+        .withPermits(1)(
+          threads
+            .getThreadShell(threadId)
+            .pipe(
+              Effect.flatMap((shell) =>
+                shell === null ? publisher.remove(threadId) : publisher.publish(shell),
+              ),
+            ),
+        )
+        .pipe(reportFailure("publish", threadId));
+
+    const companyShells = (snapshot: {
+      threads: ReadonlyArray<OrchestrationV2ThreadShell>;
+      archivedThreads: ReadonlyArray<OrchestrationV2ThreadShell>;
+    }) =>
+      [...snapshot.threads, ...snapshot.archivedThreads].filter(
         (shell) => shell.projectId !== null || shell.conversationCompanyId === options.companyId,
       );
-      // One unpublishable shell (a thread whose project binding was revoked,
-      // a shell the deployed validator rejects) must not abort the cycle:
-      // every other shell still publishes and stale removals below still run.
-      yield* Effect.forEach(
-        shells,
-        (shell) => publisher.publish(shell).pipe(reportFailure("publish", shell.id)),
-        {
-          concurrency: 4,
-          discard: true,
-        },
+
+    const reconcile = Effect.gen(function* () {
+      const snapshot = yield* threads.getShellSnapshot();
+      // Snapshot IDs are scan work only. Read each current shell under the same mutation lock
+      // as live events, so delayed scans cannot overwrite edits or resurrect deleted threads.
+      yield* Effect.forEach(companyShells(snapshot), (shell) => publishThread(shell.id), {
+        concurrency: 4,
+        discard: true,
+      });
+      yield* mutationLock.withPermits(1)(
+        Effect.gen(function* () {
+          const current = yield* threads.getShellSnapshot();
+          yield* publisher.reconcileIds(companyShells(current).map((shell) => shell.id));
+        }),
       );
-      yield* publisher.reconcileIds(shells.map((shell) => shell.id));
     }).pipe(reportFailure("reconcile"));
 
-    const publishThread = (threadId: ThreadId) =>
-      threads.getThreadShell(threadId).pipe(
-        Effect.flatMap((shell) =>
-          shell === null ? publisher.remove(threadId) : publisher.publish(shell),
-        ),
-        reportFailure("publish", threadId),
-      );
-
-    yield* reconcile;
-    const events = threads.streamDomainEvents.pipe(
-      Stream.filter(shouldPublishCloudAgentThreadEvent),
-      Stream.map((event) => ({ _tag: "Thread" as const, threadId: event.threadId })),
-    );
-    const periodic = Stream.tick(
-      options.reconcileInterval ?? DEFAULT_AGENT_THREAD_RECONCILE_INTERVAL,
-    ).pipe(Stream.map(() => ({ _tag: "Reconcile" as const })));
-
-    yield* Stream.runForEach(Stream.merge(events, periodic), (event) =>
-      event._tag === "Reconcile" ? reconcile : publishThread(event.threadId),
+    // Start the live tail before scanning existing threads. Reconciliation can involve hundreds
+    // of cloud calls, and must not postpone subscribing to or processing newly created threads.
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const live = yield* threads.streamDomainEvents.pipe(
+          Stream.filter(shouldPublishCloudAgentThreadEvent),
+          Stream.runForEach((event) => publishThread(event.threadId)),
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* reconcile.pipe(
+          Effect.repeat(
+            Schedule.spaced(options.reconcileInterval ?? DEFAULT_AGENT_THREAD_RECONCILE_INTERVAL),
+          ),
+          Effect.forkScoped,
+        );
+        yield* Fiber.join(live);
+      }),
     );
   },
 );

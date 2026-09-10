@@ -10,6 +10,7 @@ import { appAtomRegistry, resetAppAtomRegistryForTests } from "../rpc/atomRegist
 import { companyRegistryReplicasAtom } from "./companyRegistryReplica";
 import {
   cloudAgentThreadCompanyId,
+  cloudAgentProjectCompanyId,
   cloudEnvironmentProjectsAtom,
   cloudEnvironmentProjectsFromReplicas,
   cloudEnvironmentThreadsAtom,
@@ -522,6 +523,15 @@ describe("cloud Agent Thread read model", () => {
         { id: THREAD_ID, settledOverride: "active", settledAt: null },
       ]);
     }
+  });
+
+  it("resolves a fork or new project thread company with All companies selected", () => {
+    const replicas = new Map([
+      [COMPANY_ID, replica(binding)],
+      [OTHER_COMPANY_ID, replica(otherBinding)],
+    ]);
+    expect(cloudAgentProjectCompanyId(replicas, ENVIRONMENT_ID, LOCAL_PROJECT_ID)).toBe(COMPANY_ID);
+    expect(cloudAgentProjectCompanyId(replicas, ENVIRONMENT_ID, "missing")).toBeNull();
   });
 
   it("resolves the company that owns a cloud Agent Thread shell", () => {

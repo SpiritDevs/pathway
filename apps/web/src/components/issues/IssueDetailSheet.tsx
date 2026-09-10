@@ -1188,6 +1188,9 @@ function IssueDetailBody({
       if (project === null || project.workspaceRoot === null || !startWorkAttachmentsReady) {
         throw new Error("The issue thread could not be prepared.");
       }
+      if (agentEnvironmentBlockReason !== null) {
+        throw new Error(`${agentEnvironmentBlockReason} Connect it before preparing issue work.`);
+      }
       const workspacePlan = resolveIssueStartWorkWorkspacePlan(workspaceMode, baseBranch);
       if (workspacePlan === null) {
         throw new Error(newWorktreeBlockReason ?? "A base branch is required.");
@@ -1275,6 +1278,7 @@ function IssueDetailBody({
       relationDisplays,
       agentSettings.newWorktreesStartFromOrigin,
       primarySettings.issueAutomation.statusTransitions.workFinishedStatusId,
+      agentEnvironmentBlockReason,
       startWorkAttachmentsReady,
       startWorkAttachmentUrls,
       startWorkBranchRefs,
