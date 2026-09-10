@@ -389,7 +389,11 @@ import {
   shouldShowThreadErrorBanner,
   ThreadErrorBanner,
 } from "./chat/ThreadErrorBanner";
-import { resolveThreadPr } from "./ThreadStatusIndicators";
+import {
+  aggregateThreadPullRequestState,
+  useAttachedPullRequests,
+} from "../state/threadPullRequest";
+import { resolveThreadPr, resolveThreadPrBadges } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import { shouldOfferResumeCompaction } from "./chat/ContextWindowMeter.logic";
 import {
@@ -5594,6 +5598,15 @@ function ChatViewContent(props: ChatViewProps) {
     threadBranch: activeThread?.branch ?? null,
     gitStatus: gitStatusQuery.data ?? null,
   });
+  const attachedPrQueries = useAttachedPullRequests(activeThreadShell, { poll: true });
+  const activeThreadPrState = aggregateThreadPullRequestState(
+    resolveThreadPrBadges({
+      branchPullRequest: activeThreadPr,
+      detachedPullRequestUrls: activeThreadShell?.detachedPullRequestUrls,
+      attachedQueries: attachedPrQueries,
+      provider: gitStatusQuery.data?.sourceControlProvider,
+    }).map((badge) => badge.changeRequestState),
+  );
   // The right panel offers the thread's own change request, so it can only offer it once the
   // branch has one; until then the picker says so rather than opening an empty panel.
   const addPullRequestSurface = useCallback(() => {
@@ -5667,15 +5680,9 @@ function ChatViewContent(props: ChatViewProps) {
     return effectiveSettled(activeThreadShell, {
       now: `${nowMinute}:00.000Z`,
       autoSettleAfterDays,
-      changeRequestState: activeThreadPr?.state ?? null,
+      changeRequestState: activeThreadPrState,
     });
-  }, [
-    activeThreadPr?.state,
-    activeThreadShell,
-    autoSettleAfterDays,
-    nowMinute,
-    supportsSettlement,
-  ]);
+  }, [activeThreadPrState, activeThreadShell, autoSettleAfterDays, nowMinute, supportsSettlement]);
   const activeThreadSettleAfterCompletion =
     supportsSettleAfterCompletion && activeThreadShell?.settleAfterCompletion === true;
   const settleAfterCompletionMutation = useAtomCommand(threadEnvironment.setSettleAfterCompletion, {

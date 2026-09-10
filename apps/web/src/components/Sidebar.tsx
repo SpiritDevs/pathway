@@ -201,7 +201,7 @@ import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   ThreadWorktreeIndicator,
   resolveThreadPr,
-  resolveThreadPrBadge,
+  resolveThreadPrBadges,
   settledPrHoverColorClass,
   terminalStatusFromRunningIds,
   type TerminalStatusIndicator,
@@ -942,25 +942,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   });
   const attachedQueries = useAttachedPullRequests(thread, { poll: props.isActive });
   const visibleBranchPr = pr && !thread.detachedPullRequestUrls?.includes(pr.url) ? pr : null;
-  const badges = attachedQueries.map(
-    (query) =>
-      resolveThreadPrBadge({
-        branchPullRequest: visibleBranchPr,
-        attachedPullRequest: query.attachment,
-        attachedDetail: query.data,
-        attachedError: query.error,
-        provider: gitStatus.data?.sourceControlProvider,
-      })!,
-  );
-  if (visibleBranchPr && !badges.some((badge) => badge.pullRequest.url === visibleBranchPr.url)) {
-    badges.push(
-      resolveThreadPrBadge({
-        branchPullRequest: visibleBranchPr,
-        attachedPullRequest: null,
-        provider: gitStatus.data?.sourceControlProvider,
-      })!,
-    );
-  }
+  const badges = resolveThreadPrBadges({
+    branchPullRequest: pr,
+    detachedPullRequestUrls: thread.detachedPullRequestUrls,
+    attachedQueries,
+    provider: gitStatus.data?.sourceControlProvider,
+  });
   const displayedPrBadge =
     badges.find((badge) => badge.changeRequestState !== "merged") ?? badges.at(-1) ?? null;
   const displayedPr = displayedPrBadge?.pullRequest ?? null;

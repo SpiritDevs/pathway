@@ -75,6 +75,25 @@ describe("ThreadPullRequestAction", () => {
       "project-111",
     ]);
   });
+  it("passes merged state to the action row while its detail cache still says open", () => {
+    const html = renderToStaticMarkup(
+      <ThreadPullRequestAction
+        thread={thread}
+        isPanel
+        branchPullRequest={{
+          ...second,
+          state: "merged",
+          title: "Feature",
+          headRef: "feature",
+          baseRef: "main",
+        }}
+      />,
+    );
+    expect(html).toContain("PR #111 - Merged");
+    expect(mocks.row.mock.calls.find(([props]) => props.pr.number === 111)?.[0].pr.state).toBe(
+      "merged",
+    );
+  });
   it("deduplicates the branch PR and hides explicitly unlinked branch PRs", () => {
     const branch = {
       ...second,
