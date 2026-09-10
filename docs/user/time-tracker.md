@@ -19,3 +19,7 @@ History loads 50 sessions at a time. Choose **Load more sessions** to see earlie
 The latest sessions and period totals update automatically. Refresh history to reload older entries after changes on another device: pull down on Apple clients or choose **Refresh history** on desktop after loading more entries.
 
 If a reporting period exceeds the 2,000-session reporting limit, analytics marks totals as unavailable. Choose a shorter period. Every completed session remains accessible through history; a partial total is never presented as the full period total.
+
+Completed agent runs receive a specific title and a short description of their recorded actions and results. Summaries are generated in the background after tracking ends; recorded durations do not wait for generation. If a summary cannot be generated, the entry explains this and retains its time. In web and desktop history, choose the thread link to open the source conversation.
+
+Choose **Settings → Time Tracker → Summary model** to select the model on your primary environment. Each environment uses its own setting, so configure other environments by making them primary first. Codex, Claude, and OpenCode support this text-only task. Manual timers have separate title and description fields. Issue creation entries identify the issue and describe the creation activity. Older entries retain their existing text.

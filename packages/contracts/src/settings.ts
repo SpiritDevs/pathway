@@ -888,6 +888,9 @@ export const ServerSettings = Schema.Struct({
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TEXT_GENERATION_MODEL_SELECTION)),
   ),
+  timeTrackerModelSelection: ModelSelection.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_TEXT_GENERATION_MODEL_SELECTION)),
+  ),
   contextCompactionModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CONTEXT_COMPACTION_MODEL_SELECTION)),
   ),
@@ -1049,6 +1052,7 @@ export const ServerSettingsPatch = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  timeTrackerModelSelection: Schema.optionalKey(ModelSelectionPatch),
   contextCompactionModelSelection: Schema.optionalKey(ModelSelectionPatch),
   issueEnrichmentModelSelection: Schema.optionalKey(ModelSelectionPatch),
   issueAutomation: Schema.optionalKey(IssueAutomationSettings),

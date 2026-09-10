@@ -2,25 +2,34 @@ import { useAuth } from "@clerk/react";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import type { Value } from "convex/values";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { resolveCloudSyncConvexUrl } from "../../cloud/publicConfig";
 import { makeClerkConvexTokenFetcher } from "../../cloud/syncTransportAuth";
 
 export function useBusinessToolsCloud() {
   const { getToken, isSignedIn, userId } = useAuth({ treatPendingAsSignedOut: false });
   const url = resolveCloudSyncConvexUrl();
-  const client = useMemo(() => {
-    if (!url || !isSignedIn || !userId) return null;
-    const next = new ConvexClient(url);
-    next.setAuth(makeClerkConvexTokenFetcher(getToken));
-    return next;
+  const [connection, setConnection] = useState<{
+    client: ConvexClient;
+    accountID: string;
+    url: string;
+  } | null>(null);
+  useEffect(() => {
+    if (!url || !isSignedIn || !userId) {
+      setConnection(null);
+      return;
+    }
+    const client = new ConvexClient(url);
+    client.setAuth(makeClerkConvexTokenFetcher(getToken));
+    setConnection({ client, accountID: userId, url });
+    return () => {
+      void client.close();
+    };
   }, [url, isSignedIn, userId, getToken]);
-  useEffect(
-    () => () => {
-      void client?.close();
-    },
-    [client],
-  );
+  const client =
+    isSignedIn && connection?.accountID === userId && connection.url === url
+      ? connection.client
+      : null;
   return {
     client,
     accountID: userId ?? "",

@@ -136,6 +136,31 @@ async function setup() {
 }
 
 describe("Automatic tracked activities", () => {
+  it("updates completed summaries and retains source links without changing duration", async () => {
+    const { user, environment, snapshot } = await setup();
+    const end = Date.now();
+    const input = snapshot("summary", end - 60000, end);
+    await environment.mutation(api.timeTracking.syncAgentSession, input);
+    await environment.mutation(api.timeTracking.syncAgentSession, {
+      ...input,
+      session: {
+        ...input.session,
+        revision: 2,
+        title: "Repair project selection",
+        description: "Updated the selector and verified the fallback.",
+      },
+    });
+    await environment.mutation(api.timeTracking.syncAgentSession, input);
+    const entry = (await user.query(api.timeTracking.listMine, {})).entries[0];
+    expect(entry).toMatchObject({
+      title: "Repair project selection",
+      description: "Updated the selector and verified the fallback.",
+      durationMs: 60000,
+      environmentId: "env",
+      threadId: input.session.threadId,
+    });
+  });
+
   it("sums eight concurrent agents while elapsed activity uses their union, and replay is idempotent", async () => {
     const { user, environment, snapshot } = await setup();
     const end = Date.now(),

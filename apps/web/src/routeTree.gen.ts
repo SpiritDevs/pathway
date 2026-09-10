@@ -28,6 +28,7 @@ import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
 import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
+import { Route as SettingsTimeTrackerRouteImport } from './routes/settings.time-tracker'
 import { Route as SettingsSyncRouteImport } from './routes/settings.sync'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsSnapShotRouteImport } from './routes/settings.snap-shot'
@@ -161,6 +162,11 @@ const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
 const SettingsUsageRoute = SettingsUsageRouteImport.update({
   id: '/usage',
   path: '/usage',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsTimeTrackerRoute = SettingsTimeTrackerRouteImport.update({
+  id: '/time-tracker',
+  path: '/time-tracker',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsSyncRoute = SettingsSyncRouteImport.update({
@@ -421,6 +427,7 @@ export interface FileRoutesByFullPath {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/sync': typeof SettingsSyncRoute
+  '/settings/time-tracker': typeof SettingsTimeTrackerRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/projects/': typeof ProjectsIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -480,6 +487,7 @@ export interface FileRoutesByTo {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/sync': typeof SettingsSyncRoute
+  '/settings/time-tracker': typeof SettingsTimeTrackerRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/projects': typeof ProjectsIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -542,6 +550,7 @@ export interface FileRoutesById {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/sync': typeof SettingsSyncRoute
+  '/settings/time-tracker': typeof SettingsTimeTrackerRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/projects/': typeof ProjectsIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -604,6 +613,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/sync'
+    | '/settings/time-tracker'
     | '/settings/usage'
     | '/projects/'
     | '/$environmentId/$threadId'
@@ -663,6 +673,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/sync'
+    | '/settings/time-tracker'
     | '/settings/usage'
     | '/projects'
     | '/$environmentId/$threadId'
@@ -724,6 +735,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/sync'
+    | '/settings/time-tracker'
     | '/settings/usage'
     | '/projects/'
     | '/_chat/$environmentId/$threadId'
@@ -892,6 +904,13 @@ declare module '@tanstack/react-router' {
       path: '/usage'
       fullPath: '/settings/usage'
       preLoaderRoute: typeof SettingsUsageRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/time-tracker': {
+      id: '/settings/time-tracker'
+      path: '/time-tracker'
+      fullPath: '/settings/time-tracker'
+      preLoaderRoute: typeof SettingsTimeTrackerRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/sync': {
@@ -1239,6 +1258,7 @@ interface SettingsRouteChildren {
   SettingsSnapShotRoute: typeof SettingsSnapShotRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
   SettingsSyncRoute: typeof SettingsSyncRoute
+  SettingsTimeTrackerRoute: typeof SettingsTimeTrackerRoute
   SettingsUsageRoute: typeof SettingsUsageRoute
   SettingsAppearanceActionPaletteRoute: typeof SettingsAppearanceActionPaletteRoute
   SettingsEmailEnvironmentIdRoute: typeof SettingsEmailEnvironmentIdRoute
@@ -1273,6 +1293,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsSnapShotRoute: SettingsSnapShotRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
   SettingsSyncRoute: SettingsSyncRoute,
+  SettingsTimeTrackerRoute: SettingsTimeTrackerRoute,
   SettingsUsageRoute: SettingsUsageRoute,
   SettingsAppearanceActionPaletteRoute: SettingsAppearanceActionPaletteRoute,
   SettingsEmailEnvironmentIdRoute: SettingsEmailEnvironmentIdRoute,

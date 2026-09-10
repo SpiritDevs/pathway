@@ -1,3 +1,4 @@
+import { Clock3Icon } from "lucide-react";
 import { CameraIcon } from "lucide-react";
 import {
   useCallback,
@@ -97,6 +98,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/providers": BotIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
   "/settings/source-control": GitBranchIcon,
+  "/settings/time-tracker": Clock3Icon,
   "/settings/usage": ChartNoAxesColumnIcon,
   "/settings/issues-statuses": CircleDotIcon,
   "/settings/issues-labels": TagsIcon,

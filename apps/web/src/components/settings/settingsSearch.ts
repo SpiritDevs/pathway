@@ -15,6 +15,7 @@ export type SettingsPath =
   | "/settings/providers"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
+  | "/settings/time-tracker"
   | "/settings/usage"
   | "/settings/issues-statuses"
   | "/settings/issues-labels"
@@ -99,6 +100,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/providers": "Providers",
   "/settings/scheduled-tasks": "Schedule Tasks",
   "/settings/source-control": "Source Control",
+  "/settings/time-tracker": "Time Tracker",
   "/settings/usage": "Usage",
   "/settings/issues-statuses": "Statuses",
   "/settings/issues-labels": "Labels",
@@ -149,6 +151,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/providers",
       "/settings/scheduled-tasks",
       "/settings/source-control",
+      "/settings/time-tracker",
       "/settings/usage",
     ],
   },
@@ -471,6 +474,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "providers",
     title: "Providers",
     to: "/settings/providers",
+  },
+  {
+    id: "time-tracker",
+    title: "Time Tracker summary model",
+    to: "/settings/time-tracker",
+    searchTerms: ["time", "tracking", "title", "description", "model"],
   },
   {
     id: "source-control",

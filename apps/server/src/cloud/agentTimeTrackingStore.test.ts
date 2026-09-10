@@ -96,6 +96,30 @@ layer("durable agent time capture", (it) => {
       assert.deepEqual(yield* store.pending(Date.parse(timestamp(33))), []);
     }),
   );
+  it.effect("retries legacy fallback summaries with a durable backoff", () =>
+    Effect.gen(function* () {
+      yield* setup;
+      const store = yield* makeAgentTimeTrackingStore("company-1");
+      yield* append(runEvent("running", 0, "run.created"));
+      yield* append(runEvent("completed", 30));
+      yield* store.capture();
+      const session = (yield* store.nextSummary())!;
+      yield* store.saveSummary(session, {
+        title: "Agent work completed",
+        description: "Summary unavailable",
+      });
+      assert.isNotNull(yield* store.nextSummary());
+      yield* store.deferSummary(session);
+      assert.isNull(yield* store.nextSummary());
+      yield* TestClock.adjust("5 minutes");
+      assert.isNotNull(yield* store.nextSummary());
+      yield* store.saveSummary(session, {
+        title: "Explain project architecture",
+        description: "Reviewed project documentation and explained the app structure.",
+      });
+      assert.isNull(yield* store.nextSummary());
+    }),
+  );
   for (const scenario of [
     { trigger: "startup", blocking: null, trackedSeconds: 30 },
     { trigger: "startup", blocking: false, trackedSeconds: 30 },

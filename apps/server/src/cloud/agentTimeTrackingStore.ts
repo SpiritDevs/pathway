@@ -1,4 +1,5 @@
 import { OrchestrationV2DomainEventJson } from "@spiritdevs/contracts";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -164,11 +165,68 @@ export const makeAgentTimeTrackingStore = Effect.fn("AgentTimeTrackingStore.make
   const acknowledge = (session: AgentTimeSession) =>
     sql`UPDATE agent_time_tracking_sessions
     SET dirty = 0 WHERE company_id = ${companyId} AND run_id = ${session.id}
-      AND payload_json = ${encodeSession(session)}`.pipe(Effect.asVoid);
+      AND json_extract(payload_json, '$.revision') = ${session.revision}`.pipe(Effect.asVoid);
 
   const deferUnbound = (session: AgentTimeSession, now: number) =>
     sql`UPDATE agent_time_tracking_sessions SET next_attempt_at = ${now + 5 * 60_000}
       WHERE company_id = ${companyId} AND run_id = ${session.id}`.pipe(Effect.asVoid);
 
-  return { capture, pending, acknowledge, deferUnbound };
+  const nextSummary = Effect.fn("AgentTimeTrackingStore.nextSummary")(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    const rows = yield* sql<{
+      payload_json: string;
+    }>`SELECT payload_json FROM agent_time_tracking_sessions
+      WHERE company_id = ${companyId} AND state = 'stopped'
+      AND (COALESCE(json_extract(payload_json, '$.summaryComplete'), 0) = 0
+        OR json_extract(payload_json, '$.title') = 'Agent work ' || json_extract(payload_json, '$.runStatus'))
+      AND COALESCE(json_extract(payload_json, '$.summaryRetryAt'), 0) <= ${now}
+      ORDER BY run_id LIMIT 1`;
+    return rows[0] ? decodeSession(rows[0].payload_json) : null;
+  });
+  const summaryContext = Effect.fn("AgentTimeTrackingStore.summaryContext")(function* (
+    session: AgentTimeSession,
+  ) {
+    const rows = yield* sql<{
+      event_type: string;
+      payload: string;
+    }>`SELECT event_type, substr(payload_json, 1, 4000) AS payload
+      FROM orchestration_events WHERE stream_id = ${session.threadId}
+      AND (json_extract(metadata_json, '$.runId') = ${session.id}
+        OR json_extract(payload_json, '$.runId') = ${session.id}
+        OR json_extract(payload_json, '$.id') = (SELECT json_extract(payload_json, '$.userMessageId') FROM orchestration_events WHERE stream_id = ${session.threadId} AND event_type = 'run.created' AND json_extract(payload_json, '$.id') = ${session.id} LIMIT 1))
+      AND event_type IN ('message.updated', 'tool-call.updated', 'run.updated')
+      GROUP BY event_type, json_extract(payload_json, '$.id')
+      ORDER BY MAX(sequence) DESC LIMIT 40`;
+    return rows
+      .toReversed()
+      .map((row) => row.event_type + ": " + row.payload)
+      .join("\n")
+      .slice(-24000);
+  });
+  const saveSummary = Effect.fn("AgentTimeTrackingStore.saveSummary")(function* (
+    session: AgentTimeSession,
+    summary: { title: string; description: string },
+  ) {
+    yield* sql`UPDATE agent_time_tracking_sessions SET payload_json = json_set(payload_json,
+      '$.title', ${summary.title}, '$.description', ${summary.description}, '$.summaryComplete', json('true'),
+      '$.revision', json_extract(payload_json, '$.revision') + 1), dirty = 1
+      WHERE company_id = ${companyId} AND run_id = ${session.id} AND state = 'stopped'`;
+  });
+  const deferSummary = Effect.fn("AgentTimeTrackingStore.deferSummary")(function* (
+    session: AgentTimeSession,
+  ) {
+    const now = yield* Clock.currentTimeMillis;
+    yield* sql`UPDATE agent_time_tracking_sessions SET payload_json = json_set(payload_json, '$.summaryRetryAt', ${now + 300_000})
+      WHERE company_id = ${companyId} AND run_id = ${session.id}`;
+  });
+  return {
+    capture,
+    pending,
+    acknowledge,
+    deferUnbound,
+    nextSummary,
+    summaryContext,
+    saveSummary,
+    deferSummary,
+  };
 });

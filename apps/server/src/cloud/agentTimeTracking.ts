@@ -7,6 +7,9 @@ export const AgentTimeSession = Schema.Struct({
   threadId: Schema.String,
   localProjectId: Schema.String,
   description: Schema.String,
+  title: Schema.optionalKey(Schema.String),
+  summaryComplete: Schema.optionalKey(Schema.Boolean),
+  summaryRetryAt: Schema.optionalKey(Schema.Number),
   startedAt: Schema.String,
   stoppedAt: Schema.NullOr(Schema.String),
   state: Schema.Literals(["running", "paused", "stopped"]),
@@ -107,6 +110,12 @@ export function applyAgentTimeEvent(
 }
 
 export function agentTimeSessionPayload(session: AgentTimeSession) {
-  const { runStatus: _runStatus, blockedRequestIds: _blockedRequestIds, ...payload } = session;
+  const {
+    runStatus: _runStatus,
+    blockedRequestIds: _blockedRequestIds,
+    summaryComplete: _summaryComplete,
+    summaryRetryAt: _summaryRetryAt,
+    ...payload
+  } = session;
   return payload;
 }

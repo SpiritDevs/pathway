@@ -392,7 +392,14 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         // Enumerate names only in memory; config may contain credentials and is never logged.
         const listCommand = yield* resolveSpawnCommand(
           codexConfig.binaryPath || "codex",
-          [...codexExecLaunchArgs(launchArgs), "mcp", "list", "--json"],
+          [
+            ...codexExecLaunchArgs(launchArgs),
+            "--config",
+            "features.plugins=false",
+            "mcp",
+            "list",
+            "--json",
+          ],
           { env: resolvedEnvironment },
         );
         const listing = yield* commandSpawner
@@ -448,9 +455,15 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
               }),
           ),
         );
-        contentConfig.push(
-          ...servers.map(({ name }) => `mcp_servers.${JSON.stringify(name)}.enabled=false`),
-        );
+        // CLI override paths are dot-separated, not TOML-quoted. Dotted names cannot
+        // be isolated safely through this interface.
+        if (servers.some(({ name }) => name.includes("."))) {
+          return yield* new TextGenerationError({
+            operation,
+            detail: "Cannot isolate an MCP server with a dotted name.",
+          });
+        }
+        contentConfig.push(...servers.map(({ name }) => `mcp_servers.${name}.enabled=false`));
         contentConfig.push(
           "features.shell_tool=false",
           "features.shell_snapshot=false",

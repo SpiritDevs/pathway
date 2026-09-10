@@ -40,6 +40,7 @@ export function encodeActivity(row: Doc<"trackedSessions">) {
     (row.stoppedAt ? [{ start: Date.parse(row.startedAt), end: Date.parse(row.stoppedAt) }] : []);
   return {
     id: row.id,
+    ...(row.title ? { title: row.title } : {}),
     description: row.description,
     projectKey: row.projectKey,
     projectName: row.projectName,
@@ -129,7 +130,8 @@ export async function recordIssueSession(
     companyId: input.companyId,
     issueId: input.issueId,
     source: "issue",
-    description: input.description.slice(0, 2_000),
+    title: input.description.slice(0, 200),
+    description: `Created issue: ${input.description}`.slice(0, 2_000),
     projectKey: input.projectKey,
     projectName: input.projectName,
     startedAt: new Date(intervals[0]?.start ?? now).toISOString(),

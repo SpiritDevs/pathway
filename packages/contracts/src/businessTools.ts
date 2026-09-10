@@ -17,6 +17,9 @@ export type BusinessContact = typeof BusinessContact.Type;
 export const TrackedSession = Schema.Struct({
   id: Schema.String,
   description: Schema.String,
+  title: Schema.optionalKey(Schema.String),
+  environmentId: Schema.optionalKey(Schema.String),
+  threadId: Schema.optionalKey(Schema.String),
   projectKey: Schema.String,
   projectName: Schema.String,
   startedAt: Schema.String,

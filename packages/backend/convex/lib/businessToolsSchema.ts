@@ -18,11 +18,14 @@ export const contactWire = v.object({
   revision: v.number(),
 });
 export const sessionFields = {
+  title: v.optional(v.string()),
   description: v.string(),
   projectKey: v.string(),
   projectName: v.string(),
 };
 export const sessionWire = v.object({
+  threadId: v.optional(v.string()),
+  environmentId: v.optional(v.string()),
   id: v.string(),
   ...sessionFields,
   startedAt: v.string(),

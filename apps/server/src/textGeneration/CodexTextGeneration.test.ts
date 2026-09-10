@@ -721,7 +721,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
     withFakeCodexEnv(
       {
         output: '{"bucket":"noise","reason":"Newsletter"}',
-        requireArg: String.raw`mcp_servers.\"private-tools\".enabled=false`,
+        requireArg: "mcp_servers.private-tools.enabled=false",
         forbidArg: "features.shell_tool=true",
       },
       (generation) =>
