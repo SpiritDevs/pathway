@@ -491,12 +491,14 @@ export function useQueuedStartThreadTurn() {
 export function subscribeQueuedThread(
   identity: { threadId: string; environmentId: string; queueId?: string; companyId?: string },
   onChange: (detail: ThreadQueueDetail | null) => void,
+  onError?: (error: Error) => void,
 ): () => void {
   if (!session) return () => {};
   return session.client.onUpdate(
     ref.getThread,
     { ...identity, companyId: identity.companyId ?? session.companyId ?? "" },
     onChange,
+    onError,
   );
 }
 

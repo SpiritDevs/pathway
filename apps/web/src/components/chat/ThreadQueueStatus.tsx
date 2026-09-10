@@ -11,6 +11,7 @@ import {
 } from "../../cloud/threadQueue";
 import type { useThreadQueueChat } from "../../cloud/useThreadQueueChat";
 import { Button } from "../ui/button";
+import { Spinner } from "../ui/spinner";
 import {
   Dialog,
   DialogPopup,
@@ -58,17 +59,19 @@ export function ThreadQueueStatus({ queue }: { queue: ReturnType<typeof useThrea
   const waiting = row.waitingToSync;
   const active = waiting || row.state !== "delivered";
   if (!active && !queue.error && !error) return null;
-  const label = waiting
-    ? "Saved on this device · Waiting to sync"
-    : row.state === "canceled"
-      ? row.cloudSaved
-        ? "Saved to cloud · Canceled"
-        : "Saved on this device · Canceled"
-      : row.state === "blocked"
-        ? "Saved to cloud · Needs attention"
-        : row.state === "accepted"
-          ? "Saved to cloud · Starting"
-          : "Saved to cloud · Queued";
+  const label = queue.loading
+    ? "Loading messages"
+    : waiting
+      ? "Saved on this device · Waiting to sync"
+      : row.state === "canceled"
+        ? row.cloudSaved
+          ? "Saved to cloud · Canceled"
+          : "Saved on this device · Canceled"
+        : row.state === "blocked"
+          ? "Saved to cloud · Needs attention"
+          : row.state === "accepted"
+            ? "Saved to cloud · Starting"
+            : "Saved to cloud · Queued";
   const targets = destinations.flatMap<{
     key: string;
     destination: ThreadQueueDestination;
@@ -102,7 +105,17 @@ export function ThreadQueueStatus({ queue }: { queue: ReturnType<typeof useThrea
         className="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-center gap-x-2 px-3 pb-2 text-xs text-muted-foreground"
         role="status"
       >
-        <span>{label}</span>
+        <span className="inline-flex items-center gap-1.5">
+          {queue.loading ? (
+            <Spinner
+              aria-hidden="true"
+              aria-label={undefined}
+              role="presentation"
+              className="size-3 [animation-timing-function:steps(8,end)] motion-reduce:animate-none"
+            />
+          ) : null}
+          {label}
+        </span>
         {waiting ? (
           <Button
             size="xs"

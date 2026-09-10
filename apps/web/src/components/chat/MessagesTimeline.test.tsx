@@ -2558,3 +2558,9 @@ it("offers workspace recovery only on the latest local run", async () => {
     expect(markup.includes("Work locally")).toBe(scenario === "latest");
   }
 });
+
+it("leaves an empty conversation clear without an instructional placeholder", async () => {
+  const { MessagesTimeline } = await import("./MessagesTimeline");
+  const markup = renderToStaticMarkup(<MessagesTimeline {...buildProps()} timelineEntries={[]} />);
+  expect(markup).toBe("");
+});

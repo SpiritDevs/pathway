@@ -101,6 +101,7 @@ export function useThreadQueueChat(environmentId: string, threadId: string) {
       },
       (next) => {
         if (!active) return;
+        setError(null);
         setDetailState((previousState) => {
           const previous = previousState.key === key ? previousState.value : null;
           if (!next || !previous) return { key, value: next };
@@ -119,6 +120,9 @@ export function useThreadQueueChat(environmentId: string, threadId: string) {
             },
           };
         });
+      },
+      (cause) => {
+        if (active) setError(threadQueueErrorMessage(cause));
       },
     );
     return () => {
@@ -215,5 +219,7 @@ export function useThreadQueueChat(environmentId: string, threadId: string) {
     },
     [messageById, threadId, environmentId, row?.queueId, row?.companyId],
   );
-  return { row, messages, chatMessages, attachmentUrls, controls, mutateMessage, error };
+  const loading =
+    row?.cloudSaved === true && detail === null && chatMessages.length === 0 && !error;
+  return { row, messages, chatMessages, attachmentUrls, controls, mutateMessage, error, loading };
 }
