@@ -9,6 +9,11 @@ import { type FunctionReference, getFunctionName } from "convex/server";
 import { ConvexError } from "convex/values";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -19,6 +24,7 @@ import {
   cloudSafeThreadShell,
   isUnpublishableAgentThreadRefusal,
   makeCloudAgentThreadPublisher,
+  runCloudAgentThreadPublisher,
   shouldPublishCloudAgentThreadEvent,
 } from "./cloudAgentThreadPublisher.ts";
 
@@ -308,3 +314,48 @@ describe("cloud Agent Thread publisher", () => {
     }),
   );
 });
+
+it.effect("publishes a newly created thread while startup reconciliation is still blocked", () =>
+  Effect.gen(function* () {
+    const subscribed = yield* Deferred.make<void>();
+    const scanning = yield* Deferred.make<void>();
+    const finishScan = yield* Deferred.make<void>();
+    const publishedNew = yield* Deferred.make<void>();
+    const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+    const next = shellOf("new-during-reconcile", "project-one");
+    const { client } = fakeClient((args) => {
+      if (args["threadId"] === next.id) Deferred.doneUnsafe(publishedNew, Effect.void);
+      return Promise.resolve({ outcome: "published" });
+    });
+    const service = {
+      streamDomainEvents: Stream.unwrap(
+        Deferred.succeed(subscribed, undefined).pipe(Effect.as(Stream.fromQueue(events))),
+      ),
+      getShellSnapshot: () =>
+        Deferred.succeed(scanning, undefined).pipe(
+          Effect.andThen(Deferred.await(finishScan)),
+          Effect.as({ threads: [], archivedThreads: [] }),
+        ),
+      getThreadShell: () => Effect.succeed(next),
+    } as unknown as ThreadManagement.ThreadManagementService["Service"];
+    const worker = yield* runCloudAgentThreadPublisher({
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ID,
+      convexUrl: "https://convex.example.test",
+      tokens,
+      client,
+    }).pipe(
+      Effect.provideService(ThreadManagement.ThreadManagementService, service),
+      Effect.forkChild,
+    );
+    yield* Deferred.await(subscribed);
+    yield* Deferred.await(scanning);
+    yield* Queue.offer(events, {
+      type: "thread.created",
+      threadId: next.id,
+    } as OrchestrationV2DomainEvent);
+    yield* Deferred.await(publishedNew);
+    expect(yield* Deferred.isDone(finishScan)).toBe(false);
+    yield* Fiber.interrupt(worker);
+  }),
+);

@@ -15,6 +15,8 @@ import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Schedule from "effect/Schedule";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import * as Ref from "effect/Ref";
@@ -280,17 +282,23 @@ export const runCloudAgentThreadPublisher = Effect.fn("cloud.agent_thread_publis
         reportFailure("publish", threadId),
       );
 
-    yield* reconcile;
-    const events = threads.streamDomainEvents.pipe(
-      Stream.filter(shouldPublishCloudAgentThreadEvent),
-      Stream.map((event) => ({ _tag: "Thread" as const, threadId: event.threadId })),
-    );
-    const periodic = Stream.tick(
-      options.reconcileInterval ?? DEFAULT_AGENT_THREAD_RECONCILE_INTERVAL,
-    ).pipe(Stream.map(() => ({ _tag: "Reconcile" as const })));
-
-    yield* Stream.runForEach(Stream.merge(events, periodic), (event) =>
-      event._tag === "Reconcile" ? reconcile : publishThread(event.threadId),
+    // Start the live tail before scanning existing threads. Reconciliation can involve hundreds
+    // of cloud calls, and must not postpone subscribing to or processing newly created threads.
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const live = yield* threads.streamDomainEvents.pipe(
+          Stream.filter(shouldPublishCloudAgentThreadEvent),
+          Stream.runForEach((event) => publishThread(event.threadId)),
+          Effect.forkScoped({ startImmediately: true }),
+        );
+        yield* reconcile.pipe(
+          Effect.repeat(
+            Schedule.spaced(options.reconcileInterval ?? DEFAULT_AGENT_THREAD_RECONCILE_INTERVAL),
+          ),
+          Effect.forkScoped,
+        );
+        yield* Fiber.join(live);
+      }),
     );
   },
 );
