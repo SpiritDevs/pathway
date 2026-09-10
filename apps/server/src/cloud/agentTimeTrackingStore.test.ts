@@ -54,6 +54,48 @@ const append = Effect.fn("test.append")(function* (
 });
 
 layer("durable agent time capture", (it) => {
+  it.effect("persists one completed summary without changing recorded time", () =>
+    Effect.gen(function* () {
+      yield* setup;
+      const store = yield* makeAgentTimeTrackingStore("company-1");
+      yield* append(runEvent("running", 0, "run.created"));
+      yield* store.capture();
+      assert.isNull(yield* store.nextSummary());
+      yield* append(runEvent("completed", 30));
+      yield* store.capture();
+      const session = yield* store.nextSummary();
+      assert.isNotNull(session);
+      if (!session) return;
+      const sql = yield* SqlClient.SqlClient;
+      for (const [runId, text] of [
+        [session.id, "initial draft"],
+        [session.id, "verified checkout recovery"],
+        ["other-run", "unrelated work"],
+      ]) {
+        yield* sql`INSERT INTO orchestration_events(stream_id, event_type, payload_json, metadata_json, application_event_version)
+          VALUES (${session.threadId}, 'message.updated', ${encodeJson({ id: `assistant-${runId}`, text })}, ${encodeJson({ runId })}, 2)`;
+      }
+      const context = yield* store.summaryContext(session);
+      assert.include(context, "completed");
+      assert.include(context, "verified checkout recovery");
+      assert.notInclude(context, "initial draft");
+      assert.notInclude(context, "unrelated work");
+      yield* store.saveSummary(session, {
+        title: "Implement checkout recovery",
+        description: "Added stash and retry actions.",
+      });
+      assert.isNull(yield* store.nextSummary());
+      const pending = yield* store.pending(Date.parse(timestamp(31)));
+      assert.strictEqual(pending[0]?.title, "Implement checkout recovery");
+      assert.deepEqual(pending[0]?.intervals, session.intervals);
+      assert.strictEqual(pending[0]?.revision, session.revision + 1);
+      yield* store.acknowledge(session);
+      const summarized = yield* store.pending(Date.parse(timestamp(32)));
+      assert.strictEqual(summarized.length, 1);
+      yield* store.acknowledge(summarized[0]!);
+      assert.deepEqual(yield* store.pending(Date.parse(timestamp(33))), []);
+    }),
+  );
   for (const scenario of [
     { trigger: "startup", blocking: null, trackedSeconds: 30 },
     { trigger: "startup", blocking: false, trackedSeconds: 30 },

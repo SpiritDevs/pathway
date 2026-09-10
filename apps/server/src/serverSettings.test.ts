@@ -713,6 +713,28 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("sets the time summary model independently and merges its options", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      const instanceId = ProviderInstanceId.make("claudeAgent");
+      yield* settings.updateSettings({
+        timeTrackerModelSelection: { instanceId, model: "claude-opus-5" },
+      });
+      const next = yield* settings.updateSettings({
+        timeTrackerModelSelection: { options: [{ id: "effort", value: "high" }] },
+      });
+      assert.deepEqual(next.timeTrackerModelSelection, {
+        instanceId,
+        model: "claude-opus-5",
+        options: [{ id: "effort", value: "high" }],
+      });
+      assert.deepEqual(
+        next.textGenerationModelSelection,
+        DEFAULT_SERVER_SETTINGS.textGenerationModelSelection,
+      );
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("starts issue enrichment on the text generation default", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
