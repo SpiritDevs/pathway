@@ -13,6 +13,7 @@ struct AgentThreadsView: View {
     @State private var isSettledExpanded = false
     @State private var settledVisibleCount = 10
     @State private var routedThreadID: String?
+    @State private var queuedThread: PathwayQueuedThread?
     @State private var reviewingThreadID: String?
     @State private var threadProviders = PathwayThreadProviders()
     @State private var threadActions = PathwayThreadActions()
@@ -46,6 +47,7 @@ struct AgentThreadsView: View {
             }
         }
         .navigationTitle("Agent Threads")
+        .sheet(item: $queuedThread) { thread in NavigationStack { PathwayQueuedThreadView(thread: thread) } }
         .searchable(text: $query, prompt: "Search threads")
         .toolbar {
             ToolbarItem(placement: .primaryAction) { focusMenu }
@@ -87,6 +89,7 @@ struct AgentThreadsView: View {
             await openPendingThread()
         }
         .task(id: appModel.cloud.threads.map(\.id)) { await openPendingThread() }
+        .task(id: appModel.cloud.threadQueue.threads.map(\.id)) { await openPendingThread() }
         .task(id: appModel.localStorageDirectory) { await focuses.observe(cloud: appModel.cloud, storageDirectory: appModel.localStorageDirectory) }
         .sheet(isPresented: $creatingFocus) { PathwayFocusEditorView(model: focuses) }
         .sheet(item: $editingFocus) { PathwayFocusEditorView(model: focuses, focus: $0) }
@@ -142,6 +145,18 @@ struct AgentThreadsView: View {
     @ViewBuilder
     private var threadList: some View {
         List {
+            if !pendingQueueThreads.isEmpty {
+                Section("Queued") {
+                    ForEach(pendingQueueThreads) { thread in
+                        Button { queuedThread = thread } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(thread.title).foregroundStyle(.primary)
+                                Text(thread.status).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
             if let cachedAt = appModel.cloud.cachedAt, !appModel.cloud.isConnected {
                 Label("Saved \(cachedAt.formatted(date: .abbreviated, time: .shortened))", systemImage: "wifi.slash")
                     .font(.caption).foregroundStyle(.secondary)
@@ -240,7 +255,16 @@ struct AgentThreadsView: View {
         #endif
     }
 
+    private var pendingQueueThreads: [PathwayQueuedThread] {
+        appModel.cloud.threadQueue.threads.filter { queued in
+            queued.state != "delivered" || !appModel.cloud.threads.contains {
+                $0.companyId == queued.companyID && $0.threadId == queued.threadID && $0.environmentId == queued.environmentID
+            }
+        }
+    }
+
     private var lifecycleThreadCount: Int {
+        if !pendingQueueThreads.isEmpty { return pendingQueueThreads.count }
         if appModel.pendingThreadRoute != nil || appModel.pendingProductLink != nil { return 1 }
         return listFilter == .archived ? archivedThreads.count : activeThreads.count + snoozedThreads.count + settledThreads.count
     }
@@ -383,6 +407,11 @@ struct AgentThreadsView: View {
 
     private func openPendingThread() async {
         guard !Task.isCancelled, let route = appModel.pendingThreadRoute else { return }
+        if let pending = pendingQueueThreads.first(where: { $0.companyID == route.companyId && $0.threadID == route.threadId }) {
+            appModel.pendingThreadRoute = nil
+            queuedThread = pending
+            return
+        }
             if let thread = appModel.cloud.threads.first(where: {
                 $0.companyId == route.companyId
                     && $0.environmentId == route.environmentId
@@ -849,6 +878,13 @@ struct AgentThreadConversationView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     connectionBanner
+                    if let queued = appModel.cloud.threadQueue.threads.first(where: {
+                        $0.companyID == model.thread.companyId && $0.threadID == model.threadID && $0.state != "delivered"
+                    }) {
+                        NavigationLink { PathwayQueuedThreadView(thread: queued) } label: {
+                            Label(queued.status, systemImage: "tray.and.arrow.up")
+                        }
+                    }
                     AgentThreadTranscript(model: model, onOpenChild: openChild)
                 }
                 .frame(maxWidth: 760)
@@ -1018,7 +1054,7 @@ struct AgentThreadConversationView: View {
         .onChange(of: model.thread.shell.deletedAt) { _, deletedAt in
             if deletedAt != nil { dismiss() }
         }
-        .task { model.start() }
+        .task { model.threadQueue = appModel.cloud.threadQueue; model.start() }
         .onDisappear {
             compactThreadChrome?.leaveThreadDetail()
             Task { await model.stop() }

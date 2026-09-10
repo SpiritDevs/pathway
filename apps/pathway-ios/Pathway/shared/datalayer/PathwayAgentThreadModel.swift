@@ -290,11 +290,14 @@ final class PathwayAgentThreadModel {
     var supportsConversations: Bool {
         serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue?["threadConversations"]?.boolValue == true
     }
+    @ObservationIgnored var threadQueue: PathwayThreadQueueModel? {
+        didSet { if threadQueue != nil { supportsAttachmentUploads = true; maximumFileAttachmentBytes = 50 * 1024 * 1024 } }
+    }
     var storageAllowsSend = true
     var canSend: Bool {
         (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftAttachments.isEmpty)
-            && draft.count <= 120_000 && !isSending && draftAttachments.allSatisfy { $0.state == .ready }
-            && isSubscriptionReady && storageAllowsSend && (rpc != nil || injectedRequest != nil)
+            && draft.count <= 120_000 && !isSending && (threadQueue != nil || draftAttachments.allSatisfy { $0.state == .ready })
+            && (threadQueue != nil || (isSubscriptionReady && (rpc != nil || injectedRequest != nil))) && storageAllowsSend
     }
 
     private(set) var isSubscriptionReady = false
@@ -420,6 +423,7 @@ final class PathwayAgentThreadModel {
     }
 
     func send(mode: String = "queue") async {
+        if let threadQueue { await enqueueMessage(using: threadQueue, mode: mode); return }
         guard canSend else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         var selected = draftAttachments
@@ -462,6 +466,39 @@ final class PathwayAgentThreadModel {
             if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
             preparedSend = nil
             let sentIDs = Set(selected.map(\.id))
+            draftAttachments.removeAll { sentIDs.contains($0.id) }
+            for id in sentIDs { attachmentData.removeValue(forKey: id) }
+            await persistDraftNow()
+        } catch { actionError = error.localizedDescription }
+    }
+
+    private func enqueueMessage(using queue: PathwayThreadQueueModel, mode: String) async {
+        guard canSend else { return }
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selected = draftAttachments
+        isSending = true
+        defer { isSending = false }
+        do {
+            let ids = selected.map(\.id)
+            if preparedSend?.text != text || preparedSend?.ids != ids || preparedSend?.requestedMode != mode {
+                preparedSend = PathwayThreadPreparedSend(ids: ids, messageID: UUID().uuidString.lowercased(), text: text,
+                    requestedMode: mode, attachments: [], dispatchMode: .object(["type": .string("queue_after_active")]))
+            }
+            guard let preparedSend else { return }
+            await persistDraftNow()
+            let files = try selected.map { try PathwayQueueFile.capture($0, bytes: attachmentData[$0.id]) }
+            var command = PathwayAgentThreadCommands.dispatchMessage(threadID: threadID, text: text,
+                hasActiveRun: true, identifier: preparedSend.messageID).objectValue ?? [:]
+            command["modelSelection"] = try Self.json(currentModelSelection)
+            if mode == "steer", let activeRunID {
+                command["dispatchMode"] = .object(["type": .string("steer_active"), "targetRunId": .string(activeRunID)])
+            }
+            try await queue.enqueue(companyID: thread.companyId, environmentID: environment.environment.environmentId,
+                threadID: threadID, submission: .object(["kind": .string("message"), "input": .object(command),
+                    "runtimeMode": .string(runtimeMode), "interactionMode": .string(interactionMode)]), files: files)
+            if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
+            self.preparedSend = nil
+            let sentIDs = Set(ids)
             draftAttachments.removeAll { sentIDs.contains($0.id) }
             for id in sentIDs { attachmentData.removeValue(forKey: id) }
             await persistDraftNow()

@@ -80,6 +80,13 @@ final class PathwayCloudModel {
         }
     )
 
+    @ObservationIgnored lazy var threadQueue = PathwayThreadQueueModel(request: { [weak self] kind, name, arguments in
+        guard let self else { throw CancellationError() }
+        return try await request(kind: kind, name: name, arguments: arguments)
+    }, subscribe: { [weak self] name, arguments in
+        self?.subscribe(name: name, arguments: arguments) ?? AsyncThrowingStream { $0.finish(throwing: CancellationError()) }
+    })
+
     @ObservationIgnored private let client: (any PathwayCloudSyncClient)?
     @ObservationIgnored lazy var connectedMail = makeConnectedMailModel()
 
@@ -163,6 +170,7 @@ final class PathwayCloudModel {
         // with authentication so an older logout cannot tear down a newer account's login.
         let generation = lifecycleGeneration + 1
         await stop()
+        await threadQueue.configure(directory: directory)
         guard storageConfigurationID == configurationID, storageDirectory == directory,
               lifecycleGeneration == generation, !Task.isCancelled else { return }
         guard let cache = discoveryCache, entitiesByCompany.isEmpty else { return }
@@ -318,6 +326,7 @@ final class PathwayCloudModel {
     }
 
     func stop(clearContent: Bool = true) async {
+        threadQueue.stop(clear: clearContent)
         cancelWork()
         connectedEnvironmentIDs = []
         connectionState = .disconnected
@@ -502,6 +511,7 @@ extension PathwayCloudModel {
             return
         }
 
+        threadQueue.observe(companies: newCompanies.map(\.id))
         let activeCompanyIds = Set(newCompanies.map(\.id))
         removeCompanies(notIn: activeCompanyIds)
         for company in newCompanies {
