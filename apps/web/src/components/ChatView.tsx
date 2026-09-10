@@ -9616,14 +9616,6 @@ function ChatViewContent(props: ChatViewProps) {
                 liveFollowEnabled={timelineLiveFollowEnabled}
                 onIsAtEndChange={onIsAtEndChange}
                 onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
-                hideEmptyPlaceholder={isDraftHeroState}
-                emptyStateMessage={
-                  queuedChat.row
-                    ? queuedChat.error
-                      ? "Saved messages could not be loaded."
-                      : "Loading saved messages…"
-                    : undefined
-                }
                 topFadeEnabled={!hasTimelineTopBanner}
               />
 

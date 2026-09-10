@@ -219,5 +219,7 @@ export function useThreadQueueChat(environmentId: string, threadId: string) {
     },
     [messageById, threadId, environmentId, row?.queueId, row?.companyId],
   );
-  return { row, messages, chatMessages, attachmentUrls, controls, mutateMessage, error };
+  const loading =
+    row?.cloudSaved === true && detail === null && chatMessages.length === 0 && !error;
+  return { row, messages, chatMessages, attachmentUrls, controls, mutateMessage, error, loading };
 }

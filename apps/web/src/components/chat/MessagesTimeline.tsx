@@ -366,8 +366,6 @@ interface MessagesTimelineProps {
    */
   liveFollowEnabled: boolean;
   onManualNavigation: () => void;
-  hideEmptyPlaceholder?: boolean;
-  emptyStateMessage?: string | undefined;
   topFadeEnabled?: boolean;
 }
 
@@ -437,8 +435,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onIsAtEndChange,
   liveFollowEnabled,
   onManualNavigation,
-  hideEmptyPlaceholder = false,
-  emptyStateMessage,
   topFadeEnabled = false,
 }: MessagesTimelineProps) {
   const [expandedRunIds, setExpandedRunIds] = useState<ReadonlySet<RunId>>(new Set());
@@ -972,19 +968,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
 
   if (rows.length === 0 && !isWorking && parentThreadLink === null) {
-    if (hideEmptyPlaceholder) {
-      return null;
-    }
-    return (
-      <div className="flex h-full items-center justify-center">
-        <p
-          role={emptyStateMessage ? "status" : undefined}
-          className="text-sm text-muted-foreground/60"
-        >
-          {emptyStateMessage ?? "Send a message to start the conversation."}
-        </p>
-      </div>
-    );
+    return null;
   }
 
   return (
