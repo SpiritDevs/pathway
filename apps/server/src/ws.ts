@@ -2266,7 +2266,27 @@ const makeWsRpcLayer = (
                 .runStackedAction(input, {
                   actionId: input.actionId,
                   progressReporter: {
-                    publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
+                    publish: (event) =>
+                      Effect.gen(function* () {
+                        if (
+                          event.kind === "action_failed" &&
+                          event.commitSha !== undefined &&
+                          input.threadId !== undefined
+                        ) {
+                          yield* threadManagement
+                            .dispatch({
+                              type: "thread.source-control.record",
+                              commandId: CommandId.make(`${input.actionId}:source-control`),
+                              threadId: input.threadId,
+                              committed: true,
+                              commitSha: event.commitSha,
+                              pushed: event.pushed ?? false,
+                              pullRequest: null,
+                            })
+                            .pipe(Effect.ignoreCause({ log: true }));
+                        }
+                        yield* Queue.offer(queue, event);
+                      }),
                   },
                 })
                 .pipe(

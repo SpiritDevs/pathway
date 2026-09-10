@@ -5124,6 +5124,48 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("retains the local commit SHA when the subsequent push fails", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("pathway-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "local-change.txt"), "keep this commit\n");
+      NodeFS.writeFileSync(
+        NodePath.join(repoDir, ".git", "hooks", "pre-push"),
+        "#!/bin/sh\nexit 1\n",
+        { mode: 0o755 },
+      );
+      const { manager } = yield* makeManager();
+      const events: GitActionProgressEvent[] = [];
+      yield* runStackedAction(
+        manager,
+        {
+          cwd: repoDir,
+          action: "commit_push",
+          commitMessage: "Keep local change",
+        },
+        {
+          actionId: "failed-push",
+          progressReporter: {
+            publish: (event) =>
+              Effect.sync(() => {
+                events.push(event);
+              }),
+          },
+        },
+      ).pipe(Effect.flip);
+      const head = yield* runGit(repoDir, ["rev-parse", "HEAD"]);
+      expect(events.at(-1)).toMatchObject({
+        kind: "action_failed",
+        phase: "push",
+        commitSha: head.stdout.trim(),
+        pushed: false,
+      });
+      expect(events.some((event) => event.kind === "action_finished")).toBe(false);
+    }),
+  );
+
   it.effect("emits action_failed when a commit hook rejects", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("pathway-git-manager-");

@@ -1746,6 +1746,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           updatedAt: now,
           type: "source_control",
           committed: command.committed,
+          ...(command.pushed === undefined ? {} : { pushed: command.pushed }),
           ...(command.pullRequestAction === undefined
             ? {}
             : { pullRequestAction: command.pullRequestAction }),

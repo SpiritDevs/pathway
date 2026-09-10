@@ -623,6 +623,49 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("persists a local-only source-control marker", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("local-commit-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("local-commit-create"),
+        threadId,
+        projectId: ProjectId.make("local-commit-project"),
+        title: "Local commit",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "main",
+        worktreePath: process.cwd(),
+      });
+      const command = {
+        type: "thread.source-control.record" as const,
+        commandId: CommandId.make("local-commit-marker"),
+        threadId,
+        committed: true,
+        pushed: false,
+        commitSha: "abc123",
+        pullRequest: null,
+      };
+      yield* orchestrator.dispatch(command);
+      yield* orchestrator.dispatch(command);
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      const markers = projection.visibleTurnItems.filter(
+        (row) => row.item.type === "source_control",
+      );
+      assert.equal(markers.length, 1);
+      assert.include(markers[0]?.item, {
+        committed: true,
+        pushed: false,
+        commitSha: "abc123",
+        pullRequest: null,
+      });
+    }),
+  );
+
   it.effect("records a durable source-control timeline marker", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;

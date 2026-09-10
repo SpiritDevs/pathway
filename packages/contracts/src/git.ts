@@ -441,6 +441,8 @@ const GitActionFinishedEvent = Schema.Struct({
 const GitActionFailedEvent = Schema.Struct({
   ...GitActionProgressBase.fields,
   kind: Schema.Literal("action_failed"),
+  commitSha: Schema.optional(TrimmedNonEmptyStringSchema),
+  pushed: Schema.optional(Schema.Boolean),
   phase: Schema.NullOr(GitActionProgressPhase),
   message: TrimmedNonEmptyStringSchema,
 });
