@@ -104,13 +104,9 @@ export function StorageStatusIndicator() {
     };
   }, [isSignedIn, userId, settingsReady, settings, pressures, navigate]);
 
-  if (pressures.length === 0) return null;
+  if (low.length === 0) return null;
   const critical = low.some((entry) => entry.displayedPressure === "critical");
-  const color = critical
-    ? "text-destructive"
-    : low.length
-      ? "text-warning"
-      : "text-muted-foreground";
+  const color = critical ? "text-destructive" : "text-warning";
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
