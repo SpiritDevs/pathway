@@ -107,7 +107,7 @@ describe("ComposerBannerStack", () => {
     );
     expect(markup.match(/data-composer-banner-stack-peek=/g)).toHaveLength(2);
     expect(markup).toContain("width:96%;top:-8px");
-    expect(markup).toContain("width:92%;top:-16px");
+    expect(markup).toContain("width:92.16%;top:-16px");
     expect(markup).toContain("fourth warning");
     expect(markup.indexOf("fourth warning")).toBeLessThan(markup.indexOf("second warning"));
   });

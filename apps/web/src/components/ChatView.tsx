@@ -9752,10 +9752,18 @@ function ChatViewContent(props: ChatViewProps) {
                           conversationSelected={activeThread.projectId === null}
                         />
                       </div>
-                      <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
+                      <ComposerBannerStack
+                        className="relative z-0"
+                        items={composerBannerItems}
+                        behindContextStrip={showComposerContextStrip}
+                      />
                     </div>
                   ) : (
-                    <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
+                    <ComposerBannerStack
+                      className="relative z-0"
+                      items={composerBannerItems}
+                      behindContextStrip={showComposerContextStrip}
+                    />
                   )}
                   {isServerThread && activeThread ? (
                     <QueuedRunsControl
