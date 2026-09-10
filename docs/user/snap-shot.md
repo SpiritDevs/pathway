@@ -6,7 +6,8 @@ accessibility data (its controls, text, and their positions in the image). Agent
 to reason about the screenshot.
 
 SnapShots are off by default and available in the desktop app on macOS, Windows, and Linux with
-Wayland. X11 sessions are not supported.
+Wayland. X11 sessions are not supported. SnapShots settings are only shown in the desktop app,
+not in a web browser.
 
 ## Turning it on
 

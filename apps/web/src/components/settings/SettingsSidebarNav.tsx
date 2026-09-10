@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 import { useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
 
+import { isElectron } from "../../env";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Kbd } from "../ui/kbd";
@@ -159,8 +160,10 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const [activeResultIndex, setActiveResultIndex] = useState(0);
   const results = useMemo(
     () =>
-      searchSettings(query).filter((item) =>
-        settingsPathIsVisibleForWorkspace(item.to, workspaceKind),
+      searchSettings(query).filter(
+        (item) =>
+          settingsPathIsVisibleForWorkspace(item.to, workspaceKind) &&
+          (isElectron || item.to !== "/settings/snap-shot"),
       ),
     [query, workspaceKind],
   );
@@ -434,7 +437,11 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                 </SidebarGroupLabel>
                 <SidebarMenu className="ps-px">
                   {group.paths
-                    .filter((to) => settingsPathIsVisibleForWorkspace(to, workspaceKind))
+                    .filter(
+                      (to) =>
+                        settingsPathIsVisibleForWorkspace(to, workspaceKind) &&
+                        (isElectron || to !== "/settings/snap-shot"),
+                    )
                     .map((to) => {
                       const Icon = SETTINGS_SECTION_ICONS[to];
                       // Prefix match keeps the section active on nested routes
