@@ -1,6 +1,6 @@
 # Time Tracker
 
-Your timers and completed sessions belong to your account and sync across devices. You can run one manual timer alongside any number of automatically tracked agent sessions. Stopping a manual timer records its duration; deleting a completed session removes it from history and totals.
+Your timers and completed sessions belong to your account and sync across devices. You can run one manual timer alongside any number of automatically tracked agent sessions. Stopping a manual timer records its duration; deleting a completed session removes it from history and totals. Web and desktop history show durations as hours, minutes, and seconds (`HH:MM:SS`).
 
 Agent work is tracked automatically on registered environments with linked projects. Each independent thread run records its own time, including concurrent runs on the same project. Tracking pauses when the agent is blocked waiting for permission or an answer and resumes when work continues. A question that lets the agent keep working does not pause tracking. Closing the app does not stop an agent's timer.
 
