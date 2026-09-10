@@ -59,6 +59,11 @@ extension PathwayAgentThreadModel {
             (message["acceptedAt"] == .null && ["queued", "blocked", "canceled"].contains(message["state"]?.stringValue ?? ""))
     }
 
+    func canCancelCloudQueueMessage(_ item: PathwayTimelineItem) -> Bool {
+        guard let message = cloudQueueMessage(for: item), message["state"]?.stringValue != "canceled" else { return false }
+        return canEditCloudQueueMessage(item) || (message["state"]?.stringValue == "blocked" && ["command", "initial-message"].contains(message["rejection"]?.stringValue ?? ""))
+    }
+
     func updateCloudQueue(_ queued: PathwayQueuedThread) async {
         guard let threadQueue else { return }
         installCloudQueueDetail(queued, detail: threadQueue.cachedDetail(queued), authoritative: false)
@@ -97,7 +102,7 @@ extension PathwayAgentThreadModel {
     }
 
     func loadSavedQueueProviders(using queue: PathwayThreadQueueModel, companyID: String) async {
-        guard let value = try? await queue.destinations(companyID: companyID, threadID: cloudQueuedThread == nil || cloudQueuedThread?.state == "local" ? nil : threadID), !Task.isCancelled, providers.isEmpty else { return }
+        guard let value = try? await queue.destinations(companyID: companyID, threadID: cloudQueuedThread == nil || cloudQueuedThread?.state == "local" ? nil : threadID, environmentID: environment.environment.environmentId, queueID: cloudQueuedThread?.queueID), !Task.isCancelled, providers.isEmpty else { return }
         let target = value.arrayValue?.first { $0.objectValue?["environmentId"]?.stringValue == environment.environment.environmentId }
         providers = (target?.objectValue?["providers"]?.arrayValue ?? []).compactMap { value in
             guard let fields = value.objectValue, fields["enabled"]?.boolValue == true,

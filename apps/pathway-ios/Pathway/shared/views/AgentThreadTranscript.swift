@@ -63,9 +63,9 @@ struct AgentThreadTranscript: View {
                     }
                     if model.canEditCloudQueueMessage(item) {
                         Button("Edit", systemImage: "pencil") { beginEditing(item, queuedRunID: nil) }
-                        if message["state"]?.stringValue != "canceled" {
-                            Button("Cancel", systemImage: "xmark") { mutateCloudMessage(item, action: "cancel") }
-                        }
+                    }
+                    if model.canCancelCloudQueueMessage(item) {
+                        Button("Cancel", systemImage: "xmark") { mutateCloudMessage(item, action: "cancel") }
                     }
                 }
                 .font(.caption).buttonStyle(.plain)

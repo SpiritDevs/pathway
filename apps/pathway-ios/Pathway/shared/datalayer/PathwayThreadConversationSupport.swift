@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import UniformTypeIdentifiers
 
@@ -296,7 +297,9 @@ extension PathwayAgentThreadModel {
         isSending = true
         defer { isSending = false }
         if let threadQueue {
-            let identifier = UUID().uuidString.lowercased()
+            // A plan has one implementation command, including after navigation or restart.
+            let identity = try JSONEncoder().encode([thread.companyId, threadID, planID])
+            let identifier = "implement-plan-" + SHA256.hash(data: identity).map { String(format: "%02x", $0) }.joined()
             var command = PathwayAgentThreadCommands.dispatchMessage(threadID: threadID,
                 text: "PLEASE IMPLEMENT THIS PLAN:\n" + markdown.trimmingCharacters(in: .whitespacesAndNewlines),
                 hasActiveRun: false, identifier: identifier).objectValue ?? [:]

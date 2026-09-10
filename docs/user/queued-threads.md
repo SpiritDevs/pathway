@@ -7,6 +7,8 @@ it on another device.
 Queued and disconnected threads use the same conversation view and composer as running threads.
 Your pending messages appear in the conversation, with their delivery status and available
 recovery actions. You can continue writing and attaching files in the usual composer.
+When starting work from an issue, Pathway links the thread to the issue after the thread is saved
+to the cloud. A message saved only on this device does not mark the issue as started.
 
 **Waiting to sync** means the message is saved on this device and still needs a cloud connection.
 Keep this device's application data until it finishes syncing. **Queued · Saved to cloud** means

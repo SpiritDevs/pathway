@@ -47,7 +47,7 @@ struct PathwayThreadQueueTests {
 }
 
 @MainActor
-private final class QueueDestinationGate {
+final class QueueDestinationGate {
     private var response: CheckedContinuation<JSONValue, any Error>?
     private var started: CheckedContinuation<Void, Never>?
     private var didStart = false
@@ -285,7 +285,7 @@ extension PathwayThreadQueueTests {
         await restored.stop()
     }
 
-    private func queueConversationModel(directory: URL? = nil) -> PathwayAgentThreadModel {
+    func queueConversationModel(directory: URL? = nil) -> PathwayAgentThreadModel {
         let thread = makeAgentThread()
         let environment = PathwayCompanyEnvironment(companyId: thread.companyId,
                                                     environment: PathwayEnvironment(id: "environment", environmentId: thread.environmentId,

@@ -777,6 +777,7 @@ extension PathwayCloudModel {
             discoveryThreads = nextThreads
             threads = nextThreads
             rebuildThreadPartition()
+            threadQueue.retry()
         }
         let replica = entitiesByCompany.mapValues { Array($0.values) }
         issues.replaceReplica(

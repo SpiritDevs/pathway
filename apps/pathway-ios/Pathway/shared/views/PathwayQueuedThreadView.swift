@@ -7,7 +7,12 @@ struct PathwayQueuedThreadView: View {
     @State private var model: PathwayAgentThreadModel?
     @State private var errorMessage: String?
 
-    private var current: PathwayQueuedThread { appModel.cloud.threadQueue.threads.first { $0.id == thread.id } ?? thread }
+    private var current: PathwayQueuedThread {
+        let known = model?.cloudQueuedThread ?? thread
+        return appModel.cloud.threadQueue.threads.first {
+            $0.companyID == known.companyID && (known.queueID != nil ? $0.queueID == known.queueID : $0.scopedID == known.scopedID)
+        } ?? known
+    }
 
     var body: some View {
         Group {
@@ -129,7 +134,7 @@ struct PathwayQueuedThreadMoveView: View {
         loadingProviders = true
         defer { if destination == selected { loadingProviders = false } }
         do {
-            let destinations = try await appModel.cloud.threadQueue.destinations(companyID: thread.companyID, threadID: thread.threadID)
+            let destinations = try await appModel.cloud.threadQueue.destinations(companyID: thread.companyID, threadID: thread.threadID, environmentID: thread.environmentID, queueID: thread.queueID)
             guard !Task.isCancelled, destination == selected else { return }
             let target = destinations.arrayValue?.first { $0.objectValue?["environmentId"]?.stringValue == environment.environment.environmentId }
             providers = (target?.objectValue?["providers"]?.arrayValue ?? []).compactMap { value in

@@ -410,7 +410,7 @@ struct AgentThreadsView: View {
 
     private func openPendingThread() async {
         guard !Task.isCancelled, let route = appModel.pendingThreadRoute else { return }
-        if let pending = pendingQueueThreads.first(where: { $0.companyID == route.companyId && $0.threadID == route.threadId }) {
+        if let pending = pendingQueueThreads.first(where: { $0.companyID == route.companyId && $0.environmentID == route.environmentId && $0.threadID == route.threadId }) {
             appModel.pendingThreadRoute = nil
             queuedThread = pending
             return
@@ -735,7 +735,7 @@ private struct AgentThreadRow: View {
     @ViewBuilder
     private var statusIndicator: some View {
         if let queued = appModel.cloud.threadQueue.threads.first(where: {
-            $0.companyID == thread.companyId && $0.threadID == thread.threadId && $0.state != "delivered"
+            $0.companyID == thread.companyId && $0.environmentID == thread.environmentId && $0.threadID == thread.threadId && $0.state != "delivered"
         }) {
             Text(queued.status).font(.caption).foregroundStyle(.secondary)
         } else if thread.needsAction {
@@ -1083,7 +1083,7 @@ struct AgentThreadConversationView: View {
             model.threadQueue = appModel.cloud.threadQueue
             if let queued = queuedConversation { await model.updateCloudQueue(queued) }
         }
-        .task(id: appModel.cloud.threads.contains { $0.companyId == model.thread.companyId && $0.threadId == model.threadID }) {
+        .task(id: appModel.cloud.threads.contains { $0.companyId == model.thread.companyId && $0.environmentId == model.thread.environmentId && $0.threadId == model.threadID }) {
             if model.cloudQueuedThread != nil, !model.isSubscriptionReady {
                 await model.stop()
                 guard !Task.isCancelled else { return }
@@ -1154,7 +1154,7 @@ struct AgentThreadConversationView: View {
         }
     }
     private var queuedConversation: PathwayQueuedThread? {
-        appModel.cloud.threadQueue.threads.first { $0.companyID == model.thread.companyId && $0.threadID == model.threadID }
+        appModel.cloud.threadQueue.threads.first { $0.companyID == model.thread.companyId && $0.environmentID == model.thread.environmentId && $0.threadID == model.threadID }
     }
 
     @ViewBuilder private var connectionBanner: some View {

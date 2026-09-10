@@ -239,6 +239,7 @@ struct PathwayIssueWorkView: View {
                 launchedThreadID = created
                 threadID = created
             }
+            try await creation.threadQueue?.requireCloudSavedThread(companyID: issue.companyId, environmentID: binding.binding.environmentId, threadID: threadID)
             _ = try await model.mutate(companyID: issue.companyId, kind: "issueThreadLink.create", entityID: linkID,
                                        args: ["issueId": .string(issue.id), "environmentId": .string(binding.binding.environmentId),
                                               "threadId": .string(threadID), "origin": .string(workPurpose == "implement" ? "start-work" : "manual")])

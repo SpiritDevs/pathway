@@ -16,7 +16,15 @@ struct PathwayQueuedThread: Identifiable, Equatable, Sendable {
     let fields: [String: JSONValue]
     var threadID: String { fields["threadId"]?.stringValue ?? "" }
     var environmentID: String { fields["environmentId"]?.stringValue ?? "" }
-    var id: String { "\(companyID):\(threadID)" }
+    var queueID: String? { fields["queueId"]?.stringValue }
+    var scopedID: String { "\(companyID):\(environmentID):\(threadID)" }
+    var id: String { queueID.map { "\(companyID):\($0)" } ?? scopedID }
+    var queryFields: [String: JSONValue] {
+        var result: [String: JSONValue] = ["companyId": .string(companyID), "threadId": .string(threadID), "environmentId": .string(environmentID)]
+        if let queueID { result["queueId"] = .string(queueID) }
+        return result
+    }
+
     var title: String { fields["title"]?.stringValue ?? "New thread" }
     var state: String { fields["state"]?.stringValue ?? "queued" }
     var revision: Int { fields["revision"]?.intValue ?? 0 }
@@ -67,7 +75,8 @@ struct PathwayLocalQueueEntry: Codable, Sendable, Identifiable {
     var error: String?
     var localRevision: Int?
     var submissionStarted: Bool?
-    var id: String { "\(companyID):\(commandID)" }
+    var queueID: String?
+    var id: String { "\(companyID):\(environmentID):\(threadID):\(commandID)" }
 }
 
 actor PathwayThreadQueueStore {
@@ -76,7 +85,11 @@ actor PathwayThreadQueueStore {
     private nonisolated var filesDirectory: URL { url.deletingLastPathComponent().appending(path: "ThreadQueueAttachments") }
     init(directory: URL) { url = directory.appending(path: "ThreadQueue.json") }
 
-    nonisolated func attachmentURL(entryID: String, attachmentID: String) -> URL {
+    nonisolated func attachmentURL(entryID: String, attachmentID: String, persistedName: String? = nil) -> URL {
+        if let persistedName, persistedName.count == 64, persistedName.allSatisfy(\.isHexDigit) {
+            let persisted = filesDirectory.appending(path: persistedName)
+            if FileManager.default.fileExists(atPath: persisted.path) { return persisted }
+        }
         let identity = entryID + ":" + attachmentID
         let name = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
         return filesDirectory.appending(path: name)
@@ -142,8 +155,15 @@ final class PathwayThreadQueueModel {
     @ObservationIgnored private var remote: [String: [PathwayQueuedThread]] = [:]
     @ObservationIgnored private var detailCache: [String: JSONValue] = [:]
     @ObservationIgnored private var acknowledgedRows: [String: PathwayQueuedThread] = [:]
-    @ObservationIgnored private var observers: [String: Task<Void, Never>] = [:]
+    private struct Page {
+        let cursor: String?
+        var rows: [PathwayQueuedThread] = []
+    }
+
+    @ObservationIgnored private var pages: [String: [Page]] = [:]
+    @ObservationIgnored private var observers: [String: [Int: Task<Void, Never>]] = [:]
     @ObservationIgnored private var drain: Task<Void, Never>?
+    @ObservationIgnored private var drainAgain = false
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var drainGeneration = UUID()
     @ObservationIgnored private var companyIDs: Set<String> = []
@@ -176,40 +196,74 @@ final class PathwayThreadQueueModel {
     func observe(companies: [String]) {
         companyIDs = Set(companies)
         for id in Array(observers.keys) where !companyIDs.contains(id) {
-            observers.removeValue(forKey: id)?.cancel(); remote.removeValue(forKey: id)
-        }
-        let current = generation
-        for id in companies where observers[id] == nil {
-            observers[id] = Task { [weak self] in
-                guard let self else { return }
-                do {
-                    for try await value in subscribe("threadQueue:list", .object(["companyId": .string(id)])) {
-                        guard !Task.isCancelled, current == generation else { return }
-                        remote[id] = (value.arrayValue ?? []).compactMap { value in
-                            guard let fields = value.objectValue, fields["threadId"]?.stringValue != nil else { return nil }
-                            return PathwayQueuedThread(companyID: id, fields: fields)
-                        }
-                        for row in remote[id] ?? [] {
-                            acknowledgedRows.removeValue(forKey: row.id)
-                        }
-                        rebuild(); flush()
-                    }
-                } catch {
-                    guard current == generation, !Task.isCancelled else { return }
-                    errorMessage = error.localizedDescription
-                }
-                if current == generation, !Task.isCancelled { observers.removeValue(forKey: id) }
+            for task in observers.removeValue(forKey: id)?.values ?? [:].values {
+                task.cancel()
             }
+            remote.removeValue(forKey: id); pages.removeValue(forKey: id)
+        }
+        for id in companies where observers[id]?[0] == nil {
+            observePage(companyID: id, index: 0, cursor: nil)
         }
         rebuild(); flush()
     }
 
+    /// Each bounded page stays reactive; changed boundaries replace only downstream pages.
+    private func observePage(companyID: String, index: Int, cursor: String?) {
+        let current = generation
+        var companyPages = pages[companyID] ?? []
+        cancelPages(companyID: companyID, from: index)
+        companyPages = Array(companyPages.prefix(index)) + [Page(cursor: cursor)]
+        pages[companyID] = companyPages
+        observers[companyID, default: [:]][index] = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let args: JSONValue = .object(["companyId": .string(companyID), "paginationOpts": .object([
+                    "numItems": .number(64), "cursor": cursor.map(JSONValue.string) ?? .null
+                ])])
+                for try await value in subscribe("threadQueue:listPage", args) {
+                    guard !Task.isCancelled, current == generation, companyIDs.contains(companyID),
+                          var currentPages = pages[companyID], currentPages.indices.contains(index), currentPages[index].cursor == cursor else { return }
+                    currentPages[index].rows = (value.objectValue?["page"]?.arrayValue ?? []).compactMap { value in
+                        guard let fields = value.objectValue, fields["threadId"]?.stringValue != nil else { return nil }
+                        return PathwayQueuedThread(companyID: companyID, fields: fields)
+                    }
+                    pages[companyID] = currentPages
+                    let nextPageMissing = !currentPages.indices.contains(index + 1) || currentPages[index + 1].cursor != value.objectValue?["continueCursor"]?.stringValue || observers[companyID]?[index + 1] == nil
+                    if value.objectValue?["isDone"]?.boolValue == true {
+                        cancelPages(companyID: companyID, from: index + 1)
+                        pages[companyID] = Array(currentPages.prefix(index + 1))
+                    } else if let next = value.objectValue?["continueCursor"]?.stringValue, nextPageMissing {
+                        observePage(companyID: companyID, index: index + 1, cursor: next)
+                    }
+                    var seen: Set<String> = []
+                    remote[companyID] = (pages[companyID] ?? []).flatMap(\.rows).filter { seen.insert($0.id).inserted }
+                    for row in remote[companyID] ?? [] {
+                        acknowledgedRows = acknowledgedRows.filter { $0.value.id != row.id && $0.value.scopedID != row.scopedID }
+                    }
+                    rebuild(); flush()
+                }
+            } catch {
+                guard current == generation, !Task.isCancelled else { return }
+                errorMessage = error.localizedDescription
+            }
+            if current == generation, !Task.isCancelled { observers[companyID]?.removeValue(forKey: index) }
+        }
+    }
+
+    private func cancelPages(companyID: String, from index: Int) {
+        for position in Array(observers[companyID]?.keys ?? [:].keys) where position >= index {
+            observers[companyID]?.removeValue(forKey: position)?.cancel()
+        }
+    }
+
     func stop(clear: Bool = false) {
         generation = UUID()
-        for task in observers.values {
-            task.cancel()
+        for company in observers.values {
+            for task in company.values {
+                task.cancel()
+            }
         }
-        observers = [:]; stopDrain(); companyIDs = []; captures = []
+        observers = [:]; pages = [:]; stopDrain(); companyIDs = []; captures = []
         if clear { local = []; remote = [:]; detailCache = [:]; acknowledgedRows = [:]; threads = []; store = nil; storageReady = false; errorMessage = nil }
     }
 
@@ -225,7 +279,8 @@ final class PathwayThreadQueueModel {
             message["attachments"] = .array(files.map(\.metadata)); input["initialMessage"] = .object(message)
         } else { input["attachments"] = .array(files.map(\.metadata)) }
         normalized["input"] = .object(input)
-        let entry = PathwayLocalQueueEntry(companyID: companyID, environmentID: environmentID, threadID: threadID, commandID: commandID, submission: .object(normalized), files: files)
+        var entry = PathwayLocalQueueEntry(companyID: companyID, environmentID: environmentID, threadID: threadID, commandID: commandID, submission: .object(normalized), files: files)
+        entry.queueID = threads.first { $0.companyID == companyID && $0.environmentID == environmentID && $0.threadID == threadID }?.queueID
         let inserted = !local.contains(where: { $0.id == entry.id })
         if inserted { local.append(entry) }
         let current = generation
@@ -258,14 +313,14 @@ final class PathwayThreadQueueModel {
         let confirmedIDs = Set(confirmed.compactMap { $0.objectValue?["commandId"]?.stringValue })
         var messages = confirmed
         var urls = result["attachmentUrls"]?.objectValue ?? [:]
-        for entry in local where entry.companyID == thread.companyID && entry.threadID == thread.threadID && !confirmedIDs.contains(entry.commandID) {
+        for entry in local where entry.companyID == thread.companyID && entry.threadID == thread.threadID && entry.environmentID == thread.environmentID && !confirmedIDs.contains(entry.commandID) {
             messages.append(.object(["commandId": .string(entry.commandID), "submission": entry.submission,
                                      "state": .string("local"), "revision": .number(Double(entry.localRevision ?? 0)),
                                      "editable": .bool(entry.submissionStarted != true), "acceptedAt": .null,
                                      "error": entry.error.map(JSONValue.string) ?? .null]))
             for file in entry.files {
                 if let id = file.metadata.objectValue?["id"]?.stringValue, let store {
-                    urls[id] = .string(store.attachmentURL(entryID: entry.id, attachmentID: id).absoluteString)
+                    urls[id] = .string(store.attachmentURL(entryID: entry.id, attachmentID: id, persistedName: file.localDataFile).absoluteString)
                 }
             }
         }
@@ -279,7 +334,7 @@ final class PathwayThreadQueueModel {
     func detail(_ thread: PathwayQueuedThread) async throws -> JSONValue {
         let current = generation
         guard companyIDs.contains(thread.companyID) else { throw CancellationError() }
-        let localEntries = local.filter { $0.companyID == thread.companyID && $0.threadID == thread.threadID }
+        let localEntries = local.filter { $0.companyID == thread.companyID && $0.threadID == thread.threadID && $0.environmentID == thread.environmentID }
         let pending = localEntries.map {
             JSONValue.object(["commandId": .string($0.commandID), "submission": $0.submission,
                               "state": .string("local"), "revision": .number(Double($0.localRevision ?? 0)),
@@ -289,7 +344,7 @@ final class PathwayThreadQueueModel {
         var result = detailCache[thread.id]?.objectValue ?? ["thread": .object(thread.fields), "messages": .array([])]
         if thread.state != "local" || localEntries.contains(where: { $0.submissionStarted == true }) {
             do {
-                result = try await request("query", "threadQueue:getThread", .object(["companyId": .string(thread.companyID), "threadId": .string(thread.threadID)])).objectValue ?? result
+                result = try await request("query", "threadQueue:getThread", .object(thread.queryFields)).objectValue ?? result
             } catch { if pending.isEmpty { throw error } }
         }
         guard current == generation, companyIDs.contains(thread.companyID) else { throw CancellationError() }
@@ -299,23 +354,26 @@ final class PathwayThreadQueueModel {
         // Queue detail omits delivered bodies. Check each uncertain command's indexed receipt
         // instead of treating absence from that filtered view as proof it was never saved.
         for entry in localEntries where entry.submissionStarted == true && !ids.contains(entry.commandID) {
-            let status = try? await request("query", "threadQueue:submissionStatus", .object([
-                "companyId": .string(entry.companyID), "threadId": .string(entry.threadID), "commandId": .string(entry.commandID)
-            ]))
+            var identity = thread.queryFields
+            identity["commandId"] = .string(entry.commandID)
+            let status = try? await request("query", "threadQueue:submissionStatus", .object(identity))
             guard current == generation, companyIDs.contains(thread.companyID) else { throw CancellationError() }
             if status?.objectValue?["commandId"]?.stringValue == entry.commandID {
                 ids.insert(entry.commandID)
-                if !(remote[thread.companyID] ?? []).contains(where: { $0.threadID == thread.threadID }) {
+                if !(remote[thread.companyID] ?? []).contains(where: { $0.threadID == thread.threadID && $0.environmentID == thread.environmentID }) {
                     var fields = thread.fields
                     fields["state"] = status?.objectValue?["state"] ?? .string("queued")
+                    fields["queueId"] = status?.objectValue?["queueId"] ?? result["thread"]?.objectValue?["queueId"] ?? fields["queueId"]
                     fields.removeValue(forKey: "localCount")
-                    acknowledgedRows[thread.id] = PathwayQueuedThread(companyID: thread.companyID, fields: fields)
+                    let row = PathwayQueuedThread(companyID: thread.companyID, fields: fields)
+                    acknowledgedRows.removeValue(forKey: thread.id)
+                    acknowledgedRows[row.id] = row
                 }
             }
         }
-        if local.contains(where: { $0.companyID == thread.companyID && $0.threadID == thread.threadID && ids.contains($0.commandID) }), let store {
+        if local.contains(where: { $0.companyID == thread.companyID && $0.threadID == thread.threadID && $0.environmentID == thread.environmentID && ids.contains($0.commandID) }), let store {
             stopDrain()
-            local.removeAll { $0.companyID == thread.companyID && $0.threadID == thread.threadID && ids.contains($0.commandID) }
+            local.removeAll { $0.companyID == thread.companyID && $0.threadID == thread.threadID && $0.environmentID == thread.environmentID && ids.contains($0.commandID) }
             try await store.save(local)
             guard current == generation, !Task.isCancelled else { throw CancellationError() }
             rebuild(); flush()
@@ -325,7 +383,7 @@ final class PathwayThreadQueueModel {
             for entry in localEntries where !ids.contains(entry.commandID) {
                 for file in entry.files {
                     guard let id = file.metadata.objectValue?["id"]?.stringValue else { continue }
-                    let url = store.attachmentURL(entryID: entry.id, attachmentID: id)
+                    let url = store.attachmentURL(entryID: entry.id, attachmentID: id, persistedName: file.localDataFile)
                     guard current == generation else { throw CancellationError() }
                     if urls[id] == nil { urls[id] = .string(url.absoluteString) }
                 }
@@ -336,11 +394,29 @@ final class PathwayThreadQueueModel {
         return .object(result)
     }
 
-    func destinations(companyID: String, threadID: String? = nil) async throws -> JSONValue {
+    /// Issue links may publish only after the launch exists beyond this device's outbox.
+    func requireCloudSavedThread(companyID: String, environmentID: String, threadID: String) async throws {
+        let current = generation
+        guard companyIDs.contains(companyID) else { throw CancellationError() }
+        flush()
+        await drain?.value
+        guard current == generation, companyIDs.contains(companyID), !Task.isCancelled else { throw CancellationError() }
+        let result = try await request("query", "threadQueue:getThread", .object([
+            "companyId": .string(companyID), "environmentId": .string(environmentID), "threadId": .string(threadID)
+        ]))
+        guard current == generation, companyIDs.contains(companyID), !Task.isCancelled else { throw CancellationError() }
+        guard result.objectValue?["thread"]?.objectValue?["threadId"]?.stringValue == threadID else {
+            throw PathwayThreadConversationError.message("Your thread is saved on this device. Sync it to Pathway Cloud before linking it to this issue.")
+        }
+    }
+
+    func destinations(companyID: String, threadID: String? = nil, environmentID: String? = nil, queueID: String? = nil) async throws -> JSONValue {
         let current = generation
         guard companyIDs.contains(companyID) else { throw CancellationError() }
         var args: [String: JSONValue] = ["companyId": .string(companyID)]
         if let threadID { args["threadId"] = .string(threadID) }
+        if let environmentID { args["environmentId"] = .string(environmentID) }
+        if let queueID { args["queueId"] = .string(queueID) }
         let result = try await request("query", "threadQueue:destinations", .object(args))
         guard current == generation, companyIDs.contains(companyID), !Task.isCancelled else { throw CancellationError() }
         return result
@@ -352,7 +428,7 @@ final class PathwayThreadQueueModel {
         let current = generation
         guard companyIDs.contains(thread.companyID), let store else { throw CancellationError() }
         let localIndex = fields["commandId"]?.stringValue.flatMap { commandID in
-            local.firstIndex { $0.companyID == thread.companyID && $0.threadID == thread.threadID && $0.commandID == commandID }
+            local.firstIndex { $0.companyID == thread.companyID && $0.threadID == thread.threadID && $0.environmentID == thread.environmentID && $0.commandID == commandID }
         }
         if let index = localIndex {
             let commandID = local[index].commandID
@@ -381,7 +457,7 @@ final class PathwayThreadQueueModel {
                 local[index].error = nil
             } else if operation == "cancel" {
                 let launch = local[index].submission.objectValue?["kind"]?.stringValue == "launch"
-                local.removeAll { $0.companyID == thread.companyID && $0.threadID == thread.threadID && (launch || $0.commandID == commandID) }
+                local.removeAll { $0.companyID == thread.companyID && $0.threadID == thread.threadID && $0.environmentID == thread.environmentID && (launch || $0.commandID == commandID) }
             } else { throw PathwayThreadConversationError.message("This action is unavailable until the thread is saved to the cloud.") }
             do {
                 try await store.save(local)
@@ -397,26 +473,31 @@ final class PathwayThreadQueueModel {
             rebuild(); flush(); return
         }
         var args = fields
-        args["companyId"] = .string(thread.companyID); args["threadId"] = .string(thread.threadID)
+        for (key, value) in thread.queryFields where args[key] == nil {
+            args[key] = value
+        }
         _ = try await request("mutation", "threadQueue:\(operation)", .object(args))
         guard current == generation, !Task.isCancelled else { throw CancellationError() }
     }
 
-    func retry() { flush() }
+    func retry() {
+        if drain != nil { drainAgain = true }
+        flush()
+    }
 
     private func stopDrain() {
         drainGeneration = UUID()
-        drain?.cancel(); drain = nil
+        drain?.cancel(); drain = nil; drainAgain = false
     }
 
     private func rebuild() {
         var rows = remote.filter { companyIDs.contains($0.key) }.values.flatMap(\.self)
         let syncedIDs = Set(rows.map(\.id))
         rows += acknowledgedRows.values.filter { companyIDs.contains($0.companyID) && !syncedIDs.contains($0.id) }
-        let remoteIDs = Set(rows.map(\.id))
+        let remoteIDs = Set(rows.map(\.scopedID))
         var added = remoteIDs
         for entry in local where companyIDs.contains(entry.companyID) {
-            let id = "\(entry.companyID):\(entry.threadID)"
+            let id = "\(entry.companyID):\(entry.environmentID):\(entry.threadID)"
             guard added.insert(id).inserted else { continue }
             let input = entry.submission.objectValue?["input"]?.objectValue ?? [:]
             rows.append(PathwayQueuedThread(companyID: entry.companyID, fields: ["threadId": .string(entry.threadID), "environmentId": .string(entry.environmentID),
@@ -424,7 +505,7 @@ final class PathwayThreadQueueModel {
                                                                                  "localProjectId": input["projectId"] ?? .null, "state": .string("local"), "error": entry.error.map(JSONValue.string) ?? .null]))
         }
         rows = rows.map { row in
-            let entries = local.filter { $0.companyID == row.companyID && $0.threadID == row.threadID }
+            let entries = local.filter { $0.companyID == row.companyID && $0.threadID == row.threadID && $0.environmentID == row.environmentID }
             guard !entries.isEmpty else { return row }
             var fields = row.fields; fields["localCount"] = .number(Double(entries.count))
             fields["localState"] = .array(entries.map { .object(["commandId": .string($0.commandID),
@@ -444,13 +525,19 @@ final class PathwayThreadQueueModel {
         let currentDrain = drainGeneration
         drain = Task { [weak self] in
             guard let self else { return }
-            defer { if current == generation, currentDrain == drainGeneration { drain = nil } }
+            defer {
+                if current == generation, currentDrain == drainGeneration {
+                    drain = nil
+                    if drainAgain { drainAgain = false; flush() }
+                }
+            }
             @MainActor func check(_ companyID: String) throws {
                 guard current == generation, currentDrain == drainGeneration,
                       companyIDs.contains(companyID), !Task.isCancelled else { throw CancellationError() }
             }
-            // Stop on a failed entry so later messages cannot overtake it.
-            while let first = local.first(where: { companyIDs.contains($0.companyID) }), current == generation, !Task.isCancelled {
+            // Preserve each thread's order without blocking other threads or companies.
+            var failedThreads: Set<[String]> = []
+            while let first = local.first(where: { companyIDs.contains($0.companyID) && !failedThreads.contains([$0.companyID, $0.environmentID, $0.threadID]) }), current == generation, !Task.isCancelled {
                 do {
                     try check(first.companyID)
                     // No background callback may submit an entry whose initial local save failed.
@@ -483,12 +570,14 @@ final class PathwayThreadQueueModel {
                     try await queueStore.save(local)
                     try check(entry.companyID)
                     rebuild()
-                    _ = try await request("mutation", "threadQueue:enqueue", .object(["companyId": .string(entry.companyID), "environmentId": .string(entry.environmentID), "threadId": .string(entry.threadID), "submission": entry.submission, "attachmentIds": .array(entry.files.compactMap { $0.cloudID.map(JSONValue.string) })]))
+                    var enqueueFields: [String: JSONValue] = ["companyId": .string(entry.companyID), "environmentId": .string(entry.environmentID), "threadId": .string(entry.threadID), "submission": entry.submission, "attachmentIds": .array(entry.files.compactMap { $0.cloudID.map(JSONValue.string) })]
+                    if let queueID = entry.queueID { enqueueFields["queueId"] = .string(queueID) }
+                    let receipt = try await request("mutation", "threadQueue:enqueue", .object(enqueueFields))
                     try check(entry.companyID)
                     // Retain an acknowledged row until the subscription supplies its cloud replacement.
-                    if !(remote[entry.companyID] ?? []).contains(where: { $0.threadID == entry.threadID }) {
+                    if !(remote[entry.companyID] ?? []).contains(where: { $0.threadID == entry.threadID && $0.environmentID == entry.environmentID }) {
                         let input = entry.submission.objectValue?["input"]?.objectValue ?? [:]
-                        let row = PathwayQueuedThread(companyID: entry.companyID, fields: ["threadId": .string(entry.threadID), "environmentId": .string(entry.environmentID), "title": input["title"] ?? .string("Pending message"), "launch": entry.submission.objectValue?["kind"]?.stringValue == "launch" ? .object(input) : .null,
+                        let row = PathwayQueuedThread(companyID: entry.companyID, fields: ["queueId": receipt.objectValue?["thread"]?.objectValue?["queueId"] ?? .null, "threadId": .string(entry.threadID), "environmentId": .string(entry.environmentID), "title": input["title"] ?? .string("Pending message"), "launch": entry.submission.objectValue?["kind"]?.stringValue == "launch" ? .object(input) : .null,
                                                                                            "localProjectId": input["projectId"] ?? .null, "state": .string("queued")])
                         acknowledgedRows[row.id] = row
                     }
@@ -501,9 +590,9 @@ final class PathwayThreadQueueModel {
                     var definitelyUnsubmitted = false
                     if error is PathwayThreadQueueRejected {
                         do {
-                            let result = try await request("query", "threadQueue:submissionStatus", .object([
-                                "companyId": .string(first.companyID), "threadId": .string(first.threadID), "commandId": .string(first.commandID)
-                            ]))
+                            var identity: [String: JSONValue] = ["companyId": .string(first.companyID), "threadId": .string(first.threadID), "environmentId": .string(first.environmentID), "commandId": .string(first.commandID)]
+                            if let queueID = first.queueID { identity["queueId"] = .string(queueID) }
+                            let result = try await request("query", "threadQueue:submissionStatus", .object(identity))
                             try check(first.companyID)
                             definitelyUnsubmitted = result == .null
                         } catch {}
@@ -515,7 +604,8 @@ final class PathwayThreadQueueModel {
                     }
                     try? await queueStore.save(local)
                     guard current == generation, currentDrain == drainGeneration, !Task.isCancelled else { return }
-                    errorMessage = error.localizedDescription; rebuild(); return
+                    errorMessage = error.localizedDescription; rebuild()
+                    failedThreads.insert([first.companyID, first.environmentID, first.threadID])
                 }
             }
         }
