@@ -175,7 +175,7 @@ export function ThreadDetailsPrRow({
 
   return (
     <>
-      <div className="flex min-w-0 items-center [&>button]:min-w-0 [&>button]:flex-1 [&>div:first-child]:min-w-0 [&>div:first-child]:flex-1">
+      <div className="flex min-w-0 items-center [&>button:first-child]:min-w-0 [&>button:first-child]:flex-1 [&>div:first-child]:min-w-0 [&>div:first-child]:flex-1">
         {trailingAction ? (
           <div className={THREAD_DETAILS_PANEL_LINK_SPLIT_GROUP_CLASS}>
             <Tooltip>
