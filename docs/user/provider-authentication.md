@@ -8,6 +8,8 @@ For Codex, select **Sign in** to open the OpenAI device sign-in page. Enter the 
 
 Pathway refreshes the provider automatically when sign-in succeeds.
 
+When you switch accounts for a Codex connection, you can continue your existing conversation. Pathway replaces the idle provider session and resumes the chat with the new account. If other work is still running on that connection, wait for it to finish before continuing. Connections with separate Codex home folders have separate sign-ins; sign in to the connection you intend to use.
+
 The authorization page opens on the device running the Pathway client, while the resulting credentials stay on the environment that runs Claude. This also works when controlling an environment remotely.
 
 Select **Cancel** to discard an unfinished sign-in. Unfinished Pathway sign-in flows expire after ten minutes.
