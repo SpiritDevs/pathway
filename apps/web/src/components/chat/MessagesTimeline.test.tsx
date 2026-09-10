@@ -2558,3 +2558,17 @@ it("offers workspace recovery only on the latest local run", async () => {
     expect(markup.includes("Work locally")).toBe(scenario === "latest");
   }
 });
+
+it("shows saved-message loading instead of claiming a queued conversation is empty", async () => {
+  const { MessagesTimeline } = await import("./MessagesTimeline");
+  const markup = renderToStaticMarkup(
+    <MessagesTimeline
+      {...buildProps()}
+      timelineEntries={[]}
+      emptyStateMessage="Loading saved messages…"
+    />,
+  );
+  expect(markup).toContain("Loading saved messages…");
+  expect(markup).toContain('role="status"');
+  expect(markup).not.toContain("Send a message to start the conversation.");
+});
