@@ -785,6 +785,41 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("rounded-2xl bg-accent p-3");
   });
 
+  it.each(["queued", "canceled"] as const)(
+    "renders %s cloud messages with the normal user bubble and message controls",
+    (state) => {
+      const base = buildUserTimelineEntry("Saved while the environment is offline");
+      const entry = { ...base, message: { ...base.message, createdBy: "user" as const } };
+      const markup = renderToStaticMarkup(
+        <MessagesTimeline
+          {...buildProps()}
+          timelineEntries={[entry]}
+          queuedMessageControls={
+            new Map([
+              [
+                entry.message.id,
+                {
+                  state,
+                  editable: true,
+                  cancelable: state === "queued",
+                  retryable: state === "canceled",
+                  waitingToSync: false,
+                  submissionStarted: false,
+                },
+              ],
+            ])
+          }
+        />,
+      );
+      expect(markup).toContain("rounded-2xl bg-accent p-3");
+      expect(markup).toContain('aria-label="Edit message"');
+      expect(markup).toContain(
+        state === "queued" ? 'aria-label="Cancel queued message"' : 'aria-label="Retry message"',
+      );
+      expect(markup).toContain(state === "queued" ? "Queued" : "Canceled");
+    },
+  );
+
   it("shows retry beneath only the failed latest user message", () => {
     const baseEntry = buildUserTimelineEntry("Try this again");
     const entry = {

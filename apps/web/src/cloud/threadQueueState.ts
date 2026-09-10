@@ -11,6 +11,7 @@ export const threadQueueRowsAtom = Atom.make<ReadonlyArray<ThreadQueueThread>>([
 export const localThreadQueueAtom = Atom.make<
   ReadonlyArray<ThreadQueueOutboxRecord<ThreadQueueSubmission>>
 >([]).pipe(Atom.keepAlive);
+export const threadQueueHydratedAtom = Atom.make(false).pipe(Atom.keepAlive);
 
 /** A mutation receipt stays visible until the list subscription observes that revision. */
 export function reconcileQueuedThreadReceipts(

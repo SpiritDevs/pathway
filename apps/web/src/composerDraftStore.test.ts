@@ -1335,6 +1335,15 @@ describe("composerDraftStore project draft thread mapping", () => {
       };
       reconcilePendingDraftSends({ ...input, status: "cached" });
       expect(store.getDraftSession(draftId)?.pendingSend).not.toBeNull();
+      reconcilePendingDraftSends({ ...input, status: "live", queueHydrated: false });
+      expect(store.getDraftSession(draftId)?.pendingSend).not.toBeNull();
+      reconcilePendingDraftSends({
+        ...input,
+        status: "live",
+        queueHydrated: true,
+        queuedThreadIds: new Set([threadId]),
+      });
+      expect(store.getDraftSession(draftId)?.pendingSend).not.toBeNull();
       reconcilePendingDraftSends({
         ...input,
         status: "live",

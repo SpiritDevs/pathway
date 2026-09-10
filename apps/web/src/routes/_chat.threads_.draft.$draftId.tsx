@@ -1,8 +1,5 @@
-import { OfflineThreadComposer } from "../components/OfflineThreadComposer";
-import { environmentServerConfigsAtom } from "../state/server";
 import { useAtomValue } from "@effect/atom-react";
 import { threadQueueEntriesAtom } from "../cloud/threadQueueState";
-import { QueuedThreadPanel } from "../components/QueuedThreadPanel";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { useEffect } from "react";
@@ -34,8 +31,6 @@ function DraftChatThreadRouteView() {
   const { draftId: rawDraftId } = Route.useParams();
   const draftId = DraftId.make(rawDraftId);
   const draftSession = useComposerDraftStore((store) => store.getDraftSession(draftId));
-  const configurations = useAtomValue(environmentServerConfigsAtom);
-  const serverConfig = draftSession ? configurations.get(draftSession.environmentId) : null;
   const queuedThreads = useAtomValue(threadQueueEntriesAtom);
   const queuedThread = queuedThreads.find((row) => row.threadId === draftSession?.threadId);
   const threadRefs = useThreadRefs();
@@ -134,19 +129,13 @@ function DraftChatThreadRouteView() {
 
   return (
     <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
-      {queuedThread && !canonicalThreadRef ? (
-        <QueuedThreadPanel threadId={queuedThread.threadId} />
-      ) : !serverConfig ? (
-        <OfflineThreadComposer draftId={draftId} />
-      ) : (
-        <ChatView
-          draftId={draftId}
-          environmentId={draftSession.environmentId}
-          threadId={draftSession.threadId}
-          routeKind="draft"
-          forceExpandedMobileComposer
-        />
-      )}
+      <ChatView
+        draftId={draftId}
+        environmentId={draftSession.environmentId}
+        threadId={draftSession.threadId}
+        routeKind="draft"
+        forceExpandedMobileComposer
+      />
     </SidebarInset>
   );
 }

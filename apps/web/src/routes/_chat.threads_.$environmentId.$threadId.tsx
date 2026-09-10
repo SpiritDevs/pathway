@@ -1,8 +1,5 @@
-import { OfflineThreadComposer } from "../components/OfflineThreadComposer";
-import { environmentServerConfigsAtom } from "../state/server";
 import { useAtomValue } from "@effect/atom-react";
 import { threadQueueEntriesAtom } from "../cloud/threadQueueState";
-import { QueuedThreadPanel } from "../components/QueuedThreadPanel";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { useEffect } from "react";
@@ -28,8 +25,6 @@ function ChatThreadRouteView() {
   const shell = useEnvironmentQuery(
     threadRef === null ? null : environmentShell.stateAtom(threadRef.environmentId),
   );
-  const configurations = useAtomValue(environmentServerConfigsAtom);
-  const config = threadRef ? configurations.get(threadRef.environmentId) : null;
   const queuedThreads = useAtomValue(threadQueueEntriesAtom);
   const queuedThread = queuedThreads.find((row) => row.threadId === threadRef?.threadId);
   const serverThreadShell = useThreadShell(threadRef);
@@ -90,14 +85,9 @@ function ChatThreadRouteView() {
 
   return (
     <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
-      {queuedThread && (!serverThreadShell || !serverThreadStarted) ? (
-        <QueuedThreadPanel threadId={queuedThread.threadId} />
-      ) : serverThreadShell && !config ? (
-        <>
-          <QueuedThreadPanel threadId={threadRef.threadId} compact />
-          <OfflineThreadComposer threadRef={threadRef} />
-        </>
-      ) : renderState === "ready" || (renderState === "loading" && serverThreadShell !== null) ? (
+      {queuedThread ||
+      renderState === "ready" ||
+      (renderState === "loading" && serverThreadShell !== null) ? (
         <ChatView
           environmentId={threadRef.environmentId}
           threadId={threadRef.threadId}

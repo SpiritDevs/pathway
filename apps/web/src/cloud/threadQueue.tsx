@@ -43,6 +43,7 @@ import {
 
 import {
   threadQueueRowsAtom,
+  threadQueueHydratedAtom,
   localThreadQueueAtom,
   threadQueueAccountAtom,
   threadQueueDestinationsAtom,
@@ -120,6 +121,8 @@ let session: {
   accountId: string;
   companyId: CompanyId;
   receipts: Map<string, ThreadQueueThread>;
+  outboxLoaded: boolean;
+  listLoaded: boolean;
 } | null = null;
 let drain: Promise<void> | null = null;
 let drainAgain = false;
@@ -132,11 +135,14 @@ const announce = async (accountId: string) => {
   const rows = (await readQueuedIntents(accountId)) as ReadonlyArray<
     ThreadQueueOutboxRecord<ThreadQueueSubmission>
   >;
-  if (session?.accountId === accountId)
+  if (session?.accountId === accountId) {
     appAtomRegistry.set(
       localThreadQueueAtom,
       rows.filter((row) => row.companyId === session?.companyId),
     );
+    session.outboxLoaded = true;
+    appAtomRegistry.set(threadQueueHydratedAtom, session.listLoaded);
+  }
 };
 
 /** One drain independent of route lifetime; cloud command IDs make retries idempotent. */
@@ -279,6 +285,8 @@ export function ThreadQueueRuntime() {
       accountId: userId,
       companyId,
       receipts: new Map<string, ThreadQueueThread>(),
+      outboxLoaded: false,
+      listLoaded: false,
     };
     session = current;
     const channel = new BroadcastChannel(`pathway-thread-queue:${userId}`);
@@ -292,6 +300,8 @@ export function ThreadQueueRuntime() {
       const merged = reconcileQueuedThreadReceipts(rows, current.receipts);
       current.receipts = merged.pending;
       appAtomRegistry.set(threadQueueRowsAtom, merged.rows);
+      current.listLoaded = true;
+      appAtomRegistry.set(threadQueueHydratedAtom, current.outboxLoaded);
       void flushThreadQueue();
     });
     const unsubscribeDestinations = subscribeQueueDestinations(undefined, (destinations) => {
@@ -318,6 +328,7 @@ export function ThreadQueueRuntime() {
         session = null;
         appAtomRegistry.set(threadQueueAccountAtom, null);
         appAtomRegistry.set(threadQueueRowsAtom, []);
+        appAtomRegistry.set(threadQueueHydratedAtom, false);
         appAtomRegistry.set(threadQueueDestinationsAtom, []);
         appAtomRegistry.set(localThreadQueueAtom, []);
       }

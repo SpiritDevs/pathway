@@ -1,4 +1,5 @@
 import { useEnvironmentQuery } from "../state/query";
+import type { Project } from "../types";
 import { vcsEnvironment } from "../state/vcs";
 import { useVcsInitAction } from "../state/sourceControlActions";
 import {
@@ -58,7 +59,14 @@ import {
 } from "./ui/menu";
 import { Separator } from "./ui/separator";
 
+export interface BranchToolbarWorkspaceContext {
+  project: Project;
+  worktreePath: string | null;
+  temporary: boolean;
+}
+
 interface BranchToolbarProps {
+  workspaceContext?: BranchToolbarWorkspaceContext;
   layout?: "composer" | "panel";
   panelSection?: "all" | "workspace" | "branch";
   onOpenDirectory?: ((cwd: string) => void) | undefined;
@@ -454,6 +462,7 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
 }
 
 export const BranchToolbar = memo(function BranchToolbar({
+  workspaceContext,
   layout = "composer",
   panelSection = "all",
   onOpenDirectory,
@@ -491,10 +500,13 @@ export const BranchToolbar = memo(function BranchToolbar({
   const activeProjectRef =
     serverThread && serverThread.projectId !== null
       ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
-      : draftThread && draftThread.projectId !== null
-        ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-        : null;
-  const activeProject = useProject(activeProjectRef);
+      : workspaceContext
+        ? scopeProjectRef(workspaceContext.project.environmentId, workspaceContext.project.id)
+        : draftThread && draftThread.projectId !== null
+          ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+          : null;
+  const serverProject = useProject(activeProjectRef);
+  const activeProject = serverProject ?? workspaceContext?.project ?? null;
   // A worktree is cut from a repository, so picking one on a rootless project asks for a directory
   // first and applies the mode once there is one. Nothing needs re-reading afterwards: the mode is
   // draft state, and the send path resolves the root again anyway (`ChatView.tsx:5134`).
@@ -537,8 +549,13 @@ export const BranchToolbar = memo(function BranchToolbar({
     },
     [ensureWorkspaceRoot, isRootlessProject, onEnvModeChange],
   );
-  const hasActiveThread = serverThread !== null || draftThread !== null;
-  const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
+  const hasActiveThread =
+    serverThread !== null || draftThread !== null || workspaceContext !== undefined;
+  const activeWorktreePath =
+    serverThread?.worktreePath ??
+    workspaceContext?.worktreePath ??
+    draftThread?.worktreePath ??
+    null;
   const effectiveEnvMode =
     effectiveEnvModeOverride ??
     resolveEffectiveEnvMode({
@@ -547,7 +564,7 @@ export const BranchToolbar = memo(function BranchToolbar({
       draftThreadEnvMode: draftThread?.envMode,
     });
   const envModeLocked =
-    (serverThread?.temporary ?? draftThread?.temporary ?? false) ||
+    (serverThread?.temporary ?? workspaceContext?.temporary ?? draftThread?.temporary ?? false) ||
     envLocked ||
     (serverThread !== null && activeWorktreePath !== null);
 
