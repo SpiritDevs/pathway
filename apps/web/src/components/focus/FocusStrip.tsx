@@ -35,7 +35,7 @@ import {
 
 import type { FocusMutations } from "../../cloud/focusReadModel";
 import { cn } from "../../lib/utils";
-import { Popover, PopoverPopup } from "../ui/popover";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 import { FocusEditor, type FocusProjectOption } from "./FocusEditor";
 import { FocusIcon } from "./FocusIcon";
@@ -46,7 +46,7 @@ export interface FocusNotificationBadgeProps {
   readonly unreadCount: number;
   readonly notificationCount: number;
   readonly newCount: number;
-  readonly onOpen?: () => void;
+  readonly interactive?: boolean;
 }
 
 export const FocusNotificationBadge = memo(function FocusNotificationBadge(
@@ -78,16 +78,15 @@ export const FocusNotificationBadge = memo(function FocusNotificationBadge(
   );
   const className =
     "relative flex size-6 shrink-0 items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring";
-  return props.onOpen ? (
-    <button
+  return props.interactive ? (
+    <PopoverTrigger
       type="button"
       aria-label={label}
       title={label}
-      onClick={props.onOpen}
       className={className}
     >
       {content}
-    </button>
+    </PopoverTrigger>
   ) : (
     <span role="status" aria-label={label} title={label} className={className}>
       {content}
@@ -291,8 +290,10 @@ export function FocusStrip(props: {
   return (
     <Popover
       open={editorFocusId !== undefined || notificationsOpen}
-      onOpenChange={(open) => {
-        if (!open) {
+      onOpenChange={(open, details) => {
+        if (open || (details.reason === "trigger-press" && !notificationsOpen)) {
+          openNotifications();
+        } else {
           setEditorFocusId(undefined);
           setNotificationsOpen(false);
         }
@@ -386,7 +387,7 @@ export function FocusStrip(props: {
                 (notification) => !notification.isRead && !notification.isSeen,
               ).length
             }
-            onOpen={openNotifications}
+            interactive
           />
           <button
             type="button"

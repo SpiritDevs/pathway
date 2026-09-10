@@ -53,7 +53,7 @@ scrolling still scrolls the thread list. The slide animation respects reduced-mo
 
 ## Notifications
 
-The bell in the Focus Strip opens the notification tray. Pathway adds an attention event when:
+The bell in the Focus Strip toggles the notification tray open and closed. Pathway adds an attention event when:
 
 - an agent run finishes on an unsettled thread
 - a thread needs approval
