@@ -53,9 +53,14 @@ export interface ComposerBannerStackItem {
 interface ComposerBannerStackProps {
   readonly className?: string;
   readonly items: ReadonlyArray<ComposerBannerStackItem>;
+  readonly behindContextStrip?: boolean;
 }
 
-export function ComposerBannerStack({ className, items }: ComposerBannerStackProps) {
+export function ComposerBannerStack({
+  className,
+  items,
+  behindContextStrip = false,
+}: ComposerBannerStackProps) {
   const [requestedExitingItemId, setExitingItemId] = useState<string | null>(null);
   const dismissTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const exitingItemId =
@@ -111,7 +116,8 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
     >
       <div
         className={cn(
-          "relative flex flex-col-reverse transition-transform duration-150 ease-out group-hover/banner-stack:-translate-y-1 group-focus-within/banner-stack:-translate-y-1 motion-reduce:transition-none",
+          "relative mx-auto flex flex-col-reverse transition-transform duration-150 ease-out group-hover/banner-stack:-translate-y-1 group-focus-within/banner-stack:-translate-y-1 motion-reduce:transition-none",
+          behindContextStrip ? "w-[96%]" : "w-full",
           hasStack ? "group-hover/banner-stack:z-50 group-focus-within/banner-stack:z-50" : null,
         )}
       >
@@ -127,7 +133,7 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
                   "group-hover/banner-stack:opacity-0 group-focus-within/banner-stack:opacity-0",
                 )}
                 style={{
-                  width: `${100 - (index + 1) * 4}%`,
+                  width: `${100 * 0.96 ** (index + 1)}%`,
                   top: -(index + 1) * 8,
                   zIndex: 2 - index,
                 }}
@@ -179,7 +185,7 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
                         exitingItemId === item.id ? "pointer-events-none" : null,
                       )}
                       style={{
-                        width: `${100 - Math.min(index + 1, 2) * 4}%`,
+                        width: `${100 * 0.96 ** (index + 1)}%`,
                         ...exitTransitionStyle,
                         ...(exitingItemId === item.id ? stackedExitStyle : restingStyle),
                       }}
