@@ -493,7 +493,20 @@ export const getThread = query({
     )
       .flat()
       .sort((a, b) => a.sequence - b.sequence);
-    return { thread: await wireThread(ctx, thread), messages: messages.map(wireMessage) };
+    const attachmentEntries = await Promise.all(
+      [...new Set(messages.flatMap((message) => message.attachmentIds))].map(async (id) => {
+        const rowId = ctx.db.normalizeId("threadQueueAttachments", id);
+        const row = rowId ? await ctx.db.get(rowId) : null;
+        if (!row || row.companyId !== thread.companyId) return null;
+        const url = await ctx.storage.getUrl(row.storageId);
+        return url ? ([row.attachment.id, url] as const) : null;
+      }),
+    );
+    return {
+      thread: await wireThread(ctx, thread),
+      messages: messages.map(wireMessage),
+      attachmentUrls: Object.fromEntries(attachmentEntries.filter((entry) => entry !== null)),
+    };
   },
 });
 export const submissionStatus = query({

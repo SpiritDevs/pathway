@@ -500,10 +500,37 @@ describe("durable thread queue", () => {
       submission: withFile,
       attachmentIds: [attachmentId],
     });
+    const expectedUrl = await t.run((ctx) => ctx.storage.getUrl(storageId));
+    expect((await client.query(api.threadQueue.getThread, queueIdentity)).attachmentUrls).toEqual({
+      file_one: expectedUrl,
+    });
+    await expect(
+      asMember(t, "dispatcher").query(api.threadQueue.getThread, queueIdentity),
+    ).rejects.toThrow("another member");
+    await t.run(async (ctx) => {
+      const company = (await ctx.db.query("companies").first())!;
+      await ctx.db.insert("agentThreads", {
+        id: `${ENVIRONMENT_ONE}:thread-one`,
+        companyId: company._id,
+        environmentId: ENVIRONMENT_ONE,
+        cloudProjectId: null,
+        localProjectId: null,
+        threadId: "thread-one",
+        shell: { title: "Shared conversation" },
+        updatedAt: Date.now(),
+      });
+    });
+    expect(
+      (await asMember(t, "dispatcher").query(api.threadQueue.getThread, queueIdentity))
+        .attachmentUrls,
+    ).toEqual({ file_one: expectedUrl });
     const accepted = await asEnvironment(t).mutation(api.threadQueue.accept, firstFence);
     expect(accepted?.attachments[0]?.attachment).toEqual(attachment);
     expect(accepted?.attachments[0]?.url).toBeTruthy();
     await asEnvironment(t).mutation(api.threadQueue.acknowledge, firstFence);
+    expect((await client.query(api.threadQueue.getThread, queueIdentity)).attachmentUrls).toEqual(
+      {},
+    );
     expect(await t.run(async (ctx) => (await ctx.storage.get(storageId))?.text())).toBe("hello");
   });
   it("preflights without ownership and never releases an accepted fence on a stale preflight failure", async () => {

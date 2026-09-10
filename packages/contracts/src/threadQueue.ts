@@ -52,6 +52,8 @@ export interface ThreadQueueMessage {
 export interface ThreadQueueDetail {
   readonly thread: ThreadQueueThread;
   readonly messages: readonly ThreadQueueMessage[];
+  /** Cloud download URLs for visible message attachments, keyed by ChatAttachment.id. */
+  readonly attachmentUrls?: Readonly<Record<string, string>>;
 }
 
 /** Authoritative receipt identity for reconciling a send whose response was lost. */
