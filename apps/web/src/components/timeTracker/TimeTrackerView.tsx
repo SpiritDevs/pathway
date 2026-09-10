@@ -532,8 +532,8 @@ export function TimeTrackerView() {
                       {entry.projectName}
                     </p>
                     <div className="text-right">
-                      <p className="font-mono text-sm tabular-nums">
-                        {formatTrackedDuration(entry.durationMs)}
+                      <p className="font-mono text-sm whitespace-nowrap tabular-nums">
+                        {formatTrackedDuration(entry.durationMs, true)}
                       </p>
                       <p className="mt-1 text-[11px] text-muted-foreground">
                         {formatEntryDate(entry.startedAt)}
