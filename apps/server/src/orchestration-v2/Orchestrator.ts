@@ -1170,20 +1170,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
 
   const resumeQueuedRuns = Effect.gen(function* () {
-    const shell = yield* projectionStore.getShellSnapshot();
+    const threadIds = yield* projectionStore.getQueuedRunThreadIds();
     let resumed = 0;
-    for (const thread of shell.threads) {
+    for (const threadId of threadIds) {
       const resumedThread = yield* Effect.gen(function* () {
-        const projection = yield* projectionStore.getThreadProjection(thread.id);
+        const projection = yield* projectionStore.getThreadProjection(threadId);
         if (projection.runs.some(isBlockingRun) || nextQueuedRun(projection) === undefined) {
           return false;
         }
-        yield* threadDispatch.withLock(thread.id, startNextQueuedRun(thread.id));
+        yield* threadDispatch.withLock(threadId, startNextQueuedRun(threadId));
         return true;
       }).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("Failed to resume queued V2 run after recovery", {
-            threadId: thread.id,
+            threadId,
             cause,
           }).pipe(Effect.as(false)),
         ),
@@ -8733,8 +8733,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   // tiny process-local index so unarmed threads never take the dispatch lock
   // or decode a full projection on those paths. If startup seeding fails, the
   // conservative fallback preserves correctness until the process restarts.
-  const initialShell = yield* projectionStore
-    .getShellSnapshot()
+  const initialThreads = yield* projectionStore
+    .getThreadMetadata()
     .pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("Unable to seed settle-after-completion index", { cause }).pipe(
@@ -8742,11 +8742,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       ),
     );
-  const settleAfterCompletionIndexComplete = initialShell !== null;
+  const settleAfterCompletionIndexComplete = initialThreads !== null;
   const settleAfterCompletionThreadIds = new Set(
-    initialShell === null
+    initialThreads === null
       ? []
-      : [...initialShell.threads, ...initialShell.archivedThreads]
+      : initialThreads
           .filter((thread) => thread.settleAfterCompletion === true)
           .map((thread) => String(thread.id)),
   );
@@ -9165,20 +9165,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }),
     ),
   );
-  yield* projectionStore.getShellSnapshot().pipe(
-    Effect.flatMap((shell) =>
+  yield* projectionStore.getPendingSubagentCompletionThreads().pipe(
+    Effect.flatMap((threads) =>
       Effect.forEach(
-        [...shell.threads, ...shell.archivedThreads].filter(
-          (thread) =>
-            thread.lineage.relationshipToParent === "subagent" &&
-            thread.lineage.parentThreadId !== null &&
-            thread.forkedFrom?.type === "node" &&
-            (thread.status === "completed" ||
-              thread.status === "interrupted" ||
-              thread.status === "failed" ||
-              thread.status === "cancelled" ||
-              thread.status === "rolled_back"),
-        ),
+        threads,
         (thread) =>
           threadDispatch
             .withLock(thread.lineage.parentThreadId!, finalizeAppOwnedSubagent(thread.id))
@@ -9200,16 +9190,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }),
     ),
   );
-  yield* projectionStore.getShellSnapshot().pipe(
-    Effect.flatMap((shell) =>
+  // Child recovery above can reserve a new delivery. Read candidates afterward,
+  // then reconcile current ownership under the same per-thread locks as live events.
+  yield* projectionStore.getDelegatedCompletionRecoveryThreadIds().pipe(
+    Effect.flatMap((threadIds) =>
       Effect.forEach(
-        [...shell.threads, ...shell.archivedThreads],
-        (thread) =>
+        threadIds,
+        (threadId) =>
           threadDispatch
             .withLock(
-              thread.id,
+              threadId,
               Effect.gen(function* () {
-                const projection = yield* projectionStore.getThreadProjection(thread.id);
+                const projection = yield* projectionStore.getThreadProjection(threadId);
                 const terminalDeliveryRunIds = projection.runs
                   .filter((run) => delegatedTaskTerminalStatus(run.status) !== null)
                   .filter((run) =>
@@ -9221,15 +9213,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   )
                   .map((run) => run.id);
                 for (const runId of terminalDeliveryRunIds) {
-                  yield* finalizeDelegatedCompletionDelivery(thread.id, runId);
+                  yield* finalizeDelegatedCompletionDelivery(threadId, runId);
                 }
-                const refreshed = yield* projectionStore.getThreadProjection(thread.id);
+                const refreshed = yield* projectionStore.getThreadProjection(threadId);
                 for (const run of refreshed.runs) {
                   if (
                     run.delegatedCompletion?.delivery !== null &&
                     run.delegatedCompletion !== undefined
                   ) {
-                    yield* offerDelegatedCompletionDelivery(thread.id, run.id);
+                    yield* offerDelegatedCompletionDelivery(threadId, run.id);
                   }
                 }
               }),
@@ -9237,7 +9229,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             .pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("Failed to recover delegated completion delivery", {
-                  threadId: thread.id,
+                  threadId,
                   cause,
                 }),
               ),
@@ -9256,12 +9248,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   // process can therefore restart after the terminal event committed but
   // before its derived settle command did. Reconcile only armed threads from
   // their current projection instead of replaying the event log.
-  yield* projectionStore.getShellSnapshot().pipe(
-    Effect.flatMap((shell) =>
+  yield* projectionStore.getThreadMetadata().pipe(
+    Effect.flatMap((threads) =>
       Effect.forEach(
-        [...shell.threads, ...shell.archivedThreads].filter(
-          (thread) => thread.settleAfterCompletion === true,
-        ),
+        threads.filter((thread) => thread.settleAfterCompletion === true),
         (thread) =>
           threadDispatch.withLock(thread.id, settleAfterCompletionIfReady(thread.id)).pipe(
             Effect.catchCause((cause) =>

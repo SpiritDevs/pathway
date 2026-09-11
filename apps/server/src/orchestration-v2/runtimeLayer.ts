@@ -254,7 +254,13 @@ const threadWorkspaceMoveProvided = threadWorkspaceMoveServiceLayer.pipe(
 // cannot be a layer edge).
 const browserTakeoverFenceRegistryProvided = browserTakeoverFenceRegistryLayer;
 const browserTakeoverProvided = browserTakeoverServiceLayer.pipe(
-  Layer.provide(Layer.merge(threadManagementProvided, browserTakeoverFenceRegistryProvided)),
+  Layer.provide(
+    Layer.mergeAll(
+      threadManagementProvided,
+      browserTakeoverFenceRegistryProvided,
+      projectionStoreLayer,
+    ),
+  ),
 );
 const effectExecutorProvided = effectExecutorLayer.pipe(
   Layer.provide(
