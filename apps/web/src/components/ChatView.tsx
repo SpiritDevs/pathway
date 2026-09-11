@@ -9494,10 +9494,10 @@ function ChatViewContent(props: ChatViewProps) {
   const panelLayoutControls = (
     <div
       className={cn(
-        "workspace-titlebar-controls z-50 gap-1 [-webkit-app-region:no-drag]",
+        "z-50 gap-1 [-webkit-app-region:no-drag]",
         rightPanelOpen && !rightPanelUsesSheet
-          ? "right-2 wco:right-[var(--workspace-controls-right)]"
-          : "mr-px",
+          ? "flex h-full shrink-0 items-center"
+          : "workspace-titlebar-controls mr-px",
       )}
     >
       {rightPanelOpen && !rightPanelUsesSheet ? (
