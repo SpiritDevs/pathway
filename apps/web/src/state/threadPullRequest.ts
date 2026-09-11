@@ -150,7 +150,7 @@ export function useAttachedPullRequest(
 
 export function aggregateThreadPullRequestState(
   states: ReadonlyArray<"open" | "closed" | "merged" | null>,
-) {
+): ThreadChangeRequestState["state"] {
   if (states.length === 0) return null;
   if (states.every((state) => state === "merged")) return "merged";
   if (states.includes("open")) return "open";
@@ -187,6 +187,7 @@ export const attachedPullRequestsAtom = Atom.family((key: string) =>
         attachment,
         data,
         isPending: result?.waiting ?? false,
+        isLoading: result !== null && result._tag === "Initial",
         error:
           result?._tag === "Failure" || (value && !data)
             ? "Could not refresh pull request status."
