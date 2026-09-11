@@ -73,6 +73,7 @@ import {
   deriveThreadActivityRun,
   deriveLatestThreadRun,
   deriveThreadRuntime,
+  deriveThreadRuntimeRun,
 } from "@spiritdevs/client-runtime/state/thread-execution";
 import {
   resolveActiveThreadRun,
@@ -3737,13 +3738,17 @@ function ChatViewContent(props: ChatViewProps) {
       false,
       Schema.Boolean,
     );
-  const activeProviderEntry = useMemo(
-    () =>
-      continuationProviderEntries.find(
-        (entry) => entry.instanceId === activeProviderStatus?.instanceId,
-      ) ?? null,
-    [activeProviderStatus?.instanceId, continuationProviderEntries],
-  );
+  // Usage describes the environment's running account; a composer pick is a
+  // client-local choice for the next submission and may differ across devices.
+  const usageRun = serverProjection === null ? null : deriveThreadRuntimeRun(serverProjection);
+  const usageProviderInstanceId =
+    usageRun?.providerInstanceId ??
+    activeRuntime?.providerInstanceId ??
+    activeThread?.modelSelection.instanceId ??
+    activeProviderStatus?.instanceId;
+  const usageProviderEntry =
+    continuationProviderEntries.find((entry) => entry.instanceId === usageProviderInstanceId) ??
+    null;
   const providerStatusBannerKey = getProviderStatusBannerKey(activeProviderStatus);
   const [dismissedProviderStatusBannerKey, setDismissedProviderStatusBannerKey] = useState<
     string | null
@@ -5982,6 +5987,11 @@ function ChatViewContent(props: ChatViewProps) {
   const activeBrowserTakeoverRunId = activeBrowserTakeoverRun?.id ?? null;
   const activeBrowserTakeoverRunStatus = activeBrowserTakeoverRun?.status ?? null;
   const browserTakeoverPreviewActivity = serverProjection?.thread.previewActivity ?? null;
+  const browserTakeoverTabId = browserTakeoverPreviewActivity?.tabId;
+  const browserTakeoverTabAvailable =
+    browserTakeoverTabId != null &&
+    activePreviewState.sessions[browserTakeoverTabId] !== undefined &&
+    activePreviewState.desktopByTabId[browserTakeoverTabId]?.hasWebContents === true;
   // Re-read every render (a cheap map lookup) rather than inside the memo: the
   // answer flips when the first projection lands, which need not move any other
   // dependency of the memo below.
@@ -5996,6 +6006,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeRunId: activeBrowserTakeoverRunId,
       activeRunStatus: activeBrowserTakeoverRunStatus,
       previewSupported: isPreviewSupportedInRuntime(),
+      previewTabAvailable: browserTakeoverTabAvailable,
       automationHostClientId: browserTakeoverHostClientId,
       requestPending:
         browserTakeoverRequestThreadKey !== null &&
@@ -6012,6 +6023,7 @@ function ChatViewContent(props: ChatViewProps) {
     browserTakeoverRequestThreadKey,
     projectedBrowserTakeover,
     browserTakeoverPreviewActivity,
+    browserTakeoverTabAvailable,
     supportsBrowserTakeover,
     browserTakeoverDismissTick,
   ]);
@@ -9292,11 +9304,13 @@ function ChatViewContent(props: ChatViewProps) {
       activeProject?.workspaceRoot != null &&
       activeProject.workspaceRoot !== activeProject.internalWorkspaceRoot,
     activeProjectScripts: activeProject?.scripts,
-    activeProvider: activeProviderStatus,
-    selectedModel: usageSelectedModel,
-    activeProviderEntry,
-    activeProviderIconBadge: activeProviderEntry
-      ? shouldShowProviderInstanceBadge(activeProviderEntry, continuationProviderEntries)
+    activeProvider: usageProviderEntry?.snapshot ?? null,
+    selectedModel: draftId
+      ? usageSelectedModel
+      : (usageRun?.modelSelection.model ?? activeThread.modelSelection.model),
+    activeProviderEntry: usageProviderEntry,
+    activeProviderIconBadge: usageProviderEntry
+      ? shouldShowProviderInstanceBadge(usageProviderEntry, continuationProviderEntries)
       : false,
     resourcesEnabled: threadPanelOpen,
     preferredScriptId: activeProject
