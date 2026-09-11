@@ -32,6 +32,7 @@ saved with the reason and a retry action. A connection failure does not discard 
 
 When connected to an existing thread, queued follow-ups appear in the message stack above the
 composer. You can edit, steer, delete, or reorder them there while the agent continues working.
+Files attached to connected threads upload in the background with progress and retry controls.
 Offline delivery uses the saved-message controls described above. Pending offline messages retain
 their order when the environment reconnects.
 

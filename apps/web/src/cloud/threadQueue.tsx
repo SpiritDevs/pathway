@@ -32,6 +32,7 @@ import { readThreadShell, readThreadProjection } from "../state/entities";
 import { environmentCatalog } from "../connection/catalog";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
+import { readAttachmentUpload, uploadStandaloneFileAttachment } from "../lib/attachmentUploadQueue";
 import { shouldSendTurnToEnvironment, prepareDirectTurnAttachments } from "./threadTurnDelivery";
 import { subscribeThreadQueuePages } from "./threadQueuePages";
 import { isDefinitiveQueueRejection } from "./threadQueueErrors";
@@ -392,7 +393,7 @@ export interface QueuedThreadTurnTarget {
   readonly input: StartThreadTurnInput;
   readonly durableAttachments?: ReadonlyArray<{
     readonly metadata: ChatAttachment;
-    readonly blob: Blob;
+    readonly blob: Blob | null;
   }>;
 }
 
@@ -400,13 +401,18 @@ export async function queueThreadTurn(target: QueuedThreadTurnTarget) {
   const current = session;
   if (!current) throw new Error("Sign in to Pathway Cloud before sending.");
   const files = target.durableAttachments
-    ? target.durableAttachments.map((file, index) => ({
-        ...file,
-        metadata: {
-          ...file.metadata,
-          id: ChatAttachmentId.make(`queue-${target.input.message.messageId}-${index}`),
-        },
-      }))
+    ? target.durableAttachments.map((file, index) => {
+        if (file.blob === null)
+          throw new Error(`Attach ${file.metadata.name} again so it can be saved while offline.`);
+        return {
+          ...file,
+          blob: file.blob,
+          metadata: {
+            ...file.metadata,
+            id: ChatAttachmentId.make(`queue-${target.input.message.messageId}-${index}`),
+          },
+        };
+      })
     : await Promise.all(
         target.input.message.attachments.map(async (attachment, index) => {
           if (!("dataUrl" in attachment))
@@ -491,30 +497,32 @@ export function useQueuedStartThreadTurn() {
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   return useCallback(
     async (target: QueuedThreadTurnTarget) => {
-      const queued = findQueuedThread(
-        appAtomRegistry.get(threadQueueRowsAtom),
-        target.environmentId,
-        target.input.threadId,
-      );
-      const connected =
-        Option.getOrNull(
-          AsyncResult.value(
-            appAtomRegistry.get(environmentCatalog.stateAtom(target.environmentId)),
-          ),
-        )?.phase === "connected";
-      const localPending = appAtomRegistry
-        .get(localThreadQueueAtom)
-        .some(
-          (message) =>
-            !message.canceled &&
-            message.threadId === target.input.threadId &&
-            (message.queueId
-              ? message.queueId === queued?.queueId
-              : message.environmentId === target.environmentId),
+      const accountSession = session;
+      const canSendDirectly = () => {
+        const queued = findQueuedThread(
+          appAtomRegistry.get(threadQueueRowsAtom),
+          target.environmentId,
+          target.input.threadId,
         );
-      if (
-        !shouldSendTurnToEnvironment({
+        const connected =
+          Option.getOrNull(
+            AsyncResult.value(
+              appAtomRegistry.get(environmentCatalog.stateAtom(target.environmentId)),
+            ),
+          )?.phase === "connected";
+        const localPending = appAtomRegistry
+          .get(localThreadQueueAtom)
+          .some(
+            (message) =>
+              !message.canceled &&
+              message.threadId === target.input.threadId &&
+              (message.queueId
+                ? message.queueId === queued?.queueId
+                : message.environmentId === target.environmentId),
+          );
+        return shouldSendTurnToEnvironment({
           connected,
+          queueHydrated: appAtomRegistry.get(threadQueueHydratedAtom),
           hasThreadProjection:
             readThreadProjection({
               environmentId: target.environmentId,
@@ -522,15 +530,35 @@ export function useQueuedStartThreadTurn() {
             }) !== null,
           bootstrap: target.input.bootstrap,
           pendingCloudMessages: localPending || (queued?.queuedCount ?? 0) > 0,
-        })
-      )
-        return settlePromise(() => queueThreadTurn(target));
+        });
+      };
+      if (!canSendDirectly()) return settlePromise(() => queueThreadTurn(target));
       const attachments = await settlePromise(() =>
         target.durableAttachments
-          ? prepareDirectTurnAttachments(target.durableAttachments)
+          ? prepareDirectTurnAttachments(target.durableAttachments, async ({ metadata, blob }) => {
+              const uploaded = readAttachmentUpload(metadata.id);
+              if (uploaded?.status === "ready" && uploaded.environmentId === target.environmentId) {
+                return { ...metadata, type: "file", id: uploaded.attachmentId };
+              }
+              if (blob === null) throw new Error(`Attach ${metadata.name} again before sending.`);
+              return uploadStandaloneFileAttachment({
+                environmentId: target.environmentId,
+                file: new File([blob], metadata.name, { type: metadata.mimeType }),
+                name: metadata.name,
+                mimeType: metadata.mimeType,
+                sizeBytes: metadata.sizeBytes,
+              });
+            })
           : Promise.resolve(target.input.message.attachments),
       );
       if (attachments._tag === "Failure") return attachments;
+      if (session !== accountSession)
+        return settlePromise(() => {
+          throw new Error(
+            "The account changed while preparing this message. Send it again from the current account.",
+          );
+        });
+      if (!canSendDirectly()) return settlePromise(() => queueThreadTurn(target));
       // Do not resubmit through cloud after a transport failure: the environment
       // may already have accepted this turn before the acknowledgement was lost.
       return startTurn({
