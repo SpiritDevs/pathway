@@ -160,7 +160,7 @@ const unavailableReader: IssueReplicaReader = {
 const routingFailure = (message: string) =>
   new IssueTrackerError({
     reason: "storage",
-    message: `Cloud issue routing failed: ${message}`,
+    message: `Cloud task routing failed: ${message}`,
   });
 
 function translateProjectIds(

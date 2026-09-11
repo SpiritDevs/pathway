@@ -30,7 +30,7 @@ struct PathwayIssuePropertiesView: View {
                             close: closePicker, select: { select($0, property: property, issue: issue) }, focusedField: $focusedField)
                     }
                 } else { summary(issue) }
-            } else { ContentUnavailableView("Issue unavailable", systemImage: "doc.text.magnifyingglass") }
+            } else { ContentUnavailableView("Task unavailable", systemImage: "doc.text.magnifyingglass") }
         }
         .allowsHitTesting(!busy)
         .overlay { if busy { ProgressView().padding().background(.regularMaterial, in: Capsule()) } }
@@ -38,7 +38,7 @@ struct PathwayIssuePropertiesView: View {
         .sheet(isPresented: $addRelation) {
             if let issue { PathwayIssueRelationPicker(model: model, issue: issue) }
         }
-        .alert("Couldn’t update issue", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+        .alert("Couldn’t update task", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK") { errorMessage = nil }
         } message: { Text(errorMessage ?? "") }
     }
@@ -77,7 +77,7 @@ struct PathwayIssuePropertiesView: View {
                     Button("Add relation", systemImage: "plus") { addRelation = true }
                         .padding(.horizontal, 20).padding(.vertical, 12).foregroundStyle(.secondary)
                         .accessibilityIdentifier("issue-properties-add-relation")
-                    propertyRow("parent", value: model.records.first { $0.companyId == companyID && $0.id == issue.parentId }?.title ?? "No parent issue", icon: "arrow.turn.up.left")
+                    propertyRow("parent", value: model.records.first { $0.companyId == companyID && $0.id == issue.parentId }?.title ?? "No parent task", icon: "arrow.turn.up.left")
                     ForEach(model.detail(for: issue).relations) { relation in relationRow(relation, issue: issue) }
                 }.padding(.bottom, 20)
             }.accessibilityIdentifier("issue-properties-content")
@@ -117,7 +117,7 @@ struct PathwayIssuePropertiesView: View {
     }
 
     private func propertyTitle(_ key: String) -> String {
-        switch key { case "dueDate": "Due date"; case "parent": "Parent issue"; default: key.capitalized }
+        switch key { case "dueDate": "Due date"; case "parent": "Parent task"; default: key.capitalized }
     }
 
     private func options(_ key: String) -> [PathwayIssuePickerOption] {
@@ -144,7 +144,7 @@ struct PathwayIssuePropertiesView: View {
                 count = excluded.count
                 for row in scoped where row.parentId.map(excluded.contains) == true { excluded.insert(row.id) }
             }
-            return [.init(id: "", title: "No parent issue", icon: "arrow.turn.up.left")]
+            return [.init(id: "", title: "No parent task", icon: "arrow.turn.up.left")]
                 + scoped.filter { !excluded.contains($0.id) }.map { .init(id: $0.id, title: "\($0.key) · \($0.title)", icon: "circle") }
         default: return []
         }

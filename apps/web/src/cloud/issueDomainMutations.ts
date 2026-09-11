@@ -57,7 +57,7 @@ function unavailableError(
     reason,
     message:
       reason === "not-leader"
-        ? "This tab is not the cloud-sync leader, so it cannot enqueue issue changes."
+        ? "This tab is not the cloud-sync leader, so it cannot enqueue task changes."
         : "No running cloud-sync engine is available for this company.",
   });
 }

@@ -401,7 +401,7 @@ export function IssueDetailSheet({
         viewportClassName={cn(RIGHT_PANEL_SHEET_VIEWPORT_CLASS_NAME, "pointer-events-none")}
       >
         <RightPanelResizeHandle className="max-sm:hidden" handlers={sheetSize.handlers} />
-        <SheetTitle className="sr-only">{issue?.title ?? issueKey ?? "Issue"}</SheetTitle>
+        <SheetTitle className="sr-only">{issue?.title ?? issueKey ?? "Task"}</SheetTitle>
         {content}
       </SheetPopup>
     </Sheet>
@@ -456,7 +456,7 @@ function SheetHeaderBar({
       {children}
       {showCloseButton ? (
         <Button
-          aria-label="Close issue"
+          aria-label="Close task"
           className="[-webkit-app-region:no-drag]"
           onClick={onClose}
           size="icon-xs"
@@ -499,7 +499,7 @@ function IssueDetailPlaceholder({
             <EmptyDescription>
               {state === "disconnected"
                 ? "The tracker lives on the machine you are connected to."
-                : "No issue here carries that key. It may have been deleted, or the link may come from another machine's tracker."}
+                : "No task here carries that key. It may have been deleted, or the link may come from another machine's tracker."}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -621,15 +621,15 @@ function IssueDetailBody({
   const linkThread = useLinkIssueThread();
   const unlinkThread = useUnlinkIssueThread();
   const { copyToClipboard: copyIssueKey, isCopied: issueKeyCopied } = useCopyToClipboard({
-    target: "issue code",
+    target: "task code",
     onCopy: () => {
-      toastManager.add({ type: "success", title: "Issue code copied", description: issue.key });
+      toastManager.add({ type: "success", title: "Task code copied", description: issue.key });
     },
     onError: (error) => {
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to copy issue code",
+          title: "Failed to copy task code",
           description: error.message,
         }),
       );
@@ -640,10 +640,7 @@ function IssueDetailBody({
     (patch: IssuePatch | null) => {
       if (patch === null) return;
       void (async () => {
-        reportFailure(
-          "Failed to update the issue",
-          await updateIssue({ issueId: issue.id, patch }),
-        );
+        reportFailure("Failed to update the task", await updateIssue({ issueId: issue.id, patch }));
       })();
     },
     [issue.id, updateIssue],
@@ -886,7 +883,7 @@ function IssueDetailBody({
     (relationId: IssueRelationId) => {
       void (async () => {
         const failed = reportFailure(
-          "Failed to unlink the issues",
+          "Failed to unlink the tasks",
           await deleteRelation({ relationId }),
         );
         if (failed) return;
@@ -937,7 +934,7 @@ function IssueDetailBody({
     const key = issue.key;
     void (async () => {
       const result = await deleteIssue({ issueId });
-      if (reportFailure("Failed to delete the issue", result)) return;
+      if (reportFailure("Failed to delete the task", result)) return;
       // The row survives the delete as a tombstone, but the sheet reads a soft-deleted issue as
       // not-found: closing is what it would otherwise be sitting in front of.
       onClose();
@@ -952,7 +949,7 @@ function IssueDetailBody({
               void (async () => {
                 toastManager.close(toastId);
                 const restored = await restoreIssue({ issueId });
-                if (reportFailure("Failed to restore the issue", restored)) return;
+                if (reportFailure("Failed to restore the task", restored)) return;
                 onOpenIssueKey(key);
               })();
             },
@@ -1064,7 +1061,7 @@ function IssueDetailBody({
       void (async () => {
         if (issue.projectId !== projectId) {
           const assignmentFailed = reportFailure(
-            "Failed to assign the issue to the project",
+            "Failed to assign the task to the project",
             await updateIssue({ issueId: issue.id, patch: { projectId } }),
           );
           if (assignmentFailed) {
@@ -1186,10 +1183,10 @@ function IssueDetailBody({
       imageUrls: ReadonlyArray<string> | null = null,
     ) => {
       if (project === null || project.workspaceRoot === null || !startWorkAttachmentsReady) {
-        throw new Error("The issue thread could not be prepared.");
+        throw new Error("The task thread could not be prepared.");
       }
       if (agentEnvironmentBlockReason !== null) {
-        throw new Error(`${agentEnvironmentBlockReason} Connect it before preparing issue work.`);
+        throw new Error(`${agentEnvironmentBlockReason} Connect it before preparing task work.`);
       }
       const workspacePlan = resolveIssueStartWorkWorkspacePlan(workspaceMode, baseBranch);
       if (workspacePlan === null) {
@@ -1197,7 +1194,7 @@ function IssueDetailBody({
       }
       const relations: Array<IssueStartWorkRelation> = [];
       if (parent !== null) {
-        relations.push({ label: "Sub-issue of", key: parent.key, title: parent.title });
+        relations.push({ label: "Subtask of", key: parent.key, title: parent.title });
       }
       for (const display of relationDisplays) {
         const counterpart = store.issuesById.get(display.issueId);
@@ -1231,7 +1228,7 @@ function IssueDetailBody({
           : buildIssueStartWorkPrompt(promptContext);
       const selectedUrls = imageUrls ?? startWorkAttachmentUrls;
       if (selectedUrls.some((url) => url === null)) {
-        throw new Error("The issue images are still loading. Try again.");
+        throw new Error("The task images are still loading. Try again.");
       }
       const loadedImages = await loadIssueStartWorkImages(
         selectedUrls.filter((url): url is string => url !== null),
@@ -1369,11 +1366,11 @@ function IssueDetailBody({
                   runEnrichment: false,
                 })
               : await updateIssue({ issueId: issue.id, patch: { statusId: targetStatusId } });
-            reportFailure("Work started, but the issue status could not be updated", transitioned);
+            reportFailure("Work started, but the task status could not be updated", transitioned);
           }
 
           reportFailure(
-            "Work started, but the thread could not be linked to its issue",
+            "Work started, but the thread could not be linked to its task",
             await linkThread({
               issueId: issue.id,
               threadId: session.threadId,
@@ -1495,7 +1492,7 @@ function IssueDetailBody({
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to create issue discussion",
+              title: "Failed to create task discussion",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -1588,15 +1585,15 @@ function IssueDetailBody({
   const galleryAttachmentIds = useMemo(() => issueAttachmentIds(comments), [comments]);
   const talkAboutIssueBlockReason =
     project?.workspaceRoot == null
-      ? "Assign this issue to a project with a connected workspace before starting a discussion."
+      ? "Assign this task to a project with a connected workspace before starting a discussion."
       : agentEnvironmentBlockReason !== null
         ? agentEnvironmentBlockReason
         : storeStatus === "disconnected"
           ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
           : !startWorkAttachmentsReady
-            ? "Issue images are still loading."
+            ? "Task images are still loading."
             : startingWork
-              ? "Another issue thread is being prepared."
+              ? "Another task thread is being prepared."
               : null;
 
   return (
@@ -1607,25 +1604,25 @@ function IssueDetailBody({
         onTitleClick={() => copyIssueKey(issue.key, undefined)}
         title={issue.key}
         titleActionComplete={issueKeyCopied}
-        titleActionLabel={issueKeyCopied ? `${issue.key} copied` : `Copy issue code ${issue.key}`}
+        titleActionLabel={issueKeyCopied ? `${issue.key} copied` : `Copy task code ${issue.key}`}
         titleAccessory={
           <div className="flex shrink-0 items-center">
             <Button
-              aria-label="Go to previous issue"
+              aria-label="Go to previous task"
               disabled={!canGoBack}
               onClick={onBack}
               size="icon-xs"
-              title="Previous issue"
+              title="Previous task"
               variant="ghost"
             >
               <ChevronLeftIcon />
             </Button>
             <Button
-              aria-label="Go to next issue"
+              aria-label="Go to next task"
               disabled={!canGoForward}
               onClick={onForward}
               size="icon-xs"
-              title="Next issue"
+              title="Next task"
               variant="ghost"
             >
               <ChevronRightIcon />
@@ -1660,10 +1657,10 @@ function IssueDetailBody({
         />
         {onOpenInIssues === undefined ? null : (
           <Button
-            aria-label={`Open ${issue.key} in Issues`}
+            aria-label={`Open ${issue.key} in Tasks`}
             onClick={() => onOpenInIssues(issue.key)}
             size="icon-xs"
-            title={`Open ${issue.key} in Issues`}
+            title={`Open ${issue.key} in Tasks`}
             variant="ghost"
           >
             <ArrowUpRightIcon />
@@ -1676,7 +1673,7 @@ function IssueDetailBody({
           <div className="flex flex-col gap-4 p-4 @xl/issue-detail:flex-row @xl/issue-detail:gap-5">
             <div className="flex min-w-0 flex-1 flex-col gap-4">
               <Textarea
-                aria-label="Issue title"
+                aria-label="Task title"
                 className={cn(GROWING_TEXTAREA_CLASS_NAME, "text-[15px] font-medium")}
                 rows={1}
                 {...titleProps}
@@ -1773,7 +1770,7 @@ function IssueDetailBody({
                       issue={issue}
                       issuesById={store.issuesById}
                       onCreate={(input: IssueRelationCreateInput) =>
-                        runWrite("Failed to link the issues", () => createRelation(input))
+                        runWrite("Failed to link the tasks", () => createRelation(input))
                       }
                       onDelete={handleDeleteRelation}
                       onDismiss={
@@ -1939,7 +1936,7 @@ function IssueDetailBody({
                       : storeStatus === "disconnected"
                         ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
                         : !startWorkAttachmentsReady
-                          ? "Issue images are still loading."
+                          ? "Task images are still loading."
                           : null
                 }
                 threadsById={threadsById}
@@ -2018,7 +2015,7 @@ function IssuePropertiesResizeHandle({
 
   return (
     <div
-      aria-label="Resize issue properties"
+      aria-label="Resize task properties"
       aria-orientation="vertical"
       aria-valuemax={maxWidth}
       aria-valuemin={ISSUE_DETAIL_PROPERTIES_MIN_WIDTH}
@@ -2028,7 +2025,7 @@ function IssuePropertiesResizeHandle({
       onKeyDown={onKeyDown}
       role="separator"
       tabIndex={0}
-      title="Drag to resize issue properties"
+      title="Drag to resize task properties"
       {...size.handlers}
     >
       <span

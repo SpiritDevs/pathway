@@ -40,7 +40,7 @@ export const ISSUE_STATUS_CATEGORY_OPTIONS: ReadonlyArray<{
   {
     category: "unstarted",
     label: "Unstarted",
-    description: "Planned but not begun. New issues land in the first of these.",
+    description: "Planned but not begun. New tasks land in the first of these.",
   },
   { category: "started", label: "Started", description: "In flight. Counts as work in progress." },
   {
@@ -152,7 +152,7 @@ export function issueStatusDeletability(
   ) {
     return {
       canDelete: false,
-      reason: "This is the only Unstarted status, and new issues need one to land in.",
+      reason: "This is the only Unstarted status, and new tasks need one to land in.",
     };
   }
   return { canDelete: true };
@@ -315,7 +315,7 @@ export function issueMilestoneCreateInput(
 
 /** What an import maps a recognised CSV column onto, for the preview's column chips. */
 const ISSUE_CSV_COLUMN_LABELS: Readonly<Record<IssueCsvColumnName, string>> = {
-  key: "Issue key",
+  key: "Task key",
   title: "Title",
   description: "Description",
   status: "Status",
@@ -324,7 +324,7 @@ const ISSUE_CSV_COLUMN_LABELS: Readonly<Record<IssueCsvColumnName, string>> = {
   created: "Created",
   updated: "Updated",
   dueDate: "Due date",
-  parent: "Parent issue",
+  parent: "Parent task",
 };
 
 export function issueCsvColumnLabel(column: IssueCsvColumnName): string {

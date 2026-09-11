@@ -129,20 +129,20 @@ describe("searchSettings", () => {
     });
   });
 
-  it("routes issue settings to their Settings sections", () => {
-    expect(searchSettings("issue statuses")[0]).toMatchObject({
+  it("routes task settings to their Settings sections", () => {
+    expect(searchSettings("task statuses")[0]).toMatchObject({
       id: "issue-statuses",
       to: "/settings/issues-statuses",
     });
-    expect(searchSettings("issue labels")[0]).toMatchObject({
+    expect(searchSettings("task labels")[0]).toMatchObject({
       id: "issue-labels",
       to: "/settings/issues-labels",
     });
-    expect(searchSettings("issue milestones")[0]).toMatchObject({
+    expect(searchSettings("task milestones")[0]).toMatchObject({
       id: "issue-milestones",
       to: "/settings/issues-milestones",
     });
-    expect(searchSettings("import issues")[0]).toMatchObject({
+    expect(searchSettings("import tasks")[0]).toMatchObject({
       id: "issue-import",
       to: "/settings/issues-import",
     });
@@ -160,16 +160,16 @@ describe("SETTINGS_NAV_GROUPS", () => {
     expect(groupedPaths).toEqual(Object.keys(SETTINGS_SECTION_LABELS));
   });
 
-  it("groups the tracker pages under Issues", () => {
+  it("groups the tracker pages under Tasks", () => {
     expect(SETTINGS_NAV_GROUPS.map((group) => group.label)).toEqual([
       "Workspace",
       "Account",
       "Agents",
-      "Issues",
+      "Tasks",
       "Email",
       "System",
     ]);
-    expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Issues")?.paths).toEqual([
+    expect(SETTINGS_NAV_GROUPS.find((group) => group.label === "Tasks")?.paths).toEqual([
       "/settings/issues-statuses",
       "/settings/issues-labels",
       "/settings/issues-milestones",

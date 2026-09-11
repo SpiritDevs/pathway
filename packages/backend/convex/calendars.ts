@@ -1245,7 +1245,7 @@ export const linkIssue = mutation({
       )
       .unique();
     if (issue === null || issue.deletedAt !== null)
-      throw backendError("entity-not-found", "Issue not found.");
+      throw backendError("entity-not-found", "Task not found.");
     requireRecordPermission(actor, "issues.update", issue.teamIds);
     const googleEventId = trimmed(args.googleEventId, "Google event id", 1024);
     const existing = await ctx.db
@@ -1311,7 +1311,7 @@ export const unlinkIssue = mutation({
         q.eq("companyId", actor.company._id).eq("id", link.issueId),
       )
       .unique();
-    if (issue === null) throw backendError("entity-not-found", "Issue not found.");
+    if (issue === null) throw backendError("entity-not-found", "Task not found.");
     requireRecordPermission(actor, "issues.update", issue.teamIds);
     await ctx.db.patch(link._id, { deletedAt: Date.now() });
     await appendCompanyChanges(ctx, {

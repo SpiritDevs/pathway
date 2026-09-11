@@ -16,7 +16,7 @@ struct PathwayIssueFilterSheet: View {
             Form {
                 Section("View") {
                     Picker("Show", selection: $configuration.tab) {
-                        Text("All issues").tag("all")
+                        Text("All tasks").tag("all")
                         Text("Active").tag("active")
                         Text("Backlog").tag("backlog")
                     }

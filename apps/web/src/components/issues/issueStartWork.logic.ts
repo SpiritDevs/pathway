@@ -202,7 +202,7 @@ export function buildIssueStartWorkPrompt(context: IssueStartWorkContext): strin
       ? ""
       : ` When the implementation and its verification are genuinely finished, use \`issues_update\` to move it to ${context.completionStatusName}; that transition starts its configured audits.`;
   blocks.push(
-    `Start by reading the issue with Pathway MCP's \`issues_get\` tool and then inspect the code it points at. Keep the issue current with Pathway MCP's \`issues_update\` and \`issues_comment\` tools as you go. When you verify visible behavior in Preview, attach a useful screenshot or short recording with \`issues_comment_evidence\` and explain what it proves. Use only the Pathway MCP issue tools for this issue; do not use Linear or another external issue tracker.${completionInstruction}`,
+    `Start by reading the task with Pathway MCP's \`issues_get\` tool and then inspect the code it points at. Keep the task current with Pathway MCP's \`issues_update\` and \`issues_comment\` tools as you go. When you verify visible behavior in Preview, attach a useful screenshot or short recording with \`issues_comment_evidence\` and explain what it proves. Use only the Pathway MCP task tools for this task; do not use Linear or another external task tracker.${completionInstruction}`,
   );
 
   return `${blocks.join("\n\n")}\n`;
@@ -216,7 +216,7 @@ export function buildIssueStartWorkPrompt(context: IssueStartWorkContext): strin
 export function buildIssueTalkPrompt(context: IssueStartWorkContext): string {
   const blocks = buildIssueContextBlocks(context);
   blocks.push(
-    `I want to talk through ${context.issue.key} before deciding what to do. Start by reading it with Pathway MCP's \`issues_get\` tool and link this thread to it with \`issues_link_thread\`. Answer my questions and help me clarify the problem, scope, and next steps. Do not begin implementation unless I explicitly ask. As we reach useful conclusions, keep the ticket current with Pathway MCP's \`issues_update\` and \`issues_comment\` tools. Use only the Pathway MCP issue tools for this issue; do not use Linear or another external issue tracker.`,
+    `I want to talk through ${context.issue.key} before deciding what to do. Start by reading it with Pathway MCP's \`issues_get\` tool and link this thread to it with \`issues_link_thread\`. Answer my questions and help me clarify the problem, scope, and next steps. Do not begin implementation unless I explicitly ask. As we reach useful conclusions, keep the task current with Pathway MCP's \`issues_update\` and \`issues_comment\` tools. Use only the Pathway MCP task tools for this task; do not use Linear or another external task tracker.`,
   );
 
   return `${blocks.join("\n\n")}\n`;

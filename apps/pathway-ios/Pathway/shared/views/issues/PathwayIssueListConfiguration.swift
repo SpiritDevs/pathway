@@ -5,8 +5,8 @@ enum PathwayIssueListScope: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .all: "All issues"
-        case .mine: "My issues"
+        case .all: "All tasks"
+        case .mine: "My tasks"
         case .triage: "Triage"
         }
     }

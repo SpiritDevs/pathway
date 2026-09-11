@@ -129,7 +129,7 @@ export function IssueMilestonePicker({
         <PopoverPopup align="start" className="w-64 p-1.5">
           {!hasProject ? (
             <p className="px-1.5 py-1 text-xs text-muted-foreground">
-              Milestones belong to a project. Give this issue one first.
+              Milestones belong to a project. Give this task one first.
             </p>
           ) : (
             <>
@@ -402,7 +402,7 @@ export function IssueParentPicker({
         <PopoverTrigger render={trigger} />
         <PopoverPopup align="start" className="w-72 p-1.5">
           <IssueSearchList
-            emptyHint="No issue here can be this one's parent."
+            emptyHint="No task here can be this one's parent."
             onPick={(picked) => {
               onSelect(picked.id);
               setOpen(false);

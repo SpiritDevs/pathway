@@ -93,7 +93,7 @@ struct PathwayTimeView: View {
                 if model.loading { ProgressView("Loading tracked time…") }
                 ForEach(displayedEntries) { entry in
                     HStack {
-                        VStack(alignment: .leading) { Text(entry.description); Text(entry.projectName).font(.caption).foregroundStyle(.secondary); Text(entry.source == "agent" ? "Agent" : entry.source == "issue" ? "Issue creation" : "Manual").font(.caption2).foregroundStyle(.secondary); Text(entry.start, format: .dateTime.day().month().hour().minute()).font(.caption) }
+                        VStack(alignment: .leading) { Text(entry.description); Text(entry.projectName).font(.caption).foregroundStyle(.secondary); Text(entry.source == "agent" ? "Agent" : entry.source == "issue" ? "Task creation" : "Manual").font(.caption2).foregroundStyle(.secondary); Text(entry.start, format: .dateTime.day().month().hour().minute()).font(.caption) }
                         Spacer()
                         Text(Duration.milliseconds(entry.durationMs).formatted(.time(pattern: .hourMinute))).monospacedDigit()
                     }

@@ -72,7 +72,7 @@ function invalidPrefixError(): IssueImportRpcError {
     kind: "planning",
     code: "invalid-issue-key-prefix",
     message:
-      "Choose an issue key prefix that starts with a letter and uses at most 10 letters or digits.",
+      "Choose a task key prefix that starts with a letter and uses at most 10 letters or digits.",
     entityKind: "trackerConfig",
     entityId: null,
     attachmentIds: [],
@@ -154,7 +154,7 @@ export function mapIssueImportRpcError(error: unknown): IssueImportRpcError {
   return new IssueImportRpcError({
     kind: "unexpected",
     code: null,
-    message: "The issue import failed unexpectedly. No credential or backend detail was returned.",
+    message: "The task import failed unexpectedly. No credential or backend detail was returned.",
     entityKind: null,
     entityId: null,
     attachmentIds: [],
@@ -225,7 +225,7 @@ export const previewConfiguredIssueImport = Effect.fn("cloud.issue_import.previe
       Effect.mapError(
         () =>
           new IssueImportPlanningError({
-            message: "The local issue snapshot could not be read.",
+            message: "The local task snapshot could not be read.",
             entityIds: [],
           }),
       ),
@@ -261,7 +261,7 @@ export const previewConfiguredIssueImport = Effect.fn("cloud.issue_import.previe
     if (targetCompanyEmpty === false)
       reasons.push({
         code: "target-company-not-empty",
-        message: "Empty-company import requires a target with no issue data or workflow edits.",
+        message: "Empty-company import requires a target with no task data or workflow edits.",
       });
 
     return {

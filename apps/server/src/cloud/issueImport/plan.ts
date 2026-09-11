@@ -132,7 +132,7 @@ export const NORMAL_PUSH_FIDELITY: ReadonlyArray<IssueImportFidelityVerdict> = [
       {
         fields: ["issueKeyPrefix", "nextIssueNumber"],
         normalPushBehavior:
-          "There is no issue-domain operation for company key configuration. issue.create validates the existing company prefix/range and only advances the counter after an accepted key.",
+          "There is no task-domain operation for company key configuration. issue.create validates the existing company prefix/range and only advances the counter after an accepted key.",
       },
     ],
   },
@@ -188,7 +188,7 @@ export const NORMAL_PUSH_FIDELITY: ReadonlyArray<IssueImportFidelityVerdict> = [
       {
         fields: ["cloudProjectId"],
         normalPushBehavior:
-          "The referenced cloud project must already exist and be permission-visible; project creation is not an issue-domain operation.",
+          "The referenced cloud project must already exist and be permission-visible; project creation is not a task-domain operation.",
       },
     ],
   },
@@ -367,7 +367,7 @@ export const NORMAL_PUSH_FIDELITY: ReadonlyArray<IssueImportFidelityVerdict> = [
       {
         fields: ["id", "issueId", "kind", "actor", "payload", "operationId", "createdAt"],
         normalPushBehavior:
-          "There is no issueAuditEvent operation. Normal issue mutations generate different events with import-time ids, actor, payload, and timestamps.",
+          "There is no issueAuditEvent operation. Normal task mutations generate different events with import-time ids, actor, payload, and timestamps.",
       },
     ],
   },
@@ -788,7 +788,7 @@ export function planIssueImport(
       rejected.push({
         entityKind: "issue",
         entityId: issue.id,
-        reason: "Invalid issue key or timestamp.",
+        reason: "Invalid task key or timestamp.",
       });
       continue;
     }
@@ -916,7 +916,7 @@ export function planIssueImport(
       rejected.push({
         entityKind: "issueTodo",
         entityId: todo.id,
-        reason: `Missing parent issue ${todo.issueId}.`,
+        reason: `Missing parent task ${todo.issueId}.`,
       });
       continue;
     }
@@ -958,7 +958,7 @@ export function planIssueImport(
       rejected.push({
         entityKind: "issueRelation",
         entityId: relation.id,
-        reason: "A related issue is missing from the snapshot.",
+        reason: "A related task is missing from the snapshot.",
       });
       continue;
     }
@@ -1022,7 +1022,7 @@ export function planIssueImport(
       rejected.push({
         entityKind: "issueComment",
         entityId: comment.id,
-        reason: `Missing parent issue ${comment.issueId}.`,
+        reason: `Missing parent task ${comment.issueId}.`,
       });
       continue;
     }
@@ -1068,7 +1068,7 @@ export function planIssueImport(
       rejected.push({
         entityKind: "issueThreadLink",
         entityId: id,
-        reason: `Missing parent issue ${link.issueId}.`,
+        reason: `Missing parent task ${link.issueId}.`,
       });
       continue;
     }

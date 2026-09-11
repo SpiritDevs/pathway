@@ -1565,7 +1565,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           />
         ))}
         {issueContextState.contexts.length > 0 ? (
-          <div className="mb-2 flex flex-wrap gap-1.5" aria-label="Issues in this message">
+          <div className="mb-2 flex flex-wrap gap-1.5" aria-label="Tasks in this message">
             {issueContextState.contexts.map((context) => (
               <UserMessageIssueContextChip key={context.id} context={context} />
             ))}

@@ -432,13 +432,13 @@ export function SlackRouteRuleEditor({
               root={rule.condition}
             />
             <p className="text-[11px] text-muted-foreground">
-              Routes run top to bottom. The first matching route creates one issue; unmatched
+              Routes run top to bottom. The first matching route creates one task; unmatched
               messages are ignored.
             </p>
           </fieldset>
 
           <fieldset className="grid gap-3 sm:grid-cols-2">
-            <legend className="col-span-full text-xs font-medium">Send the issue to</legend>
+            <legend className="col-span-full text-xs font-medium">Send the task to</legend>
             <label className="space-y-1">
               <span className="text-xs text-muted-foreground">Team</span>
               <Select
@@ -631,7 +631,7 @@ export function SlackRuleAutomationEditor({
           {index + 1}. {rule.name || "Untitled route"}
         </h4>
         <p className="text-[11px] text-muted-foreground">
-          Configure what happens after the issue is created.
+          Configure what happens after the task is created.
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -721,7 +721,7 @@ export function SlackRuleAutomationEditor({
               </SelectPopup>
             </Select>
             <p className="text-[11px] text-muted-foreground">
-              Failed investigations never move the issue.
+              Failed investigations never move the task.
             </p>
           </label>
         ) : null}
@@ -740,7 +740,7 @@ export function SlackRuleAutomationEditor({
           <span>
             {rule.projectId
               ? `Runs through ${projects.find((project) => project.id === rule.projectId)?.name ?? "the selected project"}. Assignment waits while investigation is retrying or blocked.`
-              : "Choose a project in Route issues before enabling automation."}
+              : "Choose a project in Route tasks before enabling automation."}
           </span>
         </div>
       ) : null}

@@ -57,8 +57,8 @@ export const ACTION_PALETTE_SECTION_DEFINITIONS = [
   },
   {
     id: "issues",
-    label: "Issues",
-    description: "Issues linked to the current thread.",
+    label: "Tasks",
+    description: "Tasks linked to the current thread.",
     defaultVisible: true,
     defaultPosition: 5,
   },

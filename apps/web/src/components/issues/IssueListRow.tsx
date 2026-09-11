@@ -258,7 +258,7 @@ function IssueListRowImpl({
       {childRollup === null ? null : (
         <span
           className="hidden shrink-0 items-center gap-1 rounded-full border border-border/60 px-1.5 py-px text-[11px] tabular-nums text-muted-foreground sm:flex"
-          title={`${childRollup.done} of ${childRollup.total} sub-issues done`}
+          title={`${childRollup.done} of ${childRollup.total} subtasks done`}
         >
           <IssueProgressRing className="size-3" done={childRollup.done} total={childRollup.total} />
           {childRollup.done}/{childRollup.total}

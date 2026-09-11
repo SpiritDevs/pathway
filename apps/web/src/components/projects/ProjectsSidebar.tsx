@@ -74,7 +74,7 @@ export function ProjectsSidebar() {
                           }
                         />
                         <TooltipPopup side="right">
-                          No checkout yet. You can plan and file issues here; attach a directory to
+                          No checkout yet. You can plan and create tasks here; attach a directory to
                           run agents.
                         </TooltipPopup>
                       </Tooltip>

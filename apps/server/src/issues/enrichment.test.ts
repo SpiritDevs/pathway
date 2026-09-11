@@ -47,14 +47,14 @@ describe("buildInvestigationPrompt", () => {
 
     // The instruction has to come before the context: every provider here starts reading files
     // the moment it has a task, so a rule discovered afterwards is a rule discovered too late.
-    assert.isTrue(prompt.indexOf("must not change") < prompt.indexOf("Issue PAT-12"));
+    assert.isTrue(prompt.indexOf("must not change") < prompt.indexOf("Task PAT-12"));
     assert.include(prompt, "Do not edit, create, delete, or run anything that writes.");
   });
 
   it("carries the issue, its checklist, its relations, and its comments", () => {
     const prompt = buildInvestigationPrompt(PROMPT_INPUT);
 
-    assert.include(prompt, "Issue PAT-12: Reconnect drops the queued turn");
+    assert.include(prompt, "Task PAT-12: Reconnect drops the queued turn");
     assert.include(prompt, "Status: In Progress");
     assert.include(prompt, "Priority: high");
     assert.include(prompt, "Labels: Bug");
@@ -71,9 +71,9 @@ describe("buildInvestigationPrompt", () => {
 
     assert.include(prompt, "Existing labels:");
     assert.include(prompt, "- Chore");
-    assert.include(prompt, "Open issues:");
+    assert.include(prompt, "Open tasks:");
     assert.include(prompt, "- PAT-31: Socket teardown");
-    assert.include(prompt, "Do not invent an issue key or a label name");
+    assert.include(prompt, "Do not invent a task key or a label name");
   });
 
   it("asks for a title and a description only where the issue has none worth keeping", () => {
@@ -88,8 +88,8 @@ describe("buildInvestigationPrompt", () => {
     );
     // The list the prompt names is the list `isPlaceholderIssueTitle` enforces. Prose that offers
     // a case the normalizer then drops is a request the model can only lose by answering.
-    assert.include(prompt, '"Slack message", "Untitled", "New issue", or empty');
-    for (const placeholder of ["Slack message", "Untitled", "New issue", "  "]) {
+    assert.include(prompt, '"Slack message", "Untitled", "New task", "New issue", or empty');
+    for (const placeholder of ["Slack message", "Untitled", "New task", "New issue", "  "]) {
       assert.isTrue(isPlaceholderIssueTitle(placeholder));
     }
     assert.include(prompt, "no trailing punctuation");
@@ -101,13 +101,13 @@ describe("buildInvestigationPrompt", () => {
     assert.include(prompt, "invent a detail");
     assert.include(prompt, "Priority and safe missing-field suggestions may be applied");
     assert.include(prompt, "labels remain for a person to review.");
-    assert.include(prompt, "summary is appended to the issue description");
+    assert.include(prompt, "summary is appended to the task description");
   });
 
   it("asks for a specific replacement title for a Slack-ingested issue", () => {
     const prompt = buildInvestigationPrompt({ ...PROMPT_INPUT, slackIngested: true });
 
-    assert.include(prompt, "This issue was ingested from Slack");
+    assert.include(prompt, "This task was ingested from Slack");
     assert.include(prompt, 'Include "suggestedTitle" even though it already has');
     assert.include(prompt, "specific job to be done");
     assert.notInclude(prompt, "title above is one of the intake placeholders");
@@ -143,11 +143,11 @@ describe("buildInvestigationPrompt", () => {
     assert.include(prompt, "Attachments:");
     assert.include(
       prompt,
-      "- 4 image attachment(s) from this issue are provided with this request.",
+      "- 4 image attachment(s) from this task are provided with this request.",
     );
     // "not included" rather than "were not sent": the two that stayed behind may have been over
     // the cap, unreadable, or missing from the store, and the model can act on none of those.
-    assert.include(prompt, "- 2 more attachment(s) on this issue were not included.");
+    assert.include(prompt, "- 2 more attachment(s) on this task were not included.");
   });
 
   it("says nothing about attachments when none were sent", () => {
@@ -377,7 +377,7 @@ describe("normalizeInvestigationResult", () => {
       SLACK_UNTITLED_ISSUE_TITLE,
       "  slack message ",
       "Untitled",
-      "New issue",
+      "New task",
       "",
       "   ",
     ]) {

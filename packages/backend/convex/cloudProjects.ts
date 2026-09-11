@@ -1111,7 +1111,7 @@ export const mergeCompanyProjects = mutation({
       ["target threads", targetThreads],
       ["source milestones", sourceMilestones],
       ["target milestones", targetMilestones],
-      ["source issues", sourceIssues],
+      ["source tasks", sourceIssues],
       ["automation jobs", automationJobs],
       ["Slack automation intents", slackIntents],
     ] as const) {
@@ -1288,7 +1288,7 @@ export const mergeCompanyProjects = mutation({
     for (const issue of sourceIssues) {
       await ctx.db.patch(issue._id, { projectId: target.id, updatedAt: now });
       const updated = await ctx.db.get(issue._id);
-      if (updated === null) throw backendError("entity-not-found", "An issue vanished.");
+      if (updated === null) throw backendError("entity-not-found", "A task vanished.");
       if (updated.deletedAt === null) {
         changes.push({
           entityKind: "issue",
@@ -1665,7 +1665,7 @@ export const deleteCompanyProject = mutation({
     for (const child of issueData.childrenToDetach) {
       await ctx.db.patch(child._id, { parentId: null, updatedAt: now });
       const updated = await ctx.db.get(child._id);
-      if (updated === null) throw backendError("entity-not-found", "A child issue vanished.");
+      if (updated === null) throw backendError("entity-not-found", "A child task vanished.");
       changes.push({
         entityKind: "issue",
         entityId: updated.id,

@@ -302,7 +302,7 @@ const COMMENT_AGENT_SERVER_RESTARTED_REASON =
   "The server restarted while this run was in flight, so it was interrupted.";
 /** No project directory means no repository to read, which is the one dispatch that cannot start. */
 const COMMENT_AGENT_NO_WORKSPACE_REASON =
-  "This issue has no project directory, so there is nothing for an agent to read.";
+  "This task has no project directory, so there is nothing for an agent to read.";
 
 const CATEGORY_ORDER: ReadonlyArray<IssueStatusCategory> = [
   "backlog",
@@ -1466,7 +1466,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     );
 
   const syncWriteFailure = (message: string) =>
-    new IssueTrackerError({ reason: "storage", message: `Cloud issue write failed: ${message}` });
+    new IssueTrackerError({ reason: "storage", message: `Cloud task write failed: ${message}` });
 
   const projectForLocalId = (
     route: IssueReplicaRoute,
@@ -1528,7 +1528,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           (candidate) => String(candidate.id) === String(operation.entityId),
         );
         if (issue === undefined) {
-          return yield* notFound(operation.entityId, `No issue with id ${operation.entityId}.`);
+          return yield* notFound(operation.entityId, `No task with id ${operation.entityId}.`);
         }
         const targetProject = projectForLocalId(route, readModel, operation.args.projectId);
         if (targetProject === undefined) {
@@ -1544,7 +1544,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         ) {
           return yield* new IssueTrackerError({
             reason: "invalid",
-            message: `Issue ${issue.key} cannot move to project ${operation.args.projectId} because their team scopes do not overlap.`,
+            message: `Task ${issue.key} cannot move to project ${operation.args.projectId} because their team scopes do not overlap.`,
             subject: issue.key,
           });
         }
@@ -1639,37 +1639,37 @@ export const makeIssueTrackerService = Effect.fn(function* (
     Effect.forEach(events, publish, { discard: true });
 
   const listStatuses = () =>
-    statusRepository.listAll().pipe(Effect.mapError(storage("Failed to read issue statuses")));
+    statusRepository.listAll().pipe(Effect.mapError(storage("Failed to read task statuses")));
   const listLabels = () =>
-    labelRepository.listAll().pipe(Effect.mapError(storage("Failed to read issue labels")));
+    labelRepository.listAll().pipe(Effect.mapError(storage("Failed to read task labels")));
   const listRecords = () =>
-    issueRepository.listAll().pipe(Effect.mapError(storage("Failed to read issues")));
+    issueRepository.listAll().pipe(Effect.mapError(storage("Failed to read tasks")));
   const readConfig = () =>
     configRepository.get().pipe(Effect.mapError(storage("Failed to read the tracker config")));
   const listMilestones = () =>
     milestoneRepository
       .listAll()
-      .pipe(Effect.mapError(storage("Failed to read the issue milestones")));
+      .pipe(Effect.mapError(storage("Failed to read the task milestones")));
   const listCycles = () =>
-    cycleRepository.listAll().pipe(Effect.mapError(storage("Failed to read the issue cycles")));
+    cycleRepository.listAll().pipe(Effect.mapError(storage("Failed to read the task cycles")));
   const listViews = () =>
-    viewRepository.listAll().pipe(Effect.mapError(storage("Failed to read the issue views")));
+    viewRepository.listAll().pipe(Effect.mapError(storage("Failed to read the task views")));
   const listTodos = (issueId: IssueId) =>
     todoRepository
       .listByIssue({ issueId })
-      .pipe(Effect.mapError(storage("Failed to read the issue checklist")));
+      .pipe(Effect.mapError(storage("Failed to read the task checklist")));
   const listRelations = (issueId: IssueId) =>
     relationRepository
       .listByIssue({ issueId })
-      .pipe(Effect.mapError(storage("Failed to read the issue relations")));
+      .pipe(Effect.mapError(storage("Failed to read the task relations")));
   const listComments = (issueId: IssueId) =>
     commentRepository
       .listByIssue({ issueId })
-      .pipe(Effect.mapError(storage("Failed to read the issue comments")));
+      .pipe(Effect.mapError(storage("Failed to read the task comments")));
   const listThreadLinks = () =>
     threadLinkRepository
       .listAll()
-      .pipe(Effect.mapError(storage("Failed to read the issue thread links")));
+      .pipe(Effect.mapError(storage("Failed to read the task thread links")));
 
   const namingOf = (
     statuses: ReadonlyArray<IssueStatus>,
@@ -1685,7 +1685,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
   const groupLabelAssignments = () =>
     labelRepository.listAssignments().pipe(
-      Effect.mapError(storage("Failed to read issue label assignments")),
+      Effect.mapError(storage("Failed to read task label assignments")),
       // One query grouped in memory, not one query per issue: the snapshot reads every row.
       Effect.map((assignments) => {
         const byIssue = new Map<string, Array<IssueLabelId>>();
@@ -1708,7 +1708,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   const labelsOf = (issueId: IssueId) =>
     labelRepository
       .listAssignmentsByIssue({ issueId })
-      .pipe(Effect.mapError(storage("Failed to read issue label assignments")));
+      .pipe(Effect.mapError(storage("Failed to read task label assignments")));
 
   const listSlackWatches = () =>
     slackWatchRepository
@@ -1876,14 +1876,14 @@ export const makeIssueTrackerService = Effect.fn(function* (
       Effect.flatMap((rows) =>
         eventRepository
           .appendMany(rows)
-          .pipe(Effect.mapError(storage("Failed to append the issue change log"))),
+          .pipe(Effect.mapError(storage("Failed to append the task change log"))),
       ),
     );
 
   const requireRecord = (records: ReadonlyArray<IssueRecord>, issueId: IssueId) => {
     const record = records.find((candidate) => candidate.id === issueId);
     return record === undefined
-      ? Effect.fail(notFound(issueId, `No issue with id ${issueId}.`))
+      ? Effect.fail(notFound(issueId, `No task with id ${issueId}.`))
       : Effect.succeed(record);
   };
 
@@ -1903,7 +1903,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         patch.statusId !== undefined &&
         !input.statuses.some((status) => status.id === patch.statusId)
       ) {
-        return yield* notFound(patch.statusId, `No issue status with id ${patch.statusId}.`);
+        return yield* notFound(patch.statusId, `No task status with id ${patch.statusId}.`);
       }
       if (
         patch.milestoneId !== undefined &&
@@ -1912,7 +1912,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       ) {
         return yield* notFound(
           patch.milestoneId,
-          `No issue milestone with id ${patch.milestoneId}.`,
+          `No task milestone with id ${patch.milestoneId}.`,
         );
       }
       if (
@@ -1920,14 +1920,14 @@ export const makeIssueTrackerService = Effect.fn(function* (
         patch.cycleId !== null &&
         !input.cycles.some((cycle) => cycle.id === patch.cycleId)
       ) {
-        return yield* notFound(patch.cycleId, `No issue cycle with id ${patch.cycleId}.`);
+        return yield* notFound(patch.cycleId, `No task cycle with id ${patch.cycleId}.`);
       }
       if (patch.parentId !== undefined && patch.parentId !== null) {
         if (input.issueIds.includes(patch.parentId)) {
-          return yield* invalid("An issue cannot be its own parent.", patch.parentId);
+          return yield* invalid("A task cannot be its own parent.", patch.parentId);
         }
         if (!input.records.some((record) => record.id === patch.parentId)) {
-          return yield* notFound(patch.parentId, `No issue with id ${patch.parentId}.`);
+          return yield* notFound(patch.parentId, `No task with id ${patch.parentId}.`);
         }
       }
       if (patch.labelIds !== undefined) {
@@ -1935,7 +1935,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           (labelId) => !input.labels.some((label) => label.id === labelId),
         );
         if (missing !== undefined) {
-          return yield* notFound(missing, `No issue label with id ${missing}.`);
+          return yield* notFound(missing, `No task label with id ${missing}.`);
         }
       }
     });
@@ -1962,7 +1962,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         if (milestone === undefined) {
           return yield* notFound(
             issue.milestoneId,
-            `No issue milestone with id ${issue.milestoneId}.`,
+            `No task milestone with id ${issue.milestoneId}.`,
           );
         }
         if (milestone.projectId !== issue.projectId) {
@@ -1975,17 +1975,17 @@ export const makeIssueTrackerService = Effect.fn(function* (
       if (!input.checkParent || issue.parentId === null) return;
 
       if (issue.parentId === issue.id) {
-        return yield* invalid("An issue cannot be its own parent.", issue.key);
+        return yield* invalid("A task cannot be its own parent.", issue.key);
       }
       if (isDescendantOf(input.tree, issue.parentId, issue.id)) {
-        return yield* invalid("An issue cannot be moved under its own sub-issue.", issue.key);
+        return yield* invalid("A task cannot be moved under its own subtask.", issue.key);
       }
       // Counted in ancestors: a root sits at 0, so a parent three levels up is the last accepted.
       // The subtree comes along, so a shallow move of a deep branch is refused the same way.
       const depth =
         ancestorDepth(input.tree, issue.parentId) + 1 + subtreeHeight(input.tree, issue.id);
       if (depth > ISSUE_MAX_PARENT_DEPTH) {
-        return yield* invalid(`Sub-issues nest at most ${ISSUE_MAX_PARENT_DEPTH} deep.`, issue.key);
+        return yield* invalid(`Subtasks nest at most ${ISSUE_MAX_PARENT_DEPTH} deep.`, issue.key);
       }
     });
 
@@ -2017,8 +2017,8 @@ export const makeIssueTrackerService = Effect.fn(function* (
         : statuses.find((candidate) => candidate.id === input.statusId);
     if (status === undefined) {
       return yield* input.statusId === undefined
-        ? conflict("The tracker has no statuses, so an issue has nowhere to land.")
-        : notFound(input.statusId, `No issue status with id ${input.statusId}.`);
+        ? conflict("The tracker has no statuses, so a task has nowhere to land.")
+        : notFound(input.statusId, `No task status with id ${input.statusId}.`);
     }
 
     yield* validatePatch({
@@ -2038,7 +2038,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
     const key = yield* configRepository
       .allocateKey()
-      .pipe(Effect.mapError(storage("Failed to allocate an issue key")));
+      .pipe(Effect.mapError(storage("Failed to allocate a task key")));
     const id = IssueId.make(yield* newId);
     const createdAt = yield* nowIso;
     // Appended after the last issue in its own column, not the tracker's last row.
@@ -2079,11 +2079,11 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
     yield* issueRepository
       .upsert(record)
-      .pipe(Effect.mapError(storage("Failed to write the issue")));
+      .pipe(Effect.mapError(storage("Failed to write the task")));
     if (labelIds.length > 0) {
       yield* labelRepository
         .setAssignments({ issueId: id, labelIds })
-        .pipe(Effect.mapError(storage("Failed to write the issue labels")));
+        .pipe(Effect.mapError(storage("Failed to write the task labels")));
     }
     yield* appendChangeLog({
       issueId: id,
@@ -2161,11 +2161,11 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
       yield* issueRepository
         .upsert(applied.record)
-        .pipe(Effect.mapError(storage("Failed to write the issue")));
+        .pipe(Effect.mapError(storage("Failed to write the task")));
       if (applied.changes.some((change) => change.field === "labels")) {
         yield* labelRepository
           .setAssignments({ issueId: applied.record.id, labelIds: applied.labelIds })
-          .pipe(Effect.mapError(storage("Failed to write the issue labels")));
+          .pipe(Effect.mapError(storage("Failed to write the task labels")));
       }
       yield* appendChangeLog({
         issueId: applied.record.id,
@@ -2276,7 +2276,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     const [statuses, records] = yield* Effect.all([listStatuses(), listRecords()]);
     const record = yield* requireRecord(records, input.issueId);
     if (input.statusId !== undefined && !statuses.some((status) => status.id === input.statusId)) {
-      return yield* notFound(input.statusId, `No issue status with id ${input.statusId}.`);
+      return yield* notFound(input.statusId, `No task status with id ${input.statusId}.`);
     }
 
     const updatedAt = yield* nowIso;
@@ -2287,7 +2287,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         statusId: input.statusId ?? null,
         updatedAt,
       })
-      .pipe(Effect.mapError(storage("Failed to write the issue order")));
+      .pipe(Effect.mapError(storage("Failed to write the task order")));
 
     // A drag is a view concern and stays out of the feed; the column it lands in does not.
     const movedTo = input.statusId !== record.statusId ? input.statusId : undefined;
@@ -2329,7 +2329,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       const deletedAt = yield* nowIso;
       yield* issueRepository
         .softDelete({ issueId: input.issueId, deletedAt })
-        .pipe(Effect.mapError(storage("Failed to delete the issue")));
+        .pipe(Effect.mapError(storage("Failed to delete the task")));
       yield* appendChangeLog({
         issueId: input.issueId,
         actor,
@@ -2358,7 +2358,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     const updatedAt = yield* nowIso;
     yield* issueRepository
       .restore({ issueId: input.issueId, updatedAt })
-      .pipe(Effect.mapError(storage("Failed to restore the issue")));
+      .pipe(Effect.mapError(storage("Failed to restore the task")));
     yield* appendChangeLog({
       issueId: input.issueId,
       actor,
@@ -2377,9 +2377,9 @@ export const makeIssueTrackerService = Effect.fn(function* (
   )(function* (key, actor) {
     const found = yield* issueRepository
       .getByKey({ key })
-      .pipe(Effect.mapError(storage("Failed to read the issue")));
+      .pipe(Effect.mapError(storage("Failed to read the task")));
     if (Option.isNone(found)) {
-      return yield* notFound(key, `No issue with key ${key}.`);
+      return yield* notFound(key, `No task with key ${key}.`);
     }
     return yield* legacyRestore({ issueId: found.value.id }, actor);
   });
@@ -2410,7 +2410,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* statusRepository
       .upsert(status)
-      .pipe(Effect.mapError(storage("Failed to write the issue status")));
+      .pipe(Effect.mapError(storage("Failed to write the task status")));
 
     const { statuses: next } = yield* publishStatuses();
     return { status, statuses: next };
@@ -2422,7 +2422,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     const statuses = yield* listStatuses();
     const current = statuses.find((status) => status.id === input.statusId);
     if (current === undefined) {
-      return yield* notFound(input.statusId, `No issue status with id ${input.statusId}.`);
+      return yield* notFound(input.statusId, `No task status with id ${input.statusId}.`);
     }
     const { patch } = input;
     const renamedTo = patch.name;
@@ -2446,7 +2446,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* statusRepository
       .upsert(status)
-      .pipe(Effect.mapError(storage("Failed to write the issue status")));
+      .pipe(Effect.mapError(storage("Failed to write the task status")));
 
     const { statuses: next } = yield* publishStatuses();
     return { status, statuses: next };
@@ -2462,13 +2462,13 @@ export const makeIssueTrackerService = Effect.fn(function* (
     ]);
     const status = statuses.find((candidate) => candidate.id === input.statusId);
     if (status === undefined) {
-      return yield* notFound(input.statusId, `No issue status with id ${input.statusId}.`);
+      return yield* notFound(input.statusId, `No task status with id ${input.statusId}.`);
     }
     const target = statuses.find((candidate) => candidate.id === input.reassignToStatusId);
     if (target === undefined) {
       return yield* notFound(
         input.reassignToStatusId,
-        `No issue status with id ${input.reassignToStatusId} to reassign to.`,
+        `No task status with id ${input.reassignToStatusId} to reassign to.`,
       );
     }
     if (status.id === target.id) {
@@ -2486,10 +2486,10 @@ export const makeIssueTrackerService = Effect.fn(function* (
     const moved = records.filter((record) => record.statusId === status.id);
     yield* issueRepository
       .reassignStatus({ fromStatusId: status.id, toStatusId: target.id, updatedAt })
-      .pipe(Effect.mapError(storage("Failed to reassign the issues on the status")));
+      .pipe(Effect.mapError(storage("Failed to reassign the tasks on the status")));
     yield* statusRepository
       .deleteById({ statusId: status.id })
-      .pipe(Effect.mapError(storage("Failed to delete the issue status")));
+      .pipe(Effect.mapError(storage("Failed to delete the task status")));
 
     yield* Effect.forEach(
       moved,
@@ -2531,7 +2531,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       (statusId) => !statuses.some((status) => status.id === statusId),
     );
     if (unknown !== undefined) {
-      return yield* notFound(unknown, `No issue status with id ${unknown}.`);
+      return yield* notFound(unknown, `No task status with id ${unknown}.`);
     }
     // The payload is the complete order, so a status missing from it would get no position.
     const omitted = statuses.find((status) => !requested.has(status.id));
@@ -2544,7 +2544,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         positions: input.statusIds.map((statusId, index) => ({ statusId, position: index + 1 })),
         updatedAt: yield* nowIso,
       })
-      .pipe(Effect.mapError(storage("Failed to reorder the issue statuses")));
+      .pipe(Effect.mapError(storage("Failed to reorder the task statuses")));
 
     return yield* publishStatuses();
   });
@@ -2571,7 +2571,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* labelRepository
       .upsert(label)
-      .pipe(Effect.mapError(storage("Failed to write the issue label")));
+      .pipe(Effect.mapError(storage("Failed to write the task label")));
 
     const { labels: next } = yield* publishLabels();
     return { label, labels: next };
@@ -2583,7 +2583,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     const labels = yield* listLabels();
     const current = labels.find((label) => label.id === input.labelId);
     if (current === undefined) {
-      return yield* notFound(input.labelId, `No issue label with id ${input.labelId}.`);
+      return yield* notFound(input.labelId, `No task label with id ${input.labelId}.`);
     }
     const { patch } = input;
     const renamedTo = patch.name;
@@ -2604,7 +2604,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* labelRepository
       .upsert(label)
-      .pipe(Effect.mapError(storage("Failed to write the issue label")));
+      .pipe(Effect.mapError(storage("Failed to write the task label")));
 
     const { labels: next } = yield* publishLabels();
     return { label, labels: next };
@@ -2619,12 +2619,12 @@ export const makeIssueTrackerService = Effect.fn(function* (
       groupLabelAssignments(),
     ]);
     if (!labels.some((label) => label.id === input.labelId)) {
-      return yield* notFound(input.labelId, `No issue label with id ${input.labelId}.`);
+      return yield* notFound(input.labelId, `No task label with id ${input.labelId}.`);
     }
 
     yield* labelRepository
       .deleteById({ labelId: input.labelId })
-      .pipe(Effect.mapError(storage("Failed to delete the issue label")));
+      .pipe(Effect.mapError(storage("Failed to delete the task label")));
 
     const result = yield* publishLabels();
     // Deleting a label edits every issue that wore it, so those rows have to be resent.
@@ -2644,10 +2644,10 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
   const requireIssueRecord = (issueId: IssueId) =>
     issueRepository.getById({ issueId }).pipe(
-      Effect.mapError(storage("Failed to read the issue")),
+      Effect.mapError(storage("Failed to read the task")),
       Effect.flatMap((record) =>
         Option.isNone(record)
-          ? Effect.fail(notFound(issueId, `No issue with id ${issueId}.`))
+          ? Effect.fail(notFound(issueId, `No task with id ${issueId}.`))
           : Effect.succeed(record.value),
       ),
     );
@@ -2659,7 +2659,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       fromReplica: (readModel) => {
         const entity = readModel.issues.find((candidate) => candidate.id === issueId);
         return entity === undefined
-          ? Effect.fail(notFound(issueId, `No issue with id ${issueId}.`))
+          ? Effect.fail(notFound(issueId, `No task with id ${issueId}.`))
           : Effect.succeed(
               issueCollectionProjectionFromReplica(readModel).issues.find(
                 (candidate) => candidate.id === issueId,
@@ -2689,7 +2689,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     "IssueTrackerService.requireReplicaDetailProjection",
   )(function* (readModel: Parameters<typeof syncedIssueDetailById>[0], issueId: IssueId) {
     const synced = syncedIssueDetailById(readModel, issueId);
-    if (synced === null) return yield* notFound(issueId, `No issue with id ${issueId}.`);
+    if (synced === null) return yield* notFound(issueId, `No task with id ${issueId}.`);
     return issueDetailProjectionFromReplica(synced);
   });
 
@@ -2744,7 +2744,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* milestoneRepository
       .upsert(milestone)
-      .pipe(Effect.mapError(storage("Failed to write the issue milestone")));
+      .pipe(Effect.mapError(storage("Failed to write the task milestone")));
 
     const { milestones: next } = yield* publishMilestones();
     return { milestone, milestones: next };
@@ -2756,7 +2756,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     const milestones = yield* listMilestones();
     const current = milestones.find((candidate) => candidate.id === input.milestoneId);
     if (current === undefined) {
-      return yield* notFound(input.milestoneId, `No issue milestone with id ${input.milestoneId}.`);
+      return yield* notFound(input.milestoneId, `No task milestone with id ${input.milestoneId}.`);
     }
     const { patch } = input;
     const projectId = patch.projectId ?? current.projectId;
@@ -2795,7 +2795,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* milestoneRepository
       .upsert(milestone)
-      .pipe(Effect.mapError(storage("Failed to write the issue milestone")));
+      .pipe(Effect.mapError(storage("Failed to write the task milestone")));
 
     // Moving a milestone between projects takes its planning context with it. An issue that did
     // not move loses the milestone rather than wearing one from a project it is not in.
@@ -2813,7 +2813,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           milestoneId: null,
           updatedAt,
         })
-        .pipe(Effect.mapError(storage("Failed to clear the milestone on its issues")));
+        .pipe(Effect.mapError(storage("Failed to clear the milestone on its tasks")));
       yield* Effect.forEach(
         orphaned,
         (record) =>
@@ -2853,7 +2853,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     ]);
     const milestone = milestones.find((candidate) => candidate.id === input.milestoneId);
     if (milestone === undefined) {
-      return yield* notFound(input.milestoneId, `No issue milestone with id ${input.milestoneId}.`);
+      return yield* notFound(input.milestoneId, `No task milestone with id ${input.milestoneId}.`);
     }
 
     const updatedAt = yield* nowIso;
@@ -2865,11 +2865,11 @@ export const makeIssueTrackerService = Effect.fn(function* (
           milestoneId: null,
           updatedAt,
         })
-        .pipe(Effect.mapError(storage("Failed to clear the milestone on its issues")));
+        .pipe(Effect.mapError(storage("Failed to clear the milestone on its tasks")));
     }
     yield* milestoneRepository
       .deleteById({ milestoneId: milestone.id })
-      .pipe(Effect.mapError(storage("Failed to delete the issue milestone")));
+      .pipe(Effect.mapError(storage("Failed to delete the task milestone")));
 
     yield* Effect.forEach(
       cleared,
@@ -2912,7 +2912,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       (milestoneId) => !inProject.some((candidate) => candidate.id === milestoneId),
     );
     if (foreign !== undefined) {
-      return yield* notFound(foreign, `No issue milestone with id ${foreign} in this project.`);
+      return yield* notFound(foreign, `No task milestone with id ${foreign} in this project.`);
     }
     // The payload is the complete order for one project, so an omission would leave a position
     // nobody wrote — the same rule statuses follow, scoped to the project the sidebar shows.
@@ -2929,7 +2929,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         })),
         updatedAt: yield* nowIso,
       })
-      .pipe(Effect.mapError(storage("Failed to reorder the issue milestones")));
+      .pipe(Effect.mapError(storage("Failed to reorder the task milestones")));
 
     return yield* publishMilestones();
   });
@@ -2952,7 +2952,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     ]);
     const milestone = milestones.find((candidate) => candidate.id === input.milestoneId);
     if (milestone === undefined) {
-      return yield* notFound(input.milestoneId, `No issue milestone with id ${input.milestoneId}.`);
+      return yield* notFound(input.milestoneId, `No task milestone with id ${input.milestoneId}.`);
     }
 
     const members = records.filter(
@@ -2964,7 +2964,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         issueIds: members.map((record) => record.id),
         fields: ISSUE_EVENT_ASSIGNMENT_FIELDS,
       })
-      .pipe(Effect.mapError(storage("Failed to read the issue change log")));
+      .pipe(Effect.mapError(storage("Failed to read the task change log")));
 
     return milestoneHistory({ milestone, members, events, statuses, today, zone: localZone });
   });
@@ -2993,7 +2993,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* cycleRepository
       .upsert(cycle)
-      .pipe(Effect.mapError(storage("Failed to write the issue cycle")));
+      .pipe(Effect.mapError(storage("Failed to write the task cycle")));
 
     const { cycles } = yield* publishCycles();
     return { cycle, cycles };
@@ -3005,7 +3005,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     const cycles = yield* listCycles();
     const current = cycles.find((candidate) => candidate.id === input.cycleId);
     if (current === undefined) {
-      return yield* notFound(input.cycleId, `No issue cycle with id ${input.cycleId}.`);
+      return yield* notFound(input.cycleId, `No task cycle with id ${input.cycleId}.`);
     }
     const { patch } = input;
     const startDate = patch.startDate ?? current.startDate;
@@ -3023,7 +3023,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* cycleRepository
       .upsert(cycle)
-      .pipe(Effect.mapError(storage("Failed to write the issue cycle")));
+      .pipe(Effect.mapError(storage("Failed to write the task cycle")));
 
     const { cycles: next } = yield* publishCycles();
     return { cycle, cycles: next };
@@ -3040,7 +3040,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     ]);
     const cycle = cycles.find((candidate) => candidate.id === input.cycleId);
     if (cycle === undefined) {
-      return yield* notFound(input.cycleId, `No issue cycle with id ${input.cycleId}.`);
+      return yield* notFound(input.cycleId, `No task cycle with id ${input.cycleId}.`);
     }
 
     const updatedAt = yield* nowIso;
@@ -3048,7 +3048,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     if (cleared.length > 0) {
       yield* issueRepository
         .setCycle({ issueIds: cleared.map((record) => record.id), cycleId: null, updatedAt })
-        .pipe(Effect.mapError(storage("Failed to clear the cycle on its issues")));
+        .pipe(Effect.mapError(storage("Failed to clear the cycle on its tasks")));
     }
     const clearedWatches = watches.filter((watch) => watch.cycleId === cycle.id);
     yield* Effect.forEach(
@@ -3061,7 +3061,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     );
     yield* cycleRepository
       .deleteById({ cycleId: cycle.id })
-      .pipe(Effect.mapError(storage("Failed to delete the issue cycle")));
+      .pipe(Effect.mapError(storage("Failed to delete the task cycle")));
 
     yield* Effect.forEach(
       cleared,
@@ -3145,7 +3145,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
             cycleId: next?.id ?? null,
             updatedAt: finalizedAt,
           })
-          .pipe(Effect.mapError(storage("Failed to carry the cycle's issues over")));
+          .pipe(Effect.mapError(storage("Failed to carry the cycle's tasks over")));
         for (const record of carried) carriedBy.set(record.id, next?.id ?? null);
         yield* Effect.forEach(
           carried,
@@ -3162,7 +3162,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       }
       yield* cycleRepository
         .complete({ cycleId: cycle.id, completedAt: finalizedAt })
-        .pipe(Effect.mapError(storage("Failed to complete the issue cycle")));
+        .pipe(Effect.mapError(storage("Failed to complete the task cycle")));
     }
 
     yield* publishCycles();
@@ -3189,10 +3189,10 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
   const requireTodo = (todoId: IssueTodo["id"]) =>
     todoRepository.getById({ todoId }).pipe(
-      Effect.mapError(storage("Failed to read the issue checklist")),
+      Effect.mapError(storage("Failed to read the task checklist")),
       Effect.flatMap((todo) =>
         Option.isNone(todo)
-          ? Effect.fail(notFound(todoId, `No issue todo with id ${todoId}.`))
+          ? Effect.fail(notFound(todoId, `No task todo with id ${todoId}.`))
           : Effect.succeed(todo.value),
       ),
     );
@@ -3211,7 +3211,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* todoRepository
       .upsert(todo)
-      .pipe(Effect.mapError(storage("Failed to write the issue todo")));
+      .pipe(Effect.mapError(storage("Failed to write the task todo")));
     return yield* publishTodos(input.issueId);
   });
 
@@ -3226,7 +3226,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         ...(patch.text === undefined ? {} : { text: patch.text }),
         ...(patch.done === undefined ? {} : { done: patch.done }),
       })
-      .pipe(Effect.mapError(storage("Failed to write the issue todo")));
+      .pipe(Effect.mapError(storage("Failed to write the task todo")));
     return yield* publishTodos(current.issueId);
   });
 
@@ -3236,7 +3236,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     const current = yield* requireTodo(input.todoId);
     yield* todoRepository
       .deleteById({ todoId: input.todoId })
-      .pipe(Effect.mapError(storage("Failed to delete the issue todo")));
+      .pipe(Effect.mapError(storage("Failed to delete the task todo")));
     return yield* publishTodos(current.issueId);
   });
 
@@ -3250,7 +3250,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     }
     const foreign = input.todoIds.find((todoId) => !todos.some((todo) => todo.id === todoId));
     if (foreign !== undefined) {
-      return yield* notFound(foreign, `No issue todo with id ${foreign} on this issue.`);
+      return yield* notFound(foreign, `No task todo with id ${foreign} on this task.`);
     }
     const omitted = todos.find((todo) => !requested.has(todo.id));
     if (omitted !== undefined) {
@@ -3261,7 +3261,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       .setPositions({
         positions: input.todoIds.map((todoId, index) => ({ todoId, position: index + 1 })),
       })
-      .pipe(Effect.mapError(storage("Failed to reorder the issue todos")));
+      .pipe(Effect.mapError(storage("Failed to reorder the task todos")));
     return yield* publishTodos(input.issueId);
   });
 
@@ -3310,7 +3310,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     "IssueTrackerService.relationCreate",
   )(function* (input, actor) {
     if (input.issueId === input.relatedIssueId) {
-      return yield* invalid("An issue cannot relate to itself.", input.issueId);
+      return yield* invalid("A task cannot relate to itself.", input.issueId);
     }
     const [record, related] = yield* Effect.all([
       requireIssueRecord(input.issueId),
@@ -3343,7 +3343,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* relationRepository
       .insert(relation)
-      .pipe(Effect.mapError(storage("Failed to write the issue relation")));
+      .pipe(Effect.mapError(storage("Failed to write the task relation")));
     yield* logRelation({
       relation,
       issueKey: record.key,
@@ -3361,15 +3361,15 @@ export const makeIssueTrackerService = Effect.fn(function* (
   )(function* (input, actor) {
     const found = yield* relationRepository
       .getById({ relationId: input.relationId })
-      .pipe(Effect.mapError(storage("Failed to read the issue relation")));
+      .pipe(Effect.mapError(storage("Failed to read the task relation")));
     if (Option.isNone(found)) {
-      return yield* notFound(input.relationId, `No issue relation with id ${input.relationId}.`);
+      return yield* notFound(input.relationId, `No task relation with id ${input.relationId}.`);
     }
     const relation = found.value;
 
     yield* relationRepository
       .deleteById({ relationId: relation.id })
-      .pipe(Effect.mapError(storage("Failed to delete the issue relation")));
+      .pipe(Effect.mapError(storage("Failed to delete the task relation")));
 
     // The keys are read after the delete on purpose: an issue on either end may already be gone,
     // and a missing key logs as the id rather than refusing to unlink the survivor.
@@ -3401,16 +3401,16 @@ export const makeIssueTrackerService = Effect.fn(function* (
         (attachmentId) => parseIssueSegmentFromAttachmentId(attachmentId) !== expected,
       );
       if (foreign !== undefined) {
-        return yield* invalid(`Attachment ${foreign} does not belong to this issue.`, foreign);
+        return yield* invalid(`Attachment ${foreign} does not belong to this task.`, foreign);
       }
     });
 
   const requireComment = (commentId: IssueComment["id"]) =>
     commentRepository.getById({ commentId }).pipe(
-      Effect.mapError(storage("Failed to read the issue comment")),
+      Effect.mapError(storage("Failed to read the task comment")),
       Effect.flatMap((comment) =>
         Option.isNone(comment)
-          ? Effect.fail(notFound(commentId, `No issue comment with id ${commentId}.`))
+          ? Effect.fail(notFound(commentId, `No task comment with id ${commentId}.`))
           : Effect.succeed(comment.value),
       ),
     );
@@ -3465,7 +3465,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* commentRepository
       .upsert(comment)
-      .pipe(Effect.mapError(storage("Failed to write the issue comment")));
+      .pipe(Effect.mapError(storage("Failed to write the task comment")));
     yield* publish({ _tag: "IssueCommentUpserted", comment });
     if (agentRun !== null) yield* dispatchCommentAgentRun(comment, agentRun);
     return { comment };
@@ -3504,7 +3504,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* commentRepository
       .upsert(comment)
-      .pipe(Effect.mapError(storage("Failed to write the issue comment")));
+      .pipe(Effect.mapError(storage("Failed to write the task comment")));
     yield* publish({ _tag: "IssueCommentUpserted", comment });
     return { comment };
   });
@@ -3527,7 +3527,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
     yield* commentRepository
       .deleteById({ commentId: current.id })
-      .pipe(Effect.mapError(storage("Failed to delete the issue comment")));
+      .pipe(Effect.mapError(storage("Failed to delete the task comment")));
     yield* publish({
       _tag: "IssueCommentDeleted",
       issueId: current.issueId,
@@ -3570,7 +3570,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     Effect.gen(function* () {
       const found = yield* commentRepository
         .getById({ commentId })
-        .pipe(Effect.mapError(storage("Failed to read the issue comment")));
+        .pipe(Effect.mapError(storage("Failed to read the task comment")));
       if (Option.isNone(found)) return null;
       const current = found.value;
       if (!isLiveCommentAgentRun(current.agentRun) || current.agentRun.id !== runId) return null;
@@ -3580,7 +3580,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       const comment: IssueComment = { ...current, agentRun };
       yield* commentRepository
         .upsert(comment)
-        .pipe(Effect.mapError(storage("Failed to write the issue comment")));
+        .pipe(Effect.mapError(storage("Failed to write the task comment")));
       // The run rides its comment: `IssuesStreamEvent` is a closed union that older remote clients
       // decode exhaustively, so every transition is an ordinary comment upsert rather than a new
       // variant those clients would fail to decode at all.
@@ -3647,7 +3647,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         // post a reply to a thread its author already walked away from.
         const found = yield* commentRepository
           .getById({ commentId })
-          .pipe(Effect.mapError(storage("Failed to read the issue comment")));
+          .pipe(Effect.mapError(storage("Failed to read the task comment")));
         if (Option.isNone(found)) return;
         const origin = found.value;
         if (!isLiveCommentAgentRun(origin.agentRun) || origin.agentRun.id !== runId) return;
@@ -3811,7 +3811,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     const comment: IssueComment = { ...current, agentRun };
     yield* commentRepository
       .upsert(comment)
-      .pipe(Effect.mapError(storage("Failed to write the issue comment")));
+      .pipe(Effect.mapError(storage("Failed to write the task comment")));
     yield* publish({ _tag: "IssueCommentUpserted", comment });
     yield* dispatchCommentAgentRun(comment, agentRun);
     return { comment };
@@ -3834,7 +3834,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       // attachments against, and what keeps thread attachment cleanup from sweeping this file.
       const attachmentId = createIssueAttachmentId(input.issueId);
       if (attachmentId === null) {
-        return yield* invalid("This issue cannot own an attachment.", input.issueId);
+        return yield* invalid("This task cannot own an attachment.", input.issueId);
       }
 
       const mimeType = input.mimeType.toLowerCase();
@@ -3912,7 +3912,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         ? ISSUE_COMMENT_ATTACHMENT_MAX_BYTES
         : ISSUE_COMMENT_EVIDENCE_VIDEO_MAX_BYTES;
     if (input.bytes.byteLength === 0 || input.bytes.byteLength > maximumBytes) {
-      return yield* invalid("The issue evidence is empty or too large.", input.issueId);
+      return yield* invalid("The task evidence is empty or too large.", input.issueId);
     }
     return yield* writeCommentAttachment(input);
   });
@@ -3942,7 +3942,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* viewRepository
       .upsert(view)
-      .pipe(Effect.mapError(storage("Failed to write the issue view")));
+      .pipe(Effect.mapError(storage("Failed to write the task view")));
 
     const { views: next } = yield* publishViews();
     return { view, views: next };
@@ -3954,7 +3954,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     const views = yield* listViews();
     const current = views.find((candidate) => candidate.id === input.viewId);
     if (current === undefined) {
-      return yield* notFound(input.viewId, `No issue view with id ${input.viewId}.`);
+      return yield* notFound(input.viewId, `No task view with id ${input.viewId}.`);
     }
     const { patch } = input;
     if (
@@ -3977,7 +3977,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     };
     yield* viewRepository
       .upsert(view)
-      .pipe(Effect.mapError(storage("Failed to write the issue view")));
+      .pipe(Effect.mapError(storage("Failed to write the task view")));
 
     const { views: next } = yield* publishViews();
     return { view, views: next };
@@ -3988,12 +3988,12 @@ export const makeIssueTrackerService = Effect.fn(function* (
   )(function* (input) {
     const views = yield* listViews();
     if (!views.some((candidate) => candidate.id === input.viewId)) {
-      return yield* notFound(input.viewId, `No issue view with id ${input.viewId}.`);
+      return yield* notFound(input.viewId, `No task view with id ${input.viewId}.`);
     }
     // Hard, unlike an issue: a view holds no history, so there is nothing an undo would recover.
     yield* viewRepository
       .deleteById({ viewId: input.viewId })
-      .pipe(Effect.mapError(storage("Failed to delete the issue view")));
+      .pipe(Effect.mapError(storage("Failed to delete the task view")));
 
     return yield* publishViews();
   });
@@ -4008,7 +4008,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     }
     const unknown = input.viewIds.find((viewId) => !views.some((view) => view.id === viewId));
     if (unknown !== undefined) {
-      return yield* notFound(unknown, `No issue view with id ${unknown}.`);
+      return yield* notFound(unknown, `No task view with id ${unknown}.`);
     }
     // The payload is the complete order, so a view missing from it would get no position — the
     // same rule statuses follow.
@@ -4022,7 +4022,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         positions: input.viewIds.map((viewId, index) => ({ viewId, position: index + 1 })),
         updatedAt: yield* nowIso,
       })
-      .pipe(Effect.mapError(storage("Failed to reorder the issue views")));
+      .pipe(Effect.mapError(storage("Failed to reorder the task views")));
 
     return yield* publishViews();
   });
@@ -4037,7 +4037,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
     const config = yield* configRepository
       .setPrefix({ keyPrefix: input.keyPrefix })
-      .pipe(Effect.mapError(storage("Failed to rename the issue key prefix")));
+      .pipe(Effect.mapError(storage("Failed to rename the task key prefix")));
     yield* publish({ _tag: "ConfigChanged", config });
     return { config };
   });
@@ -4052,13 +4052,13 @@ export const makeIssueTrackerService = Effect.fn(function* (
           Effect.map((projection) => ({ events: projection.events })),
         ),
       fromLegacy: issueRepository.getById({ issueId: input.issueId }).pipe(
-        Effect.mapError(storage("Failed to read the issue")),
+        Effect.mapError(storage("Failed to read the task")),
         Effect.flatMap((record) =>
           Option.isNone(record)
-            ? Effect.fail(notFound(input.issueId, `No issue with id ${input.issueId}.`))
+            ? Effect.fail(notFound(input.issueId, `No task with id ${input.issueId}.`))
             : eventRepository
                 .listByIssue({ issueId: input.issueId })
-                .pipe(Effect.mapError(storage("Failed to read the issue change log"))),
+                .pipe(Effect.mapError(storage("Failed to read the task change log"))),
         ),
         Effect.map((events) => ({ events })),
       ),
@@ -4068,7 +4068,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   const listEnrichmentRuns = (issueId: IssueId) =>
     enrichmentRunRepository
       .listByIssue({ issueId })
-      .pipe(Effect.mapError(storage("Failed to read the issue enrichment runs")));
+      .pipe(Effect.mapError(storage("Failed to read the task enrichment runs")));
 
   const requireEnrichmentRun = (runId: IssueEnrichmentRunId) =>
     enrichmentRunRepository.getById({ runId }).pipe(
@@ -4199,7 +4199,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     // same question and spend twice the tokens doing it.
     const unfinished = yield* enrichmentRunRepository
       .listUnfinished()
-      .pipe(Effect.mapError(storage("Failed to read the issue enrichment runs")));
+      .pipe(Effect.mapError(storage("Failed to read the task enrichment runs")));
     if (unfinished.some((run) => run.issueId === record.id)) {
       return yield* invalid(
         `An enrichment run is already in flight for ${record.key}.`,
@@ -4290,7 +4290,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   const readThreadLinks = (issueId: IssueId) =>
     threadLinkRepository
       .listByIssue({ issueId })
-      .pipe(Effect.mapError(storage("Failed to read the issue thread links")));
+      .pipe(Effect.mapError(storage("Failed to read the task thread links")));
 
   const publishThreadLinks = (issueId: IssueId, links: ReadonlyArray<IssueThreadLink>) =>
     publish({ _tag: "IssueThreadLinksChanged", issueId, links });
@@ -4405,7 +4405,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     if (route === null) {
       const links = yield* threadLinkRepository
         .listByThread(input)
-        .pipe(Effect.mapError(storage("Failed to read the thread's issue links")));
+        .pipe(Effect.mapError(storage("Failed to read the thread's task links")));
       return { threadId: input.threadId, links };
     }
     const readModel = yield* route.read;
@@ -4428,7 +4428,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   )(function* (input) {
     const links = yield* threadLinkRepository
       .listByThread({ threadId: input.threadId })
-      .pipe(Effect.mapError(storage("Failed to read the thread's issue links")));
+      .pipe(Effect.mapError(storage("Failed to read the thread's task links")));
     if (links.length === 0) return;
 
     for (const link of links) {
@@ -4458,7 +4458,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       };
       yield* issueRepository
         .setPullRequest({ issueId: record.id, pullRequest, updatedAt: now })
-        .pipe(Effect.mapError(storage("Failed to record the issue pull request")));
+        .pipe(Effect.mapError(storage("Failed to record the task pull request")));
 
       // State and title refreshes keep the visible chip truthful without turning every external
       // host edit into another activity row. A newly discovered PR is the durable milestone.
@@ -4572,7 +4572,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       input.cycleId !== null &&
       !(yield* listCycles()).some((cycle) => cycle.id === input.cycleId)
     ) {
-      return yield* notFound(input.cycleId, `No issue cycle with id ${input.cycleId}.`);
+      return yield* notFound(input.cycleId, `No task cycle with id ${input.cycleId}.`);
     }
 
     const createdAt = yield* nowIso;
@@ -4605,7 +4605,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       patch.cycleId !== null &&
       !(yield* listCycles()).some((cycle) => cycle.id === patch.cycleId)
     ) {
-      return yield* notFound(patch.cycleId, `No issue cycle with id ${patch.cycleId}.`);
+      return yield* notFound(patch.cycleId, `No task cycle with id ${patch.cycleId}.`);
     }
     const next: SlackChannelWatch = {
       ...existing,
@@ -4693,7 +4693,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     if (Option.isSome(processed) && processed.value.issueId !== null) {
       const existing = yield* issueRepository
         .getById({ issueId: processed.value.issueId })
-        .pipe(Effect.mapError(storage("Failed to read the issue")));
+        .pipe(Effect.mapError(storage("Failed to read the task")));
       if (Option.isSome(existing)) {
         const labelIds = yield* labelsOf(existing.value.id);
         return { issue: { ...existing.value, labelIds }, created: false };
@@ -4746,7 +4746,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
     const record = yield* issueRepository
       .getById({ issueId })
-      .pipe(Effect.mapError(storage("Failed to read the issue")));
+      .pipe(Effect.mapError(storage("Failed to read the task")));
     if (Option.isNone(record) || record.value.deletedAt !== null) {
       yield* recordProcessedMessage(input.channelId, input.messageTs, null);
       return { comment: null };
@@ -4895,7 +4895,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
             workingStatuses.find((status) => DEFAULT_STATUS_CATEGORIES.has(status.category)) ??
             workingStatuses[0];
           if (fallback === undefined) {
-            return yield* conflict("The tracker has no statuses, so an issue has nowhere to land.");
+            return yield* conflict("The tracker has no statuses, so a task has nowhere to land.");
           }
           return fallback;
         }
@@ -4916,7 +4916,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         };
         yield* statusRepository
           .upsert(status)
-          .pipe(Effect.mapError(storage("Failed to write an imported issue status")));
+          .pipe(Effect.mapError(storage("Failed to write an imported task status")));
         workingStatuses.push(status);
         workingStatuses.sort((left, right) => left.position - right.position);
         createdStatuses.push(status);
@@ -4938,7 +4938,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         };
         yield* labelRepository
           .upsert(label)
-          .pipe(Effect.mapError(storage("Failed to write an imported issue label")));
+          .pipe(Effect.mapError(storage("Failed to write an imported task label")));
         workingLabels.push(label);
         createdLabels.push(label);
         return label;
@@ -4956,13 +4956,13 @@ export const makeIssueTrackerService = Effect.fn(function* (
     ) {
       yield* configRepository
         .setPrefix({ keyPrefix: prefix })
-        .pipe(Effect.mapError(storage("Failed to adopt the imported issue key prefix")));
+        .pipe(Effect.mapError(storage("Failed to adopt the imported task key prefix")));
     }
     const highestImported = importedMaxKeyNumber(plan.rows);
     if (highestImported > 0) {
       yield* configRepository
         .reserveKeyNumbers({ throughNumber: highestImported })
-        .pipe(Effect.mapError(storage("Failed to reserve the imported issue key numbers")));
+        .pipe(Effect.mapError(storage("Failed to reserve the imported task key numbers")));
     }
 
     const existingKeys = new Set(records.map((record) => record.key));
@@ -4979,7 +4979,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
     for (const row of plan.rows) {
       if (row.key !== null && existingKeys.has(row.key)) {
-        skipped.push({ line: row.line, reason: `An issue with key ${row.key} already exists.` });
+        skipped.push({ line: row.line, reason: `A task with key ${row.key} already exists.` });
         continue;
       }
 
@@ -4991,7 +4991,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         row.key ??
         (yield* configRepository
           .allocateKey()
-          .pipe(Effect.mapError(storage("Failed to allocate an issue key"))));
+          .pipe(Effect.mapError(storage("Failed to allocate a task key"))));
       const sortOrder = issueSortOrderAfter(sortOrderByStatus.get(status.id) ?? null);
       sortOrderByStatus.set(status.id, sortOrder);
       const createdAt = row.createdAt ?? importedAt;
@@ -5040,13 +5040,13 @@ export const makeIssueTrackerService = Effect.fn(function* (
 
     yield* issueRepository
       .upsertMany(linked.map(({ record }) => record))
-      .pipe(Effect.mapError(storage("Failed to write the imported issues")));
+      .pipe(Effect.mapError(storage("Failed to write the imported tasks")));
     yield* Effect.forEach(
       linked.filter(({ labelIds }) => labelIds.length > 0),
       ({ record, labelIds }) =>
         labelRepository
           .setAssignments({ issueId: record.id, labelIds })
-          .pipe(Effect.mapError(storage("Failed to write the imported issue labels"))),
+          .pipe(Effect.mapError(storage("Failed to write the imported task labels"))),
       { discard: true },
     );
     yield* Effect.forEach(
@@ -5118,7 +5118,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   const replicaRoutable = resolveReplicaRoute.pipe(Effect.map((route) => route !== null));
   const replicaAttachmentUnsupported = () =>
     invalid(
-      "Server-produced issue attachments are not supported for cloud-synced companies yet. Add the attachment from the Pathway web comment composer instead.",
+      "Server-produced task attachments are not supported for cloud-synced companies yet. Add the attachment from the Pathway web comment composer instead.",
     );
   const uploadCommentAttachment: IssueTrackerServiceShape["uploadCommentAttachment"] = (input) =>
     Effect.flatMap(replicaRoutable, (routable) =>
@@ -5207,7 +5207,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           const issue = routedIssue(written.readModel, issueId);
           if (issue === undefined) {
             return yield* syncWriteFailure(
-              `Slack intake issue ${issueId} is absent from the optimistic replica`,
+              `Slack intake task ${issueId} is absent from the optimistic replica`,
             );
           }
           yield* recordProcessedMessage(input.channelId, input.messageTs, issueId);
@@ -5265,7 +5265,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         Effect.gen(function* () {
           const current = routedIssue(readModel, input.issueId);
           if (current === undefined)
-            return yield* notFound(input.issueId, `No issue with id ${input.issueId}.`);
+            return yield* notFound(input.issueId, `No task with id ${input.issueId}.`);
           if (!current.triage)
             return yield* conflict(`${current.key} is not in triage.`, current.key);
           const patch: IssuePatch = {
@@ -5280,7 +5280,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           );
           const issue = routedIssue(written.readModel, input.issueId);
           if (issue === undefined) {
-            return yield* syncWriteFailure(`accepted issue ${input.issueId} is absent`);
+            return yield* syncWriteFailure(`accepted task ${input.issueId} is absent`);
           }
           if (!input.runEnrichment) {
             return { issue, enrichmentRun: null, enrichmentRefusal: null };
@@ -5301,7 +5301,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         Effect.gen(function* () {
           const current = routedIssue(readModel, input.issueId);
           if (current === undefined)
-            return yield* notFound(input.issueId, `No issue with id ${input.issueId}.`);
+            return yield* notFound(input.issueId, `No task with id ${input.issueId}.`);
           yield* enqueueReplicaOperations(plans([issueTriageRejectOperation(input)]));
           const deletedAt = yield* nowIso;
           return { issue: { ...current, updatedAt: deletedAt, deletedAt } };
@@ -5313,7 +5313,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     new IssueTrackerError({
       reason: "conflict",
       subject: retryIdentity,
-      message: `Issue creation ${retryIdentity} is durably queued but not confirmed. Do not file it again with a new identity. Retry issues_create with idempotencyKey "${retryIdentity}" to resume this create.`,
+      message: `Task creation ${retryIdentity} is durably queued but not confirmed. Do not file it again with a new identity. Retry issues_create with idempotencyKey "${retryIdentity}" to resume this create.`,
     });
 
   const create: IssueTrackerServiceShape["create"] = (input, actor, suppliedRetryIdentity) =>
@@ -5329,7 +5329,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           const supplied = suppliedRetryIdentity ?? (yield* newId);
           if (supplied.startsWith("issue-retry:v1:") && !supplied.startsWith(retryPrefix)) {
             return yield* invalid(
-              "This issue-create retry belongs to another company. Restore the original project binding before retrying it.",
+              "This task-create retry belongs to another company. Restore the original project binding before retrying it.",
               supplied,
             );
           }
@@ -5377,7 +5377,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
               const written = yield* enqueueReplicaOperations(plans([issueUpdateOperation(input)]));
               const issue = routedIssue(written.readModel, input.issueId);
               return issue === undefined
-                ? yield* notFound(input.issueId, `No issue with id ${input.issueId}.`)
+                ? yield* notFound(input.issueId, `No task with id ${input.issueId}.`)
                 : { issue };
             }),
           legacyUpdate(input, actor),
@@ -5409,7 +5409,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           );
           const issue = routedIssue(written.readModel, input.issueId);
           return issue === undefined
-            ? yield* notFound(input.issueId, `No issue with id ${input.issueId}.`)
+            ? yield* notFound(input.issueId, `No task with id ${input.issueId}.`)
             : { issue };
         }),
       legacySetSortOrder(input, actor),
@@ -5421,7 +5421,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         Effect.gen(function* () {
           const current = routedIssue(readModel, input.issueId);
           if (current === undefined)
-            return yield* notFound(input.issueId, `No issue with id ${input.issueId}.`);
+            return yield* notFound(input.issueId, `No task with id ${input.issueId}.`);
           yield* enqueueReplicaOperations(plans([issueDeleteOperation(input)]));
           const deletedAt = yield* nowIso;
           return { issue: { ...current, updatedAt: deletedAt, deletedAt } };
@@ -5438,7 +5438,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     const route = yield* ActiveIssueReplicaRoute;
     const issue = routedIssue(yield* route.read, issueId);
     return issue === undefined
-      ? yield* syncWriteFailure(`restore ${operationId} completed without a readable issue`)
+      ? yield* syncWriteFailure(`restore ${operationId} completed without a readable task`)
       : { issue };
   });
 
@@ -5450,7 +5450,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
       (readModel) => {
         const issueId = issueIdByKeyFromReplica(readModel, key);
         return issueId === null
-          ? Effect.fail(notFound(key, `No issue with key ${key}.`))
+          ? Effect.fail(notFound(key, `No task with key ${key}.`))
           : restoreReplica(issueId);
       },
       legacyRestoreByKey(key, actor),
@@ -5483,7 +5483,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           const statuses = routedCollection(written.readModel).statuses;
           const status = statuses.find((candidate) => candidate.id === input.statusId);
           return status === undefined
-            ? yield* notFound(input.statusId, `No issue status with id ${input.statusId}.`)
+            ? yield* notFound(input.statusId, `No task status with id ${input.statusId}.`)
             : { status, statuses };
         }),
       legacyUpdateStatus(input),
@@ -5540,7 +5540,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           const labels = routedCollection(written.readModel).labels;
           const label = labels.find((candidate) => candidate.id === input.labelId);
           return label === undefined
-            ? yield* notFound(input.labelId, `No issue label with id ${input.labelId}.`)
+            ? yield* notFound(input.labelId, `No task label with id ${input.labelId}.`)
             : { label, labels };
         }),
       legacyUpdateLabel(input),
@@ -5585,7 +5585,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           const milestones = routedCollection(written.readModel).milestones;
           const milestone = milestones.find((candidate) => candidate.id === input.milestoneId);
           return milestone === undefined
-            ? yield* notFound(input.milestoneId, `No issue milestone with id ${input.milestoneId}.`)
+            ? yield* notFound(input.milestoneId, `No task milestone with id ${input.milestoneId}.`)
             : { milestone, milestones };
         }),
       legacyMilestoneUpdate(input, actor),
@@ -5642,7 +5642,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           const cycles = routedCollection(written.readModel).cycles;
           const cycle = cycles.find((candidate) => candidate.id === input.cycleId);
           return cycle === undefined
-            ? yield* notFound(input.cycleId, `No issue cycle with id ${input.cycleId}.`)
+            ? yield* notFound(input.cycleId, `No task cycle with id ${input.cycleId}.`)
             : { cycle, cycles };
         }),
       legacyCycleUpdate(input),
@@ -5684,7 +5684,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         Effect.gen(function* () {
           const current = readModel.issueTodos.find((todo) => todo.id === input.todoId);
           if (current === undefined)
-            return yield* notFound(input.todoId, `No issue todo with id ${input.todoId}.`);
+            return yield* notFound(input.todoId, `No task todo with id ${input.todoId}.`);
           const written = yield* enqueueReplicaOperations(plans([issueTodoUpdateOperation(input)]));
           return {
             issueId: current.issueId,
@@ -5700,7 +5700,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         Effect.gen(function* () {
           const current = readModel.issueTodos.find((todo) => todo.id === input.todoId);
           if (current === undefined)
-            return yield* notFound(input.todoId, `No issue todo with id ${input.todoId}.`);
+            return yield* notFound(input.todoId, `No task todo with id ${input.todoId}.`);
           const written = yield* enqueueReplicaOperations(plans([issueTodoDeleteOperation(input)]));
           return {
             issueId: current.issueId,
@@ -5753,7 +5753,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           if (current === undefined)
             return yield* notFound(
               input.relationId,
-              `No issue relation with id ${input.relationId}.`,
+              `No task relation with id ${input.relationId}.`,
             );
           const written = yield* enqueueReplicaOperations(
             plans([issueRelationDeleteOperation(input)]),
@@ -5794,7 +5794,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         Effect.gen(function* () {
           const current = readModel.issueComments.find((comment) => comment.id === input.commentId);
           if (current === undefined)
-            return yield* notFound(input.commentId, `No issue comment with id ${input.commentId}.`);
+            return yield* notFound(input.commentId, `No task comment with id ${input.commentId}.`);
           const written = yield* enqueueReplicaOperations(
             plans([issueCommentUpdateOperation(input)]),
           );
@@ -5814,7 +5814,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
         Effect.gen(function* () {
           const current = readModel.issueComments.find((comment) => comment.id === input.commentId);
           if (current === undefined)
-            return yield* notFound(input.commentId, `No issue comment with id ${input.commentId}.`);
+            return yield* notFound(input.commentId, `No task comment with id ${input.commentId}.`);
           const written = yield* enqueueReplicaOperations(
             plans([issueCommentDeleteOperation(input)]),
           );
@@ -5851,7 +5851,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
           const views = routedCollection(written.readModel).views;
           const view = views.find((candidate) => candidate.id === input.viewId);
           return view === undefined
-            ? yield* notFound(input.viewId, `No issue view with id ${input.viewId}.`)
+            ? yield* notFound(input.viewId, `No task view with id ${input.viewId}.`)
             : { view, views };
         }),
       legacyViewUpdate(input),
@@ -5968,7 +5968,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     routeWrite((readModel) => {
       const issue = readModel.issues.find((candidate) => candidate.id === input.issueId);
       return issue === undefined
-        ? Effect.fail(notFound(input.issueId, `No issue with id ${input.issueId}.`))
+        ? Effect.fail(notFound(input.issueId, `No task with id ${input.issueId}.`))
         : Effect.succeed(
             effectiveIssueStatusesForOwnerFromReplica(readModel.issueStatuses, issue.workflowOwner),
           );
@@ -6004,7 +6004,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
     routeWrite((readModel) => {
       const issue = readModel.issues.find((candidate) => candidate.id === input.issueId);
       return issue === undefined
-        ? Effect.fail(notFound(input.issueId, `No issue with id ${input.issueId}.`))
+        ? Effect.fail(notFound(input.issueId, `No task with id ${input.issueId}.`))
         : Effect.succeed(scopedCatalog(readModel, issue.teamIds));
     }, legacyScopedCatalog);
 
@@ -6032,13 +6032,13 @@ export const makeIssueTrackerService = Effect.fn(function* (
         Effect.gen(function* () {
           const issue = readModel.issues.find((candidate) => candidate.key === input.key);
           if (issue === undefined) {
-            return yield* notFound(input.key, `No issue with key ${input.key}.`);
+            return yield* notFound(input.key, `No task with key ${input.key}.`);
           }
           const route = yield* ActiveIssueReplicaRoute;
           const resolveUrls = route.engine.resolveIssueAttachmentUrls;
           if (resolveUrls === undefined) {
             return yield* syncWriteFailure(
-              "the active cloud transport cannot resolve issue attachments",
+              "the active cloud transport cannot resolve task attachments",
             );
           }
           const batches: Array<ReadonlyArray<string>> = [];
@@ -6128,7 +6128,7 @@ export const makeIssueTrackerService = Effect.fn(function* (
   // the next snapshot tries again.
   yield* finalizeEndedCycles().pipe(
     Effect.catchCause((cause) =>
-      Effect.logWarning("Failed to finalise ended issue cycles at startup.", { cause }),
+      Effect.logWarning("Failed to finalise ended task cycles at startup.", { cause }),
     ),
   );
 

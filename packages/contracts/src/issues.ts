@@ -137,6 +137,7 @@ const ISSUE_PLACEHOLDER_TITLES: ReadonlySet<string> = new Set([
   "slack message",
   "untitled",
   "new issue",
+  "new task",
 ]);
 export function isPlaceholderIssueTitle(title: string): boolean {
   const normalized = title.trim().toLowerCase();

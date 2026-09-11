@@ -21,7 +21,7 @@ export const CALENDAR_WORK_LAYERS = ["issues", "milestones", "cycles"] as const;
 export type CalendarWorkLayer = (typeof CALENDAR_WORK_LAYERS)[number];
 
 export const CALENDAR_WORK_LAYER_LABELS: Readonly<Record<CalendarWorkLayer, string>> = {
-  issues: "Issue due dates",
+  issues: "Task due dates",
   milestones: "Milestones",
   cycles: "Cycles",
 };

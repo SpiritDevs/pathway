@@ -25,7 +25,7 @@ describe("issue composer context", () => {
     expect(prompt).toContain("Compare their root causes\n\n<issue_context>");
     expect(prompt).toContain('key="ISS-26"');
     expect(prompt).toContain('title="Modal &lt;height&gt; &amp; &quot;controls&quot;"');
-    expect(prompt).toContain("reading each issue with Pathway MCP's `issues_get` tool");
+    expect(prompt).toContain("reading each task with Pathway MCP's `issues_get` tool");
     expect(prompt).toContain("Do not begin implementation unless I explicitly ask");
 
     expect(extractTrailingIssueContexts(prompt)).toEqual({

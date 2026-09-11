@@ -234,12 +234,12 @@ describe("IssueMentionLink", () => {
   it("names the issue for screen readers and re-emits the raw key on copy", () => {
     const link = renderLink("ISS-30", "Link issue mentions in chat");
 
-    expect(link.props["aria-label"]).toBe("Issue ISS-30: Link issue mentions in chat");
+    expect(link.props["aria-label"]).toBe("Task ISS-30: Link issue mentions in chat");
     expect(link.props["data-markdown-copy"]).toBe("ISS-30");
   });
 
   it("falls back to the key alone when the issue has no title", () => {
-    expect(renderLink("PAT-9", "").props["aria-label"]).toBe("Issue PAT-9");
+    expect(renderLink("PAT-9", "").props["aria-label"]).toBe("Task PAT-9");
   });
 });
 

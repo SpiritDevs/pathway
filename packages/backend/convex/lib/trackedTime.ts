@@ -121,7 +121,7 @@ export async function recordIssueSession(
   )
     throw backendError(
       "invalid-arguments",
-      "Issue composition time must be within the last 30 days and below 24 hours.",
+      "Task composition time must be within the last 30 days and below 24 hours.",
     );
   // Duration is derived from actual intervals; clients cannot inflate credit with an independent number.
   await ctx.db.insert("trackedSessions", {
@@ -131,7 +131,7 @@ export async function recordIssueSession(
     issueId: input.issueId,
     source: "issue",
     title: input.description.slice(0, 200),
-    description: `Created issue: ${input.description}`.slice(0, 2_000),
+    description: `Created task: ${input.description}`.slice(0, 2_000),
     projectKey: input.projectKey,
     projectName: input.projectName,
     startedAt: new Date(intervals[0]?.start ?? now).toISOString(),

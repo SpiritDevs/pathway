@@ -44,7 +44,7 @@ describe("workspace navigation history", () => {
     const snapshot = recordWorkspaceHistoryNavigation(tracker, location(2, "/calendar"), "PUSH");
 
     expect(snapshot.forwardEntries).toEqual([]);
-    expect(snapshot.backEntries.map((entry) => entry.label)).toEqual(["Active issues", "Threads"]);
+    expect(snapshot.backEntries.map((entry) => entry.label)).toEqual(["Active tasks", "Threads"]);
     expect(tracker.entries.get(2)?.label).toBe("Calendar");
   });
 
@@ -55,7 +55,7 @@ describe("workspace navigation history", () => {
     const snapshot = recordWorkspaceHistoryNavigation(tracker, location(1, "/settings"), "PUSH");
 
     expect(snapshot.backEntries).toEqual([
-      { href: "/issues?tab=all", index: 0, label: "All issues" },
+      { href: "/issues?tab=all", index: 0, label: "All tasks" },
     ]);
   });
 
@@ -78,7 +78,7 @@ describe("workspace navigation history", () => {
     navigate(0, "/threads", "BACK");
 
     expect(tracker.getSnapshot().forwardEntries.map((entry) => entry.label)).toEqual([
-      "Active issues",
+      "Active tasks",
     ]);
     expect(workspaceHistoryTracker(history)).toBe(tracker);
     expect(subscribe).toHaveBeenCalledOnce();
@@ -86,10 +86,10 @@ describe("workspace navigation history", () => {
 
   it("provides readable labels for dynamic workspace routes", () => {
     expect(workspaceHistoryLocationLabel(location(0, "/issues", "?issue=ISS-35"))).toBe(
-      "Issue ISS-35",
+      "Task ISS-35",
     );
     expect(workspaceHistoryLocationLabel(location(0, "/issues", "?triage=true"))).toBe(
-      "Issue triage",
+      "Task triage",
     );
     expect(workspaceHistoryLocationLabel(location(0, "/projects/pathway"))).toBe("Project pathway");
     expect(workspaceHistoryLocationLabel(location(0, "/threads/local/thread-123"))).toBe(

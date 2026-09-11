@@ -565,13 +565,13 @@ function IssuesListView({
     if (issues.length === 0) return;
     const first = issues[0];
     if (first === undefined) return;
-    const title = issues.length === 1 ? `${first.key} deleted` : `${issues.length} issues deleted`;
+    const title = issues.length === 1 ? `${first.key} deleted` : `${issues.length} tasks deleted`;
     void (async () => {
       const deleted: Array<IssueId> = [];
       for (const issue of issues) {
         if (
           !reportIssueWriteFailure(
-            "Failed to delete the issue",
+            "Failed to delete the task",
             await deleteIssue({ issueId: issue.id }),
           )
         ) {
@@ -591,7 +591,7 @@ function IssuesListView({
                 toastManager.close(toastId);
                 for (const issueId of deleted) {
                   reportIssueWriteFailure(
-                    "Failed to restore the issue",
+                    "Failed to restore the task",
                     await restoreIssue({ issueId }),
                   );
                 }
@@ -617,7 +617,7 @@ function IssuesListView({
         : selectedIssues.every(
               (issue) => issue.deletedAt !== null || investigatingIssueIds.has(issue.id),
             )
-          ? "Every selected issue is deleted or already being investigated."
+          ? "Every selected task is deleted or already being investigated."
           : null;
 
   const bulkInvestigate = (projectId: ProjectId) => {
@@ -643,7 +643,7 @@ function IssuesListView({
     storeStatus === "disconnected"
       ? ISSUE_INVESTIGATE_BLOCK_REASONS.disconnected
       : investigationProjects.length === 0
-        ? "Connect a workspace to a project before asking AI about these issues."
+        ? "Connect a workspace to a project before asking AI about these tasks."
         : assistantDraftPending
           ? "The discussion is being prepared."
           : null;
@@ -670,7 +670,7 @@ function IssuesListView({
           startFromOrigin: false,
           worktreePath: null,
         });
-        if (opened === null) throw new Error("The issue discussion draft could not be created.");
+        if (opened === null) throw new Error("The task discussion draft could not be created.");
         useComposerDraftStore
           .getState()
           .setIssueContexts(
@@ -679,10 +679,10 @@ function IssuesListView({
           );
         const title =
           issues.length === 1
-            ? (issues[0]?.key ?? "Issue discussion")
+            ? (issues[0]?.key ?? "Task discussion")
             : issues.length === 2
               ? issues.map((issue) => issue.key).join(" + ")
-              : `${issues.length} issues`;
+              : `${issues.length} tasks`;
         const assistantTab = {
           id: `thread:${opened.threadId}`,
           kind: "draft",
@@ -704,7 +704,7 @@ function IssuesListView({
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to start the issue discussion",
+            title: "Failed to start the task discussion",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -729,7 +729,7 @@ function IssuesListView({
         startFromOrigin: false,
         worktreePath: null,
       });
-      if (opened === null) throw new Error("The issue side chat draft could not be created.");
+      if (opened === null) throw new Error("The task side chat draft could not be created.");
       const tab = {
         id: `thread:${opened.threadId}`,
         kind: "draft",
@@ -752,7 +752,7 @@ function IssuesListView({
       toastManager.add(
         stackedThreadToast({
           type: "error",
-          title: "Failed to start the issue side chat",
+          title: "Failed to start the task side chat",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );
@@ -790,7 +790,7 @@ function IssuesListView({
   // One write for both halves of a manual-order drag: the contract carries `statusId` alongside
   // the key so a row never renders in the new group with the old neighbours, or the other way round.
   const moveIssueByDrop = (drop: IssuesBoardDrop | IssuesListDrop) => {
-    write("Failed to move the issue", () =>
+    write("Failed to move the task", () =>
       setIssueSortOrder({
         issueId: drop.issueId,
         sortOrder: drop.sortOrder,
@@ -860,7 +860,7 @@ function IssuesListView({
   ]);
 
   const { copyToClipboard: copyIssueField } = useCopyToClipboard<IssueContextMenuCopyField>({
-    target: "issue",
+    target: "task",
     onCopy: (field) => {
       toastManager.add({
         type: "success",
@@ -918,7 +918,7 @@ function IssuesListView({
     void (async () => {
       if (issue.projectId !== projectId) {
         const assignmentFailed = reportIssueWriteFailure(
-          "Failed to assign the issue to the project",
+          "Failed to assign the task to the project",
           await updateIssue({ issueId: issue.id, patch: { projectId } }),
         );
         if (assignmentFailed) return;
@@ -1001,14 +1001,14 @@ function IssuesListView({
             COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
           )}
         >
-          <WorkspaceBreadcrumb ariaLabel="Issues breadcrumb">
-            <WorkspaceBreadcrumbItem current>Issues</WorkspaceBreadcrumbItem>
+          <WorkspaceBreadcrumb ariaLabel="Tasks breadcrumb">
+            <WorkspaceBreadcrumbItem current>Tasks</WorkspaceBreadcrumbItem>
           </WorkspaceBreadcrumb>
         </header>
 
         <div className="flex items-center gap-2 border-b border-border/50 px-3 py-1.5 sm:px-5">
           <div
-            aria-label="Issue tabs"
+            aria-label="Task tabs"
             className="flex items-center gap-0.5 rounded-lg bg-muted/40 p-0.5"
             role="tablist"
           >
@@ -1035,7 +1035,7 @@ function IssuesListView({
           </div>
 
           <span className="text-xs tabular-nums text-muted-foreground/70">
-            {view.total} {view.total === 1 ? "issue" : "issues"}
+            {view.total} {view.total === 1 ? "task" : "tasks"}
           </span>
 
           <div className="ms-auto flex items-center gap-1">
@@ -1075,7 +1075,7 @@ function IssuesListView({
               </Button>
             </div>
             <Toggle
-              aria-label="Toggle issues sidebar"
+              aria-label="Toggle tasks sidebar"
               onPressedChange={setAssistantPanelOpen}
               pressed={assistantPanelOpen}
               size="sm"
@@ -1085,7 +1085,7 @@ function IssuesListView({
             </Toggle>
             <Button onClick={() => openNewIssue(null)} size="xs" variant="outline">
               <PlusIcon />
-              New issue
+              New task
             </Button>
           </div>
         </div>
@@ -1118,7 +1118,7 @@ function IssuesListView({
                 <EmptyTitle>No environment connected</EmptyTitle>
                 <EmptyDescription>
                   The tracker lives on the machine you are connected to. Connect one to see its
-                  issues.
+                  tasks.
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -1132,7 +1132,7 @@ function IssuesListView({
                 <EmptyMedia variant="icon">
                   <ListTodoIcon />
                 </EmptyMedia>
-                <EmptyTitle>No issues yet</EmptyTitle>
+                <EmptyTitle>No tasks yet</EmptyTitle>
                 <EmptyDescription>
                   Create the first one, or bring a whole tracker across with a CSV.
                 </EmptyDescription>
@@ -1141,7 +1141,7 @@ function IssuesListView({
                 <div className="flex items-center gap-2">
                   <Button onClick={() => openNewIssue(null)} size="sm">
                     <PlusIcon />
-                    New issue
+                    New task
                   </Button>
                   <Button
                     render={<Link to="/settings/issues-import" />}
@@ -1159,7 +1159,7 @@ function IssuesListView({
                 <EmptyTitle>Nothing here</EmptyTitle>
                 <EmptyDescription>
                   {filterActive
-                    ? "No issue in this tab matches every filter."
+                    ? "No task in this tab matches every filter."
                     : tab === "active"
                       ? "Nothing is started or waiting to start."
                       : "This tab is empty."}
@@ -1199,7 +1199,7 @@ function IssuesListView({
             >
               <SortableContext items={listDragItems} strategy={verticalListSortingStrategy}>
                 <LegendList<IssuesListRowModel>
-                  aria-label="Issues"
+                  aria-label="Tasks"
                   className="scrollbar-gutter-both h-full min-h-0 overflow-x-hidden"
                   data={rows}
                   estimatedItemSize={ESTIMATED_ROW_HEIGHT}

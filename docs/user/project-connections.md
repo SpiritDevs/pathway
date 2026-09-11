@@ -20,7 +20,7 @@ To choose an available machine automatically for new threads, enable [load balan
 
 If two project entries were created because their Git remotes disagreed, open the project you want
 to keep in **Settings > Projects** and choose **Merge project**. Select the duplicate and then select
-the correct Git repository. Pathway moves the duplicate's connections, threads, and issues into the
+the correct Git repository. Pathway moves the duplicate's connections, threads, and tasks into the
 project you kept.
 
 When **All Companies** combines matching checkouts owned by different companies, select the company

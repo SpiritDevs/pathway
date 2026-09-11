@@ -176,7 +176,7 @@ export function LabelsSettingsPanel() {
         >
           <SettingsRow
             title="Select a company"
-            description="Choose the company whose issue labels you want to configure."
+            description="Choose the company whose task labels you want to configure."
           />
         </SettingsSection>
       </SettingsPageContainer>
@@ -189,7 +189,7 @@ export function LabelsSettingsPanel() {
         <SettingsSection {...searchableSetting("issue-labels")}>
           <SettingsRow
             title="No environment connected"
-            description="The issue tracker belongs to the environment you are connected to. Connect one to configure its labels."
+            description="The task tracker belongs to the environment you are connected to. Connect one to configure its labels."
           />
         </SettingsSection>
       </SettingsPageContainer>
@@ -202,7 +202,7 @@ export function LabelsSettingsPanel() {
         <SettingsSection {...searchableSetting("issue-labels")}>
           <SettingsRow
             title="Labels"
-            description="Flat and colour-coded, shared by every issue in this environment. Importing a CSV creates any label the file mentions."
+            description="Flat and colour-coded, shared by every task in this environment. Importing a CSV creates any label the file mentions."
           />
           {storeStatus === "loading" && labels.length === 0 ? (
             <div className="flex items-center gap-2 px-3 py-3 text-sm text-muted-foreground sm:px-4">
@@ -246,7 +246,7 @@ export function LabelsSettingsPanel() {
                     }}
                   />
                   <span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                    {count === 1 ? "1 issue" : `${count} issues`}
+                    {count === 1 ? "1 task" : `${count} tasks`}
                   </span>
                   <Button
                     size="icon-xs"
@@ -314,8 +314,8 @@ export function LabelsSettingsPanel() {
             <AlertDialogTitle>Delete {pendingDelete?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingUsage === 1
-                ? "1 issue wears this label and will lose it. The issues themselves are untouched."
-                : `${pendingUsage} issues wear this label and will lose it. The issues themselves are untouched.`}
+                ? "1 task wears this label and will lose it. The tasks themselves are untouched."
+                : `${pendingUsage} tasks wear this label and will lose it. The tasks themselves are untouched.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

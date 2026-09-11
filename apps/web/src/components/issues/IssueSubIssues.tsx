@@ -56,7 +56,7 @@ export function IssueSubIssues({
           type="button"
         >
           <PlusIcon className="size-3.5" />
-          Add sub-issues
+          Add subtasks
         </button>
       ) : (
         <>
@@ -72,14 +72,14 @@ export function IssueSubIssues({
               ) : (
                 <ChevronDownIcon className="size-3" />
               )}
-              <span>Sub-issues</span>
+              <span>Subtasks</span>
               <span className="flex items-center gap-1 text-[11px] font-normal tabular-nums">
                 <IssueProgressRing done={rollup.done} total={rollup.total} />
                 {rollup.done}/{rollup.total}
               </span>
             </button>
             <Button
-              aria-label="Add sub-issue"
+              aria-label="Add subtask"
               className="ms-auto text-muted-foreground"
               onClick={openComposer}
               size="icon-xs"

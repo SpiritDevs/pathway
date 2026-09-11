@@ -276,7 +276,7 @@ export const pullRequestObserverLive = Layer.effect(
         .recordThreadPullRequest(input)
         .pipe(
           Effect.catchCause((cause) =>
-            Effect.logWarning("Failed to attach a thread pull request to its issue.", { cause }),
+            Effect.logWarning("Failed to attach a thread pull request to its task.", { cause }),
           ),
         ),
   })),

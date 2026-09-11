@@ -83,7 +83,7 @@ interface MilestoneProgress {
 function MilestoneProgressCell({ name, progress }: { name: string; progress: MilestoneProgress }) {
   if (progress.total === 0) {
     return (
-      <span className="w-20 shrink-0 text-right text-xs text-muted-foreground/70">No issues</span>
+      <span className="w-20 shrink-0 text-right text-xs text-muted-foreground/70">No tasks</span>
     );
   }
   return (
@@ -444,7 +444,7 @@ export function MilestonesSettingsPanel() {
         <SettingsSection {...searchableSetting("issue-milestones")}>
           <SettingsRow
             title="No environment connected"
-            description="The issue tracker belongs to the environment you are connected to. Connect one to plan its milestones."
+            description="The task tracker belongs to the environment you are connected to. Connect one to plan its milestones."
           />
         </SettingsSection>
       </SettingsPageContainer>
@@ -514,8 +514,8 @@ export function MilestonesSettingsPanel() {
             <AlertDialogTitle>Delete {pendingDelete?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
               {pendingCount === 1
-                ? "1 issue is assigned to this milestone and will be left unassigned. It stays in the project, and nothing else about it changes."
-                : `${pendingCount} issues are assigned to this milestone and will be left unassigned. They stay in the project, and nothing else about them changes.`}
+                ? "1 task is assigned to this milestone and will be left unassigned. It stays in the project, and nothing else about it changes."
+                : `${pendingCount} tasks are assigned to this milestone and will be left unassigned. They stay in the project, and nothing else about them changes.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

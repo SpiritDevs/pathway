@@ -37,7 +37,7 @@ struct PathwayIssueWorkView: View {
             Form {
                 if bindings.isEmpty {
                     ContentUnavailableView("Choose a connected project", systemImage: "externaldrive.badge.wifi",
-                                           description: Text("Set this issue’s project in Properties to use an agent in its environment."))
+                                           description: Text("Set this task’s project in Properties to use an agent in its environment."))
                 } else {
                     Section("Environment") {
                         Picker("Run in", selection: $bindingID) {
@@ -131,7 +131,7 @@ struct PathwayIssueWorkView: View {
             }
             if commentBody == nil {
                 Picker("Purpose", selection: $workPurpose) {
-                    Text("Implement issue").tag("implement")
+                    Text("Implement task").tag("implement")
                     Text("Discuss first").tag("discuss")
                 }.onChange(of: workPurpose) { creation.prompt = workPrompt() }
             }
@@ -278,9 +278,9 @@ struct PathwayIssueWorkView: View {
         if let source = issue.fields["slackSource"]?.objectValue?["permalink"]?.stringValue { blocks.append("Source: \(source)") }
         if let pr = issue.fields["pullRequest"]?.objectValue?["url"]?.stringValue { blocks.append("Pull request: \(pr)") }
         if workPurpose == "discuss" {
-            blocks.append("Discuss this issue before implementing. Read it with Pathway MCP's issues_get and help clarify the problem, scope, and next steps. Do not begin implementation unless I explicitly ask.")
+            blocks.append("Discuss this task before implementing. Read it with Pathway MCP's issues_get and help clarify the problem, scope, and next steps. Do not begin implementation unless I explicitly ask.")
         } else {
-            blocks.append("Read this issue with Pathway MCP's issues_get, inspect the relevant code, implement and verify it. Keep the issue current with issues_update and issues_comment, and attach useful visual evidence with issues_comment_evidence when verifying visible behavior. Use Pathway issue tools for this issue.")
+            blocks.append("Read this task with Pathway MCP's issues_get, inspect the relevant code, implement and verify it. Keep the task current with issues_update and issues_comment, and attach useful visual evidence with issues_comment_evidence when verifying visible behavior. Use Pathway task tools for this task.")
         }
         return blocks.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }

@@ -134,7 +134,7 @@ async function insertDefaultIssueStatusChanges(
     });
     const row = await ctx.db.get(statusDocId);
     if (row === null)
-      throw backendError("entity-not-found", "The issue status insert did not persist.");
+      throw backendError("entity-not-found", "The task status insert did not persist.");
     changes.push({
       entityKind: "issueStatus",
       entityId: row.id,
@@ -717,7 +717,7 @@ export const create = mutation({
       throw backendError("invalid-arguments", "A company needs a name.");
     }
     if (args.issueKeyPrefix !== undefined && normalizeIssueKeyPrefix(args.issueKeyPrefix) === "") {
-      throw backendError("invalid-arguments", "An issue key prefix needs at least one character.");
+      throw backendError("invalid-arguments", "A task key prefix needs at least one character.");
     }
     const issueKeyPrefix =
       args.issueKeyPrefix === undefined

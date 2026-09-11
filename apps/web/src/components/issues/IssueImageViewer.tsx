@@ -8,7 +8,7 @@ import { isIssueVideoAttachmentUrl } from "./issueCommentAttachments";
 import { useIssueAttachmentUrls } from "./useIssueAttachmentUrls";
 
 export function issueAttachmentDisplayName(position: number): string {
-  return `Issue attachment ${position}`;
+  return `Task attachment ${position}`;
 }
 
 /**

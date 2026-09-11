@@ -119,7 +119,7 @@ function AddRelationPopover({
           </MenuPopup>
         </Menu>
         <IssueSearchList
-          emptyHint="No other issue matches."
+          emptyHint="No other task matches."
           onPick={(picked) => {
             const input = issueRelationCreateInput({
               issueId: issue.id,
@@ -211,7 +211,7 @@ export function IssueRelationsSection({
                 >
                   {other === undefined ? (
                     <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                      An issue this client has not loaded
+                      A task this client has not loaded
                     </span>
                   ) : (
                     <button

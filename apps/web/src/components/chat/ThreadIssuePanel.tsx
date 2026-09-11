@@ -65,7 +65,7 @@ export function ThreadIssueRow(props: {
       <button
         type="button"
         className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-black/[0.055] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-white/[0.075]"
-        aria-label={`View issue ${issue.key}`}
+        aria-label={`View task ${issue.key}`}
         onClick={() => props.onOpen(issue.key)}
       >
         <div className="min-w-0 flex-1">
@@ -158,12 +158,12 @@ export function ThreadIssuePanel(props: {
             id="thread-details-issue-heading"
             className="text-[11px] font-medium text-muted-foreground"
           >
-            Issues
+            Tasks
           </h3>
         </div>
         <div className="px-2 pb-2.5">
           <ThreadLineageRowList
-            ariaLabel="Issues linked to this thread"
+            ariaLabel="Tasks linked to this thread"
             hiddenCount={hiddenCount}
             onShowMore={showMore}
             pageCount={THREAD_ISSUE_PAGE_COUNT}

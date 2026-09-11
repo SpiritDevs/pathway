@@ -185,7 +185,7 @@ export function IssueContextMenu({
         style={{ left: x, top: y }}
         tabIndex={-1}
       >
-        <span className="sr-only">Issue actions</span>
+        <span className="sr-only">Task actions</span>
       </MenuTrigger>
       <MenuPopup
         align="start"
@@ -360,7 +360,7 @@ export function IssueContextMenu({
           <MenuSubPopup className="min-w-52">
             {projectId === null ? (
               <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                Milestones belong to a project. Put these issues in one first.
+                Milestones belong to a project. Put these tasks in one first.
               </p>
             ) : projectMilestones.length === 0 ? (
               <p className="px-2 py-1.5 text-xs text-muted-foreground">
@@ -504,7 +504,7 @@ export function IssueContextMenu({
           <MenuSubPopup className="min-w-52">
             <MenuGroup>
               <MenuGroupLabel>
-                Delete {issues.length} {issues.length === 1 ? "issue" : "issues"}?
+                Delete {issues.length} {issues.length === 1 ? "task" : "tasks"}?
               </MenuGroupLabel>
             </MenuGroup>
             <MenuSeparator />

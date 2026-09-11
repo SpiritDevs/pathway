@@ -237,7 +237,7 @@ export const SEED_ROLES: readonly SeedRole[] = [
   {
     key: "member",
     name: "Member",
-    description: "Works issues in the teams they belong to.",
+    description: "Works tasks in the teams they belong to.",
     permissions: [
       "company.read",
       "members.read",

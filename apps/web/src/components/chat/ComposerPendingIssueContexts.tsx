@@ -69,7 +69,7 @@ export function ComposerPendingIssueContexts({
 }) {
   if (contexts.length === 0) return null;
   return (
-    <div className={cn("flex flex-wrap gap-1.5", className)} aria-label="Issues in this discussion">
+    <div className={cn("flex flex-wrap gap-1.5", className)} aria-label="Tasks in this discussion">
       {contexts.map((context) => (
         <ComposerPendingIssueContextChip
           key={context.id}

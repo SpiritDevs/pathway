@@ -391,7 +391,7 @@ const issueAttachmentLabel = (
   total: number,
 ) =>
   [
-    `Issue attachment ${position} of ${total} on ${issueKey}`,
+    `Task attachment ${position} of ${total} on ${issueKey}`,
     `Attachment id: ${attachment.attachmentId}`,
     `Source: comment ${attachment.commentNumber} by ${attachment.author} at ${attachment.commentCreatedAt}`,
     `Comment body:\n${attachment.commentBody}`,
@@ -458,7 +458,7 @@ export const issueDetailCallToolResult = Effect.fn("McpHttpServer.issueDetailCal
       const omitted = attachments.length - included;
       content.push({
         type: "text",
-        text: `${omitted} issue attachment${omitted === 1 ? " was" : "s were"} not included directly in this bounded response. Use issues_get_attachment for another listed image; video evidence remains playable on the Pathway issue.`,
+        text: `${omitted} task attachment${omitted === 1 ? " was" : "s were"} not included directly in this bounded response. Use issues_get_attachment for another listed image; video evidence remains playable on the Pathway task.`,
       });
     }
     return { isError: false, structuredContent: enrichedDetail, content };
@@ -509,7 +509,7 @@ export const issueAttachmentCallToolResult = Effect.fn(
         { type: "text", text: issueAttachmentLabel(result.key, enrichedResult.attachment, 1, 1) },
         {
           type: "text",
-          text: `This attachment is ${image.mimeType} (${image.sizeBytes} bytes). MCP has no inline video content block; it is attached to and playable from the Pathway issue.`,
+          text: `This attachment is ${image.mimeType} (${image.sizeBytes} bytes). MCP has no inline video content block; it is attached to and playable from the Pathway task.`,
         },
       ],
     };

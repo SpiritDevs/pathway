@@ -47,7 +47,7 @@ export function ProjectConfigurationSheet({
             Move to another company…
           </Button>
           <p className="mt-2 text-xs text-muted-foreground">
-            Issues and milestones move with the project. Issue keys are re-issued under the new
+            Tasks and milestones move with the project. Task keys are re-issued under the new
             company&rsquo;s prefix and cannot be changed back.
           </p>
         </div>

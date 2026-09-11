@@ -503,7 +503,7 @@ async function requireExecutingRun(
     throw backendError("permission-denied", "Only the source environment may execute an import.");
   }
   const run = await runById(ctx, actor.company._id, runId);
-  if (run === null) throw backendError("entity-not-found", `No issue import run ${runId}.`);
+  if (run === null) throw backendError("entity-not-found", `No task import run ${runId}.`);
   if (run.sourceEnvironmentId !== actor.registration.environmentId) {
     throw backendError("permission-denied", "This import belongs to another environment.");
   }
@@ -681,7 +681,7 @@ async function requireReferences(
         entity.parentId !== null &&
         (await byDomain(ctx, "issues", companyId, entity.parentId)) === null
       )
-        return missing("parent issue", entity.parentId);
+        return missing("parent task", entity.parentId);
       for (const labelId of entity.labelIds) {
         if ((await liveByDomain(ctx, "issueLabels", companyId, labelId)) === null)
           return missing("label", labelId);
@@ -694,10 +694,7 @@ async function requireReferences(
         const result = await team(entity.workflowOwner.teamId);
         if (result !== null) return result;
         if (!entity.teamIds.includes(entity.workflowOwner.teamId)) {
-          return reject(
-            "invalid-arguments",
-            "A team workflow owner must be attached to the issue.",
-          );
+          return reject("invalid-arguments", "A team workflow owner must be attached to the task.");
         }
       }
       return null;
@@ -887,12 +884,12 @@ async function applyOne(
     }
     case "issue": {
       if (!Number.isSafeInteger(entity.keyNumber) || entity.keyNumber < 1) {
-        return reject("invalid-arguments", "An issue key number must be a positive safe integer.");
+        return reject("invalid-arguments", "A task key number must be a positive safe integer.");
       }
       if (entity.key !== `${run.selectedIssueKeyPrefix}-${entity.keyNumber}`) {
         return reject(
           "invalid-arguments",
-          `Issue key ${entity.key} does not match selected prefix ${run.selectedIssueKeyPrefix} and key number ${entity.keyNumber}.`,
+          `Task key ${entity.key} does not match selected prefix ${run.selectedIssueKeyPrefix} and key number ${entity.keyNumber}.`,
         );
       }
       const keyOwner = await ctx.db
@@ -902,7 +899,7 @@ async function applyOne(
         )
         .first();
       if (keyOwner !== null) {
-        return reject("foreign-key-conflict", `Issue key ${entity.key} already exists.`);
+        return reject("foreign-key-conflict", `Task key ${entity.key} already exists.`);
       }
       const docId = await ctx.db.insert("issues", {
         ...withoutEntityKind(entity),
@@ -912,7 +909,7 @@ async function applyOne(
         version: 0,
       });
       const row = await ctx.db.get(docId);
-      if (row === null) throw new Error("An imported issue vanished.");
+      if (row === null) throw new Error("An imported task vanished.");
       return {
         status: "applied",
         change: upsertOrTombstone({
@@ -1255,7 +1252,7 @@ export const start = mutation({
     );
     const selectedIssueKeyPrefix = normalizeIssueKeyPrefix(args.selectedIssueKeyPrefix);
     if (selectedIssueKeyPrefix.length === 0)
-      throw backendError("invalid-arguments", "An issue key prefix needs at least one character.");
+      throw backendError("invalid-arguments", "A task key prefix needs at least one character.");
 
     const existing = await runById(ctx, actor.company._id, args.id);
     if (existing !== null) {
@@ -1297,7 +1294,7 @@ export const start = mutation({
     if (defaultStatuses === null)
       throw backendError(
         "company-not-empty",
-        "Empty-company import requires no issue data or workflow edits.",
+        "Empty-company import requires no task data or workflow edits.",
       );
     if (defaultStatuses.length > 0) {
       for (const status of defaultStatuses) await ctx.db.delete(status._id);
@@ -1403,7 +1400,7 @@ export const applyTrackerConfig = mutation({
     const prefix = normalizeIssueKeyPrefix(args.issueKeyPrefix);
     if (prefix !== run.selectedIssueKeyPrefix)
       throw backendError("invalid-arguments", "Tracker config must use the run's selected prefix.");
-    const next = positiveInteger(args.nextIssueNumber, "The next issue number");
+    const next = positiveInteger(args.nextIssueNumber, "The next task number");
     const company = await ctx.db.get(actor.company._id);
     if (company === null) throw new Error("The import company vanished.");
     if (run.trackerApplied) {
@@ -1419,7 +1416,7 @@ export const applyTrackerConfig = mutation({
       };
     }
     if (next < company.nextIssueNumber)
-      throw backendError("counter-regression", "The issue counter may never move backwards.");
+      throw backendError("counter-regression", "The task counter may never move backwards.");
     const highestImportedIssue = await ctx.db
       .query("issues")
       .withIndex("by_company_import_run_and_key_number", (q) =>
@@ -1430,7 +1427,7 @@ export const applyTrackerConfig = mutation({
     if (highestImportedIssue !== null && next <= highestImportedIssue.keyNumber) {
       throw backendError(
         "counter-regression",
-        `The next issue number must be greater than preserved key ${highestImportedIssue.key}.`,
+        `The next task number must be greater than preserved key ${highestImportedIssue.key}.`,
       );
     }
     if (company.issueKeyPrefix !== prefix) {
@@ -1443,7 +1440,7 @@ export const applyTrackerConfig = mutation({
       if (foreignIssue !== null)
         throw backendError(
           "prefix-change-blocked",
-          "The issue key prefix cannot change while an issue outside this run exists.",
+          "The task key prefix cannot change while a task outside this run exists.",
         );
     }
     const now = Date.now();
@@ -1562,7 +1559,7 @@ export const complete = mutation({
         "Only the source environment may complete an import.",
       );
     const run = await runById(ctx, actor.company._id, args.runId);
-    if (run === null) throw backendError("entity-not-found", `No issue import run ${args.runId}.`);
+    if (run === null) throw backendError("entity-not-found", `No task import run ${args.runId}.`);
     if (
       run.sourceEnvironmentId !== actor.registration.environmentId ||
       run.sourceRegistrationId !== actor.registration._id
@@ -1643,7 +1640,7 @@ export const abandon = mutation({
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
     const run = await runById(ctx, actor.company._id, args.runId);
-    if (run === null) throw backendError("entity-not-found", `No issue import run ${args.runId}.`);
+    if (run === null) throw backendError("entity-not-found", `No task import run ${args.runId}.`);
     if (
       actor.kind === "environment" &&
       (run.sourceEnvironmentId !== actor.registration.environmentId ||

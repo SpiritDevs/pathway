@@ -7,7 +7,7 @@ struct PathwayIssueRecord: Equatable, Identifiable, Sendable {
     var id: String { string("id") ?? "" }
     var identity: String { "\(companyId):\(id)" }
     var key: String { string("key") ?? "Draft" }
-    var title: String { string("title") ?? "Untitled issue" }
+    var title: String { string("title") ?? "Untitled task" }
     var description: String { string("description") ?? "" }
     var statusId: String { string("statusId") ?? "" }
     var priority: String { string("priority") ?? "none" }
@@ -90,12 +90,12 @@ enum PathwayIssueOperations {
     static func validateReceipts(_ response: JSONValue, expectedCount: Int) throws {
         guard let receipts = response.objectValue?["receipts"]?.arrayValue,
               receipts.count == expectedCount else {
-            throw PathwayIssueWriteError(message: "Pathway did not confirm this issue change. Refresh before retrying.")
+            throw PathwayIssueWriteError(message: "Pathway did not confirm this task change. Refresh before retrying.")
         }
         for receipt in receipts {
             guard receipt.objectValue?["status"]?.stringValue == "accepted" else {
                 throw PathwayIssueWriteError(
-                    message: receipt.objectValue?["message"]?.stringValue ?? "This issue change was rejected."
+                    message: receipt.objectValue?["message"]?.stringValue ?? "This task change was rejected."
                 )
             }
         }

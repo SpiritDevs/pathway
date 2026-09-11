@@ -132,7 +132,7 @@ describe("issueStatusDeletability", () => {
     const withOneUnstarted = [BACKLOG, TODO, DOING];
     expect(issueStatusDeletability(withOneUnstarted, TODO.id)).toEqual({
       canDelete: false,
-      reason: "This is the only Unstarted status, and new issues need one to land in.",
+      reason: "This is the only Unstarted status, and new tasks need one to land in.",
     });
     // The rule is about the category, not about being alone: the others still go.
     expect(issueStatusDeletability(withOneUnstarted, BACKLOG.id)).toEqual({ canDelete: true });

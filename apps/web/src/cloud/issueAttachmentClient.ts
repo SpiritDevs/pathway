@@ -88,7 +88,7 @@ export function mapIssueAttachmentClientError(error: unknown): IssueAttachmentCl
   return new IssueAttachmentClientError(
     null,
     typeof navigator !== "undefined" && navigator.onLine === false
-      ? "Attachments need an internet connection on cloud-synced issues."
+      ? "Attachments need an internet connection on cloud-synced tasks."
       : error instanceof Error
         ? error.message
         : "The attachment request failed.",

@@ -150,7 +150,7 @@ export function IssuesBoard({
       sensors={sensors}
     >
       <div
-        aria-label="Issue board"
+        aria-label="Task board"
         className="flex h-full min-h-0 items-stretch gap-3 overflow-x-auto overflow-y-hidden px-3 pb-3 sm:px-5"
       >
         {columns.map((column) => (
@@ -220,7 +220,7 @@ function BoardColumn({
 
   return (
     <section
-      aria-label={`${column.status.name}, ${column.issues.length} issues`}
+      aria-label={`${column.status.name}, ${column.issues.length} tasks`}
       className={cn(
         "flex h-full min-h-0 shrink-0 flex-col rounded-xl border border-border/50 bg-muted/16",
         COLUMN_WIDTH_CLASS,
@@ -233,7 +233,7 @@ function BoardColumn({
         </span>
         <span className="text-xs tabular-nums text-muted-foreground">{column.issues.length}</span>
         <Button
-          aria-label={`New issue in ${column.status.name}`}
+          aria-label={`New task in ${column.status.name}`}
           className="ms-auto"
           onClick={() => onNewIssue(column.status.id)}
           size="icon-xs"
@@ -435,7 +435,7 @@ function IssueBoardCardImpl({
         {childRollup === null ? null : (
           <span
             className="flex shrink-0 items-center gap-1 text-[11px] tabular-nums text-muted-foreground"
-            title={`${childRollup.done} of ${childRollup.total} sub-issues done`}
+            title={`${childRollup.done} of ${childRollup.total} subtasks done`}
           >
             <IssueProgressRing
               className="size-3"

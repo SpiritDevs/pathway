@@ -30,7 +30,7 @@ const ROUTE_LABELS: Readonly<Record<string, string>> = {
   "/calendar": "Calendar",
   "/dashboard": "Dashboard",
   "/email": "Email",
-  "/issues": "Issues",
+  "/issues": "Tasks",
   "/issues/milestones": "Milestones",
   "/orchestrator": "Agent",
   "/pull-requests": "Pull requests",
@@ -42,13 +42,13 @@ const ROUTE_LABELS: Readonly<Record<string, string>> = {
   "/settings/diagnostics": "Diagnostics settings",
   "/settings/email": "Email settings",
   "/settings/general": "General settings",
-  "/settings/issues-enrichment": "Issue enrichment settings",
-  "/settings/issues-import": "Issue import settings",
-  "/settings/issues-intake": "Issue intake settings",
+  "/settings/issues-enrichment": "Task enrichment settings",
+  "/settings/issues-import": "Task import settings",
+  "/settings/issues-intake": "Task intake settings",
   "/settings/integrations": "Integration settings",
-  "/settings/issues-labels": "Issue label settings",
-  "/settings/issues-milestones": "Issue milestone settings",
-  "/settings/issues-statuses": "Issue status settings",
+  "/settings/issues-labels": "Task label settings",
+  "/settings/issues-milestones": "Task milestone settings",
+  "/settings/issues-statuses": "Task status settings",
   "/settings/keybindings": "Keybinding settings",
   "/settings/projects": "Project settings",
   "/settings/providers": "Provider settings",
@@ -75,12 +75,12 @@ export function workspaceHistoryLocationLabel(
 
   if (pathname === "/issues") {
     const issueKey = search.get("issue")?.trim();
-    if (issueKey) return `Issue ${issueKey}`;
-    if (search.get("triage") === "true") return "Issue triage";
+    if (issueKey) return `Task ${issueKey}`;
+    if (search.get("triage") === "true") return "Task triage";
     const tab = search.get("tab");
-    if (tab === "backlog") return "Backlog issues";
-    if (tab === "all") return "All issues";
-    return "Active issues";
+    if (tab === "backlog") return "Backlog tasks";
+    if (tab === "all") return "All tasks";
+    return "Active tasks";
   }
 
   const staticLabel = ROUTE_LABELS[pathname];

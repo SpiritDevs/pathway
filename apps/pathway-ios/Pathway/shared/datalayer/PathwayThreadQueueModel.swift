@@ -406,7 +406,7 @@ final class PathwayThreadQueueModel {
         ]))
         guard current == generation, companyIDs.contains(companyID), !Task.isCancelled else { throw CancellationError() }
         guard result.objectValue?["thread"]?.objectValue?["threadId"]?.stringValue == threadID else {
-            throw PathwayThreadConversationError.message("Your thread is saved on this device. Sync it to Pathway Cloud before linking it to this issue.")
+            throw PathwayThreadConversationError.message("Your thread is saved on this device. Sync it to Pathway Cloud before linking it to this task.")
         }
     }
 

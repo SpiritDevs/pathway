@@ -71,7 +71,7 @@ export function IssuesBulkBar({
       <div
         className="pointer-events-auto flex items-center gap-1 rounded-xl border border-border/70 bg-popover/95 p-1 shadow-lg backdrop-blur-sm"
         role="toolbar"
-        aria-label="Bulk issue actions"
+        aria-label="Bulk task actions"
       >
         <span className="px-2 text-xs tabular-nums text-muted-foreground">
           {issues.length} selected
@@ -123,7 +123,7 @@ export function IssuesBulkBar({
           Investigate
         </IssueInvestigateProjectMenu>
         <Button
-          aria-label={`Ask AI about ${issues.length} selected ${issues.length === 1 ? "issue" : "issues"}`}
+          aria-label={`Ask AI about ${issues.length} selected ${issues.length === 1 ? "task" : "tasks"}`}
           disabled={askDisabledReason !== null}
           onClick={onAsk}
           size="icon-xs"
