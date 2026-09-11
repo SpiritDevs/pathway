@@ -159,6 +159,8 @@ import { type LegendListRef } from "@legendapp/list/react";
 import {
   getAnchoredTurnMetrics,
   scrollTimelineToEndIfFollowing,
+  shouldAnchorTimelineActivity,
+  type TimelineActivityObservation,
   type TimelineScrollMode,
 } from "./chat/timelineScrollAnchoring";
 import {
@@ -4992,12 +4994,12 @@ function ChatViewContent(props: ChatViewProps) {
   const positionedTimelineAnchorRef = useRef<MessageId | null>(null);
   const settledTimelineAnchorRef = useRef<MessageId | null>(null);
   const activeTimelineAnchorIndexRef = useRef<number | null>(null);
-  const observedTimelineActivityRef = useRef<{
-    readonly threadKey: string | null;
-    readonly runId: RunId | null;
-  }>({
+  const isTimelineLive = serverProjection !== null && serverThreadStatus === "live";
+  const observedTimelineActivityRef = useRef<TimelineActivityObservation>({
     threadKey: activeThreadKey,
     runId: activeActivityRun?.runId ?? null,
+    runStatus: activeActivityRun?.status ?? null,
+    isLive: isTimelineLive,
   });
   const anchorUserScrollGenerationRef = useRef(0);
   const liveFollowUserScrollGenerationRef = useRef<number | null>(0);
@@ -5055,31 +5057,23 @@ function ChatViewContent(props: ChatViewProps) {
       cancelTimelineLiveFollowForUserNavigation;
   }, [cancelTimelineLiveFollowForUserNavigation]);
   useEffect(() => {
-    const observed = observedTimelineActivityRef.current;
-    if (observed.threadKey !== activeThreadKey) {
-      observedTimelineActivityRef.current = {
-        threadKey: activeThreadKey,
-        runId: activeActivityRun?.runId ?? null,
-      };
-      return;
-    }
-    if (
-      activeActivityRun === null ||
-      activeActivityRun.status === "queued" ||
-      observed.runId === activeActivityRun.runId
-    ) {
+    const activity = {
+      threadKey: activeThreadKey,
+      runId: activeActivityRun?.runId ?? null,
+      runStatus: activeActivityRun?.status ?? null,
+      isLive: isTimelineLive,
+    };
+    if (!shouldAnchorTimelineActivity(observedTimelineActivityRef.current, activity)) {
+      observedTimelineActivityRef.current = activity;
       return;
     }
     const dispatchedUserItem = serverProjection?.visibleTurnItems.find(
-      (row) => row.item.type === "user_message" && row.item.runId === activeActivityRun.runId,
+      (row) => row.item.type === "user_message" && row.item.runId === activity.runId,
     );
     if (dispatchedUserItem?.item.type !== "user_message") {
       return;
     }
-    observedTimelineActivityRef.current = {
-      threadKey: activeThreadKey,
-      runId: activeActivityRun.runId,
-    };
+    observedTimelineActivityRef.current = activity;
     if (
       pendingTimelineAnchorRef.current !== null ||
       timelineScrollModeRef.current === "free-scrolling"
@@ -5096,7 +5090,21 @@ function ChatViewContent(props: ChatViewProps) {
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
     setTimelineAnchor({ threadKey: activeThreadKey, messageId });
-  }, [activeActivityRun, activeThreadKey, serverProjection]);
+  }, [activeActivityRun, activeThreadKey, isTimelineLive, serverProjection]);
+
+  // A cold thread can mount the list with only a loading row. Land at the real
+  // end once history is synchronized, respecting any navigation or send meanwhile.
+  useEffect(() => {
+    if (!isTimelineLive) return;
+    const frame = requestAnimationFrame(() => {
+      scrollTimelineToEndIfFollowing({
+        timeline: legendListRef.current,
+        scrollMode: timelineScrollModeRef.current,
+        animated: false,
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeThreadKey, isTimelineLive]);
   const getActiveTimelineTurnMetrics = useCallback(
     (list?: LegendListRef | null) => {
       const resolvedList = list ?? legendListRef.current;
