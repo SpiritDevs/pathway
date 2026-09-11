@@ -24,9 +24,15 @@ import { ConvexClient } from "convex/browser";
 import { ConvexError } from "convex/values";
 import { makeFunctionReference } from "convex/server";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { readThreadShell } from "../state/entities";
+import { readThreadShell, readThreadProjection } from "../state/entities";
+import { environmentCatalog } from "../connection/catalog";
+import { threadEnvironment } from "../state/threads";
+import { useAtomCommand } from "../state/use-atom-command";
+import { shouldSendTurnToEnvironment, prepareDirectTurnAttachments } from "./threadTurnDelivery";
 import { subscribeThreadQueuePages } from "./threadQueuePages";
 import { isDefinitiveQueueRejection } from "./threadQueueErrors";
 import { scopedCompanyRegistryReplicasAtom } from "./activeCompany";
@@ -482,9 +488,60 @@ export async function queueThreadTurn(target: QueuedThreadTurnTarget) {
 }
 
 export function useQueuedStartThreadTurn() {
+  const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   return useCallback(
-    (target: QueuedThreadTurnTarget) => settlePromise(() => queueThreadTurn(target)),
-    [],
+    async (target: QueuedThreadTurnTarget) => {
+      const queued = findQueuedThread(
+        appAtomRegistry.get(threadQueueRowsAtom),
+        target.environmentId,
+        target.input.threadId,
+      );
+      const connected =
+        Option.getOrNull(
+          AsyncResult.value(
+            appAtomRegistry.get(environmentCatalog.stateAtom(target.environmentId)),
+          ),
+        )?.phase === "connected";
+      const localPending = appAtomRegistry
+        .get(localThreadQueueAtom)
+        .some(
+          (message) =>
+            !message.canceled &&
+            message.threadId === target.input.threadId &&
+            (message.queueId
+              ? message.queueId === queued?.queueId
+              : message.environmentId === target.environmentId),
+        );
+      if (
+        !shouldSendTurnToEnvironment({
+          connected,
+          hasThreadProjection:
+            readThreadProjection({
+              environmentId: target.environmentId,
+              threadId: target.input.threadId,
+            }) !== null,
+          bootstrap: target.input.bootstrap,
+          pendingCloudMessages: localPending || (queued?.queuedCount ?? 0) > 0,
+        })
+      )
+        return settlePromise(() => queueThreadTurn(target));
+      const attachments = await settlePromise(() =>
+        target.durableAttachments
+          ? prepareDirectTurnAttachments(target.durableAttachments)
+          : Promise.resolve(target.input.message.attachments),
+      );
+      if (attachments._tag === "Failure") return attachments;
+      // Do not resubmit through cloud after a transport failure: the environment
+      // may already have accepted this turn before the acknowledgement was lost.
+      return startTurn({
+        environmentId: target.environmentId,
+        input: {
+          ...target.input,
+          message: { ...target.input.message, attachments: attachments.value },
+        },
+      });
+    },
+    [startTurn],
   );
 }
 

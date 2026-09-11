@@ -1,6 +1,6 @@
 # Queued threads and messages
 
-Sending saves your thread and message before its environment starts work. A queued thread stays in
+Starting a thread or sending to a disconnected environment saves your message before the environment starts work. A queued thread stays in
 Agent Threads when you leave the conversation or close the app. After cloud sync, you can reopen
 it on another device.
 
@@ -27,6 +27,13 @@ follow-ups as well. Canceled messages remain available to retry; retrying places
 of the queue. If a send's acknowledgement is uncertain, reconnect before changing that message
 so Pathway can confirm whether it was accepted. If a prerequisite is missing, the thread stays
 saved with the reason and a retry action. A connection failure does not discard your work.
+
+## Queue a follow-up during active work
+
+When connected to an existing thread, queued follow-ups appear in the message stack above the
+composer. You can edit, steer, delete, or reorder them there while the agent continues working.
+Offline delivery uses the saved-message controls described above. Pending offline messages retain
+their order when the environment reconnects.
 
 ## Move an unstarted thread
 
