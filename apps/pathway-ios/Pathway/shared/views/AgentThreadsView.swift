@@ -151,6 +151,7 @@ struct AgentThreadsView: View {
                 Button { queuedThread = queued } label: {
                     if let thread = try? queued.conversationThread(detail: .object(["thread": .object(queued.fields)])) {
                         AgentThreadRow(thread: thread, provider: threadProviders.provider(for: thread))
+                            .overlay(alignment: .leading) { unreadDot(for: thread) }
                     } else {
                         VStack(alignment: .leading, spacing: 5) {
                             Text(queued.title).foregroundStyle(.primary)
@@ -454,11 +455,20 @@ struct AgentThreadsView: View {
 }
 
 private extension AgentThreadsView {
+    @ViewBuilder private func unreadDot(for thread: PathwayAgentThread) -> some View {
+        if focuses.hasUnreadNotification(thread) {
+            Circle().fill(.blue).frame(width: 6, height: 6).offset(x: -14)
+                .accessibilityLabel("Unread notification")
+                .allowsHitTesting(false)
+        }
+    }
+
     private func threadLink(_ thread: PathwayAgentThread) -> some View {
         Button {
             routedThreadID = thread.id
         } label: {
             AgentThreadRow(thread: thread, provider: threadProviders.provider(for: thread))
+                .overlay(alignment: .leading) { unreadDot(for: thread) }
         }
         .buttonStyle(.plain)
         .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
@@ -529,6 +539,7 @@ private extension AgentThreadsView {
             AgentThreadDetailRoute(thread: thread)
         } label: {
             CompactAgentThreadRow(thread: thread, icon: icon)
+                .overlay(alignment: .leading) { unreadDot(for: thread) }
         }
         .listRowSeparator(.hidden)
         .contextMenu { threadMenu(thread) }
@@ -850,6 +861,7 @@ struct AgentThreadConversationView: View {
     @Environment(PathwayAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.compactThreadChrome) private var compactThreadChrome
     @State private var model: PathwayAgentThreadModel
     @State private var isComposerExpanded = false
@@ -1076,6 +1088,12 @@ struct AgentThreadConversationView: View {
             if deletedAt != nil { dismiss() }
         }
         .task { model.threadQueue = appModel.cloud.threadQueue; model.start() }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            do {
+                try await PathwayFocusModel.readThreadNotifications(environmentID: model.thread.environmentId, threadID: model.threadID, cloud: appModel.cloud)
+            } catch is CancellationError {} catch { navigationError = error.localizedDescription }
+        }
         .task(id: model.environment.id) {
             if model.providers.isEmpty { await model.loadSavedQueueProviders(using: appModel.cloud.threadQueue, companyID: model.thread.companyId) }
         }

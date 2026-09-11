@@ -45,12 +45,7 @@ function FocusNotificationRow(props: {
           props.row.unread && "bg-primary/[0.04]",
         )}
       >
-        {props.row.unread ? (
-          <span
-            aria-label="Unread"
-            className="absolute left-1 top-3 size-1.5 rounded-full bg-primary"
-          />
-        ) : null}
+        {props.row.unread ? <span className="sr-only">Unread</span> : null}
         <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-muted/70 text-muted-foreground group-hover:text-foreground">
           <EventIcon aria-hidden className="size-3.5" />
         </span>

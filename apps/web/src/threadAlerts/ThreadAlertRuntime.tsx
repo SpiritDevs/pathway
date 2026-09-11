@@ -37,6 +37,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { toastManager } from "../components/ui/toast";
 import { ThreadAlertHost } from "./ThreadAlertHost";
+import { useReadThreadNotifications } from "./useReadThreadNotifications";
 import {
   threadAlertAccountAtom,
   threadAlertPolicyScopesAtom,
@@ -72,6 +73,12 @@ export function ThreadAlertRuntime() {
   );
   const params = useParams({ strict: false });
   const focusedThread = resolveThreadRouteRef(params);
+  useReadThreadNotifications({
+    account: isSignedIn && userId === account ? userId : null,
+    thread: focusedThread,
+    notifications: rows,
+    markRead: mutations?.markNotificationRead,
+  });
   const navigate = useNavigate();
   const eventEnvironmentIds = useMemo(
     () => [...new Set(rows.map((row) => row.environmentId))],

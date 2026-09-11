@@ -79,12 +79,7 @@ export const FocusNotificationBadge = memo(function FocusNotificationBadge(
   const className =
     "relative flex size-6 shrink-0 items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring";
   return props.interactive ? (
-    <PopoverTrigger
-      type="button"
-      aria-label={label}
-      title={label}
-      className={className}
-    >
+    <PopoverTrigger type="button" aria-label={label} title={label} className={className}>
       {content}
     </PopoverTrigger>
   ) : (
@@ -167,9 +162,7 @@ export function FocusStrip(props: {
 }) {
   const [editorFocusId, setEditorFocusId] = useState<FocusId | null | undefined>(undefined);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [trayUnreadCount, setTrayUnreadCount] = useState(0);
   const [clearingNotifications, setClearingNotifications] = useState(false);
-  const [trayNotifications, setTrayNotifications] = useState<ReadonlyArray<FocusNotification>>([]);
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     stripElement
@@ -240,8 +233,6 @@ export function FocusStrip(props: {
   );
   const openNotifications = useCallback(() => {
     setEditorFocusId(undefined);
-    setTrayUnreadCount(props.unreadCount);
-    setTrayNotifications([...props.notifications]);
     setNotificationsOpen(true);
     void props.mutations?.markAllNotificationsSeen().catch((error: unknown) => {
       toastManager.add({
@@ -250,7 +241,7 @@ export function FocusStrip(props: {
         description: error instanceof Error ? error.message : "Please try opening the tray again.",
       });
     });
-  }, [props.mutations, props.notifications, props.unreadCount]);
+  }, [props.mutations]);
   useEffect(() => {
     window.addEventListener("pathway:open-notification-tray", openNotifications);
     return () => window.removeEventListener("pathway:open-notification-tray", openNotifications);
@@ -260,8 +251,6 @@ export function FocusStrip(props: {
     setClearingNotifications(true);
     try {
       await props.mutations.clearAllNotifications();
-      setTrayNotifications([]);
-      setTrayUnreadCount(0);
     } catch (error) {
       toastManager.add({
         type: "error",
@@ -381,7 +370,9 @@ export function FocusStrip(props: {
           )}
           <FocusNotificationBadge
             unreadCount={props.unreadCount}
-            notificationCount={props.notifications.length}
+            notificationCount={
+              props.notifications.filter((notification) => !notification.isRead).length
+            }
             newCount={
               props.notifications.filter(
                 (notification) => !notification.isRead && !notification.isSeen,
@@ -413,8 +404,8 @@ export function FocusStrip(props: {
           viewportClassName="p-0"
         >
           <FocusNotificationTray
-            notifications={trayNotifications}
-            unreadCount={trayUnreadCount}
+            notifications={props.notifications}
+            unreadCount={props.unreadCount}
             focuses={orderedFocuses}
             assignments={props.assignments}
             activeFocusId={props.activeFocusId}

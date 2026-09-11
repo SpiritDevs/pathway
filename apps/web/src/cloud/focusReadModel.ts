@@ -24,7 +24,12 @@ import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";
 import { useEffect } from "react";
 
-import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
+import {
+  scopedProjectKey,
+  scopeProjectRef,
+  scopedThreadKey,
+  scopeThreadRef,
+} from "@spiritdevs/client-runtime/environment";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "../state/projects";
 import {
@@ -139,6 +144,21 @@ export const focusUnreadCountAtom = Atom.make(0).pipe(
 export const focusNotificationsAtom = Atom.make<ReadonlyArray<FocusNotification>>(
   EMPTY_FOCUS_NOTIFICATIONS,
 ).pipe(Atom.keepAlive, Atom.withLabel("focuses:notifications"));
+
+const unreadNotificationThreadKeysAtom = Atom.make(
+  (get) =>
+    new Set(
+      get(focusNotificationsAtom)
+        .filter((notification) => !notification.isRead)
+        .map((notification) =>
+          scopedThreadKey(scopeThreadRef(notification.environmentId, notification.threadId)),
+        ),
+    ),
+);
+
+export const threadHasUnreadNotificationAtom = Atom.family((threadKey: string) =>
+  Atom.make((get) => get(unreadNotificationThreadKeysAtom).has(threadKey)),
+);
 
 function makeFocusMutations(client: ConvexClient): FocusMutations {
   return {
