@@ -25,6 +25,7 @@ import {
   type AtomCommandResult,
 } from "@spiritdevs/client-runtime/state/runtime";
 import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceControl";
+import { isWorkspaceImagePreviewPath } from "@spiritdevs/shared/filePreview";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import React, {
@@ -101,6 +102,8 @@ import {
   type MarkdownFileLinkMeta,
 } from "../markdown-links";
 import { readLocalApi } from "../localApi";
+import { WorkspaceImageGallery } from "./media/WorkspaceImageGallery";
+import { buildMarkdownImageGallery } from "./media/workspaceImageGallery.logic";
 import { cn } from "../lib/utils";
 import { useRightPanelStore } from "../rightPanelStore";
 import { useActiveEnvironmentId } from "../state/entities";
@@ -1692,6 +1695,11 @@ function ChatMarkdown({
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const textRef = useRef(text);
+  const [imageGallery, setImageGallery] = useState<{
+    paths: ReadonlyArray<string>;
+    initialIndex: number;
+  } | null>(null);
+  const closeImageGallery = useCallback(() => setImageGallery(null), []);
   textRef.current = text;
   const settledText = isStreaming ? null : text;
   // What this message could be mentioning, from its own text alone: no store, no subscription, and
@@ -1880,6 +1888,15 @@ function ChatMarkdown({
       // Claimed on every open so a synchronous one supersedes a lookup already
       // in flight.
       const isLatestLookup = claimWorkspaceBasenameLookup();
+      if (isWorkspaceImagePreviewPath(workspaceRelativePath)) {
+        setImageGallery(
+          buildMarkdownImageGallery(workspaceRelativePath, [
+            ...markdownFileLinkMetaByHref.values(),
+            ...inlineCodeFileLinkMetaByText.values(),
+          ]),
+        );
+        return;
+      }
       const openAt = (path: string) => {
         if (onOpenFilePreview) {
           onOpenFilePreview(path, line);
@@ -1909,7 +1926,14 @@ function ChatMarkdown({
         openAt(match ?? workspaceRelativePath);
       })();
     },
-    [cwd, onOpenFilePreview, searchProjectEntries, threadRef],
+    [
+      cwd,
+      inlineCodeFileLinkMetaByText,
+      markdownFileLinkMetaByHref,
+      onOpenFilePreview,
+      searchProjectEntries,
+      threadRef,
+    ],
   );
   const markdownComponents = useMemo<Components>(
     () =>
@@ -1982,6 +2006,15 @@ function ChatMarkdown({
       onCopy={handleCopy}
     >
       {markdownElement}
+      {imageGallery && threadRef ? (
+        <WorkspaceImageGallery
+          paths={imageGallery.paths}
+          initialIndex={imageGallery.initialIndex}
+          cwd={cwd}
+          threadRef={threadRef}
+          onClose={closeImageGallery}
+        />
+      ) : null}
     </div>
   );
 }
