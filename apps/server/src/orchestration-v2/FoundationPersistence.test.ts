@@ -293,6 +293,18 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
       ]);
       assert.isTrue((yield* maintenance.verify).valid);
       assert.isTrue((yield* maintenance.rebuild).valid);
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("event:foundation-shared-session:stopped"),
+            type: "provider-session.updated",
+            threadId: firstThreadId,
+            occurredAt: now,
+            payload: { ...secondSession, status: "stopped" },
+          },
+        ],
+      });
+      assert.deepEqual(yield* projectionStore.getRecoveryThreadIds(), []);
     }),
   );
 
@@ -467,6 +479,26 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
       assert.isTrue((yield* maintenance.verify).valid);
       assert.isTrue((yield* maintenance.rebuild).valid);
       yield* assertCrossThreadProjection;
+      const provider = (yield* projectionStore.getThreadProjection(childThreadId))
+        .providerThreads[0]!;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("event:foundation-cross-thread:background"),
+            type: "provider-thread.updated",
+            threadId: childThreadId,
+            occurredAt: now,
+            payload: {
+              ...provider,
+              pendingBackgroundTasks: [{ taskId: "task", description: "Work" }],
+            },
+          },
+        ],
+      });
+      assert.deepEqual(yield* projectionStore.getRecoveryThreadIds(), [
+        childThreadId,
+        parentThreadId,
+      ]);
     }),
   );
 

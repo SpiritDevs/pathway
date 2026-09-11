@@ -82,6 +82,8 @@ import Migration0066 from "./Migrations/066_ProjectionProjectCustomTitle.ts";
 import Migration0067 from "./Migrations/067_AgentTimeTracking.ts";
 import Migration0068 from "./Migrations/068_ProjectlessConversations.ts";
 import Migration0069 from "./Migrations/069_InternalProjectWorkspace.ts";
+import Migration0070 from "./Migrations/070_StartupThreadCreationIndex.ts";
+import Migration0071 from "./Migrations/071_EventMaintenanceIndex.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -163,6 +165,8 @@ export const migrationEntries = [
   [67, "AgentTimeTracking", Migration0067],
   [68, "ProjectlessConversations", Migration0068],
   [69, "InternalProjectWorkspace", Migration0069],
+  [70, "StartupThreadCreationIndex", Migration0070],
+  [71, "EventMaintenanceIndex", Migration0071],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
