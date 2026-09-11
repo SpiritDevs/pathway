@@ -101,6 +101,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   attachmentUploads: Schema.optionalKey(Schema.Boolean),
   /** Question responses accept saved attachments grouped by question. */
   questionAttachments: Schema.optionalKey(Schema.Boolean),
+  /** Server supports ignoring questions without dispatching a follow-up turn. */
+  userInputDismissal: Schema.optionalKey(Schema.Boolean),
   /** Missing on servers that only accept inline image attachments. */
   fileAttachments: Schema.optionalKey(
     Schema.Struct({

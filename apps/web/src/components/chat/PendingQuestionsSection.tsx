@@ -7,11 +7,13 @@ export function PendingQuestionsSection({
   respondingRequestIds,
   onOpen,
   onIgnore,
+  canIgnore = false,
 }: {
   prompts: readonly PendingUserInput[];
   respondingRequestIds: readonly RuntimeRequestId[];
   onOpen: (requestId: RuntimeRequestId) => void;
   onIgnore: (requestId: RuntimeRequestId) => void;
+  canIgnore?: boolean;
 }) {
   if (prompts.length === 0) return null;
   return (
@@ -35,16 +37,18 @@ export function PendingQuestionsSection({
                 <MessageCircleQuestionIcon className="size-4 shrink-0" aria-hidden="true" />
                 <span className="line-clamp-3 whitespace-pre-wrap break-words">{title}</span>
               </button>
-              <button
-                type="button"
-                className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
-                aria-label={`Ignore question: ${title}`}
-                title="Ignore question"
-                disabled={busy}
-                onClick={() => onIgnore(prompt.requestId)}
-              >
-                <XIcon className="size-4" aria-hidden="true" />
-              </button>
+              {canIgnore && (
+                <button
+                  type="button"
+                  className="rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
+                  aria-label={`Ignore question: ${title}`}
+                  title="Ignore question"
+                  disabled={busy}
+                  onClick={() => onIgnore(prompt.requestId)}
+                >
+                  <XIcon className="size-4" aria-hidden="true" />
+                </button>
+              )}
             </div>
           );
         })}

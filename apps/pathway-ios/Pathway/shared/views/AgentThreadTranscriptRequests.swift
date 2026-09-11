@@ -72,6 +72,8 @@ struct AgentTranscriptQuestions: View {
     @State private var responding = false
     @State private var submitted = false
     @State private var errorMessage: String?
+    @State private var dismissalTask: Task<Void, Never>?
+    @State private var isPendingDismissal = false
     @FocusState private var focusedQuestion: String?
 
     private var question: PathwayThreadQuestion? {
@@ -90,7 +92,17 @@ struct AgentTranscriptQuestions: View {
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 }
             }
-            if item.requiresResponse && !submitted, let question {
+            if isPendingDismissal {
+                HStack {
+                    Label(responding ? "Ignoring question…" : "Ignoring in 5 seconds", systemImage: "xmark.circle")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Undo") { cancelUnsentDismissal() }
+                        .buttonStyle(.bordered)
+                        .disabled(responding)
+                        .accessibilityIdentifier("thread-question-undo-\(item.id)")
+                }
+            } else if !submitted, let question, item.requiresResponse || model.canDismissQuestion(item) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(question.header).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     Text(question.question).font(.body.weight(.medium))
@@ -125,6 +137,13 @@ struct AgentTranscriptQuestions: View {
                 }
                 if let errorMessage { Text(errorMessage).font(.caption).foregroundStyle(.red) }
                 HStack {
+                    if model.supportsUserInputDismissal {
+                        Button(role: .destructive) { stageDismissal() } label: {
+                            Label("Ignore", systemImage: "xmark")
+                        }
+                        .disabled(!model.canDismissQuestion(item))
+                        .accessibilityIdentifier("thread-question-ignore-\(item.id)")
+                    }
                     if questionIndex > 0 {
                         Button("Back", systemImage: "chevron.left") { questionIndex -= 1; focusedQuestion = nil }
                     }
@@ -156,6 +175,7 @@ struct AgentTranscriptQuestions: View {
         .accessibilityIdentifier("thread-questions-\(item.id)")
         .onAppear { model.prepareQuestionDraft(for: item) }
         .onChange(of: model.supportsQuestionAttachments) { _, _ in model.prepareQuestionDraft(for: item) }
+        .onDisappear { cancelUnsentDismissal() }
     }
 
     private func optionRow(_ option: PathwayThreadQuestion.Option, index: Int, question: PathwayThreadQuestion) -> some View {
@@ -225,6 +245,32 @@ struct AgentTranscriptQuestions: View {
             do { try await model.respondToQuestions(requestID: requestID, answers: answers); submitted = true }
             catch { errorMessage = error.localizedDescription }
         }
+    }
+    private func stageDismissal() {
+        guard dismissalTask == nil, model.canDismissQuestion(item), let requestID = item.requestID else { return }
+        focusedQuestion = nil
+        errorMessage = nil
+        isPendingDismissal = true
+        dismissalTask = Task {
+            do { try await Task.sleep(for: .seconds(5)) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            responding = true
+            do {
+                try await model.dismissQuestion(requestID: requestID)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            responding = false
+            isPendingDismissal = false
+            dismissalTask = nil
+        }
+    }
+    private func cancelUnsentDismissal() {
+        guard !responding else { return }
+        dismissalTask?.cancel()
+        dismissalTask = nil
+        isPendingDismissal = false
     }
 }
 

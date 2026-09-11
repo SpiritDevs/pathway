@@ -17,6 +17,7 @@ describe("pending questions palette", () => {
   it("shows every request with a separate ignore button", () => {
     const html = renderToStaticMarkup(
       <PendingQuestionsSection
+        canIgnore
         prompts={prompts}
         respondingRequestIds={[]}
         onOpen={noop}
@@ -27,10 +28,23 @@ describe("pending questions palette", () => {
     expect(html).toContain("Older question?");
     expect(html.match(/title="Ignore question"/g)).toHaveLength(2);
   });
+  it("keeps answering available but hides Ignore on older servers", () => {
+    const html = renderToStaticMarkup(
+      <PendingQuestionsSection
+        prompts={prompts}
+        respondingRequestIds={[]}
+        onOpen={noop}
+        onIgnore={noop}
+      />,
+    );
+    expect(html).toContain("First question?");
+    expect(html).not.toContain("Ignore question");
+  });
   it("hides the section after the last request is resolved", () => {
     expect(
       renderToStaticMarkup(
         <PendingQuestionsSection
+          canIgnore
           prompts={[]}
           respondingRequestIds={[]}
           onOpen={noop}
@@ -42,6 +56,7 @@ describe("pending questions palette", () => {
   it("allows ignoring a stale request while disabling answering", () => {
     const html = renderToStaticMarkup(
       <PendingQuestionsSection
+        canIgnore
         prompts={[{ ...prompts[0]!, responseCapability: "not_resumable" }]}
         respondingRequestIds={[]}
         onOpen={noop}
@@ -54,6 +69,7 @@ describe("pending questions palette", () => {
   it("disables both actions while the request is being submitted", () => {
     const html = renderToStaticMarkup(
       <PendingQuestionsSection
+        canIgnore
         prompts={[prompts[0]!]}
         respondingRequestIds={[prompts[0]!.requestId]}
         onOpen={noop}

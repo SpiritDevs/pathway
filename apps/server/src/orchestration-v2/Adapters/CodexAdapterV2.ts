@@ -5664,6 +5664,11 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 });
               }
               if (pending.type === "user_input") {
+                if (requestInput.decision === "cancel") {
+                  // Codex's requestUserInput response has no cancellation variant.
+                  yield* Deferred.succeed(pending.answers, {});
+                  return;
+                }
                 if (requestInput.answers === undefined) {
                   return yield* new ProviderAdapterRuntimeRequestResponseError({
                     driver: CODEX_PROVIDER,

@@ -59,7 +59,13 @@ The action palette lists pending questions for the current thread. Select a requ
 it in the composer, even when the original question is earlier in the conversation. Requests
 with several questions open together so you can answer each one before submitting.
 
-Select the X beside a request to ignore it. Ignoring removes it from the pending list on all
-connected clients without sending a follow-up message. If the agent is waiting for that answer,
-it receives an empty response. The thread's Input marker clears when no pending input remains.
+Select the X beside a request to ignore it. You have five seconds to select Undo before the
+request is sent. Leaving the conversation during that window keeps the question open. Native
+question forms also provide Ignore and Undo; leaving the form cancels an unsent dismissal.
+
+Ignoring removes the request from all connected clients without sending a follow-up message.
+An agent waiting for an answer receives its provider's cancellation response. If delivery fails,
+the question reappears so you can retry. The thread's Input marker clears when no pending input
+remains. Ignore is available only when the connected environment supports question dismissal.
+
 You can show, hide, and reorder Pending questions in the action palette settings.

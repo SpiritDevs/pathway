@@ -6092,7 +6092,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           threadId: command.threadId,
           nodeId: runtimeRequest.nodeId,
           occurredAt: now,
-          payload: dismissal.request,
+          payload: { ...dismissal.request, responseCommandId: command.commandId },
         });
         if (dismissal.node) {
           yield* emitEvent({
@@ -6366,6 +6366,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...runtimeRequest,
         status: "resolved" as const,
         resolvedAt: now,
+        ...(runtimeRequest.kind === "user_input" ? { responseCommandId: command.commandId } : {}),
       };
       const emitEvent = emit(events, command);
       if (questionItem?.type === "user_input_request" && attachments.length > 0) {
@@ -9278,8 +9279,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               const request = projection.runtimeRequests.find(
                 (candidate) =>
                   candidate.responseCommandId === input.commandId &&
+                  candidate.kind === "user_input" &&
                   candidate.status === "resolved" &&
-                  candidate.responseCapability.type === "message",
+                  (candidate.responseCapability.type === "message" ||
+                    candidate.responseCapability.type === "live"),
               );
               if (request === undefined) return;
               const now = yield* DateTime.now;

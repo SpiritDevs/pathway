@@ -99,6 +99,17 @@ it.effect("expires orphaned runtime requests before command readiness", () => {
         responseCapability: { type: "message", providerThreadId: ProviderThreadId.make("origin") },
       },
       {
+        id: RuntimeRequestId.make("request_live_undelivered"),
+        nodeId: NodeId.make("node_live_undelivered"),
+        status: "resolved",
+        isBlocking: false,
+        responseCommandId: CommandId.make("live-answer-command"),
+        responseCapability: {
+          type: "live",
+          providerSessionId: ProviderSessionId.make("lost-live-session"),
+        },
+      },
+      {
         id: RuntimeRequestId.make("request_orphaned"),
         nodeId: NodeId.make("node_orphaned"),
         status: "pending",
@@ -128,10 +139,12 @@ it.effect("expires orphaned runtime requests before command readiness", () => {
         IdAllocator.layer,
         Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({ runOnce: Effect.succeed(false) }),
         Layer.mock(EffectOutbox.EffectOutboxV2)({
-          listByCommandId: () =>
-            Effect.succeed([
-              { request: { type: "provider-turn.steer" }, status: "running" },
-            ] as never),
+          listByCommandId: (commandId) =>
+            Effect.succeed(
+              commandId === CommandId.make("live-answer-command")
+                ? ([{ request: { type: "runtime-request.respond" }, status: "running" }] as never)
+                : ([{ request: { type: "provider-turn.steer" }, status: "running" }] as never),
+            ),
           reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
         }),
       ),
@@ -155,6 +168,15 @@ it.effect("expires orphaned runtime requests before command readiness", () => {
     if (retriable?.type === "runtime-request.updated") {
       assert.equal(retriable.payload.status, "pending");
       assert.equal(retriable.payload.responseMessageId, "saved-answer");
+    }
+    const lostLiveResponse = command.events.find(
+      (event) =>
+        event.type === "runtime-request.updated" && event.payload.id === "request_live_undelivered",
+    );
+    assert.isDefined(lostLiveResponse);
+    if (lostLiveResponse?.type === "runtime-request.updated") {
+      assert.equal(lostLiveResponse.payload.status, "expired");
+      assert.equal(lostLiveResponse.payload.responseCapability.type, "not_resumable");
     }
     assert.equal(command?.events[0]?.type, "runtime-request.updated");
     if (command?.events[0]?.type === "runtime-request.updated") {

@@ -1934,7 +1934,7 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
-  it.live("correlates reordered elicitation schemas through the completed stdout write", () =>
+  it.live("sends native cancellation for a dismissed elicitation", () =>
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1946,6 +1946,7 @@ describe("AcpAdapterV2", () => {
       );
       const responseWritten = yield* Deferred.make<void>();
       const releaseResponseAcknowledgement = yield* Deferred.make<void>();
+      const protocolEvents = yield* Queue.bounded<EffectAcpProtocol.AcpProtocolLogEvent>(256);
       const instanceId = ProviderInstanceId.make("acp-test-reordered-elicitation");
       const adapter = makeAcpAdapterV2({
         crypto: yield* Crypto.Crypto,
@@ -1957,6 +1958,7 @@ describe("AcpAdapterV2", () => {
             childProcessSpawner,
             mockAgentPath,
             environment: { Pathway_ACP_EMIT_ELICITATION: "1" },
+            protocolEvents,
             wrapIncomingRequest: (onIncomingRequest) => (requestId, method, payload) => {
               if (method !== "session/elicitation") {
                 return onIncomingRequest(requestId, method, payload);
@@ -2025,7 +2027,7 @@ describe("AcpAdapterV2", () => {
       const responseFiber = yield* runtime
         .respondToRuntimeRequest({
           requestId: pending.runtimeRequest.id,
-          answers: { approved: ["true"] },
+          decision: "cancel",
         })
         .pipe(Effect.forkScoped);
 
@@ -2033,6 +2035,14 @@ describe("AcpAdapterV2", () => {
       assert.isUndefined(responseFiber.pollUnsafe());
       yield* Deferred.succeed(releaseResponseAcknowledgement, undefined);
       yield* Fiber.join(responseFiber);
+      assert.isTrue(
+        (yield* Queue.takeAll(protocolEvents)).some(
+          (event) =>
+            event.stage === "raw" &&
+            typeof event.payload === "string" &&
+            event.payload.includes('"action":{"action":"cancel"}'),
+        ),
+      );
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
@@ -11038,11 +11048,11 @@ describe("AcpAdapterV2", () => {
       const responseFiber = yield* runtime
         .respondToRuntimeRequest({
           requestId: replacementRequest.runtimeRequest.id,
-          answers: { approved: ["yes"] },
+          decision: "cancel",
         })
         .pipe(Effect.forkScoped);
       const replacementUserInput = yield* Fiber.join(replacementUserInputFiber);
-      assert.deepEqual(replacementUserInput.answers, { approved: ["yes"] });
+      assert.isNull(replacementUserInput.answers);
       yield* replacementUserInput.acknowledgeNativeResponse;
       yield* runtimeInputs[0]!.onOutgoingResponse!("stale-generation-1-transport-id");
       yield* runtimeInputs[1]!.onOutgoingResponse!("live-generation-2-wrong-method-id");

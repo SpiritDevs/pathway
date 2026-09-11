@@ -22,7 +22,10 @@ export function questionDismissal(
       : undefined,
     response:
       request.responseCapability.type === "live"
-        ? { providerSessionId: request.responseCapability.providerSessionId, answers: {} }
+        ? {
+            providerSessionId: request.responseCapability.providerSessionId,
+            decision: "cancel" as const,
+          }
         : undefined,
   };
 }

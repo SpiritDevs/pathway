@@ -1,3 +1,4 @@
+import { useQuestionDismissal } from "./chat/useQuestionDismissal";
 import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
 import { ThreadQueueStatus } from "./chat/ThreadQueueStatus";
 import { useThreadQueueChat } from "../cloud/useThreadQueueChat";
@@ -8550,9 +8551,14 @@ function ChatViewContent(props: ChatViewProps) {
     [allPendingUserInputs, asyncUserInputs, scheduleComposerFocus],
   );
 
+  const canIgnoreQuestions =
+    activeEnvironment?.serverConfig?.environment.capabilities.userInputDismissal === true;
+  const pendingQuestionIdsRef = useRef(new Set<RuntimeRequestId>());
+  pendingQuestionIdsRef.current = new Set(allPendingUserInputs.map((request) => request.requestId));
   const onIgnoreQuestion = useCallback(
     async (requestId: RuntimeRequestId) => {
-      if (!activeThreadId) return;
+      if (!activeThreadId || !canIgnoreQuestions || !pendingQuestionIdsRef.current.has(requestId))
+        return;
       setRespondingUserInputRequestIds((existing) => [...existing, requestId]);
       const result = await respondToThreadApproval({
         environmentId,
@@ -8573,8 +8579,10 @@ function ChatViewContent(props: ChatViewProps) {
         );
       }
     },
-    [activeThreadId, environmentId, respondToThreadApproval, setThreadError],
+    [activeThreadId, environmentId, canIgnoreQuestions, respondToThreadApproval, setThreadError],
   );
+
+  const questionDismissal = useQuestionDismissal(onIgnoreQuestion, canIgnoreQuestions);
 
   const onChangeActivePendingUserInputCustomAnswer = useCallback(
     (
@@ -9254,12 +9262,16 @@ function ChatViewContent(props: ChatViewProps) {
   const threadDetailsPanelProps: Omit<ThreadDetailsPanelProps, "mode"> = {
     pendingQuestions: {
       prompts: allPendingUserInputs,
-      respondingRequestIds: respondingUserInputRequestIds,
+      respondingRequestIds: [
+        ...respondingUserInputRequestIds,
+        ...questionDismissal.queuedRequestIds,
+      ],
+      canIgnore: canIgnoreQuestions,
       onOpen: (requestId) => {
         closeThreadPanelPopover();
         timelineAsyncQuestions.onOpen(requestId);
       },
-      onIgnore: onIgnoreQuestion,
+      onIgnore: questionDismissal.scheduleDismissal,
     },
     ...(!isServerThread && activeProject
       ? {
