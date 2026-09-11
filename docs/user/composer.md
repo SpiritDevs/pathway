@@ -53,6 +53,14 @@ Provider slash commands appear only when `/` starts the whole message, where the
 provider can expand them. Pathway's `/model`, `/plan`, and `/default` commands
 remain available at the beginning of any line.
 
+## Action palette
+
+The action palette sits at the right of the conversation in web and desktop. When the
+conversation becomes too narrow, including when you resize a neighboring pane, the palette
+hides automatically. Toggle thread details to reopen it floating above the conversation
+without squeezing messages or the composer. Widening the conversation restores the inline
+layout. You can toggle the palette independently in each layout.
+
 ## Pending questions
 
 The action palette lists pending questions for the current thread. Select a request to answer

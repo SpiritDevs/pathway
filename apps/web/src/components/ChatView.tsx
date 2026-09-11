@@ -1763,6 +1763,7 @@ function ChatViewContent(props: ChatViewProps) {
     "[data-app-workspace-main-row]",
   );
   const previewPanelInlineSize = usePreviewPanelInlineSize(workspaceLayoutWidth ?? undefined);
+  const [conversationLayoutRef, conversationLayoutWidth] = useElementWidth<HTMLDivElement>();
   const threadPanelPopoverAnchorRef = useRef<HTMLElement | null>(null);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -2206,9 +2207,9 @@ function ChatViewContent(props: ChatViewProps) {
   const threadPanelPresentation = isPanelPresentation
     ? "popover"
     : resolveThreadPanelPresentation(
-        workspaceLayoutWidth,
-        // The inline right panel lives in the adjacent workspace host, so this
-        // element's observed width is already the remaining chat-pane width.
+        conversationLayoutWidth,
+        // Measure the conversation itself; the workspace row also includes
+        // adjacent panels and stays wide when their divider squeezes the chat.
         0,
         rightPanelPoppedOut,
       );
@@ -9600,6 +9601,7 @@ function ChatViewContent(props: ChatViewProps) {
         />
         {/* Main content area with optional plan sidebar */}
         <div
+          ref={conversationLayoutRef}
           className="relative flex min-h-0 min-w-0 flex-1"
           data-thread-details-inline-reserved={inlineThreadPanelOpen ? "true" : undefined}
         >
