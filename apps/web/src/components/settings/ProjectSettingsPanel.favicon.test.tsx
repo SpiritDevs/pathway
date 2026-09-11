@@ -440,46 +440,58 @@ describe("Project settings favicon selection", () => {
     expect(protectedRemoval?.props.disabled).toBe(true);
   });
 
-  it("deletes a shared project from every owning company without using the settings filter", async () => {
-    const companyA = CompanyId.make("company-a");
-    const companyB = CompanyId.make("company-b");
-    const group = makeGroup(null);
-    hooks.beginRender();
-    const detail = ProjectDetail({
-      group,
-      workspaceProject: {
-        projectKey: group.projectKey,
-        displayName: group.displayName,
-        companyIds: [companyA, companyB],
+  it.each([true, false])(
+    "only deletes a shared project when confirmation is %s",
+    async (confirmed) => {
+      dialogState.confirm.mockResolvedValue(confirmed);
+      const companyA = CompanyId.make("company-a");
+      const companyB = CompanyId.make("company-b");
+      const group = makeGroup(null);
+      hooks.beginRender();
+      const detail = ProjectDetail({
         group,
-        checkoutCount: group.memberProjects.length,
-        cloudProjectId: "cloud-pathway",
-      },
-      companyContext: {
-        companyId: companyA,
-        replica: null,
-        environmentControl: {
-          deleteCompanyProject: cloudState.deleteCompanyProject,
-        } as never,
-      },
-    }) as ReactElement<Record<string, unknown>>;
-    const removeProject = visitElements(
-      detail,
-      (element) =>
-        element.type === Button &&
-        Array.isArray(element.props.children) &&
-        element.props.children.includes("Remove all entries"),
-    );
-    expect(removeProject).not.toBeNull();
-    (removeProject?.props.onClick as (() => void) | undefined)?.();
-    await flushPromises();
-    await flushPromises();
+        workspaceProject: {
+          projectKey: group.projectKey,
+          displayName: group.displayName,
+          companyIds: [companyA, companyB],
+          group,
+          checkoutCount: group.memberProjects.length,
+          cloudProjectId: "cloud-pathway",
+        },
+        companyContext: {
+          companyId: companyA,
+          replica: null,
+          environmentControl: {
+            deleteCompanyProject: cloudState.deleteCompanyProject,
+          } as never,
+        },
+      }) as ReactElement<Record<string, unknown>>;
+      const removeProject = visitElements(
+        detail,
+        (element) =>
+          element.type === Button &&
+          Array.isArray(element.props.children) &&
+          element.props.children.includes("Remove all entries"),
+      );
+      expect(removeProject).not.toBeNull();
+      (removeProject?.props.onClick as (() => void) | undefined)?.();
+      await flushPromises();
+      await flushPromises();
 
-    expect(cloudState.deleteCompanyProject.mock.calls).toEqual([
-      [{ companyId: companyA, cloudProjectId: "cloud-pathway" }],
-      [{ companyId: companyB, cloudProjectId: "cloud-pathway" }],
-    ]);
-  });
+      expect(dialogState.confirm).toHaveBeenCalledWith(
+        expect.stringContaining("This action cannot be undone."),
+        { variant: "destructive" },
+      );
+      expect(cloudState.deleteCompanyProject.mock.calls).toEqual(
+        confirmed
+          ? [
+              [{ companyId: companyA, cloudProjectId: "cloud-pathway" }],
+              [{ companyId: companyB, cloudProjectId: "cloud-pathway" }],
+            ]
+          : [],
+      );
+    },
+  );
 
   it("offers each connected environment as the new-thread default", async () => {
     const companyId = CompanyId.make("company-a");

@@ -42,7 +42,7 @@ import {
   StarIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
@@ -377,7 +377,10 @@ export function CheckoutlessProjectSettings({
       <SettingsSection title="Pending setup">
         <PendingProjectSetup key={project.projectKey} project={project} />
       </SettingsSection>
-      <SettingsSection title="Danger">
+      <SettingsSection
+        title="Danger"
+        className="rounded-xl border border-destructive/20 bg-destructive/5 p-4"
+      >
         <SettingsRow
           title="Remove project"
           description="Deletes the company project from every Pathway app. Files on disk are not touched."
@@ -402,11 +405,13 @@ export function ProjectDetail({
   workspaceProject = null,
   companyContext = null,
   workspaceProjects = EMPTY_WORKSPACE_PROJECTS,
+  beforeDanger,
 }: {
   group: SidebarProjectSnapshot;
   workspaceProject?: WorkspaceProject | null;
   companyContext?: ProjectCompanyContext | null;
   workspaceProjects?: ReadonlyArray<WorkspaceProject>;
+  beforeDanger?: ReactNode;
 }) {
   const navigate = useNavigate();
   const settings = usePrimarySettings();
@@ -1842,7 +1847,12 @@ export function ProjectDetail({
           />
         </SettingsSection>
 
-        <SettingsSection title="Danger">
+        {beforeDanger}
+
+        <SettingsSection
+          title="Danger"
+          className="rounded-xl border border-destructive/20 bg-destructive/5 p-4"
+        >
           <SettingsRow
             title={
               group.memberProjects.length > 1 ? "Remove this project everywhere" : "Remove project"
