@@ -400,7 +400,7 @@ function Sidebar({
         />
         <div
           className={cn(
-            "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[transform,width] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none md:flex group-data-[state=expanded]:duration-200 group-data-[hover-revealed=true]:z-40 group-data-[hover-revealed=true]:translate-x-0! group-data-[hover-revealed=true]:duration-[220ms] group-data-[hover-revealed=true]:shadow-xl",
+            "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[translate,width] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none md:flex group-data-[state=expanded]:duration-200 group-data-[hover-revealed=true]:z-40 group-data-[hover-revealed=true]:translate-x-0! group-data-[hover-revealed=true]:duration-[220ms] group-data-[hover-revealed=true]:shadow-xl",
             side === "left"
               ? "left-0 group-data-[collapsible=offcanvas]:-translate-x-full"
               : "right-0 group-data-[collapsible=offcanvas]:translate-x-full",
