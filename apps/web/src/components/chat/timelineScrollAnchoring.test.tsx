@@ -1,10 +1,96 @@
+import { RunId } from "@spiritdevs/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   getAnchoredTurnMetrics,
   getRowBottom,
   keepTimelineEndVisibleAfterOverlayGrowth,
   scrollTimelineToEndIfFollowing,
+  shouldAnchorTimelineActivity,
+  type TimelineActivityObservation,
 } from "./timelineScrollAnchoring";
+
+const currentActivity: TimelineActivityObservation = {
+  threadKey: "environment-a:thread-a",
+  runId: RunId.make("current-run"),
+  runStatus: "running",
+  isLive: true,
+};
+const olderActivity: TimelineActivityObservation = {
+  ...currentActivity,
+  runId: RunId.make("older-run"),
+  runStatus: "completed",
+};
+
+describe("timeline activity after opening a thread", () => {
+  it("does not anchor cached history or the fresh history that replaces it", () => {
+    const shell = { ...currentActivity, isLive: false };
+    const cached = { ...olderActivity, isLive: false };
+    const synchronizing = { ...currentActivity, isLive: false };
+
+    expect(shouldAnchorTimelineActivity(shell, cached)).toBe(false);
+    expect(shouldAnchorTimelineActivity(cached, synchronizing)).toBe(false);
+    expect(shouldAnchorTimelineActivity(synchronizing, currentActivity)).toBe(false);
+    expect(shouldAnchorTimelineActivity(currentActivity, currentActivity)).toBe(false);
+  });
+
+  it("does not anchor the first loaded run when the shell has no run", () => {
+    expect(
+      shouldAnchorTimelineActivity(
+        { ...currentActivity, runId: null, runStatus: null, isLive: false },
+        currentActivity,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not treat reconnect catch-up as a newly started turn", () => {
+    const reconnecting = { ...olderActivity, isLive: false };
+    expect(shouldAnchorTimelineActivity(olderActivity, reconnecting)).toBe(false);
+    expect(shouldAnchorTimelineActivity(reconnecting, currentActivity)).toBe(false);
+  });
+
+  it.each(["environment-a:thread-b", "environment-b:thread-a"])(
+    "does not anchor a run on navigation to %s",
+    (threadKey) => {
+      expect(shouldAnchorTimelineActivity(olderActivity, { ...currentActivity, threadKey })).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each(["preparing", "starting", "running", "waiting"] as const)(
+    "anchors new %s work after synchronization",
+    (runStatus) => {
+      expect(shouldAnchorTimelineActivity(olderActivity, { ...currentActivity, runStatus })).toBe(
+        true,
+      );
+    },
+  );
+
+  it("anchors the first run started in an already loaded empty thread", () => {
+    expect(
+      shouldAnchorTimelineActivity(
+        { ...currentActivity, runId: null, runStatus: null },
+        currentActivity,
+      ),
+    ).toBe(true);
+  });
+
+  it("anchors a queued run when it starts, even though its run ID stays the same", () => {
+    const queued = { ...currentActivity, runStatus: "queued" as const };
+    expect(shouldAnchorTimelineActivity(olderActivity, queued)).toBe(false);
+    expect(shouldAnchorTimelineActivity(queued, queued)).toBe(false);
+    expect(shouldAnchorTimelineActivity(queued, currentActivity)).toBe(true);
+  });
+
+  it.each(["completed", "failed", "interrupted", "cancelled", "rolled_back"] as const)(
+    "does not anchor a historical %s run even when received live",
+    (runStatus) => {
+      expect(shouldAnchorTimelineActivity(currentActivity, { ...olderActivity, runStatus })).toBe(
+        false,
+      );
+    },
+  );
+});
 
 function buildState({
   positions,
@@ -49,6 +135,30 @@ describe("timeline scroll anchoring", () => {
     });
 
     expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
+  });
+
+  it("does not move a newly submitted prompt when history finishes loading", () => {
+    const scrollToEnd = vi.fn();
+
+    scrollTimelineToEndIfFollowing({
+      timeline: { scrollToEnd },
+      scrollMode: "anchoring-new-turn",
+      animated: false,
+    });
+
+    expect(scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  it("lands at the newest messages without animation when history finishes loading", () => {
+    const scrollToEnd = vi.fn();
+
+    scrollTimelineToEndIfFollowing({
+      timeline: { scrollToEnd },
+      scrollMode: "following-end",
+      animated: false,
+    });
+
+    expect(scrollToEnd).toHaveBeenCalledExactlyOnceWith({ animated: false });
   });
 
   it("keeps the live edge visible when the composer overlay grows", () => {

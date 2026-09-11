@@ -6,6 +6,8 @@ Before sending, choose the machine that will run the conversation from the envir
 
 Conversations appear in **All** for their company. Enable **Conversations** when editing a Focus to include them there. Several Focuses can include conversations independently.
 
+When you reopen a thread in the web or desktop app, it opens at the newest messages once its history has loaded. If you scroll up while it loads, your position is left alone.
+
 ## Attach a project
 
 When all running and queued work has finished, choose **Attach project**. The project must belong to the same environment. Your thread and history stay together, and the original conversation folder remains available to the agent alongside the project workspace. After attachment, the thread follows the project's company and Focus.
