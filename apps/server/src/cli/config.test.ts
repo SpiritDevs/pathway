@@ -128,6 +128,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
+        shellEnvironmentHydrated: false,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: true,
       });
@@ -194,6 +195,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
+        shellEnvironmentHydrated: false,
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: true,
       });
@@ -261,6 +263,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: false,
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-bootstrap-token",
+        shellEnvironmentHydrated: false,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
       });
@@ -279,6 +282,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           noBrowser: true,
           desktopBootstrapToken: "desktop-token",
           desktopEnvironmentId: EnvironmentId.make("desktop-host-id"),
+          shellEnvironmentHydrated: true,
           desktopTelemetryFd: 4,
           desktopTelemetryControlFd: 5,
           otlpTracesUrl: "http://localhost:4318/v1/traces",
@@ -333,6 +337,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-token",
         desktopEnvironmentId: EnvironmentId.make("desktop-host-id"),
+        shellEnvironmentHydrated: true,
         desktopTelemetryFd: 4,
         desktopTelemetryControlFd: 5,
         resourceMonitorPath: undefined,
@@ -458,6 +463,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-token",
+        shellEnvironmentHydrated: false,
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: true,
       });
@@ -523,6 +529,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
+        shellEnvironmentHydrated: false,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
       });
@@ -582,6 +589,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "headless",
         desktopBootstrapToken: undefined,
+        shellEnvironmentHydrated: false,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
       });

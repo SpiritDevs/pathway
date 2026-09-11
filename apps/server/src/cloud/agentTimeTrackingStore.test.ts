@@ -207,13 +207,7 @@ layer("durable agent time capture", (it) => {
             Layer.provide(
               Layer.mergeAll(
                 Layer.mock(ProjectionStore.ProjectionStoreV2)({
-                  getShellSnapshot: () =>
-                    Effect.succeed({
-                      schemaVersion: 2,
-                      snapshotSequence: 0,
-                      threads: [ProjectionStore.threadShellFromProjection(projection)],
-                      archivedThreads: [],
-                    }),
+                  getRecoveryThreadIds: () => Effect.succeed([projection.thread.id]),
                   getThreadProjection: () => Effect.succeed(projection),
                 }),
                 Layer.mock(EventSink.EventSinkV2)({
