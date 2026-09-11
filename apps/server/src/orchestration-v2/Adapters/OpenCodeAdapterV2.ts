@@ -2684,6 +2684,12 @@ export function makeOpenCodeAdapterV2(options: OpenCodeAdapterV2Options): Provid
                 );
               }
               if (pending.question !== undefined) {
+                if (requestInput.decision === "cancel") {
+                  yield* sdkCall("question.reject", { requestID: pending.nativeRequestId }, () =>
+                    client.question.reject({ requestID: pending.nativeRequestId }),
+                  );
+                  return;
+                }
                 if (requestInput.answers === undefined) {
                   return yield* protocolError(
                     `OpenCode question request ${requestInput.requestId} requires answers`,

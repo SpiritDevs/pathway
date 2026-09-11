@@ -11,6 +11,7 @@ import {
   ContextTransferId,
   EventId,
   MessageId,
+  NodeId,
   type ModelSelection,
   ProjectId,
   ProviderDriverKind,
@@ -20,10 +21,12 @@ import {
   RunId,
   RuntimeRequestId,
   ThreadId,
+  TurnItemId,
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -47,6 +50,10 @@ import { OrchestratorDispatchError, OrchestratorV2 } from "./Orchestrator.ts";
 import { OrchestrationEffectWorkerV2 } from "./EffectWorker.ts";
 import { EffectOutboxV2, layer as effectOutboxLayer } from "./EffectOutbox.ts";
 import { EventSinkV2 } from "./EventSink.ts";
+import {
+  layer as questionAnswerDeliveryLayer,
+  QuestionAnswerDelivery,
+} from "./QuestionAnswerDelivery.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { OrchestrationV2EventSinkLayerLive, OrchestrationV2LayerLive } from "./runtimeLayer.ts";
 import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
@@ -116,6 +123,7 @@ const TestLayer = Layer.mergeAll(
   Layer.provide(TestProviderInstanceRegistry),
   Layer.provide(NodeServices.layer),
 );
+const QuestionDeliveryTestLayer = TestLayer.pipe(Layer.provideMerge(questionAnswerDeliveryLayer));
 
 const SharedApplicationDataPlaneTestLayer = Layer.merge(
   OrchestrationLayerLive,
@@ -840,6 +848,267 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         ["provider-thread.rollback-and-start"],
       );
     }),
+  );
+
+  it.effect("ignores pending questions durably without starting another turn", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const eventSink = yield* EventSinkV2;
+      const outbox = yield* EffectOutboxV2;
+      const threadId = ThreadId.make("ignore-questions-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("ignore-questions-create"),
+        threadId,
+        projectId: ProjectId.make("ignore-questions-project"),
+        title: "Questions",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/ignore-questions",
+      });
+      const now = yield* DateTime.now;
+      const capabilities = [
+        {
+          type: "message" as const,
+          providerThreadId: ProviderThreadId.make("old-provider-thread"),
+        },
+        { type: "not_resumable" as const, reason: "Previous session" },
+        {
+          type: "live" as const,
+          providerSessionId: ProviderSessionId.make("live-question-session"),
+        },
+      ];
+      for (const [index, responseCapability] of capabilities.entries()) {
+        yield* eventSink.write({
+          events: [
+            {
+              id: EventId.make(`ignore-question-${index}`),
+              type: "runtime-request.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: RuntimeRequestId.make(`question-${index}`),
+                nodeId: NodeId.make(`question-node-${index}`),
+                providerTurnId: null,
+                nativeRequestRef: null,
+                kind: "user_input",
+                status: "pending",
+                responseCapability,
+                createdAt: now,
+                resolvedAt: null,
+              },
+            },
+            {
+              id: EventId.make(`ignore-question-item-${index}`),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make(`question-item-${index}`),
+                threadId,
+                type: "user_input_request",
+                requestId: RuntimeRequestId.make(`question-${index}`),
+                runId: null,
+                nodeId: NodeId.make(`question-node-${index}`),
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: index,
+                status: "running",
+                title: "Question",
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+                questions: [
+                  { id: "question", header: "Question", question: "Which approach?", options: [] },
+                ],
+              },
+            },
+          ],
+        });
+      }
+      for (const [index, responseCapability] of capabilities.entries()) {
+        const commandId = CommandId.make(`ignore-question-command-${index}`);
+        yield* orchestrator.dispatch({
+          type: "runtime-request.respond",
+          commandId,
+          threadId,
+          requestId: RuntimeRequestId.make(`question-${index}`),
+          decision: "cancel",
+        });
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(
+          projection.runtimeRequests.find(
+            (request) => request.id === RuntimeRequestId.make(`question-${index}`),
+          )?.responseCommandId,
+          commandId,
+        );
+        assert.lengthOf(
+          projection.runtimeRequests.filter((request) => request.status === "pending"),
+          2 - index,
+        );
+        assert.equal(
+          projection.turnItems.find((item) => item.id === TurnItemId.make(`question-item-${index}`))
+            ?.status,
+          "cancelled",
+        );
+        assert.lengthOf(projection.messages, 0);
+        assert.lengthOf(projection.runs, 0);
+        const effects = yield* outbox.listByCommandId(commandId);
+        if (responseCapability.type === "live") {
+          assert.lengthOf(effects, 1);
+          assert.deepEqual(effects[0]?.request, {
+            type: "runtime-request.respond",
+            requestId: RuntimeRequestId.make(`question-${index}`),
+            providerSessionId: responseCapability.providerSessionId,
+            decision: "cancel",
+          });
+        } else {
+          assert.lengthOf(effects, 0);
+        }
+      }
+      const shell = (yield* orchestrator.getShellSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      assert.isNull(shell?.pendingRuntimeRequest);
+    }),
+  );
+
+  it.effect("reopens a live question after provider dismissal delivery exhausts retries", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const eventSink = yield* EventSinkV2;
+      const worker = yield* OrchestrationEffectWorkerV2;
+      const threadId = ThreadId.make("failed-live-question-thread");
+      const requestId = RuntimeRequestId.make("failed-live-question");
+      const nodeId = NodeId.make("failed-live-question-node");
+      const itemId = TurnItemId.make("failed-live-question-item");
+      const commandId = CommandId.make("failed-live-question-dismiss");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("failed-live-question-create"),
+        threadId,
+        projectId: ProjectId.make("failed-live-question-project"),
+        title: "Failed live question",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/failed-live-question",
+      });
+      const now = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: EventId.make("failed-live-question-request-event"),
+            type: "runtime-request.updated",
+            threadId,
+            nodeId,
+            occurredAt: now,
+            payload: {
+              id: requestId,
+              nodeId,
+              providerTurnId: null,
+              nativeRequestRef: null,
+              kind: "user_input",
+              status: "pending",
+              responseCapability: {
+                type: "live",
+                providerSessionId: ProviderSessionId.make("missing-live-question-session"),
+              },
+              createdAt: now,
+              resolvedAt: null,
+            },
+          },
+          {
+            id: EventId.make("failed-live-question-item-event"),
+            type: "turn-item.updated",
+            threadId,
+            nodeId,
+            occurredAt: now,
+            payload: {
+              id: itemId,
+              threadId,
+              type: "user_input_request",
+              requestId,
+              runId: null,
+              nodeId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 0,
+              status: "running",
+              title: "Question",
+              startedAt: now,
+              completedAt: null,
+              updatedAt: now,
+              questions: [
+                { id: "question", header: "Question", question: "Continue?", options: [] },
+              ],
+            },
+          },
+        ],
+      });
+
+      yield* orchestrator.dispatch({
+        type: "runtime-request.respond",
+        commandId,
+        threadId,
+        requestId,
+        decision: "cancel",
+      });
+      const outbox = yield* EffectOutboxV2;
+      const effectId = `effect:${commandId}:runtime-request.respond:${requestId}`;
+      assert.equal((yield* outbox.get(effectId)).pipe(Option.getOrThrow).status, "pending");
+      for (const retryDelay of ["100 millis", "200 millis", "400 millis", "800 millis"] as const) {
+        assert.isTrue(yield* worker.runOnce);
+        yield* TestClock.adjust(retryDelay);
+      }
+      assert.isTrue(yield* worker.runOnce);
+      const failedEffect = (yield* outbox.get(effectId)).pipe(Option.getOrThrow);
+      assert.equal(failedEffect.attemptCount, 5);
+      assert.equal(failedEffect.status, "failed");
+
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      const request = projection.runtimeRequests.find((candidate) => candidate.id === requestId);
+      assert.equal(request?.status, "pending");
+      assert.isNull(request?.resolvedAt);
+      assert.equal(request?.responseCommandId, commandId);
+      assert.equal(
+        projection.turnItems.find((candidate) => candidate.id === itemId)?.status,
+        "waiting",
+      );
+      assert.equal(
+        (yield* orchestrator.getShellSnapshot()).threads.find(
+          (candidate) => candidate.id === threadId,
+        )?.pendingRuntimeRequest?.id,
+        requestId,
+      );
+
+      const newerCommandId = CommandId.make("failed-live-question-dismiss-newer");
+      yield* orchestrator.dispatch({
+        type: "runtime-request.respond",
+        commandId: newerCommandId,
+        threadId,
+        requestId,
+        decision: "cancel",
+      });
+      yield* (yield* QuestionAnswerDelivery).failed({ threadId, commandId });
+      const afterStaleFailure = yield* orchestrator.getThreadProjection(threadId);
+      const newerResponse = afterStaleFailure.runtimeRequests.find(
+        (candidate) => candidate.id === requestId,
+      );
+      assert.equal(newerResponse?.status, "resolved");
+      assert.equal(newerResponse?.responseCommandId, newerCommandId);
+    }).pipe(Effect.provide(Layer.fresh(QuestionDeliveryTestLayer))),
   );
 
   it.effect("rejects ordinary settle but force settle cancels active and queued work", () =>

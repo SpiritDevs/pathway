@@ -35,6 +35,13 @@ export const ACTION_PALETTE_SECTION_DEFINITIONS = [
     defaultPosition: 2,
   },
   {
+    id: "questions",
+    label: "Pending questions",
+    description: "Answer or ignore questions from this thread.",
+    defaultVisible: true,
+    defaultPosition: 2.5,
+  },
+  {
     id: "development-environments",
     label: "Development environments",
     description: "Discovered local development servers.",

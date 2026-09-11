@@ -1,3 +1,4 @@
+import { questionDismissal } from "./questionDismissal.ts";
 import { invalidateStorageInventory } from "../storage/pressureState.ts";
 import { useStorageWorkspace } from "../storage/workspaceLease.ts";
 import { ThreadWorkspaceService } from "./ThreadWorkspaceService.ts";
@@ -6082,6 +6083,52 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: "Attachments must belong to a question that accepts a custom answer.",
         });
       }
+      if (runtimeRequest.kind === "user_input" && declined) {
+        const now = yield* DateTime.now;
+        const dismissal = questionDismissal(projection, runtimeRequest, now);
+        const emitEvent = emit(events, command);
+        yield* emitEvent({
+          type: "runtime-request.updated",
+          threadId: command.threadId,
+          nodeId: runtimeRequest.nodeId,
+          occurredAt: now,
+          payload: { ...dismissal.request, responseCommandId: command.commandId },
+        });
+        if (dismissal.node) {
+          yield* emitEvent({
+            type: "node.updated",
+            threadId: command.threadId,
+            nodeId: dismissal.node.id,
+            occurredAt: now,
+            payload: dismissal.node,
+          });
+        }
+        if (dismissal.item) {
+          yield* emitEvent({
+            type: "turn-item.updated",
+            threadId: command.threadId,
+            occurredAt: now,
+            payload: dismissal.item,
+          });
+        }
+        const response = dismissal.response;
+        if (response) {
+          yield* Ref.update(effects, (existing) => [
+            ...existing,
+            {
+              id: `effect:${command.commandId}:runtime-request.respond:${command.requestId}`,
+              commandId: command.commandId,
+              threadId: command.threadId,
+              request: {
+                type: "runtime-request.respond",
+                requestId: command.requestId,
+                ...response,
+              },
+            } satisfies PendingOrchestrationEffectV2,
+          ]);
+        }
+        return;
+      }
       const providerAnswers =
         attachments.length === 0
           ? command.answers
@@ -6319,6 +6366,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...runtimeRequest,
         status: "resolved" as const,
         resolvedAt: now,
+        ...(runtimeRequest.kind === "user_input" ? { responseCommandId: command.commandId } : {}),
       };
       const emitEvent = emit(events, command);
       if (questionItem?.type === "user_input_request" && attachments.length > 0) {
@@ -9231,8 +9279,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               const request = projection.runtimeRequests.find(
                 (candidate) =>
                   candidate.responseCommandId === input.commandId &&
+                  candidate.kind === "user_input" &&
                   candidate.status === "resolved" &&
-                  candidate.responseCapability.type === "message",
+                  (candidate.responseCapability.type === "message" ||
+                    candidate.responseCapability.type === "live"),
               );
               if (request === undefined) return;
               const now = yield* DateTime.now;

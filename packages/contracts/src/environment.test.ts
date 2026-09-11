@@ -14,6 +14,18 @@ const descriptor = {
 } as const;
 
 describe("ExecutionEnvironmentDescriptor", () => {
+  it("requires explicit question dismissal support from the connected server", () => {
+    expect(decodeDescriptor(descriptor).capabilities.userInputDismissal).toBeUndefined();
+    for (const userInputDismissal of [false, true]) {
+      expect(
+        decodeDescriptor({
+          ...descriptor,
+          capabilities: { ...descriptor.capabilities, userInputDismissal },
+        }).capabilities.userInputDismissal,
+      ).toBe(userInputDismissal);
+    }
+  });
+
   it("treats a missing pull-request capability as unsupported under version skew", () => {
     expect(decodeDescriptor(descriptor).capabilities.pullRequests).toBeUndefined();
     expect(decodeDescriptor(descriptor).capabilities.threadPullRequestAttachments).toBeUndefined();

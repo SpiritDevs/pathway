@@ -1,3 +1,4 @@
+import { PendingQuestionsSection } from "./PendingQuestionsSection";
 import type { AutoPlacementOption } from "../BranchToolbar.logic";
 import type {
   EditorId,
@@ -46,6 +47,7 @@ import { useClientSettings } from "../../hooks/useSettings";
 import { resolveActionPaletteSections, type ActionPaletteSectionId } from "./actionPaletteSections";
 
 export interface ThreadDetailsPanelProps {
+  pendingQuestions?: React.ComponentProps<typeof PendingQuestionsSection>;
   workspaceContext?: BranchToolbarWorkspaceContext;
   mode: "inline" | "popover";
   onClose?: () => void;
@@ -203,6 +205,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
 
   const renderSection = (sectionId: ActionPaletteSectionId) => {
     switch (sectionId) {
+      case "questions":
+        return props.pendingQuestions ? (
+          <PendingQuestionsSection key={sectionId} {...props.pendingQuestions} />
+        ) : null;
       case "workspace":
         return (
           <section

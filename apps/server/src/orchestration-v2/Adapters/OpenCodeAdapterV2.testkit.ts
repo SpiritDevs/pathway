@@ -287,6 +287,7 @@ function makeReplayClient(controller: OpenCodeReplayController): OpencodeClient 
     },
     question: {
       reply: (input: unknown) => request("question.reply", input),
+      reject: (input: unknown) => request("question.reject", input),
     },
     mcp: {
       add: (input: unknown) => request("mcp.add", input),

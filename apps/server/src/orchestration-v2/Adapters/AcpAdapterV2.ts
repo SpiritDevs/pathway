@@ -5902,7 +5902,14 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
                   }
                   const settled =
                     pending.type === "user_input"
-                      ? yield* Deferred.succeed(pending.answers, requestInput.answers ?? null)
+                      ? requestInput.decision === "cancel"
+                        ? yield* Deferred.succeed(pending.answers, null)
+                        : requestInput.answers === undefined
+                          ? yield* new ProviderAdapterProtocolError({
+                              driver,
+                              detail: `ACP user-input request ${requestInput.requestId} requires answers`,
+                            })
+                          : yield* Deferred.succeed(pending.answers, requestInput.answers)
                       : requestInput.decision === undefined
                         ? yield* new ProviderAdapterProtocolError({
                             driver,

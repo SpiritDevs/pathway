@@ -633,6 +633,17 @@ final class PathwayAgentThreadModel {
             return fields?["id"]?.stringValue == id && fields?["status"]?.stringValue == "pending" && (capability == "live" || capability == "message")
         }
     }
+    var supportsUserInputDismissal: Bool {
+        serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue?["userInputDismissal"]?.boolValue == true
+    }
+    func canDismissQuestion(_ item: PathwayTimelineItem) -> Bool {
+        guard supportsUserInputDismissal, isSubscriptionReady, item.type == "user_input_request",
+              let id = item.requestID else { return false }
+        return runtimeRequests.contains { request in
+            let fields = request.objectValue
+            return fields?["id"]?.stringValue == id && fields?["status"]?.stringValue == "pending"
+        }
+    }
     func responseUnavailableReason(for item: PathwayTimelineItem) -> String? {
         if !isSubscriptionReady { return "Reconnect and wait for the latest thread state before responding." }
         return canRespond(to: item) ? nil : "This request is no longer connected to a live agent."
@@ -673,6 +684,13 @@ final class PathwayAgentThreadModel {
         for (_, store) in stores {
             for draft in store.drafts { await store.remove(id: draft.id) }
         }
+    }
+    func dismissQuestion(requestID: String) async throws {
+        guard let item = items.first(where: { $0.requestID == requestID }), canDismissQuestion(item) else {
+            throw PathwayThreadConversationError.message("This question can no longer be ignored.")
+        }
+        let payload: [String: JSONValue] = ["requestId": .string(requestID), "decision": .string("cancel")]
+        try await dispatch("runtime-request.respond", fields: payload)
     }
 
     var supportsQuestionAttachments: Bool {
