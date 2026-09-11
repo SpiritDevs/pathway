@@ -8,7 +8,6 @@
  * @module
  */
 
-import type * as threadQueue from "../threadQueue.js";
 import type * as agentThreads from "../agentThreads.js";
 import type * as browserPasswords from "../browserPasswords.js";
 import type * as calendarAccounts from "../calendarAccounts.js";
@@ -41,6 +40,7 @@ import type * as lib_mailSchema from "../lib/mailSchema.js";
 import type * as lib_relayIdentity from "../lib/relayIdentity.js";
 import type * as lib_slackOutbound from "../lib/slackOutbound.js";
 import type * as lib_threadAlertPolicy from "../lib/threadAlertPolicy.js";
+import type * as lib_threadQueueRetention from "../lib/threadQueueRetention.js";
 import type * as lib_trackedTime from "../lib/trackedTime.js";
 import type * as lib_validators from "../lib/validators.js";
 import type * as mail from "../mail.js";
@@ -56,13 +56,13 @@ import type * as smoke from "../smoke.js";
 import type * as sync from "../sync.js";
 import type * as teams from "../teams.js";
 import type * as threadAlertPolicies from "../threadAlertPolicies.js";
+import type * as threadQueue from "../threadQueue.js";
 import type * as timeTracking from "../timeTracking.js";
 import type * as trustedEmailSenders from "../trustedEmailSenders.js";
 
 import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  threadQueue: typeof threadQueue;
   agentThreads: typeof agentThreads;
   browserPasswords: typeof browserPasswords;
   calendarAccounts: typeof calendarAccounts;
@@ -95,6 +95,7 @@ declare const fullApi: ApiFromModules<{
   "lib/relayIdentity": typeof lib_relayIdentity;
   "lib/slackOutbound": typeof lib_slackOutbound;
   "lib/threadAlertPolicy": typeof lib_threadAlertPolicy;
+  "lib/threadQueueRetention": typeof lib_threadQueueRetention;
   "lib/trackedTime": typeof lib_trackedTime;
   "lib/validators": typeof lib_validators;
   mail: typeof mail;
@@ -110,6 +111,7 @@ declare const fullApi: ApiFromModules<{
   sync: typeof sync;
   teams: typeof teams;
   threadAlertPolicies: typeof threadAlertPolicies;
+  threadQueue: typeof threadQueue;
   timeTracking: typeof timeTracking;
   trustedEmailSenders: typeof trustedEmailSenders;
 }>;
