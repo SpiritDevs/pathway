@@ -1,4 +1,5 @@
 import { useQuestionDismissal } from "./chat/useQuestionDismissal";
+import { ScrollToEndButton } from "./chat/ScrollToEndButton";
 import { threadQueueDestinationsAtom, threadQueueHydratedAtom } from "../cloud/threadQueueState";
 import { ThreadQueueStatus } from "./chat/ThreadQueueStatus";
 import { useThreadQueueChat } from "../cloud/useThreadQueueChat";
@@ -244,7 +245,6 @@ import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
   CheckCircle2Icon,
-  ChevronDownIcon,
   GitBranchIcon,
   Minimize2Icon,
   PaperclipIcon,
@@ -9712,16 +9712,16 @@ function ChatViewContent(props: ChatViewProps) {
                   className="chat-scroll-to-bottom pointer-events-none absolute z-30 flex justify-center py-1.5"
                   style={{ bottom: composerOverlayHeight + 4 }}
                 >
-                  <button
-                    type="button"
-                    aria-label="Scroll to end"
-                    title="Scroll to end"
+                  <ScrollToEndButton
+                    isWorking={
+                      isWorking &&
+                      activeRuntime?.status !== "queued" &&
+                      activePendingApproval === null &&
+                      activePendingUserInput === null
+                    }
+                    theme={resolvedTheme}
                     onClick={() => scrollToEnd(true)}
-                    className="chat-composer-glass pointer-events-auto flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1 text-muted-foreground text-xs shadow-sm transition-colors hover:border-border hover:text-foreground hover:cursor-pointer"
-                  >
-                    <ChevronDownIcon className="size-3.5" />
-                    Scroll to end
-                  </button>
+                  />
                 </div>
               )}
             </div>
