@@ -1,5 +1,5 @@
 import { useQuestionDismissal } from "./chat/useQuestionDismissal";
-import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
+import { threadQueueDestinationsAtom, threadQueueHydratedAtom } from "../cloud/threadQueueState";
 import { ThreadQueueStatus } from "./chat/ThreadQueueStatus";
 import { useThreadQueueChat } from "../cloud/useThreadQueueChat";
 import {
@@ -302,7 +302,7 @@ import {
   useEffectiveComposerModelState,
   DraftId,
 } from "../composerDraftStore";
-import { releaseDraftAttachment } from "../lib/attachmentUploadQueue";
+import { releaseDraftAttachment, readAttachmentUpload } from "../lib/attachmentUploadQueue";
 import { useProvisionInternalWorkspace } from "./projects/useProjectWorkspaceCommands";
 import {
   appendTerminalContextsToPrompt,
@@ -1546,6 +1546,7 @@ function ChatViewContent(props: ChatViewProps) {
   const serverThread = useThreadShell(routeThreadRef);
   const queuedChat = useThreadQueueChat(environmentId, threadId);
   const queueDestinations = useAtomValue(threadQueueDestinationsAtom);
+  const queueHydrated = useAtomValue(threadQueueHydratedAtom);
   const queueDestination = queueDestinations.find(
     (destination) => destination.environmentId === environmentId,
   );
@@ -2686,7 +2687,17 @@ function ChatViewContent(props: ChatViewProps) {
   const modelPickerLockedProvider = supportsProviderSwitchingViaHandoff ? null : lockedProvider;
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
-  const maxFileAttachmentBytes = 50 * 1024 * 1024;
+  const uploadFilesToEnvironment =
+    isServerThread &&
+    activeEnvironmentConnectionPhase === "connected" &&
+    queueHydrated &&
+    !queuedChat.row?.waitingToSync &&
+    (queuedChat.row?.queuedCount ?? 0) === 0;
+  const maxFileAttachmentBytes = uploadFilesToEnvironment
+    ? serverConfig?.environment.capabilities.attachmentUploads === true
+      ? (serverConfig.environment.capabilities.fileAttachments?.maxUploadBytes ?? null)
+      : null
+    : 50 * 1024 * 1024;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -7594,7 +7605,14 @@ function ChatViewContent(props: ChatViewProps) {
     );
     const turnAttachmentsPromise = Promise.resolve().then(() => {
       for (const attachment of composerImagesSnapshot) {
-        if (attachment.file === null)
+        if (
+          attachment.file === null &&
+          !(
+            uploadFilesToEnvironment &&
+            attachment.type === "file" &&
+            readAttachmentUpload(attachment.id)?.status === "ready"
+          )
+        )
           throw new Error(`Attach ${attachment.name} again to save it to the cloud.`);
       }
       return [];
@@ -7777,7 +7795,7 @@ function ChatViewContent(props: ChatViewProps) {
               ? { source: attachment.source }
               : {}),
           },
-          blob: attachment.file!,
+          blob: attachment.file,
         })),
         input: {
           ...(target === "current" && localCheckoutBranchMismatch
@@ -9852,6 +9870,7 @@ function ChatViewContent(props: ChatViewProps) {
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}
                             maxFileAttachmentBytes={maxFileAttachmentBytes}
+                            uploadFilesToEnvironment={uploadFilesToEnvironment}
                             questionAttachments={{
                               enabled:
                                 serverConfig?.environment.capabilities.questionAttachments ===

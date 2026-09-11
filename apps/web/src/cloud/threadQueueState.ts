@@ -11,6 +11,7 @@ export const threadQueueRowsAtom = Atom.make<ReadonlyArray<ThreadQueueThread>>([
 export const localThreadQueueAtom = Atom.make<
   ReadonlyArray<ThreadQueueOutboxRecord<ThreadQueueSubmission>>
 >([]).pipe(Atom.keepAlive);
+export const threadQueueSessionRevisionAtom = Atom.make(0).pipe(Atom.keepAlive);
 export const threadQueueHydratedAtom = Atom.make(false).pipe(Atom.keepAlive);
 
 export function queuedThreadKey(row: {

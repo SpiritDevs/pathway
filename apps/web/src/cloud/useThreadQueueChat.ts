@@ -7,6 +7,7 @@ import type { ThreadQueueDetail } from "@spiritdevs/contracts/threadQueue";
 import {
   localThreadQueueAtom,
   threadQueueAccountAtom,
+  threadQueueSessionRevisionAtom,
   threadQueueEntriesAtom,
   findQueuedThread,
 } from "./threadQueueState";
@@ -30,6 +31,7 @@ export function useThreadQueueChat(environmentId: string, threadId: string) {
   const rows = useAtomValue(threadQueueEntriesAtom);
   const local = useAtomValue(localThreadQueueAtom);
   const account = useAtomValue(threadQueueAccountAtom);
+  const sessionRevision = useAtomValue(threadQueueSessionRevisionAtom);
   const row = findQueuedThread(rows, environmentId, threadId);
   const key = `${account}:${environmentId}:${threadId}`;
   const [detailState, setDetailState] = useState<{ key: string; value: ThreadQueueDetail | null }>({
@@ -88,7 +90,7 @@ export function useThreadQueueChat(environmentId: string, threadId: string) {
     });
   }, [key, localMessages]);
   useEffect(() => {
-    setDetailState({ key, value: null });
+    setDetailState((previous) => (previous.key === key ? previous : { key, value: null }));
     setError(null);
     if (!row?.cloudSaved) return;
     let active = true;
@@ -129,7 +131,16 @@ export function useThreadQueueChat(environmentId: string, threadId: string) {
       active = false;
       unsubscribe();
     };
-  }, [threadId, environmentId, account, key, row?.cloudSaved, row?.queueId, row?.companyId]);
+  }, [
+    threadId,
+    environmentId,
+    account,
+    sessionRevision,
+    key,
+    row?.cloudSaved,
+    row?.queueId,
+    row?.companyId,
+  ]);
   const messages = useMemo<readonly QueuedChatMessage[]>(() => {
     const cloud = detail?.thread.threadId === threadId ? detail.messages : [];
     const ids = new Set(cloud.map((message) => message.commandId));

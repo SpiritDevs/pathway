@@ -690,6 +690,35 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
+  it.effect("dispatches send settings atomically with the message", () =>
+    Effect.gen(function* () {
+      const commands: OrchestrationV2Command[] = [];
+      const supervisor = yield* makeSupervisor({ commands, projects: [] });
+      yield* startThreadTurn({
+        commandId: CommandId.make("send-settings"),
+        threadId: v2ThreadId,
+        message: {
+          messageId: MessageId.make("message-settings"),
+          role: "user",
+          text: "Review",
+          attachments: [],
+        },
+        branch: null,
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+      expect(commands).toMatchObject([
+        {
+          type: "message.dispatch",
+          commandId: "send-settings",
+          branch: null,
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+        },
+      ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
   it.effect("preserves plan implementation provenance on V2 runs", () =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];

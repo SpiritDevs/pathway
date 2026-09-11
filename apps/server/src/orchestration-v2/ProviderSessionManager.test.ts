@@ -611,6 +611,60 @@ it.effect("ProviderSessionManagerV2 opens independent sessions concurrently", ()
   }),
 );
 
+it.effect("ProviderSessionManagerV2 reopens sessions that cannot switch permissions in place", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    yield* Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const idAllocator = yield* IdAllocatorV2;
+      const manager = yield* ProviderSessionManagerV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread-permission-switch");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      const original = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const restricted = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy: { ...runtimePolicy, runtimeMode: "approval-required" },
+      });
+      assert.notStrictEqual(restricted, original);
+      assert.equal((yield* Ref.get(state)).openCount, 2);
+      assert.equal((yield* Ref.get(state)).closeCount, 1);
+      const reused = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy: { ...runtimePolicy, runtimeMode: "approval-required" },
+      });
+      assert.strictEqual(reused, restricted);
+      assert.equal((yield* Ref.get(state)).openCount, 2);
+    }).pipe(
+      Effect.provide(
+        makeTestLayer({
+          state,
+          idleTimeoutMs: 60_000,
+          capabilities: {
+            ...CodexCapabilities,
+            sessions: { ...CodexCapabilities.sessions, supportsRuntimeModeSwitchInSession: false },
+          },
+        }),
+      ),
+    );
+  }),
+);
+
 it.effect("ProviderSessionManagerV2 opens a duplicate session only once", () =>
   Effect.gen(function* () {
     const state = yield* Ref.make(emptyState);

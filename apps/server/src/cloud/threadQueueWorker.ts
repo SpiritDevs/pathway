@@ -464,37 +464,21 @@ export const makeLocalThreadQueueExecutor = Effect.fn("cloud.thread_queue.execut
           })
           .pipe(Effect.asVoid);
       }
-      return Effect.gen(function* () {
-        if (submission.branch !== undefined)
-          yield* threads.dispatch({
-            type: "thread.metadata.update",
-            commandId: CommandId.make(`${receiptId}:branch`),
-            threadId: ThreadId.make(accepted.threadId),
-            branch: submission.branch,
-          });
-        if (submission.runtimeMode !== undefined)
-          yield* threads.dispatch({
-            type: "thread.runtime-mode.set",
-            commandId: CommandId.make(`${receiptId}:runtime-mode`),
-            threadId: ThreadId.make(accepted.threadId),
-            runtimeMode: submission.runtimeMode,
-          });
-        if (submission.interactionMode !== undefined)
-          yield* threads.dispatch({
-            type: "thread.interaction-mode.set",
-            commandId: CommandId.make(`${receiptId}:interaction-mode`),
-            threadId: ThreadId.make(accepted.threadId),
-            interactionMode: submission.interactionMode,
-          });
-        yield* threads.dispatch({
+      return threads
+        .dispatch({
           ...submission.input,
+          ...(submission.branch === undefined ? {} : { branch: submission.branch }),
+          ...(submission.runtimeMode === undefined ? {} : { runtimeMode: submission.runtimeMode }),
+          ...(submission.interactionMode === undefined
+            ? {}
+            : { interactionMode: submission.interactionMode }),
           commandId: receiptId,
           threadId: ThreadId.make(accepted.threadId),
           attachments,
           dispatchMode: threadQueueDispatchMode(submission.input.dispatchMode),
           createdBy: "user",
-        });
-      });
+        })
+        .pipe(Effect.asVoid);
     }),
   } satisfies ThreadQueueExecutor;
 });

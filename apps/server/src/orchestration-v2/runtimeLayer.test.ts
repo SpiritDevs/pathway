@@ -1,3 +1,5 @@
+import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
+import { ProjectionProjectRepositoryLive } from "../persistence/Layers/ProjectionProjects.ts";
 import { reconcileTemporaryThreads } from "./TemporaryThreadSettlement.ts";
 import { ThreadWorkspaceService } from "./ThreadWorkspaceService.ts";
 import { CompanyId } from "@spiritdevs/contracts/company";
@@ -114,6 +116,7 @@ const TestLayer = Layer.mergeAll(
   OrchestrationV2LayerLive,
   OrchestrationV2EventSinkLayerLive,
   effectOutboxLayer,
+  ProjectionProjectRepositoryLive,
 ).pipe(
   Layer.provide(mcpSessionRegistryTestLayer),
   Layer.provide(SqlitePersistenceMemory),
@@ -1952,6 +1955,18 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const eventSink = yield* EventSinkV2;
       const threadId = ThreadId.make("runtime-layer-serialized-queue-thread");
 
+      const projects = yield* ProjectionProjectRepository;
+      yield* projects.upsert({
+        projectId: ProjectId.make("runtime-layer-serialized-queue-project"),
+        title: "Serialized queue project",
+        workspaceRoot: process.cwd(),
+        defaultModelSelection: modelSelection,
+        defaultThreadEnvMode: null,
+        scripts: [],
+        createdAt: "2026-06-22T00:00:00.000Z",
+        updatedAt: "2026-06-22T00:00:00.000Z",
+        deletedAt: null,
+      });
       yield* orchestrator.dispatch({
         type: "thread.create",
         createdBy: "user",
@@ -1978,32 +1993,57 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         modelSelection,
         dispatchMode: { type: "start_immediately" },
       });
-      yield* orchestrator.dispatch({
-        type: "message.dispatch",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make("runtime-layer-serialized-queue-first"),
-        threadId,
-        messageId: MessageId.make("runtime-layer-serialized-queue-first"),
-        text: "First queued",
-        attachments: [],
-        modelSelection,
-        dispatchMode: { type: "queue_after_active" },
-      });
-      yield* orchestrator.dispatch({
-        type: "message.dispatch",
-        createdBy: "user",
-        creationSource: "web",
-        commandId: CommandId.make("runtime-layer-serialized-queue-second"),
-        threadId,
-        messageId: MessageId.make("runtime-layer-serialized-queue-second"),
-        text: "Second queued",
-        attachments: [],
-        modelSelection,
-        dispatchMode: { type: "queue_after_active" },
-      });
+      yield* Effect.all(
+        [
+          orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make("runtime-layer-serialized-queue-first"),
+            threadId,
+            messageId: MessageId.make("runtime-layer-serialized-queue-first"),
+            text: "First queued",
+            runtimeMode: "approval-required",
+            interactionMode: "plan",
+            attachments: [],
+            modelSelection,
+            dispatchMode: { type: "queue_after_active" },
+          }),
+          orchestrator.dispatch({
+            type: "message.dispatch",
+            createdBy: "user",
+            creationSource: "web",
+            commandId: CommandId.make("runtime-layer-serialized-queue-second"),
+            threadId,
+            messageId: MessageId.make("runtime-layer-serialized-queue-second"),
+            text: "Second queued",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            attachments: [],
+            modelSelection,
+            dispatchMode: { type: "queue_after_active" },
+          }),
+        ],
+        { concurrency: "unbounded" },
+      );
 
       const before = yield* orchestrator.getThreadProjection(threadId);
+      const restrictedRun = before.runs.find(
+        (run) => run.userMessageId === "runtime-layer-serialized-queue-first",
+      );
+      const unrestrictedRun = before.runs.find(
+        (run) => run.userMessageId === "runtime-layer-serialized-queue-second",
+      );
+      assert.equal(restrictedRun?.runtimeMode, "approval-required");
+      assert.equal(restrictedRun?.interactionMode, "plan");
+      assert.equal(unrestrictedRun?.runtimeMode, "full-access");
+      assert.equal(unrestrictedRun?.interactionMode, "default");
+      yield* orchestrator.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId: CommandId.make("runtime-layer-serialized-queue-other-client"),
+        threadId,
+        runtimeMode: "full-access",
+      });
       const activeRun = before.runs.find((run) => run.status === "starting");
       const queuedRuns = before.runs
         .filter((run) => run.status === "queued")
@@ -2064,6 +2104,11 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.equal(
         afterFirstPromotion.runs.find((run) => run.id === secondQueuedRun.id)?.status,
         "queued",
+      );
+      assert.equal(
+        afterFirstPromotion.runs.find((run) => run.id === restrictedRun?.id)?.runtimeMode,
+        "approval-required",
+        "another client's settings must not change the queued run's saved permissions",
       );
       const promotedMessageItem = afterFirstPromotion.turnItems.find(
         (item) => item.type === "user_message" && item.messageId === firstQueuedRun.userMessageId,

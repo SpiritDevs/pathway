@@ -860,6 +860,9 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
                   : ({ type: "queue_after_active" } as const);
   return yield* dispatch({
     type: "message.dispatch",
+    ...(input.branch === undefined ? {} : { branch: input.branch }),
+    runtimeMode: input.runtimeMode,
+    interactionMode: input.interactionMode,
     commandId,
     createdBy: "user",
     creationSource: input.creationSource ?? "web",

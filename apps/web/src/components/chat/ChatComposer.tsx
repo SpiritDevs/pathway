@@ -153,8 +153,14 @@ import {
   releaseDraftAttachment,
   releasePersistedAttachmentUpload,
   retryAttachmentUpload,
+  startAttachmentUpload,
+  cancelAttachmentUpload,
+  useAttachmentUploadStore,
 } from "../../lib/attachmentUploadQueue";
-import { formatAttachmentUploadProgress } from "../../lib/attachmentUploadState";
+import {
+  attachmentUploadBlockReason,
+  formatAttachmentUploadProgress,
+} from "../../lib/attachmentUploadState";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
 
@@ -511,6 +517,7 @@ export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   maxFileAttachmentBytes: number | null;
+  uploadFilesToEnvironment: boolean;
   routeKind: "server" | "draft";
   routeThreadRef: ScopedThreadRef;
   draftId: DraftId | null;
@@ -684,6 +691,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerDraftTarget,
     environmentId,
     maxFileAttachmentBytes: advertisedMaxFileAttachmentBytes,
+    uploadFilesToEnvironment,
     routeKind,
     routeThreadRef,
     draftId,
@@ -1152,6 +1160,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ),
     [composerImages],
   );
+  const uploadsByAttachmentId = useAttachmentUploadStore((state) => state.uploadsByAttachmentId);
   const fileAttachmentBlockReason = useMemo(() => {
     if (composerFileAttachments.length === 0) return null;
     if (maxFileAttachmentBytes === null) {
@@ -1172,9 +1181,37 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     ) {
       return "Attach the unavailable files again or remove them before sending.";
     }
-    // Queued submissions upload the original file to cloud storage after device persistence.
-    return null;
-  }, [composerFileAttachments, environmentId, maxFileAttachmentBytes]);
+    return uploadFilesToEnvironment
+      ? attachmentUploadBlockReason({
+          fileIds: composerFileAttachments.map((file) => file.id),
+          uploadsByAttachmentId,
+          environmentId,
+        })
+      : null;
+  }, [
+    composerFileAttachments,
+    environmentId,
+    maxFileAttachmentBytes,
+    uploadFilesToEnvironment,
+    uploadsByAttachmentId,
+  ]);
+
+  useEffect(() => {
+    if (!uploadFilesToEnvironment || maxFileAttachmentBytes === null) {
+      for (const file of composerFileAttachments) cancelAttachmentUpload(file.id);
+      return;
+    }
+    for (const file of composerFileAttachments) {
+      if (file.sizeBytes > maxFileAttachmentBytes || composerFileNeedsReattach(file)) continue;
+      startAttachmentUpload({ environmentId, file, draftTarget: composerDraftTarget });
+    }
+  }, [
+    composerDraftTarget,
+    composerFileAttachments,
+    environmentId,
+    maxFileAttachmentBytes,
+    uploadFilesToEnvironment,
+  ]);
 
   // ------------------------------------------------------------------
   // Derived: composer trigger / menu
@@ -3285,7 +3322,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                   {composerFileNeedsReattach(image)
                                     ? "Attach again"
                                     : (() => {
-                                        const upload = readAttachmentUpload(image.id);
+                                        const upload = uploadFilesToEnvironment
+                                          ? uploadsByAttachmentId[image.id]
+                                          : undefined;
                                         if (
                                           upload?.status === "uploading" &&
                                           upload.environmentId === environmentId
@@ -3310,7 +3349,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                       })()}
                                 </div>
                               </div>
-                              {readAttachmentUpload(image.id)?.status === "failed" &&
+                              {uploadFilesToEnvironment &&
+                              readAttachmentUpload(image.id)?.status === "failed" &&
                               image.file !== null ? (
                                 <button
                                   type="button"
