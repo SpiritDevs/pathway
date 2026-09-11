@@ -85,6 +85,8 @@ export interface BrowserTakeoverCalloutInput {
   readonly activeRunStatus: OrchestrationV2RunStatus | null;
   /** This client can host a Preview browser (desktop runtime). */
   readonly previewSupported: boolean;
+  /** The recorded tab has a live native browser in this desktop's preview sessions. */
+  readonly previewTabAvailable: boolean;
   /** This client's automation host id for the thread's environment. */
   readonly automationHostClientId: string | null;
   readonly dismissed: boolean;
@@ -99,6 +101,8 @@ export function shouldShowBrowserTakeoverCallout(input: BrowserTakeoverCalloutIn
   if (!input.previewSupported) return false;
   const activity = input.previewActivity ?? null;
   if (activity === null) return false;
+  // Routing an open request records activity even if the browser never opens.
+  if (activity.tabId === null || !input.previewTabAvailable) return false;
   // Stale activity: the browser work belongs to a run that already finished.
   if (input.activeRunId === null || activity.runId !== input.activeRunId) return false;
   // The run is still "active" in the sidebar sense but past the point where the
@@ -182,6 +186,7 @@ export interface BrowserTakeoverBannerInput {
   readonly activeRunId: RunId | null;
   readonly activeRunStatus: OrchestrationV2RunStatus | null;
   readonly previewSupported: boolean;
+  readonly previewTabAvailable: boolean;
   readonly automationHostClientId: string | null;
   /** A takeover request this client sent that the projection has not echoed. */
   readonly requestPending: boolean;
@@ -264,6 +269,7 @@ export function resolveBrowserTakeoverBanner(
     activeRunId: input.activeRunId,
     activeRunStatus: input.activeRunStatus,
     previewSupported: input.previewSupported,
+    previewTabAvailable: input.previewTabAvailable,
     automationHostClientId: input.automationHostClientId,
     dismissed: isDismissed(calloutKey),
   });

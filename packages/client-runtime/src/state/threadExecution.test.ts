@@ -1,4 +1,10 @@
-import { MessageId, RunId, type OrchestrationV2RunStatus } from "@spiritdevs/contracts";
+import {
+  MessageId,
+  ProviderInstanceId,
+  ProviderThreadId,
+  RunId,
+  type OrchestrationV2RunStatus,
+} from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -7,6 +13,7 @@ import {
   deriveLatestThreadRun,
   deriveThreadActivityRun,
   deriveThreadRuntime,
+  deriveThreadRuntimeRun,
   threadRuntimeHasInterruptibleRun,
 } from "./threadExecution.ts";
 
@@ -33,8 +40,45 @@ function run(id: string, ordinal: number, status: OrchestrationV2RunStatus) {
 }
 
 describe("thread execution presentation", () => {
+  it.each(["running", "waiting", "completed"] as const)(
+    "reports the run's account instead of the thread default while %s",
+    (status) => {
+      const workInstanceId = ProviderInstanceId.make("codex_work");
+      const workRun = { ...run("work-run", 2, status), providerInstanceId: workInstanceId };
+      const projection = {
+        ...v2Projection,
+        runs: [run("personal-run", 1, "completed"), workRun],
+      };
+
+      expect(deriveThreadRuntime(projection)?.providerInstanceId).toBe(workInstanceId);
+      expect(projection.thread.providerInstanceId).not.toBe(workInstanceId);
+    },
+  );
+
+  it("keeps the attached account and model after completion with another account queued", () => {
+    const workInstanceId = ProviderInstanceId.make("codex_work");
+    const providerThreadId = ProviderThreadId.make("work-provider-thread");
+    const workRun = {
+      ...run("work-run", 1, "completed"),
+      providerInstanceId: workInstanceId,
+      providerThreadId,
+      modelSelection: { instanceId: workInstanceId, model: "gpt-5.3-codex-spark" },
+    };
+    const projection = {
+      ...v2Projection,
+      thread: { ...v2Projection.thread, activeProviderThreadId: providerThreadId },
+      runs: [workRun, run("queued-personal-run", 2, "queued")],
+    };
+
+    expect(deriveThreadRuntime(projection)?.providerInstanceId).toBe(workInstanceId);
+    expect(deriveThreadRuntimeRun(projection)?.modelSelection).toEqual(workRun.modelSelection);
+  });
+
   it("keeps live activity attached to an executing run when a newer run is queued", () => {
-    const runningRun = run("run-running", 1, "running");
+    const runningRun = {
+      ...run("run-running", 1, "running"),
+      providerInstanceId: ProviderInstanceId.make("codex_work"),
+    };
     const queuedRun = run("run-queued", 2, "queued");
     const projection = { ...v2Projection, runs: [queuedRun, runningRun], updatedAt: now };
 
@@ -48,6 +92,7 @@ describe("thread execution presentation", () => {
     expect(runtime).toMatchObject({
       status: "running",
       activeRunId: runningRun.id,
+      providerInstanceId: runningRun.providerInstanceId,
     });
     expect(threadRuntimeHasInterruptibleRun(runtime)).toBe(true);
   });

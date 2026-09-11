@@ -48,6 +48,7 @@ const eligible = {
   activeRunId: RUN_ID,
   activeRunStatus: "running",
   previewSupported: true,
+  previewTabAvailable: true,
   automationHostClientId: HOST_CLIENT_ID,
   dismissed: false,
 } as const satisfies BrowserTakeoverCalloutInput;
@@ -75,6 +76,7 @@ const bannerInput = {
   activeRunId: RUN_ID,
   activeRunStatus: "running",
   previewSupported: true,
+  previewTabAvailable: true,
   automationHostClientId: HOST_CLIENT_ID,
   requestPending: false,
   isDismissed: () => false,
@@ -117,6 +119,13 @@ describe("shouldShowBrowserTakeoverCallout", () => {
         previewActivity: activity({ runId: null }),
       }),
     ).toBe(false);
+  });
+
+  it("hides after a failed open or when the recorded tab is no longer available", () => {
+    expect(
+      shouldShowBrowserTakeoverCallout({ ...eligible, previewActivity: activity({ tabId: null }) }),
+    ).toBe(false);
+    expect(resolveBrowserTakeoverBanner({ ...bannerInput, previewTabAvailable: false })).toBeNull();
   });
 
   it("only offers a takeover while the run can still be paused", () => {
@@ -366,6 +375,7 @@ describe("resolveBrowserTakeoverBanner", () => {
         activeRunId: RUN_ID,
         activeRunStatus: "running",
         previewSupported: true,
+        previewTabAvailable: false,
         automationHostClientId: HOST_CLIENT_ID,
         requestPending: false,
         isDismissed: () => false,

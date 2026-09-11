@@ -22,6 +22,8 @@ Use the tab bar to open, select, and close pages. Websites can open additional t
 
 Take browser control before interacting while the agent is working. Resume the agent when you are finished.
 
+The desktop's **Take over to assist agent** offer appears only when that desktop has the browser tab used by the current run. A failed attempt to open a browser without a tab does not offer takeover.
+
 ## Saved logins
 
 Settings → General → Passwords stores website logins in your Pathway account. On iOS, open Passwords from the browser to manage saved logins. The vault uses encryption on Pathway's servers and synchronizes through your account.

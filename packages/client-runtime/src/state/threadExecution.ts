@@ -63,14 +63,40 @@ export function deriveThreadActivityRun(
   return run === null ? null : summarizeThreadRun(projection, run);
 }
 
+/** Resolves the run supplying the current session's account and model. */
+export function deriveThreadRuntimeRun(projection: OrchestrationV2ThreadProjection) {
+  const executingRun = latestMatchingRun(projection, (run) =>
+    ACTIVITY_RUN_STATUSES.has(run.status),
+  );
+  if (executingRun !== null) return executingRun;
+  const attachedThreadId = projection.thread.activeProviderThreadId;
+  return latestMatchingRun(
+    projection,
+    (run) =>
+      attachedThreadId === null ||
+      (run.providerThreadId === attachedThreadId && run.status !== "queued"),
+  );
+}
+
 export function deriveThreadRuntime(
   projection: OrchestrationV2ThreadProjection,
 ): ThreadRuntimeSummary | null {
   const latestRun = deriveLatestThreadRun(projection);
   const latestRunProjection = latestMatchingRun(projection, () => true);
   const activityRun = deriveThreadActivityRun(projection);
+  const runtimeRun = deriveThreadRuntimeRun(projection);
+  const attachedProviderThread = projection.providerThreads.find(
+    (thread) => thread.id === projection.thread.activeProviderThreadId,
+  );
+  // A run can override the thread's default account. Keep the attached account
+  // after it finishes; queued work must not relabel the session executing now.
+  const providerInstanceId =
+    runtimeRun?.providerInstanceId ??
+    attachedProviderThread?.providerInstanceId ??
+    latestRunProjection?.providerInstanceId ??
+    projection.thread.providerInstanceId;
   const providerSession = projection.providerSessions.findLast(
-    (session) => session.providerInstanceId === projection.thread.providerInstanceId,
+    (session) => session.providerInstanceId === providerInstanceId,
   );
   if (latestRun === null && projection.thread.activeProviderThreadId === null) return null;
   const activeRunId =
@@ -86,7 +112,7 @@ export function deriveThreadRuntime(
   return {
     status: hasPendingBackgroundTasks ? "idle" : (activityRun?.status ?? "idle"),
     activeRunId,
-    providerInstanceId: projection.thread.providerInstanceId,
+    providerInstanceId,
     providerName: providerSession?.driver ?? null,
     lastError: providerSession?.lastError ?? null,
     updatedAt: DateTime.formatIso(projection.updatedAt),
