@@ -30,3 +30,7 @@ projects, remove one of those connections first so future remote commands have o
 The selected repository becomes authoritative for every connection. Online environments update the
 checkout's Git remote immediately; offline environments apply the choice when they reconnect. Files
 and branches in the checkout are not changed.
+
+To remove a project, open its settings and scroll to the red-tinted **Danger** card at the bottom.
+Choose **Remove project**, then review the confirmation before continuing. **Cancel** keeps the
+project. Removing a project deletes its entry and threads; files on disk are not touched.
