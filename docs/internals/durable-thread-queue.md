@@ -23,6 +23,11 @@ dispatch permission.
 
 ## Delivery and ownership
 
+The queue worker discovers companies through the environment's registered proof key. A desktop
+registration refresh must accept every field in `ExecutionEnvironmentCapabilities`: rejecting a
+new capability preserves stale queue-support metadata and can prevent discovery after a proof-key
+change. The Convex registration validator checks its capability keys against that shared contract.
+
 `environmentHead` subscriptions wake the environment worker on changes and reconnect. Only the
 first outstanding submission in each thread is eligible. A read-only `prepare` supplies the payload
 and cloud attachment URLs so prerequisites can be checked without claiming execution ownership.

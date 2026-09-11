@@ -18,6 +18,7 @@ const modules = {
   "../convex/_generated/server.js": () => import("../convex/_generated/server.js"),
   "../convex/agentThreads.ts": () => import("../convex/agentThreads.ts"),
   "../convex/threadQueue.ts": () => import("../convex/threadQueue.ts"),
+  "../convex/environments.ts": () => import("../convex/environments.ts"),
   "../convex/sync.ts": () => import("../convex/sync.ts"),
 };
 
@@ -250,6 +251,70 @@ async function capabilities(t: Harness) {
 }
 
 describe("durable thread queue", () => {
+  it("discovers and delivers saved work after a desktop refreshes its registration key", async () => {
+    const t = harness();
+    await seed(t);
+    const saved = await enqueue(t);
+    await t.run(async (ctx) => {
+      const registration = await ctx.db
+        .query("environmentRegistrations")
+        .withIndex("by_environment", (q) => q.eq("environmentId", ENVIRONMENT_ONE))
+        .unique();
+      await ctx.db.patch(registration!._id, { publicKeyThumbprint: "previous-install-key" });
+    });
+    const environment = asEnvironment(t);
+    expect(await environment.query(api.environments.listRegisteredCompanies, {})).toEqual([]);
+
+    const member = asMember(t, "manager");
+    await member.mutation(api.environments.register, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ONE,
+      publicKeyThumbprint: THUMBPRINT_ONE,
+      descriptor: {
+        environmentId: ENVIRONMENT_ONE,
+        applicationId: "pathway",
+        label: "Mac Studio",
+        platform: { os: "darwin", arch: "arm64" },
+        runtime: { mode: "desktop" },
+        serverVersion: "1.1.0",
+        capabilities: {
+          repositoryIdentity: true,
+          durableThreadQueue: true,
+          desktopAppUpdate: true,
+          userInputDismissal: true,
+        },
+      },
+      relayLinkState: "linked",
+      managedEndpointAvailable: true,
+    });
+
+    expect(await environment.query(api.environments.listRegisteredCompanies, {})).toEqual([
+      COMPANY_ID,
+    ]);
+    const heads = await environment.query(api.threadQueue.environmentHead, {
+      companyId: COMPANY_ID,
+    });
+    expect(heads).toHaveLength(1);
+    expect(heads[0]).toMatchObject({
+      queueId: saved.thread.queueId,
+      commandId: firstFence.commandId,
+    });
+    await environment.mutation(api.threadQueue.accept, firstFence);
+    await environment.mutation(api.threadQueue.acknowledge, firstFence);
+    expect(
+      await member.query(api.threadQueue.submissionStatus, {
+        ...queueIdentity,
+        commandId: firstFence.commandId,
+      }),
+    ).toMatchObject({ state: "delivered" });
+    const destinations = await member.query(api.threadQueue.destinations, {
+      companyId: COMPANY_ID,
+    });
+    expect(destinations.find((value) => value.environmentId === ENVIRONMENT_ONE)).toMatchObject({
+      durableThreadQueue: true,
+    });
+  });
+
   it("isolates identical thread and command IDs by environment while preserving stable queue IDs", async () => {
     const t = harness();
     await seed(t);
