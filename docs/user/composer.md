@@ -52,3 +52,14 @@ over a project skill with the same name.
 Provider slash commands appear only when `/` starts the whole message, where the
 provider can expand them. Pathway's `/model`, `/plan`, and `/default` commands
 remain available at the beginning of any line.
+
+## Pending questions
+
+The action palette lists pending questions for the current thread. Select a request to answer
+it in the composer, even when the original question is earlier in the conversation. Requests
+with several questions open together so you can answer each one before submitting.
+
+Select the X beside a request to ignore it. Ignoring removes it from the pending list on all
+connected clients without sending a follow-up message. If the agent is waiting for that answer,
+it receives an empty response. The thread's Input marker clears when no pending input remains.
+You can show, hide, and reorder Pending questions in the action palette settings.

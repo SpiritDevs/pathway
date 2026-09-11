@@ -2919,10 +2919,10 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const pendingUserInputs = useMemo(() => {
     const blocking = allPendingUserInputs.filter((request) => request.isBlocking !== false);
-    const selected = asyncUserInputs.find(
+    const selected = allPendingUserInputs.find(
       (request) => request.requestId === selectedAsyncQuestionId,
     );
-    return blocking.length > 0 ? blocking : selected ? [selected] : [];
+    return selected ? [selected] : blocking;
   }, [allPendingUserInputs, asyncUserInputs, selectedAsyncQuestionId]);
   const closeAsyncQuestion = useCallback(() => setSelectedAsyncQuestionId(null), []);
   const activePendingUserInput = pendingUserInputs[0] ?? null;
@@ -8537,7 +8537,7 @@ function ChatViewContent(props: ChatViewProps) {
     () => ({
       prompts: asyncUserInputs,
       onOpen: (requestId: RuntimeRequestId) => {
-        const prompt = asyncUserInputs.find((entry) => entry.requestId === requestId);
+        const prompt = allPendingUserInputs.find((entry) => entry.requestId === requestId);
         if (!prompt) return;
         setPendingUserInputAnswersByRequestId((existing) => ({
           ...existing,
@@ -8547,7 +8547,33 @@ function ChatViewContent(props: ChatViewProps) {
         scheduleComposerFocus();
       },
     }),
-    [asyncUserInputs, scheduleComposerFocus],
+    [allPendingUserInputs, asyncUserInputs, scheduleComposerFocus],
+  );
+
+  const onIgnoreQuestion = useCallback(
+    async (requestId: RuntimeRequestId) => {
+      if (!activeThreadId) return;
+      setRespondingUserInputRequestIds((existing) => [...existing, requestId]);
+      const result = await respondToThreadApproval({
+        environmentId,
+        input: { threadId: activeThreadId, requestId, decision: "cancel" },
+      });
+      setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
+      if (result._tag === "Success") {
+        clearQuestionAttachments(
+          environmentId,
+          questionAttachmentDraftKey(environmentId, activeThreadId, requestId),
+        );
+        setSelectedAsyncQuestionId((selected) => (selected === requestId ? null : selected));
+      } else if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThreadId,
+          error instanceof Error ? error.message : "Failed to ignore question.",
+        );
+      }
+    },
+    [activeThreadId, environmentId, respondToThreadApproval, setThreadError],
   );
 
   const onChangeActivePendingUserInputCustomAnswer = useCallback(
@@ -9226,6 +9252,15 @@ function ChatViewContent(props: ChatViewProps) {
     ) : null
   ) : null;
   const threadDetailsPanelProps: Omit<ThreadDetailsPanelProps, "mode"> = {
+    pendingQuestions: {
+      prompts: allPendingUserInputs,
+      respondingRequestIds: respondingUserInputRequestIds,
+      onOpen: (requestId) => {
+        closeThreadPanelPopover();
+        timelineAsyncQuestions.onOpen(requestId);
+      },
+      onIgnore: onIgnoreQuestion,
+    },
     ...(!isServerThread && activeProject
       ? {
           workspaceContext: {

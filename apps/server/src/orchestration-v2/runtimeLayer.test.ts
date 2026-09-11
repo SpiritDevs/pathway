@@ -11,6 +11,7 @@ import {
   ContextTransferId,
   EventId,
   MessageId,
+  NodeId,
   type ModelSelection,
   ProjectId,
   ProviderDriverKind,
@@ -20,6 +21,7 @@ import {
   RunId,
   RuntimeRequestId,
   ThreadId,
+  TurnItemId,
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
@@ -839,6 +841,129 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         (yield* outbox.listByCommandId(commandId)).map((effect) => effect.request.type),
         ["provider-thread.rollback-and-start"],
       );
+    }),
+  );
+
+  it.effect("ignores pending questions durably without starting another turn", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const eventSink = yield* EventSinkV2;
+      const outbox = yield* EffectOutboxV2;
+      const threadId = ThreadId.make("ignore-questions-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("ignore-questions-create"),
+        threadId,
+        projectId: ProjectId.make("ignore-questions-project"),
+        title: "Questions",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: "/tmp/ignore-questions",
+      });
+      const now = yield* DateTime.now;
+      const capabilities = [
+        {
+          type: "message" as const,
+          providerThreadId: ProviderThreadId.make("old-provider-thread"),
+        },
+        { type: "not_resumable" as const, reason: "Previous session" },
+        {
+          type: "live" as const,
+          providerSessionId: ProviderSessionId.make("live-question-session"),
+        },
+      ];
+      for (const [index, responseCapability] of capabilities.entries()) {
+        yield* eventSink.write({
+          events: [
+            {
+              id: EventId.make(`ignore-question-${index}`),
+              type: "runtime-request.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: RuntimeRequestId.make(`question-${index}`),
+                nodeId: NodeId.make(`question-node-${index}`),
+                providerTurnId: null,
+                nativeRequestRef: null,
+                kind: "user_input",
+                status: "pending",
+                responseCapability,
+                createdAt: now,
+                resolvedAt: null,
+              },
+            },
+            {
+              id: EventId.make(`ignore-question-item-${index}`),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                id: TurnItemId.make(`question-item-${index}`),
+                threadId,
+                type: "user_input_request",
+                requestId: RuntimeRequestId.make(`question-${index}`),
+                runId: null,
+                nodeId: NodeId.make(`question-node-${index}`),
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                ordinal: index,
+                status: "running",
+                title: "Question",
+                startedAt: now,
+                completedAt: null,
+                updatedAt: now,
+                questions: [
+                  { id: "question", header: "Question", question: "Which approach?", options: [] },
+                ],
+              },
+            },
+          ],
+        });
+      }
+      for (const [index, responseCapability] of capabilities.entries()) {
+        const commandId = CommandId.make(`ignore-question-command-${index}`);
+        yield* orchestrator.dispatch({
+          type: "runtime-request.respond",
+          commandId,
+          threadId,
+          requestId: RuntimeRequestId.make(`question-${index}`),
+          decision: "cancel",
+        });
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        assert.lengthOf(
+          projection.runtimeRequests.filter((request) => request.status === "pending"),
+          2 - index,
+        );
+        assert.equal(
+          projection.turnItems.find((item) => item.id === TurnItemId.make(`question-item-${index}`))
+            ?.status,
+          "cancelled",
+        );
+        assert.lengthOf(projection.messages, 0);
+        assert.lengthOf(projection.runs, 0);
+        const effects = yield* outbox.listByCommandId(commandId);
+        if (responseCapability.type === "live") {
+          assert.lengthOf(effects, 1);
+          assert.deepEqual(effects[0]?.request, {
+            type: "runtime-request.respond",
+            requestId: RuntimeRequestId.make(`question-${index}`),
+            providerSessionId: responseCapability.providerSessionId,
+            answers: {},
+          });
+        } else {
+          assert.lengthOf(effects, 0);
+        }
+      }
+      const shell = (yield* orchestrator.getShellSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      assert.isNull(shell?.pendingRuntimeRequest);
     }),
   );
 
