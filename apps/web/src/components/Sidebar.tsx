@@ -1,3 +1,4 @@
+import { useSidebarPrRevalidation } from "../state/sidebarPrRevalidation";
 import { QueuedThreadSidebar } from "./QueuedThreadSidebar";
 import {
   threadQueueEntriesAtom,
@@ -2389,6 +2390,10 @@ export default function Sidebar() {
   const [changeRequestStateByKey, setChangeRequestStateByKey] = useAtom(
     sidebarThreadChangeRequestsAtom(threadScope),
   );
+  const retainedClassifications = useRef({ scope: threadScope, states: changeRequestStateByKey });
+  if (retainedClassifications.current.scope !== threadScope)
+    retainedClassifications.current = { scope: threadScope, states: changeRequestStateByKey };
+  const retainedStates = retainedClassifications.current.states;
   const threadListReadiness = useAtomValue(threadListReadinessAtom);
   const handleChangeRequestState = useCallback(
     (threadKey: string, value: ThreadChangeRequestState, failed = false) => {
@@ -2408,6 +2413,19 @@ export default function Sidebar() {
       return new Map([...current].filter(([key]) => keys.has(key)));
     });
   }, [threads, threadListReadiness, setChangeRequestStateByKey]);
+  const unavailableEnvironmentIds = useMemo(
+    () =>
+      new Set(
+        environments
+          .filter((environment) =>
+            ["available", "offline", "error", "reconnecting"].includes(
+              environment.connection.phase,
+            ),
+          )
+          .map((environment) => environment.environmentId),
+      ),
+    [environments],
+  );
   const lifecycleCapabilities = useMemo(() => {
     const capabilities = new Map(
       environments.map((environment) => [
@@ -2605,6 +2623,7 @@ export default function Sidebar() {
       const capabilities = lifecycleCapabilities.get(thread.environmentId);
       const section = sidebarThreadSection(thread, {
         now: preciseNow,
+        unavailable: unavailableEnvironmentIds.has(thread.environmentId),
         autoSettleAfterDays,
         queued: queuedStatusByThreadId.has(
           scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
@@ -2648,6 +2667,7 @@ export default function Sidebar() {
     autoSettleAfterDays,
     changeRequestStateByKey,
     lifecycleCapabilities,
+    unavailableEnvironmentIds,
     projectCwdByKey,
     nowMinute,
     scopedProjectKeys,
@@ -2657,6 +2677,22 @@ export default function Sidebar() {
     agentThreads,
     queuedStatusByThreadId,
   ]);
+
+  const retainedSettledThreads = useMemo(
+    () =>
+      settledThreads.filter(
+        (thread) =>
+          thread.settledOverride == null &&
+          environments.some(
+            (environment) =>
+              environment.environmentId === thread.environmentId &&
+              environment.connection.phase === "connected",
+          ) &&
+          retainedStates.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+      ),
+    [settledThreads, environments, retainedStates],
+  );
+  useSidebarPrRevalidation(threadScope, retainedSettledThreads, projects, handleChangeRequestState);
 
   // Drag-to-reorder for the active inbox. Purely client-local (this device
   // only): a drop saves the full visible key order, and this memo re-derives

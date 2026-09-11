@@ -582,6 +582,52 @@ const connectionTo = (
 ): CloudSyncConnection => ({ transport, companies: Stream.fromQueue(listings) });
 
 describe("runCloudSyncEngines", () => {
+  it.effect(
+    "publishes the complete discovery set before starting company engines and clears it on stop",
+    () =>
+      Effect.gen(function* () {
+        const { transport } = yield* makeFeedTransport();
+        const store = yield* makeMemorySyncStore();
+        const election = yield* makeWebLeaderElection({
+          scope: "discovery-test",
+          locks: makeInProcessWebLockManager(),
+        });
+        const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
+        const published = yield* Queue.unbounded<ReadonlyArray<CompanyId> | null>();
+        const started = yield* Queue.unbounded<CompanyId>();
+        let discovered: ReadonlyArray<CompanyId> | null = null;
+        const supervisor = yield* Effect.forkChild(
+          runCloudSyncEngines({
+            clientId: SyncClientId.make("client-1"),
+            election,
+            connect: Effect.succeed(connectionTo(transport, listings)),
+            publishDiscoveredCompanyIds: (ids) =>
+              Effect.sync(() => {
+                discovered = ids;
+              }).pipe(Effect.andThen(Queue.offer(published, ids))),
+            publishCompanyRegistryMembershipId: (id, membership) => {
+              if (!membership) return Effect.void;
+              expect(discovered).toEqual([COMPANY_A, COMPANY_B]);
+              return Queue.offer(started, id);
+            },
+          }).pipe(Effect.provideService(SyncStore, store.service)),
+          { startImmediately: true },
+        );
+        expect(yield* Queue.take(published)).toBeNull();
+        yield* Queue.offer(
+          listings,
+          cleanListing(company(COMPANY_A, "member-a"), company(COMPANY_B, "member-b")),
+        );
+        expect(yield* Queue.take(published)).toEqual([COMPANY_A, COMPANY_B]);
+        yield* Queue.take(started);
+        yield* Queue.take(started);
+        yield* Queue.offer(listings, partialListing([{ id: "broken" }]));
+        expect(yield* Queue.take(published)).toBeNull();
+        yield* Fiber.interrupt(supervisor);
+        expect(yield* Queue.take(published)).toBeNull();
+      }),
+  );
+
   it.effect("publishes compact status and removes it with the company engine scope", () =>
     Effect.gen(function* () {
       const { transport } = yield* makeFeedTransport();

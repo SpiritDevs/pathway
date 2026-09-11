@@ -1,7 +1,7 @@
 import { Atom } from "effect/unstable/reactivity";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { activeCompanyIdAtom } from "./activeCompany";
-import { companyRegistryReplicasAtom } from "./companyRegistryReplica";
+import { companyRegistryReplicasAtom, discoveredCompanyIdsAtom } from "./companyRegistryReplica";
 import { companySyncStatusesAtom } from "./syncStatus";
 import type { CompanySyncStatus } from "./syncStatus.logic";
 
@@ -11,10 +11,10 @@ export function companyThreadReadiness(
   companyId: CompanyId | null,
   replicas: ReadonlyMap<CompanyId, unknown>,
   statuses: ReadonlyMap<CompanyId, CompanySyncStatus>,
+  discoveredIds: ReadonlyArray<CompanyId> | null = null,
 ): ThreadListReadiness {
-  const ids =
-    companyId === null ? [...new Set([...replicas.keys(), ...statuses.keys()])] : [companyId];
-  if (ids.length === 0) return "loading";
+  if (companyId === null && discoveredIds === null) return "loading";
+  const ids = companyId === null ? discoveredIds! : [companyId];
   let readiness: ThreadListReadiness = "ready";
   for (const id of ids) {
     const status = statuses.get(id);
@@ -31,5 +31,6 @@ export const companyThreadReadinessAtom = Atom.make((get) =>
     get(activeCompanyIdAtom),
     get(companyRegistryReplicasAtom),
     get(companySyncStatusesAtom),
+    get(discoveredCompanyIdsAtom),
   ),
 );

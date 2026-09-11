@@ -146,3 +146,9 @@ A read-only aggregate check of the local live database found 81 nondeleted, unar
 The browser pass covered warm remounts, delayed PR/config/shell delivery, a collapsed Settled shelf, and reduced-motion comparisons. No JavaScript page errors were recorded. The in-app preview failed to initialize, so the approved check used a separate Playwright Chromium context.
 
 Remaining limits: actual cache expiry was modeled by unavailable query inputs rather than waiting five minutes; remote transport, company/Focus rebootstrap and explicit-settlement capability loss were traced in source/helper tests rather than an authenticated multi-environment browser session. Packaged Electron and native iOS were not driven. The browser fixture and scripts are retained locally under `.pathway/investigations/sidebar-loading` for follow-up, with no test entry point left in the shipped app.
+
+## Review follow-up
+
+Company readiness now uses the complete membership-discovery result, published before any company engine starts. Missing or malformed discovery stays pending; a confirmed empty company list is ready. Offline environments retain navigable thread rows even when PR status has never loaded.
+
+Retained settled history is revalidated on sidebar entry and when a previously unavailable environment connects. This uses at most four finite reads at once, preserves classification during requests and errors, and stops queued work when the sidebar unmounts. Explicitly settled threads do not need this pass. A fresh branch PR or reopened closed PR can therefore restore a row without expanding the Settled shelf.

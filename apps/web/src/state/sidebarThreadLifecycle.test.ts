@@ -143,3 +143,18 @@ describe("sidebar lifecycle loading", () => {
     ).toBeNull();
   });
 });
+
+it("keeps uncached remote threads navigable while offline and reclassifies after reconnect", () => {
+  expect(classify(thread, { unavailable: true })).toBe("active");
+  expect(classify(thread, { unavailable: true, supportsSettlement: undefined })).toBe("active");
+  expect(classify(thread, { unavailable: true, changeRequests: new Map([[key, merged]]) })).toBe(
+    "settled",
+  );
+  expect(classify(thread, { unavailable: false })).toBe("loading");
+  expect(
+    classify(thread, {
+      unavailable: false,
+      changeRequests: new Map([[key, { ...merged, state: "open" }]]),
+    }),
+  ).toBe("active");
+});

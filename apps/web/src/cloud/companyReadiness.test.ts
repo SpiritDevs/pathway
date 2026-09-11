@@ -53,6 +53,23 @@ describe("company thread readiness", () => {
         ]),
       ),
     ).toBe("loading");
-    expect(companyThreadReadiness(null, replicas, new Map([[company, status]]))).toBe("ready");
+    expect(companyThreadReadiness(null, replicas, new Map([[company, status]]), [company])).toBe(
+      "ready",
+    );
   });
+});
+
+it("does not declare All ready before undispatched company engines bootstrap", () => {
+  const statuses = new Map([[company, status]]);
+  expect(companyThreadReadiness(null, replicas, statuses, null)).toBe("loading");
+  expect(companyThreadReadiness(null, replicas, statuses, [company, other])).toBe("loading");
+  expect(
+    companyThreadReadiness(
+      null,
+      new Map([...replicas, [other, { view: new Map() }]]),
+      new Map([...statuses, [other, status]]),
+      [company, other],
+    ),
+  ).toBe("ready");
+  expect(companyThreadReadiness(null, new Map(), new Map(), [])).toBe("ready");
 });

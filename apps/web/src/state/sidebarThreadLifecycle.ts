@@ -45,13 +45,14 @@ export function sidebarThreadSection(
     readonly queued: boolean;
     readonly supportsSettlement: boolean | undefined;
     readonly supportsSnooze: boolean | undefined;
+    readonly unavailable?: boolean;
     readonly projectCwd: string | null;
     readonly changeRequests: ReadonlyMap<string, ThreadChangeRequestState>;
   },
 ): SidebarThreadSection {
   if (options.queued && thread.pinnedAt == null) return "active";
   const snoozed = effectiveSnoozed(thread, { now: options.now });
-  if (snoozed && options.supportsSnooze === undefined) return "loading";
+  if (snoozed && options.supportsSnooze === undefined && !options.unavailable) return "loading";
   if (snoozed && options.supportsSnooze) return "snoozed";
   if (thread.pinnedAt != null) return "pinned";
   if (options.supportsSettlement === false) return "active";
@@ -64,6 +65,12 @@ export function sidebarThreadSection(
   const settled = (changeRequestState: ThreadChangeRequestState["state"]) =>
     effectiveSettled(thread, { ...settleOptions, changeRequestState });
   if (options.supportsSettlement && known) return settled(cached.state) ? "settled" : "active";
+  // A missing remote answer must never make a navigable thread disappear during an outage.
+  if (options.unavailable) {
+    return options.supportsSettlement && thread.settledOverride === "settled" && settled(null)
+      ? "settled"
+      : "active";
+  }
   const hasChangeRequestSource =
     threadPullRequestAttachments(thread).length > 0 ||
     (thread.branch !== null && (thread.worktreePath ?? options.projectCwd) !== null);
