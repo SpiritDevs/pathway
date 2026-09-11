@@ -69,3 +69,9 @@ the question reappears so you can retry. The thread's Input marker clears when n
 remains. Ignore is available only when the connected environment supports question dismissal.
 
 You can show, hide, and reorder Pending questions in the action palette settings.
+
+# Returning to the latest message
+
+When you scroll up in a thread, a button above the composer takes you back to the end.
+It shows a down chevron while the thread is idle, or a working orb beside “working...”
+while the agent is busy. The orb respects your reduced-motion preference.
