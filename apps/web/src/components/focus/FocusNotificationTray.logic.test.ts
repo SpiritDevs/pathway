@@ -198,7 +198,6 @@ describe("Focus notification rows", () => {
       projectNamesByKey: new Map(),
     });
     expect(group?.rows.map((row) => [row.notification.id, row.unread])).toEqual([
-      ["newer-read", false],
       ["older-unread", true],
     ]);
   });

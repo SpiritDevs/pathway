@@ -95,7 +95,8 @@ export function buildFocusNotificationRows(input: {
           resolvedFocusId === CONVERSATIONS_FOCUS_ID ? "Conversations" : (focus?.name ?? "All"),
         unread: notification.isRead === undefined ? index < unreadCount : !notification.isRead,
       };
-    });
+    })
+    .filter((row) => row.notification.isRead !== true);
 
   const rowsByFocus = new Map<ActiveFocusId, FocusNotificationRowModel[]>();
   for (const row of rows) {

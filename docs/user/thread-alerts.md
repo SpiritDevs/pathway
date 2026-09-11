@@ -61,8 +61,9 @@ OS notification that updates with the latest event and a count.
 Snoozed threads can alert. Settled and archived threads keep their preferences but stay silent until
 reopened. Deleting a thread removes its override. Muting alerts never removes tray history.
 
-Clicking an individual OS notification opens its environment and thread and marks only that event
-read. Clicking a summary opens the Notification Tray, whose open action marks the whole tray read.
+Clicking an individual OS notification opens its environment and thread. Opening a thread marks its
+notifications read and removes them from the Notification Tray. Clicking a summary opens the tray
+and marks its notifications seen. They stay unread until you open their threads.
 Individual notifications show the thread title, event label, and project name. Their bodies exclude
 prompts, commands, file paths, and agent output.
 

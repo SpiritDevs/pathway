@@ -62,9 +62,9 @@ The bell in the Focus Strip toggles the notification tray open and closed. Pathw
 
 **Clear all** removes all read and unread notifications from your account. It appears in the tray header whenever notifications are present.
 
-Opening the tray marks notifications as seen on all your machines. Selecting a notification marks it as read. The bell is hidden when there are no notifications, shows a grey dot when all are read, a green dot when unread notifications have been seen, and a count for new unread notifications since the tray was last opened. Read notifications remain
-for 7 days and unread notifications remain for 30 days. Pathway keeps at most 200 notifications per
-user and removes the oldest records first when the limit is reached.
+Opening the tray marks notifications as seen on all your machines. Opening a thread marks all its notifications as read, removes them from the tray, and reduces the unread count. A small blue dot in the thread's left margin shows that it has unread notifications. New events are marked read while you have that thread open in the foreground.
+
+The bell shows a count for new unread notifications and a green dot for unread notifications you have already seen in the tray. It disappears when no unread notifications remain. Unread notifications expire after 30 days. Pathway keeps at most 200 notifications per account and removes the oldest records first when the limit is reached.
 
 Starting a project thread from Conversations switches to the profile containing that project after the first successful send, or to All if the project has no profile.
 

@@ -263,6 +263,7 @@ import {
   focusMutationsAtom,
   focusNotificationsAtom,
   focusUnreadCountAtom,
+  threadHasUnreadNotificationAtom,
   visibleFocusProjectKeysAtom,
 } from "../cloud/focusReadModel";
 import type { FocusNotification } from "@spiritdevs/contracts/focus";
@@ -931,6 +932,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     [thread.environmentId, thread.id],
   );
   const threadKey = scopedThreadKey(threadRef);
+  const hasUnreadNotification = useAtomValue(threadHasUnreadNotificationAtom(threadKey));
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
@@ -1307,6 +1309,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       "opacity-70 transition-opacity hover:opacity-100",
   );
 
+  const unreadDot = hasUnreadNotification ? (
+    <span className="pointer-events-none absolute left-0 top-1/2 z-20 size-1.5 -translate-y-1/2 rounded-full bg-blue-500">
+      <span className="sr-only">Unread notification</span>
+    </span>
+  ) : null;
+
   const title = isRenaming ? (
     <input
       autoFocus
@@ -1408,8 +1416,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       <li
         data-thread-item
         data-active-thread={props.isActive || undefined}
-        className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
+        className="relative -ml-[3px] list-none pl-[3px] [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
       >
+        {unreadDot}
         <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
           <PopoverTrigger
             nativeButton={false}
@@ -1586,10 +1595,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       }
       {...(sortable?.listeners ?? {})}
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]",
+        "relative -ml-[3px] list-none py-0.5 pl-[3px] [content-visibility:auto] [contain-intrinsic-size:auto_96px]",
         sortable?.isDragging && "z-20 opacity-80",
       )}
     >
+      {unreadDot}
       <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
         <PopoverTrigger
           nativeButton={false}
