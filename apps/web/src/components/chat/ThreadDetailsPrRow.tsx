@@ -1,6 +1,11 @@
 /** A linked PR's status, provider actions, and thread unlink menu, shared by the panel and hover card. */
 import type { EnvironmentProject } from "@spiritdevs/client-runtime/state/shell";
-import type { EnvironmentId, ProjectId, PullRequestRef } from "@spiritdevs/contracts";
+import type {
+  EnvironmentId,
+  ProjectId,
+  PullRequestRef,
+  PullRequestDetail,
+} from "@spiritdevs/contracts";
 import {
   ArrowUpRightIcon,
   TriangleAlertIcon,
@@ -8,6 +13,8 @@ import {
   ExternalLinkIcon,
   UnlinkIcon,
   CopyIcon,
+  RefreshCwIcon,
+  ClockIcon,
 } from "lucide-react";
 import { useState, type MouseEvent as ReactMouseEvent } from "react";
 
@@ -18,8 +25,7 @@ import { readLocalApi } from "~/localApi";
 import { Menu, MenuTrigger, MenuPopup, MenuItem, MenuSeparator } from "../ui/menu";
 import { cn } from "~/lib/utils";
 import { useServerConfigs } from "~/state/entities";
-import { pullRequestEnvironment } from "~/state/pullRequests";
-import { useEnvironmentQuery } from "~/state/query";
+import type { EnvironmentQueryView } from "~/state/query";
 
 import {
   allowedPullRequestMergeMethods,
@@ -66,10 +72,11 @@ export function ThreadDetailsPrRow({
   label,
   openAriaLabel,
   onOpen,
-  onActed,
   onUnlink,
+  detailQuery,
 }: {
   environmentId: EnvironmentId;
+  detailQuery: EnvironmentQueryView<PullRequestDetail>;
   pr: NonNullable<ThreadPr>;
   status: PrStatusIndicator;
   /** The thread's project, which is what the pull request is read through on the host. */
@@ -77,14 +84,12 @@ export function ThreadDetailsPrRow({
   label: string;
   openAriaLabel: string;
   onOpen: (event: ReactMouseEvent<HTMLElement>) => void;
-  /** An action changed the pull request on the host, so the vcs status behind the row is stale. */
-  onActed?: () => void;
   onUnlink?: (() => void) | undefined;
 }) {
   const serverConfigs = useServerConfigs();
   const supportsPullRequests =
     serverConfigs.get(environmentId)?.environment.capabilities.pullRequests === true;
-  // The identity's own spelling, the way the detail panel is addressed everywhere else.
+  // The parent owns the live detail query for both the badge and the actions.
   const identity = project?.repositoryIdentity;
   const repository =
     parseChangeRequestUrl(pr.url)?.repository ??
@@ -94,9 +99,6 @@ export function ThreadDetailsPrRow({
     supportsPullRequests && project !== null && repository !== null
       ? { projectId: project.id as ProjectId, repository, number: pr.number }
       : null;
-  const detailQuery = useEnvironmentQuery(
-    reference === null ? null : pullRequestEnvironment.detail({ environmentId, input: reference }),
-  );
   const detail =
     detailQuery.data && sameAttachedPullRequest(pr, detailQuery.data) ? detailQuery.data : null;
 
@@ -105,14 +107,20 @@ export function ThreadDetailsPrRow({
     reference,
     onSuccess: () => {
       detailQuery.refresh();
-      onActed?.();
     },
   });
   const { handoff, startHandoff } = usePullRequestHandoffs({ environmentId, detail });
   const [confirmingMerge, setConfirmingMerge] = useState(false);
 
-  const primaryAction = resolvePullRequestPrimaryAction(detail);
-  const conflicting = isPullRequestConflicting(detail);
+  const checking =
+    reference !== null &&
+    (detailQuery.isPending ||
+      detail === null ||
+      (detail.state === "open" && detail.mergeability === "unknown"));
+  const unavailable = reference !== null && detailQuery.error !== null;
+  const verified = !checking && !unavailable;
+  const primaryAction = resolvePullRequestPrimaryAction(verified ? detail : null);
+  const conflicting = verified && isPullRequestConflicting(detail);
   const selectedMergeMethod = resolveSelectedMergeMethod(
     allowedPullRequestMergeMethods(detail),
     "merge",
@@ -247,6 +255,13 @@ export function ThreadDetailsPrRow({
             <MoreHorizontalIcon className="size-3.5" />
           </MenuTrigger>
           <MenuPopup align="end">
+            <MenuItem
+              disabled={reference === null || detailQuery.isPending}
+              onClick={detailQuery.refresh}
+            >
+              <RefreshCwIcon />
+              Refresh
+            </MenuItem>
             <MenuItem onClick={() => void readLocalApi()?.shell.openExternal(pr.url)}>
               <ExternalLinkIcon />
               Open in {pr.url.startsWith("https://github.com/") ? "GitHub" : "browser"}
@@ -267,6 +282,20 @@ export function ThreadDetailsPrRow({
           </MenuPopup>
         </Menu>
       </div>
+      {unavailable || checking ? (
+        <div
+          role="status"
+          className="flex h-8 items-center gap-1.5 ps-2.5 pe-1 text-xs text-muted-foreground"
+        >
+          <ClockIcon aria-hidden className="size-3.5 shrink-0" />
+          <span>{unavailable ? "Couldn’t refresh status" : "Checking merge status…"}</span>
+          {unavailable ? (
+            <Button size="xs" variant="ghost" className="ml-auto h-6" onClick={detailQuery.refresh}>
+              Retry
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {conflicting ? (
         // The same words the detail panel says, one click away, so the two read as one thing.
         <div className="flex h-8 items-center gap-1.5 ps-2.5 pe-1">

@@ -17,3 +17,9 @@ When several PRs are linked, the thread list shows a multiple-PR icon and count.
 An idle thread settles automatically only after **all linked PRs are merged**. Open, closed without merging, and unknown statuses keep it active. Running work, pending approvals or input, and an explicit choice to keep the thread active take precedence. You can still settle a thread manually. Unlinking removes only that PR from the thread; it does not close or delete it on the provider, and automatic detection will not link it again. You can attach it again explicitly.
 
 On iOS, tap the thread's PR badge to see links and individual statuses. Workspace → Source control and Pull requests show the linked PRs with merge and unlink actions. Pull to refresh the thread list to check statuses again. Environments that do not support PR details keep a neutral attachment badge.
+
+## Keeping thread PR status current
+
+The thread’s Version Control panel checks its PR status when you return to the thread or window, after an in-app push, and when the agent finishes a turn. It continues checking periodically while the PR row is open.
+
+“Checking merge status…” means the latest result is still being checked, including when the host has not finished calculating mergeability. “Couldn’t refresh status” offers **Retry**. You can also choose **Refresh** from the PR row’s menu to check again. Merge and conflict-resolution actions are offered once the current check succeeds.

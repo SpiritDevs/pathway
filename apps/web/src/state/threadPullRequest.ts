@@ -136,6 +136,8 @@ export function useAttachedPullRequest(
   const matches = attachment && query.data && sameAttachedPullRequest(attachment, query.data);
   return {
     ...query,
+    target: supported ? target : null,
+    isConnected: environment?.connection?.phase === "connected",
     project,
     data: matches ? query.data : null,
     error:

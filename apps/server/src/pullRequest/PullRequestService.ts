@@ -1676,20 +1676,40 @@ export const make = Effect.gen(function* () {
   const detailCache = yield* Cache.makeWith(
     (key: string) => {
       const [, projectId, repository, number] = JSON.parse(key) as [number, string, string, number];
-      return detailUncached({ projectId, repository, number } as PullRequestRef);
+      return detailUncached({ projectId, repository, number } as PullRequestRef).pipe(
+        Effect.flatMap((value) =>
+          Effect.map(Clock.currentTimeMillis, (fetchedAt) => ({ value, fetchedAt })),
+        ),
+      );
     },
     {
       capacity: DETAIL_CACHE_CAPACITY,
       timeToLive: (exit) => (Exit.isSuccess(exit) ? DETAIL_CACHE_TTL : Duration.zero),
     },
   );
-  const staleDetail = staleWhileRevalidate<PullRequestDetail>(
-    DETAIL_STALE_WINDOW,
-    DETAIL_CACHE_CAPACITY,
-  );
   const detail: PullRequestService["Service"]["detail"] = (input) => {
     const key = JSON.stringify([refEpoch(input), input.projectId, input.repository, input.number]);
-    return staleDetail(key, Cache.get(detailCache, key));
+    return Cache.get(detailCache, key).pipe(
+      Effect.tap(({ value, fetchedAt }) =>
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          yield* Effect.annotateCurrentSpan({
+            "pr.mergeability": value.mergeability,
+            "pr.state": value.state,
+            "pr.cacheAgeMs": Math.max(0, now - fetchedAt),
+            "pr.cacheTtlMs": Duration.toMillis(DETAIL_CACHE_TTL),
+          });
+        }),
+      ),
+      Effect.map(({ value }) => value),
+      Effect.withSpan("PullRequestService.detail", {
+        attributes: {
+          "pr.projectId": input.projectId,
+          "pr.repository": input.repository,
+          "pr.number": input.number,
+        },
+      }),
+    );
   };
 
   const activityCache = yield* Cache.makeWith(

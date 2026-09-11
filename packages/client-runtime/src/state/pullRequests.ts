@@ -1,13 +1,20 @@
-import { WS_METHODS, type PullRequestDiffInput } from "@spiritdevs/contracts";
+import {
+  WS_METHODS,
+  type PullRequestDiffInput,
+  type EnvironmentId,
+  type PullRequestRef,
+} from "@spiritdevs/contracts";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { request } from "../rpc/client.ts";
 
 import {
   createAtomCommandScheduler,
   createEnvironmentRpcCommand,
+  createEnvironmentCommand,
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentQueryAtomFamily,
 } from "./runtime.ts";
@@ -34,6 +41,11 @@ export function createPullRequestEnvironmentAtoms<R, E>(
     mode: "serial",
     key: ({ environmentId }: { readonly environmentId: string }) => environmentId,
   } as const;
+  const detail = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:pull-requests:detail",
+    tag: WS_METHODS.pullRequestsDetail,
+    staleTimeMs: 15_000,
+  });
   return {
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:list",
@@ -51,10 +63,23 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       tag: WS_METHODS.pullRequestsListStats,
       staleTimeMs: 60_000,
     }),
-    detail: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:pull-requests:detail",
-      tag: WS_METHODS.pullRequestsDetail,
-      staleTimeMs: 15_000,
+    detail,
+    refreshDetail: createEnvironmentCommand(runtime, {
+      label: "environment-data:pull-requests:refresh-detail",
+      scheduler: commandScheduler,
+      concurrency: {
+        mode: "singleFlight",
+        key: (target: { environmentId: EnvironmentId; input: PullRequestRef }) =>
+          JSON.stringify([target.environmentId, target.input]),
+      },
+      execute: (input: PullRequestRef, registry, environmentId) =>
+        Effect.gen(function* () {
+          yield* request(WS_METHODS.pullRequestsInvalidate, { reference: input });
+          const atom = detail({ environmentId, input });
+          yield* AtomRegistry.mount(registry, atom);
+          registry.refresh(atom);
+          return yield* AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true });
+        }).pipe(Effect.scoped),
     }),
     activity: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:activity",
