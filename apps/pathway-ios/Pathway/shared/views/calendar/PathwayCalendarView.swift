@@ -67,7 +67,7 @@ struct PathwayCalendarView: View {
                         let start = item.date("startDate") ?? end
                         let title = item.string("title").isEmpty ? item.string("name") : item.string("title")
                         BarMark(xStart: .value("Starts", start), xEnd: .value("Ends", Calendar.current.date(byAdding: .day, value: 1, to: end) ?? end), y: .value("Work", title))
-                            .foregroundStyle(by: .value("Kind", item.kind == "issue" ? "Issue" : item.kind == "issueCycle" ? "Cycle" : "Milestone"))
+                            .foregroundStyle(by: .value("Kind", item.kind == "issue" ? "Task" : item.kind == "issueCycle" ? "Cycle" : "Milestone"))
                             .accessibilityLabel(title)
                             .accessibilityValue("\(start.formatted(date: .abbreviated, time: .omitted)) to \(end.formatted(date: .abbreviated, time: .omitted))")
                     }.frame(height: max(180, CGFloat(min(visibleWork.count, 100)) * 42))
@@ -96,7 +96,7 @@ struct PathwayCalendarView: View {
                 ForEach(visibleWork) { item in
                     Button { workEditor = item } label: { VStack(alignment: .leading) {
                         Text(item.string("title").isEmpty ? item.string("name") : item.string("title"))
-                        Text(item.kind == "issue" ? "Issue due date" : item.kind == "issueCycle" ? "Cycle" : "Milestone").font(.caption).foregroundStyle(.secondary)
+                        Text(item.kind == "issue" ? "Task due date" : item.kind == "issueCycle" ? "Cycle" : "Milestone").font(.caption).foregroundStyle(.secondary)
                         if let day = item.date("dueDate") ?? item.date("targetDate") ?? item.date("endDate") { Text(day, format: .dateTime.day().month().year()).font(.caption) }
                     } }.foregroundStyle(.primary)
                 }
@@ -114,7 +114,7 @@ struct PathwayCalendarView: View {
                         Toggle(calendar.string("name"), isOn: Binding(get: { !hidden.contains(calendar.entityID) }, set: { if $0 { hidden.remove(calendar.entityID) } else { hidden.insert(calendar.entityID) } }))
                     }
                     ForEach(["issue", "issueMilestone", "issueCycle"], id: \.self) { kind in
-                        Toggle(kind == "issue" ? "Issue due dates" : kind == "issueMilestone" ? "Milestones" : "Cycles", isOn: Binding(get: { !hidden.contains(kind) }, set: { if $0 { hidden.remove(kind) } else { hidden.insert(kind) } }))
+                        Toggle(kind == "issue" ? "Task due dates" : kind == "issueMilestone" ? "Milestones" : "Cycles", isOn: Binding(get: { !hidden.contains(kind) }, set: { if $0 { hidden.remove(kind) } else { hidden.insert(kind) } }))
                     }
                     Button("Calendar settings") { showSettings = true }
                 }

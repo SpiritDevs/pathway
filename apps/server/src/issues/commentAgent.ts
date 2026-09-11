@@ -54,7 +54,7 @@ export const COMMENT_AGENT_REPLY_HEADING = "## Reply";
 export function buildCommentAgentPrompt(input: CommentAgentPromptInput): string {
   const lines: Array<string> = [];
   lines.push(
-    "You are answering a comment on an issue in the Pathway issue tracker. Somebody mentioned",
+    "You are answering a comment on a task in the Pathway task tracker. Somebody mentioned",
     "you in the thread below and is waiting for a reply. Read the repository in your working",
     "directory as far as you need to answer well, and do not change any files: this is a",
     "read-only investigation, and your entire output is a comment.",
@@ -86,10 +86,10 @@ export function buildCommentAgentPrompt(input: CommentAgentPromptInput): string 
     "## How to answer",
     "",
     `Write your reply as markdown under a \`${COMMENT_AGENT_REPLY_HEADING}\` heading. Be direct:`,
-    "the person reading it is looking at the issue, not at your transcript. Cite file paths when",
+    "the person reading it is looking at the task, not at your transcript. Cite file paths when",
     "they help.",
     "",
-    "If — and only if — the issue itself is wrong or incomplete, end your message with a fenced",
+    "If — and only if — the task itself is wrong or incomplete, end your message with a fenced",
     "JSON block holding the fields you would correct:",
     "",
     "```json",
@@ -97,7 +97,7 @@ export function buildCommentAgentPrompt(input: CommentAgentPromptInput): string 
     "```",
     "",
     "Every field is optional and the block itself is optional. `priority` must be one of",
-    `${PRIORITIES.join(", ")}. The title is only applied when the issue never got a real one, and`,
+    `${PRIORITIES.join(", ")}. The title is only applied when the task never got a real one, and`,
     "the description only when it is empty; suggest them anyway when they would help.",
   );
 

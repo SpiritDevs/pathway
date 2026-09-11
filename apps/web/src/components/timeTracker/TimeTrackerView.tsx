@@ -291,7 +291,7 @@ export function TimeTrackerView() {
               </h1>
             </div>
             <p className="max-w-sm text-sm leading-6 text-muted-foreground">
-              Manual time, agent work, and issue creation, together. Concurrent sessions each
+              Manual time, agent work, and task creation, together. Concurrent sessions each
               contribute to your project totals.
             </p>
           </div>
@@ -486,7 +486,7 @@ export function TimeTrackerView() {
                       ? "Your history could not be loaded. Check the connection and try again."
                       : !result.value
                         ? "Waiting for your tracked activity to load."
-                        : "Start a manual timer or work in a thread. Completed agent, manual, and issue sessions collect here."}
+                        : "Start a manual timer or work in a thread. Completed agent, manual, and task sessions collect here."}
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
@@ -521,7 +521,7 @@ export function TimeTrackerView() {
                         {entry.source === "agent"
                           ? "Agent"
                           : entry.source === "issue"
-                            ? "Issue creation"
+                            ? "Task creation"
                             : "Manual"}
                       </span>
                       <p className="mt-1 text-xs text-muted-foreground sm:hidden">

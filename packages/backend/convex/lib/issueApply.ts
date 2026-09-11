@@ -857,7 +857,7 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
 
   const existing = await byDomain(ctx, "issues", company._id, operation.entityId);
   if (existing !== null) {
-    return rejected("invalid-arguments", `An issue ${operation.entityId} already exists.`);
+    return rejected("invalid-arguments", `A task ${operation.entityId} already exists.`);
   }
 
   if (args.slackSource !== undefined) {
@@ -873,7 +873,7 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
       );
     }
     if (args.slackSource.issueId !== operation.entityId) {
-      return rejected("invalid-arguments", "The Slack source must name the issue being created.");
+      return rejected("invalid-arguments", "The Slack source must name the task being created.");
     }
   }
 
@@ -894,7 +894,7 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
   const owner: IssueWorkflowOwner = args.workflowOwner ??
     project?.defaultWorkflowOwner ?? { kind: "company" };
   if (owner.kind === "team" && !teamIds.includes(owner.teamId)) {
-    return rejected("invalid-arguments", "The workflow owner must be one of the issue's teams.");
+    return rejected("invalid-arguments", "The workflow owner must be one of the task's teams.");
   }
 
   const triage = args.triage ?? false;
@@ -913,7 +913,7 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
     const fallback = await defaultStatusId(ctx, company, owner);
     if (!fallback.ok) return fallback.outcome;
     if (fallback.value === null) {
-      return rejected("invalid-arguments", "This workflow has no status to place the issue in.");
+      return rejected("invalid-arguments", "This workflow has no status to place the task in.");
     }
     statusId = fallback.value;
   }
@@ -944,7 +944,7 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
   if (args.parentId !== undefined) {
     const parent = await liveRow(ctx, "issues", company._id, args.parentId);
     if (!readableIssue(actor, parent)) {
-      return rejected("invalid-arguments", `No issue ${args.parentId}.`);
+      return rejected("invalid-arguments", `No task ${args.parentId}.`);
     }
   }
   const badAssignee = await unassignableAssignee(ctx, company, args.assignee);
@@ -962,7 +962,7 @@ const issueCreate: EnvApply = async ({ ctx, actor, company, feedActor, operation
     if (prefix !== freshCompany.issueKeyPrefix) {
       return rejected(
         "invalid-arguments",
-        `Issue keys here start with ${freshCompany.issueKeyPrefix}-.`,
+        `Task keys here start with ${freshCompany.issueKeyPrefix}-.`,
       );
     }
     keyNumber = issueKeyNumber(args.key);
@@ -1055,9 +1055,9 @@ const issueUpdate: EnvApply = async ({ ctx, actor, company, feedActor, operation
   const args = parsed.args;
 
   const issue = await byDomain(ctx, "issues", company._id, operation.entityId);
-  if (issue === null) return rejected("entity-not-found", `No issue ${operation.entityId}.`);
+  if (issue === null) return rejected("entity-not-found", `No task ${operation.entityId}.`);
   if (issue.deletedAt !== null) {
-    return rejected("entity-deleted", "This issue is deleted; restore it before editing.");
+    return rejected("entity-deleted", "This task is deleted; restore it before editing.");
   }
   if (!can(actor, "issues.update", issue.teamIds)) return denied("issues.update");
 
@@ -1102,14 +1102,14 @@ const issueUpdate: EnvApply = async ({ ctx, actor, company, feedActor, operation
   }
   if (args.parentId != null) {
     if (args.parentId === issue.id) {
-      return rejected("invalid-arguments", "An issue cannot be its own parent.");
+      return rejected("invalid-arguments", "A task cannot be its own parent.");
     }
     const parent = await liveRow(ctx, "issues", company._id, args.parentId);
     if (!readableIssue(actor, parent)) {
-      return rejected("invalid-arguments", `No issue ${args.parentId}.`);
+      return rejected("invalid-arguments", `No task ${args.parentId}.`);
     }
     if (await hasAncestor(ctx, company, parent, issue.id)) {
-      return rejected("invalid-arguments", "That parent is already below this issue.");
+      return rejected("invalid-arguments", "That parent is already below this task.");
     }
   }
   for (const labelId of args.labelIds ?? []) {
@@ -1196,7 +1196,7 @@ const issueDelete: EnvApply = async ({ ctx, actor, company, feedActor, operation
   if ("outcome" in parsed) return parsed.outcome;
 
   const issue = await byDomain(ctx, "issues", company._id, operation.entityId);
-  if (issue === null) return rejected("entity-not-found", `No issue ${operation.entityId}.`);
+  if (issue === null) return rejected("entity-not-found", `No task ${operation.entityId}.`);
   if (!can(actor, "issues.delete", issue.teamIds)) return denied("issues.delete");
   // Deleting a deleted issue converged already; accept without changes so the receipt lands at the
   // unchanged head.
@@ -1226,7 +1226,7 @@ const issueTriageReject: EnvApply = async ({ ctx, actor, company, feedActor, ope
   if ("outcome" in parsed) return parsed.outcome;
 
   const issue = await byDomain(ctx, "issues", company._id, operation.entityId);
-  if (issue === null) return rejected("entity-not-found", `No issue ${operation.entityId}.`);
+  if (issue === null) return rejected("entity-not-found", `No task ${operation.entityId}.`);
   if (!can(actor, "issues.delete", issue.teamIds)) return denied("issues.delete");
   if (issue.deletedAt !== null) return applied();
   if (!issue.triage) return rejected("invalid-arguments", "Only a triage item can be rejected.");
@@ -1255,7 +1255,7 @@ const issueRestore: EnvApply = async ({ ctx, actor, company, feedActor, operatio
   if ("outcome" in parsed) return parsed.outcome;
 
   const issue = await byDomain(ctx, "issues", company._id, operation.entityId);
-  if (issue === null) return rejected("entity-not-found", `No issue ${operation.entityId}.`);
+  if (issue === null) return rejected("entity-not-found", `No task ${operation.entityId}.`);
   if (!can(actor, "issues.update", issue.teamIds)) return denied("issues.update");
   if (issue.deletedAt === null) return applied();
 
@@ -1282,10 +1282,7 @@ const issueRestore: EnvApply = async ({ ctx, actor, company, feedActor, operatio
     const fallback = await defaultStatusId(ctx, company, issue.workflowOwner);
     if (!fallback.ok) return fallback.outcome;
     if (fallback.value === null) {
-      return rejected(
-        "invalid-arguments",
-        "This workflow has no status to restore the issue into.",
-      );
+      return rejected("invalid-arguments", "This workflow has no status to restore the task into.");
     }
     normalize("statusId", fallback.value);
   }
@@ -1340,8 +1337,8 @@ const issueSetSortOrder: EnvApply = async ({ ctx, actor, company, feedActor, ope
   const args = parsed.args;
 
   const issue = await byDomain(ctx, "issues", company._id, operation.entityId);
-  if (issue === null) return rejected("entity-not-found", `No issue ${operation.entityId}.`);
-  if (issue.deletedAt !== null) return rejected("entity-deleted", "This issue is deleted.");
+  if (issue === null) return rejected("entity-not-found", `No task ${operation.entityId}.`);
+  if (issue.deletedAt !== null) return rejected("entity-deleted", "This task is deleted.");
   if (!can(actor, "issues.update", issue.teamIds)) return denied("issues.update");
 
   const patch: { sortOrder: string; statusId?: string; updatedAt: number } = {
@@ -1395,13 +1392,13 @@ const issueSetWorkflowOwner: EnvApply = async ({
   const args = parsed.args;
 
   const issue = await byDomain(ctx, "issues", company._id, operation.entityId);
-  if (issue === null) return rejected("entity-not-found", `No issue ${operation.entityId}.`);
-  if (issue.deletedAt !== null) return rejected("entity-deleted", "This issue is deleted.");
+  if (issue === null) return rejected("entity-not-found", `No task ${operation.entityId}.`);
+  if (issue.deletedAt !== null) return rejected("entity-deleted", "This task is deleted.");
   if (!can(actor, "issues.update", issue.teamIds)) return denied("issues.update");
 
   const owner = args.workflowOwner;
   if (owner.kind === "team" && !issue.teamIds.includes(owner.teamId)) {
-    return rejected("invalid-arguments", "The workflow owner must be one of the issue's teams.");
+    return rejected("invalid-arguments", "The workflow owner must be one of the task's teams.");
   }
 
   // Status carryover, judged against the *effective* target workflow rather than against raw rows:
@@ -1440,7 +1437,7 @@ const issueSetWorkflowOwner: EnvApply = async ({
       // instead would silently reopen finished work.
       return rejected(
         "invalid-arguments",
-        "The target workflow has no matching status; name the one this issue should land in.",
+        "The target workflow has no matching status; name the one this task should land in.",
       );
     } else {
       // No status to carry over at all — a row whose status died while it sat there. Landing in the
@@ -1487,7 +1484,7 @@ const ISSUE_SCOPE_MIGRATION_MAX_ROWS = 500;
 function tooManyDependents(issue: Doc<"issues">): DomainOutcome {
   return rejected(
     "dependency-blocked",
-    `Issue ${issue.key} carries more than ${ISSUE_SCOPE_MIGRATION_MAX_ROWS} dependent records; ` +
+    `Task ${issue.key} carries more than ${ISSUE_SCOPE_MIGRATION_MAX_ROWS} dependent records; ` +
       "a team change cannot migrate them in one operation.",
   );
 }
@@ -1645,8 +1642,8 @@ const issueSetTeams: EnvApply = async ({ ctx, actor, company, feedActor, operati
   const teamIds = parsed.args.teamIds;
 
   const issue = await byDomain(ctx, "issues", company._id, operation.entityId);
-  if (issue === null) return rejected("entity-not-found", `No issue ${operation.entityId}.`);
-  if (issue.deletedAt !== null) return rejected("entity-deleted", "This issue is deleted.");
+  if (issue === null) return rejected("entity-not-found", `No task ${operation.entityId}.`);
+  if (issue.deletedAt !== null) return rejected("entity-deleted", "This task is deleted.");
   // Judged against the record as it stands: detaching a team is an act on that team's record.
   if (!can(actor, "issues.update", issue.teamIds)) return denied("issues.update");
 
@@ -1961,7 +1958,7 @@ const issueStatusDelete: EnvApply = async ({ ctx, actor, company, operation, now
   const doomedIds = new Set(doomed.map((row) => row.id));
 
   if (doomedIds.has(args.reassignToStatusId)) {
-    return rejected("invalid-arguments", "A status cannot absorb its own issues.");
+    return rejected("invalid-arguments", "A status cannot absorb its own tasks.");
   }
   const target = await liveRow(ctx, "issueStatuses", company._id, args.reassignToStatusId);
   if (target === null) {
@@ -2024,7 +2021,7 @@ const issueStatusDelete: EnvApply = async ({ ctx, actor, company, operation, now
   if (stranded.length > STATUS_DELETE_MAX_ISSUES) {
     return rejected(
       "dependency-blocked",
-      `A status holding more than ${STATUS_DELETE_MAX_ISSUES} issues cannot be deleted in one ` +
+      `A status holding more than ${STATUS_DELETE_MAX_ISSUES} tasks cannot be deleted in one ` +
         "operation; move the excess first.",
     );
   }
@@ -2305,8 +2302,8 @@ const issueMilestoneUpdate: EnvApply = async ({ ctx, actor, company, operation, 
     if (holders.length > MILESTONE_MOVE_MAX_ISSUES) {
       return rejected(
         "dependency-blocked",
-        `A milestone holding more than ${MILESTONE_MOVE_MAX_ISSUES} issues cannot be moved to ` +
-          "another project in one operation; move its issues first.",
+        `A milestone holding more than ${MILESTONE_MOVE_MAX_ISSUES} tasks cannot be moved to ` +
+          "another project in one operation; move its tasks first.",
       );
     }
     stranded = holders.filter((issue) => issue.projectId === milestone.cloudProjectId);
@@ -2486,7 +2483,7 @@ const issueTodoCreate: EnvApply = async ({ ctx, actor, company, operation, now }
     return rejected("invalid-arguments", `A todo ${operation.entityId} already exists.`);
   }
   const issue = await liveRow(ctx, "issues", company._id, args.issueId);
-  if (issue === null) return rejected("invalid-arguments", `No issue ${args.issueId}.`);
+  if (issue === null) return rejected("invalid-arguments", `No task ${args.issueId}.`);
   if (!can(actor, "issues.update", issue.teamIds)) return denied("issues.update");
 
   let sortOrder = args.sortOrder;
@@ -2566,13 +2563,13 @@ const issueRelationCreate: EnvApply = async ({ ctx, actor, company, operation, n
     return rejected("invalid-arguments", `A relation ${operation.entityId} already exists.`);
   }
   const issue = await liveRow(ctx, "issues", company._id, args.issueId);
-  if (issue === null) return rejected("invalid-arguments", `No issue ${args.issueId}.`);
+  if (issue === null) return rejected("invalid-arguments", `No task ${args.issueId}.`);
   const related = await liveRow(ctx, "issues", company._id, args.relatedIssueId);
   // The relation is visible from both ends, so an actor who can only reach one end would be
   // authoring an edge onto another team's issue. An unreadable related issue answers exactly like a
   // missing one, so the refusal does not double as an existence oracle for that team's ids.
   if (!readableIssue(actor, related)) {
-    return rejected("invalid-arguments", `No issue ${args.relatedIssueId}.`);
+    return rejected("invalid-arguments", `No task ${args.relatedIssueId}.`);
   }
 
   const teamIds = unionTeamIds(issue.teamIds, related.teamIds);
@@ -2670,7 +2667,7 @@ async function resolveCommentAttachments(
     ) {
       return {
         ok: false,
-        outcome: rejected("invalid-arguments", `No attachment ${attachmentId} on this issue.`),
+        outcome: rejected("invalid-arguments", `No attachment ${attachmentId} on this task.`),
       };
     }
     if (attachment.commentId !== null && attachment.commentId !== commentId) {
@@ -2760,7 +2757,7 @@ const issueCommentCreate: EnvApply = async ({ ctx, actor, company, feedActor, op
     return rejected("invalid-arguments", `A comment ${operation.entityId} already exists.`);
   }
   const issue = await liveRow(ctx, "issues", company._id, args.issueId);
-  if (issue === null) return rejected("invalid-arguments", `No issue ${args.issueId}.`);
+  if (issue === null) return rejected("invalid-arguments", `No task ${args.issueId}.`);
   if (!can(actor, "comments.create", issue.teamIds)) return denied("comments.create");
 
   const attachmentIds = args.attachmentIds ?? [];
@@ -3071,7 +3068,7 @@ const issueThreadLinkCreate: EnvApply = async ({ ctx, actor, company, operation,
     return rejected("invalid-arguments", `A thread link ${operation.entityId} already exists.`);
   }
   const issue = await liveRow(ctx, "issues", company._id, args.issueId);
-  if (issue === null) return rejected("invalid-arguments", `No issue ${args.issueId}.`);
+  if (issue === null) return rejected("invalid-arguments", `No task ${args.issueId}.`);
   if (!can(actor, "issues.update", issue.teamIds)) return denied("issues.update");
 
   const registration = await ctx.db
@@ -3113,7 +3110,7 @@ const issueThreadLinkCreate: EnvApply = async ({ ctx, actor, company, operation,
     )
     .first();
   if (duplicate !== null) {
-    return rejected("invalid-arguments", "This thread is already linked to the issue.");
+    return rejected("invalid-arguments", "This thread is already linked to the task.");
   }
 
   const docId = await ctx.db.insert("issueThreadLinks", {

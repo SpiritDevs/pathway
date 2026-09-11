@@ -118,9 +118,9 @@ describe("ThreadIssuePanel", () => {
     expect(html).toContain("In Progress");
     expect(html).toContain("Medium");
     expect(html).toContain("2026-08-20");
-    expect(html).toContain('aria-label="View issue PAT-4"');
-    expect(html).toContain("Issues");
-    expect(html).toContain('aria-label="Issues linked to this thread"');
+    expect(html).toContain('aria-label="View task PAT-4"');
+    expect(html).toContain("Tasks");
+    expect(html).toContain('aria-label="Tasks linked to this thread"');
   });
 
   it("renders manual and mention links, not just the issue the thread came from", () => {
@@ -129,8 +129,8 @@ describe("ThreadIssuePanel", () => {
 
     const html = render();
 
-    expect(html).toContain('aria-label="View issue PAT-1"');
-    expect(html).toContain('aria-label="View issue PAT-2"');
+    expect(html).toContain('aria-label="View task PAT-1"');
+    expect(html).toContain('aria-label="View task PAT-2"');
   });
 
   it("orders rows by origin, start-work first and mention last", () => {
@@ -157,7 +157,7 @@ describe("ThreadIssuePanel", () => {
 
     const html = render();
 
-    expect(html.split('aria-label="View issue PAT-1"')).toHaveLength(2);
+    expect(html.split('aria-label="View task PAT-1"')).toHaveLength(2);
   });
 
   // The number in the label is the number Show more adds, not the row list's own default.
@@ -180,7 +180,7 @@ describe("ThreadIssuePanel", () => {
     const html = render();
 
     expect(html).toContain("Deleted");
-    expect(html).toContain('aria-label="View issue PAT-1"');
+    expect(html).toContain('aria-label="View task PAT-1"');
   });
 
   it("drops a link whose issue is no longer in the store", () => {

@@ -256,7 +256,7 @@ function issueDate(value: unknown, label: string): string {
 }
 
 function issueKey(value: unknown, label: string): string {
-  return patterned(value, ISSUE_KEY_PATTERN, label, "an issue key like PAT-42");
+  return patterned(value, ISSUE_KEY_PATTERN, label, "a task key like PAT-42");
 }
 
 /** Stored opaque (`v.any()` in the table); only its being an object is checkable here. */
@@ -842,7 +842,7 @@ export function parseIssueRelationCreateArgs(value: unknown): ArgsResult<IssueRe
       relatedIssueId: domainId(field(source, "relatedIssueId"), "args.relatedIssueId"),
       kind: literal(field(source, "kind"), ISSUE_RELATION_KINDS, "args.kind"),
     };
-    if (args.issueId === args.relatedIssueId) invalid("An issue cannot relate to itself.");
+    if (args.issueId === args.relatedIssueId) invalid("A task cannot relate to itself.");
     return args;
   });
 }

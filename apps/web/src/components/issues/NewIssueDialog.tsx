@@ -248,7 +248,7 @@ function ParentPicker({
       <PopoverTrigger render={trigger} />
       <PopoverPopup align="start" className="w-72" viewportClassName={PICKER_VIEWPORT_CLASS}>
         <IssueSearchList
-          emptyHint="No issue can take a sub-issue here."
+          emptyHint="No task can take a subtask here."
           onPick={(picked) => {
             onSelect(picked.id);
             setOpen(false);
@@ -596,7 +596,7 @@ export function NewIssueDialog({
       toastManager.add({
         type: "error",
         title: "Choose a company",
-        description: "New issues belong to one company. Select a company before creating one.",
+        description: "New tasks belong to one company. Select a company before creating one.",
       });
       return;
     }
@@ -608,7 +608,7 @@ export function NewIssueDialog({
     }
     if (preparedAttachments.length > 0 && attachmentCloud !== null && !attachmentCloud.isOnline) {
       reportAttachmentRejection(
-        "Attachments need an internet connection on cloud-synced issues. You can still create the issue without the image.",
+        "Attachments need an internet connection on cloud-synced tasks. You can still create the task without the image.",
       );
       setSubmitting(false);
       return;
@@ -666,7 +666,7 @@ export function NewIssueDialog({
     const result = await createIssue(input);
     // The dialog stays open on a refusal with the draft intact: the server can reject a create the
     // form cannot pre-empt (a status deleted from another tab, a tracker with no statuses at all).
-    if (reportIssueWriteFailure("Failed to create the issue", result)) {
+    if (reportIssueWriteFailure("Failed to create the task", result)) {
       setSubmitting(false);
       return;
     }
@@ -676,8 +676,8 @@ export function NewIssueDialog({
     }
     const createdIssueLabel =
       result.value.issue.key === ISSUE_KEY_DRAFT_PLACEHOLDER
-        ? "Issue"
-        : `Issue ${result.value.issue.key}`;
+        ? "Task"
+        : `Task ${result.value.issue.key}`;
 
     if (preparedAttachments.length > 0) {
       if (attachmentCloud !== null && companyId !== null) {
@@ -704,7 +704,7 @@ export function NewIssueDialog({
               title: `${createdIssueLabel} could not be synced before attaching the image`,
               description:
                 syncResult.value.error?.message ??
-                "The issue is still pending sync. Try attaching the image from the issue after reconnecting.",
+                "The task is still pending sync. Try attaching the image from the task after reconnecting.",
             }),
           );
           clearAttachments();
@@ -829,7 +829,7 @@ export function NewIssueDialog({
         >
           {canResize ? (
             <Button
-              aria-label={isMaximized ? "Minimize new issue dialog" : "Maximize new issue dialog"}
+              aria-label={isMaximized ? "Minimize new task dialog" : "Maximize new task dialog"}
               className="absolute end-12 top-2"
               onClick={() => setIsMaximized((current) => !current)}
               size="icon"
@@ -848,7 +848,7 @@ export function NewIssueDialog({
                   <button
                     aria-label={
                       selectedCompany === null
-                        ? "Choose a company for this issue"
+                        ? "Choose a company for this task"
                         : `Company: ${selectedCompany.name}`
                     }
                     className={cn(
@@ -888,11 +888,11 @@ export function NewIssueDialog({
               </span>
             )}
             <ChevronRightIcon className="size-3.5 text-muted-foreground" />
-            <DialogTitle className="font-sans text-base">New issue</DialogTitle>
+            <DialogTitle className="font-sans text-base">New task</DialogTitle>
             <DialogDescription className="sr-only">
               {selectedProject === null
-                ? "Create an issue on this environment."
-                : `Create an issue in ${selectedProject.title}.`}
+                ? "Create a task on this environment."
+                : `Create a task in ${selectedProject.title}.`}
             </DialogDescription>
           </DialogHeader>
           <DialogPanel
@@ -918,7 +918,7 @@ export function NewIssueDialog({
             scrollFade={false}
           >
             <input
-              aria-label="Issue title"
+              aria-label="Task title"
               className="w-full bg-transparent font-semibold text-xl leading-tight text-foreground outline-none placeholder:text-muted-foreground/55"
               onChange={(event) => setTitle(event.currentTarget.value)}
               onKeyDown={(event) => {
@@ -926,12 +926,12 @@ export function NewIssueDialog({
                 event.preventDefault();
                 void submit();
               }}
-              placeholder="Issue title"
+              placeholder="Task title"
               ref={titleRef}
               value={title}
             />
             <textarea
-              aria-label="Issue description"
+              aria-label="Task description"
               className="min-h-10 w-full flex-1 resize-none bg-transparent text-base leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/55"
               onChange={(event) => setDescription(event.currentTarget.value)}
               onKeyDown={(event) => {
@@ -950,7 +950,7 @@ export function NewIssueDialog({
             />
 
             {attachments.length === 0 ? null : (
-              <ul className="flex flex-wrap gap-2" aria-label="Issue attachments">
+              <ul className="flex flex-wrap gap-2" aria-label="Task attachments">
                 {attachments.map((attachment) => (
                   <PendingNewIssueAttachment
                     attachment={attachment}
@@ -1127,7 +1127,7 @@ export function NewIssueDialog({
               />
 
               <button
-                aria-label={showMore ? "Hide more issue properties" : "Show more issue properties"}
+                aria-label={showMore ? "Hide more task properties" : "Show more task properties"}
                 className={cn(PICKER_CLASS, "size-7 justify-center px-0 pointer-coarse:size-11")}
                 onClick={() => setShowMore((current) => !current)}
                 type="button"
@@ -1210,7 +1210,7 @@ export function NewIssueDialog({
             )}
             {companyRequired ? (
               <span className="me-auto text-xs text-muted-foreground">
-                Choose a company to create an issue.
+                Choose a company to create a task.
               </span>
             ) : null}
             <label className="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
@@ -1224,7 +1224,7 @@ export function NewIssueDialog({
               size="sm"
               type="button"
             >
-              {submitting ? "Creating…" : "Create issue"}
+              {submitting ? "Creating…" : "Create task"}
             </Button>
           </DialogFooter>
         </DialogPopup>

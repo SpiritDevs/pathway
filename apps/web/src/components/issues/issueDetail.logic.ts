@@ -378,7 +378,7 @@ function describeFieldChange(event: IssueEvent, naming: IssueEventNaming): strin
     }
     case "parent": {
       const key = after === null ? null : (naming.issueKeys?.get(after) ?? after);
-      return key === null ? "cleared the parent issue" : `made this a sub-issue of ${key}`;
+      return key === null ? "cleared the parent task" : `made this a subtask of ${key}`;
     }
     case "dueDate":
       return fromTo("due date", before, after);
@@ -407,7 +407,7 @@ function describeFieldChange(event: IssueEvent, naming: IssueEventNaming): strin
       return before === null ? `added the labels ${after}` : `changed labels to ${after}`;
     }
     case null:
-      return "changed this issue";
+      return "changed this task";
     default:
       return `changed ${event.field}`;
   }
@@ -420,13 +420,13 @@ export function describeIssueEvent(
   const actor = issueActorLabel(event.actor, naming);
   switch (event.kind) {
     case "created":
-      return { actor, summary: "created this issue" };
+      return { actor, summary: "created this task" };
     case "imported":
-      return { actor, summary: "imported this issue" };
+      return { actor, summary: "imported this task" };
     case "deleted":
-      return { actor, summary: "deleted this issue" };
+      return { actor, summary: "deleted this task" };
     case "restored":
-      return { actor, summary: "restored this issue" };
+      return { actor, summary: "restored this task" };
     // A soft delete underneath, but "this never was an issue" is the ordinary outcome of intake
     // and should not read in the feed as somebody destroying work.
     case "triage_rejected":

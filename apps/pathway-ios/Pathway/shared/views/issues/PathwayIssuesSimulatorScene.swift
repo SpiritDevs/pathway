@@ -47,10 +47,10 @@ private final class PathwayIssueSimulatorWorkspace {
         append("issueLabel", "sim-ai", ["name": .string("AI"), "color": .string("#AF52DE")])
         append("issueLabel", "sim-backend", ["name": .string("Backend"), "color": .string("#008080")])
         append("issueMilestone", "sim-milestone", ["name": .string("M5 · Desktop and mobile sync"), "cloudProjectId": .string("sim-project")])
-        let titles = ["Calendar changes jump back", "Reconnect remote sessions", "Preview issue attachments",
-            "Keep project selection after reconnect", "Open linked agent threads", "Improve issue search",
+        let titles = ["Calendar changes jump back", "Reconnect remote sessions", "Preview task attachments",
+            "Keep project selection after reconnect", "Open linked agent threads", "Improve task search",
             "Sync status across devices", "Add images to comments", "Restore saved views", "Fix milestone date picker",
-            "Show pull request updates", "Preserve unsent replies", "Keyboard focus in issue editor"]
+            "Show pull request updates", "Preserve unsent replies", "Keyboard focus in task editor"]
         for (index, title) in titles.enumerated() {
             append("issue", "sim-issue-\(index)", ["key": .string("PW-\(248 + index)"), "title": .string(title),
                 "description": .string(index == 0 ? "## Goal\n\nKeep the latest calendar change visible while the server catches up. Users should be able to move between desktop and mobile without losing their work.\n\n## Source decision\n\nPreserve the local update until the workspace confirms it. A slow connection should never make a successful change jump back.\n\n## Done in repo\n\n- [x] Keep the most recent change visible.\n- [x] Restore the previous value only when saving fails.\n- [ ] Verify the reconnect flow on mobile." : "Keep the latest change visible while the server catches up."),

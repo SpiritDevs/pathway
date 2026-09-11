@@ -48,15 +48,15 @@ describe("resolvePathwayMcpToolPresentation", () => {
 
   it("pretty prints issue and email tools and retains old transcript aliases", () => {
     expect(resolvePathwayMcpToolPresentation("mcp__pathway__issues_get")).toEqual({
-      displayName: "Read a Pathway issue",
+      displayName: "Read a Pathway task",
       logo: "pathway",
     });
     expect(resolvePathwayMcpToolPresentation("mcp__pathway__issues_get_attachment")).toEqual({
-      displayName: "Read a Pathway issue attachment",
+      displayName: "Read a Pathway task attachment",
       logo: "pathway",
     });
     expect(resolvePathwayMcpToolPresentation("mcp__pathway__issues_comment_evidence")).toEqual({
-      displayName: "Attach browser evidence to a Pathway issue",
+      displayName: "Attach browser evidence to a Pathway task",
       logo: "pathway",
     });
     expect(resolvePathwayMcpToolPresentation("pathway.email_latest_code")).toEqual({
@@ -64,7 +64,7 @@ describe("resolvePathwayMcpToolPresentation", () => {
       logo: "pathway",
     });
     expect(resolvePathwayMcpToolPresentation("mcp__pathway__issues_get")).toEqual({
-      displayName: "Read a Pathway issue",
+      displayName: "Read a Pathway task",
       logo: "pathway",
     });
   });

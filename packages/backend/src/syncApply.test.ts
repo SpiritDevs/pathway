@@ -1104,14 +1104,14 @@ describe("cross-team references", () => {
     expect(receipts.get(hidden.operationId)).toMatchObject({
       status: "rejected",
       code: "invalid-arguments",
-      message: `No issue ${ISSUE_B}.`,
+      message: `No task ${ISSUE_B}.`,
     });
     // Character for character the answer a genuinely absent issue gets, so the refusal is not an
     // existence oracle for another team's ids.
     expect(receipts.get(missing.operationId)).toMatchObject({
       status: "rejected",
       code: "invalid-arguments",
-      message: `No issue ${ISSUE_C}.`,
+      message: `No task ${ISSUE_C}.`,
     });
 
     await t.run(async (ctx) => {
@@ -1132,7 +1132,7 @@ describe("cross-team references", () => {
     expect(result.receipts[0]).toMatchObject({
       status: "rejected",
       code: "invalid-arguments",
-      message: `No issue ${ISSUE_B}.`,
+      message: `No task ${ISSUE_B}.`,
     });
   });
 

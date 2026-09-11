@@ -234,7 +234,7 @@ describe("suggestions", () => {
     expect(issueApplyTitlePatch(issue({ title: " untitled " }), "Login test flakes")).toEqual({
       title: "Login test flakes",
     });
-    expect(issueApplyTitlePatch(issue({ title: "New issue" }), "Login test flakes")).toEqual({
+    expect(issueApplyTitlePatch(issue({ title: "New task" }), "Login test flakes")).toEqual({
       title: "Login test flakes",
     });
     expect(issueApplyTitlePatch(issue({ title: "Slack message" }), undefined)).toBe(null);

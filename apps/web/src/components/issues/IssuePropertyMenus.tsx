@@ -342,7 +342,7 @@ export function IssueDeleteMenu({
         <MenuPopup align="end" className={cn("min-w-52", className)} side="top">
           <MenuGroup>
             <MenuGroupLabel>
-              Delete {count} {count === 1 ? "issue" : "issues"}?
+              Delete {count} {count === 1 ? "task" : "tasks"}?
             </MenuGroupLabel>
           </MenuGroup>
           <MenuSeparator />

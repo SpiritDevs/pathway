@@ -60,14 +60,14 @@ const dependencies = [
 const evidenceDependencies = [...dependencies, PreviewAutomationBroker.PreviewAutomationBroker];
 
 const ASSIGNEE_GRAMMAR =
-  'Who owns the issue: "user" for the environment\'s bound company member, "member:<membership-id>" for an explicit member, "agent" for you (the calling agent), or "agent:<driver>" for a specific provider such as "agent:codex".';
+  'Who owns the task: "user" for the environment\'s bound company member, "member:<membership-id>" for an explicit member, "agent" for you (the calling agent), or "agent:<driver>" for a specific provider such as "agent:codex".';
 
 const STATUS_GRAMMAR =
   'Status name such as "In Progress" (case-insensitive), or one of the six categories — backlog, unstarted, started, review, completed, canceled — which resolves to the first status in that category. Use "review" for pre-completion checks and "completed" rather than guessing the name of the done column.';
 
 const issueKeyField = (verb: string) =>
   Schema.String.annotate({
-    description: `Issue key to ${verb}, such as "PAT-12". Case-insensitive.`,
+    description: `Task key to ${verb}, such as "PAT-12". Case-insensitive.`,
   });
 
 const optionalName = (description: string) =>
@@ -204,30 +204,30 @@ export type IssuesMcpDetail = typeof IssuesMcpDetail.Type;
 
 export const IssuesMcpListInput = Schema.Struct({
   query: optionalName(
-    "Case-insensitive substring matched against the issue key and title. Not a full-text search of descriptions or comments.",
+    "Case-insensitive substring matched against the task key and title. Not a full-text search of descriptions or comments.",
   ),
-  status: optionalName("Only issues in this status, by name (case-insensitive)."),
+  status: optionalName("Only tasks in this status, by name (case-insensitive)."),
   statusCategory: Schema.optional(
     IssueStatusCategory.annotate({
       description:
-        "Only issues whose status is in this category. Use completed to find finished work regardless of what the column is called.",
+        "Only tasks whose status is in this category. Use completed to find finished work regardless of what the column is called.",
     }),
   ),
-  project: optionalName("Only issues in this project, by project name (case-insensitive)."),
-  label: optionalName("Only issues carrying this label, by name (case-insensitive)."),
-  assignee: optionalName(`${ASSIGNEE_GRAMMAR} Pass "none" for unassigned issues.`),
+  project: optionalName("Only tasks in this project, by project name (case-insensitive)."),
+  label: optionalName("Only tasks carrying this label, by name (case-insensitive)."),
+  assignee: optionalName(`${ASSIGNEE_GRAMMAR} Pass "none" for unassigned tasks.`),
   priority: Schema.optional(
-    IssuePriority.annotate({ description: "Only issues at this priority." }),
+    IssuePriority.annotate({ description: "Only tasks at this priority." }),
   ),
   triage: Schema.optional(
     Schema.Boolean.annotate({
       description:
-        "true for triage items only, false to exclude them. Omitted, both are returned — triage items are issues with no status assigned yet.",
+        "true for triage items only, false to exclude them. Omitted, both are returned — triage items are tasks with no status assigned yet.",
     }),
   ),
   includeDeleted: Schema.optional(
     Schema.Boolean.annotate({
-      description: "Include soft-deleted issues. Defaults to false.",
+      description: "Include soft-deleted tasks. Defaults to false.",
     }),
   ),
   limit: Schema.optional(
@@ -258,7 +258,7 @@ export const IssuesMcpGetAttachmentInput = Schema.Struct({
   key: issueKeyField("read an attachment from"),
   attachmentId: Schema.String.annotate({
     description:
-      "Attachment id returned by issues_get. The attachment must belong to a comment on this issue.",
+      "Attachment id returned by issues_get. The attachment must belong to a comment on this task.",
   }),
 });
 
@@ -330,7 +330,7 @@ export const IssuesMcpMilestoneUpdateInput = Schema.Struct({
       "Replacement target day, YYYY-MM-DD. Pass null to clear it; omit the field to leave it alone.",
   }),
   newProject: optionalName(
-    "Move the milestone to this project. Issues left in the old project are removed from the milestone.",
+    "Move the milestone to this project. Tasks left in the old project are removed from the milestone.",
   ),
 });
 
@@ -358,7 +358,7 @@ export const IssuesMcpCreateInput = Schema.Struct({
   idempotencyKey: Schema.optional(
     Schema.String.check(Schema.isTrimmed(), Schema.isNonEmpty(), Schema.isMaxLength(512)).annotate({
       description:
-        "Stable retry token. Omit it on the first attempt. If a queued create tells you to retry, pass back the exact token from that error so the retry resumes the same issue.",
+        "Stable retry token. Omit it on the first attempt. If a queued create tells you to retry, pass back the exact token from that error so the retry resumes the same task.",
     }),
   ),
   title: Schema.String.check(Schema.isMaxLength(ISSUE_TITLE_MAX_CHARS)).annotate({
@@ -370,21 +370,21 @@ export const IssuesMcpCreateInput = Schema.Struct({
     }),
   ),
   status: optionalName(
-    `${STATUS_GRAMMAR} Omitted, the issue takes the first configured status — or none at all when triage is true.`,
+    `${STATUS_GRAMMAR} Omitted, the task takes the first configured status — or none at all when triage is true.`,
   ),
   priority: Schema.optional(IssuePriority.annotate({ description: 'Defaults to "none".' })),
   project: optionalName("Project name. Must already exist; this tool does not create projects."),
   milestone: optionalName(
-    "Milestone name. When it does not exist in the selected project, it is created while filing the issue. An existing milestone can supply the project when its name is unique; creating one requires project.",
+    "Milestone name. When it does not exist in the selected project, it is created while filing the task. An existing milestone can supply the project when its name is unique; creating one requires project.",
   ),
   cycle: optionalName("Cycle name. Cycles span every project."),
   labels: labelNames(
     "Label names. A label that does not exist yet is created with a colour from the tracker's palette.",
   ),
   assignee: optionalName(ASSIGNEE_GRAMMAR),
-  dueDate: optionalDate("Calendar day the issue is due."),
+  dueDate: optionalDate("Calendar day the task is due."),
   parentKey: optionalName(
-    'Key of the parent issue, making this a sub-issue, such as "PAT-4". Nesting is capped at three levels.',
+    'Key of the parent task, making this a subtask, such as "PAT-4". Nesting is capped at three levels.',
   ),
   triage: Schema.optional(
     Schema.Boolean.annotate({
@@ -401,7 +401,7 @@ export const IssuesMcpUpdateInput = Schema.Struct({
   description: Schema.optional(
     Schema.String.check(Schema.isMaxLength(ISSUE_DESCRIPTION_MAX_CHARS)).annotate({
       description:
-        "Replacement markdown body. This overwrites the whole description, including any Investigation block already there — read the issue first if you mean to append.",
+        "Replacement markdown body. This overwrites the whole description, including any Investigation block already there — read the task first if you mean to append.",
     }),
   ),
   status: optionalName(STATUS_GRAMMAR),
@@ -409,7 +409,7 @@ export const IssuesMcpUpdateInput = Schema.Struct({
   assignee: clearableName(ASSIGNEE_GRAMMAR),
   project: clearableName("Project name."),
   milestone: clearableName(
-    "Milestone name. Cleared automatically when the issue leaves the milestone's project.",
+    "Milestone name. Cleared automatically when the task leaves the milestone's project.",
   ),
   cycle: clearableName("Cycle name."),
   labels: labelNames(
@@ -417,18 +417,18 @@ export const IssuesMcpUpdateInput = Schema.Struct({
   ),
   addLabels: labelNames("Label names to add, keeping the ones already there. Created if missing."),
   removeLabels: labelNames(
-    "Label names to take off this issue. The label itself survives on other issues.",
+    "Label names to take off this task. The label itself survives on other tasks.",
   ),
   dueDate: Schema.optional(
     Schema.NullOr(Schema.String).annotate({
-      description: "Calendar day the issue is due, YYYY-MM-DD. Pass null to clear it.",
+      description: "Calendar day the task is due, YYYY-MM-DD. Pass null to clear it.",
     }),
   ),
-  parentKey: clearableName('Key of the parent issue, such as "PAT-4".'),
+  parentKey: clearableName('Key of the parent task, such as "PAT-4".'),
   triage: Schema.optional(
     Schema.Boolean.annotate({
       description:
-        "Move the issue in or out of triage. Setting it false without a status leaves the issue where it is.",
+        "Move the task in or out of triage. Setting it false without a status leaves the task where it is.",
     }),
   ),
 });
@@ -516,34 +516,34 @@ const writeTrackerTool = <T extends Tool.Any>(tool: T): T =>
 export const IssuesListTool = readonlyTrackerTool(
   Tool.make("issues_list", {
     description:
-      "Search this environment's issue tracker. Filters combine with AND; every filter names things the way a person does — a status name or category, a project name, a label name. Returns compact rows newest-updated first, and reports how many matched so a truncated answer is never mistaken for the whole tracker. Read-only.",
+      "Search this environment's task tracker. Filters combine with AND; every filter names things the way a person does — a status name or category, a project name, a label name. Returns compact rows newest-updated first, and reports how many matched so a truncated answer is never mistaken for the whole tracker. Read-only.",
     parameters: IssuesMcpListInput,
     success: IssuesMcpListResult,
     failure: IssueTrackerError,
     dependencies,
-  }).annotate(Tool.Title, "List issues"),
+  }).annotate(Tool.Title, "List tasks"),
 );
 
 export const IssuesGetTool = readonlyTrackerTool(
   Tool.make("issues_get", {
     description:
-      "Read one issue in full by key: description, labels, milestone and cycle, sub-issue keys, checklist todos, relations, comments, and attachments. Each comment includes its attachment ids; the issue-level attachment list includes the source comment body and author. Available images are returned directly as MCP image content, within a bounded eager-load budget; use issues_get_attachment for any listed image that was not included. Read-only. Works on soft-deleted issues too.",
+      "Read one task in full by key: description, labels, milestone and cycle, subtask keys, checklist todos, relations, comments, and attachments. Each comment includes its attachment ids; the task-level attachment list includes the source comment body and author. Available images are returned directly as MCP image content, within a bounded eager-load budget; use issues_get_attachment for any listed image that was not included. Read-only. Works on soft-deleted tasks too.",
     parameters: IssuesMcpGetInput,
     success: IssuesMcpDetail,
     failure: IssueTrackerError,
     dependencies,
-  }).annotate(Tool.Title, "Get issue detail"),
+  }).annotate(Tool.Title, "Get task detail"),
 );
 
 export const IssuesGetAttachmentTool = readonlyTrackerTool(
   Tool.make("issues_get_attachment", {
     description:
-      "Read one attachment listed by issues_get together with its source comment body, author, and timestamp. Images are returned directly as MCP image content. Video metadata is returned as text because MCP has no inline video content block; the video remains playable on the Pathway issue. The attachment must belong to the named issue. Read-only.",
+      "Read one attachment listed by issues_get together with its source comment body, author, and timestamp. Images are returned directly as MCP image content. Video metadata is returned as text because MCP has no inline video content block; the video remains playable on the Pathway task. The attachment must belong to the named task. Read-only.",
     parameters: IssuesMcpGetAttachmentInput,
     success: IssuesMcpGetAttachmentResult,
     failure: IssueTrackerError,
     dependencies,
-  }).annotate(Tool.Title, "Get issue attachment"),
+  }).annotate(Tool.Title, "Get task attachment"),
 );
 
 export const IssuesMilestonesListTool = readonlyTrackerTool(
@@ -584,7 +584,7 @@ export const IssuesMilestoneUpdateTool = writeTrackerTool(
 export const IssuesMilestoneDeleteTool = writeTrackerTool(
   Tool.make("issues_milestone_delete", {
     description:
-      "Permanently delete a milestone. Issues on it stay in their project and become unassigned from any milestone. This writes to the tracker and is visible to everyone immediately.",
+      "Permanently delete a milestone. Tasks on it stay in their project and become unassigned from any milestone. This writes to the tracker and is visible to everyone immediately.",
     parameters: IssuesMcpMilestoneDeleteInput,
     success: IssuesMcpMilestoneDeleteResult,
     failure: IssueTrackerError,
@@ -595,58 +595,58 @@ export const IssuesMilestoneDeleteTool = writeTrackerTool(
 export const IssuesCreateTool = writeTrackerTool(
   Tool.make("issues_create", {
     description:
-      "File a new issue and return it, including the key it was given. This writes to the tracker and shows up immediately in everyone's list view, attributed to you in the issue's change log. Labels are created when missing. A missing milestone is also created when the project field names where it belongs; projects and cycles must already exist. If an earlier attempt remains queued, reuse the idempotencyKey named in its error instead of filing another issue.",
+      "File a new task and return it, including the key it was given. This writes to the tracker and shows up immediately in everyone's list view, attributed to you in the task's change log. Labels are created when missing. A missing milestone is also created when the project field names where it belongs; projects and cycles must already exist. If an earlier attempt remains queued, reuse the idempotencyKey named in its error instead of filing another task.",
     parameters: IssuesMcpCreateInput,
     success: IssuesMcpIssueResult,
     failure: IssueTrackerError,
     dependencies,
-  }).annotate(Tool.Title, "Create issue"),
+  }).annotate(Tool.Title, "Create task"),
 );
 
 export const IssuesUpdateTool = writeTrackerTool(
   Tool.make("issues_update", {
     description:
-      "Change fields on one issue. Patch semantics: an omitted field is left alone and an explicit null clears it. This writes to the tracker, is visible to everyone immediately, and every field change is recorded against your name in the issue's change log. Setting a status in the completed category is how you mark work done.",
+      "Change fields on one task. Patch semantics: an omitted field is left alone and an explicit null clears it. This writes to the tracker, is visible to everyone immediately, and every field change is recorded against your name in the task's change log. Setting a status in the completed category is how you mark work done.",
     parameters: IssuesMcpUpdateInput,
     success: IssuesMcpIssueResult,
     failure: IssueTrackerError,
     dependencies,
   })
-    .annotate(Tool.Title, "Update issue")
+    .annotate(Tool.Title, "Update task")
     .annotate(Tool.Idempotent, true),
 );
 
 export const IssuesCommentTool = writeTrackerTool(
   Tool.make("issues_comment", {
     description:
-      "Post a markdown comment on an issue, attributed to you. This is visible to everyone reading the issue and cannot be posted silently — use it to report what you found or did, not to talk to yourself.",
+      "Post a markdown comment on a task, attributed to you. This is visible to everyone reading the task and cannot be posted silently — use it to report what you found or did, not to talk to yourself.",
     parameters: IssuesMcpCommentInput,
     success: IssuesMcpCommentResult,
     failure: IssueTrackerError,
     dependencies,
-  }).annotate(Tool.Title, "Comment on issue"),
+  }).annotate(Tool.Title, "Comment on task"),
 );
 
 export const IssuesCommentEvidenceTool = writeTrackerTool(
   Tool.make("issues_comment_evidence", {
     description:
-      "Capture browser proof and post it to an issue as an attributed markdown comment with an inline attachment. For a screenshot, this captures the current Preview tab. For video, call preview_recording_start and preview_recording_stop first, then pass the returned artifact unchanged. The evidence is copied into the issue so it remains reviewable from other devices. This is visible to everyone reading the issue.",
+      "Capture browser proof and post it to a task as an attributed markdown comment with an inline attachment. For a screenshot, this captures the current Preview tab. For video, call preview_recording_start and preview_recording_stop first, then pass the returned artifact unchanged. The evidence is copied into the task so it remains reviewable from other devices. This is visible to everyone reading the task.",
     parameters: IssuesMcpCommentEvidenceInput,
     success: IssuesMcpCommentResult,
     failure: IssueTrackerError,
     dependencies: evidenceDependencies,
-  }).annotate(Tool.Title, "Attach browser evidence to issue"),
+  }).annotate(Tool.Title, "Attach browser evidence to task"),
 ).annotate(Tool.OpenWorld, true);
 
 export const IssuesDeleteTool = writeTrackerTool(
   Tool.make("issues_delete", {
     description:
-      "Delete an issue. The delete is soft — the row keeps its key and its history, disappears from the list view, and is recoverable with issues_restore — but it is not a draft operation: everyone stops seeing the issue, and the deletion is recorded against your name. Sub-issues are not deleted with it.",
+      "Delete a task. The delete is soft — the row keeps its key and its history, disappears from the list view, and is recoverable with issues_restore — but it is not a draft operation: everyone stops seeing the task, and the deletion is recorded against your name. Subtasks are not deleted with it.",
     parameters: IssuesMcpDeleteInput,
     success: IssuesMcpIssueResult,
     failure: IssueTrackerError,
     dependencies,
-  }).annotate(Tool.Title, "Delete issue"),
+  }).annotate(Tool.Title, "Delete task"),
 )
   // Annotated outside the wrapper: `writeTrackerTool` clears the destructive hint for the rest of
   // the toolkit, and this is the one tool that earns it back.
@@ -656,26 +656,26 @@ export const IssuesDeleteTool = writeTrackerTool(
 export const IssuesRestoreTool = writeTrackerTool(
   Tool.make("issues_restore", {
     description:
-      "Take a soft-deleted issue back out of the bin and return it to the list view, recorded against your name. Use this to undo an issues_delete, yours or anyone's.",
+      "Take a soft-deleted task back out of the bin and return it to the list view, recorded against your name. Use this to undo an issues_delete, yours or anyone's.",
     parameters: IssuesMcpRestoreInput,
     success: IssuesMcpIssueResult,
     failure: IssueTrackerError,
     dependencies,
   })
-    .annotate(Tool.Title, "Restore issue")
+    .annotate(Tool.Title, "Restore task")
     .annotate(Tool.Idempotent, true),
 );
 
 export const IssuesLinkThreadTool = writeTrackerTool(
   Tool.make("issues_link_thread", {
     description:
-      "Record that a thread is working this issue, so the issue shows the conversation and the conversation shows the issue. Defaults to your own thread. Linking is a record only: it starts nothing, and it is idempotent per issue and thread.",
+      "Record that a thread is working this task, so the task shows the conversation and the conversation shows the task. Defaults to your own thread. Linking is a record only: it starts nothing, and it is idempotent per task and thread.",
     parameters: IssuesMcpLinkThreadInput,
     success: IssuesMcpThreadLinksResult,
     failure: IssueTrackerError,
     dependencies,
   })
-    .annotate(Tool.Title, "Link thread to issue")
+    .annotate(Tool.Title, "Link thread to task")
     .annotate(Tool.Idempotent, true),
 );
 

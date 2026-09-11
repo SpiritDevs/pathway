@@ -447,7 +447,7 @@ function SidebarThreadTooltip({
             <button
               type="button"
               className="flex min-w-0 cursor-pointer items-center gap-2 text-left text-foreground/75 outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label={`Open issue ${issue.key}`}
+              aria-label={`Open task ${issue.key}`}
               onClick={() => onOpenIssue(issue.key)}
             >
               <TicketIcon aria-hidden className="size-3 shrink-0 stroke-muted-foreground" />
@@ -1811,7 +1811,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 <button
                   type="button"
                   className="shrink-0 cursor-pointer font-mono text-[11px] font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-                  aria-label={`Open issue ${props.issue.key}`}
+                  aria-label={`Open task ${props.issue.key}`}
                   onClick={handleIssueClick}
                 >
                   {props.issue.key}

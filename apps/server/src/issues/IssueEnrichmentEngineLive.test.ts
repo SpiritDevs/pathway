@@ -487,8 +487,8 @@ describe("IssueEnrichmentEngineLive", () => {
       for (const imagePath of imagePaths) {
         assert.isTrue(yield* Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(imagePath)));
       }
-      assert.include(prompt, "- 4 image attachment(s) from this issue are provided");
-      assert.include(prompt, "- 2 more attachment(s) on this issue were not included.");
+      assert.include(prompt, "- 4 image attachment(s) from this task are provided");
+      assert.include(prompt, "- 2 more attachment(s) on this task were not included.");
     }).pipe(Effect.provide(DependenciesLive), TestClock.withLive),
   );
 
@@ -574,8 +574,8 @@ describe("IssueEnrichmentEngineLive", () => {
         [`${png}.png`],
       );
       // Unsendable is still one the model does not have: counted, so "there is more" stays true.
-      assert.include(prompt, "- 1 image attachment(s) from this issue are provided");
-      assert.include(prompt, "- 1 more attachment(s) on this issue were not included.");
+      assert.include(prompt, "- 1 image attachment(s) from this task are provided");
+      assert.include(prompt, "- 1 more attachment(s) on this task were not included.");
     }).pipe(Effect.provide(DependenciesLive), TestClock.withLive),
   );
 
@@ -611,7 +611,7 @@ describe("IssueEnrichmentEngineLive", () => {
 
       const tracker = yield* buildTracker(({ prompt }) =>
         Effect.gen(function* () {
-          const key = prompt.includes("Issue ISS-1:") ? "ISS-1" : "ISS-2";
+          const key = prompt.includes("Task ISS-1:") ? "ISS-1" : "ISS-2";
           startedKeys.push(key);
           if (key === "ISS-1") {
             yield* Deferred.succeed(firstStarted, undefined);

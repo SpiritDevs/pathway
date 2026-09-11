@@ -26,7 +26,7 @@ export function IssueDetailTabs({
 }) {
   return (
     <div
-      aria-label="Issue detail sections"
+      aria-label="Task detail sections"
       className="flex border-b border-border/50"
       role="tablist"
     >

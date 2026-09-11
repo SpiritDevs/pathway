@@ -206,7 +206,7 @@ export function TriageAcceptDialog({
         });
         if (input === null) continue;
         const result = await acceptTriage(input);
-        if (reportIssueWriteFailure("Failed to accept the issue", result)) {
+        if (reportIssueWriteFailure("Failed to accept the task", result)) {
           failed = true;
           continue;
         }
@@ -224,8 +224,8 @@ export function TriageAcceptDialog({
             type: "success",
             title:
               accepted === 1
-                ? `${issues[0]?.key ?? "Issue"} accepted`
-                : `${accepted} issues accepted`,
+                ? `${issues[0]?.key ?? "Task"} accepted`
+                : `${accepted} tasks accepted`,
             ...(refusal === null ? {} : { description: refusal }),
           }),
         );
@@ -405,7 +405,7 @@ export function TriageAcceptDialog({
                 size="sm"
                 title={
                   startTaskBlockReason === null
-                    ? "Accept this issue and start its assigned agent."
+                    ? "Accept this task and start its assigned agent."
                     : startTaskBlockReason
                 }
                 type="button"

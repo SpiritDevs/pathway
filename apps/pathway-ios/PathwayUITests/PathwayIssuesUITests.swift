@@ -8,7 +8,7 @@ final class PathwayIssuesUITests: XCTestCase {
         XCTAssertTrue(first.waitForExistence(timeout: 10))
         let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "issue-row-"))
         XCTAssertGreaterThanOrEqual(rows.allElementsBoundByIndex.filter(\.isHittable).count, 11)
-        XCTAssertFalse(app.textFields["Search issues"].exists)
+        XCTAssertFalse(app.textFields["Search tasks"].exists)
         capture(app, name: "Compact issue list")
         first.tap()
         XCTAssertTrue(app.buttons["issue-detail-actions"].waitForExistence(timeout: 5))
@@ -171,7 +171,7 @@ final class PathwayIssuesUITests: XCTestCase {
         XCTAssertTrue(comment.waitForExistence(timeout: 5))
         comment.tap()
         comment.typeText("Keep this parent draft")
-        selectIssueTab("Sub-issues", in: app)
+        selectIssueTab("Subtasks", in: app)
         let child = app.buttons["Reconnect remote sessions"]
         XCTAssertTrue(child.waitForExistence(timeout: 5))
         child.tap()
@@ -192,10 +192,10 @@ final class PathwayIssuesUITests: XCTestCase {
     @MainActor
     func testSearchAndSecondaryControlsStayOutOfTheList() throws {
         let app = launchFixture()
-        XCTAssertTrue(app.buttons["Issue actions"].waitForExistence(timeout: 10))
-        app.buttons["Issue actions"].tap()
+        XCTAssertTrue(app.buttons["Task actions"].waitForExistence(timeout: 10))
+        app.buttons["Task actions"].tap()
         app.buttons["Search"].tap()
-        let search = app.textFields["Search issues"]
+        let search = app.textFields["Search tasks"]
         XCTAssertTrue(search.waitForExistence(timeout: 5))
         search.tap()
         search.typeText("Calendar")
@@ -207,7 +207,7 @@ final class PathwayIssuesUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Filter and display"].waitForExistence(timeout: 5))
         capture(app, name: "Filters and display sheet")
         app.buttons["Done"].tap()
-        app.buttons["Issue actions"].tap()
+        app.buttons["Task actions"].tap()
         app.buttons["Projects, milestones and cycles"].tap()
         XCTAssertTrue(app.buttons["New milestone"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.segmentedControls.buttons["Cycles"].exists)
@@ -321,7 +321,7 @@ final class PathwayIssuesUITests: XCTestCase {
         capture(app, name: "Issue comments tab")
         selectIssueTab("Attachments", in: app)
         capture(app, name: "Issue attachments tab")
-        selectIssueTab("Sub-issues", in: app)
+        selectIssueTab("Subtasks", in: app)
         XCTAssertTrue(app.buttons["Reconnect remote sessions"].waitForExistence(timeout: 5))
         capture(app, name: "Issue sub-issues tab")
         selectIssueTab("AI", in: app)

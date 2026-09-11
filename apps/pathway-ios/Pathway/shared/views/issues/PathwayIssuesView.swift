@@ -89,7 +89,7 @@ struct PathwayIssuesView: View {
             }
             let knownIDs = Set(statuses.map(\.id))
             let unknown = issues.filter { !knownIDs.contains($0.statusId) }
-            if !unknown.isEmpty { result.append(.init(id: "unknown-status", title: "Other issues", statusID: nil, issues: unknown)) }
+            if !unknown.isEmpty { result.append(.init(id: "unknown-status", title: "Other tasks", statusID: nil, issues: unknown)) }
             return result
         }
         let grouped = Dictionary(grouping: issues) { issue in
@@ -144,7 +144,7 @@ struct PathwayIssuesView: View {
             Button("Save") { saveView() }
                 .disabled(savedViewName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } message: { Text("Save these filters, grouping and layout to return to them later.") }
-        .confirmationDialog("Delete \(pendingDelete.count) \(pendingDelete.count == 1 ? "issue" : "issues")?", isPresented: Binding(get: { !pendingDelete.isEmpty }, set: { if !$0 { pendingDelete = [] } }), titleVisibility: .visible) {
+        .confirmationDialog("Delete \(pendingDelete.count) \(pendingDelete.count == 1 ? "task" : "tasks")?", isPresented: Binding(get: { !pendingDelete.isEmpty }, set: { if !$0 { pendingDelete = [] } }), titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 let issues = pendingDelete
                 pendingDelete = []
@@ -153,7 +153,7 @@ struct PathwayIssuesView: View {
                     selectedIDs.subtract(issues.map(\.id))
                 }
             }
-        } message: { Text("Deleted issues can be restored from Recently deleted.") }
+        } message: { Text("Deleted tasks can be restored from Recently deleted.") }
         .onChange(of: companyID) { resetView() }
         .onChange(of: scope) { selectedIDs = []; isSelecting = false }
         .onChange(of: visibleIssues.map(\.id)) { _, visibleIDs in
@@ -184,7 +184,7 @@ struct PathwayIssuesView: View {
             Spacer(minLength: 8)
             HStack(spacing: 0) {
                 Button { openEditor() } label: { Image(systemName: "square.and.pencil").frame(width: 44, height: 44) }
-                    .accessibilityLabel("New issue")
+                    .accessibilityLabel("New task")
                     .disabled(companyID == nil)
                 overflowMenu
             }
@@ -204,7 +204,7 @@ struct PathwayIssuesView: View {
             ForEach(PathwayIssueListScope.allCases) { item in
                 HStack(spacing: 0) {
                     Button { scope = item } label: {
-                        Text(item == .all ? "All" : item == .mine ? "My issues" : "Triage")
+                        Text(item == .all ? "All" : item == .mine ? "My tasks" : "Triage")
                             .font(.subheadline.weight(scope == item ? .semibold : .regular))
                             .foregroundStyle(scope == item ? .primary : .secondary)
                             .padding(.horizontal, 14)
@@ -234,7 +234,7 @@ struct PathwayIssuesView: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search issues", text: $query).focused($searchFocused).submitLabel(.search)
+            TextField("Search tasks", text: $query).focused($searchFocused).submitLabel(.search)
             Button {
                 query = ""; showsSearch = false
             } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
@@ -254,7 +254,7 @@ struct PathwayIssuesView: View {
                 Button("Filter and display", systemImage: "line.3.horizontal.decrease") { showsFilters = true }
                 Button("Saved views", systemImage: "star") { showingDeleted = false; showsSavedViews = true }
             }
-            Button(isSelecting ? "Done selecting" : "Select issues", systemImage: "checkmark.circle") {
+            Button(isSelecting ? "Done selecting" : "Select tasks", systemImage: "checkmark.circle") {
                 isSelecting.toggle(); selectedIDs = []
             }
             if isSelecting {
@@ -263,26 +263,26 @@ struct PathwayIssuesView: View {
             Divider()
             if let companyID {
                 Button("Projects, milestones and cycles", systemImage: "calendar") { onOpenPlanning(companyID) }
-                Button("Issue settings", systemImage: "gearshape") { onOpenSettings(companyID) }
+                Button("Task settings", systemImage: "gearshape") { onOpenSettings(companyID) }
                 Button("Recently deleted", systemImage: "trash") { showingDeleted = true; showsSavedViews = true }
             }
         } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
-        .accessibilityLabel("Issue actions")
+        .accessibilityLabel("Task actions")
     }
 
     @ViewBuilder private var issueContent: some View {
         if companyID == nil {
-            ContentUnavailableView("No company selected", systemImage: "building.2", description: Text("Connect to a company to see its issues."))
+            ContentUnavailableView("No company selected", systemImage: "building.2", description: Text("Connect to a company to see its tasks."))
         } else if visibleIssues.isEmpty {
             ContentUnavailableView {
-                Label(scope == .triage ? "Triage is clear" : "No issues", systemImage: scope == .triage ? "tray" : "checklist")
+                Label(scope == .triage ? "Triage is clear" : "No tasks", systemImage: scope == .triage ? "tray" : "checklist")
             } description: {
-                Text(query.isEmpty && configuration.filterCount == 0 ? "New issues will appear here." : "Try another search or clear your filters.")
+                Text(query.isEmpty && configuration.filterCount == 0 ? "New tasks will appear here." : "Try another search or clear your filters.")
             } actions: {
                 if configuration.filterCount > 0 || !query.isEmpty {
                     Button("Clear filters") { configuration = .init(); query = "" }
                 }
-                Button("Create issue") { openEditor() }
+                Button("Create task") { openEditor() }
             }
         } else if configuration.viewMode == "board" && scope != .triage {
             board
@@ -366,7 +366,7 @@ struct PathwayIssuesView: View {
             Button { openEditor(statusID: group.statusID) } label: {
                 Image(systemName: "plus").font(.subheadline).foregroundStyle(Color.secondary).frame(width: 36, height: 36)
             }
-            .accessibilityLabel("Add issue to \(group.title)")
+            .accessibilityLabel("Add task to \(group.title)")
         }
         .buttonStyle(.plain)
         .tint(Color.primary)
@@ -459,7 +459,7 @@ struct PathwayIssuesView: View {
             Button("Open", systemImage: "doc.text") { openedIssue = .init(companyID: issue.companyId, issueID: issue.id) }
             Button("Start work", systemImage: "play") { workIssue = issue }
             Button("Edit", systemImage: "pencil") { presentation = .init(companyID: issue.companyId, issueID: issue.id) }
-            Button("Add sub-issue", systemImage: "list.bullet.indent") { presentation = .init(companyID: issue.companyId, parentID: issue.id) }
+            Button("Add subtask", systemImage: "list.bullet.indent") { presentation = .init(companyID: issue.companyId, parentID: issue.id) }
         }
         Button("Ask AI or investigate", systemImage: "sparkles") { agentIssues = targets }
         Button("Select", systemImage: "checkmark.circle") { isSelecting = true; selectedIDs.insert(issue.id) }
@@ -546,7 +546,7 @@ struct PathwayIssuesView: View {
         let before = index > 0 ? siblings[index - 1].sortOrder : nil
         let after = index < siblings.count ? siblings[index].sortOrder : nil
         guard let key = PathwayIssueOrdering.key(between: before, and: after) else {
-            errorMessage = "These issues have an invalid manual order. Choose another sort order to continue."
+            errorMessage = "These tasks have an invalid manual order. Choose another sort order to continue."
             return
         }
         perform { try await model.setSortOrder(issue, sortOrder: key) }
@@ -677,7 +677,7 @@ private extension PathwayIssuesView {
                 if showingDeleted {
                     let deleted = companyRecords.filter(\.isDeleted).sorted { $0.updatedAt > $1.updatedAt }
                     if deleted.isEmpty {
-                        ContentUnavailableView("No deleted issues", systemImage: "trash")
+                        ContentUnavailableView("No deleted tasks", systemImage: "trash")
                     }
                     ForEach(deleted, id: \.id) { issue in
                         HStack {

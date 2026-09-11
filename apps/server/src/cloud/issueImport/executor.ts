@@ -478,7 +478,7 @@ function backendCall<A>(operation: string, effect: Effect.Effect<A, unknown>) {
       () =>
         new IssueImportBackendError({
           operation,
-          message: `The Convex issue-import ${operation} call failed.`,
+          message: `The Convex task-import ${operation} call failed.`,
         }),
     ),
   );
@@ -672,7 +672,7 @@ export const runIssueImportExecutor = Effect.fn("cloud.issue_import.execute")(fu
     Effect.mapError(
       () =>
         new IssueImportPlanningError({
-          message: "The local issue or project snapshot could not be read.",
+          message: "The local task or project snapshot could not be read.",
           entityIds: [],
         }),
     ),
@@ -867,14 +867,14 @@ export const runConfiguredIssueImport = Effect.fn("cloud.issue_import.run_config
     if (config._tag !== "Configured") {
       return yield* new IssueImportPreflightError({
         reason: "cloud-sync-not-configured",
-        message: "Cloud sync must be fully configured before an issue import can run.",
+        message: "Cloud sync must be fully configured before a task import can run.",
       });
     }
     const secrets = yield* ServerSecretStore.ServerSecretStore;
     if ((yield* readCloudSyncLink(secrets)) === null) {
       return yield* new IssueImportPreflightError({
         reason: "environment-not-linked",
-        message: "This environment must be linked before an issue import can run.",
+        message: "This environment must be linked before a task import can run.",
       });
     }
     const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;

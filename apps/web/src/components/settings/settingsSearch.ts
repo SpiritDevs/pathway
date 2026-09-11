@@ -156,7 +156,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     ],
   },
   {
-    label: "Issues",
+    label: "Tasks",
     paths: [
       "/settings/issues-statuses",
       "/settings/issues-labels",
@@ -488,27 +488,27 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "issue-statuses",
-    title: "Issue statuses",
+    title: "Task statuses",
     to: "/settings/issues-statuses",
   },
   {
     id: "issue-key-prefix",
-    title: "Issue key prefix",
+    title: "Task key prefix",
     to: "/settings/issues-statuses",
   },
   {
     id: "issue-labels",
-    title: "Issue labels",
+    title: "Task labels",
     to: "/settings/issues-labels",
   },
   {
     id: "issue-milestones",
-    title: "Issue milestones",
+    title: "Task milestones",
     to: "/settings/issues-milestones",
   },
   {
     id: "issue-import",
-    title: "Import issues",
+    title: "Import tasks",
     to: "/settings/issues-import",
   },
   {
@@ -530,12 +530,12 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "issue-intake-automation",
-    title: "Issue auto-assignment and audits",
+    title: "Task auto-assignment and audits",
     to: "/settings/integrations",
   },
   {
     id: "issue-enrichment",
-    title: "Issue enrichment",
+    title: "Task enrichment",
     to: "/settings/issues-enrichment",
   },
   {

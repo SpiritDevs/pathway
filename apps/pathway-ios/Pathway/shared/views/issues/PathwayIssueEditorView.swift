@@ -45,7 +45,7 @@ struct PathwayIssueEditorView: View {
         var title: String {
             switch self {
             case .dueDate: "Due date"
-            case .parent: "Parent issue"
+            case .parent: "Parent task"
             default: rawValue.capitalized
             }
         }
@@ -142,7 +142,7 @@ struct PathwayIssueEditorView: View {
             .buttonStyle(.plain).padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 12)
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    TextField("Issue title", text: $title, axis: .vertical)
+                    TextField("Task title", text: $title, axis: .vertical)
                         .font(.title2.weight(.semibold)).focused($focusedField, equals: .title)
                         .accessibilityIdentifier("issue-title-input")
                     ZStack(alignment: .topLeading) {
@@ -488,12 +488,12 @@ struct PathwayIssueEditorView: View {
                 }
                 _ = try await model.mutate(companyID: companyID, kind: "issueComment.create", entityID: imageCommentID,
                                            args: ["issueId": .string(savedIssue.id),
-                                                  "body": .string(images.count == 1 ? "Added an image to this issue." : "Added \(images.count) images to this issue."),
+                                                  "body": .string(images.count == 1 ? "Added an image to this task." : "Added \(images.count) images to this task."),
                                                   "attachmentIds": .array(uploadedIDs.map(JSONValue.string))])
             }
             dismiss()
         } catch {
-            errorMessage = createdIssueID == nil ? error.localizedDescription : "The issue was created, but its attachments could not be saved. Retry Save to finish: \(error.localizedDescription)"
+            errorMessage = createdIssueID == nil ? error.localizedDescription : "The task was created, but its attachments could not be saved. Retry Save to finish: \(error.localizedDescription)"
         }
     }
 

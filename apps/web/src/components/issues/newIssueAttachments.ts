@@ -35,14 +35,14 @@ export function newIssueAttachmentIntake<F extends NewIssueAttachmentCandidate>(
 
   const images = files.filter((file) => file.type.startsWith("image/"));
   if (images.length === 0) {
-    return { accepted: [], rejection: "Only images can be attached to an issue." };
+    return { accepted: [], rejection: "Only images can be attached to a task." };
   }
 
   const remaining = Math.max(0, ISSUE_COMMENT_MAX_ATTACHMENTS - currentCount);
   if (remaining === 0) {
     return {
       accepted: [],
-      rejection: `An issue can start with at most ${ISSUE_COMMENT_MAX_ATTACHMENTS} images.`,
+      rejection: `A task can start with at most ${ISSUE_COMMENT_MAX_ATTACHMENTS} images.`,
     };
   }
 
@@ -51,7 +51,7 @@ export function newIssueAttachmentIntake<F extends NewIssueAttachmentCandidate>(
   if (droppedForCap > 0) {
     return {
       accepted,
-      rejection: `An issue can start with at most ${ISSUE_COMMENT_MAX_ATTACHMENTS} images, so ${droppedForCap} ${droppedForCap === 1 ? "was" : "were"} not attached.`,
+      rejection: `A task can start with at most ${ISSUE_COMMENT_MAX_ATTACHMENTS} images, so ${droppedForCap} ${droppedForCap === 1 ? "was" : "were"} not attached.`,
     };
   }
 
@@ -61,7 +61,7 @@ export function newIssueAttachmentIntake<F extends NewIssueAttachmentCandidate>(
     rejection:
       droppedForType === 0
         ? null
-        : `Only images can be attached to an issue, so ${droppedForType} ${droppedForType === 1 ? "file was" : "files were"} skipped.`,
+        : `Only images can be attached to a task, so ${droppedForType} ${droppedForType === 1 ? "file was" : "files were"} skipped.`,
   };
 }
 
@@ -72,7 +72,7 @@ function formatAttachmentByteLimit(bytes: number): string {
 
 export function newIssueAttachmentTooLargeMessage(name: string): string {
   const label = name.trim().length === 0 ? "That image" : name.trim();
-  return `${label} is larger than the ${formatAttachmentByteLimit(ISSUE_COMMENT_ATTACHMENT_MAX_BYTES)} limit for an issue image.`;
+  return `${label} is larger than the ${formatAttachmentByteLimit(ISSUE_COMMENT_ATTACHMENT_MAX_BYTES)} limit for a task image.`;
 }
 
 export function newIssueAttachmentDataUrlRejection(input: {
@@ -88,8 +88,8 @@ export function newIssueAttachmentDataUrlRejection(input: {
 export function newIssueAttachmentComment(count: number): string {
   const description =
     count === 1
-      ? "Attached an image when creating this issue."
-      : `Attached ${count} images when creating this issue.`;
+      ? "Attached an image when creating this task."
+      : `Attached ${count} images when creating this task.`;
   return `${NEW_ISSUE_ATTACHMENT_RECORD_PREFIX}${description}`;
 }
 

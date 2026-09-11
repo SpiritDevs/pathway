@@ -352,12 +352,12 @@ describe("issueActorLabel", () => {
 
 describe("describeIssueEvent", () => {
   it("describes the lifecycle kinds without a field", () => {
-    expect(describeIssueEvent(event({ kind: "created" })).summary).toBe("created this issue");
-    expect(describeIssueEvent(event({ kind: "deleted" })).summary).toBe("deleted this issue");
-    expect(describeIssueEvent(event({ kind: "restored" })).summary).toBe("restored this issue");
+    expect(describeIssueEvent(event({ kind: "created" })).summary).toBe("created this task");
+    expect(describeIssueEvent(event({ kind: "deleted" })).summary).toBe("deleted this task");
+    expect(describeIssueEvent(event({ kind: "restored" })).summary).toBe("restored this task");
     expect(
       describeIssueEvent(event({ kind: "imported", actor: { kind: "system", source: "import" } })),
-    ).toEqual({ actor: "CSV import", summary: "imported this issue" });
+    ).toEqual({ actor: "CSV import", summary: "imported this task" });
   });
 
   it("quotes a rename and stays quiet about a body", () => {
@@ -477,7 +477,7 @@ describe("describeIssueEvent", () => {
         event({ kind: "field_changed", field: "parent", before: null, after: "issue-7" }),
         { issueKeys: new Map([["issue-7", "PAT-7"]]) },
       ).summary,
-    ).toBe("made this a sub-issue of PAT-7");
+    ).toBe("made this a subtask of PAT-7");
   });
 
   it("reads the triage flag as the two things it means", () => {

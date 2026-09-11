@@ -856,7 +856,7 @@ export const activate = mutation({
       if (requirements.usesAutomation && !capabilities.supportsAutomationJobs) {
         throw backendError(
           "activation-unsafe",
-          `Environment ${environmentId} cannot execute issue automation jobs.`,
+          `Environment ${environmentId} cannot execute task automation jobs.`,
         );
       }
     }
@@ -868,13 +868,13 @@ export const activate = mutation({
       if (automation === null) {
         throw backendError(
           "activation-unsafe",
-          "Configure issue automation before activating Slack workflow automation.",
+          "Configure task automation before activating Slack workflow automation.",
         );
       }
       if (!automation.enabled && args.enableAutomation !== true) {
         throw backendError(
           "activation-unsafe",
-          "Confirm that issue automation may be enabled for this Slack workflow.",
+          "Confirm that task automation may be enabled for this Slack workflow.",
         );
       }
       if (!automation.enabled) {

@@ -111,7 +111,7 @@ export function parseCsv(text: string): ReadonlyArray<CsvRecord> {
  * in each list; the rest are what hand-made files and other trackers call the same column.
  */
 export const ISSUE_CSV_COLUMN_ALIASES = {
-  key: ["id", "key", "identifier", "issue id", "issue key"],
+  key: ["id", "key", "identifier", "issue id", "issue key", "task id", "task key"],
   title: ["title", "name", "summary"],
   description: ["description", "body", "details"],
   status: ["status", "state"],
@@ -120,7 +120,7 @@ export const ISSUE_CSV_COLUMN_ALIASES = {
   created: ["created", "created at", "createdat", "created date"],
   updated: ["updated", "updated at", "updatedat", "updated date"],
   dueDate: ["due date", "duedate", "due"],
-  parent: ["parent issue", "parent", "parent id", "parent key"],
+  parent: ["parent issue", "parent", "parent id", "parent key", "parent task"],
 } as const satisfies Record<string, ReadonlyArray<string>>;
 
 export type IssueCsvColumnName = keyof typeof ISSUE_CSV_COLUMN_ALIASES;

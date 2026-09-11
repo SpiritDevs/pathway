@@ -229,7 +229,7 @@ describe("issue automation prompts", () => {
       workerIndex: 1,
       workerCount: 2,
     });
-    expect(first).toContain("do not move the issue back to review yet");
+    expect(first).toContain("do not move the task back to review yet");
     expect(last).toContain("move ISS-1 to In Review");
   });
 

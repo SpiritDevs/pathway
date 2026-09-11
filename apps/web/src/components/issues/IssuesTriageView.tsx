@@ -299,7 +299,7 @@ export function IssuesTriageView({
       const rejected: Array<IssueId> = [];
       for (const issue of issues) {
         const result = await rejectTriage({ issueId: issue.id });
-        if (reportIssueWriteFailure("Failed to reject the issue", result)) continue;
+        if (reportIssueWriteFailure("Failed to reject the task", result)) continue;
         rejected.push(issue.id);
       }
       if (rejected.length === 0) return;
@@ -310,7 +310,7 @@ export function IssuesTriageView({
           type: "success",
           title:
             rejected.length === 1
-              ? `${first?.key ?? "Issue"} rejected`
+              ? `${first?.key ?? "Task"} rejected`
               : `${rejected.length} items rejected`,
           description: "Restoring one puts it back in triage.",
           actionProps: {
@@ -320,7 +320,7 @@ export function IssuesTriageView({
                 toastManager.close(toastId);
                 for (const issueId of rejected) {
                   reportIssueWriteFailure(
-                    "Failed to restore the issue",
+                    "Failed to restore the task",
                     await restoreIssue({ issueId }),
                   );
                 }
@@ -358,14 +358,14 @@ export function IssuesTriageView({
             COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
           )}
         >
-          <WorkspaceBreadcrumb ariaLabel="Issues breadcrumb">
+          <WorkspaceBreadcrumb ariaLabel="Tasks breadcrumb">
             <WorkspaceBreadcrumbItem>
               <button
                 className="outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => onSearch({ triage: undefined })}
                 type="button"
               >
-                Issues
+                Tasks
               </button>
             </WorkspaceBreadcrumbItem>
             <WorkspaceBreadcrumbSeparator />
@@ -379,7 +379,7 @@ export function IssuesTriageView({
           </span>
           <div className="ms-auto flex items-center gap-1">
             <Button onClick={() => onSearch({ triage: undefined })} size="xs" variant="ghost">
-              Back to issues
+              Back to tasks
             </Button>
           </div>
         </div>

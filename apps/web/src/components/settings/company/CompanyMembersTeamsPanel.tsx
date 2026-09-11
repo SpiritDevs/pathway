@@ -76,7 +76,7 @@ function PersonalWorkspaceUpgrade({ settings }: { readonly settings: CompanySett
                 </h3>
                 <p className="max-w-md text-sm leading-6 text-muted-foreground">
                   Create a company when you are ready to collaborate. This personal workspace stays
-                  exactly as it is, with its own projects, threads, and issues.
+                  exactly as it is, with its own projects, threads, and tasks.
                 </p>
               </div>
             </div>

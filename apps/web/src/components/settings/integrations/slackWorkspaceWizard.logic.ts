@@ -2,9 +2,9 @@ import type { IssueAutomationSettings } from "@spiritdevs/contracts";
 
 export const SLACK_WORKSPACE_WIZARD_STEPS = [
   "Connect Slack",
-  "Route issues",
+  "Route tasks",
   "Automate routes",
-  "Issue automation",
+  "Task automation",
   "Activate",
 ] as const;
 
@@ -469,7 +469,7 @@ export function slackWizardStepError(
     draft.rules.some(slackRuleUsesAutomation) &&
     context.automationConfigured !== true
   ) {
-    return "Save issue automation settings before continuing.";
+    return "Save task automation settings before continuing.";
   }
   if (step === 4 && context.readiness?.some((item) => item.state === "blocked")) {
     return "Resolve the blocked activation checks before activating.";

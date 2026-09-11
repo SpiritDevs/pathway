@@ -104,10 +104,10 @@ export const make = Effect.gen(function* () {
     const { issue } = request;
     const [statuses, labels, comments] = yield* Effect.all(
       [
-        read("Failed to read the issue statuses", statusRepository.listAll()),
-        read("Failed to read the issue labels", labelRepository.listAll()),
+        read("Failed to read the task statuses", statusRepository.listAll()),
+        read("Failed to read the task labels", labelRepository.listAll()),
         read(
-          "Failed to read the issue comments",
+          "Failed to read the task comments",
           commentRepository.listByIssue({ issueId: issue.id }),
         ),
       ],

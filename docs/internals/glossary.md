@@ -2,6 +2,14 @@
 
 Project-specific vocabulary beyond the small glossary in `AGENTS.md`. Be opinionated: one canonical word per concept; alternates go under _Avoid_.
 
+## Tasks
+
+**Task**:
+A tracked unit of work, optionally belonging to a project, with a status, assignment, and history. The product view is **Tasks**; a child task is a **subtask**. Checklist items are lightweight steps within a task. Scheduled tasks are recurring automations and keep their qualified name.
+_Avoid_: Issue, ticket, bug as the generic name for this feature. External trackers and actual defects may still use those terms.
+
+Existing `/issues` links, `issue`/`issues` storage and protocol identifiers, permission keys, and `issues_*` MCP tool names remain stable for compatibility. Display labels, tool descriptions, and product documentation use task terminology.
+
 ## Connected mail
 
 **Mail account**:
@@ -32,8 +40,8 @@ The sum of tracked agent durations. Concurrent agents each contribute their own 
 **Elapsed activity time**:
 The duration covered by tracked activity, counting overlapping intervals once within the selected scope. Eight agents working simultaneously for 30 minutes yield 30 minutes of elapsed activity and four hours of agent work.
 
-**Issue creation credit**:
-The greater of one minute or measured active composer time, recorded when a human issue creation succeeds. Any minimum credit above measured time does not add elapsed activity.
+**Task creation credit**:
+The greater of one minute or measured active composer time, recorded when a human task creation succeeds. Any minimum credit above measured time does not add elapsed activity.
 
 ## Agent questions
 
@@ -150,7 +158,7 @@ One connected Google account, owned by a member, holding the encrypted OAuth cre
 _Avoid_: Connection, Provider, Integration
 
 **Layer**:
-One toggleable row-source in the calendar sidebar — a Calendar, or a work source such as Issues, Milestones, Cycles, or Scheduled Tasks. Layer visibility is per-machine and per-company, like the Active Focus, and does not sync.
+One toggleable row-source in the calendar sidebar — a Calendar, or a work source such as Tasks, Milestones, Cycles, or Scheduled Tasks. Layer visibility is per-machine and per-company, like the Active Focus, and does not sync.
 _Avoid_: Filter, Overlay, Track
 
 **Grant**:
@@ -158,7 +166,7 @@ An explicit edge from one Calendar to one member, giving read-only access to all
 _Avoid_: Share, ACL, Permission (reserve "permission" for `PermissionKey`)
 
 **Link**:
-The optional attachment from an Event to exactly one project, issue, or thread. Stored as its own owned entity so a mirrored Event can carry one without mutating the mirror, and so it survives a disconnect and reconnect. Visible from both ends.
+The optional attachment from an Event to exactly one project, task, or thread. Stored as its own owned entity so a mirrored Event can carry one without mutating the mirror, and so it survives a disconnect and reconnect. Visible from both ends.
 _Avoid_: Association, Tag, Reference
 
 **Mirror Window**:

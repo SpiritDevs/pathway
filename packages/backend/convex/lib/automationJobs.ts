@@ -39,7 +39,7 @@ export async function automationReadiness(
       diagnostic:
         targetKind === "project"
           ? "The selected project has no preferred active environment binding."
-          : "The issue has no linked start-work thread.",
+          : "The task has no linked start-work thread.",
     };
   }
   const registration = await ctx.db

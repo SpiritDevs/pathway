@@ -77,7 +77,7 @@ export function TimeTrackerAnalytics({
     {
       label: "Your work",
       value: overview ? overview.totals.manualMs + overview.totals.issueMs : undefined,
-      detail: "Manual timers and issue creation",
+      detail: "Manual timers and task creation",
       Icon: UserRoundIcon,
     },
   ];

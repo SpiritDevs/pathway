@@ -794,7 +794,7 @@ export function buildIssuesView(input: IssuesViewInput): IssuesView {
         : [
             {
               id: "all",
-              label: "All issues",
+              label: "All tasks",
               status: null,
               priority: null,
               issues: [...matched].sort(compare),

@@ -182,7 +182,7 @@ export function IssuesFilterBar({
 
   return (
     <div
-      aria-label="Issue filters"
+      aria-label="Task filters"
       className={cn("flex flex-wrap items-center gap-1", className)}
       role="group"
     >

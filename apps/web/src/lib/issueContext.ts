@@ -80,7 +80,7 @@ export function buildIssueContextBlock(rawContexts: ReadonlyArray<IssueContextSe
     "<issue_context>",
     ...issueTags,
     "",
-    `I want to talk through ${keys} before deciding what to do. Start by reading each issue with Pathway MCP's \`issues_get\` tool and link this thread to each one with \`issues_link_thread\`. Use each issue's own project as its context, even when the selection spans several projects; treat an issue without a project as a global question. Answer my questions and help me compare, clarify, and investigate the selected issues. Do not begin implementation unless I explicitly ask. As we reach useful conclusions, keep the tickets current with Pathway MCP's \`issues_update\` and \`issues_comment\` tools. Use only the Pathway MCP issue tools for these issues; do not use Linear or another external issue tracker.`,
+    `I want to talk through ${keys} before deciding what to do. Start by reading each task with Pathway MCP's \`issues_get\` tool and link this thread to each one with \`issues_link_thread\`. Use each task's own project as its context, even when the selection spans several projects; treat a task without a project as a global question. Answer my questions and help me compare, clarify, and investigate the selected tasks. Do not begin implementation unless I explicitly ask. As we reach useful conclusions, keep the tasks current with Pathway MCP's \`issues_update\` and \`issues_comment\` tools. Use only the Pathway MCP task tools for these tasks; do not use Linear or another external task tracker.`,
     "</issue_context>",
   ].join("\n");
 }

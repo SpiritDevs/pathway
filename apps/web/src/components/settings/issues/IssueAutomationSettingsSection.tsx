@@ -363,7 +363,7 @@ export function IssueAutomationSettingsSection({
   return (
     <SettingsSection {...searchableSetting("issue-intake-automation")}>
       <SettingsRow
-        description="Channels with Auto-assign enabled use these ordered, natural-language rules. The routing model chooses the first matching worker rule and every matching audit rule; the decision and exact model are saved on the issue."
+        description="Channels with Auto-assign enabled use these ordered, natural-language rules. The routing model chooses the first matching worker rule and every matching audit rule; the decision and exact model are saved on the task."
         title="Auto-assignment"
         control={
           <AutomationModelPicker
@@ -428,7 +428,7 @@ export function IssueAutomationSettingsSection({
       </div>
 
       <SettingsRow
-        description="Used when no worker rule matches. Leave this disabled to keep unmatched issues unassigned."
+        description="Used when no worker rule matches. Leave this disabled to keep unmatched tasks unassigned."
         title="Fallback worker"
         control={
           automation.fallbackModelSelection === null ? (
@@ -464,7 +464,7 @@ export function IssueAutomationSettingsSection({
           <p className="text-xs font-medium text-foreground">Audit rules</p>
           <p className="text-[11px] text-muted-foreground">
             Every model on a matching rule reviews independently. Any blocking finding returns the
-            issue to work with all findings; all auditors must pass before completion.
+            task to work with all findings; all auditors must pass before completion.
           </p>
         </div>
         {automation.auditRules.map((rule, index) => (
@@ -520,7 +520,7 @@ export function IssueAutomationSettingsSection({
           <p className="text-xs font-medium text-foreground">Review workers</p>
           <p className="text-[11px] text-muted-foreground">
             When an audit requests changes, these workers run in order on the linked work thread.
-            The last worker returns the issue to review. With none configured, the original worker
+            The last worker returns the task to review. With none configured, the original worker
             handles remediation.
           </p>
         </div>
@@ -620,7 +620,7 @@ export function IssueAutomationSettingsSection({
       </div>
 
       <SettingsRow
-        description="After this many failed review cycles, findings remain on the issue and automation stops rather than looping forever."
+        description="After this many failed review cycles, findings remain on the task and automation stops rather than looping forever."
         title="Remediation limit"
         control={
           <Input

@@ -9,8 +9,8 @@ Your pending messages appear in the conversation, with their delivery status and
 recovery actions. You can continue writing and attaching files in the usual composer. While saved
 messages load, a small indicator appears above the composer. Empty conversations leave the message
 area clear.
-When starting work from an issue, Pathway links the thread to the issue after the thread is saved
-to the cloud. A message saved only on this device does not mark the issue as started.
+When starting work from a task, Pathway links the thread to the task after the thread is saved
+to the cloud. A message saved only on this device does not mark the task as started.
 
 **Waiting to sync** means the message is saved on this device and still needs a cloud connection.
 Keep this device's application data until it finishes syncing. **Queued · Saved to cloud** means

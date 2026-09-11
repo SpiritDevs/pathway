@@ -222,7 +222,7 @@ function Suggestions({
           <div className="flex items-center gap-2">
             <h5 className="text-[11px] font-medium text-muted-foreground">Description</h5>
             <RewriteApplyButton
-              blockedReason="This issue already has a description. Applying would overwrite it."
+              blockedReason="This task already has a description. Applying would overwrite it."
               className="ms-auto"
               onApply={onApplyDescription}
               rewrite={suggestedDescription}
@@ -355,7 +355,7 @@ function RunResult({
 
       {result.relatedIssueKeys.length === 0 ? null : (
         <section className="flex flex-col gap-1">
-          <h4 className="text-[11px] font-medium text-muted-foreground">Related issues</h4>
+          <h4 className="text-[11px] font-medium text-muted-foreground">Related tasks</h4>
           <div className="flex flex-wrap gap-1.5">
             {result.relatedIssueKeys.map((key) => {
               const related = issuesByKey.get(key) ?? null;
@@ -365,7 +365,7 @@ function RunResult({
                   disabled={related === null}
                   key={key}
                   onClick={() => onOpenIssueKey(key)}
-                  title={related === null ? "No issue here carries that key." : related.title}
+                  title={related === null ? "No task here carries that key." : related.title}
                   type="button"
                 >
                   <span className="font-mono">{key}</span>
@@ -456,7 +456,7 @@ export function IssueEnrichmentPanel({
             {isPending
               ? "Loading investigations…"
               : (error ??
-                "No investigation has been run on this issue yet. Press Investigate to start one.")}
+                "No investigation has been run on this task yet. Press Investigate to start one.")}
           </p>
         ) : (
           <div className="flex flex-col gap-3">

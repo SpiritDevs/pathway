@@ -57,7 +57,7 @@ const AutomationAuditResponse = Schema.fromJsonString(
 const decodeAutomationAuditResponse = Schema.decodeUnknownOption(AutomationAuditResponse);
 
 const issueText = (issue: Issue) =>
-  [`Issue ${issue.key}: ${issue.title}`, issue.description.trim()].filter(Boolean).join("\n\n");
+  [`Task ${issue.key}: ${issue.title}`, issue.description.trim()].filter(Boolean).join("\n\n");
 
 /**
  * Explicit choices win. Otherwise the category and visible workflow order provide the unsurprising
@@ -154,7 +154,7 @@ export function buildIssueAutomationClassificationPrompt(input: {
     name: rule.name,
     condition: rule.condition,
   }));
-  return `Classify this issue against the configured automation rules.
+  return `Classify this task against the configured automation rules.
 
 ${issueText(input.issue)}
 
@@ -195,7 +195,7 @@ export function buildIssueAutomationAuditPrompt(input: {
   readonly rule: IssueAutomationAuditRule;
   readonly remediationCycle: number;
 }): string {
-  return `Audit the completed work for this issue in the current repository. Read the actual diff,
+  return `Audit the completed work for this task in the current repository. Read the actual diff,
 tests, and relevant source. Do not edit anything.
 
 ${issueText(input.issue)}
@@ -254,8 +254,8 @@ export function buildIssueAutomationRemediationPrompt(input: {
   const finalWorker = input.workerIndex === input.workerCount - 1;
   const handoff = finalWorker
     ? input.reviewStatusName === null
-      ? "When the fixes are genuinely complete, leave a concise issue comment describing what you verified."
-      : `When the fixes are genuinely complete, use the Pathway issues tools to move ${input.issue.key} to ${input.reviewStatusName}. That transition starts the next audit cycle.`
-    : "Another configured review worker is queued after you. Fix and verify everything you can, but do not move the issue back to review yet.";
+      ? "When the fixes are genuinely complete, leave a concise task comment describing what you verified."
+      : `When the fixes are genuinely complete, use the Pathway tasks tools to move ${input.issue.key} to ${input.reviewStatusName}. That transition starts the next audit cycle.`
+    : "Another configured review worker is queued after you. Fix and verify everything you can, but do not move the task back to review yet.";
   return `Automated review requested changes for ${input.issue.key}. Review the current repository state and the findings below, then fix every valid issue. Re-check existing work because an earlier review worker may already have changed it.\n\n${input.findings.map((finding) => `- ${finding}`).join("\n")}\n\n${handoff}`;
 }

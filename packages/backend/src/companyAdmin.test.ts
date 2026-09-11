@@ -496,7 +496,7 @@ describe("companies.create", () => {
         name: "Second Co",
         issueKeyPrefix: "!!!",
       }),
-    ).rejects.toThrow("An issue key prefix needs at least one character.");
+    ).rejects.toThrow("A task key prefix needs at least one character.");
   });
 
   /**

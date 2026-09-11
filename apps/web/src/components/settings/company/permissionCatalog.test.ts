@@ -22,7 +22,7 @@ describe("permissionCatalog", () => {
         COMPANY_PERMISSIONS.some((permission) => PERMISSION_CATALOG[permission].group === group),
       ),
     );
-    const issues = sections.find((section) => section.group === "Issues");
+    const issues = sections.find((section) => section.group === "Tasks");
     expect(issues?.permissions[0]).toBe("issues.read");
   });
 

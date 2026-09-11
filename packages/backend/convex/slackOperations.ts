@@ -1135,7 +1135,7 @@ export const createIssue = mutation({
           )
           .unique();
         if (issue === null)
-          throw backendError("entity-not-found", "The canonical Slack issue is missing.");
+          throw backendError("entity-not-found", "The canonical Slack task is missing.");
         return { created: false, issueId: issue.id, issueKey: issue.key };
       }
     }
@@ -1152,7 +1152,7 @@ export const createIssue = mutation({
       if (args.ruleId === undefined || args.watchRevision !== watch.revision) {
         throw backendError(
           "configuration-changed",
-          "The selected Slack workflow changed before the issue was created.",
+          "The selected Slack workflow changed before the task was created.",
         );
       }
       v2Rule = Array.isArray(watch.rules)
@@ -1211,7 +1211,7 @@ export const createIssue = mutation({
       kind: "issue.create",
       entityId: issueId,
       args: {
-        title: trimmed(args.title, "Issue title"),
+        title: trimmed(args.title, "Task title"),
         description: args.description,
         projectId: project?.id,
         cycleId: v2Rule?.cycleId ?? watch.cycleId ?? undefined,
@@ -1324,7 +1324,7 @@ export const createIssue = mutation({
         q.eq("companyId", actor.company._id).eq("id", issueId),
       )
       .unique();
-    if (issue === null) throw new Error("The Slack issue vanished.");
+    if (issue === null) throw new Error("The Slack task vanished.");
     return { created: true, issueId, issueKey: issue.key };
   },
 });
@@ -1359,7 +1359,7 @@ export const addReply = mutation({
       .unique();
     if (existing !== null) {
       if (existing.issueId === null)
-        throw backendError("entity-not-found", "The Slack reply has no issue.");
+        throw backendError("entity-not-found", "The Slack reply has no task.");
       return { created: false, issueId: existing.issueId };
     }
     const root = await ctx.db
@@ -1372,7 +1372,7 @@ export const addReply = mutation({
       )
       .unique();
     if (root?.issueId === null || root === null) {
-      throw backendError("entity-not-found", "The Slack thread is not linked to an issue.");
+      throw backendError("entity-not-found", "The Slack thread is not linked to a task.");
     }
     const commentId = mintDomainId(Date.now());
     await applyDirectIssueOperation(ctx, actor, {
@@ -1463,7 +1463,7 @@ export const markThreadReplyScanned = mutation({
       )
       .unique();
     if (root === null || root.disposition !== "created" || root.issueId === null) {
-      throw backendError("entity-not-found", "The canonical Slack issue thread is missing.");
+      throw backendError("entity-not-found", "The canonical Slack task thread is missing.");
     }
     await ctx.db.patch(root._id, { lastReplyScanAt: Date.now() });
     return null;

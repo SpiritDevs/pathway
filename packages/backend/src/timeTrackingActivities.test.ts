@@ -255,7 +255,7 @@ describe("Automatic tracked activities", () => {
     const base = {
       userId: ids.userId,
       companyId: ids.companyId,
-      description: "Issue",
+      description: "Task",
       projectKey: "project",
       projectName: "Project",
     };

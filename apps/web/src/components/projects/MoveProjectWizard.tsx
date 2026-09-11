@@ -98,7 +98,7 @@ function MappingStep({
   if (source.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        This project&rsquo;s issues use no {what}, so there is nothing to map.
+        This project&rsquo;s tasks use no {what}, so there is nothing to map.
       </p>
     );
   }
@@ -274,7 +274,7 @@ export function MoveProjectWizard({
         type: "success",
         title: `Moved to ${destinationCompany?.name ?? "the new company"}`,
         description: [
-          `${result.movedIssues} ${result.movedIssues === 1 ? "issue" : "issues"} re-keyed`,
+          `${result.movedIssues} ${result.movedIssues === 1 ? "task" : "tasks"} re-keyed`,
           `${result.movedThreads} ${result.movedThreads === 1 ? "thread" : "threads"} moved`,
           `${result.movedIssueAssets} related ${result.movedIssueAssets === 1 ? "record" : "records"} moved`,
           ...(result.canceledAutomationJobs > 0
@@ -330,7 +330,7 @@ export function MoveProjectWizard({
               <ul className="space-y-2 text-sm text-muted-foreground">
                 <li>Project details and environment connections</li>
                 <li>
-                  {movingIssues.length} {movingIssues.length === 1 ? "issue" : "issues"}, including
+                  {movingIssues.length} {movingIssues.length === 1 ? "task" : "tasks"}, including
                   comments, files, checklists, relations, and linked threads
                 </li>
                 <li>Agent thread metadata, milestones, and captured email</li>
@@ -389,7 +389,7 @@ export function MoveProjectWizard({
               target={destinationLabels}
               matches={labelMatches}
               onChange={(sourceId, targetId) => setMatch(setLabelMatches, sourceId, targetId)}
-              unmatchedNote="A label left unmapped is removed from its issues when they move."
+              unmatchedNote="A label left unmapped is removed from its tasks when they move."
             />
           ) : null}
 
@@ -398,10 +398,10 @@ export function MoveProjectWizard({
               <div className="rounded-lg border border-warning/30 bg-warning/5 p-3">
                 <p className="flex items-center gap-2 text-sm font-medium">
                   <AlertTriangleIcon aria-hidden className="size-4 text-warning" />
-                  Issue keys change and cannot be changed back
+                  Task keys change and cannot be changed back
                 </p>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  {movingIssues.length} {movingIssues.length === 1 ? "issue" : "issues"} will be
+                  {movingIssues.length} {movingIssues.length === 1 ? "task" : "tasks"} will be
                   re-keyed under {destinationCompany?.issueKeyPrefix ?? "the new prefix"}. Any key
                   you have linked, quoted, or referenced in a commit will no longer resolve.
                 </p>
@@ -413,8 +413,8 @@ export function MoveProjectWizard({
                 <li>
                   Slack channel watches remain with their integration and detach from the project.
                 </li>
-                <li>Cycles do not: moved issues leave their cycle behind.</li>
-                <li>Team visibility resets — issues arrive company-wide.</li>
+                <li>Cycles do not: moved tasks leave their cycle behind.</li>
+                <li>Team visibility resets — tasks arrive company-wide.</li>
                 {droppedLabelCount > 0 ? (
                   <li className="text-warning">
                     {droppedLabelCount} unmapped{" "}

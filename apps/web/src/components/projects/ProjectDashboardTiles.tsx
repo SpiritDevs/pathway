@@ -107,7 +107,7 @@ export function WhereItLivesTile({
         <TileEmpty>
           {hasCheckout
             ? "This project has a checkout, but no environment has reported it yet."
-            : "No machine has a checkout of this project. You can plan and file issues here; attach a directory to run agents."}
+            : "No machine has a checkout of this project. You can plan and create tasks here; attach a directory to run agents."}
         </TileEmpty>
       ) : (
         <ul className="space-y-2.5">
@@ -160,7 +160,7 @@ export function IssueRollupTile({
   const percent = rollup.total === 0 ? 0 : Math.round((rollup.done / rollup.total) * 100);
   return (
     <Link
-      aria-label="View issues for this project"
+      aria-label="View tasks for this project"
       className="group block rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring"
       search={{ project: projectIds.join(",") }}
       to="/issues"
@@ -168,10 +168,10 @@ export function IssueRollupTile({
       <DashboardTile
         className="h-full transition-colors group-hover:border-border group-hover:bg-accent/20"
         icon={<CircleDotIcon />}
-        title="Issues"
+        title="Tasks"
       >
         {rollup.total === 0 ? (
-          <TileEmpty>No issues yet. File one to start tracking work here.</TileEmpty>
+          <TileEmpty>No tasks yet. Create one to start tracking work here.</TileEmpty>
         ) : (
           <>
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -193,7 +193,7 @@ export function IssueRollupTile({
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-valuenow={percent}
-                aria-label="Issues completed"
+                aria-label="Tasks completed"
               >
                 <div className="h-full rounded-full bg-success" style={{ width: `${percent}%` }} />
               </div>
@@ -225,7 +225,7 @@ export function MilestonesTile({
       }
     >
       {milestones.length === 0 ? (
-        <TileEmpty>No milestones. Add one to track a date rather than a pile of issues.</TileEmpty>
+        <TileEmpty>No milestones. Add one to track a date rather than a pile of tasks.</TileEmpty>
       ) : (
         <ul className="space-y-3">
           {milestones.slice(0, 4).map((milestone) => {

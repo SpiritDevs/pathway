@@ -288,7 +288,7 @@ export function MilestonesOverviewPage({
                 className="outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                 to="/issues"
               >
-                Issues
+                Tasks
               </Link>
             </WorkspaceBreadcrumbItem>
             <WorkspaceBreadcrumbSeparator />
@@ -466,7 +466,7 @@ export function MilestonesOverviewPage({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {pendingDelete?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Its issues stay in the project and land unassigned. Nothing else about them changes,
+              Its tasks stay in the project and land unassigned. Nothing else about them changes,
               and there is nothing to undo.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -504,8 +504,8 @@ export function MilestonesOverviewPage({
             </AlertDialogTitle>
             <AlertDialogDescription>
               {moveCount === 1
-                ? "Its issue does not come along: an issue belongs to its project, so it stays where it is and lands unassigned. There is nothing to undo."
-                : `Its ${moveCount} issues do not come along: an issue belongs to its project, so they stay where they are and land unassigned. There is nothing to undo.`}
+                ? "Its task does not come along: a task belongs to its project, so it stays where it is and lands unassigned. There is nothing to undo."
+                : `Its ${moveCount} tasks do not come along: a task belongs to its project, so they stay where they are and land unassigned. There is nothing to undo.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

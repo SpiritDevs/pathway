@@ -300,7 +300,7 @@ export function SlackWorkspaceWizardSheet({
       .catch((cause: unknown) => {
         if (cancelled) return;
         setAutomationLoadState("error");
-        setError(cause instanceof Error ? cause.message : "Could not load issue automation.");
+        setError(cause instanceof Error ? cause.message : "Could not load task automation.");
       });
     return () => {
       cancelled = true;
@@ -440,7 +440,7 @@ export function SlackWorkspaceWizardSheet({
     } catch (cause) {
       if (automationOwnerRef.current !== ownerId) return;
       setAutomationSaveState("error");
-      setError(cause instanceof Error ? cause.message : "Could not save issue automation.");
+      setError(cause instanceof Error ? cause.message : "Could not save task automation.");
     }
   };
 
@@ -1016,10 +1016,10 @@ function RouteIssuesStep({
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-medium" id="slack-routing-heading">
-            2. Route issues
+            2. Route tasks
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            Build ordered conditions and choose where each matching message becomes an issue.
+            Build ordered conditions and choose where each matching message becomes a task.
           </p>
         </div>
         <Button
@@ -1115,7 +1115,7 @@ function ConfigureRouteAutomationStep({
           3. Automate routes
         </h3>
         <p className="mt-1 text-xs text-muted-foreground">
-          Choose when each route investigates and assigns the issues it creates.
+          Choose when each route investigates and assigns the tasks it creates.
         </p>
       </div>
 
@@ -1158,10 +1158,10 @@ function IssueAutomationSetupStep({
     <section aria-labelledby="slack-automation-settings-heading" className="space-y-5">
       <div>
         <h3 className="text-sm font-medium" id="slack-automation-settings-heading">
-          4. Issue automation
+          4. Task automation
         </h3>
         <p className="mt-1 text-xs text-muted-foreground">
-          Choose the models and status transitions used to investigate and assign issues.
+          Choose the models and status transitions used to investigate and assign tasks.
         </p>
       </div>
 
@@ -1181,7 +1181,7 @@ function IssueAutomationSetupStep({
                 ? enabled
                   ? "Company automation is enabled. Changes below save automatically."
                   : "These settings are saved. Company automation will be enabled when Slack intake is activated."
-                : "Review the defaults below, configure a fallback worker if routes assign issues, then save these settings."}
+                : "Review the defaults below, configure a fallback worker if routes assign tasks, then save these settings."}
             </AlertDescription>
           </Alert>
 

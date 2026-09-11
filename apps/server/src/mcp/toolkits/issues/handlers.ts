@@ -110,7 +110,7 @@ export const issueCreateContinuationFailure = (retryIdentity: string, error: Iss
   new IssueTrackerError({
     reason: "conflict",
     subject: retryIdentity,
-    message: `Issue creation succeeded, but the remaining create workflow did not finish: ${error.message} Retry issues_create with idempotencyKey "${retryIdentity}" to resume the same issue.`,
+    message: `Task creation succeeded, but the remaining create workflow did not finish: ${error.message} Retry issues_create with idempotencyKey "${retryIdentity}" to resume the same task.`,
   });
 
 const evidenceFailure = (cause: { readonly message: string }) =>
@@ -268,7 +268,7 @@ const resolveIssue = (
     ? Effect.succeed(issue)
     : Effect.fail(
         notFound(
-          `No issue with key "${normalized}". Use issues_list to find the key you meant.`,
+          `No task with key "${normalized}". Use issues_list to find the key you meant.`,
           normalized,
         ),
       );
@@ -301,7 +301,7 @@ const resolveStatuses = (
   if (matches.length > 0) return Effect.succeed(matches);
   return Effect.fail(
     notFound(
-      `No issue status called "${value.trim()}". Valid statuses: ${quoteOptions(
+      `No task status called "${value.trim()}". Valid statuses: ${quoteOptions(
         statuses.map((status) => status.name),
       )}. Valid categories: ${quoteOptions(ISSUE_STATUS_CATEGORIES)}.`,
       value.trim(),
@@ -785,7 +785,7 @@ const handlers = {
           const wanted = normalizeName(input.milestone);
           if (!index.milestones.some((candidate) => normalizeName(candidate.name) === wanted)) {
             return yield* invalid(
-              `No milestone called "${input.milestone.trim()}". Pass project to create it while filing the issue.`,
+              `No milestone called "${input.milestone.trim()}". Pass project to create it while filing the task.`,
               input.milestone.trim(),
             );
           }
@@ -904,7 +904,7 @@ const handlers = {
           const projectId = patch.projectId === undefined ? issue.projectId : patch.projectId;
           if (projectId === null) {
             return yield* invalid(
-              "An issue must belong to a project before it can be assigned to a milestone.",
+              "A task must belong to a project before it can be assigned to a milestone.",
               issue.key,
             );
           }

@@ -240,7 +240,7 @@ final class PathwayIssuesModel {
     }
 
     func bulkUpdate(_ issues: [PathwayIssueRecord], patch: [String: JSONValue]) async throws {
-        guard issues.count <= 500 else { throw PathwayIssueWriteError(message: "Select at most 500 issues.") }
+        guard issues.count <= 500 else { throw PathwayIssueWriteError(message: "Select at most 500 tasks.") }
         // Preflight every company before sending the first write.
         for issue in issues { _ = try membershipID(issue.companyId) }
         for issue in issues { try await update(issue, patch: patch) }
@@ -249,11 +249,11 @@ final class PathwayIssuesModel {
     @discardableResult
     func mutate(companyID: String, kind: String, entityID: String, args: [String: JSONValue]) async throws -> JSONValue {
         guard sendOperations != nil else {
-            throw PathwayIssueWriteError(message: "Connect to Pathway before changing issues.")
+            throw PathwayIssueWriteError(message: "Connect to Pathway before changing tasks.")
         }
         if let data = defaults.data(forKey: "pathway.issues.pendingOperations"),
            (try? JSONDecoder().decode([JSONValue].self, from: data)) == nil {
-            throw PathwayIssueWriteError(message: "Saved issue changes could not be read. Your pending changes have been preserved; reconnect before making another change.")
+            throw PathwayIssueWriteError(message: "Saved task changes could not be read. Your pending changes have been preserved; reconnect before making another change.")
         }
         let membership = try membershipID(companyID)
         let clientID: String
@@ -419,7 +419,7 @@ final class PathwayIssuesModel {
 
     private func membershipID(_ companyID: String) throws -> String {
         guard let company = companies.first(where: { $0.id == companyID }) else {
-            throw PathwayIssueWriteError(message: "Choose a connected company before changing issues.")
+            throw PathwayIssueWriteError(message: "Choose a connected company before changing tasks.")
         }
         return company.membershipId
     }

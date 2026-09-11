@@ -52,7 +52,7 @@ Apple App ID prefix before hosted authentication can complete on a signed build.
 
 The release targets iOS, iPadOS, and visionOS. Android is outside this version.
 
-Shared native screens include threads and approvals, Issues, Calendar, captured Email, Projects,
+Shared native screens include threads and approvals, Tasks, Calendar, captured Email, Projects,
 Contacts, Time Tracker, thread-scoped source control and pull requests, files, and remote terminals.
 Administration covers companies, teams, roles, connections, providers, scheduled tasks, and usage.
 Contacts and timers use shared cloud persistence with an explicit desktop import for old local data.

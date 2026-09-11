@@ -20,7 +20,7 @@ struct PathwayIssueSettingsView: View {
                 NavigationLink("Import CSV") { PathwayIssueImportView(model: model, companyID: companyID) }
             }
         }
-        .navigationTitle("Issue settings")
+        .navigationTitle("Task settings")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -70,8 +70,8 @@ private struct PathwayIssueImportView: View {
             Section("CSV") {
                 Button("Choose CSV file", systemImage: "doc") { selectingFile = true }
                 TextEditor(text: $csv).frame(minHeight: 180).accessibilityLabel("CSV contents")
-                Text("Review the contents before importing. Existing issues are kept.").font(.caption).foregroundStyle(.secondary)
-                Button("Import issues") {
+                Text("Review the contents before importing. Existing tasks are kept.").font(.caption).foregroundStyle(.secondary)
+                Button("Import tasks") {
                     busy = true
                     Task {
                         defer { busy = false }
@@ -86,7 +86,7 @@ private struct PathwayIssueImportView: View {
             }
             if let result, let fields = result.objectValue {
                 Section("Import result") {
-                    Text("\(fields["created"]?.intValue ?? 0) issues imported")
+                    Text("\(fields["created"]?.intValue ?? 0) tasks imported")
                     ForEach((fields["skipped"]?.arrayValue ?? []).compactMap { $0.objectValue }.map {
                         ImportSkip(line: $0["line"]?.intValue ?? 0, reason: $0["reason"]?.stringValue ?? "Skipped")
                     }) { skip in Text("Line \(skip.line): \(skip.reason)").font(.caption) }
@@ -129,12 +129,12 @@ struct PathwayIssueEnvironmentSettingsView: View {
                         providers: config["providers"]?.arrayValue ?? [],
                         initial: config["settings"]?.objectValue?["issueAutomation"] ?? .object([:]))
                 }
-                LabeledContent("Issue prefix", value: appModel.cloud.companies.first { $0.id == companyID }?.issueKeyPrefix ?? "—")
+                LabeledContent("Task prefix", value: appModel.cloud.companies.first { $0.id == companyID }?.issueKeyPrefix ?? "—")
             }
             if !config.isEmpty {
                 Section("Investigation") {
                     PathwayIssueModelSelectionPicker(selection: $selection, providers: config["providers"]?.arrayValue ?? [])
-                    Text("The model used to investigate an issue's project. Investigation does not edit the repository.")
+                    Text("The model used to investigate a task's project. Investigation does not edit the repository.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Save investigation model") { saveModel() }.disabled(busy || selection == .null)
                 }

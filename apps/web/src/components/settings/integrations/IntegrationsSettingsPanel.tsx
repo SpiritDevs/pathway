@@ -490,7 +490,7 @@ function SlackWorkspaceWizardController({
     ): Promise<SlackWizardAutomationContext> => {
       if (!canManage) {
         throw new Error(
-          "The integrations.manage permission is required to configure issue automation.",
+          "The integrations.manage permission is required to configure task automation.",
         );
       }
       const selectedCompanyId = CompanyId.make(selectedOwnerId);
@@ -650,7 +650,7 @@ function SlackWorkspaceWizardController({
           },
           {
             id: "automation",
-            label: "Issue automation",
+            label: "Task automation",
             state:
               automationRules.length === 0 || checkedAutomation?.enabled === true
                 ? "ready"
@@ -661,10 +661,10 @@ function SlackWorkspaceWizardController({
               automationRules.length === 0
                 ? "No route requires investigation or assignment."
                 : checkedAutomation === null
-                  ? "Configure issue automation before activating these routes."
+                  ? "Configure task automation before activating these routes."
                   : checkedAutomation.enabled
-                    ? "Issue automation is enabled."
-                    : "Issue automation will be enabled during activation.",
+                    ? "Task automation is enabled."
+                    : "Task automation will be enabled during activation.",
           },
           {
             id: "controller",
@@ -1328,7 +1328,7 @@ function SlackIntegrationSheet({
         <div className="rounded-lg border border-destructive/30 p-4">
           <p className="text-sm font-medium text-destructive">Remove integration</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Permanently deletes company Slack configuration and operational history. Existing issues
+            Permanently deletes company Slack configuration and operational history. Existing tasks
             remain readable.
           </p>
           <Input
@@ -1493,7 +1493,7 @@ function AutomationSheet({
       });
       await onChanged();
     } catch (error) {
-      reportError("Could not save issue automation", error);
+      reportError("Could not save task automation", error);
     }
   };
   const act = async (title: string, action: () => Promise<unknown>) => {
@@ -1508,7 +1508,7 @@ function AutomationSheet({
     <CompanySettingsSheet
       open
       onOpenChange={(next) => !next && onClose()}
-      title="Issue automation"
+      title="Task automation"
       description="Durable company jobs for routing, audits, review transitions and remediation."
       footer={
         <Button variant="outline" onClick={onClose}>
@@ -1598,7 +1598,7 @@ function AutomationSheet({
                     size="xs"
                     variant="ghost"
                   >
-                    Open issue
+                    Open task
                   </Button>
                 ) : null}
                 {canManage && (job.state === "failed" || job.state === "blocked") ? (
@@ -1685,7 +1685,7 @@ function LegacyPersonalIntegrationsPanel() {
               <BotIcon className="size-4" />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="text-sm font-medium">Issue automation</span>
+              <span className="text-sm font-medium">Task automation</span>
               <span className="block text-xs text-muted-foreground">
                 Local routing, audits, review transitions and remediation
               </span>
@@ -1709,7 +1709,7 @@ function LegacyPersonalIntegrationsPanel() {
       <CompanySettingsSheet
         open={open === "automation"}
         onOpenChange={(next) => !next && setOpen(null)}
-        title="Issue automation"
+        title="Task automation"
         description="Automation on a personal workspace is owned by this environment."
         footer={
           <Button variant="outline" onClick={() => setOpen(null)}>
@@ -1992,9 +1992,9 @@ export function IntegrationsSettingsPanel() {
         .catch((error: unknown) => {
           if (!isCurrent()) return;
           setAutomationLoadError(
-            error instanceof Error ? error.message : "Could not load issue automation.",
+            error instanceof Error ? error.message : "Could not load task automation.",
           );
-          reportError("Could not load issue automation", error);
+          reportError("Could not load task automation", error);
         });
       await Promise.all([loadIntegrations, loadAutomation]);
     },
@@ -2191,7 +2191,7 @@ export function IntegrationsSettingsPanel() {
             </span>
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2">
-                <span className="text-sm font-medium">Issue automation</span>
+                <span className="text-sm font-medium">Task automation</span>
                 <Badge
                   variant={
                     automationLoadError !== null

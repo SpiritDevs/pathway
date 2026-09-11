@@ -112,7 +112,7 @@ export function SaveIssueViewControl({
             event.preventDefault();
             submit();
           }}
-          placeholder="My bugs"
+          placeholder="My tasks"
           ref={nameRef}
           size="sm"
           value={name}

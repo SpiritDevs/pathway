@@ -88,9 +88,9 @@ struct PathwayIssueRowPropertyMenus: View {
             if targets.contains(where: { $0.parentId != nil }) { Button("Parent") { update(["parentId": .null]) } }
         }
         Menu("Copy", systemImage: "doc.on.doc") {
-            Button("Issue ID") { UIPasteboard.general.string = targets.map(\.key).joined(separator: "\n") }
-            Button("Issue title") { UIPasteboard.general.string = targets.map(\.title).joined(separator: "\n") }
-            Button("Issue link") { UIPasteboard.general.string = targets.compactMap { PathwayIssueShareLink.url($0)?.absoluteString }.joined(separator: "\n") }
+            Button("Task ID") { UIPasteboard.general.string = targets.map(\.key).joined(separator: "\n") }
+            Button("Task title") { UIPasteboard.general.string = targets.map(\.title).joined(separator: "\n") }
+            Button("Task link") { UIPasteboard.general.string = targets.compactMap { PathwayIssueShareLink.url($0)?.absoluteString }.joined(separator: "\n") }
             Button("Markdown link") {
                 UIPasteboard.general.string = targets.compactMap { item in
                     PathwayIssueShareLink.url(item).map { "[\(item.key) \(item.title)](\($0.absoluteString))" }
