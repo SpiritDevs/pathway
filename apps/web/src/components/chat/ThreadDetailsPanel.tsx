@@ -410,9 +410,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
         "dropdown-glass isolate contain-paint grid max-h-full grid-rows-[minmax(0,1fr)] overflow-hidden rounded-[20px]",
         // The popup's real ceiling is what base-ui measured for it — the anchor's clipping
         // ancestors, which is how an open terminal drawer shrinks it — less the popover
-        // viewport's own p-2. The dvh term is the fallback's fallback, from before.
+        // viewport's own p-3. The dvh term is the fallback's fallback, from before.
         props.mode === "popover" &&
-          "max-h-[min(calc(100dvh-6.5rem),calc(var(--available-height,100dvh)-1rem))]",
+          "max-h-[min(calc(100dvh-6.5rem),calc(var(--available-height,100dvh)-1.5rem))]",
       )}
       data-thread-details-card
     >

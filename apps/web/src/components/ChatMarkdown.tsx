@@ -25,7 +25,7 @@ import {
   type AtomCommandResult,
 } from "@spiritdevs/client-runtime/state/runtime";
 import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceControl";
-import { isWorkspaceImagePreviewPath } from "@spiritdevs/shared/filePreview";
+import { isWorkspaceMediaPreviewPath } from "@spiritdevs/shared/filePreview";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import React, {
@@ -1888,7 +1888,7 @@ function ChatMarkdown({
       // Claimed on every open so a synchronous one supersedes a lookup already
       // in flight.
       const isLatestLookup = claimWorkspaceBasenameLookup();
-      if (isWorkspaceImagePreviewPath(workspaceRelativePath)) {
+      if (isWorkspaceMediaPreviewPath(workspaceRelativePath)) {
         setImageGallery(
           buildMarkdownImageGallery(workspaceRelativePath, [
             ...markdownFileLinkMetaByHref.values(),

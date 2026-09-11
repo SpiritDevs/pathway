@@ -8,6 +8,7 @@ describe("markdown image galleries", () => {
       "/project/screens/light.png",
       "/project/notes.md",
       "/project/screens/dark.png",
+      "/project/demo.MP4",
       "/project/screens/light.png:12",
       "/elsewhere/other.png",
       "/project/screens/animated.GIF",
@@ -16,7 +17,7 @@ describe("markdown image galleries", () => {
       return meta ? [meta] : [];
     });
     expect(buildMarkdownImageGallery("screens/dark.png", links)).toEqual({
-      paths: ["screens/light.png", "screens/dark.png", "screens/animated.GIF"],
+      paths: ["screens/light.png", "screens/dark.png", "demo.MP4", "screens/animated.GIF"],
       initialIndex: 1,
     });
   });

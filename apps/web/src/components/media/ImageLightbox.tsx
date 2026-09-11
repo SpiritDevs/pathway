@@ -12,6 +12,7 @@ import {
   DownloadIcon,
   ExternalLinkIcon,
   MessageSquarePlusIcon,
+  FilmIcon,
   XIcon,
   ZoomInIcon,
   ZoomOutIcon,
@@ -43,6 +44,7 @@ import {
 import { copyImageToClipboard, downloadImageFile } from "./imageTransfer";
 
 export interface LightboxImage {
+  readonly kind?: "image" | "video";
   readonly src: string;
   readonly name: string;
   readonly loading?: boolean;
@@ -120,7 +122,7 @@ function IconAction({
 }
 
 /**
- * Full-window image viewer: a slideshow over one gallery with zoom, save, and
+ * Full-window media viewer: images with zoom and videos with native playback controls, plus
  * whatever contextual actions the call site provides. Nothing here leaves the app.
  */
 export const ImageLightbox = memo(function ImageLightbox({
@@ -148,6 +150,9 @@ export const ImageLightbox = memo(function ImageLightbox({
   const selectedThumbnailRef = useRef<HTMLButtonElement>(null);
 
   const image = images[wrapImageIndex(index, images.length)];
+  const isVideo = image?.kind === "video";
+  const mediaGallery = images.some((item) => item.kind === "video");
+  const mediaLabel = isVideo ? "video" : "image";
   const multiple = images.length > 1;
   const imageUnavailable = !image?.src || failedSource === image.src;
 
@@ -205,7 +210,7 @@ export const ImageLightbox = memo(function ImageLightbox({
       setCommentOpen(false);
       return;
     }
-    if (typing) return;
+    if (typing || target?.tagName === "VIDEO") return;
     if (event.key === "ArrowLeft" && images.length > 1) {
       event.preventDefault();
       event.stopPropagation();
@@ -218,6 +223,7 @@ export const ImageLightbox = memo(function ImageLightbox({
       navigate(1);
       return;
     }
+    if (isVideo) return;
     if (event.key === "+" || event.key === "=") {
       event.preventDefault();
       event.stopPropagation();
@@ -318,7 +324,7 @@ export const ImageLightbox = memo(function ImageLightbox({
     >
       <Dialog.Portal>
         <Dialog.Popup
-          aria-label="Image viewer"
+          aria-label={mediaGallery ? "Media viewer" : "Image viewer"}
           className="fixed inset-0 z-[140] flex flex-col bg-black/85 outline-none [-webkit-app-region:no-drag]"
           onKeyDown={onKeyDown}
         >
@@ -332,27 +338,31 @@ export const ImageLightbox = memo(function ImageLightbox({
               ) : null}
             </div>
             <div className="ms-auto flex items-center gap-1">
-              <IconAction
-                disabled={imageUnavailable || zoom === MIN_IMAGE_ZOOM}
-                icon={ZoomOutIcon}
-                label="Zoom out"
-                onClick={() => changeZoom(-1)}
-              />
-              <Button
-                aria-label="Fit image to window"
-                className="min-w-12 text-white/80 tabular-nums [:hover,[data-pressed]]:bg-white/10 hover:text-white"
-                onClick={resetView}
-                size="sm"
-                variant="ghost"
-              >
-                {Math.round(zoom * 100)}%
-              </Button>
-              <IconAction
-                disabled={imageUnavailable || zoom === MAX_IMAGE_ZOOM}
-                icon={ZoomInIcon}
-                label="Zoom in"
-                onClick={() => changeZoom(1)}
-              />
+              {!isVideo ? (
+                <>
+                  <IconAction
+                    disabled={imageUnavailable || zoom === MIN_IMAGE_ZOOM}
+                    icon={ZoomOutIcon}
+                    label="Zoom out"
+                    onClick={() => changeZoom(-1)}
+                  />
+                  <Button
+                    aria-label="Fit image to window"
+                    className="min-w-12 text-white/80 tabular-nums [:hover,[data-pressed]]:bg-white/10 hover:text-white"
+                    onClick={resetView}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    {Math.round(zoom * 100)}%
+                  </Button>
+                  <IconAction
+                    disabled={imageUnavailable || zoom === MAX_IMAGE_ZOOM}
+                    icon={ZoomInIcon}
+                    label="Zoom in"
+                    onClick={() => changeZoom(1)}
+                  />
+                </>
+              ) : null}
               <IconAction
                 icon={ExternalLinkIcon}
                 disabled={imageUnavailable}
@@ -361,15 +371,15 @@ export const ImageLightbox = memo(function ImageLightbox({
                   void readLocalApi()
                     ?.shell.openExternal(image.src)
                     .catch((error: unknown) =>
-                      reportImageFailure("Could not open the image", error),
+                      reportImageFailure(`Could not open the ${mediaLabel}`, error),
                     );
                 }}
               />
               <Dialog.Close
                 render={
                   <Button
-                    aria-label="Close image viewer"
-                    title="Close image viewer"
+                    aria-label={mediaGallery ? "Close media viewer" : "Close image viewer"}
+                    title={mediaGallery ? "Close media viewer" : "Close image viewer"}
                     className="text-white/80 [:hover,[data-pressed]]:bg-white/10 hover:text-white"
                     size="icon-sm"
                     variant="ghost"
@@ -384,7 +394,14 @@ export const ImageLightbox = memo(function ImageLightbox({
           <div
             className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden"
             onWheel={(event) => {
-              if (!multiple || zoom !== MIN_IMAGE_ZOOM || event.ctrlKey || showContents) return;
+              if (
+                !multiple ||
+                zoom !== MIN_IMAGE_ZOOM ||
+                event.ctrlKey ||
+                showContents ||
+                (event.target as HTMLElement).tagName === "VIDEO"
+              )
+                return;
               const delta = event.shiftKey ? event.deltaY : event.deltaX;
               if (!delta || (!event.shiftKey && Math.abs(delta) <= Math.abs(event.deltaY))) return;
               const wheel = wheelRef.current;
@@ -401,7 +418,7 @@ export const ImageLightbox = memo(function ImageLightbox({
             }}
           >
             <button
-              aria-label="Close image viewer"
+              aria-label={mediaGallery ? "Close media viewer" : "Close image viewer"}
               className="absolute inset-0 cursor-zoom-out"
               onClick={onClose}
               type="button"
@@ -417,8 +434,24 @@ export const ImageLightbox = memo(function ImageLightbox({
                 />
               ) : image.loading || imageUnavailable ? (
                 <p role="status" className="text-sm text-white/70">
-                  {image.loading ? "Loading image…" : "This image could not be loaded."}
+                  {image.loading
+                    ? `Loading ${mediaLabel}…`
+                    : `This ${mediaLabel} could not be loaded.`}
                 </p>
+              ) : isVideo ? (
+                <video
+                  key={image.src}
+                  aria-label={image.name}
+                  className="pointer-events-auto max-h-full max-w-full object-contain"
+                  controls
+                  playsInline
+                  preload="metadata"
+                  src={image.src}
+                  onError={() => {
+                    setFailedSource(image.src);
+                    onImageError?.(image, index);
+                  }}
+                />
               ) : (
                 <img
                   key={image.src}
@@ -450,7 +483,7 @@ export const ImageLightbox = memo(function ImageLightbox({
             {multiple ? (
               <>
                 <Button
-                  aria-label="Previous image"
+                  aria-label={mediaGallery ? "Previous media" : "Previous image"}
                   className="-translate-y-1/2 absolute top-1/2 left-2 border border-white/15 bg-black/60 text-white [:hover,[data-pressed]]:bg-black/80 hover:text-white sm:left-6"
                   onClick={() => navigate(-1)}
                   size="icon"
@@ -459,7 +492,7 @@ export const ImageLightbox = memo(function ImageLightbox({
                   <ChevronLeftIcon className="size-5 text-current" />
                 </Button>
                 <Button
-                  aria-label="Next image"
+                  aria-label={mediaGallery ? "Next media" : "Next image"}
                   className="-translate-y-1/2 absolute top-1/2 right-2 border border-white/15 bg-black/60 text-white [:hover,[data-pressed]]:bg-black/80 hover:text-white sm:right-6"
                   onClick={() => navigate(1)}
                   size="icon"
@@ -492,7 +525,9 @@ export const ImageLightbox = memo(function ImageLightbox({
                       type="button"
                       ref={thumbnailIndex === index ? selectedThumbnailRef : undefined}
                     >
-                      {thumbnail.src ? (
+                      {thumbnail.kind === "video" ? (
+                        <FilmIcon aria-hidden="true" className="m-auto size-6 text-white/80" />
+                      ) : thumbnail.src ? (
                         <img
                           alt=""
                           className="size-full object-cover"
@@ -512,9 +547,9 @@ export const ImageLightbox = memo(function ImageLightbox({
 
             <div className="flex flex-wrap items-center justify-center gap-1.5">
               <Button
-                disabled={busy || imageUnavailable}
+                disabled={busy || (isVideo ? !image.src || image.loading : imageUnavailable)}
                 onClick={() =>
-                  runTransfer("Could not download the image", () =>
+                  runTransfer(`Could not download the ${mediaLabel}`, () =>
                     downloadImageFile(image.src, imageDownloadFileName(image.name, image.src)),
                   )
                 }
@@ -524,17 +559,19 @@ export const ImageLightbox = memo(function ImageLightbox({
                 <DownloadIcon />
                 Download
               </Button>
-              <Button
-                disabled={busy || imageUnavailable}
-                onClick={() =>
-                  runTransfer("Could not copy the image", () => copyImageToClipboard(image.src))
-                }
-                size="sm"
-                variant="outline"
-              >
-                <CopyIcon />
-                Copy
-              </Button>
+              {!isVideo ? (
+                <Button
+                  disabled={busy || imageUnavailable}
+                  onClick={() =>
+                    runTransfer("Could not copy the image", () => copyImageToClipboard(image.src))
+                  }
+                  size="sm"
+                  variant="outline"
+                >
+                  <CopyIcon />
+                  Copy
+                </Button>
+              ) : null}
               {hasContents ? (
                 <Button
                   aria-pressed={showContents}

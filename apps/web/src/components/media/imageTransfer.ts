@@ -5,7 +5,7 @@
 
 async function fetchImageBlob(src: string): Promise<Blob> {
   const response = await fetch(src);
-  if (!response.ok) throw new Error("The image could not be loaded.");
+  if (!response.ok) throw new Error("The media file could not be loaded.");
   return response.blob();
 }
 

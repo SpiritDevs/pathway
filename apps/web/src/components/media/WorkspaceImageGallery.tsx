@@ -1,3 +1,4 @@
+import { isWorkspaceVideoPreviewPath } from "@spiritdevs/shared/filePreview";
 import type { ScopedThreadRef } from "@spiritdevs/contracts";
 import { useEffect, useState } from "react";
 
@@ -34,7 +35,12 @@ export function WorkspaceImageGallery({
     reportFailure: false,
   });
   const [images, setImages] = useState<ReadonlyArray<LightboxImage>>(() =>
-    paths.map((path) => ({ name: path.split(/[\\/]/).pop() ?? path, src: "", loading: true })),
+    paths.map((path) => ({
+      name: path.split(/[\\/]/).pop() ?? path,
+      kind: isWorkspaceVideoPreviewPath(path) ? "video" : "image",
+      src: "",
+      loading: true,
+    })),
   );
 
   useEffect(() => {
@@ -55,9 +61,9 @@ export function WorkspaceImageGallery({
         environmentId: threadRef.environmentId,
         input: { resource: { _tag: "workspace-file", threadId: threadRef.threadId, path } },
       });
-      if (result._tag !== "Success") throw new Error("This image is unavailable.");
+      if (result._tag !== "Success") throw new Error("This media file is unavailable.");
       const src = resolveAssetUrl(httpBaseUrl, result.value.relativeUrl);
-      if (!src) throw new Error("This image is unavailable.");
+      if (!src) throw new Error("This media file is unavailable.");
       return src;
     };
     paths.forEach((path, index) => {

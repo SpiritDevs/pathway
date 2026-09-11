@@ -1,4 +1,4 @@
-import { isWorkspaceImagePreviewPath } from "@spiritdevs/shared/filePreview";
+import { isWorkspaceMediaPreviewPath } from "@spiritdevs/shared/filePreview";
 import type { MarkdownFileLinkMeta } from "~/markdown-links";
 
 export function buildMarkdownImageGallery(
@@ -7,7 +7,7 @@ export function buildMarkdownImageGallery(
 ) {
   const paths = new Set<string>();
   for (const link of links) {
-    if (link.workspaceRelativePath && isWorkspaceImagePreviewPath(link.workspaceRelativePath)) {
+    if (link.workspaceRelativePath && isWorkspaceMediaPreviewPath(link.workspaceRelativePath)) {
       paths.add(link.workspaceRelativePath);
     }
   }

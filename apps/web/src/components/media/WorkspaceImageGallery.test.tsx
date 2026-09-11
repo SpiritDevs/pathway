@@ -36,7 +36,7 @@ const threadRef = {
   environmentId: EnvironmentId.make("remote"),
   threadId: ThreadId.make("thread"),
 };
-const paths = ["screens/light.png", "dark.png"];
+const paths = ["screens/light.png", "dark.png", "clips/demo.mp4"];
 function render(): ReactElement<ImageLightboxProps> {
   hooks.beginRender();
   return WorkspaceImageGallery({
@@ -83,9 +83,11 @@ it("loads a message's images from the thread environment and resolves bare filen
   });
   const gallery = render();
   expect(gallery.props.initialIndex).toBe(1);
+  expect(gallery.props.images[2]?.kind).toBe("video");
   expect(gallery.props.images.map((image) => image.src)).toEqual([
     "https://remote.example/api/assets/signed/screens/light.png",
     "https://remote.example/api/assets/signed/screens/dark.png",
+    "https://remote.example/api/assets/signed/clips/demo.mp4",
   ]);
 });
 

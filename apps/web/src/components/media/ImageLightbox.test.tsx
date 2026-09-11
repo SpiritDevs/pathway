@@ -81,6 +81,7 @@ describe("image gallery controls", () => {
     const wheel = (deltaX: number, deltaY: number, timeStamp: number) => {
       const viewport = find((e) => typeof e.props.onWheel === "function");
       (viewport.props.onWheel as (event: unknown) => void)({
+        target: { tagName: "DIV" },
         deltaX,
         deltaY,
         timeStamp,
@@ -147,5 +148,65 @@ describe("image gallery controls", () => {
     );
     action("Next image");
     expect(image().props.src).toBe(images[1]!.src);
+  });
+});
+
+describe("video galleries", () => {
+  beforeEach(() => {
+    props = {
+      ...props,
+      images: [
+        images[0]!,
+        {
+          kind: "video",
+          name: "demo.mp4",
+          src: "https://remote.example/api/assets/demo.mp4?token=video",
+        },
+        images[1]!,
+      ],
+    };
+  });
+
+  it("renders a video with playback controls and removes it when navigating to an image", () => {
+    const video = find((e) => e.type === "video");
+    expect(video.props).toMatchObject({ controls: true, playsInline: true, preload: "metadata" });
+    expect(visitElements(render(), (e) => e.props.label === "Zoom in")).toBeNull();
+    action("Next media");
+    expect(visitElements(render(), (e) => e.type === "video")).toBeNull();
+    expect(image().props.src).toBe(images[1]!.src);
+    action("Previous media");
+    expect(find((e) => e.type === "video").key).toBe(props.images[1]!.src);
+  });
+
+  it("leaves playback keyboard shortcuts to the video controls", () => {
+    const popup = find((e) => e.props["aria-label"] === "Media viewer");
+    const preventDefault = vi.fn();
+    (popup.props.onKeyDown as (event: unknown) => void)({
+      target: { tagName: "VIDEO" },
+      key: "ArrowRight",
+      preventDefault,
+      stopPropagation: vi.fn(),
+    });
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(find((e) => e.type === "video").props.src).toBe(props.images[1]!.src);
+  });
+
+  it("still offers the original download when a codec cannot be played", () => {
+    (find((e) => e.type === "video").props.onError as () => void)();
+    expect(find((e) => e.props.role === "status").props.children).toBe(
+      "This video could not be loaded.",
+    );
+    const download = find(
+      (e) => Array.isArray(e.props.children) && e.props.children.includes("Download"),
+    );
+    expect(download.props.disabled).toBeFalsy();
+    (download.props.onClick as () => void)();
+    expect(downloadImageFile).toHaveBeenCalledWith(props.images[1]!.src, "demo.mp4");
+    expect(
+      visitElements(
+        render(),
+        (e) => Array.isArray(e.props.children) && e.props.children.includes("Copy"),
+      ),
+    ).toBeNull();
   });
 });

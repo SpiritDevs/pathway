@@ -184,6 +184,42 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
+  it.effect("issues exact workspace URLs for video previews", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "pathway-asset-image-workspace-",
+      });
+      const assetsDirectory = path.join(root, "assets");
+      const imagePath = path.join(assetsDirectory, "clip.mp4");
+      const siblingPath = path.join(assetsDirectory, "other.mp4");
+      yield* fileSystem.makeDirectory(assetsDirectory, { recursive: true });
+      yield* fileSystem.writeFile(imagePath, new Uint8Array([137, 80, 78, 71]));
+      yield* fileSystem.writeFile(siblingPath, new Uint8Array([137, 80, 78, 71]));
+      const canonicalImagePath = yield* fileSystem.realPath(imagePath);
+
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "workspace-file",
+          threadId: ThreadId.make("thread-1"),
+          path: imagePath,
+        },
+        workspaceRoot: root,
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separatorIndex = suffix.indexOf("/");
+      const token = suffix.slice(0, separatorIndex);
+
+      expect(yield* resolveAsset(token, "clip.mp4")).toEqual({
+        kind: "file",
+        path: canonicalImagePath,
+      });
+      expect(yield* resolveAsset(token, "other.mp4")).toBeNull();
+      expect(yield* resolveAsset(token, "../clip.mp4")).toBeNull();
+    }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect("issues exact attachment capabilities by attachment id", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
