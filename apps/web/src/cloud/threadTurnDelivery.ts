@@ -12,13 +12,24 @@ export function shouldSendTurnToEnvironment(input: {
   hasThreadProjection: boolean;
   bootstrap: StartThreadTurnInput["bootstrap"];
   pendingCloudMessages: boolean;
+  activeProviderInstanceId?: string | undefined;
+  requestedProviderInstanceId?: string | undefined;
+  dispatchMode?: StartThreadTurnInput["dispatchMode"];
 }): boolean {
   return (
     input.connected &&
     input.queueHydrated &&
     input.hasThreadProjection &&
     !input.bootstrap &&
-    !input.pendingCloudMessages
+    !input.pendingCloudMessages &&
+    !(
+      input.activeProviderInstanceId !== undefined &&
+      input.requestedProviderInstanceId !== undefined &&
+      input.activeProviderInstanceId !== input.requestedProviderInstanceId &&
+      (input.dispatchMode === undefined ||
+        input.dispatchMode === "auto" ||
+        input.dispatchMode === "queue")
+    )
   );
 }
 

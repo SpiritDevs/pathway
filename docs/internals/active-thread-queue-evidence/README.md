@@ -18,8 +18,9 @@ Build/Plan remains absent from this conversation's composer.
 
 [Upload recording](attachment-upload.mp4)
 
-80 focused tests cover delivery routing and hydration, large-file transport, upload status,
-existing queue controls, queue ordering, and settings-before-dispatch. Targeted lint and scoped
+Focused tests cover delivery routing and reconnect hydration, large-file transport, expired uploads,
+existing queue controls, queue ordering, and atomic per-turn settings. Concurrent sends retain their
+own permission and interaction settings through queue promotion. Targeted lint and scoped
 web/client-runtime typechecks passed. Queued-run edit, steer, remove, and reorder controls were
 verified by the existing focused tests; this browser pass specifically exercised attachment UI.
 Desktop uses the same web composer; no separate Electron or native-mobile pass was performed.

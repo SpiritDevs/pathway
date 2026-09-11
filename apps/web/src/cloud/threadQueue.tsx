@@ -26,14 +26,18 @@ import { makeFunctionReference } from "convex/server";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { readThreadShell, readThreadProjection } from "../state/entities";
 import { environmentCatalog } from "../connection/catalog";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
-import { readAttachmentUpload, uploadStandaloneFileAttachment } from "../lib/attachmentUploadQueue";
+import {
+  verifyReadyAttachmentUpload,
+  uploadStandaloneFileAttachment,
+} from "../lib/attachmentUploadQueue";
 import { shouldSendTurnToEnvironment, prepareDirectTurnAttachments } from "./threadTurnDelivery";
+import { watchQueueConnection, awaitQueueMutation } from "./threadQueueConnection";
 import { subscribeThreadQueuePages } from "./threadQueuePages";
 import { isDefinitiveQueueRejection } from "./threadQueueErrors";
 import { scopedCompanyRegistryReplicasAtom } from "./activeCompany";
@@ -57,6 +61,7 @@ import {
 import {
   threadQueueRowsAtom,
   threadQueueHydratedAtom,
+  threadQueueSessionRevisionAtom,
   localThreadQueueAtom,
   threadQueueAccountAtom,
   threadQueueDestinationsAtom,
@@ -118,6 +123,8 @@ let session: {
   receipts: Map<string, ThreadQueueThread>;
   outboxLoaded: boolean;
   listLoaded: boolean;
+  restarting: boolean;
+  closed: Promise<void>;
 } | null = null;
 let drain: Promise<void> | null = null;
 let drainAgain = false;
@@ -136,7 +143,7 @@ const announce = async (accountId: string) => {
       rows.filter((row) => !session?.companyId || row.companyId === session.companyId),
     );
     session.outboxLoaded = true;
-    appAtomRegistry.set(threadQueueHydratedAtom, session.listLoaded);
+    appAtomRegistry.set(threadQueueHydratedAtom, session.listLoaded && !session.restarting);
   }
 };
 
@@ -146,8 +153,8 @@ export function flushThreadQueue(): Promise<void> {
   const current = session;
   if (!current) return Promise.resolve();
   if (!current.client.connectionState().isWebSocketConnected) return announce(current.accountId);
-  const stillCurrent = () => session === current;
-  drain = (async () => {
+  const stillCurrent = () => session === current && !current.restarting;
+  const currentDrain = (async () => {
     const rows = (await readQueuedIntents(current.accountId)) as ReadonlyArray<
       ThreadQueueOutboxRecord<ThreadQueueSubmission>
     >;
@@ -269,17 +276,20 @@ export function flushThreadQueue(): Promise<void> {
     }
     await announce(current.accountId);
   })().finally(() => {
+    if (drain !== currentDrain) return;
     drain = null;
     if (drainAgain || session !== current) {
       drainAgain = false;
       void flushThreadQueue();
     }
   });
-  return drain;
+  drain = currentDrain;
+  return currentDrain;
 }
 
 export function ThreadQueueRuntime() {
   const { getToken, isSignedIn, userId } = useAuth({ treatPendingAsSignedOut: false });
+  const [connectionEpoch, setConnectionEpoch] = useState(0);
   const companyId = useAtomValue(activeCompanyIdAtom);
   const companies = useAtomValue(companyListAtom);
   const companyIdsKey = JSON.stringify(
@@ -293,19 +303,37 @@ export function ThreadQueueRuntime() {
   }, [cloudShellRevision]);
   useEffect(() => {
     const url = resolveCloudSyncConvexUrl();
+    const accountScope = isSignedIn && userId && url ? `${userId}:${companyId}` : null;
+    if (appAtomRegistry.get(threadQueueAccountAtom) !== accountScope) {
+      appAtomRegistry.set(threadQueueAccountAtom, accountScope);
+      appAtomRegistry.set(threadQueueRowsAtom, []);
+      appAtomRegistry.set(threadQueueDestinationsAtom, []);
+      appAtomRegistry.set(localThreadQueueAtom, []);
+    }
+    appAtomRegistry.set(threadQueueHydratedAtom, false);
     if (!isSignedIn || !userId || !url) return;
     const companyIds = (JSON.parse(companyIdsKey) as string[]).map((id) => CompanyId.make(id));
     const client = new ConvexClient(url);
     client.setAuth(makeClerkConvexTokenFetcher(getToken));
+    let closeSession = () => {};
+    const closed = new Promise<void>((resolve) => {
+      closeSession = resolve;
+    });
     const current = {
+      closed,
       client,
       accountId: userId,
       companyId,
       receipts: new Map<string, ThreadQueueThread>(),
       outboxLoaded: false,
       listLoaded: false,
+      restarting: false,
     };
     session = current;
+    appAtomRegistry.set(
+      threadQueueSessionRevisionAtom,
+      appAtomRegistry.get(threadQueueSessionRevisionAtom) + 1,
+    );
     const channel = new BroadcastChannel(`pathway-thread-queue:${userId}`);
     queueChannel = channel;
     channel.addEventListener("message", () => {
@@ -327,7 +355,7 @@ export function ThreadQueueRuntime() {
             receive,
           ),
         (rows, hydrated) => {
-          if (session !== current) return;
+          if (session !== current || current.restarting) return;
           companyRows.set(
             scopeCompanyId,
             rows.map((row) => ({ ...row, companyId: scopeCompanyId })),
@@ -339,8 +367,9 @@ export function ThreadQueueRuntime() {
             current.receipts,
           );
           current.receipts = merged.pending;
-          appAtomRegistry.set(threadQueueRowsAtom, merged.rows);
           current.listLoaded = loadedCompanies.size === companyIds.length;
+          // Keep the visible queue until every fresh subscription has caught up.
+          if (current.listLoaded) appAtomRegistry.set(threadQueueRowsAtom, merged.rows);
           appAtomRegistry.set(threadQueueHydratedAtom, current.listLoaded && current.outboxLoaded);
           void flushThreadQueue();
         },
@@ -348,7 +377,7 @@ export function ThreadQueueRuntime() {
       subscribeQueueDestinations(
         undefined,
         (destinations) => {
-          if (session !== current) return;
+          if (session !== current || current.restarting) return;
           companyDestinations.set(scopeCompanyId, destinations);
           appAtomRegistry.set(
             threadQueueDestinationsAtom,
@@ -361,13 +390,23 @@ export function ThreadQueueRuntime() {
     const reconnect = () => {
       void flushThreadQueue();
     };
-    const unsubscribeConnection = client.subscribeToConnectionState((state) => {
-      if (session === current && state.isWebSocketConnected) reconnect();
-    });
+    const unsubscribeConnection = watchQueueConnection(
+      client,
+      () => {
+        if (session !== current) return;
+        current.restarting = true;
+        current.listLoaded = false;
+        appAtomRegistry.set(threadQueueHydratedAtom, false);
+        // A fresh client cannot return cached pre-disconnect query results.
+        setConnectionEpoch((epoch) => epoch + 1);
+      },
+      reconnect,
+    );
     window.addEventListener("online", reconnect);
     window.addEventListener("focus", reconnect);
     void announce(userId).then(reconnect);
     return () => {
+      closeSession();
       for (const unsubscribe of unsubscribes) unsubscribe();
       unsubscribeConnection();
       channel.close();
@@ -376,15 +415,21 @@ export function ThreadQueueRuntime() {
       window.removeEventListener("focus", reconnect);
       if (session === current) {
         session = null;
-        appAtomRegistry.set(threadQueueAccountAtom, null);
-        appAtomRegistry.set(threadQueueRowsAtom, []);
+        // Closing Convex does not settle pending mutation promises. The new session
+        // retries durable command IDs without waiting for the abandoned drain.
+        drain = null;
+        drainAgain = false;
         appAtomRegistry.set(threadQueueHydratedAtom, false);
-        appAtomRegistry.set(threadQueueDestinationsAtom, []);
-        appAtomRegistry.set(localThreadQueueAtom, []);
+        if (!current.restarting) {
+          appAtomRegistry.set(threadQueueAccountAtom, null);
+          appAtomRegistry.set(threadQueueRowsAtom, []);
+          appAtomRegistry.set(threadQueueDestinationsAtom, []);
+          appAtomRegistry.set(localThreadQueueAtom, []);
+        }
       }
       void client.close();
     };
-  }, [companyId, companyIdsKey, getToken, isSignedIn, userId]);
+  }, [companyId, companyIdsKey, connectionEpoch, getToken, isSignedIn, userId]);
   return null;
 }
 
@@ -520,14 +565,32 @@ export function useQueuedStartThreadTurn() {
                 ? message.queueId === queued?.queueId
                 : message.environmentId === target.environmentId),
           );
+        const projection =
+          readThreadProjection({
+            environmentId: target.environmentId,
+            threadId: target.input.threadId,
+          })?.projection ?? null;
+        const activeRun = projection?.runs.find((run) =>
+          ["preparing", "starting", "running", "waiting"].includes(run.status),
+        );
+        const activeProviderThread =
+          activeRun &&
+          (projection?.providerThreads.find(
+            (thread) => thread.id === projection.thread.activeProviderThreadId,
+          ) ??
+            projection?.providerThreads.find((thread) => thread.id === activeRun.providerThreadId));
         return shouldSendTurnToEnvironment({
           connected,
-          queueHydrated: appAtomRegistry.get(threadQueueHydratedAtom),
-          hasThreadProjection:
-            readThreadProjection({
-              environmentId: target.environmentId,
-              threadId: target.input.threadId,
-            }) !== null,
+          activeProviderInstanceId: activeProviderThread?.providerInstanceId,
+          requestedProviderInstanceId:
+            target.input.modelSelection?.instanceId ?? projection?.thread.modelSelection.instanceId,
+          dispatchMode: target.input.dispatchMode,
+          queueHydrated:
+            appAtomRegistry.get(threadQueueHydratedAtom) &&
+            session !== null &&
+            !session.restarting &&
+            session.client.connectionState().isWebSocketConnected,
+          hasThreadProjection: projection !== null,
           bootstrap: target.input.bootstrap,
           pendingCloudMessages: localPending || (queued?.queuedCount ?? 0) > 0,
         });
@@ -536,7 +599,10 @@ export function useQueuedStartThreadTurn() {
       const attachments = await settlePromise(() =>
         target.durableAttachments
           ? prepareDirectTurnAttachments(target.durableAttachments, async ({ metadata, blob }) => {
-              const uploaded = readAttachmentUpload(metadata.id);
+              const uploaded = await verifyReadyAttachmentUpload({
+                id: metadata.id,
+                environmentId: target.environmentId,
+              });
               if (uploaded?.status === "ready" && uploaded.environmentId === target.environmentId) {
                 return { ...metadata, type: "file", id: uploaded.attachmentId };
               }
@@ -591,11 +657,15 @@ export async function mutateQueuedThread(
   action: "edit" | "cancel" | "retry" | "reassign",
   args: Record<string, string | number | null | object>,
 ) {
-  if (!session) throw new Error("Cloud authentication is unavailable.");
-  return session.client.mutation(makeFunctionReference<"mutation">(`threadQueue:${action}`), {
-    companyId: session.companyId,
-    ...args,
-  });
+  const current = session;
+  if (!current) throw new Error("Cloud authentication is unavailable.");
+  return awaitQueueMutation(
+    current.client.mutation(makeFunctionReference<"mutation">(`threadQueue:${action}`), {
+      companyId: current.companyId,
+      ...args,
+    }),
+    current.closed,
+  );
 }
 
 export type { ThreadQueueDestination } from "@spiritdevs/contracts/threadQueue";

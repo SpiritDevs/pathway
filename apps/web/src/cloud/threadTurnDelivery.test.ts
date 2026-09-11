@@ -10,6 +10,54 @@ const connectedThread = {
 };
 
 describe("thread turn delivery", () => {
+  it.each([undefined, "auto", "queue"] as const)(
+    "keeps cross-provider follow-ups durable with dispatch mode %s",
+    (dispatchMode) => {
+      expect(
+        shouldSendTurnToEnvironment({
+          ...connectedThread,
+          activeProviderInstanceId: "codex",
+          requestedProviderInstanceId: "claude",
+          dispatchMode,
+        }),
+      ).toBe(false);
+    },
+  );
+  it.each([undefined, "auto", "queue"] as const)(
+    "keeps the normal same-provider queue with dispatch mode %s",
+    (dispatchMode) => {
+      expect(
+        shouldSendTurnToEnvironment({
+          ...connectedThread,
+          activeProviderInstanceId: "codex",
+          requestedProviderInstanceId: "codex",
+          dispatchMode,
+        }),
+      ).toBe(true);
+    },
+  );
+  it.each(["steer", "restart"] as const)(
+    "preserves explicit %s intent instead of silently deferring it",
+    (dispatchMode) => {
+      expect(
+        shouldSendTurnToEnvironment({
+          ...connectedThread,
+          activeProviderInstanceId: "codex",
+          requestedProviderInstanceId: "claude",
+          dispatchMode,
+        }),
+      ).toBe(true);
+    },
+  );
+  it("allows provider changes once no run is active", () => {
+    expect(
+      shouldSendTurnToEnvironment({
+        ...connectedThread,
+        requestedProviderInstanceId: "claude",
+        dispatchMode: "queue",
+      }),
+    ).toBe(true);
+  });
   it("sends connected thread follow-ups to the normal environment queue", () => {
     expect(shouldSendTurnToEnvironment(connectedThread)).toBe(true);
   });

@@ -2,7 +2,11 @@ import { useEffect, useState } from "react";
 import { ProviderInstanceId } from "@spiritdevs/contracts";
 import type { ThreadQueueDestination } from "@spiritdevs/contracts/threadQueue";
 import { useAtomValue } from "@effect/atom-react";
-import { threadQueueAccountAtom, threadQueueDestinationsAtom } from "../../cloud/threadQueueState";
+import {
+  threadQueueAccountAtom,
+  threadQueueDestinationsAtom,
+  threadQueueSessionRevisionAtom,
+} from "../../cloud/threadQueueState";
 import {
   flushThreadQueue,
   mutateQueuedThread,
@@ -26,6 +30,7 @@ export function ThreadQueueStatus({ queue }: { queue: ReturnType<typeof useThrea
   const { row } = queue;
   const registered = useAtomValue(threadQueueDestinationsAtom);
   const account = useAtomValue(threadQueueAccountAtom);
+  const sessionRevision = useAtomValue(threadQueueSessionRevisionAtom);
   const [moving, setMoving] = useState(false);
   const [destinations, setDestinations] = useState<readonly ThreadQueueDestination[]>([]);
   const [targetKey, setTargetKey] = useState("");
@@ -51,6 +56,7 @@ export function ThreadQueueStatus({ queue }: { queue: ReturnType<typeof useThrea
     row?.queueId,
     row?.companyId,
     account,
+    sessionRevision,
   ]);
   if (!row) return null;
   const destination = registered.find(

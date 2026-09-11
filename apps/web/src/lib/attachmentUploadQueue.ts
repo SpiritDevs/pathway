@@ -22,7 +22,7 @@ import { appAtomRegistry } from "../rpc/atomRegistry";
 import { assetEnvironment } from "../state/assets";
 import { attachmentEnvironment } from "../state/attachments";
 import { readPreparedConnection } from "../state/session";
-import type { AttachmentUploadState } from "./attachmentUploadState";
+import type { AttachmentUploadState, ReadyAttachmentUpload } from "./attachmentUploadState";
 
 const MAX_UPLOADS_PER_ENVIRONMENT = 3;
 const UPLOAD_TIMEOUT_MS = 5 * 60_000;
@@ -68,6 +68,28 @@ function clearUploadState(id: string): void {
 
 export function readAttachmentUpload(id: string): AttachmentUploadState | undefined {
   return useAttachmentUploadStore.getState().uploadsByAttachmentId[id];
+}
+
+export async function verifyReadyAttachmentUpload(input: {
+  readonly id: string;
+  readonly environmentId: EnvironmentId;
+}): Promise<ReadyAttachmentUpload | null> {
+  const upload = readAttachmentUpload(input.id);
+  if (upload?.status !== "ready" || upload.environmentId !== input.environmentId) return null;
+  const verification = await verifyStashedAttachmentUpload({
+    environmentId: input.environmentId,
+    attachmentId: upload.attachmentId,
+  });
+  if (verification.status === "failed") {
+    throw new Error("Uploaded file could not be verified. Retry when reconnected.");
+  }
+  // Only invalidate the exact upload checked; another upload may have finished meanwhile.
+  if (readAttachmentUpload(input.id) !== upload) return null;
+  if (verification.status === "missing") {
+    clearUploadState(input.id);
+    return null;
+  }
+  return upload;
 }
 
 function removePending(environmentId: EnvironmentId, attachmentId: string): void {
