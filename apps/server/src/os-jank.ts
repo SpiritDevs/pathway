@@ -48,15 +48,14 @@ export function hydratePosixHome(
   }
 }
 
-export const fixPath = Effect.fn("fixPath")(function* (): Effect.fn.Return<
-  void,
-  never,
-  FileSystem.FileSystem | Path.Path
-> {
+export const fixPath = Effect.fn("fixPath")(function* (options?: {
+  readonly shellEnvironmentHydrated?: boolean | undefined;
+}): Effect.fn.Return<void, never, FileSystem.FileSystem | Path.Path> {
   const platform = yield* HostProcessPlatform;
   const env = yield* HostProcessEnvironment;
 
   if (platform === "win32") {
+    if (options?.shellEnvironmentHydrated) return;
     const repairedEnvironment = yield* resolveWindowsEnvironment(env).pipe(
       Effect.catchDefect((defect) =>
         Effect.sync(() => {
@@ -82,6 +81,9 @@ export const fixPath = Effect.fn("fixPath")(function* (): Effect.fn.Return<
       }),
     ),
   );
+  // The native desktop already waited for shell hydration before spawning us.
+  // Preserve HOME repair above; WSL and standalone servers still need their own PATH.
+  if (options?.shellEnvironmentHydrated) return;
   yield* Effect.sync(() => hydratePosixPath(env, platform)).pipe(
     Effect.catchDefect((defect) =>
       Effect.sync(() => {

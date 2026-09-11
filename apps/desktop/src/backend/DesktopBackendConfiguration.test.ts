@@ -143,6 +143,7 @@ describe("DesktopBackendConfiguration", () => {
         assert.equal(first.bootstrap.port, 4888);
         assert.equal(first.bootstrap.host, "0.0.0.0");
         assert.equal(first.bootstrap.pathwayHome, environment.baseDir);
+        assert.isTrue(first.bootstrap.shellEnvironmentHydrated);
         assert.match(first.bootstrap.desktopBootstrapToken, /^[0-9a-f]{48}$/i);
         assert.equal(second.bootstrap.desktopBootstrapToken, first.bootstrap.desktopBootstrapToken);
         assert.match(first.bootstrap.desktopEnvironmentId ?? "", /^[0-9a-f-]{36}$/i);
@@ -165,6 +166,7 @@ describe("DesktopBackendConfiguration", () => {
 
         assert.equal(wsl.bootstrap.desktopBootstrapToken, primary.bootstrap.desktopBootstrapToken);
         assert.equal(wsl.bootstrap.desktopEnvironmentId, primary.bootstrap.desktopEnvironmentId);
+        assert.notProperty(wsl.bootstrap, "shellEnvironmentHydrated");
       }),
     ),
   );

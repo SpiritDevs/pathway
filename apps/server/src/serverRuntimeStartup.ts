@@ -13,6 +13,7 @@ import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -284,6 +285,12 @@ const maybeOpenBrowser = (target: string) =>
 
 const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>) =>
   effect.pipe(
+    Effect.timed,
+    Effect.flatMap(([duration, value]) => {
+      const durationMs = Math.round(Duration.toMillis(duration));
+      const log = durationMs >= 250 ? Effect.logInfo : Effect.logDebug;
+      return log("Server startup phase completed", { phase, durationMs }).pipe(Effect.as(value));
+    }),
     Effect.annotateSpans({ "startup.phase": phase }),
     Effect.withSpan(`server.startup.${phase}`),
   );
@@ -593,6 +600,9 @@ export const make = (options?: StartupOptions) =>
         }),
       );
       yield* Effect.logDebug("startup phase: complete");
+      yield* Effect.logInfo("Server command ready", {
+        startupMs: Math.round(process.uptime() * 1_000),
+      });
     }).pipe(
       Effect.annotateSpans({
         "server.mode": serverConfig.mode,

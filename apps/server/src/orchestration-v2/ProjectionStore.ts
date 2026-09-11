@@ -117,6 +117,11 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, ProjectionStoreV2Error>;
+  /** Conservative candidates for process-loss recovery, including archived threads. */
+  readonly getRecoveryThreadIds: () => Effect.Effect<
+    ReadonlyArray<ThreadId>,
+    ProjectionStoreV2Error
+  >;
   readonly getThreadSnapshot: (threadId: ThreadId) => Effect.Effect<
     {
       readonly schemaVersion: number;
@@ -2656,6 +2661,60 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         } satisfies ShellThreadState;
       });
 
+    const getRecoveryThreadIds: ProjectionStoreV2Shape["getRecoveryThreadIds"] = () =>
+      sql<{ readonly thread_id: string }>`
+        SELECT thread_id
+        FROM orchestration_v2_projection_threads
+        WHERE deleted_at IS NULL AND thread_id IN (
+          SELECT thread_id FROM orchestration_v2_projection_runs
+          WHERE status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
+          UNION
+          SELECT thread_id FROM orchestration_v2_projection_runtime_requests
+          WHERE status IN ('pending', 'resolved')
+          UNION
+          SELECT thread_id FROM orchestration_v2_projection_turn_items
+          WHERE status IN ('pending', 'running', 'waiting')
+          UNION
+          SELECT bindings.thread_id
+          FROM orchestration_v2_projection_provider_session_bindings AS bindings
+          JOIN orchestration_v2_projection_provider_sessions AS sessions
+            ON sessions.provider_session_id = bindings.provider_session_id
+          WHERE sessions.status NOT IN ('stopped', 'error')
+          UNION
+          SELECT provider_threads.thread_id
+          FROM orchestration_v2_projection_provider_threads AS provider_threads
+          WHERE provider_threads.status = 'active'
+            OR json_array_length(provider_threads.payload_json, '$.pendingBackgroundTasks') > 0
+          UNION
+          SELECT nodes.thread_id
+          FROM orchestration_v2_projection_provider_threads AS provider_threads
+          JOIN orchestration_v2_projection_nodes AS nodes
+            ON nodes.node_id = provider_threads.owner_node_id
+          WHERE provider_threads.status = 'active'
+            OR json_array_length(provider_threads.payload_json, '$.pendingBackgroundTasks') > 0
+          UNION
+          SELECT subagents.thread_id
+          FROM orchestration_v2_projection_provider_threads AS provider_threads
+          JOIN orchestration_v2_projection_subagents AS subagents
+            ON subagents.provider_thread_id = provider_threads.provider_thread_id
+          WHERE provider_threads.status = 'active'
+            OR json_array_length(provider_threads.payload_json, '$.pendingBackgroundTasks') > 0
+          UNION
+          SELECT thread_id FROM orchestration_v2_effect_outbox
+          WHERE status IN ('pending', 'running')
+        )
+        ORDER BY thread_id ASC
+      `.pipe(
+        Effect.map((rows) => rows.map((row) => ThreadId.make(row.thread_id))),
+        Effect.mapError(
+          (cause) =>
+            new ProjectionStoreReadError({
+              threadId: ThreadId.make("thread:recovery"),
+              cause,
+            }),
+        ),
+      );
+
     const getShellSnapshot: ProjectionStoreV2Shape["getShellSnapshot"] = () =>
       sql
         .withTransaction(
@@ -2810,6 +2869,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getShellSnapshot,
       getThreadShell,
       getThreadProjection,
+      getRecoveryThreadIds,
       getThreadSnapshot,
     } satisfies ProjectionStoreV2Shape;
   }),
@@ -2905,6 +2965,14 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           }
           return projection;
         }),
+      getRecoveryThreadIds: () =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .filter((projection) => projection.thread.deletedAt === null)
+              .map((projection) => projection.thread.id),
+          ),
+        ),
       getThreadSnapshot: (threadId) =>
         service.getThreadProjection(threadId).pipe(
           Effect.flatMap((projection) =>

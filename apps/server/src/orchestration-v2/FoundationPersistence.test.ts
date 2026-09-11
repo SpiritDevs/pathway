@@ -25,6 +25,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -161,6 +162,32 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
         replayed.map((stored) => stored.sequence),
         Array.from({ length: eventCount }, (_, index) => index + 1),
       );
+      const maintenance = yield* ProjectionMaintenanceV2;
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      const projections = yield* ProjectionStoreV2;
+      assert.equal(
+        (yield* projections.getThreadProjection(threadId)).thread.title,
+        `Catch-up update ${eventCount - 1}`,
+      );
+      const sql = yield* SqlClient.SqlClient;
+      const lastEvent = (yield* sql<{ readonly payload_json: string }>`
+        SELECT payload_json FROM orchestration_events WHERE sequence = ${eventCount}
+      `)[0]!;
+      yield* sql`UPDATE orchestration_events SET payload_json = '{}' WHERE sequence = ${eventCount}`;
+      const failedRebuild = yield* maintenance.rebuild.pipe(
+        Effect.exit,
+        Effect.ensuring(
+          sql`
+          UPDATE orchestration_events SET payload_json = ${lastEvent.payload_json}
+          WHERE sequence = ${eventCount}
+        `.pipe(Effect.orDie),
+        ),
+      );
+      assert.isTrue(Exit.isFailure(failedRebuild));
+      assert.equal(
+        (yield* projections.getThreadProjection(threadId)).thread.title,
+        `Catch-up update ${eventCount - 1}`,
+      );
     }),
   );
 
@@ -260,6 +287,10 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
         (yield* projectionStore.getThreadProjection(firstThreadId)).providerSessions[0]?.cwd,
         secondSession.cwd,
       );
+      assert.deepEqual(yield* projectionStore.getRecoveryThreadIds(), [
+        firstThreadId,
+        secondThreadId,
+      ]);
       assert.isTrue((yield* maintenance.verify).valid);
       assert.isTrue((yield* maintenance.rebuild).valid);
     }),
@@ -373,7 +404,7 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
               ownerNodeId: null,
               nativeThreadRef: null,
               nativeConversationHeadRef: null,
-              status: "idle",
+              status: "active",
               firstRunOrdinal: 1,
               lastRunOrdinal: 1,
               handoffIds: [],
@@ -430,6 +461,9 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
       });
 
       yield* assertCrossThreadProjection;
+      const recoveryIds = yield* projectionStore.getRecoveryThreadIds();
+      assert.include(recoveryIds, parentThreadId);
+      assert.include(recoveryIds, childThreadId);
       assert.isTrue((yield* maintenance.verify).valid);
       assert.isTrue((yield* maintenance.rebuild).valid);
       yield* assertCrossThreadProjection;
@@ -1766,7 +1800,13 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
       const threadId = ThreadId.make("thread:foundation-process-loss");
       const runId = RunId.make("run:foundation-process-loss");
       const commandId = CommandId.make("command:foundation-process-loss");
-      const thread = makeThread(threadId, now);
+      const thread = { ...makeThread(threadId, now), archivedAt: now };
+      const idleThread = makeThread(ThreadId.make("thread:foundation-process-loss:idle"), now);
+      yield* eventSink.write({
+        events: [
+          threadCreatedEvent({ id: "event:foundation-process-loss:idle", thread: idleThread, now }),
+        ],
+      });
       yield* eventSink.commitCommand({
         commandId,
         threadId,
@@ -1827,6 +1867,9 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
           }),
         ),
       );
+      const recoveryIds = yield* projectionStore.getRecoveryThreadIds();
+      assert.include(recoveryIds, threadId);
+      assert.notInclude(recoveryIds, idleThread.id);
       const first = yield* recovery.recover;
       assert.equal(first.terminalizedRuns, 1);
       assert.equal(first.retiredEffects, 1);
@@ -1836,6 +1879,7 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
       assert.isTrue(Option.isSome(effect));
       if (Option.isSome(effect)) assert.equal(effect.value.status, "cancelled");
 
+      assert.notInclude(yield* projectionStore.getRecoveryThreadIds(), threadId);
       const second = yield* recovery.recover;
       assert.equal(second.terminalizedRuns, 0);
       assert.equal(second.retiredEffects, 0);

@@ -1,4 +1,4 @@
-import { type OrchestrationV2StoredEvent, ThreadId } from "@spiritdevs/contracts";
+import { ThreadId } from "@spiritdevs/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -65,24 +65,6 @@ export const layer: Layer.Layer<
     const eventStore = yield* EventStoreV2;
     const projectionStore = yield* ProjectionStoreV2;
 
-    const readAllEvents = Effect.gen(function* () {
-      const events: Array<OrchestrationV2StoredEvent> = [];
-      const pageSize = 500;
-      let afterSequence = 0;
-      while (true) {
-        const page = yield* eventStore.read({ afterSequence, limit: pageSize }).pipe(
-          Stream.runCollect,
-          Effect.map((chunk) => Array.from(chunk)),
-        );
-        events.push(...page);
-        if (page.length < pageSize) {
-          break;
-        }
-        afterSequence = page.at(-1)?.sequence ?? afterSequence;
-      }
-      return events;
-    });
-
     /**
      * EventSink commits the event, its projection updates, and projection metadata in one SQL
      * transaction. Startup verification therefore checks that transaction boundary and that every
@@ -145,7 +127,6 @@ export const layer: Layer.Layer<
     });
 
     const rebuild = Effect.gen(function* () {
-      const events = yield* readAllEvents;
       yield* sql.withTransaction(
         Effect.gen(function* () {
           yield* sql`DELETE FROM orchestration_v2_projection_context_transfers`;
@@ -167,10 +148,18 @@ export const layer: Layer.Layer<
           yield* sql`DELETE FROM orchestration_v2_projection_threads`;
           yield* sql`DELETE FROM orchestration_v2_turn_item_positions`;
 
-          for (const stored of events) {
-            yield* projectionStore.apply(stored.event);
-            if (stored.event.type === "turn-item.updated") {
-              yield* sql`
+          // Keep replay memory bounded on upgrades with large event histories.
+          // The transaction covers every page, projection write, and metadata update.
+          const pageSize = 500;
+          let lastSequence = 0;
+          while (true) {
+            const page = yield* eventStore
+              .read({ afterSequence: lastSequence, limit: pageSize })
+              .pipe(Stream.runCollect);
+            for (const stored of page) {
+              yield* projectionStore.apply(stored.event);
+              if (stored.event.type === "turn-item.updated") {
+                yield* sql`
                 INSERT INTO orchestration_v2_turn_item_positions (
                   thread_id,
                   turn_item_id,
@@ -183,11 +172,13 @@ export const layer: Layer.Layer<
                 )
                 ON CONFLICT(thread_id, turn_item_id) DO UPDATE SET
                   ordinal = excluded.ordinal
-              `;
+                `;
+              }
+              lastSequence = stored.sequence;
             }
+            if (page.length < pageSize) break;
           }
           const now = DateTime.formatIso(yield* DateTime.now);
-          const lastSequence = events.at(-1)?.sequence ?? 0;
           yield* sql`
             INSERT INTO orchestration_v2_projection_metadata (
               projection_name,

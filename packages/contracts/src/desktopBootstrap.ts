@@ -16,6 +16,8 @@ export const DesktopBackendBootstrap = Schema.Struct({
   desktopEnvironmentId: Schema.optionalKey(EnvironmentId),
   /** Electron parent PID. The backend exits if force-quit leaves it orphaned. */
   desktopParentPid: Schema.optionalKey(PositiveInt),
+  /** The native desktop has already hydrated the environment inherited by this child. */
+  shellEnvironmentHydrated: Schema.optionalKey(Schema.Boolean),
   otlpTracesUrl: Schema.optional(Schema.String),
   otlpMetricsUrl: Schema.optional(Schema.String),
   desktopTelemetryFd: Schema.optionalKey(PositiveInt),
