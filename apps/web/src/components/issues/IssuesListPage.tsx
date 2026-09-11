@@ -78,7 +78,6 @@ import { SidebarInset } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
 import { Toggle } from "../ui/toggle";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
 import { IssueContextMenu, type IssueContextMenuTarget } from "./IssueContextMenu";
 import { IssueDetailSheet } from "./IssueDetailSheet";
 import { directInvestigateProjectId } from "./IssueInvestigateProjectMenu";
@@ -995,18 +994,12 @@ function IssuesListView({
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
-        <header
+        <div
           className={cn(
-            "workspace-topbar drag-region px-3 transition-[padding-left] duration-200 ease-linear motion-reduce:transition-none sm:px-5",
+            "flex items-center gap-2 border-b border-border/50 px-3 py-1.5 transition-[padding-left] duration-200 ease-linear motion-reduce:transition-none sm:px-5",
             COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
           )}
         >
-          <WorkspaceBreadcrumb ariaLabel="Tasks breadcrumb">
-            <WorkspaceBreadcrumbItem current>Tasks</WorkspaceBreadcrumbItem>
-          </WorkspaceBreadcrumb>
-        </header>
-
-        <div className="flex items-center gap-2 border-b border-border/50 px-3 py-1.5 sm:px-5">
           <div
             aria-label="Task tabs"
             className="flex items-center gap-0.5 rounded-lg bg-muted/40 p-0.5"
