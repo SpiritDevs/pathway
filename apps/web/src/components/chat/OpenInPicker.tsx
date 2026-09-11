@@ -6,7 +6,9 @@ import {
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { shortcutLabelForCommand } from "../../keybindings";
 import { usePreferredEditor } from "../../editorPreferences";
-import { ChevronDownIcon, FolderClosedIcon } from "lucide-react";
+import { usePrimarySettings } from "../../hooks/useSettings";
+import { GhosttyIcon } from "../GhosttyIcon";
+import { ChevronDownIcon, FolderClosedIcon, TerminalIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel } from "../ui/collapsible";
 import { Group, GroupSeparator } from "../ui/group";
@@ -219,6 +221,18 @@ export const OpenInPicker = memo(function OpenInPicker({
   const panelAnchorRef = useRef<HTMLDivElement | null>(null);
   const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
   const [preferredEditor, setPreferredEditor] = usePreferredEditor(availableEditors);
+  const { preferredTerminal } = usePrimarySettings();
+  const TerminalAppIcon = preferredTerminal === "ghostty" ? GhosttyIcon : TerminalIcon;
+  const terminalLabel = preferredTerminal === "ghostty" ? "Open in Ghostty" : "Open in Terminal";
+  const canOpenTerminal = availableEditors.includes(preferredTerminal) && !!openInCwd;
+  const openTerminal = () => {
+    if (!openInCwd) return;
+    setEditorOptionsOpen(false);
+    return openInEditorMutation({
+      environmentId,
+      input: { cwd: openInCwd, editor: preferredTerminal },
+    });
+  };
   const [editorOptionsOpen, setEditorOptionsOpen] = useState(false);
   const options = useMemo(
     () => resolveOptions(navigator.platform, availableEditors),
@@ -281,7 +295,7 @@ export const OpenInPicker = memo(function OpenInPicker({
               </span>
             ) : null}
           </button>
-          {secondaryOptions.length > 0 ? (
+          {secondaryOptions.length > 0 || canOpenTerminal ? (
             <button
               type="button"
               data-keep-action-card-open
@@ -302,6 +316,15 @@ export const OpenInPicker = memo(function OpenInPicker({
         </div>
         <CollapsiblePanel>
           <div className="space-y-0.5 pt-0.5">
+            <button
+              type="button"
+              disabled={!canOpenTerminal}
+              onClick={openTerminal}
+              className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent disabled:opacity-50"
+            >
+              <TerminalAppIcon aria-hidden="true" className="size-4 shrink-0" />
+              {terminalLabel}
+            </button>
             {secondaryOptions.map(({ label, Icon, value, kind }) => (
               <button
                 key={value}
@@ -395,6 +418,10 @@ export const OpenInPicker = memo(function OpenInPicker({
               )}
             </MenuItem>
           ))}
+          <MenuItem disabled={!canOpenTerminal} onClick={openTerminal}>
+            <TerminalAppIcon aria-hidden="true" />
+            {terminalLabel}
+          </MenuItem>
         </MenuPopup>
       </Menu>
     </ActionGroup>

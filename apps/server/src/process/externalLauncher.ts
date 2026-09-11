@@ -47,6 +47,7 @@ export {
 } from "@spiritdevs/contracts";
 export type { LaunchEditorInput };
 interface EditorLaunch {
+  readonly cwd?: string;
   readonly editor: EditorId;
   readonly target: string;
   readonly command: string;
@@ -262,6 +263,19 @@ function buildBrowserLaunch(
   };
 }
 
+function terminalLaunch(editor: "terminal" | "ghostty", target: string, platform: NodeJS.Platform) {
+  if (platform === "darwin") {
+    return { command: "open", args: ["-a", editor === "ghostty" ? "Ghostty" : "Terminal", target] };
+  }
+  if (editor === "ghostty") {
+    return { command: "ghostty", args: [`--working-directory=${target}`] };
+  }
+  if (platform === "win32") {
+    return { command: "wt", args: ["-d", target] };
+  }
+  return { command: "x-terminal-emulator", args: [], cwd: target };
+}
+
 const buildAvailableEditors = Effect.fn("externalLauncher.buildAvailableEditors")(function* (
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
@@ -269,6 +283,12 @@ const buildAvailableEditors = Effect.fn("externalLauncher.buildAvailableEditors"
   const available: EditorId[] = [];
 
   for (const editor of EDITORS) {
+    if (editor.id === "terminal" || editor.id === "ghostty") {
+      if (editor.id === "ghostty" && platform === "win32") continue;
+      const launch = terminalLaunch(editor.id, ".", platform);
+      if (yield* isCommandAvailable(launch.command, { env })) available.push(editor.id);
+      continue;
+    }
     if (editor.commands === null) {
       const command = fileManagerCommandForPlatform(platform);
       if (yield* isCommandAvailable(command, { env })) {
@@ -359,6 +379,26 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
     return yield* new ExternalLauncherUnknownEditorError({ editor: input.editor });
   }
 
+  if (editorDef.id === "terminal" || editorDef.id === "ghostty") {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const target = Option.match(parseTargetPathAndPosition(input.cwd), {
+      onNone: () => input.cwd,
+      onSome: (position) => position.path,
+    });
+    const info = yield* fs.stat(target).pipe(Effect.option);
+    const directory =
+      Option.isSome(info) && info.value.type === "File" ? path.dirname(target) : target;
+    if (editorDef.id === "ghostty" && platform === "win32") {
+      return yield* new ExternalLauncherUnsupportedEditorError({ editor: input.editor });
+    }
+    return {
+      editor: editorDef.id,
+      target: directory,
+      ...terminalLaunch(editorDef.id, directory, platform),
+    };
+  }
+
   if (editorDef.commands) {
     const command = Option.getOrElse(
       yield* resolveAvailableCommand(editorDef.commands, env),
@@ -438,6 +478,7 @@ const launchEditorProcess = Effect.fn("externalLauncher.launchEditorProcess")(fu
       options: {
         detached: true,
         shell: spawnCommand.shell,
+        ...(launch.cwd ? { cwd: launch.cwd } : {}),
         stdin: "ignore",
         stdout: "ignore",
         stderr: "ignore",

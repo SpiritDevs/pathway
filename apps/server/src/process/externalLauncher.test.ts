@@ -292,3 +292,62 @@ it.effect("rejects unknown editors through the service API", () =>
     assert.equal(error.message, "Unknown editor: missing-editor");
   }).pipe(Effect.provide(testLayer({ platform: "linux", env: { PATH: "" } }))),
 );
+
+for (const scenario of [
+  {
+    platform: "darwin",
+    editor: "terminal",
+    command: "open",
+    args: ["-a", "Terminal", "/workspace with spaces"],
+  },
+  {
+    platform: "darwin",
+    editor: "ghostty",
+    command: "open",
+    args: ["-a", "Ghostty", "/workspace with spaces"],
+  },
+  {
+    platform: "linux",
+    editor: "ghostty",
+    command: "ghostty",
+    args: ["--working-directory=/workspace with spaces"],
+  },
+  { platform: "linux", editor: "terminal", command: "x-terminal-emulator", args: [] },
+  { platform: "win32", editor: "terminal", command: "wt", args: ["-d", "/workspace with spaces"] },
+] as const) {
+  it.effect(`opens ${scenario.editor} on ${scenario.platform} without shell interpolation`, () => {
+    let spawned: ChildProcess.StandardCommand | undefined;
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const binDir = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-terminal-" });
+      const executable = path.join(
+        binDir,
+        scenario.command + (scenario.platform === "win32" ? ".EXE" : ""),
+      );
+      yield* fs.writeFileString(executable, "");
+      yield* fs.chmod(executable, 0o755);
+      yield* Effect.gen(function* () {
+        const launcher = yield* ExternalLauncher.ExternalLauncher;
+        yield* launcher.launchEditor({ editor: scenario.editor, cwd: "/workspace with spaces" });
+        assert.ok(spawned);
+        assert.equal(spawned.command, scenario.command);
+        assert.deepEqual(spawned.args, scenario.args);
+        assert.equal(spawned.options.shell, false);
+        if (scenario.platform === "linux" && scenario.editor === "terminal") {
+          assert.equal(spawned.options.cwd, "/workspace with spaces");
+        }
+      }).pipe(
+        Effect.provide(
+          testLayer({
+            platform: scenario.platform,
+            env: { PATH: binDir, PATHEXT: ".EXE" },
+            onSpawn: (command) => {
+              spawned = command;
+            },
+          }),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+  });
+}
