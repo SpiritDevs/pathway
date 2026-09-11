@@ -2,13 +2,20 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
 import type * as Electron from "electron";
 
 import * as DesktopBackendManager from "../../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
-import { getLocalEnvironmentBootstraps, getWindowFullscreenState } from "./window.ts";
+import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
+import * as DesktopConfig from "../../app/DesktopConfig.ts";
+import {
+  getLocalEnvironmentBootstraps,
+  getWindowFullscreenState,
+  setWindowButtonsVisible,
+} from "./window.ts";
 
 const readyWslConfig: DesktopBackendManager.DesktopBackendStartConfig = {
   executablePath: "wsl.exe",
@@ -143,4 +150,53 @@ describe("getWindowFullscreenState", () => {
       ),
     );
   });
+});
+
+describe("setWindowButtonsVisible", () => {
+  const environmentLayer = (platform: NodeJS.Platform) =>
+    DesktopEnvironment.layer({
+      dirname: "/repo/apps/desktop/dist-electron",
+      homeDirectory: "/Users/alice",
+      platform,
+      processArch: "arm64",
+      appVersion: "1.2.3",
+      appPath: "/repo",
+      isPackaged: false,
+      resourcesPath: "/repo/resources",
+      runningUnderArm64Translation: false,
+    }).pipe(Layer.provide([Path.layer, DesktopConfig.layerTest({})]));
+
+  for (const platform of ["darwin", "win32", "linux"] as const) {
+    it.effect(`updates native button visibility only on macOS (${platform})`, () => {
+      const calls: boolean[] = [];
+      const window = {
+        isDestroyed: () => false,
+        setWindowButtonVisibility: (visible: boolean) => calls.push(visible),
+      } as unknown as Electron.BrowserWindow;
+
+      return Effect.gen(function* () {
+        yield* setWindowButtonsVisible.handler(false);
+        yield* setWindowButtonsVisible.handler(true);
+        assert.deepEqual(calls, platform === "darwin" ? [false, true] : []);
+      }).pipe(
+        Effect.provide([
+          environmentLayer(platform),
+          Layer.mock(ElectronWindow.ElectronWindow)({
+            currentMainOrFirst: Effect.succeed(Option.some(window)),
+          }),
+        ]),
+      );
+    });
+  }
+
+  it.effect("ignores requests after the window closes", () =>
+    setWindowButtonsVisible.handler(true).pipe(
+      Effect.provide([
+        environmentLayer("darwin"),
+        Layer.mock(ElectronWindow.ElectronWindow)({
+          currentMainOrFirst: Effect.succeed(Option.none()),
+        }),
+      ]),
+    ),
+  );
 });

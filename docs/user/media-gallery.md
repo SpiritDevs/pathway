@@ -4,6 +4,9 @@ In web and desktop, select an image or video file link in a conversation to open
 full-window gallery. Images and videos linked in the same message share a gallery.
 Use the thumbnails or next and previous buttons to move between them.
 
+On macOS desktop, the window's close, minimize, and maximize buttons hide while
+the gallery is open and return when you close it.
+
 Videos have playback, seeking, volume, and fullscreen controls. Playback stops when
 you change gallery items or close the viewer. Arrow keys move between gallery items
 unless the video controls have focus, where they control playback. Images retain
