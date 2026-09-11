@@ -432,7 +432,7 @@ it("preserves explicit steering and restart targets while ordering ordinary mess
   });
 });
 
-it.effect("persists the queued checkout branch before dispatching a follow-up", () =>
+it.effect("dispatches queued checkout metadata atomically with the follow-up", () =>
   Effect.gen(function* () {
     const commands: OrchestrationV2Command[] = [];
     const selection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" };
@@ -495,13 +495,10 @@ it.effect("persists the queued checkout branch before dispatching a follow-up", 
     expect(commands).toEqual([]);
     expect(dispatch).not.toBeNull();
     if (dispatch) yield* dispatch;
-    expect(commands.map((command) => command.type)).toEqual([
-      "thread.metadata.update",
-      "message.dispatch",
-    ]);
+    expect(commands.map((command) => command.type)).toEqual(["message.dispatch"]);
     expect(commands[0]).toMatchObject({
       branch: "release-review",
-      commandId: "queued-command:branch",
+      commandId: "queued-command",
     });
   }),
 );

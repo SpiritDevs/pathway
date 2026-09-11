@@ -822,30 +822,6 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
   }
 
   const projection = yield* getProjection(input.threadId);
-  if (input.branch !== undefined && input.branch !== projection.thread.branch) {
-    yield* dispatch({
-      type: "thread.metadata.update",
-      commandId: CommandId.make(`${commandId}:branch`),
-      threadId: input.threadId,
-      branch: input.branch,
-    });
-  }
-  if (input.runtimeMode !== projection.thread.runtimeMode) {
-    yield* dispatch({
-      type: "thread.runtime-mode.set",
-      commandId: CommandId.make(`${commandId}:runtime-mode`),
-      threadId: input.threadId,
-      runtimeMode: input.runtimeMode,
-    });
-  }
-  if (input.interactionMode !== projection.thread.interactionMode) {
-    yield* dispatch({
-      type: "thread.interaction-mode.set",
-      commandId: CommandId.make(`${commandId}:interaction-mode`),
-      threadId: input.threadId,
-      interactionMode: input.interactionMode,
-    });
-  }
   const activeRun = projection.runs.findLast(
     (run) =>
       run.status === "preparing" ||
@@ -884,6 +860,9 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
                   : ({ type: "queue_after_active" } as const);
   return yield* dispatch({
     type: "message.dispatch",
+    ...(input.branch === undefined ? {} : { branch: input.branch }),
+    runtimeMode: input.runtimeMode,
+    interactionMode: input.interactionMode,
     commandId,
     createdBy: "user",
     creationSource: input.creationSource ?? "web",

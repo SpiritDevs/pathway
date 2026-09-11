@@ -3454,7 +3454,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           threadId: input.command.threadId,
           providerInstanceId: targetRun.providerInstanceId,
           capabilities: session.providerSession.capabilities,
-          forceRestart: input.forceRestart || selectionChanged,
+          forceRestart:
+            input.forceRestart ||
+            selectionChanged ||
+            targetRun.runtimeMode !== input.projection.thread.runtimeMode ||
+            targetRun.interactionMode !== input.projection.thread.interactionMode,
         }),
       );
 
@@ -3704,6 +3708,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       const restartedRun: OrchestrationV2Run = {
         ...targetRun,
+        runtimeMode: input.projection.thread.runtimeMode,
+        interactionMode: input.projection.thread.interactionMode,
         providerInstanceId: input.modelSelection.instanceId,
         modelSelection: input.modelSelection,
         providerThreadId: restartProviderThread.id,
@@ -3874,6 +3880,33 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) =>
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      if (
+        (command.branch !== undefined && command.branch !== projection.thread.branch) ||
+        (command.runtimeMode !== undefined &&
+          command.runtimeMode !== projection.thread.runtimeMode) ||
+        (command.interactionMode !== undefined &&
+          command.interactionMode !== projection.thread.interactionMode)
+      ) {
+        const now = yield* DateTime.now;
+        yield* emit(
+          events,
+          command,
+        )({
+          type: "thread.metadata-updated",
+          threadId: command.threadId,
+          occurredAt: now,
+          payload: {
+            ...projection.thread,
+            ...(command.branch === undefined ? {} : { branch: command.branch }),
+            ...(command.runtimeMode === undefined ? {} : { runtimeMode: command.runtimeMode }),
+            ...(command.interactionMode === undefined
+              ? {}
+              : { interactionMode: command.interactionMode }),
+            updatedAt: now,
+          },
+        });
+        projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      }
       if (
         projection.thread.temporary === true &&
         projection.thread.projectId !== null &&
@@ -4227,6 +4260,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 ),
               );
         const run: OrchestrationV2Run = {
+          runtimeMode: projection.thread.runtimeMode,
+          interactionMode: projection.thread.interactionMode,
           id: runId,
           threadId: command.threadId,
           ordinal,
@@ -4465,6 +4500,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   mapDispatchError(command),
                 );
         const run: OrchestrationV2Run = {
+          runtimeMode: projection.thread.runtimeMode,
+          interactionMode: projection.thread.interactionMode,
           id: runId,
           threadId: command.threadId,
           ordinal,
@@ -5095,6 +5132,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ),
         );
       const run: OrchestrationV2Run = {
+        runtimeMode: projection.thread.runtimeMode,
+        interactionMode: projection.thread.interactionMode,
         id: runId,
         threadId: command.threadId,
         ordinal,
@@ -6596,8 +6635,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command,
         events,
         effects,
-        projection,
-        modelSelection: projection.thread.modelSelection,
+        projection: {
+          ...projection,
+          thread: {
+            ...projection.thread,
+            runtimeMode: queuedRun.runtimeMode ?? projection.thread.runtimeMode,
+            interactionMode: queuedRun.interactionMode ?? projection.thread.interactionMode,
+          },
+        },
+        modelSelection: queuedRun.modelSelection,
         targetRunId: command.targetRunId,
         messageId: queuedMessage.id,
         text: queuedMessage.text,

@@ -69,7 +69,7 @@ import {
 } from "./commands.ts";
 
 class LaunchTestError extends Schema.TaggedErrorClass<LaunchTestError>()("LaunchTestError", {
-  phase: Schema.Literals(["attachments", "launch", "settings"]),
+  phase: Schema.Literals(["attachments", "launch"]),
 }) {}
 
 const TEST_CRYPTO_LAYER = Layer.succeed(
@@ -89,7 +89,6 @@ const TARGET = new PrimaryConnectionTarget({
 
 const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(function* (input: {
   readonly commands: OrchestrationV2Command[];
-  readonly failCommandType?: OrchestrationV2Command["type"];
   readonly projects: ProjectMutation[];
   readonly launches?: OrchestrationV2ThreadLaunchInput[];
   readonly launchCalls?: string[];
@@ -109,11 +108,8 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
 }) {
   const client = {
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
-      Effect.gen(function* () {
+      Effect.sync(() => {
         input.commands.push(command);
-        if (command.type === input.failCommandType) {
-          return yield* new LaunchTestError({ phase: "settings" });
-        }
         return { sequence: input.commands.length };
       }),
     [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: () =>
@@ -694,110 +690,31 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
-  it.effect("persists changed send settings before dispatching an existing thread message", () =>
+  it.effect("dispatches send settings atomically with the message", () =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];
       const supervisor = yield* makeSupervisor({ commands, projects: [] });
-
       yield* startThreadTurn({
         commandId: CommandId.make("send-settings"),
         threadId: v2ThreadId,
         message: {
           messageId: MessageId.make("message-settings"),
           role: "user",
-          text: "Review the next step",
-          attachments: [],
-        },
-        branch: "feature/review",
-        runtimeMode: "approval-required",
-        interactionMode: "plan",
-      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
-
-      expect(commands).toMatchObject([
-        {
-          type: "thread.metadata.update",
-          commandId: "send-settings:branch",
-          threadId: v2ThreadId,
-          branch: "feature/review",
-        },
-        {
-          type: "thread.runtime-mode.set",
-          commandId: "send-settings:runtime-mode",
-          threadId: v2ThreadId,
-          runtimeMode: "approval-required",
-        },
-        {
-          type: "thread.interaction-mode.set",
-          commandId: "send-settings:interaction-mode",
-          threadId: v2ThreadId,
-          interactionMode: "plan",
-        },
-        { type: "message.dispatch", commandId: "send-settings" },
-      ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
-  );
-
-  it.effect("clears explicit branch metadata without rewriting unchanged send settings", () =>
-    Effect.gen(function* () {
-      const commands: OrchestrationV2Command[] = [];
-      const supervisor = yield* makeSupervisor({
-        commands,
-        projects: [],
-        projection: {
-          ...v2Projection,
-          thread: { ...v2Projection.thread, branch: "feature/old" },
-        },
-      });
-
-      yield* startThreadTurn({
-        commandId: CommandId.make("clear-branch"),
-        threadId: v2ThreadId,
-        message: {
-          messageId: MessageId.make("message-clear-branch"),
-          role: "user",
-          text: "Continue",
+          text: "Review",
           attachments: [],
         },
         branch: null,
-        runtimeMode: v2Projection.thread.runtimeMode,
-        interactionMode: v2Projection.thread.interactionMode,
-      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
-
-      expect(commands).toMatchObject([
-        { type: "thread.metadata.update", branch: null },
-        { type: "message.dispatch" },
-      ]);
-    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
-  );
-
-  it.effect("does not dispatch a message when its permission update fails", () =>
-    Effect.gen(function* () {
-      const commands: OrchestrationV2Command[] = [];
-      const supervisor = yield* makeSupervisor({
-        commands,
-        projects: [],
-        failCommandType: "thread.runtime-mode.set",
-      });
-
-      const result = yield* startThreadTurn({
-        commandId: CommandId.make("failed-settings"),
-        threadId: v2ThreadId,
-        message: {
-          messageId: MessageId.make("message-failed-settings"),
-          role: "user",
-          text: "Continue with approvals",
-          attachments: [],
-        },
         runtimeMode: "approval-required",
-        interactionMode: "default",
-      }).pipe(
-        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-        Effect.exit,
-      );
-
-      expect(Exit.isFailure(result)).toBe(true);
+        interactionMode: "plan",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
       expect(commands).toMatchObject([
-        { type: "thread.runtime-mode.set", runtimeMode: "approval-required" },
+        {
+          type: "message.dispatch",
+          commandId: "send-settings",
+          branch: null,
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+        },
       ]);
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );

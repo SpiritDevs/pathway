@@ -185,6 +185,7 @@ interface LiveSessionEntry {
    */
   readonly mcpCredentialIdByThread: ReadonlyMap<ThreadId, string>;
   readonly supportsMultipleProviderThreads: boolean;
+  readonly runtimeMode: ProviderAdapterV2RuntimePolicy["runtimeMode"];
   readonly runtime: ProviderAdapterV2SessionRuntime;
   readonly exposedRuntime: ProviderAdapterV2SessionRuntime;
   readonly eventSubscribers: Ref.Ref<
@@ -1427,6 +1428,32 @@ export const layerWithOptions = (
                   });
                 }
               }
+              if (
+                existing !== undefined &&
+                existing.runtimeMode !== input.runtimePolicy.runtimeMode &&
+                !existing.runtime.providerSession.capabilities.sessions
+                  .supportsRuntimeModeSwitchInSession
+              ) {
+                const pendingWork = yield* (
+                  existing.runtime.hasPendingBackgroundWork ?? Effect.succeed(false)
+                );
+                if (existing.busyCount === 0 && !pendingWork) {
+                  yield* releaseEntry({
+                    providerSessionId: input.providerSessionId,
+                    reason: "manual_shutdown",
+                    detail: "Runtime mode changed; reopen with the requested permissions.",
+                    onlyIfIdleGeneration: existing.idleGeneration,
+                  });
+                }
+                existing = (yield* Ref.get(sessions)).get(key);
+                if (existing !== undefined) {
+                  return yield* new ProviderSessionOpenError({
+                    instanceId: input.modelSelection.instanceId,
+                    providerSessionId: input.providerSessionId,
+                    cause: "Wait for running provider work to finish before changing permissions.",
+                  });
+                }
+              }
               if (existing !== undefined) {
                 if (
                   !existing.attachedThreadIds.has(input.threadId) &&
@@ -1527,6 +1554,7 @@ export const layerWithOptions = (
                 supportsMultipleProviderThreads:
                   runtime.providerSession.capabilities.sessions
                     .supportsMultipleProviderThreadsPerSession,
+                runtimeMode: input.runtimePolicy.runtimeMode,
                 runtime,
                 exposedRuntime,
                 eventSubscribers,
