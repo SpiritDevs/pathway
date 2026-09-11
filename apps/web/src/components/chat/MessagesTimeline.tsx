@@ -42,7 +42,8 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import { LegendList, type LegendListRef } from "@legendapp/list/react";
+import { LegendList, type LegendListRef, useSyncLayout } from "@legendapp/list/react";
+import { observeTimelineRowSize } from "./observeTimelineRowSize";
 import { useAtomValue } from "@effect/atom-react";
 import { FileDiff } from "@pierre/diffs/react";
 import {
@@ -1322,8 +1323,17 @@ type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["grouped
 type TimelineRow = MessagesTimelineRow;
 
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
+  const syncLayout = useSyncLayout();
+  const observeContent = useCallback(
+    (element: HTMLDivElement | null) => {
+      if (element) return observeTimelineRowSize(element, syncLayout);
+    },
+    [syncLayout],
+  );
+
   return (
     <div
+      ref={observeContent}
       className={cn(
         // Commentary (non-terminal assistant) rows carry no metadata row, so
         // they sit closer to the work that follows them.
