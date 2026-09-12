@@ -1,6 +1,9 @@
 # Queued threads and messages
 
-Starting a thread or sending to a disconnected environment saves your message before the environment starts work. A queued thread stays in
+On web and desktop, connected environments start new threads and prepare worktrees directly.
+They do not wait for cloud queue sync before starting work.
+
+Sending to a disconnected environment saves your message before the environment starts work. A queued thread stays in
 Agent Threads when you leave the conversation or close the app. After cloud sync, you can reopen
 it on another device.
 

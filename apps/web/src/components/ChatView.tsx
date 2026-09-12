@@ -1,6 +1,6 @@
 import { useQuestionDismissal } from "./chat/useQuestionDismissal";
 import { ScrollToEndButton } from "./chat/ScrollToEndButton";
-import { threadQueueDestinationsAtom, threadQueueHydratedAtom } from "../cloud/threadQueueState";
+import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
 import { ThreadQueueStatus } from "./chat/ThreadQueueStatus";
 import { useThreadQueueChat } from "../cloud/useThreadQueueChat";
 import {
@@ -1548,7 +1548,6 @@ function ChatViewContent(props: ChatViewProps) {
   const serverThread = useThreadShell(routeThreadRef);
   const queuedChat = useThreadQueueChat(environmentId, threadId);
   const queueDestinations = useAtomValue(threadQueueDestinationsAtom);
-  const queueHydrated = useAtomValue(threadQueueHydratedAtom);
   const queueDestination = queueDestinations.find(
     (destination) => destination.environmentId === environmentId,
   );
@@ -2691,9 +2690,7 @@ function ChatViewContent(props: ChatViewProps) {
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
   const uploadFilesToEnvironment =
-    isServerThread &&
     activeEnvironmentConnectionPhase === "connected" &&
-    queueHydrated &&
     !queuedChat.row?.waitingToSync &&
     (queuedChat.row?.queuedCount ?? 0) === 0;
   const maxFileAttachmentBytes = uploadFilesToEnvironment

@@ -3,9 +3,6 @@ import { prepareDirectTurnAttachments, shouldSendTurnToEnvironment } from "./thr
 
 const connectedThread = {
   connected: true,
-  queueHydrated: true,
-  hasThreadProjection: true,
-  bootstrap: undefined,
   pendingCloudMessages: false,
 };
 
@@ -61,21 +58,8 @@ describe("thread turn delivery", () => {
   it("sends connected thread follow-ups to the normal environment queue", () => {
     expect(shouldSendTurnToEnvironment(connectedThread)).toBe(true);
   });
-  it("does not overtake cloud messages before initial or refreshed queue hydration", () => {
-    expect(shouldSendTurnToEnvironment({ ...connectedThread, queueHydrated: false })).toBe(false);
-  });
   it("retains durable delivery when the environment is disconnected", () => {
     expect(shouldSendTurnToEnvironment({ ...connectedThread, connected: false })).toBe(false);
-  });
-  it("keeps a new or not-yet-hydrated thread durable", () => {
-    expect(shouldSendTurnToEnvironment({ ...connectedThread, hasThreadProjection: false })).toBe(
-      false,
-    );
-  });
-  it("keeps initial workspace preparation durable", () => {
-    expect(
-      shouldSendTurnToEnvironment({ ...connectedThread, bootstrap: { runSetupScript: true } }),
-    ).toBe(false);
   });
   it("does not let a connected follow-up overtake saved offline messages", () => {
     expect(shouldSendTurnToEnvironment({ ...connectedThread, pendingCloudMessages: true })).toBe(

@@ -5,12 +5,9 @@ import type {
   UploadChatAttachment,
 } from "@spiritdevs/contracts";
 
-/** Existing connected threads use the environment's editable run queue. */
+/** Connected environments launch work directly unless saved messages must be delivered first. */
 export function shouldSendTurnToEnvironment(input: {
   connected: boolean;
-  queueHydrated: boolean;
-  hasThreadProjection: boolean;
-  bootstrap: StartThreadTurnInput["bootstrap"];
   pendingCloudMessages: boolean;
   activeProviderInstanceId?: string | undefined;
   requestedProviderInstanceId?: string | undefined;
@@ -18,9 +15,6 @@ export function shouldSendTurnToEnvironment(input: {
 }): boolean {
   return (
     input.connected &&
-    input.queueHydrated &&
-    input.hasThreadProjection &&
-    !input.bootstrap &&
     !input.pendingCloudMessages &&
     !(
       input.activeProviderInstanceId !== undefined &&
