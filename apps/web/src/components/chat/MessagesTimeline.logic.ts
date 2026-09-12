@@ -255,6 +255,7 @@ export type MessagesTimelineRow =
       id: string;
       createdAt: string;
       proposedPlan: ProposedPlan;
+      projectedItem: OrchestrationV2ProjectedTurnItem;
     }
   | {
       kind: "working";
@@ -728,6 +729,7 @@ export function deriveMessagesTimelineRows(input: {
         id: timelineEntry.id,
         createdAt: timelineEntry.createdAt,
         proposedPlan: timelineEntry.proposedPlan,
+        projectedItem: timelineEntry.projectedItem,
       });
       continue;
     }
@@ -861,7 +863,10 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     }
 
     case "proposed-plan":
-      return a.proposedPlan === (b as typeof a).proposedPlan;
+      return (
+        a.proposedPlan === (b as typeof a).proposedPlan &&
+        a.projectedItem === (b as typeof a).projectedItem
+      );
 
     case "event":
       return a.projectedItem === (b as typeof a).projectedItem;

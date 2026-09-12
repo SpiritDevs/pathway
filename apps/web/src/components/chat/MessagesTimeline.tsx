@@ -2044,7 +2044,11 @@ function ProposedPlanTimelineRow({
       <ProposedPlanCard
         planMarkdown={row.proposedPlan.planMarkdown}
         environmentId={ctx.activeThreadEnvironmentId}
-        threadRef={ctx.threadRef ?? undefined}
+        threadRef={
+          ctx.threadRef
+            ? { ...ctx.threadRef, threadId: row.projectedItem.sourceThreadId }
+            : undefined
+        }
         onOpenFilePreview={ctx.onOpenFilePreview}
         onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
         cwd={ctx.markdownCwd}
