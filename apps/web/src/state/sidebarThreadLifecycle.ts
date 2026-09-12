@@ -30,9 +30,15 @@ export function updateSidebarChangeRequest(
   failed = false,
 ): ReadonlyMap<string, ThreadChangeRequestState> {
   const previous = current.get(key);
-  if (previous?.source === value.source && (failed || previous.state === value.state))
+  if (
+    previous?.source === value.source &&
+    (failed || (previous.state === value.state && value.checkedAt === undefined))
+  )
     return current;
-  return new Map(current).set(key, value);
+  return new Map(current).set(key, {
+    ...value,
+    checkedAt: failed ? undefined : (value.checkedAt ?? Date.now()),
+  });
 }
 
 export type SidebarThreadSection = "active" | "pinned" | "snoozed" | "settled" | "loading";

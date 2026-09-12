@@ -14,13 +14,17 @@ export const companyRegistryMembershipIdsAtom = Atom.make<ReadonlyMap<CompanyId,
   new Map(),
 ).pipe(Atom.keepAlive, Atom.withLabel("cloud-sync:company-registry-memberships"));
 
-// Published before any engine starts; null means membership discovery is incomplete.
-export const discoveredCompanyIdsAtom = Atom.make<ReadonlyArray<CompanyId> | null>(null).pipe(
+export type CompanyDiscoveryState =
+  | { readonly phase: "loading" | "error" }
+  | { readonly phase: "ready"; readonly companyIds: ReadonlyArray<CompanyId> };
+
+// Published before any engine starts; a failed subscription is distinct from pending discovery.
+export const companyDiscoveryAtom = Atom.make<CompanyDiscoveryState>({ phase: "loading" }).pipe(
   Atom.keepAlive,
 );
 
-export const publishDiscoveredCompanyIds = (ids: ReadonlyArray<CompanyId> | null) =>
-  Effect.sync(() => appAtomRegistry.set(discoveredCompanyIdsAtom, ids));
+export const publishCompanyDiscovery = (state: CompanyDiscoveryState) =>
+  Effect.sync(() => appAtomRegistry.set(companyDiscoveryAtom, state));
 
 /** Publishes one engine's existing reactive view into the app registry consumed by the catalog. */
 export function publishCompanyRegistryReplica(

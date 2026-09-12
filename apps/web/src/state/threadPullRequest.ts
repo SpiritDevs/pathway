@@ -75,6 +75,8 @@ export function sameAttachedPullRequest(
 export interface ThreadChangeRequestState {
   readonly source: string;
   readonly state: "open" | "closed" | "merged" | null;
+  /** Last conclusive classification check; retained across sidebar navigation. */
+  readonly checkedAt?: number | undefined;
 }
 
 export function threadChangeRequestSource(

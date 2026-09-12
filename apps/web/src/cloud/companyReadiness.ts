@@ -1,7 +1,11 @@
 import { Atom } from "effect/unstable/reactivity";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import { activeCompanyIdAtom } from "./activeCompany";
-import { companyRegistryReplicasAtom, discoveredCompanyIdsAtom } from "./companyRegistryReplica";
+import {
+  companyRegistryReplicasAtom,
+  companyDiscoveryAtom,
+  type CompanyDiscoveryState,
+} from "./companyRegistryReplica";
 import { companySyncStatusesAtom } from "./syncStatus";
 import type { CompanySyncStatus } from "./syncStatus.logic";
 
@@ -11,15 +15,21 @@ export function companyThreadReadiness(
   companyId: CompanyId | null,
   replicas: ReadonlyMap<CompanyId, unknown>,
   statuses: ReadonlyMap<CompanyId, CompanySyncStatus>,
-  discoveredIds: ReadonlyArray<CompanyId> | null = null,
+  discovery: CompanyDiscoveryState = { phase: "loading" },
 ): ThreadListReadiness {
-  if (companyId === null && discoveredIds === null) return "loading";
-  const ids = companyId === null ? discoveredIds! : [companyId];
+  if (companyId === null && discovery.phase !== "ready") return discovery.phase;
+  const ids =
+    companyId !== null ? [companyId] : discovery.phase === "ready" ? discovery.companyIds : [];
   let readiness: ThreadListReadiness = "ready";
   for (const id of ids) {
     const status = statuses.get(id);
     if (replicas.has(id) && status?.bootstrapComplete) continue;
-    if (status?.phase === "error" || status?.phase === "reconnecting") return "error";
+    if (
+      discovery.phase === "error" ||
+      status?.phase === "error" ||
+      status?.phase === "reconnecting"
+    )
+      return "error";
     readiness = "loading";
   }
   return readiness;
@@ -31,6 +41,6 @@ export const companyThreadReadinessAtom = Atom.make((get) =>
     get(activeCompanyIdAtom),
     get(companyRegistryReplicasAtom),
     get(companySyncStatusesAtom),
-    get(discoveredCompanyIdsAtom),
+    get(companyDiscoveryAtom),
   ),
 );

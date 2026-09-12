@@ -38,6 +38,7 @@ import { Atom } from "effect/unstable/reactivity";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
+import type { CompanyDiscoveryState } from "./companyRegistryReplica";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import {
   automaticEnvironmentRegistrationServiceRoleId,
@@ -593,40 +594,89 @@ describe("runCloudSyncEngines", () => {
           locks: makeInProcessWebLockManager(),
         });
         const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
-        const published = yield* Queue.unbounded<ReadonlyArray<CompanyId> | null>();
+        const published = yield* Queue.unbounded<CompanyDiscoveryState>();
         const started = yield* Queue.unbounded<CompanyId>();
-        let discovered: ReadonlyArray<CompanyId> | null = null;
+        let discovered: CompanyDiscoveryState = { phase: "loading" };
         const supervisor = yield* Effect.forkChild(
           runCloudSyncEngines({
             clientId: SyncClientId.make("client-1"),
             election,
             connect: Effect.succeed(connectionTo(transport, listings)),
-            publishDiscoveredCompanyIds: (ids) =>
+            publishCompanyDiscovery: (ids) =>
               Effect.sync(() => {
                 discovered = ids;
               }).pipe(Effect.andThen(Queue.offer(published, ids))),
             publishCompanyRegistryMembershipId: (id, membership) => {
               if (!membership) return Effect.void;
-              expect(discovered).toEqual([COMPANY_A, COMPANY_B]);
+              expect(discovered).toEqual({ phase: "ready", companyIds: [COMPANY_A, COMPANY_B] });
               return Queue.offer(started, id);
             },
           }).pipe(Effect.provideService(SyncStore, store.service)),
           { startImmediately: true },
         );
-        expect(yield* Queue.take(published)).toBeNull();
+        expect(yield* Queue.take(published)).toEqual({ phase: "loading" });
         yield* Queue.offer(
           listings,
           cleanListing(company(COMPANY_A, "member-a"), company(COMPANY_B, "member-b")),
         );
-        expect(yield* Queue.take(published)).toEqual([COMPANY_A, COMPANY_B]);
+        expect(yield* Queue.take(published)).toEqual({
+          phase: "ready",
+          companyIds: [COMPANY_A, COMPANY_B],
+        });
         yield* Queue.take(started);
         yield* Queue.take(started);
         yield* Queue.offer(listings, partialListing([{ id: "broken" }]));
-        expect(yield* Queue.take(published)).toBeNull();
+        expect(yield* Queue.take(published)).toEqual({ phase: "loading" });
         yield* Fiber.interrupt(supervisor);
-        expect(yield* Queue.take(published)).toBeNull();
+        expect(yield* Queue.take(published)).toEqual({ phase: "loading" });
       }),
   );
+
+  for (const reason of ["unauthorized", "upgrade-required"] as const) {
+    it.effect(`exposes ${reason} discovery failure after teardown and resets on a new pass`, () =>
+      Effect.gen(function* () {
+        const { transport } = yield* makeFeedTransport();
+        const store = yield* makeMemorySyncStore();
+        const election = yield* makeWebLeaderElection({
+          scope: `discovery-${reason}`,
+          locks: makeInProcessWebLockManager(),
+        });
+        const published = yield* Queue.unbounded<CompanyDiscoveryState>();
+        const error = new SyncTransportError({ reason, message: "subscription refused" });
+        const base = {
+          clientId: SyncClientId.make("client-1"),
+          election,
+          publishCompanyDiscovery: (state: CompanyDiscoveryState) => Queue.offer(published, state),
+        };
+        const failed = yield* Effect.forkChild(
+          runCloudSyncEngines({
+            ...base,
+            connect:
+              reason === "unauthorized"
+                ? Effect.fail(error)
+                : Effect.succeed({ transport, companies: Stream.fail(error) }),
+          }).pipe(Effect.provideService(SyncStore, store.service)),
+          { startImmediately: true },
+        );
+        yield* Fiber.await(failed);
+        expect(yield* Queue.take(published)).toEqual({ phase: "loading" });
+        expect(yield* Queue.take(published)).toEqual({ phase: "error" });
+        const listings = yield* Queue.unbounded<CloudSyncCompanyListing>();
+        const recovered = yield* Effect.forkChild(
+          runCloudSyncEngines({
+            ...base,
+            connect: Effect.succeed(connectionTo(transport, listings)),
+          }).pipe(Effect.provideService(SyncStore, store.service)),
+          { startImmediately: true },
+        );
+        expect(yield* Queue.take(published)).toEqual({ phase: "loading" });
+        yield* Queue.offer(listings, cleanListing());
+        expect(yield* Queue.take(published)).toEqual({ phase: "ready", companyIds: [] });
+        yield* Fiber.interrupt(recovered);
+        expect(yield* Queue.take(published)).toEqual({ phase: "loading" });
+      }),
+    );
+  }
 
   it.effect("publishes compact status and removes it with the company engine scope", () =>
     Effect.gen(function* () {

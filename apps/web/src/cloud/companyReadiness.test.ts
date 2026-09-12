@@ -53,23 +53,53 @@ describe("company thread readiness", () => {
         ]),
       ),
     ).toBe("loading");
-    expect(companyThreadReadiness(null, replicas, new Map([[company, status]]), [company])).toBe(
-      "ready",
-    );
+    expect(
+      companyThreadReadiness(null, replicas, new Map([[company, status]]), {
+        phase: "ready",
+        companyIds: [company],
+      }),
+    ).toBe("ready");
   });
 });
 
 it("does not declare All ready before undispatched company engines bootstrap", () => {
   const statuses = new Map([[company, status]]);
-  expect(companyThreadReadiness(null, replicas, statuses, null)).toBe("loading");
-  expect(companyThreadReadiness(null, replicas, statuses, [company, other])).toBe("loading");
+  expect(companyThreadReadiness(null, replicas, statuses, { phase: "loading" })).toBe("loading");
+  expect(
+    companyThreadReadiness(null, replicas, statuses, {
+      phase: "ready",
+      companyIds: [company, other],
+    }),
+  ).toBe("loading");
   expect(
     companyThreadReadiness(
       null,
       new Map([...replicas, [other, { view: new Map() }]]),
       new Map([...statuses, [other, status]]),
-      [company, other],
+      { phase: "ready", companyIds: [company, other] },
     ),
   ).toBe("ready");
-  expect(companyThreadReadiness(null, new Map(), new Map(), [])).toBe("ready");
+  expect(
+    companyThreadReadiness(null, new Map(), new Map(), { phase: "ready", companyIds: [] }),
+  ).toBe("ready");
+});
+
+it("shows discovery failure for an unbootstrapped view, then recovers on retry", () => {
+  for (const selected of [null, company]) {
+    expect(companyThreadReadiness(selected, new Map(), new Map(), { phase: "error" })).toBe(
+      "error",
+    );
+    expect(companyThreadReadiness(selected, new Map(), new Map(), { phase: "loading" })).toBe(
+      "loading",
+    );
+    expect(
+      companyThreadReadiness(selected, replicas, new Map([[company, status]]), {
+        phase: "ready",
+        companyIds: [company],
+      }),
+    ).toBe("ready");
+  }
+  expect(
+    companyThreadReadiness(company, replicas, new Map([[company, status]]), { phase: "error" }),
+  ).toBe("ready");
 });

@@ -2692,7 +2692,13 @@ export default function Sidebar() {
       ),
     [settledThreads, environments, retainedStates],
   );
-  useSidebarPrRevalidation(threadScope, retainedSettledThreads, projects, handleChangeRequestState);
+  useSidebarPrRevalidation(
+    threadScope,
+    retainedSettledThreads,
+    projects,
+    retainedStates,
+    handleChangeRequestState,
+  );
 
   // Drag-to-reorder for the active inbox. Purely client-local (this device
   // only): a drop saves the full visible key order, and this memo re-derives

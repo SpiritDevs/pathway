@@ -158,3 +158,21 @@ it("keeps uncached remote threads navigable while offline and reclassifies after
     }),
   ).toBe("active");
 });
+
+it("retains freshness across cache reads and errors, and advances it on successful revalidation", () => {
+  vi.spyOn(Date, "now").mockReturnValue(1000);
+  try {
+    const states = updateSidebarChangeRequest(new Map(), key, merged);
+    expect(states.get(key)?.checkedAt).toBe(1000);
+    vi.mocked(Date.now).mockReturnValue(2000);
+    expect(updateSidebarChangeRequest(states, key, merged)).toBe(states);
+    expect(updateSidebarChangeRequest(states, key, { ...merged, checkedAt: 2000 }, true)).toBe(
+      states,
+    );
+    const refreshed = updateSidebarChangeRequest(states, key, { ...merged, checkedAt: 2000 });
+    expect(refreshed.get(key)?.checkedAt).toBe(2000);
+    expect(classify(thread, { changeRequests: refreshed })).toBe("settled");
+  } finally {
+    vi.restoreAllMocks();
+  }
+});

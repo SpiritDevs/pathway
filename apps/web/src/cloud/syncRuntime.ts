@@ -71,7 +71,8 @@ import {
   companyRegistryReplicasAtom,
   publishCompanyRegistryMembershipId,
   publishCompanyRegistryReplica,
-  publishDiscoveredCompanyIds,
+  publishCompanyDiscovery,
+  type CompanyDiscoveryState,
 } from "./companyRegistryReplica";
 import {
   publishCompanySyncEngineHandle,
@@ -449,9 +450,7 @@ export interface CloudSyncConnection {
 }
 
 export interface CloudSyncEnginesOptions {
-  readonly publishDiscoveredCompanyIds?: (
-    ids: ReadonlyArray<CompanyId> | null,
-  ) => Effect.Effect<void>;
+  readonly publishCompanyDiscovery?: (state: CompanyDiscoveryState) => Effect.Effect<void>;
   readonly clientId: SyncClientId;
   readonly election: WebLeaderElection;
   /**
@@ -635,8 +634,13 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
     // #region DEBUG
     yield* Effect.sync(() => debugCloudSync("H1", "leadership-body-entered"));
     // #endregion DEBUG
-    yield* options.publishDiscoveredCompanyIds?.(null) ?? Effect.void;
-    yield* Effect.addFinalizer(() => options.publishDiscoveredCompanyIds?.(null) ?? Effect.void);
+    yield* options.publishCompanyDiscovery?.({ phase: "loading" }) ?? Effect.void;
+    yield* Effect.addFinalizer(
+      (exit) =>
+        options.publishCompanyDiscovery?.({
+          phase: Exit.isFailure(exit) && !Cause.hasInterruptsOnly(exit.cause) ? "error" : "loading",
+        }) ?? Effect.void,
+    );
     const connection = yield* options.connect;
     const running = yield* Ref.make(new Map<CompanyId, RunningEngine>());
 
@@ -738,8 +742,11 @@ export const runCloudSyncEngines = Effect.fn("web.cloudSync.engines")(function* 
       );
       const desiredIds = new Set(desired.map((company) => company.companyId));
       yield* (
-        options.publishDiscoveredCompanyIds?.(listing.decodedCleanly ? [...desiredIds] : null) ??
-          Effect.void
+        options.publishCompanyDiscovery?.(
+          listing.decodedCleanly
+            ? { phase: "ready", companyIds: [...desiredIds] }
+            : { phase: "loading" },
+        ) ?? Effect.void
       );
       const revoked = listing.decodedCleanly
         ? (yield* store.listCompanyIds).filter((companyId) => !desiredIds.has(companyId))
@@ -1007,7 +1014,7 @@ export const runCloudSyncRuntime = Effect.fn("web.cloudSync.run")(function* (
     election,
     connect,
     publishCompanyRegistryReplica,
-    publishDiscoveredCompanyIds,
+    publishCompanyDiscovery,
     publishCompanyRegistryMembershipId,
     publishCompanySyncEngineHandle,
     publishCompanySyncStatus,
