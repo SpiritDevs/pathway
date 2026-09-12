@@ -452,14 +452,16 @@ private struct NewAgentThreadComposer: View {
                     Text("Auto may choose a compatible account on another machine.")
                 }
             }
-            ForEach(project.bindings) { binding in
-                Button {
-                    chooseEnvironment(binding.id)
-                } label: {
-                    if binding.id == selectedBindingID {
-                        Label(binding.label, systemImage: "checkmark")
-                    } else {
-                        Text(binding.label)
+            Section(project.isConversation ? "Environments" : "Project environments") {
+                ForEach(project.bindings) { binding in
+                    Button {
+                        chooseEnvironment(binding.id)
+                    } label: {
+                        if binding.id == selectedBindingID {
+                            Label(binding.label, systemImage: "checkmark")
+                        } else {
+                            Text(binding.label)
+                        }
                     }
                 }
             }
@@ -469,19 +471,18 @@ private struct NewAgentThreadComposer: View {
                 Text(isResolvingPlacement ? "Choosing environment…"
                     : "\(model?.usesAutomaticPlacement == true && automaticPlacementEnabled ? "Auto · " : "")\(selectedBinding?.label ?? "Choose environment")")
                     .lineLimit(1)
-                if project.bindings.count > 1 {
-                    Image(systemName: "chevron.down")
-                        .font(.caption2.weight(.bold))
-                }
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
             }
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
-        .disabled(project.bindings.count < 2 || isResolvingPlacement || model?.isLaunching == true || model?.hasPendingLaunch == true)
-        .accessibilityLabel("Environment")
+        .disabled(isResolvingPlacement || model?.isLaunching == true || model?.hasPendingLaunch == true)
+        .accessibilityLabel("Choose environment")
         .accessibilityValue(selectedBinding?.label ?? "Not selected")
+        .accessibilityHint("Chooses where the new thread will run")
     }
 
     private func workspaceSummary(_ model: PathwayAgentThreadCreationModel) -> some View {

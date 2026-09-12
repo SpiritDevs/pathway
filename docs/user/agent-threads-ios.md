@@ -1,5 +1,9 @@
 # Agent Threads on iOS
 
+When starting a thread, tap the environment dropdown below the project name to choose where
+it will run. The menu lists the environments linked to that project and marks the selected
+environment with a checkmark. It remains available when the project has only one environment.
+
 Active threads show the project above the thread title, with the branch and environment below it.
 The branch stays on the left; the environment name sits on the right beside the provider logo.
 The filter icon opens **Thread options**, with **Settings**, **Focus**, and **Filters** submenus.
