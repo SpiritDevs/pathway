@@ -548,8 +548,11 @@ function RemoteCommandForm({
     kind === "startThread"
       ? prompt.trim().length > 0
       : threadId.trim().length > 0 && (kind !== "sendMessage" || message.trim().length > 0);
-  const kindGate =
-    environmentCommandPermission(kind) === "environments.read" ? readGate : controlGate;
+  const kindGate = {
+    "remoteAgents.dispatch": dispatchGate,
+    "remoteAgents.control": controlGate,
+    "environments.read": readGate,
+  }[environmentCommandPermission(kind)];
   const enabled = controlAvailable && dispatchGate.enabled && kindGate.enabled;
   const tooltip = dispatchGate.tooltip ?? kindGate.tooltip;
   const delivery = remoteCommandDeliveryCopy(pathwayConnectStatus, environment.label);

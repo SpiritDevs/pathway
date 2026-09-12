@@ -18,11 +18,13 @@ import {
 } from "@spiritdevs/contracts";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { AuthorizationEpoch, CompanyVersion, SyncEntityId } from "@spiritdevs/contracts/cloudSync";
+import { ConvexError } from "convex/values";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
 import {
+  EnvironmentCommandIssueFailedError,
   EnvironmentCommandIssueUnavailableError,
   EnvironmentCommandIssuer,
   makeRemoteDispatch,
@@ -260,6 +262,24 @@ describe("RemoteDispatch", () => {
       assert.deepEqual(error.missing, ["connect-grant", "cloud-sync"]);
       assert.include(error.message, "connect-grant");
       assert.include(error.message, "cloud-sync");
+    }),
+  );
+
+  it.effect("includes the cloud permission refusal in the error shown to the agent", () =>
+    Effect.gen(function* () {
+      const message = "Missing permission remoteAgents.dispatch.";
+      const remote = yield* makeHarness({
+        connect: () => Effect.die("No direct grant was provided"),
+        issue: () =>
+          new EnvironmentCommandIssueFailedError({
+            message,
+            cause: new ConvexError({ code: "permission-denied", message }),
+          }),
+      });
+      const error = yield* remote.dispatch(commandInput()).pipe(Effect.flip);
+      assert.include(error.message, message);
+      assert.instanceOf(error, RemoteDispatchUnavailableError);
+      assert.deepEqual(error.missing, ["connect-grant", "cloud-authorization"]);
     }),
   );
 

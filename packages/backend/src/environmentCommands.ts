@@ -248,6 +248,14 @@ export function isCancellableEnvironmentCommand(state: EnvironmentCommandState):
 
 export function environmentCommandPermission(
   kind: EnvironmentCommandKind,
-): "remoteAgents.control" | "environments.read" {
-  return kind === "statusQuery" ? "environments.read" : "remoteAgents.control";
+): "remoteAgents.dispatch" | "remoteAgents.control" | "environments.read" {
+  switch (kind) {
+    case "startThread":
+      return "remoteAgents.dispatch";
+    case "statusQuery":
+      return "environments.read";
+    case "sendMessage":
+    case "interrupt":
+      return "remoteAgents.control";
+  }
 }
