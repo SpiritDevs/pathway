@@ -47,3 +47,20 @@ The exact build 14 source is now in a separate clean checkout. Production public
 was generated from the existing production environment, and archive compilation is underway.
 The working Xcode account removes the need to create a distribution certificate or profiles
 manually. Build 14 upload and tester verification remain pending.
+
+## Build 14 signed and verified
+
+The exact source commit archived successfully, then App Store distribution export succeeded
+on 2026-09-12 at 10:15 UTC using the same saved Xcode account as build 13. The main app,
+share extension, and widget all contain version 1.0.13 build 14. Strict signature verification
+passed for all three. Their signed identifiers, team, and App Groups match their App Store
+profiles. Debug entitlements are disabled and the app uses production APNs.
+
+All five public runtime settings match the build 13 archive. The production Clerk association
+was checked live. The terminal bundle manifest and Xcode project plist passed verification.
+No source files changed. Earlier release testing is recorded in the original status report;
+this recovery ran archive, package, signing, and configuration checks without repeating UI tests.
+
+Exported IPA SHA-256: `ae9fd16315ed1b1efcbc2f96413bbfdf7c6350abbcfc651776ec1e011618a18a`.
+The archive and package are retained in the isolated release checkout under
+`.pathway/releases/1.0.13`. Upload is the next step; tester availability remains unconfirmed.
