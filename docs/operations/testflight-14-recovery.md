@@ -33,3 +33,17 @@ credentials for standard certificate/profile provisioning without revoking exist
 
 No human action is currently requested. TestFlight upload is authorized; public App Store
 release is outside this task. Credentials and account identifiers are omitted from this report.
+
+## Signing access confirmed
+
+At 2026-09-12 10:10 UTC, local export of the retained build 13 archive succeeded using
+the saved Xcode account and automatic distribution signing. A distribution IPA was produced
+locally; it was not uploaded. Apple authenticated the account and returned the Pathway app.
+Its validation response reported 13 as the previously uploaded bundle version. This was
+an export-time validation response, not a full TestFlight build-list query. No local API key
+has been found in the usual credential locations.
+
+The exact build 14 source is now in a separate clean checkout. Production public configuration
+was generated from the existing production environment, and archive compilation is underway.
+The working Xcode account removes the need to create a distribution certificate or profiles
+manually. Build 14 upload and tester verification remain pending.
