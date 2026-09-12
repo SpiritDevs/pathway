@@ -5,11 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import {
-  AgentTimeSession,
-  applyAgentTimeEvent,
-  transitionAgentTimeSession,
-} from "./agentTimeTracking.ts";
+import { AgentTimeSession, applyAgentTimeEvent } from "./agentTimeTracking.ts";
 
 const decodeSession = Schema.decodeUnknownSync(Schema.fromJsonString(AgentTimeSession));
 const encodeSession = Schema.encodeSync(Schema.fromJsonString(AgentTimeSession));
@@ -29,8 +25,6 @@ export const makeAgentTimeTrackingStore = Effect.fn("AgentTimeTrackingStore.make
         payload_json = excluded.payload_json, dirty = 1`;
   });
 
-  const priorCursors = yield* sql<{ sequence: number }>`SELECT sequence
-    FROM agent_time_tracking_cursors WHERE company_id = ${companyId}`;
   // The first enablement starts at the current event boundary, never backfills historical runs.
   yield* sql`INSERT OR IGNORE INTO agent_time_tracking_cursors(company_id, sequence)
     SELECT ${companyId}, COALESCE(MAX(sequence), 0) FROM orchestration_events`;
@@ -122,24 +116,11 @@ export const makeAgentTimeTrackingStore = Effect.fn("AgentTimeTrackingStore.make
     );
   });
 
-  if (priorCursors.length > 0) {
-    // Replay committed completions before capping clocks left open by a process crash. Otherwise
-    // work completed while cloud delivery was offline would be cut back to an old heartbeat.
-    while (yield* capture()) {
-      /* drain persisted lifecycle events */
-    }
-    const interrupted = yield* sql<{ payload_json: string }>`SELECT payload_json
-      FROM agent_time_tracking_sessions WHERE company_id = ${companyId} AND state = 'running'`;
-    for (const row of interrupted) {
-      const session = decodeSession(row.payload_json);
-      yield* save(
-        transitionAgentTimeSession(
-          { ...session, runStatus: "waiting" },
-          "paused",
-          session.observedAt,
-        ),
-      );
-    }
+  // ProviderRuntimeRecoveryService records actual process loss before server activation.
+  // Replaying those events caps crashed runs at their last heartbeat; restarting this
+  // publisher alone must not pause agents that are still working.
+  while (yield* capture()) {
+    /* drain persisted lifecycle events */
   }
 
   const pending = Effect.fn("AgentTimeTrackingStore.pending")(function* (now: number) {

@@ -4,6 +4,8 @@ Your timers and completed sessions belong to your account and sync across device
 
 Agent work is tracked automatically on registered environments with linked projects. Each independent thread run records its own time, including concurrent runs on the same project. Tracking pauses when the agent is blocked waiting for permission or an answer and resumes when work continues. A question that lets the agent keep working does not pause tracking. Closing the app does not stop an agent's timer.
 
+Queued follow-ups appear in the active timer list when the agent starts working on them. Preparing a run and finishing its cleanup do not appear as waits for input. Reconnecting the time tracking service does not pause an agent that is still working.
+
 Automatic agent sessions belong to the account of the person who registered the environment. On shared environments, this is not a separate record of each person's working hours. Tracking starts with new runs after the environment receives the updated tracker; earlier runs are not backfilled.
 
 Successfully creating a task records at least one minute. If you actively compose it for longer, that active time is recorded instead. After 30 seconds without interaction, composition stops adding time until you interact again. Leaving the app pauses composition immediately. Cancelled drafts and failed creations add no time. Creating a subtask follows the same rule.

@@ -87,7 +87,14 @@ export async function activeSessions(ctx: QueryCtx, userId: Id<"users">) {
       .take(TRACKED_READ_LIMIT + 1),
   ]);
   return {
-    rows: [...running, ...paused].slice(0, TRACKED_READ_LIMIT),
+    // Queued/startup work and post-turn draining are not active agent timers.
+    // Older environments omit runStatus, so retain their existing behavior.
+    rows: [...running, ...paused]
+      .filter(
+        (row) =>
+          row.source !== "agent" || row.runStatus === undefined || row.runStatus === "running",
+      )
+      .slice(0, TRACKED_READ_LIMIT),
     complete: running.length + paused.length <= TRACKED_READ_LIMIT,
   };
 }

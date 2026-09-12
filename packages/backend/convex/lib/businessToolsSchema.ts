@@ -114,6 +114,7 @@ export const businessToolsTables = {
     runningSince: v.optional(v.union(v.number(), v.null())),
     observedAt: v.optional(v.number()),
     revision: v.optional(v.number()),
+    runStatus: v.optional(v.string()),
   })
     .index("by_user_and_id", ["userId", "id"])
     .index("by_company_environment_and_id", ["companyId", "environmentId", "id"])
