@@ -42,11 +42,14 @@ The production target uses:
 
 - app name: `Pathway`
 - bundle identifier: `com.spiritdevs.pathway`
+- Apple App ID prefix: `4444F36N8Z`
 - callback: `pathway://callback`
-- associated domain: `clerk.spiritdevs.com`
+- associated domain: `clerk.pathwayos.dev`
 
 The Clerk Dashboard must have Native API enabled and register the production bundle identifier and
 Apple App ID prefix before hosted authentication can complete on a signed build.
+The Clerk domain's `/.well-known/apple-app-site-association` must list
+`4444F36N8Z.com.spiritdevs.pathway` under `webcredentials.apps`.
 
 ## Current product boundary
 
@@ -70,6 +73,10 @@ Convex WebSocket/HTTP transport. See `docs/operations/apple-client-release.md` f
 external-service requirements, and `docs/plans/mobile-parity-completion.md` for current verification.
 
 ## Checks
+
+Focus icons use the desktop Lucide artwork. After changing the desktop Focus icon catalog or
+updating Lucide, run `node scripts/ios/build-focus-icons.mjs` from the repository root.
+Run it with `--check` to verify the native catalog and vector assets match.
 
 From `apps/pathway-ios`:
 

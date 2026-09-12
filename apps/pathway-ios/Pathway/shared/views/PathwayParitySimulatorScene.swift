@@ -6,7 +6,13 @@ struct PathwayParitySimulatorScene: View {
     @State private var workspace = PathwayParitySimulatorWorkspace()
 
     var body: some View {
-        MainTabView(initialDestination: ProcessInfo.processInfo.arguments.contains("--parity-email") ? .email : .calendar)
+        Group {
+            if ProcessInfo.processInfo.arguments.contains("--parity-threads") {
+                AgentThreadRowsSimulatorView()
+            } else {
+                MainTabView(initialDestination: ProcessInfo.processInfo.arguments.contains("--parity-thread-menu") ? .agentThreads : ProcessInfo.processInfo.arguments.contains("--parity-email") ? .email : .calendar)
+            }
+        }
             .environment(workspace.appModel)
             .preferredColorScheme(.light)
     }
@@ -57,7 +63,8 @@ struct PathwayParitySimulatorScene: View {
         let start = Calendar.current.date(byAdding: .hour, value: 10, to: day) ?? day
         put("membership", "parity-member", ["displayNameSnapshot": .string("Parity owner"), "state": .string("active")])
         put("cloudProject", "parity-project", ["name": .string("Parity project"), "description": .string("Calendar and email validation"), "archivedAt": .null])
-        for (id, label) in [("online", "Parity server"), ("offline", "Offline server")] {
+        let threadPreview = ProcessInfo.processInfo.arguments.contains("--parity-threads")
+        for (id, label) in [("online", threadPreview ? "Corey's Mac Studio" : "Parity server"), ("offline", threadPreview ? "macOS-C02DN08X0KPF" : "Offline server")] {
             put("environmentRegistration", id, ["environmentId": .string(id),
                 "descriptor": .object(["environmentId": .string(id), "label": .string(label), "serverVersion": .string("fixture")]),
                 "relayLinkState": .string("linked"), "managedEndpointAvailable": .bool(id == "online"),
@@ -65,6 +72,14 @@ struct PathwayParitySimulatorScene: View {
         }
         put("environmentBinding", "parity-binding", ["cloudProjectId": .string("parity-project"), "environmentId": .string("online"),
             "localProjectId": .string("local-project"), "localWorkspaceRoot": .string("/fixture/parity"), "status": .string("active"), "lastSeenAt": .null])
+        if ProcessInfo.processInfo.arguments.contains("--parity-thread-menu") {
+            for (title, branch, environment) in AgentThreadRowsSimulatorView.samples {
+                let thread = AgentThreadRowsSimulatorView.thread(title: title, branch: branch, environment: environment)
+                let shell = try! JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(thread.shell))
+                put("agentThread", thread.threadId, ["environmentId": .string(environment),
+                    "cloudProjectId": .string("parity-project"), "shell": shell, "updatedAt": .number(0)])
+            }
+        }
         for (id, name, kind, owner) in [("owned", "My calendar", "pathway", "parity-member"), ("mirrored", "Mirrored calendar", "google", "parity-member")] {
             put("calendar", id, ["name": .string(name), "kind": .string(kind), "ownerMembershipId": .string(owner), "sharing": .string("private")])
         }

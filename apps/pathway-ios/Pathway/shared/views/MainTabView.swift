@@ -193,7 +193,9 @@ private struct FloatingAppShell: View {
                                     systemImage: "bubble.left.and.bubble.right",
                                     action: presentNewAgentThread
                                 )
-                                Button("Settings", systemImage: "gearshape", action: presentSettings)
+                                if activeDestination != .agentThreads {
+                                    Button("Settings", systemImage: "gearshape", action: presentSettings)
+                                }
                             }
                         }
                     }
@@ -469,6 +471,7 @@ struct PathwayFeatureDestinationView: View {
 
 struct PathwaySettingsView: View {
     var isSeparateWindow = false
+    var focusModel: PathwayFocusModel? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(PathwayAppModel.self) private var appModel
@@ -500,6 +503,11 @@ struct PathwaySettingsView: View {
             }
             Section("Capture") {
                 NavigationLink("Shared Drafts") { PathwaySharedDraftsDestination() }
+            }
+            Section("Agent Threads") {
+                NavigationLink { PathwayFocusSettingsView(model: focusModel) } label: {
+                    Label("Focus Views", systemImage: "target")
+                }
             }
             Section("Models") {
                 NavigationLink("Favourite models") {

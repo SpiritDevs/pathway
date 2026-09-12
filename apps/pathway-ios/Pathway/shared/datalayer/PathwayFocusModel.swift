@@ -87,6 +87,18 @@ struct PathwayFocusNotification: Decodable, Identifiable {
         focuses = []; assignments = []; notifications = []; unreadCount = 0; unreadThreadKeys = []; errorMessage = nil
         preferenceKey = storageDirectory.map { "pathway.focus.\($0.lastPathComponent)" }
         selectedID = preferenceKey.flatMap { UserDefaults.standard.string(forKey: $0) } ?? "all"
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--uitest-parity") && ProcessInfo.processInfo.arguments.contains("--parity-focus-views") {
+            focuses = [
+                PathwayFocus(id: "work", name: "CITAUS", iconName: "Landmark", accentColor: "#6366f1", orderKey: "a"),
+                PathwayFocus(id: "personal", name: "Personal", iconName: "Rocket", accentColor: "#3b82f6", orderKey: "b"),
+                PathwayFocus(id: "ideas", name: "Ideas", iconName: "Lightbulb", accentColor: "#22c55e", orderKey: "c")
+            ]
+            assignments = [PathwayFocusAssignment(focusId: "personal", projectKey: "online:local-project"),
+                           PathwayFocusAssignment(focusId: "ideas", projectKey: "offline:local-project")]
+            return
+        }
+        #endif
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await self.observeFocuses(cloud: cloud, generation: generation) }
             group.addTask { await self.observeNotifications(cloud: cloud, generation: generation) }

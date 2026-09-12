@@ -9,8 +9,8 @@
 	<key>com.apple.developer.associated-domains</key>
     <array>
         <string>applinks:app.pathwayos.dev</string>
-		<string>applinks:clerk.spiritdevs.com</string>
-		<string>webcredentials:clerk.spiritdevs.com</string>
+		<string>applinks:clerk.pathwayos.dev</string>
+		<string>webcredentials:clerk.pathwayos.dev</string>
 	</array>
 </dict>
 </plist>
