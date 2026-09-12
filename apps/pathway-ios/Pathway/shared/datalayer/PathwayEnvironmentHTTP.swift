@@ -11,6 +11,8 @@ enum PathwayEnvironmentHTTP {
     }
 
     static func signedAssetURL(_ response: JSONValue, base: URL) throws -> URL {
+        if case let .number(expiresAt)? = response.objectValue?["expiresAt"],
+           expiresAt <= Date().timeIntervalSince1970 * 1000 + 60_000 { throw URLError(.userAuthenticationRequired) }
         guard let relative = response.objectValue?["relativeUrl"]?.stringValue,
               relative.hasPrefix("/api/assets/") else { throw URLError(.badServerResponse) }
         let url = try resolve(relative, base: base)

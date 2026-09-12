@@ -17,7 +17,7 @@ const POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
 const POSITION_ONLY_PATTERN = /^\d+(?::\d+)?$/;
 // Standard OS and dev-container roots; deliberately excludes app-route-ish
 // prefixes like /app/ or /chat/ so SPA routes never read as files.
-const POSIX_FILE_ROOT_PREFIXES = [
+export const POSIX_FILE_ROOT_PREFIXES = [
   "/Users/",
   "/home/",
   "/tmp/",

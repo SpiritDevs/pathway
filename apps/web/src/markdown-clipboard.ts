@@ -253,8 +253,8 @@ function serializeNode(node: Node): string {
       return serializeAnchor(element);
     case "IMG": {
       const alt = element.getAttribute("alt") ?? "";
-      const src = element.getAttribute("src") ?? "";
-      return alt && src ? `![${alt}](${src})` : "";
+      const src = element.getAttribute("data-markdown-src") ?? element.getAttribute("src") ?? "";
+      return src ? `![${alt}](<${src}>)` : "";
     }
     case "UL":
       return serializeList(element, false);
@@ -313,6 +313,10 @@ export function serializeTableElementToCsv(table: Element): string {
 }
 
 function sanitizedHtmlFrom(container: Element): string {
+  for (const image of container.querySelectorAll("img[data-markdown-src]")) {
+    image.setAttribute("src", image.getAttribute("data-markdown-src") ?? "");
+    image.removeAttribute("data-markdown-src");
+  }
   for (const node of container.querySelectorAll(SANITIZED_HTML_SELECTOR)) {
     if (
       node.classList.contains("chat-markdown-file-link") ||

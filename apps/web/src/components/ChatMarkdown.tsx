@@ -46,6 +46,12 @@ import React, {
 import type { Components, Options as ReactMarkdownOptions } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import { defaultUrlTransform } from "react-markdown";
+import { markdownImageUrlTransform } from "../markdown-images";
+import {
+  ChatMarkdownImage,
+  MarkdownImageContext,
+  MarkdownLinkedImageContext,
+} from "./ChatMarkdownImage";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
@@ -220,6 +226,13 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     // `mention:` carries an agent mention pill. Unlisted protocols lose their href to the
     // sanitizer, which would leave the pill's own scheme indistinguishable from plain text.
     href: [...(defaultSchema.protocols?.href ?? []), "file", ISSUE_AGENT_MENTION_PROTOCOL],
+    // Local sources reach only ChatMarkdownImage, which resolves authorized assets.
+    src: [
+      ...(defaultSchema.protocols?.src ?? []),
+      "file",
+      "sandbox",
+      ..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    ],
   },
 } satisfies Parameters<typeof rehypeSanitize>[0];
 
@@ -1524,6 +1537,30 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
       );
     },
     a({ node, href, children, title: _title, ...props }) {
+      // A linked image must retain its image child, including when its target is a file.
+      if (node?.children.some((child) => child.type === "element" && child.tagName === "img")) {
+        const file = resolveMarkdownFileLinkMeta(href, cwd);
+        return (
+          <MarkdownLinkedImageContext value={true}>
+            <a
+              {...props}
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              onClick={
+                file
+                  ? (event) => {
+                      event.preventDefault();
+                      void openMarkdownFileInPreview(file.targetPath);
+                    }
+                  : props.onClick
+              }
+            >
+              {children}
+            </a>
+          </MarkdownLinkedImageContext>
+        );
+      }
       // Before anything href-keyed: a mention is a pill, not a link, and it must never be mistaken
       // for a relative path by the file-link resolver.
       const mentionPill = renderIssueAgentMentionAnchor(href, children, props.className);
@@ -1620,9 +1657,7 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
         props.className,
       );
     },
-    img({ node: _node, title: _title, ...props }) {
-      return <img {...props} />;
-    },
+    img: ChatMarkdownImage,
     code({ node, children, className, ...props }) {
       if (node?.properties?.dataInlineCode != null) {
         const codeText = nodeToPlainText(children);
@@ -1813,7 +1848,8 @@ function ChatMarkdown({
     ];
     return buildFileLinkParentSuffixByPath(filePaths);
   }, [inlineCodeFileLinkMetaByText, markdownFileLinkMetaByHref]);
-  const markdownUrlTransform = useCallback((href: string) => {
+  const markdownUrlTransform = useCallback((href: string, key: string) => {
+    if (key === "src") return markdownImageUrlTransform(href);
     // `defaultUrlTransform` drops every protocol it does not know, which would empty the mention
     // href the anchor component keys the pill off.
     if (parseIssueAgentMentionHref(href) !== null) return href;
@@ -2005,7 +2041,7 @@ function ChatMarkdown({
       )}
       onCopy={handleCopy}
     >
-      {markdownElement}
+      <MarkdownImageContext value={{ threadRef, cwd }}>{markdownElement}</MarkdownImageContext>
       {imageGallery && threadRef ? (
         <WorkspaceImageGallery
           paths={imageGallery.paths}

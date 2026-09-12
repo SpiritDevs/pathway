@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "@effect/vitest";
-import { EnvironmentId } from "@spiritdevs/contracts";
+import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import * as Layer from "effect/Layer";
 import { Atom, AtomRegistry } from "effect/unstable/reactivity";
 
@@ -65,6 +65,38 @@ describe("resolveCurrentAssetUrl", () => {
 });
 
 describe("createAssetEnvironmentAtoms", () => {
+  it("shares streamed image references only within the same environment and source thread", () => {
+    const runtime = Atom.runtime(Layer.empty) as unknown as Atom.AtomRuntime<
+      EnvironmentRegistry,
+      never
+    >;
+    const assets = createAssetEnvironmentAtoms(runtime);
+    const target = {
+      environmentId: EnvironmentId.make("owner"),
+      input: {
+        resource: {
+          _tag: "workspace-file" as const,
+          threadId: ThreadId.make("thread"),
+          path: "./image.png",
+        },
+      },
+    };
+    const query = assets.createUrl(target);
+    for (let index = 0; index < 100; index++) {
+      expect(
+        assets.createUrl({ ...target, input: { resource: { ...target.input.resource } } }),
+      ).toBe(query);
+    }
+    expect(assets.createUrl({ ...target, environmentId: EnvironmentId.make("other") })).not.toBe(
+      query,
+    );
+    expect(
+      assets.createUrl({
+        ...target,
+        input: { resource: { ...target.input.resource, threadId: ThreadId.make("inherited") } },
+      }),
+    ).not.toBe(query);
+  });
   it("releases a signed URL query when its last view unmounts", async () => {
     vi.useFakeTimers();
     try {

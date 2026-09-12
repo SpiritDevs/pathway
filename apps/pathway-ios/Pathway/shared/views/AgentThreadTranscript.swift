@@ -167,7 +167,7 @@ private struct AgentTranscriptMessage<Actions: View>: View {
                     } else if item.isUserMessage {
                         Text(AgentTranscriptMessageEditor.editableText(text)).textSelection(.enabled)
                     } else {
-                        AgentTranscriptMarkdown(markdown: text).equatable()
+                        AgentTranscriptMarkdown(markdown: text, imageContext: AgentMarkdownImageContext(model: model, threadID: item.fields["threadId"]?.stringValue ?? model.threadID)).equatable()
                     }
                 }
                 ForEach(item.attachments.filter { attachment in !(questionReply?.answers.contains { $0.attachmentIDs.contains(attachment.id) } ?? false) }) { attachment in
@@ -273,10 +273,12 @@ private struct AgentTranscriptAttachment: View {
     }
 }
 
-private struct AgentTranscriptAttachmentPreview: View {
+struct AgentTranscriptAttachmentPreview: View {
     let attachment: PathwayMessageAttachment
     let model: PathwayAgentThreadModel
     let initialURL: URL?
+    var markdownSource: PathwayMarkdownImageSource? = nil
+    var sourceThreadID: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var url: URL?
     @State private var attempt = 0
@@ -335,8 +337,11 @@ private struct AgentTranscriptAttachmentPreview: View {
             }
             .task(id: "\(attempt):\(model.cloudQueueAttachmentURLs[attachment.id]?.absoluteString ?? "")") {
                 do {
-                    if let saved = model.cloudQueueAttachmentURLs[attachment.id] { url = saved }
+                    if markdownSource == nil, let saved = model.cloudQueueAttachmentURLs[attachment.id] { url = saved }
                     else if attempt == 0, let initialURL { url = initialURL }
+                    else if case .workspace(let path) = markdownSource {
+                        url = try await model.markdownImageURL(path, threadID: sourceThreadID ?? model.threadID)
+                    } else if case .web(let remote) = markdownSource { url = remote }
                     else { url = try await model.attachmentURL(attachment) }
                     errorMessage = nil
                 } catch { errorMessage = error.localizedDescription }
@@ -377,7 +382,7 @@ private struct AgentTranscriptWorkGroup: View {
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(items) { item in
                         if item.isConversation {
-                            AgentTranscriptMarkdown(markdown: item.text ?? "").equatable()
+                            AgentTranscriptMarkdown(markdown: item.text ?? "", imageContext: AgentMarkdownImageContext(model: model, threadID: item.fields["threadId"]?.stringValue ?? model.threadID)).equatable()
                         } else {
                             AgentTranscriptEventRow(item: item, model: model, onOpenChild: onOpenChild)
                         }
@@ -543,18 +548,18 @@ struct AgentTranscriptEventContent: View {
                 if let input = item.fields["input"] { Text("Input").font(.caption); AgentTranscriptCodeBlock(text: formatted(input)) }
                 if let output = item.fields["output"] { Text("Result").font(.caption); AgentTranscriptCodeBlock(text: formatted(output)) }
             } else if item.type == "subagent" {
-                if let prompt = item.fields["prompt"]?.stringValue { AgentTranscriptMarkdown(markdown: prompt).equatable() }
+                if let prompt = item.fields["prompt"]?.stringValue { AgentTranscriptMarkdown(markdown: prompt, imageContext: AgentMarkdownImageContext(model: model, threadID: item.fields["threadId"]?.stringValue ?? model.threadID)).equatable() }
                 if let progress = item.fields["progress"]?.stringValue { Text(progress).font(.subheadline).foregroundStyle(.secondary) }
-                if let result = item.fields["result"]?.stringValue { AgentTranscriptMarkdown(markdown: result).equatable() }
+                if let result = item.fields["result"]?.stringValue { AgentTranscriptMarkdown(markdown: result, imageContext: AgentMarkdownImageContext(model: model, threadID: item.fields["threadId"]?.stringValue ?? model.threadID)).equatable() }
             } else if item.type == "todo_list" {
-                if let explanation = item.fields["explanation"]?.stringValue { AgentTranscriptMarkdown(markdown: explanation).equatable() }
+                if let explanation = item.fields["explanation"]?.stringValue { AgentTranscriptMarkdown(markdown: explanation, imageContext: AgentMarkdownImageContext(model: model, threadID: item.fields["threadId"]?.stringValue ?? model.threadID)).equatable() }
                 ForEach(Array((item.fields["steps"]?.arrayValue ?? []).enumerated()), id: \.offset) { _, step in
                     let state = step.objectValue?["status"]?.stringValue ?? "pending"
                     Label(step.objectValue?["text"]?.stringValue ?? "", systemImage: state == "completed" ? "checkmark.circle.fill" : state == "running" ? "circle.lefthalf.filled" : "circle")
                         .font(.subheadline).foregroundStyle(state == "completed" ? .secondary : .primary)
                 }
             } else {
-                if let text = item.text, !text.isEmpty { AgentTranscriptMarkdown(markdown: text).equatable() }
+                if let text = item.text, !text.isEmpty { AgentTranscriptMarkdown(markdown: text, imageContext: AgentMarkdownImageContext(model: model, threadID: item.fields["threadId"]?.stringValue ?? model.threadID)).equatable() }
                 searchResults
                 checkpointFiles
                 if let url = item.fields["pullRequest"]?.objectValue?["url"]?.stringValue.flatMap(URL.init(string:)) {
@@ -741,5 +746,6 @@ struct AgentThreadChangesView: View {
 /// Unchanged messages do not reparse Markdown while another message streams.
 struct AgentTranscriptMarkdown: View, Equatable {
     let markdown: String
-    var body: some View { PathwayIssueMarkdownView(markdown: markdown) }
+    var imageContext: AgentMarkdownImageContext? = nil
+    var body: some View { PathwayIssueMarkdownView(markdown: markdown, imageContext: imageContext) }
 }
