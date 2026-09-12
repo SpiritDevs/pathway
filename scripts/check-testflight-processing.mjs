@@ -44,7 +44,9 @@ for (const version of ["13", "14"]) {
     console.log(JSON.stringify({ buildId: build.id, buildNumber: build.attributes.version, marketingVersion: marketing?.attributes.version, uploadedDate: build.attributes.uploadedDate, processingState: build.attributes.processingState, expired: build.attributes.expired }));
     const beta = await get(`/v1/builds/${encodeURIComponent(build.id)}/buildBetaDetail`);
     console.log(JSON.stringify({ buildNumber: version, betaState: beta.data?.attributes }));
-    const groups = await get(`/v1/builds/${encodeURIComponent(build.id)}/betaGroups`, { limit: "200" });
-    console.log(JSON.stringify({ buildNumber: version, testerGroups: groups.data.map(({ attributes }) => ({ name: attributes.name, isInternalGroup: attributes.isInternalGroup })), hasMoreGroups: Boolean(groups.links?.next) }));
+    
   }
 }
+
+const groups = await get("/v1/betaGroups", { "filter[app]": app.id, include: "builds", "limit[builds]": "1000", limit: "200" });
+console.log(JSON.stringify({ testerGroups: groups.data.map(({ id, attributes, relationships }) => ({ id, name: attributes.name, isInternalGroup: attributes.isInternalGroup, hasAccessToAllBuilds: attributes.hasAccessToAllBuilds, relevantBuilds: (relationships?.builds?.data ?? []).map((item) => groups.included?.find((build) => build.type === "builds" && build.id === item.id)?.attributes.version).filter((version) => version === "13" || version === "14") })), hasMoreGroups: Boolean(groups.links?.next) }));
