@@ -90,7 +90,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getSnapShotState: () => ipcRenderer.invoke(IpcChannels.GET_SNAP_SHOT_STATE_CHANNEL),
   setSnapShotAccount: (userId) =>
     ipcRenderer.invoke(IpcChannels.SET_SNAP_SHOT_ACCOUNT_CHANNEL, userId),
-  captureSnapShot: () => ipcRenderer.invoke(IpcChannels.CAPTURE_SNAP_SHOT_CHANNEL),
+  captureSnapShot: (options) => ipcRenderer.invoke(IpcChannels.CAPTURE_SNAP_SHOT_CHANNEL, options),
+  exportSnapShot: (request) => ipcRenderer.invoke(IpcChannels.EXPORT_SNAP_SHOT_CHANNEL, request),
   setupSnapShot: (action) => ipcRenderer.invoke(IpcChannels.SETUP_SNAP_SHOT_CHANNEL, action),
   previewSnapShotConfig: (request) =>
     ipcRenderer.invoke(IpcChannels.PREVIEW_SNAP_SHOT_CONFIG_CHANNEL, request),

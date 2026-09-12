@@ -17,6 +17,7 @@ import {
   type SnapShotModifier,
   type SnapShotModifierPairShortcut,
   type SnapShotShortcut,
+  type SnapShotCaptureType,
   type DesktopSnapShotEvent,
   type DesktopSnapShotId,
 } from "@spiritdevs/contracts";
@@ -43,6 +44,11 @@ import { startGlobalShiftShortcutProcess } from "./GlobalShiftShortcutProcess.ts
 import { startMacModifierPairShortcutProcess } from "./MacModifierPairShortcutProcess.ts";
 import { activeWindow, type ActiveWindow } from "./ActiveWindow.ts";
 import { captureMacWindowSnapshot, type MacSnapShotSource } from "./MacSnapShot.ts";
+import {
+  captureDisplaySnapshot,
+  SnapShotRegionCancelled,
+  SnapShotRegionPicker,
+} from "./DisplaySnapShot.ts";
 import type { LinuxCaptureFeedback, LinuxWindowMetadata } from "./LinuxSnapShot.ts";
 import { niriSocketPath } from "./NiriSnapShot.ts";
 import { CaptureShortcutConfig, niriCaptureConfigPath } from "./CaptureShortcutConfig.ts";
@@ -89,6 +95,7 @@ import {
 
 const MAX_CAPTURE_WIDTH = 2_560;
 const MAX_CAPTURE_HEIGHT = 1_600;
+const EDITOR_CAPTURE_SIZE = { width: 16_384, height: 16_384 };
 const SHORTCUT_COOLDOWN_NS = 200_000_000n;
 const WAYLAND_MODIFIER_PAIR_UNAVAILABLE_MESSAGE =
   "Modifier-pair shortcuts aren't available in this Wayland session. Choose another shortcut or use Take snapshot from the command palette.";
@@ -126,6 +133,8 @@ const DesktopSnapShotOperation = Schema.Literals([
   "no-window-selected",
   "window-unavailable",
   "capture",
+  "cancelled",
+  "unsupported-capture-type",
 ]);
 
 export class DesktopSnapShotError extends Schema.TaggedErrorClass<DesktopSnapShotError>()(
@@ -155,7 +164,11 @@ export class DesktopSnapShotError extends Schema.TaggedErrorClass<DesktopSnapSho
       case "window-unavailable":
         return "The active window is not available for capture.";
       case "capture":
-        return "Could not capture the active window.";
+        return "Could not take the snapshot.";
+      case "cancelled":
+        return "Capture cancelled.";
+      case "unsupported-capture-type":
+        return "Screen and region capture are not available in this desktop session.";
     }
   }
 }
@@ -163,9 +176,11 @@ export class DesktopSnapShotError extends Schema.TaggedErrorClass<DesktopSnapSho
 const isDesktopSnapShotError = Schema.is(DesktopSnapShotError);
 
 function captureFailure(cause: unknown, captureId?: string): DesktopSnapShotError {
-  return isDesktopSnapShotError(cause)
-    ? cause
-    : new DesktopSnapShotError({ operation: "capture", captureId, cause });
+  return cause instanceof SnapShotRegionCancelled
+    ? new DesktopSnapShotError({ operation: "cancelled", captureId })
+    : isDesktopSnapShotError(cause)
+      ? cause
+      : new DesktopSnapShotError({ operation: "capture", captureId, cause });
 }
 
 export class DesktopSnapShot extends Context.Service<
@@ -192,6 +207,7 @@ export class DesktopSnapShot extends Context.Service<
     readonly setShortcutSuppressed: (suppressed: boolean) => Effect.Effect<void>;
     /** Capture the foreground window in place, including Pathway itself. */
     readonly capture: Effect.Effect<void, DesktopSnapShotError>;
+    readonly captureType: (type: SnapShotCaptureType) => Effect.Effect<void, DesktopSnapShotError>;
     readonly listPending: Effect.Effect<
       ReadonlyArray<DesktopPendingSnapShot>,
       DesktopSnapShotError
@@ -429,6 +445,7 @@ function snapShotImageSize(png: Buffer, fallback: Electron.Rectangle): Electron.
 
 async function captureSource({
   mode,
+  captureType,
   captureId,
   platform,
   settings,
@@ -440,12 +457,14 @@ async function captureSource({
   hyprlandCapturePaths,
   accessibilityProcessPool,
   regionSnapShotPool,
+  regionPicker,
   prepareReveal,
   onAcquired,
   onLinuxFeedback,
   isCurrentAccount,
 }: {
   mode: DesktopSnapShotState["mode"];
+  captureType: SnapShotCaptureType;
   captureId: string;
   platform: NodeJS.Platform;
   settings: ClientSettings;
@@ -457,6 +476,7 @@ async function captureSource({
   hyprlandCapturePaths: HyprlandCapturePaths;
   accessibilityProcessPool: AccessibilityProcessPool;
   regionSnapShotPool: RegionSnapShotPool;
+  regionPicker: SnapShotRegionPicker;
   prepareReveal: () => Promise<void>;
   onAcquired: (capture: {
     readonly source: MacSnapShotSource | RegionSnapShotSource | Electron.DesktopCapturerSource;
@@ -464,6 +484,9 @@ async function captureSource({
     readonly linuxWindow: LinuxWindowMetadata | undefined;
     readonly png: Buffer;
     readonly imageTempReady: boolean;
+    readonly captureType: SnapShotCaptureType;
+    readonly captureBounds?: Electron.Rectangle;
+    readonly capturedAt?: string;
   }) => Promise<DesktopPendingSnapShot>;
   onLinuxFeedback: (feedback: LinuxCaptureFeedback) => void;
   isCurrentAccount: () => boolean;
@@ -482,7 +505,7 @@ async function captureSource({
   const revealPreparation =
     platform === "win32" ? prepareReveal().catch(() => undefined) : Promise.resolve();
   try {
-    if (mode === "direct") {
+    if (mode === "direct" && captureType === "window") {
       active = await resolveSnapShotActiveWindow(platform);
     }
     if (!isCurrentAccount()) {
@@ -492,14 +515,26 @@ async function captureSource({
     let source: MacSnapShotSource | RegionSnapShotSource | Electron.DesktopCapturerSource;
     let png: Buffer;
     let imageTempReady = false;
-    if (platform === "darwin") {
+    let captureBounds: Electron.Rectangle | undefined;
+    let capturedAt: string | undefined;
+    if (captureType !== "window") {
+      ({ source, png, captureBounds, capturedAt } = await captureDisplaySnapshot({
+        type: captureType,
+        platform,
+        imageTempPath,
+        pool: regionSnapShotPool,
+        picker: regionPicker,
+        maxSize: EDITOR_CAPTURE_SIZE,
+        isCurrentAccount,
+      }));
+    } else if (platform === "darwin") {
       if (!active) {
         throw new DesktopSnapShotError({ operation: "window-unavailable", captureId });
       }
       ({ source, png } = await captureMacWindowSnapshot(
         active,
         imageTempPath,
-        snapShotThumbnailSize(active),
+        EDITOR_CAPTURE_SIZE,
       ));
       imageTempReady = true;
     } else if (mode === "direct") {
@@ -510,7 +545,7 @@ async function captureSource({
         regionSnapShotPool,
         active,
         snapShotFlashBounds(active, platform),
-        snapShotThumbnailSize(active),
+        EDITOR_CAPTURE_SIZE,
       ));
     } else {
       const { captureLinuxWindow } = await import("./LinuxSnapShot.ts");
@@ -521,9 +556,7 @@ async function captureSource({
         linuxAppId,
         {
           flash: settings.snapShotFlash,
-          animate:
-            settings.snapShotAnimations &&
-            shouldAnimateSnapShot(Electron.systemPreferences.getAnimationSettings()),
+          animate: false,
         },
         kdeCapturePaths,
         hyprlandCapturePaths,
@@ -553,7 +586,16 @@ async function captureSource({
         png = selected.thumbnail.toPNG();
       }
     }
-    const pending = await onAcquired({ source, active, linuxWindow, png, imageTempReady });
+    const pending = await onAcquired({
+      source,
+      active,
+      linuxWindow,
+      png,
+      imageTempReady,
+      captureType,
+      ...(captureBounds ? { captureBounds } : {}),
+      ...(capturedAt ? { capturedAt } : {}),
+    });
     const accessibleIdentity = active
       ? { ...active, bounds: snapShotFlashBounds(active, platform) }
       : linuxWindow?.processId
@@ -601,10 +643,11 @@ async function captureSource({
           flash,
           captureId,
           `data:image/png;base64,${png.toString("base64")}`,
-          settings,
+          { ...settings, snapShotAnimations: false },
           active,
           platform,
           destinationWindowBounds,
+          captureBounds,
         )));
     return {
       source,
@@ -716,10 +759,11 @@ async function showCaptureFeedback(
   active: ActiveWindow | undefined,
   platform: NodeJS.Platform,
   destinationWindowBounds?: Electron.Rectangle,
+  captureBounds?: Electron.Rectangle,
 ): Promise<boolean> {
   // Wayland does not let this client position overlays on another app's window.
   if (platform === "linux") return false;
-  const bounds = snapShotFlashBounds(active, platform);
+  const bounds = captureBounds ?? snapShotFlashBounds(active, platform);
   const animationsEnabled =
     settings.snapShotAnimations &&
     shouldAnimateSnapShot(Electron.systemPreferences.getAnimationSettings());
@@ -842,7 +886,17 @@ export const make = Effect.gen(function* () {
   const regionSnapShotPool = makeRegionSnapShotPool(
     path.join(__dirname, "snapShot", "RegionSnapShotWorker.cjs"),
   );
+  const regionPicker = new SnapShotRegionPicker(environment.platform);
   let registeredAccelerator: string | undefined;
+  const additionalShortcuts = new Map<
+    "screen" | "region",
+    {
+      shortcut: SnapShotShortcut;
+      registered: boolean;
+      message: string | null;
+      stop: () => void;
+    }
+  >();
   // False until the first applySettings; the first pass must always register.
   let initialized = false;
   let portalShortcut: PortalCaptureShortcut | undefined;
@@ -892,6 +946,8 @@ export const make = Effect.gen(function* () {
     }
     stopShiftShortcut?.();
     stopShiftShortcut = undefined;
+    for (const registration of additionalShortcuts.values()) registration.stop();
+    additionalShortcuts.clear();
   };
 
   const emit = (event: DesktopSnapShotEvent) =>
@@ -938,9 +994,13 @@ export const make = Effect.gen(function* () {
       readonly linuxWindow: LinuxWindowMetadata | undefined;
       readonly png: Buffer;
       readonly imageTempReady: boolean;
+      readonly captureType: SnapShotCaptureType;
+      readonly captureBounds?: Electron.Rectangle;
+      readonly capturedAt?: string;
     }) {
       const { id, source, active, linuxWindow, png, imageTempReady } = capture;
-      const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
+      const capturedAt =
+        capture.capturedAt ?? (yield* DateTime.now.pipe(Effect.map(DateTime.formatIso)));
       const appIdentifier = boundedSnapShotString(
         active?.platform === "macos" ? active.owner.bundleId : linuxWindow?.appIdentifier,
         255,
@@ -948,12 +1008,14 @@ export const make = Effect.gen(function* () {
       const pending = yield* decodePendingCapture({
         id,
         ownerUserId: capture.ownerUserId,
-        name: `window-${capturedAt.replaceAll(":", "-")}.png`,
+        name: `${capture.captureType}-${capturedAt.replaceAll(":", "-")}.png`,
         mimeType: "image/png",
         sizeBytes: png.byteLength,
         source: {
           kind: "snap-shot",
           capturedAt,
+          captureType: capture.captureType,
+          ...(capture.captureBounds ? { captureBounds: capture.captureBounds } : {}),
           appName:
             boundedSnapShotString(snapShotAppName(active, linuxWindow, source.name), 255) ??
             "Window",
@@ -983,11 +1045,18 @@ export const make = Effect.gen(function* () {
     settings: ClientSettings,
     ownerUserId: string,
     revision: number,
+    captureType: SnapShotCaptureType,
   ) {
     const id = yield* crypto.randomUUIDv4.pipe(Effect.mapError((cause) => captureFailure(cause)));
     const mode = captureMode(environment.platform);
     if (mode === "unavailable") {
       return yield* new DesktopSnapShotError({ operation: "unsupported", captureId: id });
+    }
+    if (mode !== "direct" && captureType !== "window") {
+      return yield* new DesktopSnapShotError({
+        operation: "unsupported-capture-type",
+        captureId: id,
+      });
     }
     const imageTempPath = path.join(captureDirectory, `${id}.tmp.png`);
 
@@ -1020,6 +1089,7 @@ export const make = Effect.gen(function* () {
         try: () =>
           captureSource({
             mode,
+            captureType,
             captureId: id,
             platform: environment.platform,
             settings,
@@ -1031,6 +1101,7 @@ export const make = Effect.gen(function* () {
             hyprlandCapturePaths,
             accessibilityProcessPool,
             regionSnapShotPool,
+            regionPicker,
             prepareReveal: () => runPromise(desktopWindow.prepareCaptureReveal),
             onAcquired: async (capture) => {
               const pending = await runPromise(
@@ -1116,56 +1187,65 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  const capture = Effect.gen(function* () {
-    const ownerUserId = accountUserId;
-    const revision = accountRevision;
-    if (ownerUserId === null) {
-      return yield* new DesktopSnapShotError({ operation: "signed-out" });
-    }
-    const settings = yield* Ref.get(settingsRef);
-    if (!settings.snapShotEnabled) {
-      return yield* new DesktopSnapShotError({ operation: "disabled" });
-    }
-    // Only acquisition, the durable image handoff, and the initial UI handoff require
-    // exclusive access. Each captured image can finish its own metadata enrichment.
-    const prepared = yield* prepareCapture(settings, ownerUserId, revision).pipe(
-      Effect.tapError((error) =>
-        (error.captureId ? discardCapture(error.captureId) : Effect.void).pipe(
-          Effect.andThen(
-            Effect.suspend(() =>
-              isCurrentAccount(ownerUserId, revision)
-                ? setFailure(error.message, error.captureId)
-                : Effect.void,
+  const captureType = Effect.fn("desktop.snapShot.capture")(
+    function* (type: SnapShotCaptureType) {
+      const ownerUserId = accountUserId;
+      const revision = accountRevision;
+      if (ownerUserId === null) {
+        return yield* new DesktopSnapShotError({ operation: "signed-out" });
+      }
+      const settings = yield* Ref.get(settingsRef);
+      if (!settings.snapShotEnabled) {
+        return yield* new DesktopSnapShotError({ operation: "disabled" });
+      }
+      // Only acquisition, the durable image handoff, and the initial UI handoff require
+      // exclusive access. Each captured image can finish its own metadata enrichment.
+      const prepared = yield* prepareCapture(settings, ownerUserId, revision, type).pipe(
+        Effect.tapError((error) =>
+          (error.captureId ? discardCapture(error.captureId) : Effect.void).pipe(
+            Effect.andThen(
+              Effect.suspend(() =>
+                isCurrentAccount(ownerUserId, revision)
+                  ? error.operation === "cancelled" && error.captureId
+                    ? emit({ type: "cancelled", id: error.captureId as DesktopSnapShotId })
+                    : setFailure(error.message, error.captureId)
+                  : Effect.void,
+              ),
             ),
           ),
         ),
-      ),
-      snapshotMutex.withPermitsIfAvailable(1),
-    );
-    if (Option.isNone(prepared)) return;
-    const capture = prepared.value;
-    yield* persistCapture(capture).pipe(
-      Effect.tap(() =>
-        Effect.suspend(() =>
-          isCurrentAccount(ownerUserId, revision)
-            ? Ref.update(stateRef, (state) => ({ ...state, message: null })).pipe(
-                Effect.andThen(emit({ type: "ready", id: capture.id as DesktopSnapShotId })),
-              )
-            : Effect.void,
+        snapshotMutex.withPermitsIfAvailable(1),
+      );
+      if (Option.isNone(prepared)) return;
+      const capture = prepared.value;
+      yield* persistCapture(capture).pipe(
+        Effect.tap(() =>
+          Effect.suspend(() =>
+            isCurrentAccount(ownerUserId, revision)
+              ? Ref.update(stateRef, (state) => ({ ...state, message: null })).pipe(
+                  Effect.andThen(emit({ type: "ready", id: capture.id as DesktopSnapShotId })),
+                )
+              : Effect.void,
+          ),
         ),
-      ),
-    );
-  }).pipe(Effect.withSpan("desktop.snapShot.capture"));
+      );
+    },
+    Effect.catch((error) => (error.operation === "cancelled" ? Effect.void : Effect.fail(error))),
+  );
+  const capture = captureType("window");
 
-  const captureFromShortcut = Effect.gen(function* () {
+  const captureFromShortcut = Effect.fn("desktop.snapShot.shortcutActivated")(function* (
+    type: SnapShotCaptureType,
+  ) {
     if (shortcutSuppressed) return;
     shortcutVerified = true;
     const now = yield* Clock.currentTimeNanos;
     if (lastShortcutAt !== undefined && now - lastShortcutAt < SHORTCUT_COOLDOWN_NS) return;
     lastShortcutAt = now;
-    yield* capture;
-  }).pipe(Effect.withSpan("desktop.snapShot.shortcutActivated"));
-  const onShortcut = () => runPromise(captureFromShortcut).catch(() => undefined);
+    yield* captureType(type);
+  });
+  const onShortcut = (type: SnapShotCaptureType = "window") =>
+    runPromise(captureFromShortcut(type)).catch(() => undefined);
 
   const checkShortcut = Effect.fn("desktop.snapShot.checkShortcut")(function* (
     shortcut: SnapShotShortcut,
@@ -1226,13 +1306,19 @@ export const make = Effect.gen(function* () {
     }
     const accelerator = toElectronAccelerator(shortcut);
     const available =
-      registeredAccelerator === accelerator
+      registeredAccelerator === accelerator ||
+      [...additionalShortcuts.values()].some(
+        (registration) =>
+          registration.registered &&
+          !isModifierPairShortcut(registration.shortcut) &&
+          toElectronAccelerator(registration.shortcut) === accelerator,
+      )
         ? { available: true, message: null }
         : probeGlobalShortcut(accelerator);
     return available;
   });
 
-  const applySettings = Effect.fn("desktop.snapShot.applySettings")(function* (
+  const applyWindowSettings = Effect.fn("desktop.snapShot.applyWindowSettings")(function* (
     settings: ClientSettings,
     requestedPermissionMessage: string | null,
     forceShortcut = false,
@@ -1450,6 +1536,105 @@ export const make = Effect.gen(function* () {
     });
   });
 
+  const applySettings = Effect.fn("desktop.snapShot.applySettings")(function* (
+    settings: ClientSettings,
+    requestedPermissionMessage: string | null,
+    forceShortcut = false,
+  ) {
+    yield* applyWindowSettings(settings, requestedPermissionMessage, forceShortcut);
+    const supported = captureMode(environment.platform) === "direct";
+    const enabled = supported && settings.snapShotEnabled && accountUserId !== null;
+    if (!enabled) regionPicker.close();
+    // Release changed bindings together, so swapping the two shortcuts succeeds.
+    for (const [type, previous] of additionalShortcuts) {
+      const next =
+        type === "screen" ? settings.snapShotScreenShortcut : settings.snapShotRegionShortcut;
+      if (!enabled || !next || !sameSnapShotShortcut(previous.shortcut, next)) {
+        previous.stop();
+        additionalShortcuts.delete(type);
+      }
+    }
+    const peers: SnapShotShortcut[] = [settings.snapShotShortcut];
+    for (const type of ["screen", "region"] as const) {
+      const shortcut =
+        type === "screen" ? settings.snapShotScreenShortcut : settings.snapShotRegionShortcut;
+      const previous = additionalShortcuts.get(type);
+      const duplicate =
+        shortcut !== null && peers.some((peer) => sameSnapShotShortcut(peer, shortcut));
+      if (shortcut) peers.push(shortcut);
+      const permissionMessage =
+        environment.platform === "darwin" ? currentMacSnapShotPermissionMessage(false) : null;
+      const message = !supported
+        ? "Screen and region capture are not available in this desktop session."
+        : duplicate
+          ? "This shortcut is already assigned to another capture type."
+          : permissionMessage;
+      if (
+        previous?.registered &&
+        enabled &&
+        shortcut &&
+        !message &&
+        sameSnapShotShortcut(previous.shortcut, shortcut)
+      )
+        continue;
+      previous?.stop();
+      additionalShortcuts.delete(type);
+      if (!enabled || shortcut === null) continue;
+      if (message) {
+        additionalShortcuts.set(type, {
+          shortcut,
+          registered: false,
+          message,
+          stop: () => undefined,
+        });
+        continue;
+      }
+      const generation = shortcutGeneration;
+      const onCurrentShortcut = () =>
+        generation === shortcutGeneration ? onShortcut(type) : Promise.resolve();
+      let registered = false;
+      let stop: () => void = () => undefined;
+      if (isModifierPairShortcut(shortcut)) {
+        const registration = yield* Effect.tryPromise(() =>
+          startPairShortcutProcess(
+            snapShotShortcutModifierPair(shortcut),
+            onCurrentShortcut,
+            () => {
+              const current = additionalShortcuts.get(type);
+              if (current?.shortcut !== shortcut || generation !== shortcutGeneration) return;
+              current.registered = false;
+              current.message = snapShotShortcutRegistrationFailureMessage(
+                shortcut,
+                environment.platform,
+              );
+              void runPromise(emit({ type: "shortcut-changed" }));
+            },
+          ),
+        ).pipe(Effect.option);
+        if (Option.isSome(registration)) {
+          stop = registration.value;
+          registered = true;
+        }
+      } else {
+        const accelerator = toElectronAccelerator(shortcut);
+        registered = yield* Effect.try(() =>
+          Electron.globalShortcut.register(accelerator, onCurrentShortcut),
+        ).pipe(Effect.orElseSucceed(() => false));
+        if (registered) stop = () => Electron.globalShortcut.unregister(accelerator);
+      }
+      additionalShortcuts.set(type, {
+        shortcut,
+        registered,
+        message: registered
+          ? isModifierPairShortcut(shortcut)
+            ? observedPairMessage(shortcut, environment.platform)
+            : null
+          : snapShotShortcutRegistrationFailureMessage(shortcut, environment.platform),
+        stop,
+      });
+    }
+  });
+
   const setShortcutSuppressed = (suppressed: boolean) =>
     Effect.sync(() => {
       shortcutSuppressed = suppressed;
@@ -1473,6 +1658,7 @@ export const make = Effect.gen(function* () {
     flash.dispose();
     transition.dispose();
     closeLinuxFeedback();
+    regionPicker.close();
     yield* configurationMutex.withPermits(1)(
       Ref.get(settingsRef).pipe(Effect.flatMap((settings) => applySettings(settings, null, true))),
     );
@@ -1606,6 +1792,7 @@ export const make = Effect.gen(function* () {
       closeLinuxFeedback();
       accessibilityProcessPool.close();
       regionSnapShotPool.close();
+      regionPicker.close();
     }),
   );
 
@@ -1776,6 +1963,29 @@ export const make = Effect.gen(function* () {
                 }
               : {}),
             shortcutVerified,
+            captureTypes:
+              state.mode === "direct"
+                ? (["window", "screen", "region"] as const)
+                : state.mode === "unavailable"
+                  ? []
+                  : (["window"] as const),
+            captureShortcuts: {
+              window: {
+                shortcut: state.shortcut,
+                registered: portalShortcut?.state.shortcutRegistered ?? state.shortcutRegistered,
+                message: portalShortcut?.state.shortcutMessage ?? state.shortcutMessage,
+              },
+              screen: {
+                shortcut: (yield* Ref.get(settingsRef)).snapShotScreenShortcut,
+                registered: additionalShortcuts.get("screen")?.registered ?? false,
+                message: additionalShortcuts.get("screen")?.message ?? null,
+              },
+              region: {
+                shortcut: (yield* Ref.get(settingsRef)).snapShotRegionShortcut,
+                registered: additionalShortcuts.get("region")?.registered ?? false,
+                message: additionalShortcuts.get("region")?.message ?? null,
+              },
+            },
           };
         }),
       ),
@@ -1783,6 +1993,7 @@ export const make = Effect.gen(function* () {
     checkShortcut,
     setShortcutSuppressed,
     capture,
+    captureType,
     listPending: Effect.suspend(() => {
       const ownerUserId = accountUserId;
       const revision = accountRevision;

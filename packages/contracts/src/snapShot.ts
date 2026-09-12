@@ -96,9 +96,22 @@ export const SnapShotAccessibility = SnapShotAccessibilityWire.check(
 );
 export type SnapShotAccessibility = typeof SnapShotAccessibility.Type;
 
+export const SnapShotCaptureType = Schema.Literals(["window", "screen", "region"]);
+export type SnapShotCaptureType = typeof SnapShotCaptureType.Type;
+
 export const SnapShotSource = Schema.Struct({
   kind: Schema.Literal("snap-shot"),
   capturedAt: IsoDateTime,
+  captureType: Schema.optional(SnapShotCaptureType),
+  /** Capture rectangle in desktop logical coordinates; origins may be negative. */
+  captureBounds: Schema.optional(
+    Schema.Struct({
+      x: Schema.Number.check(Schema.isFinite()),
+      y: Schema.Number.check(Schema.isFinite()),
+      width: PositiveInt,
+      height: PositiveInt,
+    }),
+  ),
   appName: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
   windowTitle: TrimmedString.check(Schema.isMaxLength(1_000)),
   accessibleText: Schema.optional(

@@ -4,11 +4,22 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { vi } from "vite-plus/test";
 
 const showMacPermissionSetupMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const { copyImageMock, saveDialogMock, exportImageMock } = vi.hoisted(() => ({
+  copyImageMock: vi.fn(),
+  saveDialogMock: vi.fn(),
+  exportImageMock: vi.fn(),
+}));
+vi.mock("electron", () => ({
+  nativeImage: { createFromBuffer: exportImageMock },
+  clipboard: { writeImage: copyImageMock },
+  dialog: { showSaveDialog: saveDialogMock },
+}));
 vi.mock("../../snapShot/MacPermissionSetup.ts", () => ({
   showMacPermissionSetup: showMacPermissionSetupMock,
 }));
@@ -19,6 +30,8 @@ import * as DesktopSnapShot from "../../snapShot/DesktopSnapShot.ts";
 import {
   checkSnapShotShortcut,
   captureSnapShot,
+  exportSnapShot,
+  decodeSnapShotExportImage,
   setSnapShotAccount,
   watchSnapShotAccountRenderer,
   requestSnapShotPermissions,
@@ -32,6 +45,32 @@ import {
 } from "./snapShot.ts";
 
 describe("window capture IPC", () => {
+  it.effect("forwards an explicitly selected capture type only from the trusted renderer", () => {
+    const modes: string[] = [];
+    return Effect.gen(function* () {
+      const rejected = yield* Effect.exit(
+        captureSnapShot.handler({ type: "screen" }, { sender: { id: 8 } }),
+      );
+      assert(Exit.isFailure(rejected));
+      yield* captureSnapShot.handler({ type: "screen" }, { sender: { id: 7 } });
+      yield* captureSnapShot.handler({ type: "region" }, { sender: { id: 7 } });
+      assert.deepEqual(modes, ["screen", "region"]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(ElectronWindow.ElectronWindow, {
+            main: Effect.succeed(Option.some({ webContents: { id: 7 } })),
+          } as ElectronWindow.ElectronWindow["Service"]),
+          Layer.succeed(DesktopSnapShot.DesktopSnapShot, {
+            captureType: (type: string) =>
+              Effect.sync(() => {
+                modes.push(type);
+              }),
+          } as unknown as DesktopSnapShot.DesktopSnapShot["Service"]),
+        ),
+      ),
+    );
+  });
   it.effect("captures only for the main renderer and forwards capture errors", () => {
     let captureCount = 0;
     const failure = new DesktopSnapShot.DesktopSnapShotError({ operation: "disabled" });
@@ -502,4 +541,81 @@ it("normalizes Wayland attachment coordinates without trusting Electron's screen
     snapShotRelativeFrame(frame, bounds, 1.25),
   );
   assert.isUndefined(snapShotRelativeFrame(frame, { ...bounds, width: 0 }, 1));
+});
+
+const exportPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lRkAAAAASUVORK5CYII=",
+  "base64",
+);
+const exportDataUrl = `data:image/png;base64,${exportPng.toString("base64")}`;
+
+it.effect("copies the rendered PNG only for the trusted renderer", () => {
+  const nativeImage = { isEmpty: () => false, toPNG: () => exportPng };
+  copyImageMock.mockClear();
+  exportImageMock.mockReset().mockReturnValue(nativeImage);
+  return Effect.gen(function* () {
+    const request = { action: "copy", dataUrl: exportDataUrl, name: "snapshot.png" };
+    const rejected = yield* Effect.exit(exportSnapShot.handler(request, { sender: { id: 8 } }));
+    assert(Exit.isFailure(rejected));
+    assert.lengthOf(copyImageMock.mock.calls, 0);
+    assert.isTrue(yield* exportSnapShot.handler(request, { sender: { id: 7 } }));
+    assert.deepEqual(copyImageMock.mock.calls, [[nativeImage]]);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.succeed(ElectronWindow.ElectronWindow, {
+          main: Effect.succeed(Option.some({ webContents: { id: 7 } })),
+        } as ElectronWindow.ElectronWindow["Service"]),
+        FileSystem.layerNoop({}),
+      ),
+    ),
+  );
+});
+
+it.effect(
+  "returns false on a cancelled download and writes only after a destination is selected",
+  () => {
+    const writes: Array<[string, Uint8Array]> = [];
+    const owner = { webContents: { id: 7 } };
+    exportImageMock.mockReset().mockReturnValue({ isEmpty: () => false, toPNG: () => exportPng });
+    saveDialogMock
+      .mockReset()
+      .mockResolvedValueOnce({ canceled: true })
+      .mockResolvedValueOnce({ canceled: false, filePath: "/downloads/edited.png" });
+    return Effect.gen(function* () {
+      const request = { action: "download", dataUrl: exportDataUrl, name: "../../edited" };
+      assert.isFalse(yield* exportSnapShot.handler(request, { sender: { id: 7 } }));
+      assert.deepEqual(writes, []);
+      assert.isTrue(yield* exportSnapShot.handler(request, { sender: { id: 7 } }));
+      assert.deepEqual(writes, [["/downloads/edited.png", exportPng]]);
+      assert.equal(saveDialogMock.mock.calls[0]?.[1].defaultPath, "edited.png");
+      assert.strictEqual(saveDialogMock.mock.calls[0]?.[0], owner);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(ElectronWindow.ElectronWindow, {
+            main: Effect.succeed(Option.some(owner)),
+          } as ElectronWindow.ElectronWindow["Service"]),
+          FileSystem.layerNoop({
+            writeFile: (path, bytes) =>
+              Effect.sync(() => {
+                writes.push([path, bytes]);
+              }),
+          }),
+        ),
+      ),
+    );
+  },
+);
+
+it("rejects invalid and oversized PNGs before native decoding", () => {
+  exportImageMock.mockClear();
+  const oversized = Buffer.from(exportPng);
+  oversized.writeUInt32BE(16_384, 16);
+  oversized.writeUInt32BE(16_384, 20);
+  assert.throws(() => decodeSnapShotExportImage("data:image/png;base64,AAAA"));
+  assert.throws(() =>
+    decodeSnapShotExportImage(`data:image/png;base64,${oversized.toString("base64")}`),
+  );
+  assert.lengthOf(exportImageMock.mock.calls, 0);
 });

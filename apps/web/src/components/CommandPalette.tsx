@@ -50,6 +50,7 @@ import {
 } from "@spiritdevs/client-runtime/state/runtime";
 import {
   type DesktopWslState,
+  type DesktopSnapShotState,
   type EnvironmentId,
   type FilesystemBrowseResult,
   type ProjectId,
@@ -104,6 +105,10 @@ import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
 import { useSnapShotAccountId } from "../lib/snapShotAccount";
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
+import {
+  SNAP_SHOT_CAPTURE_ACTIONS,
+  snapShotCaptureUnavailableMessage,
+} from "../lib/snapShotCapture";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
@@ -2003,24 +2008,49 @@ function OpenCommandPaletteDialog(props: {
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
   const snapShotAccountId = useSnapShotAccountId();
   const snapShotBridge = getDesktopSnapShotBridge();
+  const [snapShotState, setSnapShotState] = useState<DesktopSnapShotState | null>(null);
+  useEffect(() => {
+    if (!snapShotBridge || !snapShotAccountId) return;
+    let cancelled = false;
+    void snapShotBridge
+      .getSnapShotState()
+      .then((next) => {
+        if (!cancelled) setSnapShotState(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [snapShotBridge, snapShotAccountId, clientSettings.snapShotEnabled]);
   if (snapShotAccountId && snapShotBridge?.captureSnapShot) {
-    actionItems.push({
-      kind: "action",
-      value: "action:snap-shot",
-      searchTerms: ["screenshot", "window capture", "app shots", "snapshots"],
-      title: "Take snapshot",
-      icon: <CameraIcon className={ITEM_ICON_CLASS} />,
-      run: async () => {
-        if (!clientSettings.snapShotEnabled) {
-          await navigate({ to: "/settings/snap-shot" });
-          return;
-        }
-        await new Promise<void>((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-        );
-        await snapShotBridge.captureSnapShot?.();
-      },
-    });
+    for (const action of SNAP_SHOT_CAPTURE_ACTIONS) {
+      const unavailable = snapShotCaptureUnavailableMessage(snapShotState, action.type);
+      actionItems.push({
+        kind: "action",
+        value: action.type === "window" ? "action:snap-shot" : `action:snap-shot-${action.type}`,
+        searchTerms: [
+          action.title,
+          "screenshot",
+          `${action.type} capture`,
+          "app shots",
+          "snapshots",
+        ],
+        title: action.title,
+        description: unavailable ?? "Open in the capture editor",
+        disabled: Boolean(unavailable),
+        icon: <CameraIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          if (!clientSettings.snapShotEnabled) {
+            await navigate({ to: "/settings/snap-shot" });
+            return;
+          }
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          );
+          await snapShotBridge.captureSnapShot?.({ type: action.type });
+        },
+      });
+    }
   }
   actionItems.push({
     kind: "action",

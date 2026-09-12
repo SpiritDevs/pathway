@@ -86,7 +86,7 @@ import type {
   OrchestrationV2ThreadStreamItem,
 } from "./orchestrationV2.ts";
 import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { SnapShotSource } from "./snapShot.ts";
+import { SnapShotCaptureType, SnapShotSource } from "./snapShot.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
@@ -246,8 +246,22 @@ export const DesktopCaptureConfigApplied = Schema.Struct({
 });
 export type DesktopCaptureConfigApplied = typeof DesktopCaptureConfigApplied.Type;
 
+const DesktopSnapShotCaptureShortcut = Schema.Struct({
+  shortcut: Schema.NullOr(SnapShotShortcut),
+  registered: Schema.Boolean,
+  message: Schema.NullOr(Schema.String),
+});
+
 export const DesktopSnapShotState = Schema.Struct({
   mode: DesktopSnapShotMode,
+  captureTypes: Schema.optional(Schema.Array(SnapShotCaptureType)),
+  captureShortcuts: Schema.optional(
+    Schema.Struct({
+      window: DesktopSnapShotCaptureShortcut,
+      screen: DesktopSnapShotCaptureShortcut,
+      region: DesktopSnapShotCaptureShortcut,
+    }),
+  ),
   windows: Schema.optional(Schema.Boolean),
   linuxDesktop: Schema.optional(Schema.Literals(["gnome", "kde", "niri", "hyprland"])),
   linuxBackend: Schema.optional(
@@ -292,6 +306,7 @@ export const DesktopSnapShotEvent = Schema.Union([
   Schema.Struct({ type: Schema.Literal("started"), id: DesktopSnapShotId }),
   Schema.Struct({ type: Schema.Literal("ready"), id: DesktopSnapShotId }),
   Schema.Struct({ type: Schema.Literal("failed"), id: Schema.optional(DesktopSnapShotId) }),
+  Schema.Struct({ type: Schema.Literal("cancelled"), id: DesktopSnapShotId }),
   Schema.Struct({ type: Schema.Literal("shortcut-changed") }),
 ]);
 export type DesktopSnapShotEvent = typeof DesktopSnapShotEvent.Type;
@@ -311,6 +326,19 @@ export const DesktopSnapShot = Schema.Struct({
   dataUrl: Schema.String,
 });
 export type DesktopSnapShot = typeof DesktopSnapShot.Type;
+
+export const DesktopSnapShotCaptureOptions = Schema.Struct({ type: SnapShotCaptureType });
+export type DesktopSnapShotCaptureOptions = typeof DesktopSnapShotCaptureOptions.Type;
+
+export const DesktopSnapShotExport = Schema.Struct({
+  action: Schema.Literals(["copy", "download"]),
+  dataUrl: Schema.String.check(
+    Schema.isMaxLength(45_000_000),
+    Schema.isPattern(/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/),
+  ),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+});
+export type DesktopSnapShotExport = typeof DesktopSnapShotExport.Type;
 
 export const DesktopSnapShotAnimationDestination = Schema.Struct({
   id: DesktopSnapShotId,
@@ -1204,7 +1232,8 @@ export interface DesktopBridge {
   setConnectionCatalog?: (catalog: string) => Promise<boolean>;
   clearConnectionCatalog?: () => Promise<void>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
-  captureSnapShot?: () => Promise<void>;
+  captureSnapShot?: (options?: DesktopSnapShotCaptureOptions) => Promise<void>;
+  exportSnapShot?: (request: DesktopSnapShotExport) => Promise<boolean>;
   setSnapShotAccount?: (userId: string | null) => Promise<void>;
   requestSnapShotPermissions?: (includeAccessibility: boolean) => Promise<void>;
   getSnapShotState?: () => Promise<DesktopSnapShotState>;

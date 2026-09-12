@@ -102,7 +102,7 @@ export function snapShotFeedbackUnavailableMessage(
 export function snapShotDescription(state: DesktopSnapShotState | null): string {
   return state?.mode === "portal" && captureSetupBackend(state) === "picker"
     ? "Automatic capture isn't available here. Choose a window instead."
-    : "Capture a window and attach it to your current draft.";
+    : "Capture windows, screens, or regions and annotate them before sharing.";
 }
 
 export function snapShotAccessibilityUnavailableMessage(
