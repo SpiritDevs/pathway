@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct LoginView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(PathwayAppModel.self) private var appModel
 
     private var isSigningIn: Bool {
@@ -9,53 +10,60 @@ struct LoginView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                Spacer()
+            ScrollView {
+                VStack(spacing: 24) {
+                    Image("pathway-logo-small")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 110, height: 110)
+                        .clipShape(.rect(cornerRadius: 28))
+                        .accessibilityHidden(true)
 
-                Image("pathway-logo-small")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 110, height: 110)
-                    .clipShape(.rect(cornerRadius: 12))
-                    .accessibilityHidden(true)
-
-                VStack(spacing: 6) {
-                    Text("Welcome")
-                        .font(.largeTitle.bold())
-                    Text("Log in to continue to Pathway")
-                        .foregroundStyle(.secondary)
-                }
-
-                Text("Use the same Pathway account as the web and desktop apps. Clerk handles your configured sign-in methods, verification, and account recovery.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    VStack(spacing: 8) {
+                        Text("Welcome")
+                            .font(.largeTitle.bold())
+                        Text("Log in to continue to Pathway")
+                            .foregroundStyle(.secondary)
+                    }
                     .multilineTextAlignment(.center)
 
-                if let message = appModel.authenticationErrorMessage {
-                    Text(message)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityLabel("Login error: \(message)")
+                    Text("Use the same Pathway account you use on the web and desktop.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+
+                    if let issue = appModel.authenticationIssue {
+                        PathwayAuthenticationIssueView(issue: issue, automaticReportState: issue.errorCode == nil ? nil : appModel.loginReportState)
+                    }
                 }
-
-                Spacer()
-
+                .frame(maxWidth: 480)
+                .padding(24)
+                .frame(maxWidth: .infinity)
+            }
+            .defaultScrollAnchor(.center, for: .alignment)
+            .task(id: scenePhase) {
+                if scenePhase == .active { await appModel.retryLoginReport() }
+            }
+            .safeAreaInset(edge: .bottom) {
                 Button(action: signIn) {
-                    Group {
+                    HStack(spacing: 10) {
                         if isSigningIn {
                             ProgressView()
+                            Text("Signing in…")
                         } else {
-                            Text("Continue with Pathway")
+                            Text(appModel.authenticationIssue == nil ? "Continue with Pathway" : "Try again")
                         }
                     }
                     .frame(maxWidth: .infinity)
-                    .padding()
+                    .padding(.vertical, 12)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(isSigningIn)
+                .frame(maxWidth: 480)
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(.background)
             }
-            .padding()
         }
     }
 

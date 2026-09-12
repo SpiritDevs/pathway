@@ -21,7 +21,8 @@ struct PathwayPendingThreadRoute: Equatable, Sendable {
 @Observable
 final class PathwayAppModel {
     private(set) var authenticationState: AppAuthenticationState = .restoring
-    private(set) var authenticationErrorMessage: String?
+    private(set) var authenticationIssue: PathwayAuthenticationIssue?
+    private(set) var loginReportState: PathwayLoginReportState = .sending
     var pendingThreadRoute: PathwayPendingThreadRoute?
     var pendingStorageNotification: PathwayStorageNotificationDestination?
     var pendingProductLink: PathwayProductLink?
@@ -41,6 +42,7 @@ final class PathwayAppModel {
     let connect: PathwayConnectClient?
     let relayURL: URL?
 
+    @ObservationIgnored private let loginErrorReporter: any PathwayLoginErrorReporting
     @ObservationIgnored private let authProvider: any PathwayAuthenticating
     @ObservationIgnored private var hasRestoredSession = false
     @ObservationIgnored private var authenticationGeneration = 0
@@ -50,11 +52,13 @@ final class PathwayAppModel {
         authProvider: (any PathwayAuthenticating)? = nil,
         convexDeploymentURL: URL? = nil,
         relayURL: URL? = nil,
-        relayJWTTemplate: String? = nil
+        relayJWTTemplate: String? = nil,
+        loginErrorReporter: (any PathwayLoginErrorReporting)? = nil
     ) {
         let provider = authProvider ?? PathwayAuthProvider()
         self.relayURL = relayURL
         self.authProvider = provider
+        self.loginErrorReporter = loginErrorReporter ?? PathwayLoginErrorReporter(deploymentURL: convexDeploymentURL)
         if let relayURL, let relayJWTTemplate {
             connect = PathwayConnectClient(
                 relayURL: relayURL,
@@ -85,7 +89,8 @@ final class PathwayAppModel {
     func restoreSession() async {
         guard !hasRestoredSession else { return }
         hasRestoredSession = true
-        authenticationErrorMessage = nil
+        Task { await loginErrorReporter.retryPendingReports() }
+        authenticationIssue = nil
         authenticationState = authProvider.hasActiveSession ? .signedIn : .signedOut
         if authenticationState == .signedIn {
             guard await prepareLocalStorage() else { return }
@@ -94,9 +99,10 @@ final class PathwayAppModel {
     }
 
     func signIn() async {
+        guard authenticationState != .signingIn else { return }
         let generation = authenticationGeneration
         authenticationState = .signingIn
-        authenticationErrorMessage = nil
+        authenticationIssue = nil
 
         do {
             try await authProvider.startHostedSignIn()
@@ -107,8 +113,22 @@ final class PathwayAppModel {
         } catch {
             guard generation == authenticationGeneration else { return }
             authenticationState = .signedOut
-            authenticationErrorMessage = error.localizedDescription
+            let issue = PathwayAuthenticationIssue(signInError: error)
+            authenticationIssue = issue
+            loginReportState = .sending
+            let reported = await loginErrorReporter.report(issue)
+            guard authenticationIssue?.id == issue.id else { return }
+            loginReportState = reported ? .received : .pending
         }
+    }
+
+    func retryLoginReport() async {
+        guard authenticationState == .signedOut, loginReportState == .pending,
+              let issue = authenticationIssue, issue.errorCode != nil else { return }
+        loginReportState = .sending
+        let reported = await loginErrorReporter.report(issue)
+        guard authenticationIssue?.id == issue.id else { return }
+        loginReportState = reported ? .received : .pending
     }
 
     func signOut() async {
@@ -131,10 +151,14 @@ final class PathwayAppModel {
             await cloud.stop()
             await cloud.configureLocalStorage(directory: nil)
             projectIcons.clear()
-            authenticationErrorMessage = nil
+            authenticationIssue = nil
             authenticationState = .signedOut
         } catch {
-            authenticationErrorMessage = error.localizedDescription
+            authenticationIssue = PathwayAuthenticationIssue(
+                title: "Couldn't sign out",
+                message: "Please try signing out again. If this keeps happening, report it to our support team.",
+                error: error
+            )
             if authenticationState == .signedIn { await PathwayNotifications.shared.configure(appModel: self) }
         }
     }
@@ -153,7 +177,10 @@ final class PathwayAppModel {
         PathwaySystemEntry.shared.request = nil
             PathwayKeyboardPreferences.shared.pendingAction = nil
         projectIcons.clear()
-        authenticationErrorMessage = "Your Pathway session ended. Sign in again to continue."
+        authenticationIssue = PathwayAuthenticationIssue(
+            title: "Sign in again",
+            message: "Your Pathway session ended. Sign in again to continue."
+        )
         authenticationState = .signedOut
     }
 
@@ -164,7 +191,7 @@ final class PathwayAppModel {
             isAccountReady = false
             PathwayNotifications.shared.clearLocalRegistration()
             let generation = authenticationGeneration
-            authenticationErrorMessage = nil
+            authenticationIssue = nil
             authenticationState = .signedIn
             Task { @MainActor [weak self] in
                 guard let self, generation == authenticationGeneration else { return }
@@ -194,7 +221,10 @@ final class PathwayAppModel {
         let token = try? await authProvider.token(template: nil)
         guard generation == authenticationGeneration, authenticationState == .signedIn else { return false }
         guard let token, let identity = PathwayAccountStorage.identity(fromToken: token) else {
-            authenticationErrorMessage = "Pathway could not prepare your account. Sign in again to continue."
+            authenticationIssue = PathwayAuthenticationIssue(
+                title: "Account unavailable",
+                message: "Pathway could not prepare your account. Sign in again to continue."
+            )
             return false
         }
         let directory = PathwayAccountStorage.directory(for: identity)

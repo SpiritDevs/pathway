@@ -530,10 +530,8 @@ struct PathwaySettingsView: View {
                     }
                 }
 
-                if let message = appModel.authenticationErrorMessage {
-                    Text(message)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
+                if let issue = appModel.authenticationIssue {
+                    PathwayAuthenticationIssueView(issue: issue)
                 }
             }
 

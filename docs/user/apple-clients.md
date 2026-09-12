@@ -4,6 +4,14 @@ Pathway connects to your environments so you can direct agents and complete work
 
 iPhone uses portrait orientation. iPad supports portrait and landscape. Apple Vision Pro uses resizable spatial windows.
 
+## Sign-in help
+
+Use the same Pathway account as the web and desktop apps. If sign-in closes before finishing, tap **Try again** to reopen it. Connection failures include guidance for retrying.
+
+Login failures are reported automatically to support@pathwayos.app, including when sign-in closes before finishing. The report includes the error code, time, app version and OS version, without account credentials or conversation content. The screen shows when Pathway Cloud receives the report. If the phone cannot send it, Pathway saves it and retries when you return to the login screen or restart the app. No email app or manual send is required.
+
+Other account errors offer **Report a problem**, which lets you review an email for support or share its details.
+
 ## Work and conversations
 
 Agent Threads includes search, company/project/environment/provider filters, running and attention views, and Focuses. You can rename, pin, archive, restore, snooze, wake, settle, reopen or delete threads. Deletion is permanent; use Archive when you may want the conversation again.

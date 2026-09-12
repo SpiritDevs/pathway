@@ -43,6 +43,7 @@ import type * as lib_threadAlertPolicy from "../lib/threadAlertPolicy.js";
 import type * as lib_threadQueueRetention from "../lib/threadQueueRetention.js";
 import type * as lib_trackedTime from "../lib/trackedTime.js";
 import type * as lib_validators from "../lib/validators.js";
+import type * as loginErrorReports from "../loginErrorReports.js";
 import type * as mail from "../mail.js";
 import type * as mailJobs from "../mailJobs.js";
 import type * as mailRelay from "../mailRelay.js";
@@ -98,6 +99,7 @@ declare const fullApi: ApiFromModules<{
   "lib/threadQueueRetention": typeof lib_threadQueueRetention;
   "lib/trackedTime": typeof lib_trackedTime;
   "lib/validators": typeof lib_validators;
+  loginErrorReports: typeof loginErrorReports;
   mail: typeof mail;
   mailJobs: typeof mailJobs;
   mailRelay: typeof mailRelay;

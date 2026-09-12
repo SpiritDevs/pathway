@@ -29,10 +29,12 @@ struct InitView: View {
                 case .signedIn:
                     if appModel.isAccountReady {
                         MainTabView().id(appModel.localStorageDirectory)
-                    } else if let message = appModel.authenticationErrorMessage {
+                    } else if let issue = appModel.authenticationIssue {
                         ContentUnavailableView {
                             Label("Account unavailable", systemImage: "person.crop.circle.badge.exclamationmark")
-                        } description: { Text(message) } actions: {
+                        } description: {
+                            PathwayAuthenticationIssueView(issue: issue)
+                        } actions: {
                             Button("Sign out") { Task { await appModel.signOut() } }
                         }
                     } else {

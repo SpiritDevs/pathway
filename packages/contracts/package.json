@@ -7,6 +7,10 @@
   ],
   "type": "module",
   "exports": {
+    "./loginErrorReports": {
+      "types": "./src/loginErrorReports.ts",
+      "import": "./src/loginErrorReports.ts"
+    },
     "./threadAlerts": {
       "types": "./src/threadAlerts.ts",
       "import": "./src/threadAlerts.ts"
