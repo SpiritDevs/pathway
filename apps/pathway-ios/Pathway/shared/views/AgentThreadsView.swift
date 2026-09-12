@@ -43,7 +43,7 @@ struct AgentThreadsView: View {
         _listFilter = State(initialValue: initialFilter)
     }
 
-    var body: some View {
+    private var threadNavigation: some View {
         Group {
             if lifecycleThreadCount == 0 {
                 emptyState
@@ -99,6 +99,10 @@ struct AgentThreadsView: View {
                 perform(.attachProject(projectID), on: thread)
             }
         }
+    }
+
+    var body: some View {
+        threadNavigation
         .alert("Unfinished Git work", isPresented: Binding(
             get: { threadActions.unfinishedGitThread != nil },
             set: { if !$0 { threadActions.unfinishedGitThread = nil } }
@@ -1182,7 +1186,10 @@ struct AgentThreadConversationView: View {
         .onChange(of: model.thread.shell.deletedAt) { _, deletedAt in
             if deletedAt != nil { dismiss() }
         }
-        .task { model.threadQueue = appModel.cloud.threadQueue; model.start() }
+        .task {
+            if model.injectedRequest == nil { model.threadQueue = appModel.cloud.threadQueue }
+            model.start()
+        }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             do {
@@ -1193,6 +1200,7 @@ struct AgentThreadConversationView: View {
             if model.providers.isEmpty { await model.loadSavedQueueProviders(using: appModel.cloud.threadQueue, companyID: model.thread.companyId) }
         }
         .task(id: queuedConversation) {
+            guard model.injectedRequest == nil else { return }
             model.threadQueue = appModel.cloud.threadQueue
             if let queued = queuedConversation { await model.updateCloudQueue(queued) }
         }
