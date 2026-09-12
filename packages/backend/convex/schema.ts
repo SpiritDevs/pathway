@@ -178,6 +178,23 @@ const relayActivityAggregateState = v.object({
 });
 
 export default defineSchema({
+  // Anonymous login diagnostics. Delivery fields are private server bookkeeping.
+  loginErrorReports: defineTable({
+    reportId: v.string(),
+    installationId: v.string(),
+    occurredAt: v.string(),
+    appVersion: v.string(),
+    osVersion: v.string(),
+    errorDomain: v.string(),
+    errorCode: v.number(),
+    kind: v.union(v.literal("cancelled"), v.literal("connection"), v.literal("unknown")),
+    createdAt: v.number(),
+    attempts: v.number(),
+    sentAt: v.union(v.number(), v.null()),
+  })
+    .index("by_reportId", ["reportId"])
+    .index("by_createdAt", ["createdAt"])
+    .index("by_sentAt", ["sentAt"]),
   ...businessToolsTables,
   ...mailTables,
   // ---------------------------------------------------------------------------

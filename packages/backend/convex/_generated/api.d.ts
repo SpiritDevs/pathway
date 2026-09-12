@@ -36,6 +36,7 @@ import type * as lib_relayIdentity from "../lib/relayIdentity.js";
 import type * as lib_slackOutbound from "../lib/slackOutbound.js";
 import type * as lib_threadAlertPolicy from "../lib/threadAlertPolicy.js";
 import type * as lib_validators from "../lib/validators.js";
+import type * as loginErrorReports from "../loginErrorReports.js";
 import type * as mail from "../mail.js";
 import type * as mailJobs from "../mailJobs.js";
 import type * as mailRelay from "../mailRelay.js";
@@ -84,6 +85,7 @@ declare const fullApi: ApiFromModules<{
   "lib/slackOutbound": typeof lib_slackOutbound;
   "lib/threadAlertPolicy": typeof lib_threadAlertPolicy;
   "lib/validators": typeof lib_validators;
+  loginErrorReports: typeof loginErrorReports;
   mail: typeof mail;
   mailJobs: typeof mailJobs;
   mailRelay: typeof mailRelay;

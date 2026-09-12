@@ -44,7 +44,7 @@ struct PathwayTests {
         await appModel.restoreSession()
 
         #expect(appModel.authenticationState == .signedIn)
-        #expect(appModel.authenticationErrorMessage == nil)
+        #expect(appModel.authenticationIssue == nil)
     }
 
     @MainActor
@@ -57,7 +57,7 @@ struct PathwayTests {
         authProvider.onSessionChanged?(false)
 
         #expect(appModel.authenticationState == .signedOut)
-        #expect(appModel.authenticationErrorMessage != nil)
+        #expect(appModel.authenticationIssue != nil)
     }
 
     @MainActor
@@ -72,7 +72,7 @@ struct PathwayTests {
         await appModel.signOut()
 
         #expect(appModel.authenticationState == .signedIn)
-        #expect(appModel.authenticationErrorMessage == "The test sign-out failed.")
+        #expect(appModel.authenticationIssue?.title == "Couldn't sign out")
     }
 
     @Test func timelineDecodesStreamingMarkdownAndAttachments() {

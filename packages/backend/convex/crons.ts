@@ -36,4 +36,10 @@ crons.interval(
   {},
 );
 
+crons.hourly(
+  "prune delivered login reports",
+  { minuteUTC: 29 },
+  internal.loginErrorReports.pruneSent,
+);
+
 export default crons;
