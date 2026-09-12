@@ -241,6 +241,14 @@ extension PathwayAgentThreadModel {
         }
     }
 
+    func visualizationURL(_ path: String, threadID: String) async throws -> URL {
+        guard let connect else { throw PathwayThreadConversationError.message("Connect to the environment to open the visualization.") }
+        return try await PathwayEnvironmentHTTP.assetURL(path, threadID: threadID, environment: environment, connect: connect,
+                                                       resourceKind: "visualization-file") { [self] method, payload in
+            try await request(method, payload: payload, reportsErrors: false)
+        }
+    }
+
     func attachmentURL(_ attachment: PathwayMessageAttachment) async throws -> URL {
         if let url = cloudQueueAttachmentURLs[attachment.id] { return url }
         let value = try await request("assets.createUrl", payload: .object(["resource": .object([
