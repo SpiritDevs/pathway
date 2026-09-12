@@ -40,7 +40,7 @@ const app = apps.data[0];
 console.log(JSON.stringify({ checkedAt: new Date().toISOString(), appName: app.attributes.name, bundleId: app.attributes.bundleId }));
 let priorDeclaration;
 let targetBuildFound = false;
-for (const version of ["12", "13", "14"]) {
+for (const version of ["12", "13", "14", "15"]) {
   const result = await get("/v1/builds", { "filter[app]": app.id, "filter[version]": version, include: "preReleaseVersion", limit: "20" });
   console.log(JSON.stringify({ buildNumber: version, matches: result.data.length }));
   for (const build of result.data) {
@@ -68,6 +68,6 @@ for (const version of ["12", "13", "14"]) {
 }
 
 const groups = await get("/v1/betaGroups", { "filter[app]": app.id, include: "builds", "limit[builds]": "1000", limit: "200" });
-console.log(JSON.stringify({ testerGroups: groups.data.map(({ id, attributes, relationships }) => ({ id, name: attributes.name, isInternalGroup: attributes.isInternalGroup, hasAccessToAllBuilds: attributes.hasAccessToAllBuilds, relevantBuilds: (relationships?.builds?.data ?? []).map((item) => groups.included?.find((build) => build.type === "builds" && build.id === item.id)?.attributes.version).filter((version) => version === "13" || version === "14") })), hasMoreGroups: Boolean(groups.links?.next) }));
+console.log(JSON.stringify({ testerGroups: groups.data.map(({ id, attributes, relationships }) => ({ id, name: attributes.name, isInternalGroup: attributes.isInternalGroup, hasAccessToAllBuilds: attributes.hasAccessToAllBuilds, relevantBuilds: (relationships?.builds?.data ?? []).map((item) => groups.included?.find((build) => build.type === "builds" && build.id === item.id)?.attributes.version).filter((version) => version === "13" || version === "14" || version === "15") })), hasMoreGroups: Boolean(groups.links?.next) }));
 
 if (process.env.COMPLETE_BUILD_14 === "true" && !targetBuildFound) throw new Error("Build 14 is not uploaded yet");
