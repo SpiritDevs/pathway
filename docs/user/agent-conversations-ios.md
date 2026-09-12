@@ -18,7 +18,7 @@ Tap the floating composer to write. Add photos, images from the clipboard, or fi
 
 While the agent works, stop the response or queue another message. Hold Send to choose whether to queue the message or steer the current turn. Sending and property changes report failures without discarding the draft. The same Send menu can start a new thread or a side chat when the provider supports it.
 
-The round send button stays visible in both the collapsed and expanded composer. While the agent is preparing or working, it shows a spinner. With an empty draft, tap it to stop the response. With a draft, tap it to send your follow-up; a separate Stop button remains available. Reduce Motion replaces the spinner with a still icon.
+The round send button stays visible in both the collapsed and expanded composer. While the agent is preparing or working, it shows a spinner. With an empty draft, tap it to stop the response. With text or attachments in the composer, the spinner changes to the selected Steer or Queue icon. Tap it to send your follow-up; a separate Stop button remains available. The working spinner returns when the composer is empty. Reduce Motion replaces the spinner with a still icon.
 
 Use `@` to find a workspace file, `$` for a provider skill, and `/` for supported commands. `/model` searches the available models. Suggestions replace the token at your cursor and preserve the rest of the draft.
 
@@ -37,3 +37,5 @@ The thread menu at the top includes Rename, Pin or Unpin, Settle or Reopen, Forc
 Thread rows show compact status labels so you can scan for Working, Preparing, Queued, Waiting, Question, Approval, Review plan, Failed, Stopped, or Ready. A pending question or approval takes priority over background work. Status labels use text as well as color and update with the environment's thread state.
 
 The notification bell is hidden when there are no notifications. It appears when notifications arrive; read notifications remain accessible from the bell.
+
+Tap the compose button at the top of a conversation to start a new thread. The new-thread sheet preselects the current project, environment, provider, model and reasoning options, access mode, chat or plan mode, and temporary setting. You can change the defaults before sending. The existing conversation and its draft stay intact.

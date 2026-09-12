@@ -966,6 +966,7 @@ struct AgentThreadConversationView: View {
     @State private var showsUnfinishedGit = false
     @State private var showsGitReview = false
     @State private var showsAlternateEnvironment = false
+    @State private var newThreadDefaults: PathwayNewThreadDefaults?
     @State private var showsQueueMove = false
     @State private var isComposerFocused = false
 
@@ -1124,9 +1125,11 @@ struct AgentThreadConversationView: View {
                 .accessibilityIdentifier("agent-thread-heading")
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button("Write message", systemImage: "square.and.pencil") {
-                    isComposerExpanded = true; isComposerFocused = true
+                Button("New thread", systemImage: "square.and.pencil") {
+                    isComposerFocused = false
+                    newThreadDefaults = PathwayNewThreadDefaults(model: model)
                 }
+                .accessibilityIdentifier("agent-thread-new-with-defaults")
                 threadActionsMenu
                 .accessibilityLabel("Thread actions").accessibilityIdentifier("agent-thread-actions")
             }
@@ -1156,6 +1159,9 @@ struct AgentThreadConversationView: View {
         .sheet(isPresented: $showsChanges) { AgentThreadChangesView(model: model) }
         .onChange(of: changedItems.isEmpty) { _, empty in
             if empty { showsChanges = false }
+        }
+        .sheet(item: $newThreadDefaults) { defaults in
+            NewAgentThreadView(threadDefaults: defaults)
         }
         .sheet(isPresented: $showsAlternateEnvironment) {
             NewAgentThreadView(initialPrompt: model.draft)

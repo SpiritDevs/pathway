@@ -356,8 +356,8 @@ struct AgentThreadComposer: View {
 
     private var sendButton: some View {
         let stopsResponse = model.activeRunID != nil && !hasContent
-        let showsProgress = model.isSending || isStartingNewThread || isInterrupting
-            || model.activity == .preparing || model.activity == .starting || model.activity == .working
+        let showsProgress = !hasContent && (model.isSending || isStartingNewThread || isInterrupting
+            || model.activity == .preparing || model.activity == .starting || model.activity == .working)
         let prominent = model.canSend || showsProgress || stopsResponse
         let foreground = prominent ? Color(.systemBackground) : Color.secondary
         return Button {
