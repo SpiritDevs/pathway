@@ -29,8 +29,13 @@ struct AgentThreadsView: View {
     @State private var attachingThread: PathwayAgentThread?
     @State private var focuses = PathwayFocusModel()
     @State private var creatingFocus = false
-    @State private var editingFocus: PathwayFocus?
     @State private var showingNotifications = false
+    @State private var settingsPage: ThreadSettingsPage?
+
+    private enum ThreadSettingsPage: String, Identifiable {
+        case all, general, appearance, focusViews
+        var id: Self { self }
+    }
 
     init(newThreadAction: @escaping () -> Void, initialFilter: PathwayThreadListFilter = .all) {
         self.newThreadAction = newThreadAction
@@ -47,18 +52,7 @@ struct AgentThreadsView: View {
         }
         .navigationTitle("Agent Threads")
         .searchable(text: $query, prompt: "Search threads")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) { focusMenu }
-            ToolbarItem(placement: .primaryAction) {
-                Button { showingNotifications = true } label: {
-                    Image(systemName: focuses.unreadCount > 0 ? "bell.badge" : "bell").frame(minWidth: 44, minHeight: 44)
-                }.accessibilityLabel("Notifications, \(focuses.unreadCount) unread")
-            }
-            ToolbarItem(placement: .primaryAction) { filtersMenu }
-            ToolbarItem(placement: .primaryAction) {
-                Button("New thread", systemImage: "square.and.pencil", action: newThreadAction)
-            }
-        }
+        .toolbar { threadToolbar }
         .refreshable {
             await appModel.cloud.retry()
             if let connect = appModel.connect {
@@ -89,8 +83,8 @@ struct AgentThreadsView: View {
         .task(id: appModel.cloud.threads.map(\.id)) { await openPendingThread() }
         .task(id: appModel.localStorageDirectory) { await focuses.observe(cloud: appModel.cloud, storageDirectory: appModel.localStorageDirectory) }
         .sheet(isPresented: $creatingFocus) { PathwayFocusEditorView(model: focuses) }
-        .sheet(item: $editingFocus) { PathwayFocusEditorView(model: focuses, focus: $0) }
         .sheet(isPresented: $showingNotifications) { PathwayFocusNotificationsView(model: focuses) }
+        .sheet(item: $settingsPage) { settingsView($0) }
         .accessibilityIdentifier("agent-threads-list")
         .sheet(item: $sleepingThread) { thread in
             sleepSheet(for: thread)
@@ -287,26 +281,82 @@ struct AgentThreadsView: View {
         return true
     }
 
+    @ToolbarContentBuilder
+    private var threadToolbar: some ToolbarContent {
+        if focuses.selectedID != "all" {
+            ToolbarItem(placement: .primaryAction) {
+                Menu { focusMenuContents } label: {
+                    PathwayFocusIcon(name: selectedFocus?.iconName ?? "CircleDot", size: 24)
+                        .foregroundStyle(PathwayFocusIcon.color(selectedFocus?.accentColor))
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .accessibilityLabel("Focus: \(selectedFocus?.name ?? "Unavailable")")
+            }
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button { showingNotifications = true } label: {
+                Image(systemName: focuses.unreadCount > 0 ? "bell.badge" : "bell").frame(minWidth: 44, minHeight: 44)
+            }.accessibilityLabel("Notifications, \(focuses.unreadCount) unread")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                Menu {
+                    Button("General", systemImage: "gearshape") { settingsPage = .general }
+                    Button("Appearance", systemImage: "paintbrush") { settingsPage = .appearance }
+                    Button("Focus Views", systemImage: "target") { settingsPage = .focusViews }
+                    Button("All settings", systemImage: "slider.horizontal.3") { settingsPage = .all }
+                } label: { Label("Settings", systemImage: "gearshape") }
+                focusMenu
+                filtersMenu
+            } label: { Image(systemName: "line.3.horizontal.decrease").frame(minWidth: 44, minHeight: 44) }
+            .accessibilityLabel("Thread options")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button("New thread", systemImage: "square.and.pencil", action: newThreadAction)
+        }
+    }
+
+    private func settingsView(_ page: ThreadSettingsPage) -> some View {
+        NavigationStack {
+            Group {
+                switch page {
+                case .all: PathwaySettingsView(focusModel: focuses)
+                case .general: PathwayGeneralSettingsView()
+                case .appearance: PathwayAppearanceSettingsView()
+                case .focusViews: PathwayFocusSettingsView(model: focuses)
+                }
+            }
+            .toolbar {
+                if page != .all {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { settingsPage = nil }
+                    }
+                }
+            }
+        }
+    }
+
     private var focusMenu: some View {
-        Menu {
+        Menu { focusMenuContents } label: {
+            Label("Focus", image: PathwayFocusIconCatalog.assetName(for: selectedFocus?.iconName ?? "Layers3"))
+        }
+    }
+
+    private var selectedFocus: PathwayFocus? { focuses.focuses.first { $0.id == focuses.selectedID } }
+
+    @ViewBuilder
+    private var focusMenuContents: some View {
             Picker("Focus", selection: $focuses.selectedID) {
-                Text("All threads").tag("all")
-                ForEach(focuses.focuses) { Text($0.name).tag($0.id) }
+                Label("All threads", image: PathwayFocusIconCatalog.assetName(for: "Layers3")).tag("all")
+                ForEach(focuses.focuses) { focus in
+                    Label(focus.name, image: PathwayFocusIconCatalog.assetName(for: focus.iconName)).tag(focus.id)
+                }
                 if focuses.selectedID != "all" && !focuses.focuses.contains(where: { $0.id == focuses.selectedID }) {
                     Text("Unavailable Focus").tag(focuses.selectedID)
                 }
             }
             Button("New Focus", systemImage: "plus") { creatingFocus = true }
-            ForEach(focuses.focuses) { focus in
-                Menu(focus.name) {
-                    Button("Edit") { editingFocus = focus }
-                    Button("Move up") { Task { await focuses.move(focus, offset: -1, cloud: appModel.cloud) } }
-                    Button("Move down") { Task { await focuses.move(focus, offset: 1, cloud: appModel.cloud) } }
-                }
-            }
             if let error = focuses.errorMessage { Text(error) }
-        } label: { Image(systemName: "target").frame(minWidth: 44, minHeight: 44) }
-        .accessibilityLabel("Choose or manage Focus")
     }
 
     private var filtersMenu: some View {
@@ -331,8 +381,7 @@ struct AgentThreadsView: View {
             Button("Clear filters") {
                 query = ""; listFilter = .all; companyFilter = ""; environmentFilter = ""; projectFilter = ""; providerFilter = ""
             }
-        } label: { Image(systemName: "line.3.horizontal.decrease").frame(minWidth: 44, minHeight: 44) }
-        .accessibilityLabel("Filter threads")
+        } label: { Label("Filters", systemImage: "line.3.horizontal.decrease") }
     }
 
     @ViewBuilder private func threadMenu(_ thread: PathwayAgentThread) -> some View {
@@ -604,8 +653,9 @@ private struct AgentThreadRow: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 6) {
-                workspaceDetails
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                branchDetails
+
+                Spacer(minLength: 0)
 
                 statusIndicator
 
@@ -614,6 +664,9 @@ private struct AgentThreadRow: View {
                         .labelStyle(.titleOnly)
                         .fixedSize()
                 }
+
+                environmentDetails
+                    .layoutPriority(1)
 
                 providerIcon
             }
@@ -676,20 +729,20 @@ private struct AgentThreadRow: View {
         )
     }
 
-    private var workspaceDetails: some View {
-        HStack(spacing: 5) {
-            if let branch = thread.shell.branch {
-                Text(branch)
-                    .fontDesign(.monospaced)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+    @ViewBuilder
+    private var branchDetails: some View {
+        if let branch = thread.shell.branch {
+            Text(branch)
+                .fontDesign(.monospaced)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
 
-            if let environmentName {
-                if thread.shell.branch != nil {
-                    Text("·")
-                }
-
+    @ViewBuilder
+    private var environmentDetails: some View {
+        if let environmentName {
+            HStack(spacing: 5) {
                 Text(environmentName)
                     .lineLimit(1)
 
@@ -740,6 +793,47 @@ private struct AgentThreadRow: View {
         )
     }
 }
+
+#if DEBUG && !os(visionOS)
+/// Uses production rows with sample data for simulator layout checks.
+struct AgentThreadRowsSimulatorView: View {
+    static let samples = [
+        ("Update iOS TestFlight Build", "main", "online"),
+        ("Review Billing For Missing Stripe IDs", "qc-react", "offline"),
+        ("Release App for Infrastructure", "main", "online"),
+        ("Five Astro Web Designs", "", "offline"),
+        ("Relabel Issues View as Tasks", "rename-issues-view-to-tasks", "online"),
+        ("Animate Floating Sidebar Drawer", "animate-floating-sidebar-drawer", "online")
+    ]
+
+    var body: some View {
+        NavigationStack {
+            List(Self.samples, id: \.0) { title, branch, environment in
+                AgentThreadRow(thread: Self.thread(title: title, branch: branch, environment: environment),
+                    provider: PathwayThreadProvider(driver: "codex", name: "Codex"))
+                    .padding(.vertical, 6)
+            }
+            .listStyle(.plain)
+            .navigationTitle("Agent Threads")
+        }
+    }
+
+    static func thread(title: String, branch: String, environment: String) -> PathwayAgentThread {
+        let fields: [String: JSONValue] = [
+            "id": .string(title), "projectId": .string("local-project"), "title": .string(title),
+            "providerInstanceId": .string("codex"),
+            "modelSelection": .object(["instanceId": .string("codex"), "model": .string("gpt-5.6")]),
+            "runtimeMode": .string("approval-required"), "interactionMode": .string("default"),
+            "branch": branch.isEmpty ? .null : .string(branch), "status": .string("idle"),
+            "hasActionableProposedPlan": .bool(false), "itemCount": .number(0), "visibleItemCount": .number(0),
+            "createdAt": .string("2026-09-12T00:00:00Z"), "updatedAt": .string("2026-09-12T00:00:00Z")
+        ]
+        let shell = try! JSONDecoder().decode(PathwayAgentThreadShell.self, from: JSONEncoder().encode(fields))
+        return PathwayAgentThread(companyId: "parity-company", environmentId: environment,
+            cloudProjectId: "parity-project", shell: shell, cloudUpdatedAt: 0)
+    }
+}
+#endif
 
 private struct AgentThreadPullRequestBadge: View {
     @Environment(PathwayAppModel.self) private var appModel
@@ -850,6 +944,7 @@ struct AgentThreadConversationView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     connectionBanner
                     AgentThreadTranscript(model: model, onOpenChild: openChild)
+                        .environment(\.markdownImageWorkspaceRoot, currentWorkspaceRoot)
                 }
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)

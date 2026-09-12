@@ -1,11 +1,64 @@
 import SwiftUI
 
+struct PathwayFocusSettingsView: View {
+    @Environment(PathwayAppModel.self) private var appModel
+    @State private var ownedModel = PathwayFocusModel()
+    @State private var editingFocus: PathwayFocus?
+    @State private var creatingFocus = false
+    private let providedModel: PathwayFocusModel?
+    private var model: PathwayFocusModel { providedModel ?? ownedModel }
+
+    init(model: PathwayFocusModel? = nil) {
+        providedModel = model
+    }
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(model.focuses) { focus in
+                    HStack {
+                        Button { editingFocus = focus } label: {
+                            Label { Text(focus.name) } icon: {
+                                PathwayFocusIcon(name: focus.iconName)
+                                    .foregroundStyle(PathwayFocusIcon.color(focus.accentColor))
+                            }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Edit Focus")
+                        Menu {
+                            Button("Move up", systemImage: "arrow.up") {
+                                Task { await model.move(focus, offset: -1, cloud: appModel.cloud) }
+                            }.disabled(model.focuses.first?.id == focus.id)
+                            Button("Move down", systemImage: "arrow.down") {
+                                Task { await model.move(focus, offset: 1, cloud: appModel.cloud) }
+                            }.disabled(model.focuses.last?.id == focus.id)
+                        } label: { Image(systemName: "ellipsis").frame(minWidth: 44, minHeight: 44) }
+                        .accessibilityLabel("Reorder \(focus.name)")
+                    }
+                }
+                Button("New Focus", systemImage: "plus") { creatingFocus = true }
+            } footer: {
+                Text("Choose a Focus to edit its name, projects, and appearance, or delete it.")
+            }
+            if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
+        }
+        .navigationTitle("Focus Views")
+        .sheet(item: $editingFocus) { PathwayFocusEditorView(model: model, focus: $0) }
+        .sheet(isPresented: $creatingFocus) { PathwayFocusEditorView(model: model) }
+        .task(id: appModel.localStorageDirectory) {
+            if providedModel == nil { await model.observe(cloud: appModel.cloud, storageDirectory: appModel.localStorageDirectory) }
+        }
+    }
+}
+
 struct PathwayFocusEditorView: View {
     @Environment(PathwayAppModel.self) private var appModel
     @Environment(\.dismiss) private var dismiss
     let model: PathwayFocusModel
     var focus: PathwayFocus?
     @State private var name = ""
+    @State private var iconName = "Briefcase"
     @State private var color = "#6366f1"
     @State private var selectedProjects: Set<String> = []
     @State private var includeConversations = false
@@ -18,6 +71,14 @@ struct PathwayFocusEditorView: View {
             Form {
                 Section("Focus") {
                     TextField("Name", text: $name)
+                    Picker("Icon", selection: $iconName) {
+                        ForEach(PathwayFocusIconCatalog.options) { option in
+                            Label(option.label, image: PathwayFocusIconCatalog.assetName(for: option.name)).tag(option.name)
+                        }
+                        if !PathwayFocusIconCatalog.options.contains(where: { $0.name == iconName }) {
+                            Label("Current icon", image: PathwayFocusIconCatalog.assetName(for: iconName)).tag(iconName)
+                        }
+                    }
                     Picker("Color", selection: $color) {
                         Text("Indigo").tag("#6366f1")
                         Text("Blue").tag("#3b82f6")
@@ -49,6 +110,7 @@ struct PathwayFocusEditorView: View {
             }
             .task {
                 name = focus?.name ?? ""; color = focus?.accentColor ?? "#6366f1"
+                iconName = focus?.iconName ?? "Briefcase"
                 includeConversations = focus?.includeConversations ?? false
                 selectedProjects = Set(model.assignments.filter { $0.focusId == focus?.id }.map(\.projectKey))
             }
@@ -71,7 +133,7 @@ struct PathwayFocusEditorView: View {
         saving = true; defer { saving = false }
         do {
             if let focus {
-                _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:update", arguments: .object(["focusId": .string(focus.id), "name": .string(name), "accentColor": .string(color), "includeConversations": .bool(includeConversations)]))
+                _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:update", arguments: .object(["focusId": .string(focus.id), "name": .string(name), "iconName": .string(iconName), "accentColor": .string(color), "includeConversations": .bool(includeConversations)]))
                 let original = Set(model.assignments.filter { $0.focusId == focus.id }.map(\.projectKey))
                 for key in original.subtracting(selectedProjects).sorted() {
                     _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:unassignProject", arguments: .object(["projectKey": .string(key)]))
@@ -81,7 +143,7 @@ struct PathwayFocusEditorView: View {
                 }
             } else {
                 _ = try await appModel.cloud.request(kind: "mutation", name: "focuses:create", arguments: .object([
-                    "id": .string(UUID().uuidString.lowercased()), "name": .string(name), "iconName": .string("target"),
+                    "id": .string(UUID().uuidString.lowercased()), "name": .string(name), "iconName": .string(iconName),
                     "accentColor": .string(color), "projectKeys": .array(selectedProjects.sorted().map(JSONValue.string)),
                     "includeConversations": .bool(includeConversations)
                 ]))

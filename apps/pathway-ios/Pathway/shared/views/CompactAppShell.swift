@@ -32,7 +32,7 @@ enum CompactAppShellMetrics {
                         newThreadAction: presentNewAgentThread
                     )
                     .toolbar {
-                        if activeDestination != .issues {
+                        if activeDestination != .issues && (activeDestination != .agentThreads || threadChrome.isThreadDetailActive) {
                             ToolbarItem(placement: .topBarTrailing) {
                                 Button("Settings", systemImage: "gearshape", action: presentSettings)
                             }

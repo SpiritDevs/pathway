@@ -1,6 +1,14 @@
 # Agent Threads on iOS
 
 Active threads show the project above the thread title, with the branch and environment below it.
+The branch stays on the left; the environment name sits on the right beside the provider logo.
+The filter icon opens **Thread options**, with **Settings**, **Focus**, and **Filters** submenus.
+Notifications and New Thread remain separate toolbar buttons.
+Choose a Focus or create one from the Focus submenu. When a specific Focus is selected,
+a separate target icon also opens the picker; choosing All threads hides that shortcut.
+Edit, reorder, or delete Focuses in **Settings → Focus Views**.
+Focus icons match desktop in the picker, selected Focus shortcut, and settings list.
+The selected shortcut uses the Focus color. The Focus editor offers the same icon choices as desktop.
 The project icon appears beside its name when it can be loaded from the environment. Missing,
 unreachable, or unsupported images use a folder icon. Icons are shared across threads in the same
 project and cached to avoid repeated downloads.
