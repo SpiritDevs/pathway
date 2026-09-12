@@ -25,7 +25,7 @@ final class PathwayConversationUITests: XCTestCase {
         capture(app, "Conversation changed files")
         app.buttons["Done"].tap()
         app.buttons["agent-thread-composer-collapsed"].tap()
-        let draft = app.textFields["agent-thread-composer-field"]
+        let draft = app.textViews["agent-thread-composer-field"]
         XCTAssertTrue(draft.waitForExistence(timeout: 5))
         draft.tap(); draft.typeText("Retained parent draft")
         app.buttons["agent-thread-actions"].tap()
@@ -36,7 +36,7 @@ final class PathwayConversationUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars.buttons.element(boundBy: 0).exists)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(app.staticTexts["Bring conversations to mobile"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.textFields["agent-thread-composer-field"].value as? String, "Retained parent draft")
+        XCTAssertEqual(app.textViews["agent-thread-composer-field"].value as? String, "Retained parent draft")
     }
 
     @MainActor
@@ -69,7 +69,7 @@ final class PathwayConversationUITests: XCTestCase {
     func testComposerModelEditAndFork() {
         let app = launchFixture()
         app.buttons["agent-thread-composer-collapsed"].tap()
-        let field = app.textFields["agent-thread-composer-field"]
+        let field = app.textViews["agent-thread-composer-field"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap(); field.typeText("Keep my draft")
         app.buttons["agent-thread-model-picker"].tap()
@@ -115,7 +115,7 @@ final class PathwayConversationUITests: XCTestCase {
     func testSlashModelSuggestions() {
         let app = launchFixture()
         app.buttons["agent-thread-composer-collapsed"].tap()
-        let field = app.textFields["agent-thread-composer-field"]
+        let field = app.textViews["agent-thread-composer-field"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap(); field.typeText("/model mini")
         let option = app.buttons["agent-thread-suggestion-model:codex:gpt-5.4-mini"]
@@ -142,6 +142,48 @@ final class PathwayConversationUITests: XCTestCase {
         app.buttons["agent-thread-subagent-agent-review"].tap()
         XCTAssertTrue(app.staticTexts["Review conversation controls"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["agent-thread-subagents"].exists)
+    }
+
+    @MainActor
+    func testImagePasteFromMenuAndMessageField() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--uitest-conversation", "--conversation-paste"]
+        app.launch()
+        let expand = app.buttons["agent-thread-composer-collapsed"]
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        expand.tap()
+        let field = app.textViews["agent-thread-composer-field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        app.buttons["agent-thread-add-attachment"].tap()
+        app.buttons["Paste"].tap()
+        let failed = app.buttons["Retry Pasted image.png"]
+        XCTAssertTrue(failed.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["Remove Pasted image.png"].exists)
+        XCTAssertFalse(app.alerts.firstMatch.exists)
+        XCTAssertEqual(field.value as? String, "Please review this screenshot.")
+        capture(app, "Minimal failed image thumbnail")
+        failed.tap()
+        XCTAssertTrue(app.alerts["Upload failed"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["The upload URL was unavailable."].exists)
+        capture(app, "Native upload failure dialog")
+        app.buttons["Retry"].tap()
+        XCTAssertTrue(failed.waitForExistence(timeout: 5))
+        failed.tap()
+        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 3))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(failed.waitForNonExistence(timeout: 3))
+        field.tap()
+        field.press(forDuration: 1)
+        let paste = app.menuItems["Paste"]
+        XCTAssertTrue(paste.waitForExistence(timeout: 3))
+        capture(app, "Paste directly into message")
+        paste.tap()
+        XCTAssertTrue(app.buttons["Retry Pasted image.png"].waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, "Please review this screenshot.")
+        capture(app, "Image pasted from message field")
+        field.tap()
+        field.typeText(" More detail")
+        XCTAssertTrue((field.value as? String)?.contains("More detail") == true)
     }
 
     @MainActor private func launchFixture(questions: Bool = false, agents: Bool = false) -> XCUIApplication {

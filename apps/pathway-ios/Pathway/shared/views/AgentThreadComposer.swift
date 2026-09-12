@@ -10,7 +10,7 @@ struct AgentThreadComposer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var model: PathwayAgentThreadModel
     @Binding var isExpanded: Bool
-    @FocusState.Binding var isFocused: Bool
+    @Binding var isFocused: Bool
     let modelName: String
     let usesCompactPresentation: Bool
     let isNavigationExpanded: Bool
@@ -36,7 +36,7 @@ struct AgentThreadComposer: View {
     @State private var stash: AgentThreadPromptStash?
     @State private var isStashing = false
     @State private var isStartingNewThread = false
-    @State private var textSelection: TextSelection?
+    @State private var textSelection: NSRange?
     @State private var isApplyingSuggestion = false
     @ScaledMetric(relativeTo: .body) private var controlDiameter: CGFloat = 44
 
@@ -210,12 +210,16 @@ struct AgentThreadComposer: View {
             if !model.draftAttachments.isEmpty {
                 AgentThreadComposerAttachments(model: model)
             }
-            TextField(promptPlaceholder, text: $model.draft, selection: $textSelection, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(2 ... 7)
-                .focused($isFocused)
+            AgentComposerTextInput(text: $model.draft, selection: $textSelection,
+                isFocused: $isFocused,
+                placeholder: promptPlaceholder, pasteImages: pasteImages)
+                .overlay(alignment: .topLeading) {
+                    if model.draft.isEmpty {
+                        Text(promptPlaceholder).foregroundStyle(.tertiary).allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .accessibilityIdentifier("agent-thread-composer-field")
             if model.draft.count > 120_000 {
                 Text("Message is too long. Use 120,000 characters or fewer.")
                     .font(.caption).foregroundStyle(.red)
@@ -383,13 +387,8 @@ struct AgentThreadComposer: View {
         guard !model.draft.isEmpty else { return nil }
         let cursor: Int
         if let textSelection {
-            switch textSelection.indices {
-            case .selection(let range):
-                guard range.isEmpty else { return nil }
-                cursor = range.lowerBound <= model.draft.endIndex ? range.lowerBound.utf16Offset(in: model.draft) : model.draft.utf16.count
-            case .multiSelection: return nil
-            @unknown default: return nil
-            }
+            guard textSelection.length == 0 else { return nil }
+            cursor = min(textSelection.location, model.draft.utf16.count)
         } else { cursor = model.draft.utf16.count }
         return AgentThreadComposerTrigger.detect(in: model.draft, cursor: cursor)
     }
@@ -422,9 +421,7 @@ struct AgentThreadComposer: View {
     private func applySuggestion(_ trigger: AgentThreadComposerTrigger, replacement: String) {
         guard composerTrigger == trigger, let result = trigger.replacing(in: model.draft, with: replacement) else { return }
         model.draft = result.text
-        if let range = Range(NSRange(location: result.cursor, length: 0), in: result.text) {
-            textSelection = TextSelection(insertionPoint: range.lowerBound)
-        }
+        textSelection = NSRange(location: result.cursor, length: 0)
         isFocused = true
     }
 
@@ -481,7 +478,7 @@ struct AgentThreadComposer: View {
         try await stash.remove(id: entry.id)
         model.draft = AgentThreadPromptStash.appending(entry.prompt, to: model.draft)
         if !entry.prompt.isEmpty {
-            textSelection = TextSelection(insertionPoint: model.draft.endIndex)
+            textSelection = NSRange(location: model.draft.utf16.count, length: 0)
         }
         stashCount = try await stash.entries().count
         isFocused = true
@@ -507,17 +504,18 @@ struct AgentThreadComposer: View {
     }
 
     private func pasteImages(_ providers: [NSItemProvider]) {
-        for provider in providers.prefix(max(0, 8 - model.draftAttachments.count)) {
-            guard let type = provider.registeredTypeIdentifiers.compactMap(UTType.init)
-                .first(where: { $0.conforms(to: .image) }) else { continue }
-            provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, error in
-                Task { @MainActor in
-                    if let error { errorMessage = error.localizedDescription; return }
-                    guard let data else { return }
-                    let actualType = Self.imageType(data) ?? type
-                    await model.addAttachment(data: data, name: "Pasted image.\(actualType.preferredFilenameExtension ?? "png")",
-                                              mimeType: actualType.preferredMIMEType ?? "image/png")
-                }
+        guard model.supportsAttachmentUploads else {
+            errorMessage = "This environment does not support uploading images."; return
+        }
+        let room = max(0, 8 - model.draftAttachments.count)
+        guard room > 0 else { errorMessage = "You can attach up to 8 files."; return }
+        Task { @MainActor in
+            for provider in providers.filter(PathwayPastedImage.supports).prefix(room) {
+                do {
+                    let image = try await PathwayPastedImage.load(provider)
+                    await model.addAttachment(data: image.data, name: image.name, mimeType: image.mimeType)
+                } catch is CancellationError { return }
+                catch { errorMessage = error.localizedDescription }
             }
         }
     }

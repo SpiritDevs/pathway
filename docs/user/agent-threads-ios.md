@@ -28,3 +28,12 @@ all the way left to settle immediately. These actions sync through the thread's 
 
 To bring a thread back, expand **Snoozed** and swipe left for **Wake**, or expand **Settled** and
 swipe left for **Reopen**. If an action fails, the app shows an error and keeps the thread in place.
+
+You can paste a copied photo or screenshot from the attachment menu or directly into the message
+field. The field also accepts image paste suggestions from the iOS keyboard when offered. Images
+become attachments and leave your typed message intact. You can attach up to eight files; pasted
+images must be under 10 MB. If an image cannot be read or uploaded, the app shows an error.
+
+Image attachments appear as compact thumbnails with one corner button. Tap the cross to remove
+an image. If its upload fails, a retry icon replaces the cross. Tap it to see the failure reason,
+retry the upload, or cancel and remove the attachment using the alert.

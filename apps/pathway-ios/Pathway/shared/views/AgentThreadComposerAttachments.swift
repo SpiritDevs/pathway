@@ -26,42 +26,42 @@ struct AgentThreadComposerAttachmentChip: View {
     let retry: () -> Void
     @State private var thumbnail: UIImage?
 
+    @State private var showsFailure = false
+
     var body: some View {
-        HStack(spacing: 7) {
-            Group {
-                if let thumbnail {
-                    Image(uiImage: thumbnail).resizable().scaledToFill()
-                } else {
-                    Image(systemName: attachment.type == "image" ? "photo" : "doc.text")
-                        .font(.title3).foregroundStyle(.secondary)
+        Group {
+            if attachment.type == "image" {
+                preview
+                    .frame(width: 76, height: 76)
+                    .background(.quaternary)
+                    .clipShape(.rect(cornerRadius: 14))
+                    .overlay(alignment: .topTrailing) { attachmentAction }
+                    .overlay(alignment: .bottomLeading) {
+                        if attachment.state == .uploading {
+                            ProgressView().controlSize(.small)
+                                .padding(6).background(.regularMaterial, in: Circle()).padding(5)
+                                .accessibilityLabel("Uploading \(attachment.name)")
+                        }
+                    }
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.text").foregroundStyle(.secondary)
+                    Text(attachment.name).font(.subheadline).lineLimit(1).frame(maxWidth: 160)
+                    if attachment.state == .uploading { ProgressView().controlSize(.small) }
+                    attachmentAction
                 }
+                .padding(.leading, 12)
+                .background(.quaternary, in: Capsule())
             }
-            .frame(width: 32, height: 32)
-            .clipShape(.rect(cornerRadius: 6))
-            .accessibilityHidden(true)
-            Text(attachment.name).font(.subheadline).lineLimit(1).frame(maxWidth: 160)
-            switch attachment.state {
-            case .uploading:
-                ProgressView().controlSize(.small).accessibilityLabel("Uploading")
-            case .failed(let message):
-                Button(action: retry) { Image(systemName: "arrow.clockwise.circle.fill").foregroundStyle(.orange).frame(width: 44, height: 44).contentShape(Rectangle()) }
-                    .accessibilityLabel("Retry \(attachment.name)")
-                    .accessibilityHint(message)
-            case .ready: EmptyView()
-            }
-            Button(action: remove) {
-                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .accessibilityLabel("Remove \(attachment.name)")
         }
         .buttonStyle(.plain)
-        .padding(.leading, 7)
-        .padding(.trailing, 3)
-        .padding(.vertical, 4)
-        .background(.quaternary, in: Capsule())
         .accessibilityIdentifier("agent-thread-draft-attachment-\(attachment.id)")
+        .alert("Upload failed", isPresented: $showsFailure) {
+            Button("Retry", action: retry)
+            Button("Cancel", role: .cancel, action: remove)
+        } message: {
+            Text(failureReason)
+        }
         .task(id: attachment.id) {
             guard let data = attachment.previewData else { return }
             let thumbnailData = await Task.detached(priority: .utility) {
@@ -69,7 +69,7 @@ struct AgentThreadComposerAttachmentChip: View {
                       let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                         kCGImageSourceCreateThumbnailFromImageAlways: true,
                         kCGImageSourceCreateThumbnailWithTransform: true,
-                        kCGImageSourceThumbnailMaxPixelSize: 96
+                        kCGImageSourceThumbnailMaxPixelSize: 228
                       ] as CFDictionary) else { return Data?.none }
                 return UIImage(cgImage: image).jpegData(compressionQuality: 0.8)
             }.value
@@ -77,4 +77,43 @@ struct AgentThreadComposerAttachmentChip: View {
             thumbnail = UIImage(data: thumbnailData)
         }
     }
+
+    private var preview: some View {
+        Group {
+            if let thumbnail {
+                Image(uiImage: thumbnail).resizable().scaledToFill()
+            } else {
+                Image(systemName: "photo").font(.title2).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var attachmentAction: some View {
+        Button {
+            if case .failed = attachment.state { showsFailure = true }
+            else { remove() }
+        } label: {
+            Image(systemName: failed ? "arrow.clockwise" : "xmark")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 28, height: 28)
+                .background(failed ? Color.orange : Color.black.opacity(0.55), in: Circle())
+                .frame(width: 44, height: 44, alignment: attachment.type == "image" ? .topTrailing : .center)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("\(failed ? "Retry" : "Remove") \(attachment.name)")
+        .accessibilityHint(failed ? "Shows why the upload failed and lets you retry or cancel" : "")
+    }
+
+    private var failureReason: String {
+        if case .failed(let reason) = attachment.state { return reason }
+        return "The attachment could not be uploaded."
+    }
+
+    private var failed: Bool {
+        if case .failed = attachment.state { return true }
+        return false
+    }
+
 }

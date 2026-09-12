@@ -152,7 +152,6 @@ final class PathwayNewThreadAttachments {
         } catch {
             if let uploadedID, let request { _ = try? await request("attachments.delete", .object(["attachmentId": .string(uploadedID)])) }
             if let index = drafts.firstIndex(where: { $0.id == id }) { drafts[index].state = .failed(error.localizedDescription) }
-            errorMessage = error.localizedDescription
         }
         await persist()
     }

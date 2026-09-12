@@ -220,7 +220,6 @@ extension PathwayAgentThreadModel {
         } catch {
             if let uploadedID { _ = try? await request("attachments.delete", payload: .object(["attachmentId": .string(uploadedID)])) }
             if let index = draftAttachments.firstIndex(where: { $0.id == id }) { draftAttachments[index].state = .failed(error.localizedDescription) }
-            actionError = error.localizedDescription
         }
         await persistDraftNow()
     }
