@@ -82,5 +82,40 @@ Apple's build-14 export-time validation returned HTTP 201 before upload, confirm
 this build number was accepted. No new build number or replacement certificate was needed.
 
 Processing has started. Upload success does not establish TestFlight tester availability.
-Final processing and tester-access verification is in progress. No public App Store release
+Final processing and tester-access verification is limited as described below. No public App Store release
 was submitted, and no production service configuration or unrelated working tree was changed.
+
+## Final verification and handoff
+
+At 2026-09-12 10:20 UTC, a separate `altool --build-status` check could not authenticate.
+The tool requires an App Store Connect API key or username, app-specific password, and
+provider selection. The saved Xcode account successfully signs and uploads, but is not
+available to that standalone command. No usable separate API key or app-specific password
+was found in the local credential locations inspected. A direct saved-account query attempt
+also could not obtain a usable session. No credentials were changed or authentication bypassed.
+
+Apple's last confirmed server response is from 10:18:57 UTC. The uploaded build resource is
+`51d6e0da-3e82-4f85-8f79-f05c86e4fd42`. Both `processingState` and
+`buildProcessingState.state` were `PROCESSING`; the response contained no errors, warnings,
+or informational issues. This confirms an accepted upload, not completed processing.
+
+**Remaining human or credentialed follow-up:** Open App Store Connect, select Pathway, then
+TestFlight, version 1.0.13 build 14. Confirm processing finishes, resolve any Apple-reported
+compliance requirement if present, and confirm the build belongs to the intended existing
+tester group and is available to its testers. No tester/group assignment was changed by this
+recovery. A machine with the existing App Store Connect query credentials can perform the
+same checks using the build resource above. No additional upload authorization is needed,
+and this task did not request it.
+
+The signing problem is resolved and the requested upload is complete. Tester installation
+and real-device behavior remain unverified. Do not describe the build as available to testers
+until those checks pass. No public App Store release was submitted.
+
+The release checkout remains at the exact source commit with no tracked modifications.
+Only this report was committed and pushed on `status/testflight-14-recovery-20260912`.
+No PR was opened and nothing was merged to main.
+
+Apple documents the saved-account cloud-signing route in
+[Cloud-managed certificates](https://developer.apple.com/help/account/certificates/cloud-managed-certificates).
+The [certificate creation API](https://developer.apple.com/documentation/appstoreconnectapi/post-v1-certificates)
+fallback was unnecessary because the existing Xcode signing setup succeeded.
