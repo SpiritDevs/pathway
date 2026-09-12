@@ -1080,7 +1080,19 @@ struct AgentThreadConversationView: View {
                             .id(model.environment.id)
                     }
                     HStack(spacing: 8) {
-                    if !changedItems.isEmpty {
+                    if let connectionStatus {
+                        Label(connectionStatus, systemImage: "arrow.triangle.2.circlepath")
+                            .font(.caption)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            #if os(visionOS)
+                            .background(.regularMaterial, in: Capsule())
+                            #else
+                            .glassEffect(.regular, in: .capsule)
+                            #endif
+                            .accessibilityHint("Waiting for the latest thread messages to finish syncing")
+                            .accessibilityIdentifier("agent-thread-connecting")
+                    } else if !changedItems.isEmpty {
                         Button { showsChanges = true } label: {
                             HStack(spacing: 8) {
                                 Text("\(changedFileCount) \(changedFileCount == 1 ? "file" : "files")")
@@ -1278,18 +1290,20 @@ struct AgentThreadConversationView: View {
         appModel.cloud.threadQueue.threads.first { $0.companyID == model.thread.companyId && $0.environmentID == model.thread.environmentId && $0.threadID == model.threadID }
     }
 
+    private var connectionStatus: String? {
+        switch model.connectionState {
+        case .idle, .connecting: "Connecting · Syncing messages…"
+        case .cached: "Reconnecting · Syncing messages…"
+        case .live, .failed: nil
+        }
+    }
+
     @ViewBuilder private var connectionBanner: some View {
         if queuedConversation != nil, !model.isSubscriptionReady {
             Label(model.items.isEmpty ? "Messages will appear here when the environment reconnects." : "Showing saved messages while the environment reconnects", systemImage: "wifi.slash")
                 .font(.footnote).foregroundStyle(.secondary)
         } else {
         switch model.connectionState {
-        case .connecting:
-            HStack(spacing: 8) { ProgressView(); Text("Connecting to the environment…") }
-                .font(.footnote).foregroundStyle(.secondary)
-        case .cached:
-            Label("Showing saved messages while the environment reconnects", systemImage: "wifi.slash")
-                .font(.footnote).foregroundStyle(.secondary)
         case let .failed(message):
             Label(message, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
         default: EmptyView()

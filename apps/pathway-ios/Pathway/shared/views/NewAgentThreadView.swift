@@ -72,16 +72,6 @@ struct NewAgentThreadView: View {
                     Button("Cancel", action: close)
                         .disabled(isChangingBinding)
                 }
-                if let model, model.supportsConversations, selectedProject != nil, !model.usesInternalWorkspace {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Toggle(isOn: Binding(get: { model.temporary }, set: { model.temporary = $0 })) {
-                            Label("Temporary", systemImage: "clock.badge.xmark")
-                        }
-                        .toggleStyle(.button)
-                        .disabled(model.isLaunching || isChangingBinding)
-                        .accessibilityHint("Deletes this thread and its working files when it settles")
-                    }
-                }
                 if capturedDraft != nil, !appliedCapture, let model, model.errorMessage != nil {
                     ToolbarItem(placement: .primaryAction) {
                         Button("Retry Import") { Task { await applyIncomingDraft() } }
@@ -369,7 +359,7 @@ private struct NewAgentThreadComposer: View {
     let didLaunch: (String) -> Void
 
     @FocusState private var promptFocused: Bool
-    @State private var showsSettings = false
+    @State private var showsOptions = false
     @State private var showsBranches = false
 
     var body: some View {
@@ -429,13 +419,6 @@ private struct NewAgentThreadComposer: View {
         }
         .sheet(isPresented: $showsBranches) {
             if let model { NewAgentThreadBranchPicker(model: model).presentationDetents([.medium, .large]) }
-        }
-        .sheet(isPresented: $showsSettings) {
-            if let model {
-                NewAgentThreadSettings(model: model)
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
-            }
         }
     }
 
@@ -521,19 +504,25 @@ private struct NewAgentThreadComposer: View {
 
     private func composer(_ model: PathwayAgentThreadCreationModel) -> some View {
         return VStack(spacing: 12) {
-            NewAgentThreadMessageEditor(model: model, isFocused: $promptFocused)
+            NewAgentThreadMessageEditor(model: model, isFocused: $promptFocused, showsOptions: $showsOptions)
                 .disabled(model.isLaunching)
 
             HStack(spacing: 10) {
-                Button("Thread settings", systemImage: "slider.horizontal.3") {
-                    showsSettings = true
+                Button("Composer options", systemImage: "plus") {
+                    promptFocused = false
+                    showsOptions = true
                 }
                 .disabled(model.isLaunching)
                 .labelStyle(.iconOnly)
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.circle)
+                .font(.title3)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Circle())
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("new-agent-thread-options")
 
-                modelPicker(model)
+                Text(model.selectedModel?.name ?? "Choose model")
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
 
                 Spacer(minLength: 0)
 
@@ -562,47 +551,11 @@ private struct NewAgentThreadComposer: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(16)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 28))
-    }
-
-    private func modelPicker(_ model: PathwayAgentThreadCreationModel) -> some View {
-        Menu {
-            ForEach(model.providers) { provider in
-                Section(provider.name) {
-                    ForEach(provider.models) { availableModel in
-                        Button {
-                            model.pinPlacement()
-                            model.selectedProviderID = provider.id
-                            model.selectedModelID = availableModel.id
-                        } label: {
-                            let isSelected = provider.id == model.selectedProviderID
-                                && availableModel.id == model.selectedModelID
-                            if isSelected {
-                                Label(availableModel.name, systemImage: "checkmark")
-                            } else {
-                                Text(availableModel.name)
-                            }
-                        }
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "sparkles")
-                Text(model.selectedModel?.name ?? "Choose model")
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.caption2.weight(.bold))
-            }
-            .font(.subheadline.weight(.medium))
-            .foregroundStyle(.primary)
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
+        .padding(14)
+        .background {
+            RoundedRectangle(cornerRadius: 26).fill(.regularMaterial)
+                .overlay { RoundedRectangle(cornerRadius: 26).strokeBorder(.primary.opacity(0.10), lineWidth: 0.5) }
         }
-        .disabled(model.providers.isEmpty || model.isLaunching)
-        .accessibilityLabel("Model")
-        .accessibilityValue(model.selectedModel?.name ?? "Not selected")
     }
 
     private func statusMessage(_ model: PathwayAgentThreadCreationModel) -> String? {
