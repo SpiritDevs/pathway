@@ -2,10 +2,11 @@ import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { resolveCurrentAssetUrl } from "@spiritdevs/client-runtime/state/assets";
 import type { AssetResource, EnvironmentId } from "@spiritdevs/contracts";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback, useContext, useMemo, useRef } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 
 import { assetEnvironment } from "~/state/assets";
 import { usePreparedConnection } from "~/state/session";
+import { useEnvironmentConnectionState } from "~/state/environments";
 
 export { resolveAssetUrl, resolveCurrentAssetUrl } from "@spiritdevs/client-runtime/state/assets";
 
@@ -19,26 +20,42 @@ const EMPTY_ASSET_URL_RESULTS_ATOM = Atom.make([]).pipe(Atom.withLabel("web-asse
 export function useAssetUrlState(
   environmentId: EnvironmentId,
   resource: AssetResource,
-): AssetUrlState {
+): AssetUrlState & { readonly refresh?: (() => void) | undefined } {
+  const registry = useContext(RegistryContext);
+  const connection = useEnvironmentConnectionState(environmentId);
   const preparedConnection = usePreparedConnection(environmentId);
   const query = assetEnvironment.createUrl({ environmentId, input: { resource } });
   const result = useAtomValue(query);
-  if (result._tag === "Failure") {
+  const retried = useRef(new Set<typeof query>());
+  const refresh = useCallback(() => {
+    if (retried.current.has(query)) return;
+    retried.current.add(query);
+    registry.refresh(query);
+  }, [query, registry]);
+  const expired = result._tag === "Success" && result.value.expiresAt <= Date.now() + 60_000;
+  useEffect(() => {
+    if (expired && connection.data?.phase === "connected") refresh();
+  }, [expired, refresh, connection.data?.phase]);
+  const retry = retried.current.has(query) ? undefined : refresh;
+  if (preparedConnection._tag === "None" || connection.data?.phase !== "connected") {
     return { _tag: "Failure" };
   }
-  if (preparedConnection._tag === "None" || result._tag !== "Success") {
+  if (result.waiting && (result._tag !== "Success" || expired)) {
     return { _tag: "Loading" };
   }
+  if (result._tag === "Failure") return { _tag: "Failure", refresh: retry };
+  if (result._tag !== "Success") return { _tag: "Loading" };
   const url = resolveCurrentAssetUrl(
     preparedConnection.value.httpBaseUrl,
     result.value,
     Date.now(),
   );
   return url === null
-    ? { _tag: "Failure" }
+    ? { _tag: "Failure", refresh: retry }
     : {
         _tag: "Success",
         url,
+        refresh: retry,
         ...(result.value.sourcePath !== undefined ? { sourcePath: result.value.sourcePath } : {}),
       };
 }

@@ -4,6 +4,7 @@ import SwiftUI
 struct PathwayIssueMarkdownView: View {
     let markdown: String
     var toggleTask: ((Int) -> Void)?
+    var imageContext: AgentMarkdownImageContext? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -64,7 +65,24 @@ struct PathwayIssueMarkdownView: View {
         }
     }
 
-    private func inline(_ text: String) -> Text {
+    @ViewBuilder
+    private func inline(_ text: String) -> some View {
+        if let imageContext {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(PathwayMarkdownInlinePart.parse(text)) { part in
+                    switch part.content {
+                    case .text(let value): inlineText(value)
+                    case .image(let source, let alt, let link):
+                        AgentMarkdownImage(source: source, alt: alt, link: link, context: imageContext)
+                    }
+                }
+            }
+        } else {
+            inlineText(text)
+        }
+    }
+
+    private func inlineText(_ text: String) -> Text {
         if let attributed = try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
             Text(attributed)
         } else {

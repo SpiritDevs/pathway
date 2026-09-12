@@ -919,6 +919,7 @@ struct AgentThreadConversationView: View {
                         Text(error).font(.footnote).foregroundStyle(.red)
                     }
                     AgentThreadTranscript(model: model, onOpenChild: openChild)
+                        .environment(\.markdownImageWorkspaceRoot, currentWorkspaceRoot)
                 }
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)

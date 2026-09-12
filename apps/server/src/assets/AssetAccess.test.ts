@@ -31,6 +31,33 @@ const testLayer = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 describe("AssetAccess", () => {
+  it.effect("signs exact image filenames containing spaces, Unicode and URL delimiters", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "pathway-image-names-" });
+      for (const name of ["你好 image.png", "image#1?.png", "image%20.png"]) {
+        const imagePath = path.join(root, name);
+        yield* fileSystem.writeFile(imagePath, new Uint8Array([137, 80, 78, 71]));
+        const signed = yield* issueAssetUrl({
+          resource: {
+            _tag: "workspace-file",
+            threadId: ThreadId.make("thread-1"),
+            path: `./${name}`,
+          },
+          workspaceRoot: root,
+        });
+        const suffix = signed.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const separator = suffix.indexOf("/");
+        const token = suffix.slice(0, separator);
+        expect(yield* resolveAsset(token, suffix.slice(separator + 1))).toEqual({
+          kind: "file",
+          path: yield* fileSystem.realPath(imagePath),
+        });
+        expect(yield* resolveAsset(token, "other.png")).toBeNull();
+      }
+    }).pipe(Effect.provide(testLayer)),
+  );
   it.effect("issues workspace URLs that resolve the entry file and sibling assets", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
