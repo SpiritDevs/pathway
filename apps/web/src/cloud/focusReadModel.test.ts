@@ -84,6 +84,28 @@ describe("active Focus persistence", () => {
     ).toBe(ALL_FOCUS_ID);
   });
 
+  it("does not switch to All while company projects are still loading", () => {
+    const { storage } = memoryStorage({ [activeFocusIdStorageKey("account-a")]: WORK });
+    expect(
+      readActiveFocusId({
+        scope: "account-a",
+        readModel: READ_MODEL,
+        visibleProjectKeys: new Set(),
+        projectsReady: false,
+        storage,
+      }),
+    ).toBe(WORK);
+    expect(
+      readActiveFocusId({
+        scope: "account-a",
+        readModel: READ_MODEL,
+        visibleProjectKeys: new Set(),
+        projectsReady: true,
+        storage,
+      }),
+    ).toBe(ALL_FOCUS_ID);
+  });
+
   it("preserves a requested Focus while its projects are hidden", () => {
     const { storage, values } = memoryStorage();
     const overrides = persistActiveFocusSelection({

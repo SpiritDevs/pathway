@@ -1,3 +1,4 @@
+import { useSidebarPrRevalidation } from "../state/sidebarPrRevalidation";
 import { QueuedThreadSidebar } from "./QueuedThreadSidebar";
 import {
   threadQueueEntriesAtom,
@@ -17,7 +18,6 @@ import {
 } from "@spiritdevs/contracts/threadAlerts";
 import { ThreadAlertBell } from "./ThreadAlertBell";
 import { threadAlertPoliciesAtom } from "../threadAlerts/state";
-import { autoAnimate } from "@formkit/auto-animate";
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
@@ -39,8 +39,6 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   canSettle,
   canSnooze,
-  effectiveSettled,
-  effectiveSnoozed,
   threadWokeAt,
 } from "@spiritdevs/client-runtime/state/thread-settled";
 import {
@@ -157,13 +155,19 @@ import {
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import {
-  currentThreadChangeRequestState,
   threadChangeRequestSource,
   useAttachedPullRequests,
   aggregateThreadPullRequestState,
   type ThreadChangeRequestState,
 } from "../state/threadPullRequest";
 import { threadEnvironment } from "../state/threads";
+import {
+  sidebarThreadChangeRequestsAtom,
+  sidebarThreadScopeAtom,
+  sidebarThreadSection,
+  updateSidebarChangeRequest,
+} from "../state/sidebarThreadLifecycle";
+import { threadListReadinessAtom } from "../state/threadListReadiness";
 import { useEnvironmentQuery } from "../state/query";
 import { useStartWorkIssuesByThread } from "../state/issues";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -837,6 +841,75 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   );
 });
 
+function useSidebarChangeRequest({
+  thread,
+  projectCwd,
+  poll = false,
+  onChangeRequestState,
+}: {
+  thread: EnvironmentThreadShell;
+  projectCwd: string | null;
+  poll?: boolean;
+  onChangeRequestState: (
+    threadKey: string,
+    value: ThreadChangeRequestState,
+    failed?: boolean,
+  ) => void;
+}) {
+  const gitCwd = thread.worktreePath ?? projectCwd;
+  const gitStatus = useEnvironmentQuery(
+    (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
+      ? vcsEnvironment.status({
+          environmentId: thread.environmentId,
+          input: { cwd: gitCwd },
+        })
+      : null,
+  );
+  const pr = resolveThreadPr({
+    threadBranch: thread.branch,
+    gitStatus: gitStatus.data,
+  });
+  const attachedQueries = useAttachedPullRequests(thread, { poll });
+  const visibleBranchPr = pr && !thread.detachedPullRequestUrls?.includes(pr.url) ? pr : null;
+  const badges = resolveThreadPrBadges({
+    branchPullRequest: pr,
+    detachedPullRequestUrls: thread.detachedPullRequestUrls,
+    attachedQueries,
+    provider: gitStatus.data?.sourceControlProvider,
+  });
+
+  const prState = aggregateThreadPullRequestState(badges.map((badge) => badge.changeRequestState));
+  const source = threadChangeRequestSource(thread);
+  const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+  const gitReady =
+    thread.branch === null ||
+    gitCwd === null ||
+    gitStatus.data !== null ||
+    gitStatus.error !== null;
+  const ready = gitReady && attachedQueries.every((query) => !query.isLoading);
+  // A refresh with no result must not erase the last known merged/open state.
+  const failed = gitStatus.error !== null || attachedQueries.some((query) => query.error !== null);
+  useEffect(() => {
+    if (!ready) return;
+    onChangeRequestState(threadKey, { source, state: prState }, failed);
+  }, [ready, failed, source, prState, threadKey, onChangeRequestState]);
+  return { gitStatus, pr, visibleBranchPr, badges, prState };
+}
+
+// Pending rows need only enough data to classify; do not mount hidden cards or terminal observers.
+const SidebarThreadClassification = memo(function SidebarThreadClassification(props: {
+  thread: EnvironmentThreadShell;
+  projectCwd: string | null;
+  onChangeRequestState: (
+    threadKey: string,
+    value: ThreadChangeRequestState,
+    failed?: boolean,
+  ) => void;
+}) {
+  useSidebarChangeRequest(props);
+  return null;
+});
+
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   queuedStatusLabel?: string | null;
   alertProjectKey: string | null;
@@ -845,6 +918,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   thread: SidebarThreadSummary;
   issue: Issue | null;
   variant: "card" | "slim";
+  deferRendering: boolean;
   // Slim rows are either settled (action: un-settle) or merely quiet
   // (seen Ready threads — action: settle).
   variantAction: "settle" | "unsettle" | "unsnooze";
@@ -900,7 +974,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
-  onChangeRequestState: (threadKey: string, value: ThreadChangeRequestState) => void;
+  onChangeRequestState: (
+    threadKey: string,
+    value: ThreadChangeRequestState,
+    failed?: boolean,
+  ) => void;
   onOpenIssue: (issueKey: string) => void;
   onOpenSideChat: (parentRef: ScopedThreadRef, sideChatThreadId: ThreadId) => void;
 }) {
@@ -944,33 +1022,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
 
-  const gitCwd = thread.worktreePath ?? props.projectCwd;
-  const gitStatus = useEnvironmentQuery(
-    (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
-          environmentId: thread.environmentId,
-          input: { cwd: gitCwd },
-        })
-      : null,
-  );
-  const pr = resolveThreadPr({
-    threadBranch: thread.branch,
-    gitStatus: gitStatus.data,
-  });
-  const attachedQueries = useAttachedPullRequests(thread, { poll: props.isActive });
-  const visibleBranchPr = pr && !thread.detachedPullRequestUrls?.includes(pr.url) ? pr : null;
-  const badges = resolveThreadPrBadges({
-    branchPullRequest: pr,
-    detachedPullRequestUrls: thread.detachedPullRequestUrls,
-    attachedQueries,
-    provider: gitStatus.data?.sourceControlProvider,
+  const { gitStatus, visibleBranchPr, badges, prState } = useSidebarChangeRequest({
+    thread,
+    projectCwd: props.projectCwd,
+    poll: props.isActive,
+    onChangeRequestState,
   });
   const displayedPrBadge =
     badges.find((badge) => badge.changeRequestState !== "merged") ?? badges.at(-1) ?? null;
   const displayedPr = displayedPrBadge?.pullRequest ?? null;
   const displayedPrStatus = displayedPrBadge?.status ?? null;
-  const prState = aggregateThreadPullRequestState(badges.map((badge) => badge.changeRequestState));
-  const prSource = threadChangeRequestSource(thread);
 
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
@@ -1064,11 +1125,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     currentGitBranch: gitStatus.data?.refName ?? null,
   });
   const settledPrHoverClass = prState ? settledPrHoverColorClass(prState) : undefined;
-  // Report the PR state up: the parent partitions rows with effectiveSettled,
-  // and a merged PR auto-settles a thread. Only data rows have that state.
-  useEffect(() => {
-    onChangeRequestState(threadKey, { source: prSource, state: prState });
-  }, [onChangeRequestState, prSource, prState, threadKey]);
 
   const modelInstanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
@@ -1416,7 +1472,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       <li
         data-thread-item
         data-active-thread={props.isActive || undefined}
-        className="relative -ml-[3px] list-none pl-[3px] [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
+        className={cn(
+          "relative -ml-[3px] list-none pl-[3px]",
+          props.deferRendering && "[content-visibility:auto] [contain-intrinsic-size:auto_34px]",
+        )}
       >
         {unreadDot}
         <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
@@ -1595,7 +1654,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       }
       {...(sortable?.listeners ?? {})}
       className={cn(
-        "relative -ml-[3px] list-none py-0.5 pl-[3px] [content-visibility:auto] [contain-intrinsic-size:auto_96px]",
+        "relative -ml-[3px] list-none py-0.5 pl-[3px]",
+        props.deferRendering && "[content-visibility:auto] [contain-intrinsic-size:auto_96px]",
         sortable?.isDragging && "z-20 opacity-80",
       )}
     >
@@ -2326,23 +2386,57 @@ export default function Sidebar() {
   // fresh clock whenever it recomputes.
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
 
-  // PR states stream in per-row (rows own the VCS subscriptions); a merged
-  // PR auto-settles its thread on the next partition.
-  const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
-    ReadonlyMap<string, ThreadChangeRequestState>
-  >(() => new Map());
-  const handleChangeRequestState = useCallback(
-    (threadKey: string, value: ThreadChangeRequestState) => {
-      setChangeRequestStateByKey((current) => {
-        const previous = current.get(threadKey);
-        if (previous?.source === value.source && previous.state === value.state) return current;
-        const next = new Map(current);
-        next.set(threadKey, value);
-        return next;
-      });
-    },
-    [],
+  const threadScope = useAtomValue(sidebarThreadScopeAtom);
+  const [changeRequestStateByKey, setChangeRequestStateByKey] = useAtom(
+    sidebarThreadChangeRequestsAtom(threadScope),
   );
+  const retainedClassifications = useRef({ scope: threadScope, states: changeRequestStateByKey });
+  if (retainedClassifications.current.scope !== threadScope)
+    retainedClassifications.current = { scope: threadScope, states: changeRequestStateByKey };
+  const retainedStates = retainedClassifications.current.states;
+  const threadListReadiness = useAtomValue(threadListReadinessAtom);
+  const handleChangeRequestState = useCallback(
+    (threadKey: string, value: ThreadChangeRequestState, failed = false) => {
+      setChangeRequestStateByKey((current) =>
+        updateSidebarChangeRequest(current, threadKey, value, failed),
+      );
+    },
+    [setChangeRequestStateByKey],
+  );
+  useEffect(() => {
+    if (threadListReadiness !== "ready") return;
+    const keys = new Set(
+      threads.map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+    );
+    setChangeRequestStateByKey((current) => {
+      if ([...current.keys()].every((key) => keys.has(key))) return current;
+      return new Map([...current].filter(([key]) => keys.has(key)));
+    });
+  }, [threads, threadListReadiness, setChangeRequestStateByKey]);
+  const unavailableEnvironmentIds = useMemo(
+    () =>
+      new Set(
+        environments
+          .filter((environment) =>
+            ["available", "offline", "error", "reconnecting"].includes(
+              environment.connection.phase,
+            ),
+          )
+          .map((environment) => environment.environmentId),
+      ),
+    [environments],
+  );
+  const lifecycleCapabilities = useMemo(() => {
+    const capabilities = new Map(
+      environments.map((environment) => [
+        environment.environmentId,
+        environment.descriptor?.capabilities,
+      ]),
+    );
+    for (const [environmentId, config] of serverConfigs)
+      capabilities.set(environmentId, config.environment.capabilities);
+    return capabilities;
+  }, [environments, serverConfigs]);
 
   // Project scope: one menu above the list. Scoping filters the list without
   // making the header width depend on the number or length of project names.
@@ -2503,8 +2597,9 @@ export default function Sidebar() {
     snoozedThreads,
     settledThreads,
     snoozeNow,
+    loadingThreads,
   } = useMemo(() => {
-    const now = `${nowMinute}:00.000Z`;
+    void nowMinute;
     // Snooze classification uses a REAL clock, not the quantized minute:
     // wake times are second-precise and a woken thread must not linger on
     // the shelf for the rest of the minute. snoozeWakeTick re-runs this
@@ -2522,46 +2617,24 @@ export default function Sidebar() {
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
+    const loading: EnvironmentThreadShell[] = [];
+    const sections = { active, pinned, snoozed, settled, loading };
     for (const thread of visible) {
-      // Threads on servers without the settlement capability (old server,
-      // or descriptor not loaded yet) never classify as settled: the user
-      // could neither un-settle nor pin them, so auto-settling them would
-      // strand rows in a tail with no working affordances.
-      const supportsSettlement =
-        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement === true;
-      const supportsSnooze =
-        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
-      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      if (queuedStatusByThreadId.has(threadKey) && thread.pinnedAt == null) {
-        active.push(thread);
-        continue;
-      }
-      const changeRequestState = currentThreadChangeRequestState(
-        thread,
-        changeRequestStateByKey.get(threadKey),
-      );
-      // Snooze outranks everything, including a pin: "hide until Tuesday"
-      // temporarily suspends "keep on top". The pin survives underneath —
-      // and so does its pinOrderKey, so on wake the thread reappears at
-      // its exact slot in the pinned block. (For unpinned threads
-      // this is also the snooze-beats-auto-settle rule: the wake time is a
-      // stronger statement about when the thread matters again.)
-      if (supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
-        snoozed.push(thread);
-        // A pin otherwise overrides the lifecycle: pinned threads never
-        // auto-settle out of sight. (The decider clears settled state on
-        // pin and the pin on settle, so pin-vs-settled conflicts only
-        // arise from stale or raced writes.)
-      } else if (thread.pinnedAt != null) {
-        pinned.push(thread);
-      } else if (
-        supportsSettlement &&
-        effectiveSettled(thread, { now, autoSettleAfterDays, changeRequestState })
-      ) {
-        settled.push(thread);
-      } else {
-        active.push(thread);
-      }
+      const capabilities = lifecycleCapabilities.get(thread.environmentId);
+      const section = sidebarThreadSection(thread, {
+        now: preciseNow,
+        unavailable: unavailableEnvironmentIds.has(thread.environmentId),
+        autoSettleAfterDays,
+        queued: queuedStatusByThreadId.has(
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        ),
+        supportsSettlement:
+          capabilities === undefined ? undefined : capabilities.threadSettlement === true,
+        supportsSnooze: capabilities === undefined ? undefined : capabilities.threadSnooze === true,
+        projectCwd: projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
+        changeRequests: changeRequestStateByKey,
+      });
+      sections[section].push(thread);
     }
     // One shared rule on every platform (see sortPinnedThreadsByOrderKey):
     // user-arranged keys first, keyless threads in creation order below.
@@ -2588,10 +2661,14 @@ export default function Sidebar() {
       ),
       settledThreads: sortSettledThreadsForSidebar(settled),
       snoozeNow: preciseNow,
+      loadingThreads: loading,
     };
   }, [
     autoSettleAfterDays,
     changeRequestStateByKey,
+    lifecycleCapabilities,
+    unavailableEnvironmentIds,
+    projectCwdByKey,
     nowMinute,
     scopedProjectKeys,
     includeConversations,
@@ -2600,6 +2677,28 @@ export default function Sidebar() {
     agentThreads,
     queuedStatusByThreadId,
   ]);
+
+  const retainedSettledThreads = useMemo(
+    () =>
+      settledThreads.filter(
+        (thread) =>
+          thread.settledOverride == null &&
+          environments.some(
+            (environment) =>
+              environment.environmentId === thread.environmentId &&
+              environment.connection.phase === "connected",
+          ) &&
+          retainedStates.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+      ),
+    [settledThreads, environments, retainedStates],
+  );
+  useSidebarPrRevalidation(
+    threadScope,
+    retainedSettledThreads,
+    projects,
+    retainedStates,
+    handleChangeRequestState,
+  );
 
   // Drag-to-reorder for the active inbox. Purely client-local (this device
   // only): a drop saves the full visible key order, and this memo re-derives
@@ -2817,6 +2916,11 @@ export default function Sidebar() {
   // a prop — a fresh array identity per shell update would defeat every row's
   // memoization. The ref keeps shift-range-select working against the list as
   // rendered at click time.
+  // Paint the first screenful without placeholder heights; large lists still skip offscreen work.
+  const eagerThreadKeys = useMemo(
+    () => new Set(orderedThreadKeys.slice(0, 20)),
+    [orderedThreadKeys],
+  );
   const orderedThreadKeysRef = useRef(orderedThreadKeys);
   orderedThreadKeysRef.current = orderedThreadKeys;
   const threadByKey = useMemo(
@@ -4091,12 +4195,6 @@ export default function Sidebar() {
     updateThreadJumpHintsVisibility(shouldShowJumpHintsNow);
   }, [shouldShowJumpHintsNow, updateThreadJumpHintsVisibility]);
 
-  const attachListAutoAnimateRef = useCallback((node: HTMLUListElement | null) => {
-    if (!node) return;
-    const animation = autoAnimate(node, { duration: 150, easing: "ease-out" });
-    return () => animation.destroy?.();
-  }, []);
-
   // New threads open directly in the current thread's project, falling back
   // to the current draft and then the first project in the user's ordering.
   const handleNewThreadClick = useCallback(() => {
@@ -4395,6 +4493,18 @@ export default function Sidebar() {
           ref={focusSwipe.contentRef}
           className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0"
         >
+          {loadingThreads.map((thread) =>
+            lifecycleCapabilities.get(thread.environmentId)?.threadSettlement === true ? (
+              <SidebarThreadClassification
+                key={scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))}
+                thread={thread}
+                projectCwd={
+                  projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
+                }
+                onChangeRequestState={handleChangeRequestState}
+              />
+            ) : null,
+          )}
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider
@@ -4491,14 +4601,14 @@ export default function Sidebar() {
                   ))}
                 </ul>
               </TooltipProvider>
-            ) : (
+            ) : threadListReadiness === "ready" ? (
               <p
                 role="status"
                 className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
               >
                 No threads found
               </p>
-            )
+            ) : null
           ) : null}
           {!isSearchingThreads ? (
             <TooltipProvider
@@ -4507,12 +4617,7 @@ export default function Sidebar() {
               closeDelay={0}
               timeout={400}
             >
-              <ul
-                key={activeFocusId}
-                ref={attachListAutoAnimateRef}
-                role="list"
-                className="flex flex-col gap-px"
-              >
+              <ul key={activeFocusId} role="list" className="flex flex-col gap-px">
                 {(() => {
                   const renderThreadRow = (
                     thread: EnvironmentThreadShell,
@@ -4530,6 +4635,7 @@ export default function Sidebar() {
                     const rowVariant = isCard ? "card" : "slim";
                     return (
                       <SidebarThreadRow
+                        deferRendering={!eagerThreadKeys.has(threadKey)}
                         queuedStatusLabel={
                           queuedStatusByThreadId.get(
                             scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
@@ -4840,7 +4946,19 @@ export default function Sidebar() {
               </ul>
             </TooltipProvider>
           ) : null}
+          {threadListReadiness !== "ready" || (!isSearchingThreads && loadingThreads.length > 0) ? (
+            <p
+              role="status"
+              className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
+            >
+              {threadListReadiness === "error"
+                ? "Could not load threads. Check your connection."
+                : "Loading threads…"}
+            </p>
+          ) : null}
           {!isSearchingThreads &&
+          threadListReadiness === "ready" &&
+          loadingThreads.length === 0 &&
           visibleDraftSessionCount === 0 &&
           visibleQueuedThreadCount === 0 &&
           pinnedThreads.length +
