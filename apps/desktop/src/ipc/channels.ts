@@ -8,6 +8,7 @@ export const THREAD_ALERT_SYSTEM_SOUND_CHANNEL = "desktop:thread-alert-system-so
 export const THREAD_ALERT_OPEN_SETTINGS_CHANNEL = "desktop:thread-alert-open-settings";
 export const PICK_THEME_FILES_CHANNEL = "desktop:pick-theme-files";
 export const SET_THEME_CHANNEL = "desktop:set-theme";
+export const SET_WINDOW_BUTTONS_VISIBLE_CHANNEL = "desktop:set-window-buttons-visible";
 export const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 export const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 export const MENU_ACTION_CHANNEL = "desktop:menu-action";

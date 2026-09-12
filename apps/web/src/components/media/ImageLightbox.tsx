@@ -155,6 +155,19 @@ export const ImageLightbox = memo(function ImageLightbox({
   const mediaLabel = isVideo ? "video" : "image";
   const multiple = images.length > 1;
   const imageUnavailable = !image?.src || failedSource === image.src;
+  const hasImage = image !== undefined;
+
+  useEffect(() => {
+    const bridge = window.desktopBridge;
+    if (!hasImage || !bridge?.setWindowButtonsVisible) return;
+    const setVisible = (visible: boolean) => {
+      void bridge.setWindowButtonsVisible?.(visible).catch((error: unknown) => {
+        console.error("Could not update native window buttons", error);
+      });
+    };
+    setVisible(false);
+    return () => setVisible(true);
+  }, [hasImage]);
 
   const resetView = useCallback(() => {
     setShowContents(false);

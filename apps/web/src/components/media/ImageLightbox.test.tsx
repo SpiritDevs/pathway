@@ -1,9 +1,11 @@
 import type { ReactElement } from "react";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { reactHookHarness as hooks } from "~/test/reactHookHarness";
 import { visitElements } from "~/test/reactElementTree";
 import { ImageLightbox, type ImageLightboxProps } from "./ImageLightbox";
 import { downloadImageFile } from "./imageTransfer";
+
+const lifecycle = vi.hoisted(() => ({ effects: [] as Array<() => void | (() => void)> }));
 
 vi.mock("react", async (original) => {
   const actual = await original<typeof import("react")>();
@@ -14,7 +16,7 @@ vi.mock("react", async (original) => {
     useState: reactHookHarness.useState,
     useRef: reactHookHarness.useRef,
     useCallback: reactHookHarness.useCallback,
-    useEffect: () => {},
+    useEffect: (effect: () => void | (() => void)) => lifecycle.effects.push(effect),
   };
 });
 vi.mock("react/compiler-runtime", async () => {
@@ -52,7 +54,40 @@ function image() {
 beforeEach(() => {
   hooks.reset();
   vi.clearAllMocks();
+  lifecycle.effects = [];
   props = { images, initialIndex: 1, onClose: vi.fn() };
+});
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("native window controls", () => {
+  it("hides controls for the viewer and restores them on unmount", () => {
+    const setWindowButtonsVisible = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("window", { desktopBridge: { setWindowButtonsVisible } });
+    render();
+    const cleanups = lifecycle.effects.map((effect) => effect());
+    expect(setWindowButtonsVisible.mock.calls).toEqual([[false]]);
+    for (const cleanup of cleanups) cleanup?.();
+    expect(setWindowButtonsVisible.mock.calls).toEqual([[false], [true]]);
+  });
+
+  it("leaves controls alone when there is no media to display", () => {
+    const setWindowButtonsVisible = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("window", { desktopBridge: { setWindowButtonsVisible } });
+    props = { ...props, images: [] };
+    render();
+    for (const effect of lifecycle.effects) effect();
+    expect(setWindowButtonsVisible).not.toHaveBeenCalled();
+  });
+
+  it("opens normally in web clients and older desktop shells", () => {
+    for (const desktopBridge of [undefined, {}]) {
+      vi.stubGlobal("window", { desktopBridge });
+      lifecycle.effects = [];
+      render();
+      expect(() => lifecycle.effects.forEach((effect) => effect())).not.toThrow();
+    }
+  });
 });
 
 describe("image gallery controls", () => {

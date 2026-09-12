@@ -1256,6 +1256,8 @@ export interface DesktopBridge {
    */
   pickThemeFiles?: () => Promise<readonly PickedThemeFile[] | null>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
+  /** macOS native controls sit above full-window media overlays. */
+  setWindowButtonsVisible?: (visible: boolean) => Promise<void>;
   showContextMenu: <T extends string>(
     items: readonly ContextMenuItem<T>[],
     position?: { x: number; y: number },
