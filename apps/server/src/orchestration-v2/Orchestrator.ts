@@ -30,6 +30,7 @@ import {
   type ProviderSessionId,
   RunId,
   ThreadId,
+  TurnItemId,
 } from "@spiritdevs/contracts";
 import { modelSelectionsEqual } from "@spiritdevs/shared/model";
 import * as Context from "effect/Context";
@@ -6334,9 +6335,50 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         run?.providerThreadId === null
           ? undefined
           : projection.providerThreads.find((candidate) => candidate.id === run?.providerThreadId);
-      const providerTurn = projection.providerTurns.find(
-        (candidate) =>
-          candidate.runAttemptId === run?.activeAttemptId && candidate.status === "running",
+      const backgroundItem =
+        command.backgroundTaskId === undefined
+          ? undefined
+          : projection.turnItems.find(
+              (item) =>
+                item.nativeItemRef?.nativeId === command.backgroundTaskId &&
+                item.runId === command.runId,
+            );
+      if (
+        command.backgroundTaskId !== undefined &&
+        (backgroundItem?.type !== "command_execution" ||
+          backgroundItem.nativeItemRef?.driver !== "codex" ||
+          providerThread?.driver !== "codex" ||
+          backgroundItem.providerThreadId !== providerThread?.id ||
+          !threadShellFromProjection(projection).pendingBackgroundTasks?.some(
+            (task) => task.taskId === command.backgroundTaskId,
+          ))
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "This background command is no longer pending or does not support targeted cancellation.",
+        });
+      }
+      if (
+        backgroundItem !== undefined &&
+        projection.turnItems.some(
+          (item) =>
+            item.type === "run_interrupt_result" &&
+            item.parentItemId === backgroundItem.id &&
+            item.status === "running",
+        )
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "This background command is already stopping.",
+        });
+      }
+      const providerTurn = projection.providerTurns.find((candidate) =>
+        backgroundItem !== undefined
+          ? candidate.id === backgroundItem.providerTurnId
+          : candidate.runAttemptId === run?.activeAttemptId && candidate.status === "running",
       );
       if (run === undefined || rootNode === undefined || providerThread === undefined) {
         return yield* new OrchestratorDispatchError({
@@ -6595,16 +6637,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
        *   an explicit policy decision because it can weaken native-item
        *   correlation.
        */
-      yield* emitEvent({
-        type: "turn-item.updated",
-        threadId: command.threadId,
-        runId: run.id,
-        nodeId: rootNode.id,
-        providerInstanceId: run.providerInstanceId,
-        occurredAt: now,
-        payload: interruptRequestItem,
-      });
-      yield* stopCompletionCohort();
+      if (backgroundItem !== undefined) {
+        yield* emitEvent({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          runId: run.id,
+          nodeId: rootNode.id,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: {
+            ...interruptRequestItem,
+            id: TurnItemId.make(`background-stop:${command.threadId}:${command.backgroundTaskId}`),
+            parentItemId: backgroundItem.id,
+            type: "run_interrupt_result",
+            status: "running",
+            title: "Stopping background service",
+            message: "Stop requested for this background command.",
+            completedAt: null,
+          },
+        });
+      }
+      if (command.backgroundTaskId === undefined) {
+        yield* emitEvent({
+          type: "turn-item.updated",
+          threadId: command.threadId,
+          runId: run.id,
+          nodeId: rootNode.id,
+          providerInstanceId: run.providerInstanceId,
+          occurredAt: now,
+          payload: interruptRequestItem,
+        });
+        yield* stopCompletionCohort();
+      }
       yield* Ref.update(effects, (existing) => [
         ...existing,
         {
@@ -6613,6 +6677,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           threadId: command.threadId,
           request: {
             type: "provider-turn.interrupt",
+            ...(command.backgroundTaskId === undefined
+              ? {}
+              : { backgroundTaskId: command.backgroundTaskId }),
             providerSessionId,
             providerThreadId: providerThread.id,
             providerTurnId: providerTurn.id,

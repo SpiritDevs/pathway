@@ -192,6 +192,7 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
 }
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
+  readonly backgroundTaskId?: string;
   readonly runId?: RunId;
   /** Temporary caller compatibility while UI naming moves from turns to runs. */
   readonly turnId?: string;
@@ -803,6 +804,7 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     runId,
+    ...(input.backgroundTaskId === undefined ? {} : { backgroundTaskId: input.backgroundTaskId }),
   });
 });
 

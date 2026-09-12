@@ -45,6 +45,7 @@ const isProviderTurnControlError = Schema.is(ProviderTurnControlError);
 
 export interface ProviderTurnControlServiceV2Shape {
   readonly interrupt: (input: {
+    readonly backgroundTaskId?: string;
     readonly threadId: ThreadId;
     readonly providerSessionId: ProviderSessionId;
     readonly providerThreadId: ProviderThreadId;
@@ -225,6 +226,7 @@ export const layer: Layer.Layer<
       readonly providerThreadId: ProviderThreadId;
       readonly providerTurnId: ProviderTurnId;
       readonly operation: "interrupt" | "restart" | "steer";
+      readonly backgroundTaskId?: string;
     }) =>
       Effect.gen(function* () {
         const projection = yield* projections.getThreadProjection(input.threadId);
@@ -260,7 +262,7 @@ export const layer: Layer.Layer<
         const interruptProviderThread = targetsRecordedSession
           ? providerThread
           : { ...providerThread, providerSessionId: input.providerSessionId };
-        if (providerTurn.status !== "running") {
+        if (providerTurn.status !== "running" && input.backgroundTaskId === undefined) {
           return {
             projection,
             providerThread: interruptProviderThread,
@@ -274,7 +276,10 @@ export const layer: Layer.Layer<
           // the durable effect (and retry 5x). The turn may still look running
           // in projection until recovery/finalization; there is no live adapter
           // to interrupt.
-          if (input.operation === "interrupt" || input.operation === "restart") {
+          if (
+            input.backgroundTaskId === undefined &&
+            (input.operation === "interrupt" || input.operation === "restart")
+          ) {
             yield* Effect.logWarning(
               "Provider interrupt/restart found no live session; treating as already stopped",
               {
@@ -302,12 +307,57 @@ export const layer: Layer.Layer<
         return { projection, providerThread: interruptProviderThread, providerTurn, session };
       });
 
+    const recordBackgroundStopResult = Effect.fn(
+      "ProviderTurnControlService.recordBackgroundStopResult",
+    )(function* (
+      input: { readonly threadId: ThreadId; readonly backgroundTaskId?: string },
+      status: "completed" | "failed",
+    ) {
+      if (input.backgroundTaskId === undefined) return;
+      const projection = yield* projections.getThreadProjection(input.threadId);
+      const task = projection.turnItems.find(
+        (item) => item.nativeItemRef?.nativeId === input.backgroundTaskId,
+      );
+      const request = projection.turnItems.find(
+        (item) => item.type === "run_interrupt_result" && item.parentItemId === task?.id,
+      );
+      if (request?.type !== "run_interrupt_result") return;
+      const now = yield* DateTime.now;
+      yield* eventSink.write({
+        events: [
+          {
+            id: yield* ids.allocate.event({ threadId: input.threadId }),
+            type: "turn-item.updated",
+            threadId: input.threadId,
+            occurredAt: now,
+            payload: {
+              ...request,
+              status,
+              completedAt: now,
+              updatedAt: now,
+              title:
+                status === "completed"
+                  ? "Background service stopped"
+                  : "Background service could not be stopped",
+              message:
+                status === "completed"
+                  ? "The provider confirmed that the background terminal has stopped."
+                  : "Stop failed. The provider may no longer have this terminal attached. Try again or ask the agent to stop the command.",
+            },
+          },
+        ],
+      });
+    });
+
     return ProviderTurnControlServiceV2.of({
       interrupt: (input) =>
         Effect.gen(function* () {
           const loaded = yield* load({ ...input, operation: "interrupt" });
           if (Option.isNone(loaded.session)) return;
           yield* loaded.session.value.interruptTurn({
+            ...(input.backgroundTaskId === undefined
+              ? {}
+              : { backgroundTaskId: input.backgroundTaskId }),
             providerThread: loaded.providerThread,
             providerTurnId: loaded.providerTurn.id,
             requestRuntimeRestart: true,
@@ -316,7 +366,9 @@ export const layer: Layer.Layer<
             threadId: input.threadId,
             providerTurnId: input.providerTurnId,
           });
+          yield* recordBackgroundStopResult(input, "completed");
         }).pipe(
+          Effect.tapError(() => recordBackgroundStopResult(input, "failed")),
           Effect.mapError((cause) =>
             isProviderTurnControlError(cause)
               ? cause

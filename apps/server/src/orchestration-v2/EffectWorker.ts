@@ -140,6 +140,9 @@ export const executorLayer: Layer.Layer<
           case "provider-turn.interrupt":
             return providerTurnControl
               .interrupt({
+                ...(effect.request.backgroundTaskId === undefined
+                  ? {}
+                  : { backgroundTaskId: effect.request.backgroundTaskId }),
                 threadId: effect.threadId,
                 providerSessionId: effect.request.providerSessionId,
                 providerThreadId: effect.request.providerThreadId,
@@ -605,7 +608,11 @@ export const layerWithOptions = (
         }
 
         const error = Cause.pretty(exit.cause);
-        const nonRetryable = isNonRetryableProviderTurnControlFailure(effect.request.type, error);
+        const backgroundStop =
+          effect.request.type === "provider-turn.interrupt" &&
+          effect.request.backgroundTaskId !== undefined;
+        const nonRetryable =
+          !backgroundStop && isNonRetryableProviderTurnControlFailure(effect.request.type, error);
         yield* Effect.logWarning("Orchestration effect execution failed", {
           effectId: effect.id,
           effectType: effect.request.type,
@@ -619,7 +626,7 @@ export const layerWithOptions = (
           ? yield* outbox
               .succeed({ effectId: effect.id, workerId })
               .pipe(Effect.onError((cause) => terminalizeClaim(effect, cause)))
-          : effect.attemptCount >= maxAttempts
+          : backgroundStop || effect.attemptCount >= maxAttempts
             ? yield* outbox
                 .fail({ effectId: effect.id, workerId, error })
                 .pipe(Effect.onError((cause) => terminalizeClaim(effect, cause)))

@@ -805,3 +805,22 @@ describe("rightPanelStore", () => {
     ).toEqual(["terminal:term-1", "browser:tab-b", "browser:tab-c"]);
   });
 });
+
+it("opens service output once per source thread and preserves sibling panels", () => {
+  const store = useRightPanelStore.getState();
+  store.open(refA, "files");
+  store.openBackgroundOutput(refA, refB.threadId, "task-1");
+  store.openBackgroundOutput(refA, refB.threadId, "task-1");
+  const panel = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+  expect(panel.surfaces).toHaveLength(2);
+  expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+    id: `background-output:${refB.threadId}:task-1`,
+    kind: "background-output",
+    sourceThreadId: refB.threadId,
+    taskId: "task-1",
+  });
+  store.closeSurface(refA, `background-output:${refB.threadId}:task-1`);
+  expect(
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+  ).toEqual([{ id: "files", kind: "files" }]);
+});

@@ -15,6 +15,7 @@ describe("action palette section registry", () => {
       "workspace",
       "actions",
       "usage",
+      "background-services",
       "development-environments",
       "terminals",
       "issues",
@@ -44,6 +45,7 @@ describe("action palette section registry", () => {
     expect(sections.map(({ id }) => id)).toEqual([
       "lineage",
       "workspace",
+      "background-services",
       "development-environments",
       "actions",
       "usage",
@@ -75,8 +77,9 @@ describe("action palette section registry", () => {
     ).filter(({ id }) => id !== "terminals");
     const sections = resolveActionPaletteSections(preferences);
 
-    expect(sections.map(({ id }) => id).slice(2, 6)).toEqual([
+    expect(sections.map(({ id }) => id).slice(2, 7)).toEqual([
       "usage",
+      "background-services",
       "development-environments",
       "terminals",
       "issues",

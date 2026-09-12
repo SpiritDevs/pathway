@@ -1,3 +1,7 @@
+import {
+  ThreadBackgroundServices,
+  type ThreadBackgroundServicesProps,
+} from "./ThreadBackgroundServices";
 import type {
   EditorId,
   EnvironmentId,
@@ -44,6 +48,7 @@ import { useClientSettings } from "../../hooks/useSettings";
 import { resolveActionPaletteSections, type ActionPaletteSectionId } from "./actionPaletteSections";
 
 export interface ThreadDetailsPanelProps {
+  backgroundServices?: ThreadBackgroundServicesProps;
   mode: "inline" | "popover";
   onClose?: () => void;
   environmentId: EnvironmentId;
@@ -295,6 +300,13 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               : { showIconBadge: props.activeProviderIconBadge })}
           />
         ) : null;
+      case "background-services":
+        return props.draftId || !props.backgroundServices ? null : (
+          <ThreadBackgroundServices
+            key={`${sectionId}:${props.environmentId}:${props.threadId}`}
+            {...props.backgroundServices}
+          />
+        );
       case "development-environments":
         return (
           <DevelopmentEnvironmentControls

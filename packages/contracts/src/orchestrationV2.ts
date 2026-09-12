@@ -2441,6 +2441,7 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     runId: RunId,
+    backgroundTaskId: Schema.optional(TrimmedNonEmptyString),
     reason: Schema.optional(Schema.String),
   }),
   Schema.Struct({

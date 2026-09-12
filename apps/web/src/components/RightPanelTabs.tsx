@@ -306,6 +306,8 @@ export function resolveRightPanelSurfaceTitle(
   threadTitlesById?: ReadonlyMap<string, string>,
 ): string {
   switch (surface.kind) {
+    case "background-output":
+      return "Service output";
     case "diff":
       return "Diff";
     case "files":
@@ -384,6 +386,7 @@ function SurfaceIcon({
           className="size-3"
         />
       );
+    case "background-output":
     case "terminal":
       return <TerminalSquare className="size-3 shrink-0" />;
     case "pull-request": {

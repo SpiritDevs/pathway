@@ -408,6 +408,8 @@ export interface ProviderAdapterV2SteerInput {
 }
 
 export interface ProviderAdapterV2InterruptInput {
+  /** Stop only this native background command, leaving its completed turn intact. */
+  readonly backgroundTaskId?: string;
   readonly providerThread: OrchestrationV2ProviderThread;
   readonly providerTurnId: ProviderTurnId;
   /** When true, the next `startTurn` may respawn the provider runtime (Grok Stop recovery). */

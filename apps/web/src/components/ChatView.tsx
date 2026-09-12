@@ -1,3 +1,4 @@
+import { ThreadBackgroundOutputPanel } from "./chat/ThreadBackgroundOutputPanel";
 import {
   DEFAULT_MODEL,
   defaultInstanceIdForDriver,
@@ -8229,6 +8230,14 @@ function ChatViewContent(props: ChatViewProps) {
           }}
         />
       </Suspense>
+    ) : activeRightPanelSurface?.kind === "background-output" ? (
+      <ThreadBackgroundOutputPanel
+        threadRef={{
+          environmentId: activeThreadRef.environmentId,
+          threadId: activeRightPanelSurface.sourceThreadId,
+        }}
+        taskId={activeRightPanelSurface.taskId}
+      />
     ) : activeRightPanelSurface?.kind === "terminal" ? (
       <PersistentThreadTerminalPanel
         threadRef={activeThreadRef}
@@ -8316,6 +8325,25 @@ function ChatViewContent(props: ChatViewProps) {
     ) : null
   ) : null;
   const threadDetailsPanelProps: Omit<ThreadDetailsPanelProps, "mode"> = {
+    backgroundServices: {
+      onOpenOutput: (taskId) => {
+        const owner = resolvePanelSurfaceOwnerThreadRef(activeThreadRef, panelOwnerThreadRef);
+        if (owner)
+          useRightPanelStore.getState().openBackgroundOutput(owner, activeThread.id, taskId);
+      },
+      tasks: pendingBackgroundTasks,
+      turnItems: serverProjection?.turnItems ?? [],
+      enabled: !activeEnvironmentUnavailable,
+      onStop: async (runId, backgroundTaskId) => {
+        const result = await interruptThreadTurn({
+          environmentId,
+          input: { threadId: activeThread.id, runId, backgroundTaskId },
+        });
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          throw squashAtomCommandFailure(result);
+        }
+      },
+    },
     environmentId: activeThread.environmentId,
     environmentConnection: activeEnvironment?.connection ?? null,
     threadId: activeThread.id,

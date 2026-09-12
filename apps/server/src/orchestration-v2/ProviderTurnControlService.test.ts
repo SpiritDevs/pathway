@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import {
   type ModelSelection,
+  type OrchestrationV2DomainEvent,
+  TurnItemId,
   NodeId,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ThreadProjection,
@@ -26,7 +28,11 @@ import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { layer as idAllocatorLayer } from "./IdAllocator.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
-import type { ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
+import {
+  ProviderAdapterInterruptError,
+  type ProviderAdapterV2InterruptInput,
+  type ProviderAdapterV2SessionRuntime,
+} from "./ProviderAdapter.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import {
   layer as providerTurnControlLayer,
@@ -395,3 +401,124 @@ it.effect("forces an interrupted terminal state when the provider stays running"
     );
   }),
 );
+
+for (const fails of [false, true]) {
+  it.effect(
+    `controls a background command on a completed turn and records its result (fails=${fails})`,
+    () =>
+      Effect.gen(function* () {
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread:background-stop");
+        const providerSessionId = ProviderSessionId.make("session:background-stop");
+        const providerTurnId = ProviderTurnId.make("turn:background-stop");
+        const providerThreadId = ProviderThreadId.make("provider-thread:background-stop");
+        const providerThread = {
+          id: providerThreadId,
+          providerSessionId,
+          driver,
+        } as OrchestrationV2ProviderThread;
+        const base = makeProjection({
+          now,
+          threadId,
+          providerThread,
+          providerTurnId,
+          attemptId: RunAttemptId.make("attempt:background-stop"),
+        });
+        const itemBase = {
+          threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId,
+          providerTurnId,
+          parentItemId: null,
+          ordinal: 1,
+          status: "running" as const,
+          title: null,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+        };
+        const taskId = TurnItemId.make("item:background-stop");
+        const projection: OrchestrationV2ThreadProjection = {
+          ...base,
+          providerTurns: base.providerTurns.map((turn) => ({
+            ...turn,
+            status: "completed",
+            completedAt: now,
+          })),
+          turnItems: [
+            {
+              ...itemBase,
+              id: taskId,
+              type: "command_execution",
+              input: "dev server",
+              nativeItemRef: { driver, nativeId: "native-background-task", strength: "strong" },
+            },
+            {
+              ...itemBase,
+              id: TurnItemId.make("stop:background-stop"),
+              type: "run_interrupt_result",
+              parentItemId: taskId,
+              nativeItemRef: null,
+              message: "Stopping",
+            },
+          ],
+        };
+        const calls: Array<ProviderAdapterV2InterruptInput> = [];
+        const written: Array<OrchestrationV2DomainEvent> = [];
+        const runtime = {
+          interruptTurn: (input: ProviderAdapterV2InterruptInput) =>
+            Effect.gen(function* () {
+              calls.push(input);
+              if (fails)
+                return yield* new ProviderAdapterInterruptError({
+                  driver,
+                  providerThreadId,
+                  providerTurnId,
+                  cause: "still running",
+                });
+            }),
+        } as unknown as ProviderAdapterV2SessionRuntime;
+        const testLayer = providerTurnControlLayer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.mock(ProjectionStoreV2)({
+                getThreadProjection: () => Effect.succeed(projection),
+              }),
+              Layer.mock(ProviderSessionManagerV2)({
+                get: () => Effect.succeed(Option.some(runtime)),
+              }),
+              Layer.mock(EventSinkV2)({
+                write: ({ events }) =>
+                  Effect.sync(() => {
+                    written.push(...events);
+                    return [];
+                  }),
+              }),
+              idAllocatorLayer,
+            ),
+          ),
+        );
+        const result = yield* Effect.gen(function* () {
+          const control = yield* ProviderTurnControlServiceV2;
+          yield* control.interrupt({
+            threadId,
+            providerSessionId,
+            providerThreadId,
+            providerTurnId,
+            backgroundTaskId: "native-background-task",
+          });
+        }).pipe(Effect.provide(testLayer), Effect.result);
+        assert.equal(result._tag, fails ? "Failure" : "Success");
+        assert.equal(calls[0]?.backgroundTaskId, "native-background-task");
+        assert.deepEqual(
+          written.map((event) => [
+            event.type,
+            "status" in event.payload ? event.payload.status : null,
+          ]),
+          [["turn-item.updated", fails ? "failed" : "completed"]],
+        );
+        assert.equal(projection.providerTurns[0]?.status, "completed");
+      }),
+  );
+}

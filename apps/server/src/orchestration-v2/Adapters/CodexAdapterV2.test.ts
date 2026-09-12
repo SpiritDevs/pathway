@@ -1,3 +1,4 @@
+import * as Queue from "effect/Queue";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CheckpointId,
@@ -1091,11 +1092,19 @@ const makeCodexReplayHarness = (transcript: CodexReplay.CodexAppServerReplayTran
       runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
     });
     const events: Array<ProviderAdapterV2Event> = [];
+    const eventQueue = yield* Queue.unbounded<ProviderAdapterV2Event>();
+    const waitForEvent = (predicate: (event: ProviderAdapterV2Event) => boolean) =>
+      Effect.gen(function* () {
+        while (true) {
+          const event = yield* Queue.take(eventQueue);
+          if (predicate(event)) return event;
+        }
+      });
     yield* runtime.events.pipe(
       Stream.runForEach((event) =>
         Effect.sync(() => {
           events.push(event);
-        }),
+        }).pipe(Effect.andThen(Queue.offer(eventQueue, event))),
       ),
       Effect.forkScoped,
     );
@@ -1118,6 +1127,7 @@ const makeCodexReplayHarness = (transcript: CodexReplay.CodexAppServerReplayTran
       providerThread,
       threadId,
       events,
+      waitForEvent,
       continuationRequests,
       terminalEvents,
       subagentUpdates,
@@ -1827,6 +1837,151 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
       ),
   );
+
+  for (const mode of [
+    "terminated",
+    "already-stopped",
+    "still-running",
+    "late-completion",
+    "sibling",
+  ] as const) {
+    const terminated = mode !== "already-stopped" && mode !== "still-running";
+    it.effect(
+      `targets a post-settle background command without interrupting its turn (${mode})`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const transcript = makeCodexReplayTranscript({
+              scenario: `codex-stop-background-${mode}`,
+              entries: [
+                ...backgroundExecTranscript.entries
+                  .filter(
+                    (entry) => !("label" in entry) || entry.label !== "item/completed/command-late",
+                  )
+                  .flatMap((entry) =>
+                    mode === "sibling" && "label" in entry && entry.label === "turn/completed"
+                      ? [
+                          {
+                            type: "emit_inbound" as const,
+                            label: "sibling-command",
+                            frame: {
+                              method: "item/started",
+                              params: {
+                                threadId: BG_NATIVE_THREAD,
+                                turnId: BG_NATIVE_TURN,
+                                item: {
+                                  ...backgroundCommandItem("inProgress"),
+                                  id: "sibling-command",
+                                  processId: "4243",
+                                },
+                              },
+                            },
+                          },
+                          entry,
+                        ]
+                      : [entry],
+                  ),
+                {
+                  type: "expect_outbound",
+                  label: "terminate-background",
+                  frame: {
+                    id: 4,
+                    method: "thread/backgroundTerminals/terminate",
+                    params: { threadId: BG_NATIVE_THREAD, processId: "4242" },
+                  },
+                },
+                ...(mode === "late-completion"
+                  ? [
+                      {
+                        type: "emit_inbound" as const,
+                        label: "command-completed-during-stop",
+                        frame: {
+                          method: "item/completed",
+                          params: {
+                            threadId: BG_NATIVE_THREAD,
+                            turnId: BG_NATIVE_TURN,
+                            item: backgroundCommandItem("completed"),
+                          },
+                        },
+                      },
+                    ]
+                  : []),
+                {
+                  type: "emit_inbound",
+                  label: "terminate-background",
+                  frame: { id: 4, result: { terminated } },
+                },
+                ...(terminated
+                  ? []
+                  : [
+                      {
+                        type: "expect_outbound" as const,
+                        label: "list-background",
+                        frame: {
+                          id: 5,
+                          method: "thread/backgroundTerminals/list",
+                          params: { threadId: BG_NATIVE_THREAD },
+                        },
+                      },
+                      {
+                        type: "emit_inbound" as const,
+                        label: "list-background",
+                        frame: {
+                          id: 5,
+                          result: {
+                            data: mode === "still-running" ? [{ processId: "4242" }] : [],
+                            nextCursor: null,
+                          },
+                        },
+                      },
+                    ]),
+              ],
+            });
+            const harness = yield* makeCodexReplayHarness(transcript);
+            yield* harness.runtime.startTurn(
+              makeCodexTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make("attempt-stop-background"),
+                text: BG_PROMPT,
+              }),
+            );
+            const terminal = yield* harness.waitForEvent((event) => event.type === "turn.terminal");
+            if (terminal.type !== "turn.terminal")
+              return yield* Effect.die("Expected terminal event");
+            const result = yield* harness.runtime
+              .interruptTurn({
+                providerThread: harness.providerThread,
+                providerTurnId: terminal.providerTurnId,
+                backgroundTaskId: BG_COMMAND_ITEM,
+              })
+              .pipe(Effect.result);
+            if (mode === "still-running") {
+              assert.equal(result._tag, "Failure");
+              assert.isTrue(yield* harness.hasPendingBackgroundWork);
+              assert.isFalse(
+                harness.events.some(
+                  (event) =>
+                    event.type === "turn_item.updated" && event.turnItem.status === "interrupted",
+                ),
+              );
+              return;
+            }
+            assert.equal(result._tag, "Success");
+            if (mode !== "late-completion")
+              yield* harness.waitForEvent(
+                (event) =>
+                  event.type === "turn_item.updated" && event.turnItem.status === "interrupted",
+              );
+            assert.equal(yield* harness.hasPendingBackgroundWork, mode === "sibling");
+            assert.lengthOf(harness.terminalEvents(), 1);
+            assert.equal(harness.terminalEvents()[0]?.status, "completed");
+            assert.lengthOf(harness.continuationRequests, 0);
+          }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+        ),
+    );
+  }
 
   const PRE_SETTLE_SCENARIO = "codex-bg-exec-pre-settle";
   const PRE_SETTLE_NATIVE_THREAD = "native-codex-pre-settle-thread";
@@ -3129,7 +3284,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     entries: [
       ...interruptMidCommandTranscript.entries
         .filter(
-          (entry) => entry.type === "runtime_exit" || entry.label !== "item/completed/command-late",
+          (entry) =>
+            entry.type === "runtime_exit" ||
+            !("label" in entry) ||
+            entry.label !== "item/completed/command-late",
         )
         .map((entry) =>
           entry.type === "emit_inbound" &&

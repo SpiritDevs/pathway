@@ -25,10 +25,17 @@ export const RIGHT_PANEL_KINDS = [
   "pull-request",
   "agents",
   "thread",
+  "background-output",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
 export type RightPanelSurface =
+  | {
+      id: `background-output:${string}`;
+      kind: "background-output";
+      sourceThreadId: ThreadId;
+      taskId: string;
+    }
   | { id: `browser:${string}`; kind: "preview"; resourceId: string }
   | { id: "browser:new"; kind: "preview"; resourceId: null }
   | {
@@ -100,9 +107,13 @@ interface RightPanelStoreState {
   threadPanelVisibilityByThreadKey: Record<string, ThreadPanelVisibility>;
   open: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "thread">,
+    kind: Exclude<
+      RightPanelKind,
+      "file" | "terminal" | "pull-request" | "thread" | "background-output"
+    >,
   ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
+  openBackgroundOutput: (ref: ScopedThreadRef, sourceThreadId: ThreadId, taskId: string) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
   openPullRequest: (
     ref: ScopedThreadRef,
@@ -136,7 +147,10 @@ interface RightPanelStoreState {
   toggleVisibility: (ref: ScopedThreadRef) => void;
   toggle: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "thread">,
+    kind: Exclude<
+      RightPanelKind,
+      "file" | "terminal" | "pull-request" | "thread" | "background-output"
+    >,
   ) => void;
   setThreadPanelOpen: (
     ref: ScopedThreadRef,
@@ -159,7 +173,10 @@ const DEFAULT_THREAD_PANEL_VISIBILITY: ThreadPanelVisibility = {
 };
 
 const singletonSurface = (
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request" | "thread">,
+  kind: Exclude<
+    RightPanelKind,
+    "file" | "preview" | "terminal" | "pull-request" | "thread" | "background-output"
+  >,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
@@ -359,6 +376,17 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                       }
                       return [threadSurface(ThreadId.make(surface.resourceId))];
                     }
+                    if (surface.kind === "background-output") {
+                      if (
+                        typeof surface.sourceThreadId !== "string" ||
+                        typeof surface.taskId !== "string" ||
+                        !surface.taskId ||
+                        surface.id !==
+                          `background-output:${surface.sourceThreadId}:${surface.taskId}`
+                      )
+                        return [];
+                      return [surface];
+                    }
                     if (surface.kind === "file") {
                       const revealLine =
                         typeof surface.revealLine === "number" &&
@@ -497,6 +525,17 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       openThread: (ref, threadId) =>
         set((state) =>
           updateThread(state, ref, (current) => upsertSurface(current, threadSurface(threadId))),
+        ),
+      openBackgroundOutput: (ref, sourceThreadId, taskId) =>
+        set((state) =>
+          updateThread(state, ref, (current) =>
+            upsertSurface(current, {
+              id: `background-output:${sourceThreadId}:${taskId}`,
+              kind: "background-output",
+              sourceThreadId,
+              taskId,
+            }),
+          ),
         ),
       openFile: (ref, relativePath, line) =>
         set((state) =>

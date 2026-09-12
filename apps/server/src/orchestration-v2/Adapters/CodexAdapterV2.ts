@@ -1723,6 +1723,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           nativeTurnId: string,
           status: "interrupted" | "failed",
           completedAt: DateTime.Utc,
+          nativeItemId?: string,
         ) =>
           Effect.gen(function* () {
             const items = (yield* Ref.get(runningCommandItemsByTurn)).get(nativeTurnId);
@@ -1730,6 +1731,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               return;
             }
             for (const tracked of items.values()) {
+              if (nativeItemId !== undefined && tracked.id !== nativeItemId) continue;
               const nodeId = idAllocator.derive.nodeFromProviderItem({
                 driver: CODEX_PROVIDER,
                 nativeItemId: tracked.id,
@@ -3644,6 +3646,13 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             }
 
             if (payload.item.type === "commandExecution") {
+              if (
+                settled &&
+                !(yield* Ref.get(runningCommandItemsByTurn))
+                  .get(payload.turnId)
+                  ?.has(payload.item.id)
+              )
+                return;
               const turnDrained = yield* clearRunningCommandItem(payload.turnId, payload.item.id);
               const artifacts = yield* buildCommandExecutionArtifacts(context, payload.item);
               yield* emitProviderEvent({
@@ -4755,6 +4764,92 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             ),
           interruptTurn: (turnInput) =>
             Effect.gen(function* () {
+              if (turnInput.backgroundTaskId !== undefined) {
+                const taskId = turnInput.backgroundTaskId;
+                const context = Array.from((yield* Ref.get(settledTurns)).values()).find(
+                  (candidate) =>
+                    candidate.providerTurnId === turnInput.providerTurnId &&
+                    candidate.providerThread.id === turnInput.providerThread.id,
+                );
+                if (context === undefined) {
+                  return yield* toProtocolError(
+                    "The background command is no longer attached to this provider session.",
+                  );
+                }
+                const tracked = (yield* Ref.get(runningCommandItemsByTurn))
+                  .get(context.nativeTurnId)
+                  ?.get(taskId);
+                if (tracked?.processId === undefined) {
+                  return yield* toProtocolError(
+                    "This background command has no tracked terminal to stop.",
+                  );
+                }
+                return yield* Effect.gen(function* () {
+                  const nativeThreadId = yield* getNativeThreadId(context.providerThread);
+                  // A completion notification can arrive before the terminate response.
+                  // User cancellation must not automatically start another agent turn.
+                  yield* Ref.update(offeredContinuationItemsByTurn, (current) => {
+                    const next = new Map(current);
+                    const items = new Set(next.get(context.nativeTurnId) ?? []);
+                    items.add(taskId);
+                    next.set(context.nativeTurnId, items);
+                    return next;
+                  });
+                  const response = yield* client.raw.request(
+                    "thread/backgroundTerminals/terminate",
+                    {
+                      threadId: nativeThreadId,
+                      processId: tracked.processId,
+                    },
+                  );
+                  const result = yield* decodeCodexBackgroundTerminalTerminateResponse(response);
+                  if (!result.terminated) {
+                    let cursor: string | null = null;
+                    do {
+                      const response: unknown = yield* client.raw.request(
+                        "thread/backgroundTerminals/list",
+                        {
+                          threadId: nativeThreadId,
+                          ...(cursor === null ? {} : { cursor }),
+                        },
+                      );
+                      const page: CodexBackgroundTerminalsListPage =
+                        yield* decodeCodexBackgroundTerminalsListResponse(response);
+                      if (page.data.some((terminal) => terminal.processId === tracked.processId)) {
+                        return yield* toProtocolError(
+                          "The background terminal remained active after termination.",
+                        );
+                      }
+                      cursor = page.nextCursor;
+                    } while (cursor !== null);
+                  }
+                  yield* terminalizeRunningCommandItems(
+                    context,
+                    context.nativeTurnId,
+                    "interrupted",
+                    yield* DateTime.now,
+                    taskId,
+                  );
+                  const empty = yield* clearRunningCommandItem(context.nativeTurnId, taskId);
+                  if (empty)
+                    yield* Ref.update(settledTurns, (current) => {
+                      const next = new Map(current);
+                      next.delete(context.nativeTurnId);
+                      return next;
+                    });
+                }).pipe(
+                  Effect.onError(() =>
+                    Ref.update(offeredContinuationItemsByTurn, (current) => {
+                      const next = new Map(current);
+                      const items = new Set(next.get(context.nativeTurnId) ?? []);
+                      items.delete(taskId);
+                      if (items.size === 0) next.delete(context.nativeTurnId);
+                      else next.set(context.nativeTurnId, items);
+                      return next;
+                    }),
+                  ),
+                );
+              }
               const activeTurnContexts = Array.from((yield* Ref.get(activeTurns)).values());
               const activeTurn = activeTurnContexts.find(
                 (candidate) => candidate.providerTurnId === turnInput.providerTurnId,
