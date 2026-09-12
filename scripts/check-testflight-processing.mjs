@@ -36,12 +36,12 @@ const apps = await get("/v1/apps", { "filter[bundleId]": "com.spiritdevs.pathway
 if (apps.data?.length !== 1) throw new Error(`Expected one Pathway app, found ${apps.data?.length ?? 0}`);
 const app = apps.data[0];
 console.log(JSON.stringify({ checkedAt: new Date().toISOString(), appName: app.attributes.name, bundleId: app.attributes.bundleId }));
-for (const version of ["13", "14"]) {
+for (const version of ["12", "13", "14"]) {
   const result = await get("/v1/builds", { "filter[app]": app.id, "filter[version]": version, include: "preReleaseVersion", limit: "20" });
   console.log(JSON.stringify({ buildNumber: version, matches: result.data.length }));
   for (const build of result.data) {
     const marketing = result.included?.find((item) => item.type === "preReleaseVersions" && item.id === build.relationships.preReleaseVersion?.data?.id);
-    console.log(JSON.stringify({ buildId: build.id, buildNumber: build.attributes.version, marketingVersion: marketing?.attributes.version, uploadedDate: build.attributes.uploadedDate, processingState: build.attributes.processingState, expired: build.attributes.expired }));
+    console.log(JSON.stringify({ buildId: build.id, buildNumber: build.attributes.version, marketingVersion: marketing?.attributes.version, uploadedDate: build.attributes.uploadedDate, processingState: build.attributes.processingState, expired: build.attributes.expired, usesNonExemptEncryption: build.attributes.usesNonExemptEncryption }));
     const beta = await get(`/v1/builds/${encodeURIComponent(build.id)}/buildBetaDetail`);
     console.log(JSON.stringify({ buildNumber: version, betaState: beta.data?.attributes }));
     
