@@ -351,6 +351,12 @@ export const ClientSettingsSchema = Schema.Struct({
   snapShotShortcut: SnapShotShortcut.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNAP_SHOT_SHORTCUT)),
   ),
+  snapShotScreenShortcut: Schema.NullOr(SnapShotShortcut).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  snapShotRegionShortcut: Schema.NullOr(SnapShotShortcut).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   snapShotPlaySound: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotSound: SnapShotSound.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNAP_SHOT_SOUND)),
@@ -1153,6 +1159,8 @@ export const ClientSettingsPatch = Schema.Struct({
   snapShotEnabled: Schema.optionalKey(Schema.Boolean),
   snapShotIncludeAccessibility: Schema.optionalKey(Schema.Boolean),
   snapShotShortcut: Schema.optionalKey(SnapShotShortcut),
+  snapShotScreenShortcut: Schema.optionalKey(Schema.NullOr(SnapShotShortcut)),
+  snapShotRegionShortcut: Schema.optionalKey(Schema.NullOr(SnapShotShortcut)),
   snapShotPlaySound: Schema.optionalKey(Schema.Boolean),
   snapShotSound: Schema.optionalKey(SnapShotSound),
   snapShotFlash: Schema.optionalKey(Schema.Boolean),

@@ -189,14 +189,19 @@ export async function captureRegionWindowSnapshot(
   maxSize: Electron.Size,
 ): Promise<{ readonly source: RegionSnapShotSource; readonly png: Buffer }> {
   const shot = await pool.capture(region);
-  const scale = Math.min(maxSize.width / shot.width, maxSize.height / shot.height, 1);
+  const scale = Math.min(
+    maxSize.width / shot.width,
+    maxSize.height / shot.height,
+    Math.sqrt(40_000_000 / (shot.width * shot.height)),
+    1,
+  );
   const png =
     scale < 1
       ? Electron.nativeImage
           .createFromBuffer(shot.png)
           .resize({
-            width: Math.max(1, Math.round(shot.width * scale)),
-            height: Math.max(1, Math.round(shot.height * scale)),
+            width: Math.max(1, Math.floor(shot.width * scale)),
+            height: Math.max(1, Math.floor(shot.height * scale)),
             quality: "best",
           })
           .toPNG()

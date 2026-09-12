@@ -45,7 +45,7 @@ it("returns a small capture's PNG untouched", async () => {
 
 it.each([
   { width: 600, height: 400, expected: { width: 240, height: 160 } },
-  { width: 400, height: 600, expected: { width: 107, height: 160 } },
+  { width: 400, height: 600, expected: { width: 106, height: 160 } },
   { width: 600, height: 1, expected: { width: 256, height: 1 } },
 ])(
   "bounds $width x $height physical pixels before encoding",
@@ -308,4 +308,16 @@ it("closes the standby and the in-flight child", async () => {
   assert.lengthOf(processes[1]!.close.mock.calls, 1);
   await expect(pool.capture(region)).rejects.toThrow(/unavailable/);
   assert.lengthOf(processes, 2);
+});
+
+it("keeps resized desktop captures within the native export pixel limit", async () => {
+  const capture = vi.fn(async () => ({ width: 9999, height: 9001, png: Buffer.from([1, 2, 3]) }));
+  resizeMock.mockReturnValue({ toPNG: () => Buffer.from([4, 5, 6]) });
+  await captureRegionWindowSnapshot({ capture }, active, active.bounds, {
+    width: 16384,
+    height: 16384,
+  });
+  const { width, height } = resizeMock.mock.calls[0]![0];
+  assert.isAtMost(width * height, 40_000_000);
+  assert.isAbove(width * height, 39_000_000);
 });

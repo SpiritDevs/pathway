@@ -4,10 +4,11 @@ import { useAtomValue } from "@effect/atom-react";
 import { activeCompanyIdAtom } from "../../cloud/activeCompany";
 import {
   type DesktopPendingSnapShot,
+  type DesktopSnapShot,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ScopedThreadRef,
 } from "@spiritdevs/contracts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useActiveEnvironmentId } from "../../state/entities";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -45,6 +46,8 @@ import {
 } from "../../lib/desktopSnapShot";
 import { readFileAsDataUrl } from "../ChatView.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+
+const SnapShotEditor = lazy(() => import("../snapShot/SnapShotEditor"));
 
 type CaptureTarget = DraftId | ScopedThreadRef;
 
@@ -165,6 +168,7 @@ export async function deliverSnapShot(
   item: DesktopPendingSnapShot,
   target: CaptureTarget,
   isAccountCurrent: () => boolean,
+  editedCapture?: DesktopSnapShot,
 ): Promise<void> {
   const assertAccountCurrent = () => {
     if (!isAccountCurrent())
@@ -173,7 +177,7 @@ export async function deliverSnapShot(
   assertAccountCurrent();
   const store = useComposerDraftStore.getState();
   updateSnapShotAnimationSource(item.id, item.source);
-  const capture = await bridge.readSnapShot(item.id);
+  const capture = editedCapture ?? (await bridge.readSnapShot(item.id));
   assertAccountCurrent();
   const original = dataUrlToFile(capture.dataUrl, capture.name, capture.mimeType);
   const compressed = await compressImageToByteLimit(
@@ -182,7 +186,7 @@ export async function deliverSnapShot(
   );
   if (!compressed.ok) {
     finishSnapShotAnimation(item.id);
-    throw new Error("The captured window is too large to attach.");
+    throw new Error("The snapshot is too large to attach.");
   }
   const file = compressed.file;
   const source = resizeSnapShotSource(capture.source, compressed.imageSize);
@@ -195,6 +199,11 @@ export async function deliverSnapShot(
         "The destination conversation closed. Open a conversation, then retry the saved capture.",
       );
     target = resolvedTarget;
+  }
+  const attached = store.getComposerDraft(target)?.images.find(({ id }) => id === capture.id);
+  // A failed draft write leaves the editor open, so a retry may contain newer marks.
+  if (editedCapture && attached && attached.previewUrl !== dataUrl) {
+    store.removeImage(target, capture.id);
   }
   const alreadyAttached =
     store.getComposerDraft(target)?.images.some(({ id }) => id === capture.id) ?? false;
@@ -227,7 +236,7 @@ export async function deliverSnapShot(
       ?.persistedAttachments.filter((attachment) => attachment.id !== capture.id) ?? [];
   await store.syncPersistedAttachments(target, [...persistedAttachments, persisted]);
   if (!store.getComposerDraft(target)?.persistedAttachments.some(({ id }) => id === capture.id)) {
-    throw new Error("The captured window could not be saved to the draft.");
+    throw new Error("The snapshot could not be saved to the draft.");
   }
 
   // Reveal the attachment under the flying capture before the desktop tears the overlay down,
@@ -241,6 +250,26 @@ export async function deliverSnapShot(
   assertAccountCurrent();
   await bridge.acknowledgeSnapShot(capture.id);
   if (isAccountCurrent()) dispatchSnapShotComposerFocus();
+}
+
+/** Retire the pending capture only once the edited image has actually been exported. */
+export async function exportSnapShotFromEditor(
+  bridge: DesktopSnapShotBridge,
+  capture: DesktopSnapShot,
+  action: "copy" | "download",
+  isAccountCurrent: () => boolean,
+): Promise<boolean> {
+  if (!isAccountCurrent()) throw new Error("The capture session ended.");
+  if (!bridge.exportSnapShot) throw new Error("Update the desktop app to export edited snapshots.");
+  const completed = await bridge.exportSnapShot({
+    action,
+    dataUrl: capture.dataUrl,
+    name: capture.name,
+  });
+  if (!isAccountCurrent()) throw new Error("The capture session ended.");
+  if (!completed) return false;
+  await bridge.acknowledgeSnapShot(capture.id);
+  return true;
 }
 
 export function SnapShotCoordinator() {
@@ -311,7 +340,8 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
   const captureSound = useClientSettings((settings) =>
     settings.snapShotPlaySound ? settings.snapShotSound : null,
   );
-  const animateCaptures = useClientSettings((settings) => settings.snapShotAnimations);
+  const [editorCapture, setEditorCapture] = useState<DesktopSnapShot | null>(null);
+  const editorCaptureRef = useRef<DesktopSnapShot | null>(null);
   const captureTargetsRef = useRef(new Map<string, Promise<CaptureTarget | null>>());
   const lastTargetRef = useRef<CaptureTarget | null>(null);
   const targetResolutionRef = useRef<Promise<CaptureTarget | null> | null>(null);
@@ -319,6 +349,7 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
   const drainingRef = useRef<Promise<void> | null>(null);
   const rerunRequestedRef = useRef(false);
   const soundedCaptureIdsRef = useRef(new Set<string>());
+  const reportedOpenFailuresRef = useRef(new Set<string>());
   const pendingAnimationStartsRef = useRef(new Set<string>());
 
   if (
@@ -391,7 +422,7 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
 
   const drain = useCallback(async (): Promise<void> => {
     const bridge = getDesktopSnapShotBridge();
-    if (!bridge || !isAccountCurrent()) return;
+    if (!bridge || !isAccountCurrent() || editorCaptureRef.current) return;
     if (drainingRef.current) {
       rerunRequestedRef.current = true;
       return drainingRef.current;
@@ -401,48 +432,31 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
       do {
         rerunRequestedRef.current = false;
         const pending = await bridge.listPendingSnapShots();
+        if (!isAccountCurrent() || editorCaptureRef.current) return;
         for (const item of pending) {
-          if (!isAccountCurrent()) return;
-          playCaptureSound(item.id);
-          const target = await resolvePendingSnapShotTarget(
-            captureTargetsRef.current,
-            item.id,
-            resolveCaptureTarget,
-            routeThreadRef,
-          );
-          if (!target) {
-            await dismissSnapShotAnimation(item.id);
-            soundedCaptureIdsRef.current.delete(item.id);
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: "Snapshot saved, but no conversation is available",
-                description: "Open a conversation or project, then retry to attach this capture.",
-                actionProps: { children: "Retry", onClick: () => void drain() },
-              }),
-            );
-            continue;
-          }
-
           try {
-            await deliverSnapShot(bridge, item, target, isAccountCurrent);
-            captureTargetsRef.current.delete(item.id);
-            soundedCaptureIdsRef.current.delete(item.id);
-          } catch (error) {
+            const capture = await bridge.readSnapShot(item.id);
             if (!isAccountCurrent()) return;
             await dismissSnapShotAnimation(item.id);
-            soundedCaptureIdsRef.current.delete(item.id);
-            toastManager.add(
-              stackedThreadToast({
+            if (!isAccountCurrent()) return;
+            reportedOpenFailuresRef.current.delete(item.id);
+            playCaptureSound(item.id);
+            editorCaptureRef.current = capture;
+            setEditorCapture(capture);
+            return;
+          } catch (error) {
+            if (!isAccountCurrent()) return;
+            if (!reportedOpenFailuresRef.current.has(item.id)) {
+              reportedOpenFailuresRef.current.add(item.id);
+              toastManager.add({
                 type: "error",
-                title: "Snapshot failed",
+                title: "Couldn't open a saved snapshot",
                 description:
                   error instanceof Error
                     ? error.message
-                    : "The capture is saved and can be retried.",
-                actionProps: { children: "Retry", onClick: () => void drain() },
-              }),
-            );
+                    : "Discard it in Saved captures if it cannot be recovered.",
+              });
+            }
           }
         }
       } while (rerunRequestedRef.current);
@@ -453,8 +467,11 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Snapshot failed",
-            description: error instanceof Error ? error.message : "Try the capture again.",
+            title: "Couldn't open the snapshot",
+            description:
+              error instanceof Error
+                ? error.message
+                : "The capture is saved. Try opening it again.",
           }),
         );
       })
@@ -463,7 +480,72 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
       });
     drainingRef.current = operation;
     return operation;
-  }, [isAccountCurrent, playCaptureSound, resolveCaptureTarget, routeThreadRef]);
+  }, [isAccountCurrent, playCaptureSound]);
+
+  const closeEditor = useCallback(() => {
+    const capture = editorCaptureRef.current;
+    if (capture) {
+      captureTargetsRef.current.delete(capture.id);
+      soundedCaptureIdsRef.current.delete(capture.id);
+    }
+    editorCaptureRef.current = null;
+    setEditorCapture(null);
+    void drain();
+  }, [drain]);
+
+  const handleEditorAction = useCallback(
+    async (
+      action: "copy" | "chat" | "download",
+      result: { dataUrl: string; name: string; source?: DesktopSnapShot["source"] },
+    ) => {
+      const capture = editorCaptureRef.current;
+      const bridge = getDesktopSnapShotBridge();
+      if (!capture || !bridge || !isAccountCurrent()) {
+        throw new Error("The capture session ended. Sign in and try again.");
+      }
+      const edited: DesktopSnapShot = {
+        ...capture,
+        ...result,
+        source: result.source ?? capture.source,
+        mimeType: "image/png",
+      };
+      if (action === "chat") {
+        const target = await resolvePendingSnapShotTarget(
+          captureTargetsRef.current,
+          capture.id,
+          resolveCaptureTarget,
+          routeThreadRef,
+        );
+        if (!target)
+          throw new Error("Open a conversation or project, then save this snapshot again.");
+        await deliverSnapShot(bridge, edited, target, isAccountCurrent, edited);
+      } else {
+        const completed = await exportSnapShotFromEditor(bridge, edited, action, isAccountCurrent);
+        if (!completed) return;
+      }
+      if (isAccountCurrent()) closeEditor();
+    },
+    [closeEditor, isAccountCurrent, resolveCaptureTarget, routeThreadRef],
+  );
+
+  const discardEditorCapture = useCallback(() => {
+    const capture = editorCaptureRef.current;
+    const bridge = getDesktopSnapShotBridge();
+    if (!capture || !bridge || !isAccountCurrent()) return;
+    void bridge.acknowledgeSnapShot(capture.id).then(
+      () => {
+        if (isAccountCurrent()) closeEditor();
+      },
+      (error: unknown) => {
+        if (!isAccountCurrent()) return;
+        toastManager.add({
+          type: "error",
+          title: "Couldn't discard the snapshot",
+          description: error instanceof Error ? error.message : "Try again.",
+        });
+      },
+    );
+  }, [closeEditor, isAccountCurrent]);
 
   useEffect(() => {
     const bridge = getDesktopSnapShotBridge();
@@ -485,21 +567,18 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
         }
         case "started": {
           playCaptureSound(event.id);
-          if (animateCaptures && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-            void beginSnapShotAnimationWhenReady(
-              event.id,
-              resolveSnapShotDeliveryTarget(
-                captureTargetsRef.current,
-                event.id,
-                resolveCaptureTarget,
-              ),
-              pendingAnimationStartsRef.current,
-            );
-          }
           return;
         }
         case "ready":
           void drain();
+          return;
+        case "cancelled":
+          captureTargetsRef.current.delete(event.id);
+          dismissFailedSnapShot(
+            event.id,
+            soundedCaptureIdsRef.current,
+            pendingAnimationStartsRef.current,
+          );
           return;
         case "failed": {
           if (event.id) captureTargetsRef.current.delete(event.id);
@@ -539,7 +618,7 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
       unsubscribe();
       dismissAllSnapShotAnimations();
     };
-  }, [animateCaptures, drain, playCaptureSound, resolveCaptureTarget, routeThreadRef]);
+  }, [drain, playCaptureSound, routeThreadRef]);
 
   useEffect(() => {
     const dismissOnBlur = () => {
@@ -561,5 +640,23 @@ function SnapShotAccountCoordinator({ isAccountCurrent }: { isAccountCurrent: ()
     };
   }, [drain]);
 
-  return null;
+  return editorCapture ? (
+    <Suspense
+      fallback={
+        <div
+          className="fixed inset-0 z-[100] grid place-items-center bg-[#e8e8e8] text-sm text-[#555]"
+          role="status"
+        >
+          Opening snapshot editor…
+        </div>
+      }
+    >
+      <SnapShotEditor
+        key={editorCapture.id}
+        image={editorCapture}
+        onAction={handleEditorAction}
+        onClose={discardEditorCapture}
+      />
+    </Suspense>
+  ) : null;
 }

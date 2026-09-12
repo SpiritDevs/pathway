@@ -114,3 +114,21 @@ describe("SnapShot metadata", () => {
     ).toThrow();
   });
 });
+
+it("preserves screen capture metadata and negative display origins without adding window context", () => {
+  const screen = decodeSnapShotSource({
+    kind: "snap-shot",
+    capturedAt: source.capturedAt,
+    captureType: "region",
+    captureBounds: { x: -1920, y: -200, width: 200, height: 100 },
+    appName: "Screen region",
+    windowTitle: "",
+  });
+  expect(screen.captureBounds?.x).toBe(-1920);
+  expect(screen.captureType).toBe("region");
+  expect(screen.accessibility).toBeUndefined();
+  expect(
+    decodeDesktopSnapShotEvent({ type: "cancelled", id: "00000000-0000-4000-8000-000000000001" })
+      .type,
+  ).toBe("cancelled");
+});

@@ -45,6 +45,7 @@ import {
 import {
   acknowledgeSnapShot,
   captureSnapShot,
+  exportSnapShot,
   setSnapShotAccount,
   checkSnapShotShortcut,
   dismissSnapShotAnimation,
@@ -81,6 +82,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(getConnectionCatalog);
   yield* ipc.handle(getSnapShotState);
   yield* ipc.handle(captureSnapShot);
+  yield* ipc.handle(exportSnapShot);
   yield* ipc.handle(setSnapShotAccount);
   yield* ipc.handle(setupSnapShot);
   yield* ipc.handle(previewSnapShotConfig);

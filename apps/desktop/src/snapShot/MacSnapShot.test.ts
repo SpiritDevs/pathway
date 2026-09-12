@@ -101,3 +101,26 @@ it("rejects a successful command that did not produce a PNG", async () => {
     captureMacWindowSnapshot(active, "/tmp/window.png", { width: 100, height: 80 }),
   ).rejects.toThrow("macOS returned an invalid snapshot.");
 });
+
+it("captures a display with a negative origin before showing a region picker", async () => {
+  const { captureMacScreenSnapshot, macScreenSnapShotArguments } = await import("./MacSnapShot.ts");
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from("screen"),
+  ]);
+  readFileMock.mockResolvedValue(png);
+  const bounds = { x: -1920, y: 20, width: 1920, height: 1080 };
+  assert.deepEqual(macScreenSnapShotArguments(bounds, "/tmp/screen.png"), [
+    "-R",
+    "-1920,20,1920,1080",
+    "-x",
+    "-t",
+    "png",
+    "/tmp/screen.png",
+  ]);
+  assert.strictEqual(await captureMacScreenSnapshot(bounds, "/tmp/screen.png"), png);
+  assert.deepEqual(
+    execFileMock.mock.calls[0]?.[1],
+    macScreenSnapShotArguments(bounds, "/tmp/screen.png"),
+  );
+});

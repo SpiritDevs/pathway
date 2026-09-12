@@ -335,6 +335,8 @@ describe("SETTINGS_NAV_GROUPS", () => {
 it("finds snapshot capture and metadata settings", () => {
   expect(searchSettings("screenshot")[0]?.id).toBe("snap-shot-enabled");
   expect(searchSettings("app shots")[0]?.id).toBe("snap-shot-enabled");
+  expect(searchSettings("whole screen")[0]?.id).toBe("snap-shot-screen-shortcut");
+  expect(searchSettings("region capture")[0]?.id).toBe("snap-shot-region-shortcut");
   expect(searchSettings("capture accessibility data")[0]).toMatchObject({
     id: "snap-shot-accessibility",
     targetId: "snap-shot-enabled",

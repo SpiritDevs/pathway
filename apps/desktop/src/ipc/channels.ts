@@ -29,6 +29,7 @@ export const GET_CLIENT_SETTINGS_CHANNEL = "desktop:get-client-settings";
 export const SET_CLIENT_SETTINGS_CHANNEL = "desktop:set-client-settings";
 export const SET_SNAP_SHOT_ACCOUNT_CHANNEL = "desktop:set-snap-shot-account";
 export const CAPTURE_SNAP_SHOT_CHANNEL = "desktop:capture-snap-shot";
+export const EXPORT_SNAP_SHOT_CHANNEL = "desktop:export-snap-shot";
 export const SETUP_SNAP_SHOT_CHANNEL = "desktop:setup-snap-shot";
 export const PREVIEW_SNAP_SHOT_CONFIG_CHANNEL = "desktop:preview-snap-shot-config";
 export const APPLY_SNAP_SHOT_CONFIG_CHANNEL = "desktop:apply-snap-shot-config";

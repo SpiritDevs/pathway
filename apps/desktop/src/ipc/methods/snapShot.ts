@@ -10,11 +10,17 @@ import {
   DesktopCaptureConfigRequest,
   DesktopCaptureConfigPreview,
   DesktopCaptureConfigApplied,
+  DesktopSnapShotCaptureOptions,
+  DesktopSnapShotExport,
+  SNAP_SHOT_EXPORT_MAX_BYTES,
+  SNAP_SHOT_EXPORT_MAX_DIMENSION,
+  SNAP_SHOT_EXPORT_MAX_PIXELS,
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type * as Electron from "electron";
+import * as Electron from "electron";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
@@ -127,11 +133,86 @@ export const setSnapShotAccount = DesktopIpc.makeIpcMethod({
 
 export const captureSnapShot = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.CAPTURE_SNAP_SHOT_CHANNEL,
-  payload: Schema.Void,
+  payload: Schema.Union([DesktopSnapShotCaptureOptions, Schema.Undefined]),
   result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.snapShot.capture")(function* (_, event) {
+  handler: Effect.fn("desktop.ipc.snapShot.capture")(function* (options, event) {
     yield* ensureTrustedSnapShotSender(event);
-    yield* (yield* DesktopSnapShot.DesktopSnapShot).capture;
+    const capture = yield* DesktopSnapShot.DesktopSnapShot;
+    if (!options || options.type === "window") yield* capture.capture;
+    else yield* capture.captureType(options.type);
+  }),
+});
+
+class SnapShotExportError extends Schema.TaggedErrorClass<SnapShotExportError>()(
+  "SnapShotExportError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Could not export the snapshot. Try again.";
+  }
+}
+
+/** Checks the PNG header before native decoding to bound both compressed and decoded sizes. */
+export function decodeSnapShotExportImage(dataUrl: string): Electron.NativeImage {
+  const png = Buffer.from(dataUrl.slice("data:image/png;base64,".length), "base64");
+  if (
+    png.length < 33 ||
+    png.length > SNAP_SHOT_EXPORT_MAX_BYTES ||
+    !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
+    png.toString("ascii", 12, 16) !== "IHDR"
+  ) {
+    throw new Error("The snapshot must be a valid PNG image.");
+  }
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  if (
+    width === 0 ||
+    height === 0 ||
+    width > SNAP_SHOT_EXPORT_MAX_DIMENSION ||
+    height > SNAP_SHOT_EXPORT_MAX_DIMENSION ||
+    width * height > SNAP_SHOT_EXPORT_MAX_PIXELS
+  ) {
+    throw new Error("The snapshot is too large to export.");
+  }
+  const image = Electron.nativeImage.createFromBuffer(png);
+  if (image.isEmpty()) throw new Error("The snapshot must be a valid PNG image.");
+  return image;
+}
+
+export const exportSnapShot = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.EXPORT_SNAP_SHOT_CHANNEL,
+  payload: DesktopSnapShotExport,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.snapShot.export")(function* (request, event) {
+    const owner = yield* ensureTrustedSnapShotSender(event);
+    const image = yield* Effect.try({
+      try: () => decodeSnapShotExportImage(request.dataUrl),
+      catch: (cause) => new SnapShotExportError({ cause }),
+    });
+    if (request.action === "copy") {
+      yield* Effect.try({
+        try: () => Electron.clipboard.writeImage(image),
+        catch: (cause) => new SnapShotExportError({ cause }),
+      });
+      return true;
+    }
+    const name = (request.name.split(/[\\/]/).at(-1) || "snapshot.png").replace(/\p{Cc}/gu, "");
+    const result = yield* Effect.tryPromise({
+      try: () =>
+        Electron.dialog.showSaveDialog(owner, {
+          title: "Download snapshot",
+          defaultPath: name.toLowerCase().endsWith(".png") ? name : `${name}.png`,
+          filters: [{ name: "PNG image", extensions: ["png"] }],
+          properties: ["createDirectory", "showOverwriteConfirmation"],
+        }),
+      catch: (cause) => new SnapShotExportError({ cause }),
+    });
+    if (result.canceled || !result.filePath) return false;
+    const fileSystem = yield* FileSystem.FileSystem;
+    yield* fileSystem
+      .writeFile(result.filePath, image.toPNG())
+      .pipe(Effect.mapError((cause) => new SnapShotExportError({ cause })));
+    return true;
   }),
 });
 

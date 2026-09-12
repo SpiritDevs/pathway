@@ -440,7 +440,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "snap-shot-enabled",
-    searchTerms: ["window capture screenshot", "app shots"],
+    searchTerms: ["window capture screenshot", "app shots", "annotation editor"],
     title: "SnapShots",
     to: "/settings/snap-shot",
   },
@@ -453,7 +453,22 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "snap-shot-shortcut",
-    title: "Capture shortcut",
+    title: "Active window shortcut",
+    searchTerms: ["capture shortcut", "window hotkey"],
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "snap-shot-screen-shortcut",
+    title: "Current screen shortcut",
+    searchTerms: ["fullscreen capture", "whole screen", "display monitor hotkey"],
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "snap-shot-region-shortcut",
+    title: "Region shortcut",
+    searchTerms: ["region capture", "area selection hotkey"],
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
   },
@@ -466,12 +481,6 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "snap-shot-flash",
     title: "Capture flash",
-    to: "/settings/snap-shot",
-    targetId: "snap-shot-enabled",
-  },
-  {
-    id: "snap-shot-animations",
-    title: "Capture animations",
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
   },
