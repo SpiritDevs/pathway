@@ -1,5 +1,9 @@
 # TestFlight 1.0.13 build 14 recovery
 
+**Uploaded successfully on 2026-09-12 at 10:18:57 UTC.** Apple accepted the package and
+reported that processing had started. Processing completion and tester availability are
+not yet confirmed. The following sections record the recovery evidence in order.
+
 Recovery started on 2026-09-12 on the Mac Studio that uploaded build 13.
 Source is `e030add279629cc6eb049ee6d5753a886eb97aa3` from
 `release/ios-testflight-connection-fixes-20260912`. This status branch changes only this report.
@@ -64,3 +68,19 @@ this recovery ran archive, package, signing, and configuration checks without re
 Exported IPA SHA-256: `ae9fd16315ed1b1efcbc2f96413bbfdf7c6350abbcfc651776ec1e011618a18a`.
 The archive and package are retained in the isolated release checkout under
 `.pathway/releases/1.0.13`. Upload is the next step; tester availability remains unconfirmed.
+
+## Apple upload receipt
+
+Apple accepted Pathway 1.0.13 build 14 at 2026-09-12 10:18:57 UTC. The upload command
+finished with exit code 0. Its final messages were `Uploaded package is processing.`,
+`Upload succeeded.`, `Uploaded Pathway`, and `EXPORT SUCCEEDED`.
+
+The receipt log is retained at
+`~/GitHub/pathway-testflight-14-release/.pathway/releases/1.0.13/upload-14.log`.
+The signed archive, dSYMs, exported IPA, and distribution diagnostics are retained locally.
+Apple's build-14 export-time validation returned HTTP 201 before upload, confirming that
+this build number was accepted. No new build number or replacement certificate was needed.
+
+Processing has started. Upload success does not establish TestFlight tester availability.
+Final processing and tester-access verification is in progress. No public App Store release
+was submitted, and no production service configuration or unrelated working tree was changed.
