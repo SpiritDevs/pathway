@@ -1111,7 +1111,7 @@ struct AgentThreadConversationView: View {
         }
     }
 
-    var body: some View {
+    private var conversationWithActions: some View {
         conversationScrollView
         .navigationTitle(model.threadTitle)
         .navigationBarTitleDisplayMode(.inline)
@@ -1149,6 +1149,10 @@ struct AgentThreadConversationView: View {
             Button("Cancel", role: .cancel) {}
             Button("Force settle", role: .destructive) { performLifecycle(.forceSettle) }
         } message: { Text("This settles the thread even if work is still active.") }
+    }
+
+    var body: some View {
+        conversationWithActions
         .sheet(isPresented: $showsChanges) { AgentThreadChangesView(model: model) }
         .onChange(of: changedItems.isEmpty) { _, empty in
             if empty { showsChanges = false }
