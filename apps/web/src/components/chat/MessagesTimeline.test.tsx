@@ -410,14 +410,44 @@ describe("MessagesTimeline", () => {
         scrollLength: 800,
       }),
     ).toBe(false);
-    // The composer inset is part of contentLength and must not count as
-    // distance-to-end.
+    // The composer pads the content but also covers the viewport: content
+    // hidden behind it is no longer at the visible end.
     expect(
       resolveTimelineIsAtEnd(
         { isAtEnd: false, contentLength: 2100, scroll: 1170, scrollLength: 800 },
         100,
       ),
+    ).toBe(false);
+    // LegendList's strict flag ignores the overlay as well. Measured geometry
+    // takes precedence when the last content is inside the covered area.
+    expect(
+      resolveTimelineIsAtEnd(
+        { isAtEnd: true, contentLength: 2100, scroll: 1200, scrollLength: 800 },
+        100,
+      ),
+    ).toBe(false);
+    // Scrolling that content above the composer re-arms follow.
+    expect(
+      resolveTimelineIsAtEnd(
+        { isAtEnd: false, contentLength: 2100, scroll: 1300, scrollLength: 800 },
+        100,
+      ),
     ).toBe(true);
+    // Growing the composer must not expand the follow re-arm band.
+    for (const inset of [0, 100, 240]) {
+      expect(
+        resolveTimelineIsAtEnd(
+          { contentLength: 2000 + inset, scroll: 1160 + inset, scrollLength: 800 },
+          inset,
+        ),
+      ).toBe(true);
+      expect(
+        resolveTimelineIsAtEnd(
+          { contentLength: 2000 + inset, scroll: 1159 + inset, scrollLength: 800 },
+          inset,
+        ),
+      ).toBe(false);
+    }
     // Geometry missing (older state shape): fall back to the nearEnd/strict flags.
     expect(resolveTimelineIsAtEnd({ isNearEnd: true, isAtEnd: false })).toBe(true);
     expect(resolveTimelineIsAtEnd({ isAtEnd: false })).toBe(false);
