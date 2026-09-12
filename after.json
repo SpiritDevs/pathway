@@ -1,0 +1,29 @@
+{
+  "mode": "after",
+  "actual": {
+    "origin": "http://127.0.0.1:13773",
+    "loaded": true
+  },
+  "results": [
+    {
+      "origin": "http://127.0.0.1:13773",
+      "route": "/api/assets/[redacted]",
+      "status": 200
+    },
+    {
+      "origin": "http://127.0.0.1:13773",
+      "route": "/api/assets/[redacted]",
+      "status": 200
+    },
+    {
+      "origin": "http://127.0.0.1:13773",
+      "route": "/api/assets/[redacted]",
+      "status": 200
+    },
+    {
+      "origin": "http://127.0.0.1:13773",
+      "route": "/api/assets/[redacted]",
+      "status": 200
+    }
+  ]
+}

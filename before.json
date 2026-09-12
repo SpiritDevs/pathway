@@ -1,0 +1,34 @@
+{
+  "mode": "before",
+  "actual": {
+    "origin": "http://localhost:5744",
+    "loaded": false
+  },
+  "results": [
+    {
+      "origin": "http://localhost:5744",
+      "route": "filesystem path on client",
+      "status": 200
+    },
+    {
+      "origin": "http://localhost:5744",
+      "route": "filesystem path on client",
+      "status": 200
+    },
+    {
+      "origin": "http://127.0.0.1:13773",
+      "route": "/api/assets/[redacted]",
+      "status": 200
+    },
+    {
+      "origin": "http://127.0.0.1:13773",
+      "route": "/api/assets/[redacted]",
+      "status": 200
+    },
+    {
+      "origin": "http://127.0.0.1:13773",
+      "route": "/api/assets/[redacted]",
+      "status": 200
+    }
+  ]
+}
