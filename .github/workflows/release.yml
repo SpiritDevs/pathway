@@ -1,7 +1,12 @@
-name: Check TestFlight processing
+name: Finish TestFlight processing
 
 on:
   workflow_dispatch:
+    inputs:
+      complete_build_14:
+        description: Carry forward the existing encryption declaration for 1.0.13 build 14
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,6 +22,7 @@ jobs:
           node-version: '24'
       - name: Read Apple build and tester state
         env:
+          COMPLETE_BUILD_14: ${{ inputs.complete_build_14 }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
