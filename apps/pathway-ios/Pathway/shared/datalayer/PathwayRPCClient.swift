@@ -107,6 +107,7 @@ actor PathwayRPCClient {
     private var subscriptionTag: String?
     private var subscriptionPayload: JSONValue?
     private var subscriptionRequestID: Int?
+    private var threadCompletionMarkerSupported = true
     private var subscriptionGate = PathwayRPCSubscriptionGate()
     private var subscriptionContinuation: AsyncThrowingStream<JSONValue, Error>.Continuation?
     private var subscriptionBufferingPolicy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy = .bufferingOldest(256)
@@ -128,10 +129,7 @@ actor PathwayRPCClient {
     func subscribeToThread(_ threadID: String) -> AsyncThrowingStream<JSONValue, Error> {
         subscribe(
             "orchestration.subscribeThread",
-            payload: .object([
-                "threadId": .string(threadID),
-                "requestCompletionMarker": .bool(true)
-            ])
+            payload: .object(["threadId": .string(threadID)])
         )
     }
 
@@ -236,19 +234,28 @@ actor PathwayRPCClient {
         var failureCount = 0
         while desired, !Task.isCancelled {
             let id = UUID()
+            var installed = false
             do {
                 let url = try await endpointProvider()
                 guard desired, !Task.isCancelled else { return }
                 let task = session.webSocketTask(with: url)
+                // Thread subscriptions include the initial history in one frame. Match the
+                // native cloud transport's limit so larger histories can finish loading.
+                task.maximumMessageSize = 16 * 1024 * 1024
                 task.resume()
                 install(task, id: id)
+                installed = true
                 try await receiveLoop(task, id: id)
                 failureCount = 0
             } catch is CancellationError {
                 break
             } catch {
-                disconnect(id: id)
                 guard desired, !Task.isCancelled else { break }
+                if connectionID == id {
+                    disconnect(id: id, error: error.localizedDescription)
+                } else if !installed {
+                    yieldTransportState("disconnected", error: error.localizedDescription)
+                }
                 failureCount += 1
                 let delay = min(5.0, 0.35 * pow(1.7, Double(failureCount - 1)))
                 try? await Task.sleep(for: .seconds(delay * Double.random(in: 0.5 ... 1)))
@@ -305,18 +312,22 @@ actor PathwayRPCClient {
         case "Chunk":
             guard response.requestId == subscriptionRequestID else { return }
             let values = response.values ?? []
+            let legacySnapshot = subscriptionTag == "orchestration.subscribeThread"
+                && !threadCompletionMarkerSupported
+                && values.contains { $0.objectValue?["kind"]?.stringValue == "snapshot" }
             let acknowledged = subscriptionTag != "orchestration.subscribeThread"
+                || legacySnapshot
                 || values.contains { $0.objectValue?["kind"]?.stringValue == "synchronized" }
+            var becameReady = false
             if acknowledged, subscriptionGate.receiveChunk(requestID: response.requestId) {
+                becameReady = true
                 for id in pending.keys { Task { await self.sendPending(id) } }
             }
-            for value in values {
-                if let result = subscriptionContinuation?.yield(value),
-                   pathwayRPCBufferOverflowIsFatal(result, policy: subscriptionBufferingPolicy) {
-                    throw PathwayRPCError.protocolViolation(
-                        "The live thread produced events faster than the app could display them."
-                    )
-                }
+            for value in values { try yieldSubscriptionValue(value) }
+            if legacySnapshot, becameReady {
+                // Older servers complete their initial load with a full snapshot.
+                // Normalize that boundary only after the snapshot reaches the consumer.
+                try yieldSubscriptionValue(.object(["kind": .string("synchronized")]))
             }
             try await sendControl("Ack", requestID: response.requestId)
         case "Exit":
@@ -346,7 +357,7 @@ actor PathwayRPCClient {
         }
     }
 
-    private func disconnect(id: UUID) {
+    private func disconnect(id: UUID, error: String? = nil) {
         guard connectionID == id else { return }
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
@@ -356,7 +367,7 @@ actor PathwayRPCClient {
         awaitingKeepaliveResponse = false
         subscriptionRequestID = nil
         subscriptionGate.reset()
-        yieldTransportState("disconnected")
+        yieldTransportState("disconnected", error: error)
         for id in Array(pending.keys) {
             complete(id, result: .failure(PathwayRPCError.disconnected))
         }
@@ -376,7 +387,7 @@ actor PathwayRPCClient {
             try await socket.send(.data(JSONEncoder.pathwayRPC.encode(request.envelope)))
         } catch {
             complete(id, result: .failure(PathwayRPCError.disconnected))
-            disconnect(id: connectionID)
+            disconnect(id: connectionID, error: error.localizedDescription)
         }
     }
 
@@ -391,17 +402,23 @@ actor PathwayRPCClient {
         let requestID = allocateRequestID()
         subscriptionRequestID = requestID
         subscriptionGate.open(requestID: requestID)
-        let request = PathwayRPCRequest(
-            id: requestID,
-            tag: subscriptionTag,
-            payload: subscriptionPayload
-        )
         do {
+            var payload = subscriptionPayload
+            if subscriptionTag == "orchestration.subscribeThread" {
+                let config = try await request("server.getConfig", payload: .object([:]))
+                guard self.connectionID == connectionID, subscriptionRequestID == requestID else { return }
+                threadCompletionMarkerSupported = config.objectValue?["threadResumeCompletionMarker"]?.boolValue == true
+                if threadCompletionMarkerSupported, var fields = payload.objectValue {
+                    fields["requestCompletionMarker"] = .bool(true)
+                    payload = .object(fields)
+                }
+                try yieldSubscriptionValue(.object(["_pathwayServerConfig": config]))
+            }
+            let request = PathwayRPCRequest(id: requestID, tag: subscriptionTag, payload: payload)
             try await socket.send(.data(JSONEncoder.pathwayRPC.encode(request)))
         } catch {
-            subscriptionRequestID = nil
-            subscriptionGate.reset()
-            disconnect(id: connectionID)
+            guard self.connectionID == connectionID, subscriptionRequestID == requestID else { return }
+            disconnect(id: connectionID, error: error.localizedDescription)
         }
     }
 
@@ -414,7 +431,7 @@ actor PathwayRPCClient {
                 ))
             )
         } catch {
-            disconnect(id: connectionID)
+            disconnect(id: connectionID, error: error.localizedDescription)
             throw PathwayRPCError.disconnected
         }
     }
@@ -476,9 +493,18 @@ actor PathwayRPCClient {
 
     /// Transport changes share the subscription queue so an old snapshot cannot overwrite
     /// a newer disconnect notification in the consumer.
-    private func yieldTransportState(_ state: String) {
+    private func yieldTransportState(_ state: String, error: String? = nil) {
         guard let subscriptionContinuation else { return }
-        pathwayRPCYieldTransportState(state, to: subscriptionContinuation, policy: subscriptionBufferingPolicy)
+        pathwayRPCYieldTransportState(state, error: error, to: subscriptionContinuation, policy: subscriptionBufferingPolicy)
+    }
+
+    private func yieldSubscriptionValue(_ value: JSONValue) throws {
+        if let result = subscriptionContinuation?.yield(value),
+           pathwayRPCBufferOverflowIsFatal(result, policy: subscriptionBufferingPolicy) {
+            throw PathwayRPCError.protocolViolation(
+                "The live thread produced events faster than the app could display them."
+            )
+        }
     }
 
     private func allocateRequestID() -> Int {
@@ -512,10 +538,13 @@ func pathwayRPCBufferOverflowIsFatal(
 
 func pathwayRPCYieldTransportState(
     _ state: String,
+    error: String? = nil,
     to continuation: AsyncThrowingStream<JSONValue, Error>.Continuation,
     policy: AsyncThrowingStream<JSONValue, Error>.Continuation.BufferingPolicy
 ) {
-    let result = continuation.yield(.object(["_pathwayTransport": .string(state)]))
+    var value: [String: JSONValue] = ["_pathwayTransport": .string(state)]
+    if let error { value["_pathwayTransportError"] = .string(error) }
+    let result = continuation.yield(.object(value))
     if pathwayRPCBufferOverflowIsFatal(result, policy: policy) {
         continuation.finish(throwing: PathwayRPCError.disconnected)
     }

@@ -251,6 +251,7 @@ actor PathwayThreadCache {
 final class PathwayAgentThreadModel {
     typealias Request = @MainActor (String, JSONValue) async throws -> JSONValue
     private(set) var connectionState: PathwayThreadConnectionState = .idle
+    private(set) var connectionError: String?
     private(set) var items: [PathwayTimelineItem] = []
     var questionDrafts: [String: PathwayQuestionDraft] = [:]
     var questionAttachmentStores: [String: PathwayNewThreadAttachments] = [:]
@@ -370,6 +371,7 @@ final class PathwayAgentThreadModel {
 
     func start() {
         guard streamTask == nil, let connect else { return }
+        connectionError = nil
         connectionState = .connecting
         streamTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -382,9 +384,6 @@ final class PathwayAgentThreadModel {
             let rpc = PathwayRPCClient { try await connect.prepare(environment: environment).webSocketURL }
             self.rpc = rpc
             configTask = Task { [weak self] in
-                if let value = try? await rpc.request("server.getConfig", payload: .object([:])) {
-                    self?.installServerConfig(value)
-                }
                 await self?.refreshParentRoster()
             }
             do {
@@ -782,9 +781,14 @@ final class PathwayAgentThreadModel {
     }
     func applySubscriptionValue(_ value: JSONValue) {
         guard let object = value.objectValue else { return }
+        if let config = object["_pathwayServerConfig"] {
+            installServerConfig(config)
+            return
+        }
         if object["_pathwayTransport"] != nil {
             isSubscriptionReady = false
             connectionState = items.isEmpty ? .connecting : .cached
+            if let error = object["_pathwayTransportError"]?.stringValue { connectionError = error }
             return
         }
         switch object["kind"]?.stringValue {
@@ -828,7 +832,7 @@ final class PathwayAgentThreadModel {
                 reconcileQuestionAttachments()
             }
             if isSubscriptionReady { connectionState = .live }
-        case "synchronized": isSubscriptionReady = true; connectionState = .live
+        case "synchronized": isSubscriptionReady = true; connectionState = .live; connectionError = nil
         default: break
         }
     }

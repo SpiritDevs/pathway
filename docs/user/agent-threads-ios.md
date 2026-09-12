@@ -12,6 +12,8 @@ straight into the message field to attach them without replacing your text.
 When a thread connects or reconnects, a status bubble above the composer shows that messages
 are syncing. It temporarily replaces the file-change summary until the latest updates arrive.
 You can still scroll to the latest message while reconnecting.
+If loading fails, the thread shows the connection error while it retries. A loading thread
+does not by itself mean that its environment is offline.
 
 Active threads show the project above the thread title, with the branch and environment below it.
 The branch stays on the left; the environment name sits on the right beside the provider logo.

@@ -1299,15 +1299,14 @@ struct AgentThreadConversationView: View {
     }
 
     @ViewBuilder private var connectionBanner: some View {
-        if queuedConversation != nil, !model.isSubscriptionReady {
-            Label(model.items.isEmpty ? "Messages will appear here when the environment reconnects." : "Showing saved messages while the environment reconnects", systemImage: "wifi.slash")
+        if let error = model.connectionError {
+            Label("Couldn't load the latest messages. Retrying… \(error)", systemImage: "exclamationmark.triangle")
                 .font(.footnote).foregroundStyle(.secondary)
-        } else {
-        switch model.connectionState {
-        case let .failed(message):
+        } else if case let .failed(message) = model.connectionState {
             Label(message, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
-        default: EmptyView()
-        }
+        } else if queuedConversation != nil, !model.isSubscriptionReady {
+            Label(model.items.isEmpty ? "Loading messages from the environment…" : "Showing saved messages while the latest updates load", systemImage: "arrow.triangle.2.circlepath")
+                .font(.footnote).foregroundStyle(.secondary)
         }
     }
 }

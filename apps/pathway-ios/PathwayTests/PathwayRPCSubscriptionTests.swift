@@ -2,6 +2,17 @@
 import Testing
 
 struct PathwayRPCSubscriptionTests {
+    @Test func connectionPreparationFailureReachesTheThreadWhileRetrying() async throws {
+        let rpc = PathwayRPCClient { throw PathwayRPCError.remote("Connection permission expired") }
+        var iterator = await rpc.subscribeToThread("test-thread").makeAsyncIterator()
+        let connecting = try await iterator.next()
+        #expect(connecting?.objectValue?["_pathwayTransport"]?.stringValue == "connecting")
+        let failure = try await iterator.next()
+        #expect(failure?.objectValue?["_pathwayTransport"]?.stringValue == "disconnected")
+        #expect(failure?.objectValue?["_pathwayTransportError"]?.stringValue == "Connection permission expired")
+        await rpc.stop()
+    }
+
     @Test func transportChangesDoNotTerminateAFullBrowserFrameBuffer() async throws {
         let pair = AsyncThrowingStream<JSONValue, Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
         pair.continuation.yield(.string("old frame"))
