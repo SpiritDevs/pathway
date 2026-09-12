@@ -181,6 +181,24 @@ async function appendCommandChanges(
   });
 }
 
+/** Keep the registering member as attribution while service roles authorize the environment. */
+async function issuingMembershipId(ctx: QueryCtx, actor: CompanyActor) {
+  if (actor.kind === "member") return actor.membership._id;
+  const membershipId = actor.registration.registeredByMembershipId;
+  const membership = membershipId === null ? null : await ctx.db.get(membershipId);
+  if (
+    membership === null ||
+    membership.companyId !== actor.company._id ||
+    membership.state !== "active"
+  ) {
+    throw backendError(
+      "permission-denied",
+      "Remote dispatch requires the source environment to have an active registering member.",
+    );
+  }
+  return membership._id;
+}
+
 function sameCommandIdentity(
   existing: Doc<"environmentCommands">,
   input: { readonly kind: string; readonly targetEnvironmentId: string; readonly args: unknown },
@@ -248,9 +266,6 @@ export const issue = mutation({
   handler: async (ctx, args) => {
     const actor = await requireCompanyActor(ctx, args.companyId);
     requirePermission(actor, "remoteAgents.dispatch");
-    if (actor.kind !== "member") {
-      throw backendError("invalid-arguments", "Commands are issued by a member, not a service.");
-    }
     if (
       new TextEncoder().encode(JSON.stringify(args.args ?? null)).length >
       ENVIRONMENT_COMMAND_ARGS_MAX_BYTES
@@ -276,6 +291,7 @@ export const issue = mutation({
       );
     }
     requirePermission(actor, environmentCommandPermission(args.kind));
+    const issuedByMembershipId = await issuingMembershipId(ctx, actor);
 
     const targetEnvironmentId = args.targetEnvironmentId.trim();
     if (targetEnvironmentId.length === 0 || targetEnvironmentId !== args.targetEnvironmentId) {
@@ -337,7 +353,7 @@ export const issue = mutation({
       bindingId: null,
       kind: args.kind,
       args: decoded.value,
-      issuedByMembershipId: actor.membership._id,
+      issuedByMembershipId,
       onBehalfOfActor: actorRecord(actor),
       state: "pending",
       claimedByEnvironmentId: null,

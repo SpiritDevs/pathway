@@ -31,6 +31,23 @@ struct PathwayNativeReliabilityTests {
         #expect(calls == 1)
     }
 
+    @Test func connectionErrorRemainsVisibleUntilTheThreadFinishesSynchronizing() {
+        let model = conversation { _, _ in .object([:]) }
+        model.applySubscriptionValue(.object([
+            "_pathwayTransport": .string("disconnected"),
+            "_pathwayTransportError": .string("The connection timed out.")
+        ]))
+        #expect(model.connectionError == "The connection timed out.")
+        #expect(!model.isSubscriptionReady)
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("connecting")]))
+        model.applySubscriptionValue(.object(["kind": .string("snapshot"), "projection": .object([:])]))
+        #expect(model.connectionError == "The connection timed out.")
+        #expect(!model.isSubscriptionReady)
+        model.applySubscriptionValue(.object(["kind": .string("synchronized")]))
+        #expect(model.connectionError == nil)
+        #expect(model.connectionState == .live)
+    }
+
     @Test func lostLaunchResponseRetainsOperationAndPreparedAttachments() async throws {
         var launches: [JSONValue] = []
         var preparations: [JSONValue] = []

@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- grant fingerprints must not retain reusable bearer tokens in process memory
 import * as NodeCrypto from "node:crypto";
 
+import { api } from "@spiritdevs/backend/convexApi";
 import {
   makeSqliteSyncStore,
   SYNC_BOOTSTRAP_GENERATION,
@@ -43,6 +44,8 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { convexErrorCode, type ConvexServiceTokenProvider } from "./convexServiceToken.ts";
+import { convexHttpClientLike, type ConvexClientLike } from "./convexSyncTransport.ts";
 import {
   PeerEnvironmentConnectionError,
   PeerEnvironments,
@@ -72,11 +75,7 @@ export interface EnvironmentCommandIssueInput {
 export class EnvironmentCommandIssueUnavailableError extends Schema.TaggedErrorClass<EnvironmentCommandIssueUnavailableError>()(
   "EnvironmentCommandIssueUnavailableError",
   {
-    reason: Schema.Literals([
-      "cloud-sync-unavailable",
-      "cloud-sync-unlinked",
-      "member-authorization-unavailable",
-    ]),
+    reason: Schema.Literals(["cloud-sync-unavailable", "cloud-sync-unlinked"]),
     message: Schema.String,
   },
 ) {}
@@ -88,6 +87,11 @@ export class EnvironmentCommandIssueFailedError extends Schema.TaggedErrorClass<
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+const isEnvironmentCommandIssueUnavailableError = Schema.is(
+  EnvironmentCommandIssueUnavailableError,
+);
+const isEnvironmentCommandIssueFailedError = Schema.is(EnvironmentCommandIssueFailedError);
 
 export class EnvironmentCommandIssuer extends Context.Service<
   EnvironmentCommandIssuer,
@@ -194,7 +198,7 @@ export const RemoteDispatchMissingCapability = Schema.Literals([
   "target-project",
   "cloud-sync",
   "cloud-link",
-  "member-cloud-authorization",
+  "cloud-authorization",
 ]);
 export type RemoteDispatchMissingCapability = typeof RemoteDispatchMissingCapability.Type;
 
@@ -209,7 +213,7 @@ export class RemoteDispatchUnavailableError extends Schema.TaggedErrorClass<Remo
   },
 ) {
   override get message(): string {
-    return `Remote dispatch to '${this.targetEnvironmentId}' is unavailable; missing ${this.missing.join(", ")}.`;
+    return `Remote dispatch to '${this.targetEnvironmentId}' is unavailable; missing ${this.missing.join(", ")}. ${this.deferredFailure}`;
   }
 }
 
@@ -222,6 +226,9 @@ class RemoteDirectExecutionError extends Schema.TaggedErrorClass<RemoteDirectExe
     grantConsumption: Schema.Literals(["not-consumed", "consumed", "unknown"]),
   },
 ) {}
+
+const isPeerEnvironmentConnectionError = Schema.is(PeerEnvironmentConnectionError);
+const isRemoteDirectExecutionError = Schema.is(RemoteDirectExecutionError);
 
 export class RemoteDispatch extends Context.Service<
   RemoteDispatch,
@@ -419,8 +426,8 @@ const executeDirect = Effect.fn("cloud.remote_dispatch.execute_direct")(function
       }
     }).pipe(
       Effect.mapError((cause) => {
-        if (Schema.is(PeerEnvironmentConnectionError)(cause)) return cause;
-        if (Schema.is(RemoteDirectExecutionError)(cause)) return cause;
+        if (isPeerEnvironmentConnectionError(cause)) return cause;
+        if (isRemoteDirectExecutionError(cause)) return cause;
         return new RemoteDirectExecutionError({
           stage: "target-rpc",
           message: "The target environment RPC did not complete.",
@@ -450,14 +457,22 @@ function peerGrantConsumption(
 function missingForIssueError(
   error: EnvironmentCommandIssueUnavailableError | EnvironmentCommandIssueFailedError,
 ): RemoteDispatchMissingCapability {
-  if (error._tag === "EnvironmentCommandIssueFailedError") return "cloud-sync";
+  if (error._tag === "EnvironmentCommandIssueFailedError") {
+    switch (convexErrorCode(error.cause)) {
+      case "permission-denied":
+      case "not-authenticated":
+      case "environment-not-registered":
+      case "environment-key-mismatch":
+        return "cloud-authorization";
+      default:
+        return "cloud-sync";
+    }
+  }
   switch (error.reason) {
     case "cloud-sync-unavailable":
       return "cloud-sync";
     case "cloud-sync-unlinked":
       return "cloud-link";
-    case "member-authorization-unavailable":
-      return "member-cloud-authorization";
   }
 }
 
@@ -621,12 +636,57 @@ export const make = Effect.gen(function* () {
   return yield* makeRemoteDispatch({ resolveCompany });
 });
 
+/** Each dispatch owns its HTTP client, so concurrent token refreshes cannot replace its auth. */
+export const issueEnvironmentCommand = Effect.fn("cloud.remote_dispatch.issue_command")(
+  function* (
+    input: EnvironmentCommandIssueInput,
+    options: {
+      readonly convexUrl: string;
+      readonly tokens: ConvexServiceTokenProvider;
+      readonly client?: ConvexClientLike;
+    },
+  ) {
+    const client = options.client ?? convexHttpClientLike(options.convexUrl);
+    const issue = Effect.fn(function* (token: string) {
+      client.setAuth(token);
+      yield* Effect.tryPromise(() => client.mutation(api.environmentCommands.issue, input));
+    });
+    const token = yield* options.tokens.token;
+    yield* issue(token).pipe(
+      Effect.catchIf(
+        (error) =>
+          convexErrorCode(error.cause) === "not-authenticated" ||
+          (error.cause instanceof Error && error.cause.message.includes("401")),
+        () =>
+          Effect.gen(function* () {
+            yield* options.tokens.invalidate(token);
+            yield* issue(yield* options.tokens.token);
+          }),
+      ),
+      Effect.mapError(
+        (error) =>
+          new EnvironmentCommandIssueFailedError({
+            message: `Cloud command issue failed: ${error.cause instanceof Error ? error.cause.message : error.message}`,
+            cause: error.cause,
+          }),
+      ),
+    );
+  },
+  Effect.mapError((error) =>
+    isEnvironmentCommandIssueFailedError(error)
+      ? error
+      : new EnvironmentCommandIssueFailedError({ message: error.message, cause: error }),
+  ),
+);
+
 const environmentCommandIssuerLayer = Layer.effect(
   EnvironmentCommandIssuer,
   Effect.gen(function* () {
     const secrets = yield* ServerSecretStore.ServerSecretStore;
+    const httpClient = yield* HttpClient.HttpClient;
+    const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     return EnvironmentCommandIssuer.of({
-      issue: () =>
+      issue: (input) =>
         Effect.gen(function* () {
           const config = yield* resolveCloudSyncConfig;
           if (config._tag !== "Configured") {
@@ -641,15 +701,25 @@ const environmentCommandIssuerLayer = Layer.effect(
               message: "Cloud sync has no usable environment link.",
             });
           }
-          // environmentCommands.issue currently requires a member actor, while the server can
-          // mint only an ENVIRONMENT service token. Refuse here instead of sending a mutation
-          // Convex is guaranteed to reject or silently running the requested work locally.
-          return yield* new EnvironmentCommandIssueUnavailableError({
-            reason: "member-authorization-unavailable",
-            message:
-              "Durable remote dispatch needs member authorization that apps/server cannot currently mint.",
+          const environmentId = yield* serverEnvironment.getEnvironmentId;
+          const dpopKeys = yield* getOrCreateCloudSyncDpopKeyPairFromSecretStore(secrets);
+          const tokens = yield* makeCloudSyncTokenProvider({
+            environmentId,
+            secrets,
+            dpopKeys,
+          }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient));
+          return yield* issueEnvironmentCommand(input, {
+            convexUrl: config.settings.convexUrl,
+            tokens,
           });
-        }),
+        }).pipe(
+          Effect.mapError((error) =>
+            isEnvironmentCommandIssueUnavailableError(error) ||
+            isEnvironmentCommandIssueFailedError(error)
+              ? error
+              : new EnvironmentCommandIssueFailedError({ message: error.message, cause: error }),
+          ),
+        ),
     });
   }),
 );
