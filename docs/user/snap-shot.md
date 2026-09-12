@@ -58,6 +58,9 @@ Choose one of the three actions when you are finished:
   is open, Pathway starts a draft in the current project or selected environment.
 - **Download** saves the annotated image as a PNG.
 
+PNG exports keep the captured resolution unless they exceed the export size limit; larger images
+are reduced to fit.
+
 Each action closes the editor after it succeeds. If an action fails, the editor stays open so you
 can retry. Cropping removes app text metadata and retains the capture details, so hidden text is
 not shared outside the selected area. Screen and region captures do not include unrelated app text.

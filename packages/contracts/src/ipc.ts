@@ -86,7 +86,11 @@ import type {
   OrchestrationV2ThreadStreamItem,
 } from "./orchestrationV2.ts";
 import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { SnapShotCaptureType, SnapShotSource } from "./snapShot.ts";
+import {
+  SNAP_SHOT_EXPORT_MAX_DATA_URL_CHARS,
+  SnapShotCaptureType,
+  SnapShotSource,
+} from "./snapShot.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
@@ -333,7 +337,7 @@ export type DesktopSnapShotCaptureOptions = typeof DesktopSnapShotCaptureOptions
 export const DesktopSnapShotExport = Schema.Struct({
   action: Schema.Literals(["copy", "download"]),
   dataUrl: Schema.String.check(
-    Schema.isMaxLength(45_000_000),
+    Schema.isMaxLength(SNAP_SHOT_EXPORT_MAX_DATA_URL_CHARS),
     Schema.isPattern(/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/),
   ),
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),

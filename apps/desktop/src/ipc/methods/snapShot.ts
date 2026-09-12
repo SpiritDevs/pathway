@@ -12,6 +12,9 @@ import {
   DesktopCaptureConfigApplied,
   DesktopSnapShotCaptureOptions,
   DesktopSnapShotExport,
+  SNAP_SHOT_EXPORT_MAX_BYTES,
+  SNAP_SHOT_EXPORT_MAX_DIMENSION,
+  SNAP_SHOT_EXPORT_MAX_PIXELS,
 } from "@spiritdevs/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -154,7 +157,7 @@ export function decodeSnapShotExportImage(dataUrl: string): Electron.NativeImage
   const png = Buffer.from(dataUrl.slice("data:image/png;base64,".length), "base64");
   if (
     png.length < 33 ||
-    png.length > 32_000_000 ||
+    png.length > SNAP_SHOT_EXPORT_MAX_BYTES ||
     !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
     png.toString("ascii", 12, 16) !== "IHDR"
   ) {
@@ -165,9 +168,9 @@ export function decodeSnapShotExportImage(dataUrl: string): Electron.NativeImage
   if (
     width === 0 ||
     height === 0 ||
-    width > 16_384 ||
-    height > 16_384 ||
-    width * height > 40_000_000
+    width > SNAP_SHOT_EXPORT_MAX_DIMENSION ||
+    height > SNAP_SHOT_EXPORT_MAX_DIMENSION ||
+    width * height > SNAP_SHOT_EXPORT_MAX_PIXELS
   ) {
     throw new Error("The snapshot is too large to export.");
   }

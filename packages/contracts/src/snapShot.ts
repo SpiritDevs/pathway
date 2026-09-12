@@ -8,6 +8,12 @@ import {
   TrimmedString,
 } from "./baseSchemas.ts";
 
+export const SNAP_SHOT_EXPORT_MAX_BYTES = 32_000_000;
+export const SNAP_SHOT_EXPORT_MAX_DIMENSION = 16_384;
+export const SNAP_SHOT_EXPORT_MAX_PIXELS = 40_000_000;
+export const SNAP_SHOT_EXPORT_MAX_DATA_URL_CHARS =
+  "data:image/png;base64,".length + Math.ceil(SNAP_SHOT_EXPORT_MAX_BYTES / 3) * 4;
+
 export const SNAP_SHOT_ACCESSIBLE_TEXT_MAX_CHARS = 32_000;
 export const SNAP_SHOT_ACCESSIBILITY_MAX_NODES = 10_000;
 export const SNAP_SHOT_ACCESSIBILITY_MAX_SERIALIZED_CHARS = 32_000;
