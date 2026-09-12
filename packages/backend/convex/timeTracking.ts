@@ -448,6 +448,7 @@ export const syncAgentSession = mutation({
       runningSince: v.union(v.number(), v.null()),
       observedAt: v.number(),
       revision: v.number(),
+      runStatus: v.optional(v.string()),
     }),
   },
   returns: v.object({
@@ -582,8 +583,14 @@ export const syncAgentSession = mutation({
       observedAt: session.observedAt,
       revision: session.revision,
     };
-    if (existing) await ctx.db.patch(existing._id, patch);
-    else await ctx.db.insert("trackedSessions", { id, userId, ...patch });
+    if (existing) await ctx.db.patch(existing._id, { ...patch, runStatus: session.runStatus });
+    else
+      await ctx.db.insert("trackedSessions", {
+        id,
+        userId,
+        ...patch,
+        ...(session.runStatus === undefined ? {} : { runStatus: session.runStatus }),
+      });
     return { outcome: "published" as const };
   },
 });

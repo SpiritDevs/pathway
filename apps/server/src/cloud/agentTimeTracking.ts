@@ -111,7 +111,6 @@ export function applyAgentTimeEvent(
 
 export function agentTimeSessionPayload(session: AgentTimeSession) {
   const {
-    runStatus: _runStatus,
     blockedRequestIds: _blockedRequestIds,
     summaryComplete: _summaryComplete,
     summaryRetryAt: _summaryRetryAt,
