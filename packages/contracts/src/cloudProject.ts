@@ -351,11 +351,19 @@ export function isCancellableEnvironmentCommand(state: EnvironmentCommandState):
 }
 
 /**
- * The orchestration permission a command needs *in addition to* `remoteAgents.dispatch`.
- * Dispatching a "send message" must not be a way around not being allowed to send one.
+ * Starting work needs dispatch permission; steering existing work also needs control permission.
+ * Every durable command additionally requires `remoteAgents.dispatch` to enter the queue.
  */
 export function environmentCommandPermission(
   kind: EnvironmentCommandKind,
-): "remoteAgents.control" | "environments.read" {
-  return kind === "statusQuery" ? "environments.read" : "remoteAgents.control";
+): "remoteAgents.dispatch" | "remoteAgents.control" | "environments.read" {
+  switch (kind) {
+    case "startThread":
+      return "remoteAgents.dispatch";
+    case "statusQuery":
+      return "environments.read";
+    case "sendMessage":
+    case "interrupt":
+      return "remoteAgents.control";
+  }
 }

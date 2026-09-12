@@ -1,11 +1,13 @@
 // @effect-diagnostics globalDate:off -- Fixtures and lease transitions use Convex epoch milliseconds.
 /** End-to-end remote command authorization, leasing, feed, expiry, and bootstrap coverage. */
 import { convexTest } from "convex-test";
+import { environmentCommandPermission as clientCommandPermission } from "@spiritdevs/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { api } from "../convex/_generated/api.js";
 import type { Id } from "../convex/_generated/dataModel.js";
 import schema from "../convex/schema.ts";
+import { environmentCommandPermission } from "./environmentCommands.ts";
 
 const RELAY_ISSUER = "https://relay.example.test";
 const CLERK_ISSUER = "https://clerk.example.test";
@@ -205,6 +207,43 @@ async function feedRows(t: Harness) {
   );
 }
 
+async function authorizeSourceEnvironment(t: Harness, roleId = DISPATCHER_ROLE_ID) {
+  return await t.run(async (ctx) => {
+    const registration = await ctx.db
+      .query("environmentRegistrations")
+      .filter((q) => q.eq(q.field("environmentId"), ENVIRONMENT_ONE))
+      .unique();
+    const role = await ctx.db
+      .query("roles")
+      .filter((q) => q.eq(q.field("id"), roleId))
+      .unique();
+    const member = await ctx.db
+      .query("memberships")
+      .filter((q) => q.eq(q.field("id"), MANAGER_MEMBERSHIP_ID))
+      .unique();
+    if (registration === null || role === null || member === null) throw new Error("Seed first");
+    await ctx.db.patch(registration._id, {
+      serviceRoleIds: [role.id],
+      registeredByMembershipId: member._id,
+    });
+    return { registrationId: registration._id, memberId: member._id };
+  });
+}
+
+const remoteStart = {
+  companyId: COMPANY_ID,
+  id: "01990000-0000-7000-8000-000000001901",
+  targetEnvironmentId: ENVIRONMENT_TWO,
+  cloudProjectId: null,
+  kind: "startThread" as const,
+  args: {
+    kind: "startThread" as const,
+    prompt: "Build and upload TestFlight",
+    modelSelection: null,
+  },
+  ttlMs: 60_000,
+};
+
 interface BootstrapPage {
   readonly entities: { entityKind: string; entityId: string; payload: unknown }[];
   readonly cursor: string | null;
@@ -212,6 +251,105 @@ interface BootstrapPage {
 }
 
 describe("environment commands", () => {
+  it.each([
+    ["startThread", "remoteAgents.dispatch"],
+    ["sendMessage", "remoteAgents.control"],
+    ["interrupt", "remoteAgents.control"],
+    ["statusQuery", "environments.read"],
+  ] as const)(
+    "keeps %s authorization consistent across the backend and clients",
+    (kind, permission) => {
+      expect(environmentCommandPermission(kind)).toBe(permission);
+      expect(clientCommandPermission(kind)).toBe(permission);
+    },
+  );
+
+  it("lets a dispatch role start work as a member or environment without granting control", async () => {
+    const t = harness();
+    await seed(t);
+    await authorizeSourceEnvironment(t);
+
+    await expect(
+      asEnvironment(t).mutation(api.environmentCommands.issue, remoteStart),
+    ).resolves.toBeNull();
+    await expect(
+      asEnvironment(t).mutation(api.environmentCommands.issue, remoteStart),
+    ).resolves.toBeNull();
+    expect(await feedRows(t)).toMatchObject([
+      {
+        actor: { kind: "environment", environmentId: ENVIRONMENT_ONE },
+        payload: {
+          id: remoteStart.id,
+          issuedByMembershipId: MANAGER_MEMBERSHIP_ID,
+          onBehalfOfActor: { kind: "environment", environmentId: ENVIRONMENT_ONE },
+        },
+      },
+    ]);
+    await expect(
+      asEnvironment(t, ENVIRONMENT_TWO).mutation(api.environmentCommands.claim, {
+        companyId: COMPANY_ID,
+      }),
+    ).resolves.toMatchObject([{ id: remoteStart.id, state: "claimed", args: remoteStart.args }]);
+
+    await expect(
+      asMember(t, "dispatcher").mutation(api.environmentCommands.issue, {
+        ...remoteStart,
+        id: "01990000-0000-7000-8000-000000001902",
+      }),
+    ).resolves.toBeNull();
+    for (const kind of ["sendMessage", "interrupt"] as const) {
+      await expect(
+        asEnvironment(t).mutation(api.environmentCommands.issue, {
+          ...remoteStart,
+          kind,
+          args: kind === "sendMessage" ? sendMessageArgs() : { kind, threadId: "thread-one" },
+        }),
+      ).rejects.toThrow("Missing permission remoteAgents.control");
+    }
+  });
+
+  it("uses the source service roles instead of inheriting its registering member's permissions", async () => {
+    const t = harness();
+    await seed(t);
+    const { registrationId } = await authorizeSourceEnvironment(t);
+    await t.run(async (ctx) => {
+      await ctx.db.patch(registrationId, { serviceRoleIds: [] });
+    });
+    await expect(
+      asEnvironment(t).mutation(api.environmentCommands.issue, remoteStart),
+    ).rejects.toThrow("Missing permission remoteAgents.dispatch");
+    expect(await feedRows(t)).toHaveLength(0);
+  });
+
+  it.each(["revoked", "wrong-key", "missing-member", "inactive-member"] as const)(
+    "refuses a source environment with %s authorization",
+    async (condition) => {
+      const t = harness();
+      await seed(t);
+      const { registrationId, memberId } = await authorizeSourceEnvironment(t);
+      await t.run(async (ctx) => {
+        switch (condition) {
+          case "revoked":
+            await ctx.db.patch(registrationId, { state: "revoked" });
+            break;
+          case "wrong-key":
+            await ctx.db.patch(registrationId, { publicKeyThumbprint: "different-key" });
+            break;
+          case "missing-member":
+            await ctx.db.patch(registrationId, { registeredByMembershipId: null });
+            break;
+          case "inactive-member":
+            await ctx.db.patch(memberId, { state: "left" });
+            break;
+        }
+      });
+      await expect(
+        asEnvironment(t).mutation(api.environmentCommands.issue, remoteStart),
+      ).rejects.toThrow();
+      expect(await feedRows(t)).toHaveLength(0);
+    },
+  );
+
   it("issues a pending feed row and enforces command permission, argument kind, and active target", async () => {
     const t = harness();
     await seed(t);
