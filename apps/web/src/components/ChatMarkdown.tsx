@@ -57,6 +57,8 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { remarkGithubAlerts } from "../markdown-github-alerts";
+import { remarkVisualizations } from "../markdown-visualizations";
+import { ChatVisualization } from "./ChatVisualization";
 import {
   issueMentionSignature,
   parseIssueMentionSignature,
@@ -220,6 +222,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     "*": (defaultSchema.attributes?.["*"] ?? []).filter((attribute) => attribute !== "title"),
     code: [...(defaultSchema.attributes?.code ?? []), "dataCodeMeta", "dataInlineCode"],
     blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
+    p: [...(defaultSchema.attributes?.p ?? []), "dataVisualizationPath", "dataVisualizationTitle"],
   },
   protocols: {
     ...defaultSchema.protocols,
@@ -237,6 +240,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
 } satisfies Parameters<typeof rehypeSanitize>[0];
 
 const CHAT_MARKDOWN_REMARK_PLUGINS = [
+  remarkVisualizations,
   remarkGfm,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
@@ -245,6 +249,7 @@ const CHAT_MARKDOWN_REMARK_PLUGINS = [
 ] satisfies NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
 
 const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
+  remarkVisualizations,
   remarkGfm,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
@@ -1385,6 +1390,7 @@ function areMarkdownFileLinkPropsEqual(
 }
 
 interface ChatMarkdownComponentsContext {
+  readonly onPanelSurfaceOpen: ChatMarkdownProps["onPanelSurfaceOpen"];
   readonly attachPullRequest: ((href: string) => Promise<void>) | undefined;
   readonly cwd: string | undefined;
   readonly diffThemeName: DiffThemeName;
@@ -1483,7 +1489,19 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
   return {
     // Headings and table cells: no rendering of their own, just the inline transforms.
     ...inlineChildrenComponents(renderInlineChildren),
-    p({ node: _node, children, ...props }) {
+    p({ node, children, ...props }) {
+      const visualizationPath = node?.properties?.dataVisualizationPath;
+      const visualizationTitle = node?.properties?.dataVisualizationTitle;
+      if (typeof visualizationPath === "string" && typeof visualizationTitle === "string") {
+        return (
+          <ChatVisualization
+            path={visualizationPath}
+            title={visualizationTitle}
+            threadRef={threadRef}
+            onOpen={ctx.onPanelSurfaceOpen}
+          />
+        );
+      }
       return <p {...props}>{renderInlineChildren(children)}</p>;
     },
     ol({ node, start, style, ...props }) {
@@ -1974,6 +1992,7 @@ function ChatMarkdown({
   const markdownComponents = useMemo<Components>(
     () =>
       createChatMarkdownComponents({
+        onPanelSurfaceOpen,
         attachPullRequest:
           threadRef && cwd && supportsPullRequestAttachments ? attachPullRequest : undefined,
         cwd,
@@ -2002,6 +2021,7 @@ function ChatMarkdown({
       isStreaming,
       markdownFileLinkMetaByHref,
       mentionedIssuesByKey,
+      onPanelSurfaceOpen,
       onTaskListChange,
       openFileInPanel,
       openInPreferredEditor,

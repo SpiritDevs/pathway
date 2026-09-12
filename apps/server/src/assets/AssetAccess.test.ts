@@ -31,6 +31,68 @@ const testLayer = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 describe("AssetAccess", () => {
+  it.effect(
+    "serves an exact visualization outside the workspace without granting sibling access",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-visualization-" });
+        const file = path.join(root, "preview #1.html");
+        yield* fs.writeFileString(file, "<button>Preview</button>");
+        yield* fs.writeFileString(path.join(root, "other.html"), "<p>Other</p>");
+        const result = yield* issueAssetUrl({
+          resource: {
+            _tag: "visualization-file",
+            threadId: ThreadId.make("source-thread"),
+            path: file,
+          },
+          workspaceRoot: "/unrelated/workspace",
+        });
+        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const token = suffix.slice(0, suffix.indexOf("/"));
+        expect(yield* resolveAsset(token, "preview%20%231.html")).toEqual({
+          kind: "file",
+          path: yield* fs.realPath(file),
+        });
+        expect(yield* resolveAsset(token, "other.html")).toBeNull();
+        expect(yield* resolveAsset(token, "../preview%20%231.html")).toBeNull();
+        expect(yield* resolveAsset(`${token}tampered`, "preview%20%231.html")).toBeNull();
+        yield* TestClock.setTime(result.expiresAt);
+        expect(yield* resolveAsset(token, "preview%20%231.html")).toBeNull();
+      }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("rejects missing, non-HTML and non-file visualization paths", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-visualization-invalid-" });
+      yield* fs.makeDirectory(path.join(root, "directory.html"));
+      yield* fs.writeFileString(path.join(root, "secret.txt"), "secret");
+      yield* fs.symlink(path.join(root, "secret.txt"), path.join(root, "alias.html"));
+      for (const file of [
+        "relative.html",
+        "https://example.com/file.html",
+        path.join(root, "secret.txt"),
+        path.join(root, "missing.html"),
+        path.join(root, "directory.html"),
+        path.join(root, "alias.html"),
+      ]) {
+        const error = yield* issueAssetUrl({
+          resource: {
+            _tag: "visualization-file",
+            threadId: ThreadId.make("thread"),
+            path: file,
+          },
+        }).pipe(Effect.flip);
+        expect(["AssetPreviewTypeValidationError", "AssetWorkspaceAssetNotFoundError"]).toContain(
+          error._tag,
+        );
+      }
+    }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect("signs exact image filenames containing spaces, Unicode and URL delimiters", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

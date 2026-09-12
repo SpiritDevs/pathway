@@ -2,9 +2,9 @@ import Foundation
 
 enum PathwayEnvironmentHTTP {
     static func assetURL(_ path: String, threadID: String, environment: PathwayCompanyEnvironment,
-                         connect: PathwayConnectClient, request: PathwayWorkspaceRequest) async throws -> URL {
+                         connect: PathwayConnectClient, resourceKind: String = "workspace-file", request: PathwayWorkspaceRequest) async throws -> URL {
         let signed = try await request("assets.createUrl", .object([
-            "resource": .object(["_tag": .string("workspace-file"), "threadId": .string(threadID), "path": .string(path)])
+            "resource": .object(["_tag": .string(resourceKind), "threadId": .string(threadID), "path": .string(path)])
         ]))
         let connection = try await connect.prepare(environment: environment)
         return try signedAssetURL(signed, base: connection.httpBaseURL)

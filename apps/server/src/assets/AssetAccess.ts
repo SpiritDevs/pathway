@@ -190,6 +190,38 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   let sourcePath: string | undefined;
 
   switch (input.resource._tag) {
+    case "visualization-file": {
+      // Provider visualizations may live outside the workspace (including /tmp).
+      // Grant access to this HTML file only, never its directory or sibling assets.
+      if (!path.isAbsolute(input.resource.path) || !/\.html?$/i.test(input.resource.path)) {
+        return yield* new AssetPreviewTypeValidationError({ resource: input.resource });
+      }
+      const canonicalFile = yield* optionOnNotFound(fileSystem.realPath(input.resource.path)).pipe(
+        Effect.mapError(
+          (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
+        ),
+      );
+      if (Option.isNone(canonicalFile) || !/\.html?$/i.test(canonicalFile.value)) {
+        return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
+      }
+      const info = yield* optionOnNotFound(fileSystem.stat(canonicalFile.value)).pipe(
+        Effect.mapError(
+          (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
+        ),
+      );
+      if (Option.isNone(info) || info.value.type !== "File") {
+        return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
+      }
+      fileName = path.basename(canonicalFile.value);
+      claims = {
+        version: 1,
+        kind: "workspace-file-exact",
+        workspaceRoot: path.dirname(canonicalFile.value),
+        relativePath: fileName,
+        expiresAt,
+      };
+      break;
+    }
     case "workspace-file": {
       if (!input.workspaceRoot) {
         return yield* new AssetWorkspaceContextNotFoundError({
