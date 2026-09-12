@@ -75,16 +75,15 @@ export function resolveTimelineIsAtEnd(
   if (!state) {
     return undefined;
   }
-  if (state.isAtEnd) {
-    return true;
-  }
   const { contentLength, scroll, scrollLength } = state;
   if (contentLength === undefined || scroll === undefined || scrollLength === undefined) {
-    return state.isNearEnd ?? state.isAtEnd;
+    return state.isAtEnd || (state.isNearEnd ?? state.isAtEnd);
   }
-  // contentLength includes the end inset (composer overlay), so subtract it to
-  // measure the distance to the real content bottom.
-  return contentLength - scroll - scrollLength - endInset <= TIMELINE_FOLLOW_REARM_THRESHOLD_PX;
+  // The composer inset pads the content and also covers the viewport. Compare
+  // the real content bottom with the visible edge above the composer.
+  const contentBottom = contentLength - endInset;
+  const visibleBottom = scroll + Math.max(0, scrollLength - endInset);
+  return contentBottom - visibleBottom <= TIMELINE_FOLLOW_REARM_THRESHOLD_PX;
 }
 
 export function shouldPreserveAssistantLineBreaks(text: string): boolean {
