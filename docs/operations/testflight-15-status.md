@@ -1,8 +1,23 @@
 # TestFlight 1.0.13 build 15 status
 
-**Upload complete on 2026-09-12 at 10:31:36 UTC.** Apple accepted Pathway 1.0.13 build 15
-and reported processing. Processing completion and tester availability remain unconfirmed.
-The actual archived and exported app both contain the encryption declaration as boolean false.
+**Available to internal TestFlight testers as of 2026-09-12 10:34:28 UTC.** Apple processed
+Pathway 1.0.13 build 15 successfully, accepted its encryption declaration, and enabled access
+for the existing Main internal group. Upload completed at 10:31:36 UTC. The actual archived
+and exported app both contain the encryption declaration as boolean false.
+
+## Final App Store Connect verification
+
+An independent query with the existing CI credentials confirmed the uploaded resource
+`9e5ee750-b653-4082-8e46-f4ecd53d9706` is version 1.0.13 build 15, with:
+
+- `processingState=VALID`, `expired=false`, and `usesNonExemptEncryption=false`.
+- `buildBetaDetail.internalBuildState=IN_BETA_TESTING` and `autoNotifyEnabled=true`.
+- The existing Main internal group includes build 15 and retains `hasAccessToAllBuilds=true`.
+
+The [successful Apple API check](https://github.com/SpiritDevs/pathway/actions/runs/34688797443)
+records those responses. External distribution remains `READY_FOR_BETA_SUBMISSION`; no
+external beta review or public App Store release was submitted. Installation on a tester's
+physical device was not verified. The following sections retain the build and upload evidence.
 
 ## Initial findings
 
