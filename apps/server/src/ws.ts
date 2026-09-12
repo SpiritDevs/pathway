@@ -2180,6 +2180,12 @@ const makeWsRpcLayer = (
                       }),
                   ),
                 );
+              if (input.resource._tag === "visualization-file") {
+                return yield* issueAssetUrl({
+                  resource: input.resource,
+                  visualizationItems: thread.turnItems,
+                });
+              }
               if (thread.thread.projectId === null) {
                 return yield* issueAssetUrl({
                   resource: input.resource,
