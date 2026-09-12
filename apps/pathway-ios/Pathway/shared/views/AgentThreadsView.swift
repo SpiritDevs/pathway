@@ -974,7 +974,7 @@ struct AgentThreadConversationView: View {
     @State private var showsGitReview = false
     @State private var showsAlternateEnvironment = false
     @State private var showsQueueMove = false
-    @FocusState private var isComposerFocused: Bool
+    @State private var isComposerFocused = false
 
     init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient, workspaceRoot: String? = nil, storageDirectory: URL? = nil, initiallyReviewChanges: Bool = false) {
         self.workspaceRoot = workspaceRoot

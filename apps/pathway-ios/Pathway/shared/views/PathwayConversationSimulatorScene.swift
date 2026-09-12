@@ -13,6 +13,7 @@ struct PathwayConversationSimulatorScene: View {
                 .navigationDestination(for: ConversationSimulatorRoute.self) { _ in AgentThreadConversationView(model: workspace.model) }
         }
         .environment(\.compactThreadChrome, chrome)
+        .environment(workspace.appModel)
         .preferredColorScheme(.light)
     }
 }
@@ -21,6 +22,7 @@ private enum ConversationSimulatorRoute: Hashable { case thread }
 
 @MainActor
 private final class ConversationSimulatorWorkspace {
+    let appModel = PathwayAppModel(authProvider: ConversationSimulatorAuth())
     var model: PathwayAgentThreadModel!
     private var items: [[String: JSONValue]] = []
     private var serverConfig: JSONValue = .object([:])
@@ -68,6 +70,16 @@ private final class ConversationSimulatorWorkspace {
                     .object(["id": .string("high"), "label": .string("High")])])])])])]) })
         ])])])
         model.installServerConfig(serverConfig)
+        if ProcessInfo.processInfo.arguments.contains("--conversation-paste") {
+            model.draft = "Please review this screenshot."
+            UIPasteboard.general.image = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 180)).image { context in
+                UIColor.systemBlue.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 320, height: 180))
+                ("Clipboard image" as NSString).draw(at: CGPoint(x: 24, y: 72), withAttributes: [
+                    .font: UIFont.systemFont(ofSize: 28, weight: .semibold), .foregroundColor: UIColor.white
+                ])
+            }
+        }
     }
     private func add(_ id: String, _ type: String, text: String? = nil, extra: [String: JSONValue] = [:]) {
         var item: [String: JSONValue] = ["id": .string(id), "type": .string(type), "threadId": .string("sim-thread"),
@@ -110,5 +122,13 @@ private final class ConversationSimulatorWorkspace {
         publish()
         return .object(["accepted": .bool(true)])
     }
+}
+
+@MainActor private final class ConversationSimulatorAuth: PathwayAuthenticating {
+    var hasActiveSession: Bool { false }
+    var onSessionChanged: ((Bool) -> Void)?
+    func startHostedSignIn() async throws { throw PathwayAuthError.missingSession }
+    func token(template: String?) async throws -> String { throw PathwayAuthError.missingSession }
+    func signOut() async throws {}
 }
 #endif

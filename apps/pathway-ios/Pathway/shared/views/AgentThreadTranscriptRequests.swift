@@ -351,15 +351,10 @@ private struct AgentQuestionAttachments: View {
     private func paste(_ providers: [NSItemProvider]) {
         prepare {
             for provider in providers.prefix(room) {
-                guard let type = provider.registeredTypeIdentifiers.compactMap(UTType.init).first(where: { $0.conforms(to: .image) }) else { continue }
+                guard PathwayPastedImage.supports(provider) else { continue }
                 do {
-                    let data: Data = try await withCheckedThrowingContinuation { continuation in
-                        provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, error in
-                            if let data { continuation.resume(returning: data) }
-                            else { continuation.resume(throwing: error ?? PathwayThreadConversationError.message("The image could not be pasted.")) }
-                        }
-                    }
-                    await addImage(data)
+                    let image = try await PathwayPastedImage.load(provider)
+                    await attachments.add(data: image.data, name: image.name, mimeType: image.mimeType)
                 } catch { errorMessage = error.localizedDescription }
             }
         }
