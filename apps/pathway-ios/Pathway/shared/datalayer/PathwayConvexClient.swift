@@ -92,7 +92,7 @@
         }
 
         func companiesPublisher() -> AnyPublisher<[PathwayCompany], Error> {
-            client.subscribe(to: "companies:listMine", yielding: [PathwayCompany].self).mapError { $0 as Error }.eraseToAnyPublisher()
+            Self.erasingSubscriptionErrors(client.subscribe(to: "companies:listMine", yielding: [PathwayCompany].self))
         }
 
         func provisionCurrentUser() async throws -> PathwayCompany {
@@ -110,11 +110,11 @@
         }
 
         func syncHeadPublisher(companyId: String) -> AnyPublisher<PathwaySyncHead, Error> {
-            client.subscribe(
+            Self.erasingSubscriptionErrors(client.subscribe(
                 to: "sync:latestVersion",
                 with: ["companyId": companyId],
                 yielding: PathwaySyncHead.self
-            ).mapError { $0 as Error }.eraseToAnyPublisher()
+            ))
         }
 
         func listChanges(
@@ -153,8 +153,14 @@
         }
 
         func publisher(name: String, arguments: JSONValue) -> AnyPublisher<JSONValue, Error> {
-            client.subscribe(to: name, with: PathwayConvexJSON.arguments(arguments), yielding: JSONValue.self)
-                .mapError { $0 as Error }.eraseToAnyPublisher()
+            Self.erasingSubscriptionErrors(
+                client.subscribe(to: name, with: PathwayConvexJSON.arguments(arguments), yielding: JSONValue.self)
+            )
+        }
+
+        // Convex emits failures on its worker threads. Error conversion must not inherit MainActor.
+        nonisolated static func erasingSubscriptionErrors<P: Publisher>(_ publisher: P) -> AnyPublisher<P.Output, Error> {
+            publisher.mapError { $0 as Error }.eraseToAnyPublisher()
         }
 
         private func query<Value: Decodable>(
