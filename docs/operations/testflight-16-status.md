@@ -1,5 +1,7 @@
 # TestFlight 1.0.13 build 16
 
+**Upload complete at 2026-09-12 21:33:30 UTC. Apple reports PROCESSING. Tester availability is unconfirmed.**
+
 Source: `f210bd0cd` on `release/ios-testflight-16-20260913`, based on build 15.
 
 Includes thread activity and status labels, the persistent send/working control, reorderable queued-message sheet, empty-sheet dismissal, expanded thread actions, and notification bell visibility. Build 15 cloud queue and image support are preserved. Unrelated working checkout edits are retained separately.
@@ -29,3 +31,24 @@ IPA SHA-256: `d721fee2c7b97b283912ab1b7ecf6c8f6b7a46ce5847a0d254b981429b05f045`.
 Archive: `Pathway-16.xcarchive`; IPA: `export/Pathway.ipa` under the artifact directory above.
 Validation output: `validation-archive.txt`, `validation-export.txt`.
 Next: upload the validated archive through Xcode's saved account. Processing and tester access remain unconfirmed.
+
+## Apple upload receipt
+
+Xcode exited successfully and reported `Uploaded package is processing.`, `Upload succeeded.`, and `EXPORT SUCCEEDED`. No duplicate-build rejection occurred.
+
+```json
+{
+  "buildResourceId": "84129aa3-ea9b-4c6e-a149-6070daf0171a",
+  "version": "16",
+  "uploadedDate": "2026-09-12T14:33:30-07:00",
+  "processingState": "PROCESSING"
+}
+```
+
+Uploaded source: `f210bd0cd` on `release/ios-testflight-16-20260913`.
+
+Upload used the validated `Pathway-16.xcarchive` with the retained `ExportUploadOptions.plist`, automatic signing, and `xcodebuild -exportArchive -allowProvisioningUpdates`. No public App Store release was submitted.
+
+The artifact directory retains `upload-16.log`, `upload-16.xcdistributionlogs`, and `apple-upload-receipt.json`. Raw account diagnostics remain local. The release checkout has no tracked changes.
+
+Upload is complete. Processing completion, resulting App Store Connect encryption metadata, and internal tester availability remain unconfirmed. The packaged encryption boolean is verified in both archive and exported app.
