@@ -1,6 +1,12 @@
 # TestFlight 1.0.13 build 15 status
 
-Started on 2026-09-12. Upload is authorized. Archive and upload have not started.
+**Upload complete on 2026-09-12 at 10:31:36 UTC.** Apple accepted Pathway 1.0.13 build 15
+and reported processing. Processing completion and tester availability remain unconfirmed.
+The actual archived and exported app both contain the encryption declaration as boolean false.
+
+## Initial findings
+
+Started on 2026-09-12 with upload authorization. The following records the initial checkpoint.
 
 Source is `b19ec09257e876445bf2b880994edd219b2acac8` from
 `release/ios-testflight-15-20260912`. This report branch is based on that source and changes
@@ -55,7 +61,7 @@ Artifacts and validation output are retained under the release checkout's
 `.pathway/releases/1.0.13`, including `Pathway-15.xcarchive`, `export/Pathway.ipa`,
 `validation-archive.txt`, and `validation-export.txt`.
 
-Upload is next. Upload completion, processing, and tester availability remain unconfirmed.
+At this signing checkpoint, upload was the next step. Its completed receipt follows below.
 
 ## Reproduction commands
 
@@ -80,3 +86,61 @@ xcodebuild -exportArchive \
   -exportOptionsPlist .pathway/releases/1.0.13/ExportLocalOptions.plist \
   -allowProvisioningUpdates
 ```
+
+## Apple upload receipt
+
+Apple accepted build 15 at 2026-09-12 10:31:36 UTC. The upload command exited with code 0.
+Xcode reported `Uploaded package is processing.`, `Upload succeeded.`, `Uploaded Pathway`,
+and `EXPORT SUCCEEDED`. Apple did not reject a duplicate build number.
+
+The build resource ID is `9e5ee750-b653-4082-8e46-f4ecd53d9706`.
+The sanitized Apple response was:
+
+```json
+{
+  "buildResourceId": "9e5ee750-b653-4082-8e46-f4ecd53d9706",
+  "version": "15",
+  "uploadedDate": "2026-09-12T03:31:36-07:00",
+  "processingState": "PROCESSING",
+  "processingErrors": [],
+  "buildProcessingState": {
+    "errors": [],
+    "warnings": [],
+    "infos": [],
+    "state": "PROCESSING"
+  }
+}
+```
+
+Upload used the validated archive and the existing saved Xcode account:
+
+```sh
+xcodebuild -exportArchive \
+  -archivePath .pathway/releases/1.0.13/Pathway-15.xcarchive \
+  -exportPath .pathway/releases/1.0.13/upload \
+  -exportOptionsPlist .pathway/releases/1.0.13/ExportUploadOptions.plist \
+  -allowProvisioningUpdates
+```
+
+The upload log is retained at
+`~/GitHub/pathway-testflight-15-release/.pathway/releases/1.0.13/upload-15.log`.
+The same directory retains the archive, dSYMs, exported IPA, validation output, sanitized
+`apple-upload-receipt.json`, and copied `upload-15.xcdistributionlogs` diagnostics.
+Raw distribution diagnostics remain local because they contain account metadata.
+
+## Processing handoff
+
+Upload is complete. Apple's last confirmed response reports processing, with no processing
+errors, warnings, or informational issues. Completed processing and tester availability have
+not been established here. The packaged encryption boolean is verified; the resulting
+App Store Connect `usesNonExemptEncryption` field still needs Root's read-only confirmation.
+
+Root can query the build resource above using the existing CI credentials to confirm
+`processingState=VALID`, `usesNonExemptEncryption=false`, and
+`buildBetaDetail.internalBuildState=IN_BETA_TESTING`, plus access through the existing Main
+internal group. No new query credentials or manual Apple check are requested on this Mac.
+Build 14's record was not changed. No public App Store release was submitted.
+
+The release checkout remains at the exact source commit with no tracked modifications.
+Build 14 artifacts and unrelated work are preserved. Only this report was committed and
+pushed on `status/testflight-15-20260912`. No PR was opened or main merge performed.
