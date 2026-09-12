@@ -325,10 +325,12 @@ struct AgentThreadsView: View {
                 .accessibilityLabel("Focus: \(selectedFocus?.name ?? "Unavailable")")
             }
         }
-        ToolbarItem(placement: .primaryAction) {
-            Button { showingNotifications = true } label: {
-                Image(systemName: focuses.unreadCount > 0 ? "bell.badge" : "bell").frame(minWidth: 44, minHeight: 44)
-            }.accessibilityLabel("Notifications, \(focuses.unreadCount) unread")
+        if !focuses.notifications.isEmpty || focuses.unreadCount > 0 {
+            ToolbarItem(placement: .primaryAction) {
+                Button { showingNotifications = true } label: {
+                    Image(systemName: focuses.unreadCount > 0 ? "bell.badge" : "bell").frame(minWidth: 44, minHeight: 44)
+                }.accessibilityLabel("Notifications, \(focuses.unreadCount) unread")
+            }
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
@@ -643,6 +645,8 @@ private struct CompactAgentThreadRow: View {
             Text(thread.shell.title)
                 .lineLimit(1)
 
+            AgentThreadStatusBadge(thread: thread)
+
             Spacer(minLength: 8)
 
             if let pullRequest = thread.shell.linkedPullRequests.first {
@@ -685,6 +689,8 @@ private struct AgentThreadRow: View {
                     Image(systemName: "clock.badge.xmark").font(.caption2).accessibilityLabel("Temporary")
                 }
 
+                AgentThreadStatusBadge(thread: thread)
+
                 Text(activityAge)
                     .font(.caption)
                     .lineLimit(1)
@@ -704,7 +710,6 @@ private struct AgentThreadRow: View {
 
                 Spacer(minLength: 0)
 
-                statusIndicator
 
                 if let pullRequest = thread.shell.linkedPullRequests.first {
                     AgentThreadPullRequestBadge(thread: thread, pullRequest: pullRequest)
@@ -797,27 +802,6 @@ private struct AgentThreadRow: View {
                     .font(.caption2)
                     .accessibilityHidden(true)
             }
-        }
-    }
-
-    @ViewBuilder
-    private var statusIndicator: some View {
-        if let queued = appModel.cloud.threadQueue.threads.first(where: {
-            $0.companyID == thread.companyId && $0.environmentID == thread.environmentId && $0.threadID == thread.threadId && $0.state != "delivered"
-        }) {
-            Text(queued.status).font(.caption).foregroundStyle(.secondary)
-        } else if thread.needsAction {
-            Image(systemName: "person.crop.circle.badge.exclamationmark")
-                .foregroundStyle(.orange)
-                .accessibilityLabel("Needs you")
-        } else if thread.isRunning {
-            Image(systemName: "sparkles")
-                .foregroundStyle(.blue)
-                .accessibilityLabel("Working")
-        } else if thread.shell.lastError != nil || thread.shell.status == "error" {
-            Image(systemName: "exclamationmark.circle")
-                .foregroundStyle(.red)
-                .accessibilityLabel("Thread error")
         }
     }
 
@@ -973,6 +957,11 @@ struct AgentThreadConversationView: View {
     @State private var navigationError: String?
     @State private var isForking = false
     @State private var isUpdatingLifecycle = false
+    @State private var showsRename = false
+    @State private var renameTitle = ""
+    @State private var showsDelete = false
+    @State private var showsArchive = false
+    @State private var showsForceSettle = false
     @State private var showsAttachment = false
     @State private var showsUnfinishedGit = false
     @State private var showsGitReview = false
@@ -991,7 +980,7 @@ struct AgentThreadConversationView: View {
         _model = State(initialValue: model)
     }
 
-    var body: some View {
+    private var conversationScrollView: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -1053,6 +1042,9 @@ struct AgentThreadConversationView: View {
             .onChange(of: model.conversationItems.last?.id) { _, _ in
                 if followsLatest && !userIsScrolling { proxy.scrollTo("agent-transcript-bottom", anchor: .bottom) }
             }
+            .onChange(of: model.activity) { _, _ in
+                if followsLatest && !userIsScrolling { proxy.scrollTo("agent-transcript-bottom", anchor: .bottom) }
+            }
             .overlay(alignment: .bottom) {
                     if !isNearBottom {
                         Button("Latest message", systemImage: "arrow.down") {
@@ -1108,6 +1100,7 @@ struct AgentThreadConversationView: View {
                         .buttonBorderShape(.capsule)
                         .accessibilityIdentifier("agent-thread-changes")
                     }
+                        AgentThreadQueueControl(model: model, isComposerExpanded: $isComposerExpanded, isComposerFocused: $isComposerFocused)
                         AgentThreadSubagentPicker(model: model, openThread: openChild)
                     }
                     AgentThreadComposer(model: model, isExpanded: $isComposerExpanded,
@@ -1116,6 +1109,10 @@ struct AgentThreadConversationView: View {
                 }
             }
         }
+    }
+
+    var body: some View {
+        conversationScrollView
         .navigationTitle(model.threadTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -1130,46 +1127,32 @@ struct AgentThreadConversationView: View {
                 Button("Write message", systemImage: "square.and.pencil") {
                     isComposerExpanded = true; isComposerFocused = true
                 }
-                Menu {
-                    if model.thread.shell.isTemporary {
-                        Button("Keep conversation", systemImage: "tray.and.arrow.down") { performLifecycle(.keepConversation) }
-                            .disabled(isUpdatingLifecycle || !model.supportsConversations)
-                    }
-                    if model.thread.shell.isConversation {
-                        Button("Attach project", systemImage: "folder.badge.plus") { showsAttachment = true }
-                            .disabled(!model.thread.canAttachProject || model.activeRunID != nil || model.isSending || isUpdatingLifecycle || !model.supportsConversations)
-                    }
-                    Button("Settle", systemImage: "checkmark") { performLifecycle(.settle) }
-                        .disabled(model.activeRunID != nil || model.isSending || isUpdatingLifecycle)
-                    Button(model.thread.shell.settleAfterCompletion == true ? "Cancel settle after completion" : "Settle after completion", systemImage: "checkmark.circle") {
-                        performLifecycle(.settleAfterCompletion(model.thread.shell.settleAfterCompletion != true))
-                    }.disabled(isUpdatingLifecycle)
-                    if let workspaceRoot = currentWorkspaceRoot, let connect = model.connect {
-                        NavigationLink {
-                            PathwayWorkspaceDestination(thread: model.thread, environment: model.environment,
-                                projectRoot: workspaceRoot, connect: connect, storageDirectory: model.storageDirectory)
-                        } label: { Label("Workspace", systemImage: "folder") }
-                    }
-                    Button("Fork thread", systemImage: "arrow.triangle.branch") { fork() }.disabled(isForking || model.thread.shell.isTemporary)
-                    if model.thread.shell.isTemporary { Text("Keep conversation before forking or starting a side chat.") }
-                    Button("Copy conversation", systemImage: "doc.on.doc") {
-                        UIPasteboard.general.string = model.items.filter(\.isConversation).compactMap(\.text).joined(separator: "\n\n")
-                    }
-                    if !model.subagents.isEmpty {
-                        Section("Subagents") {
-                            ForEach(model.subagents) { agent in
-                                if let id = agent.childThreadID {
-                                    Button(agent.title, systemImage: "person.crop.square") { openChild(id) }
-                                        .accessibilityIdentifier("agent-thread-open-child-\(id)")
-                                }
-                            }
-                        }
-                    }
-                } label: { Image(systemName: "ellipsis") }
+                threadActionsMenu
                 .accessibilityLabel("Thread actions").accessibilityIdentifier("agent-thread-actions")
             }
         }
+        .alert("Rename thread", isPresented: $showsRename) {
+            TextField("Title", text: $renameTitle)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") { performLifecycle(.rename(renameTitle)) }
+                .disabled(renameTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .alert("Archive thread?", isPresented: $showsArchive) {
+            Button("Cancel", role: .cancel) {}
+            Button("Archive") { performLifecycle(.archive) }
+        } message: { Text("You can restore this conversation from Archived threads.") }
+        .alert("Delete thread?", isPresented: $showsDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) { performLifecycle(.delete) }
+        } message: { Text("This permanently deletes the thread and its conversation history.") }
+        .alert("Force settle thread?", isPresented: $showsForceSettle) {
+            Button("Cancel", role: .cancel) {}
+            Button("Force settle", role: .destructive) { performLifecycle(.forceSettle) }
+        } message: { Text("This settles the thread even if work is still active.") }
         .sheet(isPresented: $showsChanges) { AgentThreadChangesView(model: model) }
+        .onChange(of: changedItems.isEmpty) { _, empty in
+            if empty { showsChanges = false }
+        }
         .sheet(isPresented: $showsAlternateEnvironment) {
             NewAgentThreadView(initialPrompt: model.draft)
         }
@@ -1190,7 +1173,7 @@ struct AgentThreadConversationView: View {
         .navigationDestination(item: $childDestination) { destination in
             AgentThreadConversationView(model: destination.model, workspaceRoot: destination.workspaceRoot)
         }
-        .alert("Couldn’t open thread", isPresented: Binding(get: { navigationError != nil }, set: { if !$0 { navigationError = nil } })) {
+        .alert("Couldn’t update thread", isPresented: Binding(get: { navigationError != nil }, set: { if !$0 { navigationError = nil } })) {
             Button("OK") { navigationError = nil }
         } message: { Text(navigationError ?? "") }
         .onAppear { compactThreadChrome?.enterThreadDetail() }
@@ -1244,6 +1227,107 @@ struct AgentThreadConversationView: View {
         }
         return model.thread.shell.conversationPath ?? workspaceRoot
     }
+    private var threadActionsMenu: some View {
+        Menu {
+        Button("Rename thread", systemImage: "pencil") {
+            renameTitle = model.threadTitle
+            showsRename = true
+        }.disabled(isUpdatingLifecycle)
+        if supportsThreadAction("threadTitleRegeneration") {
+            Button("Regenerate title", systemImage: "arrow.clockwise") { performLifecycle(.regenerateTitle) }
+                .disabled(isUpdatingLifecycle)
+        }
+        if supportsThreadAction("threadPinning") {
+            Button(model.thread.shell.pinnedAt == nil ? "Pin thread" : "Unpin thread",
+                   systemImage: model.thread.shell.pinnedAt == nil ? "pin" : "pin.slash") {
+                performLifecycle(model.thread.shell.pinnedAt == nil ? .pin : .unpin)
+            }.disabled(isUpdatingLifecycle)
+        }
+        if model.thread.shell.isTemporary {
+            Button("Keep conversation", systemImage: "tray.and.arrow.down") { performLifecycle(.keepConversation) }
+                .disabled(isUpdatingLifecycle || !model.supportsConversations)
+        }
+        if model.thread.shell.isConversation {
+            Button("Attach project", systemImage: "folder.badge.plus") { showsAttachment = true }
+                .disabled(!model.thread.canAttachProject || model.activeRunID != nil || model.isSending || isUpdatingLifecycle || !model.supportsConversations)
+        }
+        if supportsThreadAction("threadSettlement") {
+            Button(isThreadSettled ? "Reopen thread" : "Settle thread", systemImage: isThreadSettled ? "arrow.uturn.backward" : "checkmark") {
+                performLifecycle(isThreadSettled ? .reopen : .settle)
+            }.disabled(model.activeRunID != nil || model.isSending || isUpdatingLifecycle)
+        }
+        if supportsThreadAction("threadForceSettlement"), !model.thread.shell.isTemporary, !isThreadSettled {
+            Button("Force settle thread", systemImage: "checkmark.circle.trianglebadge.exclamationmark") { showsForceSettle = true }
+                .disabled(isUpdatingLifecycle)
+        }
+        if supportsThreadAction("threadSnooze") {
+            if model.thread.lifecycleSection(at: Date()) == .snoozed {
+                Button("Wake thread", systemImage: "sun.max") { performLifecycle(.wake) }
+                    .disabled(isUpdatingLifecycle)
+            } else {
+                Menu("Snooze", systemImage: "moon.zzz") {
+                    Button("For 1 hour") { snooze(hours: 1) }
+                    Button("For 3 hours") { snooze(hours: 3) }
+                    Button("For 1 day") { snooze(hours: 24) }
+                    Button("For 1 week") { snooze(hours: 168) }
+                }.disabled(model.activeRunID != nil || !model.queuedRuns.isEmpty || model.isSending || isUpdatingLifecycle || isThreadSettled || model.thread.shell.pendingRuntimeRequest != nil)
+            }
+        }
+        if supportsThreadAction("threadSettleAfterCompletion"), !isThreadSettled {
+            Button(model.thread.shell.settleAfterCompletion == true ? "Cancel settle after completion" : "Settle after completion", systemImage: "checkmark.circle") {
+                performLifecycle(.settleAfterCompletion(model.thread.shell.settleAfterCompletion != true))
+            }.disabled(isUpdatingLifecycle)
+        }
+        if let workspaceRoot = currentWorkspaceRoot, let connect = model.connect {
+            NavigationLink {
+                PathwayWorkspaceDestination(thread: model.thread, environment: model.environment,
+                    projectRoot: workspaceRoot, connect: connect, storageDirectory: model.storageDirectory)
+            } label: { Label("Workspace", systemImage: "folder") }
+        }
+        Button("Fork thread", systemImage: "arrow.triangle.branch") { fork() }.disabled(isForking || model.thread.shell.isTemporary)
+        if model.thread.shell.isTemporary { Text("Keep conversation before forking or starting a side chat.") }
+        Button("Copy conversation", systemImage: "doc.on.doc") {
+            UIPasteboard.general.string = model.items.filter(\.isConversation).compactMap(\.text).joined(separator: "\n\n")
+        }
+        if let path = model.thread.shell.worktreePath ?? currentWorkspaceRoot {
+            Button("Copy path", systemImage: "doc.on.doc") { UIPasteboard.general.string = path }
+        }
+        if let branch = model.thread.shell.branch {
+            Button("Copy branch", systemImage: "doc.on.doc") { UIPasteboard.general.string = branch }
+        }
+        Button("Copy thread ID", systemImage: "doc.on.doc") { UIPasteboard.general.string = model.threadID }
+        Section {
+            if model.thread.shell.archivedAt != nil {
+                Button("Restore thread", systemImage: "tray.and.arrow.up") { performLifecycle(.restore) }
+                    .disabled(isUpdatingLifecycle)
+            } else {
+                Button("Archive thread", systemImage: "archivebox") { showsArchive = true }
+                    .disabled(model.activeRunID != nil || model.isSending || isUpdatingLifecycle)
+            }
+            Button("Delete thread", systemImage: "trash", role: .destructive) { showsDelete = true }
+                .disabled(model.activeRunID != nil || model.isSending || isUpdatingLifecycle)
+        }
+        if !model.subagents.isEmpty {
+            Section("Subagents") {
+                ForEach(model.subagents) { agent in
+                    if let id = agent.childThreadID {
+                        Button(agent.title, systemImage: "person.crop.square") { openChild(id) }
+                            .accessibilityIdentifier("agent-thread-open-child-\(id)")
+                    }
+                }
+            }
+        }
+    } label: { Image(systemName: "ellipsis") }
+    }
+    private var isThreadSettled: Bool {
+        appModel.cloud.settledThreads.contains { $0.id == model.thread.id }
+    }
+    private func supportsThreadAction(_ capability: String) -> Bool {
+        model.environment.environment.descriptor.capabilities?[capability]?.boolValue == true
+    }
+    private func snooze(hours: Double) {
+        performLifecycle(.sleep(until: Date().addingTimeInterval(hours * 3600)))
+    }
     private func performLifecycle(_ action: PathwayThreadAction) {
         guard !isUpdatingLifecycle else { return }
         isUpdatingLifecycle = true
@@ -1252,7 +1336,7 @@ struct AgentThreadConversationView: View {
             do {
                 _ = try await model.request("orchestration.dispatchCommand", payload: action.command(threadID: model.threadID),
                     reportsErrors: false, requiresSubscription: true)
-                if model.thread.shell.isTemporary && (action == .settle || action == .discardAndSettle) {
+                if action == .delete || action == .archive || (model.thread.shell.isTemporary && (action == .settle || action == .discardAndSettle)) {
                     dismiss()
                 } else {
                     let projection = try await model.request("orchestration.getThreadProjection", payload: .object(["threadId": .string(model.threadID)]))

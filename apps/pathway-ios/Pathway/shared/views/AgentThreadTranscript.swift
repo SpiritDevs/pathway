@@ -13,7 +13,7 @@ struct AgentThreadTranscript: View {
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 22) {
-            ForEach(layoutCache.rows(model.conversationItems, activeRunID: model.activeRunID)) { row in
+            ForEach(layoutCache.rows(model.transcriptItems, activeRunID: model.activeRunID)) { row in
                 switch row.content {
                 case .item(let item):
                     itemView(item)
@@ -21,6 +21,7 @@ struct AgentThreadTranscript: View {
                     AgentTranscriptWorkGroup(label: label, items: items, settled: settled, model: model, onOpenChild: onOpenChild)
                 }
             }
+            AgentTranscriptActivity(model: model)
             Color.clear.frame(height: 1).id("agent-transcript-bottom")
         }
         .sheet(item: $editingItem) { item in
@@ -749,3 +750,24 @@ struct AgentTranscriptMarkdown: View, Equatable {
     var imageContext: AgentMarkdownImageContext? = nil
     var body: some View { PathwayIssueMarkdownView(markdown: markdown, imageContext: imageContext) }
 }
+
+private struct AgentTranscriptActivity: View {
+    let model: PathwayAgentThreadModel
+
+    var body: some View {
+        if let activity = model.activity {
+            Label {
+                Text(activity.rawValue)
+            } icon: {
+                Image(systemName: activity == .waiting ? "pause.circle" : "ellipsis")
+                    .accessibilityHidden(true)
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 4)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("agent-thread-activity")
+        }
+    }
+}
+

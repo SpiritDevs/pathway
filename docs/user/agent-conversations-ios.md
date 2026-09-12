@@ -2,15 +2,23 @@
 
 Open an agent thread to read its conversation and continue working on its connected environment. The conversation has its own screen; Back returns to the thread list or parent conversation.
 
+A status below the latest message shows when your message is sending, queued, preparing a workspace, starting the agent, working, or waiting. It clears when the run finishes or stops. If the connection drops, the app hides the activity status until it has the latest thread state again.
+
 Completed turns keep the final answer visible and fold intermediate work into a **Worked for…** row. Expand it to read progress updates, then expand individual search, command, tool, and file rows for details. Questions, approval requests, plans, and subagent links remain accessible in the conversation.
 
 The file count above the composer opens the changed files and available diffs. Copy an answer with its copy button, or hold a message to open its actions. Fork from an answer to continue from that turn in a separate conversation. The thread menu can also fork the latest state and copy the conversation.
 
-Hold the latest message you sent and choose **Edit and restart** when the provider supports restoring that conversation point. Editing preserves attached context. Messages that have already changed workspace files may no longer be editable. Queued messages have their own edit and queue actions.
+Hold the latest message you sent and choose **Edit and restart** when the provider supports restoring that conversation point. Editing preserves attached context. Messages that have already changed workspace files may no longer be editable.
+
+Queued messages appear in a count button beside the changed-file counter. Tap it to open a compact list, drag a row's reorder handle to change its position, or use the row's Edit, Steer, and Delete buttons. Edit removes the message from the queue, closes the list, and restores its text and attachments to the composer. Send or stash an existing draft first. Agent-generated replies cannot be edited or steered.
+
+The queue and question sheets close automatically when their last item is removed or resolved. The changed-files sheet also closes if its list becomes empty.
 
 Tap the floating composer to write. Add photos, images from the clipboard, or files using the attachment menu. Upload failures leave the attachment available to retry or remove. The model menu lists the models available on the connected environment. Conversation options include the provider's supported settings, reasoning effort, access mode, and planning mode.
 
 While the agent works, stop the response or queue another message. Hold Send to choose whether to queue the message or steer the current turn. Sending and property changes report failures without discarding the draft. The same Send menu can start a new thread or a side chat when the provider supports it.
+
+The round send button stays visible in both the collapsed and expanded composer. While the agent is preparing or working, it shows a spinner. With an empty draft, tap it to stop the response. With a draft, tap it to send your follow-up; a separate Stop button remains available. Reduce Motion replaces the spinner with a still icon.
 
 Use `@` to find a workspace file, `$` for a provider skill, and `/` for supported commands. `/model` searches the available models. Suggestions replace the token at your cursor and preserve the rest of the draft.
 
@@ -23,3 +31,9 @@ Subagent rows open the child conversation as a full screen. You can inspect its 
 Questions show the available options and a field for your own answer. For several questions, move through them before sending the complete response. Approval requests offer the available approval decisions. A disconnected or historical request cannot submit a new response.
 
 The model picker shows Favourites first, followed by provider submenus. Every favourite has a star. Use **Settings → Favourite models** to add or remove models; the same screen is available from composer options. Mobile favourites are saved on this device separately for each environment. Providers reported by the environment remain visible when they are not installed, disabled, or require sign-in; their models cannot be selected until setup is complete.
+
+The thread menu at the top includes Rename, Pin or Unpin, Settle or Reopen, Force settle, Snooze or Wake, and Regenerate title when the connected environment supports them. Copy the workspace path, branch, thread ID, or conversation from the same menu. Archive and Delete ask for confirmation; archived threads can be restored.
+
+Thread rows show compact status labels so you can scan for Working, Preparing, Queued, Waiting, Question, Approval, Review plan, Failed, Stopped, or Ready. A pending question or approval takes priority over background work. Status labels use text as well as color and update with the environment's thread state.
+
+The notification bell is hidden when there are no notifications. It appears when notifications arrive; read notifications remain accessible from the bell.

@@ -75,6 +75,7 @@ struct PathwayThreadAttachmentDraft: Codable, Identifiable, Equatable, Sendable 
     var state: State
     var attachment: PathwayMessageAttachment?
     var previewData: Data?
+    var source: JSONValue? = nil
 }
 
 extension PathwayMessageAttachment {
@@ -218,7 +219,7 @@ extension PathwayAgentThreadModel {
             guard let index = draftAttachments.firstIndex(where: { $0.id == id }) else {
                 _ = try? await self.request("attachments.delete", payload: .object(["attachmentId": .string(attachmentID)])); return
             }
-            draftAttachments[index].attachment = PathwayMessageAttachment(id: attachmentID, type: draft.type, name: draft.name, mimeType: draft.mimeType, sizeBytes: data.count)
+            draftAttachments[index].attachment = PathwayMessageAttachment(id: attachmentID, type: draft.type, name: draft.name, mimeType: draft.mimeType, sizeBytes: data.count, source: draft.source)
             draftAttachments[index].state = .ready
         } catch {
             if let uploadedID { _ = try? await request("attachments.delete", payload: .object(["attachmentId": .string(uploadedID)])) }
