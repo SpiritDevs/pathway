@@ -20,6 +20,12 @@ This version targets iOS, iPadOS and visionOS. Android is excluded. Code coverag
 - Unsigned simulator fixture tests bypass Clerk. For real development sign-in, keep simulator ad-hoc signing enabled so Keychain entitlements are available; an unsigned app can terminate during Clerk configuration with OSStatus -34018. Verify the built public key is `pk_test_` before unattended authentication. Use a temporary `-xcconfig` override to preserve an existing production `Config/Local.xcconfig`.
 - Run the applicable native checks locally before pushing. The native GitHub workflow is manual-only (`workflow_dispatch`); pull requests do not automatically repeat iPhone, iPad or visionOS checks. When requested, the manual workflow runs those jobs on an Apple Silicon macOS runner.
 
+## TestFlight delivery
+
+- Use an account with working distribution signing access. App Store Connect API access alone does not establish cloud-signing permission. A saved Xcode account can export with `-allowProvisioningUpdates` even when the keychain lists only development identities.
+- The app's `ITSAppUsesNonExemptEncryption` value preserves the existing export-compliance declaration from TestFlight 1.0.11 build 12. Reassess this declaration when cryptographic code or dependencies change. See [Apple's encryption declaration guidance](https://developer.apple.com/documentation/bundleresources/information-property-list/itsappusesnonexemptencryption).
+- After upload, query the exact app version and build number in App Store Connect. Confirm `processingState` is `VALID`, the encryption declaration is present, and `buildBetaDetail.internalBuildState` is `IN_BETA_TESTING` for internal distribution. Confirm the intended tester group has access. Archive success, upload success, and tester availability are separate milestones; report which has completed.
+
 ## Integrated device verification
 
 Use an isolated development environment and the provisioned Clerk development account. Keep fixture checks separate from actual cloud/relay/provider execution.
