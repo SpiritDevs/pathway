@@ -6,7 +6,13 @@ thread ID; reassignment preserves `queueId`, so equal thread IDs on different en
 distinct. Existing environment-published `agentThreads` shells remain the discovery
 read model for accepted threads.
 
-Clients persist an account-scoped outbox entry and attachment bytes before making network requests.
+Web and desktop submit directly to connected environments, including new threads and worktree
+launches. Cloud queue hydration and the client's cached thread projection do not gate direct
+delivery. Files upload to the connected environment. Known pending local or cloud messages on the
+same thread retain queue delivery to preserve order. Cross-provider follow-ups behind an active run
+also retain cloud delivery because the environment's run queue does not support them.
+
+For cloud delivery, clients persist an account-scoped outbox entry and attachment bytes before making network requests.
 They upload attachments to Convex storage, register validated metadata, then enqueue the submission
 with stable command and message IDs. A failed or uncertain enqueue keeps the local entry. An
 acknowledged cloud write is distinguishable from local persistence in the UI.
@@ -78,10 +84,10 @@ summaries for seven days after their published shell is available. Delivered ent
 replacement shell remain discoverable. Older delivered records and receipts remain available for
 direct reconciliation without subscribing every client to the entire delivery history.
 
-Roll out the Convex schema/functions, then environment workers, then clients. Old clients using
-direct environment submission are outside cloud queue ordering; update every active surface before
-relying on cross-device ordering. Local, relay and tunnel connections share the same cloud queue;
-the transport used to read a running conversation does not change delivery ownership.
+Roll out the Convex schema/functions, then environment workers, then clients. Cloud submissions
+are ordered within their queue. Direct submissions do not wait for cloud queue discovery, so
+pending messages not yet observed on another client cannot establish ordering for a direct send.
+Local, relay and tunnel connections use the same delivery decision based on environment connectivity.
 
 ## Preview data migration
 

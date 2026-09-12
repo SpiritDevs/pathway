@@ -26,7 +26,7 @@ import { makeFunctionReference } from "convex/server";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { readThreadShell, readThreadProjection } from "../state/entities";
 import { environmentCatalog } from "../connection/catalog";
@@ -539,10 +539,17 @@ export async function queueThreadTurn(target: QueuedThreadTurnTarget) {
 }
 
 export function useQueuedStartThreadTurn() {
+  const { userId } = useAuth({ treatPendingAsSignedOut: false });
+  const accountIdRef = useRef(userId);
+  accountIdRef.current = userId;
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   return useCallback(
     async (target: QueuedThreadTurnTarget) => {
-      const accountSession = session;
+      const accountId = accountIdRef.current;
+      if (!accountId)
+        return settlePromise(() => {
+          throw new Error("Sign in to Pathway Cloud before sending.");
+        });
       const canSendDirectly = () => {
         const queued = findQueuedThread(
           appAtomRegistry.get(threadQueueRowsAtom),
@@ -585,13 +592,6 @@ export function useQueuedStartThreadTurn() {
           requestedProviderInstanceId:
             target.input.modelSelection?.instanceId ?? projection?.thread.modelSelection.instanceId,
           dispatchMode: target.input.dispatchMode,
-          queueHydrated:
-            appAtomRegistry.get(threadQueueHydratedAtom) &&
-            session !== null &&
-            !session.restarting &&
-            session.client.connectionState().isWebSocketConnected,
-          hasThreadProjection: projection !== null,
-          bootstrap: target.input.bootstrap,
           pendingCloudMessages: localPending || (queued?.queuedCount ?? 0) > 0,
         });
       };
@@ -618,7 +618,7 @@ export function useQueuedStartThreadTurn() {
           : Promise.resolve(target.input.message.attachments),
       );
       if (attachments._tag === "Failure") return attachments;
-      if (session !== accountSession)
+      if (accountIdRef.current !== accountId)
         return settlePromise(() => {
           throw new Error(
             "The account changed while preparing this message. Send it again from the current account.",
