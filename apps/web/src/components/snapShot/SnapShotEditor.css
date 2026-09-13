@@ -21,6 +21,7 @@
   box-shadow: 0 20px 80px rgb(0 0 0 / 28%);
   outline: none;
   color-scheme: light;
+  -webkit-app-region: no-drag;
 }
 
 .shot-editor-toolbar {
@@ -28,7 +29,8 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 12px;
-  height: 70px;
+  min-height: 76px;
+  flex-wrap: wrap;
   padding: 10px 16px;
   overflow-x: auto;
   border-bottom: 1px solid #c8c8ca;
@@ -36,29 +38,37 @@
   user-select: none;
 }
 
-.shot-editor-brand {
-  display: flex;
+.shot-editor-window-controls {
   flex: 0 0 auto;
-  align-items: center;
-  gap: 18px;
-  padding-right: 7px;
-  color: #fa562c;
-  font-size: 23px;
-  font-weight: 600;
-  letter-spacing: -0.9px;
 }
 
 .shot-editor-close {
+  position: relative;
   display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #822a21;
+  cursor: pointer;
+}
+.shot-editor-close::before {
+  position: absolute;
   width: 17px;
   height: 17px;
-  place-items: center;
   border: 1px solid #e85049;
   border-radius: 50%;
   background: #ff6058;
-  color: #822a21;
-  cursor: pointer;
   box-shadow: inset 0 1px 2px rgb(255 255 255 / 28%);
+  content: "";
+}
+.shot-editor-close svg {
+  position: relative;
+}
+.shot-editor-close:hover:not(:disabled) {
+  background: #f0f0f0;
 }
 
 .shot-editor-close svg {
@@ -83,8 +93,8 @@
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 37px;
-  height: 39px;
+  width: 44px;
+  height: 44px;
   border: 0;
   border-radius: 7px;
   background: transparent;
@@ -121,8 +131,9 @@
 .shot-editor-color {
   position: relative;
   display: block;
-  width: 27px;
-  height: 27px;
+  width: 44px;
+  height: 44px;
+  padding: 8px;
   cursor: pointer;
 }
 .shot-editor-color > span {
@@ -168,8 +179,10 @@
   white-space: nowrap;
 }
 .shot-editor-color-info select {
-  width: 44px;
-  appearance: none;
+  min-width: 64px;
+  min-height: 44px;
+  padding: 0 8px;
+  appearance: auto;
   border: 0;
   background: none;
   color: #777;
@@ -189,8 +202,10 @@
   min-width: 60px;
 }
 .shot-editor-zoom select {
-  max-width: 84px;
-  appearance: none;
+  min-width: 84px;
+  min-height: 44px;
+  padding: 0 8px;
+  appearance: auto;
   border: 0;
   background: none;
   color: #393939;
@@ -275,14 +290,16 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  min-height: 44px;
+  padding: 0 8px;
   border: 0;
   background: none;
   color: #007aff;
   cursor: pointer;
 }
 .shot-editor-small-button {
-  width: 24px;
-  height: 26px;
+  width: 44px;
+  height: 44px;
 }
 .shot-editor-small-button svg {
   width: 14px;
@@ -325,27 +342,18 @@
 @media (max-width: 1200px) {
   .shot-editor-toolbar {
     gap: 8px;
-    height: 60px;
     padding: 8px 12px;
   }
-  .shot-editor-brand {
-    gap: 10px;
-    font-size: 19px;
-  }
   .shot-editor-group {
-    gap: 1px;
+    gap: 2px;
     padding-right: 8px;
   }
-  .shot-editor-button {
-    width: 32px;
-    height: 35px;
-  }
-  .shot-editor-button svg {
-    width: 20px;
-    height: 20px;
-  }
-  .shot-editor-history {
-    display: none;
+  .shot-editor-tools {
+    order: 2;
+    flex-wrap: wrap;
+    width: 100%;
+    border: 0;
+    padding: 0;
   }
 }
 
@@ -355,33 +363,16 @@
     border-radius: 10px;
   }
   .shot-editor-toolbar {
-    flex-wrap: wrap;
-    height: auto;
-    overflow-x: hidden;
-    gap: 8px;
-    padding: 9px;
-  }
-  .shot-editor-tools {
-    order: 2;
-    width: 100%;
-    justify-content: space-between;
-    border: 0;
-    padding: 0;
+    padding: 8px;
   }
   .shot-editor-size {
     display: none;
   }
-  .shot-editor-brand span {
-    display: none;
+  .shot-editor-inspector {
+    flex-wrap: wrap;
   }
-  .shot-editor-color-info strong {
-    font-size: 11px;
-  }
-  .shot-editor-zoom {
-    min-width: 40px;
-  }
-  .shot-editor-zoom select {
-    max-width: 64px;
+  .shot-editor-footer {
+    flex-wrap: wrap;
   }
   .shot-editor-hint {
     font-size: 10px;

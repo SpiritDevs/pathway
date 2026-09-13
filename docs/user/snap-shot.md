@@ -37,7 +37,9 @@ or press its shortcut from any app:
 - **Capture active window** captures the window you are working in. Its default shortcut on macOS
   and Windows is both Shift keys together.
 - **Capture current screen** captures everything visible on the display containing your pointer.
-- **Capture region** lets you drag a rectangle around part of the screen. Press Escape to cancel.
+- **Capture region** shows crosshairs over the live screen, with display-local pixel coordinates
+  and selection dimensions. Drag a rectangle and release to capture that area and open the editor.
+  Press Escape to cancel without taking a screenshot.
 
 Screen and region capture are available on macOS and Windows. Linux desktops currently support
 window capture only. Screen and region shortcuts start unassigned; choose your own in Settings.
