@@ -5,6 +5,7 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   DictationController,
+  type DictationControllerOptions,
   type DictationInferencePort,
   type DictationNativePort,
 } from "./DictationController.ts";
@@ -25,6 +26,8 @@ async function setup(
   overrides: Partial<DictationInferencePort> = {},
   options: {
     native?: Partial<DictationNativePort>;
+    models?: Partial<DictationControllerOptions["models"]>;
+    onState?: DictationControllerOptions["onState"];
     prepare?: (directory: string, storage: DictationStorage) => Promise<void>;
     enable?: boolean;
   } = {},
@@ -51,6 +54,7 @@ async function setup(
       cancel: async () => {},
       remove: async () => {},
       dispose: async () => {},
+      ...options.models,
     },
     native: {
       permissions: async () => ({ microphone: "granted", accessibility: "granted" }),
@@ -72,7 +76,7 @@ async function setup(
       unload: async () => {},
       ...overrides,
     },
-    onState: () => {},
+    onState: options.onState ?? (() => {}),
     onMeter,
     copy: () => {},
     open: () => {},
@@ -91,6 +95,66 @@ async function setup(
 }
 
 describe("desktop dictation lifecycle", () => {
+  it("clears a failed model download banner when retrying and after the retry succeeds", async () => {
+    const retried = deferred<void>();
+    const failed = deferred<void>();
+    const completed = deferred<void>();
+    let completing = false;
+    const download = vi
+      .fn<DictationControllerOptions["models"]["download"]>()
+      .mockRejectedValueOnce(new Error("Download interrupted"))
+      .mockReturnValueOnce(retried.promise);
+    const { controller } = await setup(
+      {},
+      {
+        models: { download },
+        onState: (state) => {
+          if (state.error === "Download interrupted") failed.resolve();
+          if (completing) completed.resolve();
+        },
+      },
+    );
+    await controller.execute({ type: "download", modelId: "whisper-turbo" });
+    await failed.promise;
+    expect(controller.getState().error).toBe("Download interrupted");
+
+    const retryState = await controller.execute({ type: "download", modelId: "whisper-turbo" });
+    expect(retryState.error).toBeNull();
+    completing = true;
+    retried.resolve();
+    await completed.promise;
+    expect(controller.getState().error).toBeNull();
+    expect(download).toHaveBeenNthCalledWith(2, "whisper-turbo");
+  });
+
+  it("keeps a newer download failure when another model finishes downloading", async () => {
+    const speechDownloaded = deferred<void>();
+    const cleanupFailed = deferred<void>();
+    const completed = deferred<void>();
+    let completing = false;
+    const download = vi
+      .fn<DictationControllerOptions["models"]["download"]>()
+      .mockReturnValueOnce(speechDownloaded.promise)
+      .mockRejectedValueOnce(new Error("Cleanup model download failed"));
+    const { controller } = await setup(
+      {},
+      {
+        models: { download },
+        onState: (state) => {
+          if (state.error === "Cleanup model download failed") cleanupFailed.resolve();
+          if (completing) completed.resolve();
+        },
+      },
+    );
+    await controller.execute({ type: "download", modelId: "whisper-turbo" });
+    await controller.execute({ type: "download", modelId: "qwen-cleanup" });
+    await cleanupFailed.promise;
+    completing = true;
+    speechDownloaded.resolve();
+    await completed.promise;
+    expect(controller.getState().error).toBe("Cleanup model download failed");
+  });
+
   it("updates the current recording meter and ignores a cancelled session's late events", async () => {
     const { controller, captureId, onMeter } = await setup();
     await controller.start("locked");

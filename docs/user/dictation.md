@@ -80,6 +80,9 @@ into a paragraph.
 
 The dictionary syncs through your personal Pathway account. Offline dictation uses the last synced
 copy. Connect to edit it. Changes apply to your next recording.
+If another desktop saves while you are editing, Pathway keeps your draft and prevents it from
+overwriting the newer dictionary. Copy any edits you want to keep, then choose **Discard changes**
+to load the latest dictionary before editing again.
 
 **History** stays on this desktop and keeps both the original recognized text and the cleaned
 result. No audio is saved in History. Search entries, copy either version, or delete individual

@@ -14,17 +14,20 @@ export function DictationDictionary({
   state,
   saveDictionary = saveDictationDictionary,
 }: DictationActions & {
-  saveDictionary?: (lists: readonly DictationDictionaryList[]) => Promise<void>;
+  saveDictionary?: typeof saveDictationDictionary;
 }) {
-  const [draft, setDraft] = useState<readonly DictationDictionaryList[] | null>(null);
+  const [draft, setDraft] = useState<{
+    lists: readonly DictationDictionaryList[];
+    base: readonly DictationDictionaryList[];
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const lists = draft ?? state.dictionary;
+  const lists = draft?.lists ?? state.dictionary;
   const canEdit = state.authenticated && state.dictionaryConnected && !saving;
   const validation = dictionaryValidation(lists);
   const change = (next: readonly DictationDictionaryList[]) => {
-    setDraft(next);
+    setDraft({ lists: next, base: draft?.base ?? state.dictionary });
     setSaved(false);
     setError(null);
   };
@@ -37,7 +40,7 @@ export function DictationDictionary({
     setSaving(true);
     setError(null);
     try {
-      await saveDictionary(normalizeDictionary(draft));
+      await saveDictionary(normalizeDictionary(draft.lists), draft.base);
       setDraft(null);
       setSaved(true);
     } catch (cause) {

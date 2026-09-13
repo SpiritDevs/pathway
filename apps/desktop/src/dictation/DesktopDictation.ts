@@ -57,6 +57,7 @@ const make = Effect.gen(function* () {
   const directory = NodePath.join(environment.stateDir, "dictation");
   let overlay: Electron.BrowserWindow | undefined;
   let owner: Electron.BrowserWindow | undefined;
+  let hiddenForDictation: Electron.BrowserWindow | undefined;
   let tray: Electron.Tray | undefined;
   let quitting = false;
   let widgetLoading = false;
@@ -189,6 +190,19 @@ const make = Effect.gen(function* () {
       } else if (!visible) overlay.hide();
     }
     if (owner && !owner.isDestroyed()) owner.webContents.send(channels.DICTATION_STATE, state);
+    if (!state.authenticated || !state.preferences.enabled) {
+      if (
+        hiddenForDictation &&
+        !hiddenForDictation.isDestroyed() &&
+        !hiddenForDictation.isVisible()
+      ) {
+        hiddenForDictation.show();
+        hiddenForDictation.focus();
+      }
+      hiddenForDictation = undefined;
+      tray?.destroy();
+      tray = undefined;
+    }
     if (state.authenticated && state.preferences.enabled && !tray) {
       const iconPath = environment
         .resolveResourcePathCandidates("icon.png")
@@ -211,6 +225,7 @@ const make = Effect.gen(function* () {
     window.on("close", (event) => {
       if (!quitting && controller?.isBackgroundEnabled) {
         event.preventDefault();
+        hiddenForDictation = window;
         window.hide();
       }
     });

@@ -24,15 +24,15 @@ const save = makeFunctionReference<"mutation", { revision: number; lists: Dictio
 const decode = Schema.decodeUnknownSync(
   Schema.Struct({ revision: Schema.Number, lists: Schema.Array(DictationDictionaryList) }),
 );
-let saveCurrent: ((lists: Dictionary) => Promise<void>) | null = null;
+let saveCurrent: ((lists: Dictionary, base: Dictionary) => Promise<void>) | null = null;
 let accountQueue = Promise.resolve();
 
-export function saveDictationDictionary(lists: Dictionary): Promise<void> {
+export function saveDictationDictionary(lists: Dictionary, base: Dictionary): Promise<void> {
   const error = dictationDictionaryError(lists);
   if (error) return Promise.reject(new Error(error));
   if (!saveCurrent || !navigator.onLine)
     return Promise.reject(new Error("Connect to Pathway Cloud to edit your dictionary."));
-  return saveCurrent(lists);
+  return saveCurrent(lists, base);
 }
 
 /** Keeps native dictation bound to the live account even while its settings page is closed. */
@@ -99,13 +99,18 @@ export function DictationAccountCoordinator() {
         },
         () => connected(false),
       );
-      saveCurrent = async (lists) => {
+      saveCurrent = async (lists, base) => {
         if (!active || !client || !latest || !client.connectionState().isWebSocketConnected)
           throw new Error("Connect to Pathway Cloud to edit your dictionary.");
-        revision = await client.mutation(save, { revision, lists });
-        if (!active) return;
+        if (JSON.stringify(base) !== JSON.stringify(latest))
+          throw new Error(
+            "Your dictionary changed on another computer. Copy any edits you want to keep, then discard changes to load the latest dictionary.",
+          );
+        const savedRevision = await client.mutation(save, { revision, lists });
+        if (!active || savedRevision < revision) return;
+        revision = savedRevision;
         latest = lists;
-        await send({ type: "dictionary", lists, connected: true });
+        connected(navigator.onLine && client.connectionState().isWebSocketConnected);
       };
     });
     accountQueue = start.catch(() => {});

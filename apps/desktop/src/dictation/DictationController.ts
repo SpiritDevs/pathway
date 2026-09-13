@@ -215,6 +215,7 @@ export class DictationController {
         break;
       }
       case "download":
+        this.publish({ error: null });
         void this.options.models.download(command.modelId).then(
           () => this.publish(),
           (error) => {
