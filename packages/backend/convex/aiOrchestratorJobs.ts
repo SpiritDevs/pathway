@@ -474,10 +474,8 @@ async function contextFor(
     })),
     work: work
       .filter((item) => (item.sourceSequence ?? 0) >= historyStart)
-      .map(({ id, title, status, environmentId, projectId, threadId, detail, resultText }) => {
-        const result = resultText?.slice(0, workResultBudget);
-        workResultBudget -= result?.length ?? 0;
-        return {
+      .map(
+        ({
           id,
           title,
           status,
@@ -485,9 +483,26 @@ async function contextFor(
           projectId,
           threadId,
           detail,
-          result,
-        };
-      }),
+          resultText,
+          readResult,
+        }) => {
+          const result = resultText?.slice(0, workResultBudget);
+          workResultBudget -= result?.length ?? 0;
+          const conversation = readResult?.slice(0, workResultBudget);
+          workResultBudget -= conversation?.length ?? 0;
+          return {
+            id,
+            title,
+            status,
+            environmentId,
+            projectId,
+            threadId,
+            detail,
+            result,
+            conversation,
+          };
+        },
+      ),
     actionResults: results.slice(0, 16000),
   });
 }
@@ -510,7 +525,7 @@ async function notifyFinishedWork(ctx: MutationCtx, orchestrator: Doc<"aiOrchest
   const groups = new Map<string, Array<Doc<"aiOrchestratorWork">>>();
   for (const work of batches.flat()) {
     if (work.status === "completed" && !work.resultCollected) continue;
-    if (!orchestrator.proactive || work.stopRequested) {
+    if (work.stopRequested) {
       await ctx.db.patch(work._id, { completionNotified: true });
       continue;
     }
@@ -1025,6 +1040,52 @@ export const complete = mutation({
         results.push({ kind: action.kind, detail: budget });
         continue;
       }
+      if (action.kind === "readWork") {
+        const work = await ctx.db
+          .query("aiOrchestratorWork")
+          .withIndex("by_domain_id", (q) => q.eq("id", action.workId))
+          .unique();
+        if (!work || work.orchestratorId !== claim.orchestrator.id || work.chatId !== claim.chat.id)
+          return fail("Only this conversation's delegated work can be read.");
+        const company = work.companyId
+          ? await ctx.db
+              .query("companies")
+              .withIndex("by_domain_id", (q) => q.eq("id", work.companyId!))
+              .unique()
+          : null;
+        const registration = company
+          ? await ctx.db
+              .query("environmentRegistrations")
+              .withIndex("by_company_and_environment", (q) =>
+                q.eq("companyId", company._id).eq("environmentId", work.environmentId),
+              )
+              .unique()
+          : null;
+        const boundary = await sharedHistoryBoundary(ctx, claim.chat, claim.chat);
+        if (
+          !registration ||
+          !work.threadId ||
+          boundary === null ||
+          (work.sourceSequence ?? 0) < boundary ||
+          !(await orchestratorCanReadWork(ctx, claim.orchestrator, work, registration)) ||
+          !(await workVisibilityForConversation(ctx, claim.chat)(work))
+        )
+          return fail("The delegated conversation is unavailable to this audience.");
+        if (!work.readRequested)
+          await ctx.db.patch(work._id, {
+            readRequested: true,
+            readRequestId: mintDomainId(Date.now()),
+          });
+        results.push({
+          kind: action.kind,
+          detail: {
+            workId: work.id,
+            status: "pending",
+            message: "The assigned environment will return the thread conversation and wake you.",
+          },
+        });
+        continue;
+      }
       if (action.kind === "remember") {
         await remember(ctx, claim, action);
         continue;
@@ -1305,8 +1366,17 @@ export const pendingWorkResults = query({
           .take(32),
       ),
     );
+    const reads = await ctx.db
+      .query("aiOrchestratorWork")
+      .withIndex("by_environment_read", (q) =>
+        q
+          .eq("companyId", args.companyId)
+          .eq("environmentId", actor.registration.environmentId)
+          .eq("readRequested", true),
+      )
+      .take(32);
     const pending = [];
-    for (const work of rows.flat()) {
+    for (const work of [...reads, ...rows.flat()]) {
       if (!work.threadId) continue;
       const orchestrator = await findOrchestrator(ctx, work.orchestratorId);
       if (
@@ -1316,6 +1386,9 @@ export const pendingWorkResults = query({
         pending.push({
           workId: work.id,
           threadId: work.threadId,
+          ...(reads.includes(work) && work.readRequestId
+            ? { readRequestId: work.readRequestId }
+            : {}),
           ...(work.resultRunId ? { runId: work.resultRunId } : {}),
         });
     }
@@ -1325,6 +1398,7 @@ export const pendingWorkResults = query({
 
 export const collectWorkResult = mutation({
   args: {
+    readRequestId: v.optional(v.string()),
     companyId: v.string(),
     workId: v.string(),
     threadId: v.string(),
@@ -1342,8 +1416,7 @@ export const collectWorkResult = mutation({
       work.companyId !== args.companyId ||
       work.environmentId !== actor.registration.environmentId ||
       work.threadId !== args.threadId ||
-      work.status !== "completed" ||
-      work.resultCollected
+      (!args.readRequestId && (work.status !== "completed" || work.resultCollected))
     )
       return false;
     const orchestrator = await findOrchestrator(ctx, work.orchestratorId);
@@ -1352,6 +1425,63 @@ export const collectWorkResult = mutation({
       !(await orchestratorCanReadWork(ctx, orchestrator, work, actor.registration))
     )
       return false;
+    if (args.readRequestId) {
+      if (!work.readRequested || work.readRequestId !== args.readRequestId) return false;
+      const chat = await findChat(ctx, work.chatId);
+      if (!chat || chat.archived || !chat.orchestratorIds.includes(orchestrator.id)) return false;
+      const boundary = await sharedHistoryBoundary(ctx, chat, chat);
+      if (
+        boundary === null ||
+        (work.sourceSequence ?? 0) < boundary ||
+        !(await workVisibilityForConversation(ctx, chat)(work))
+      )
+        return false;
+      if (!args.text.trim() || args.text.length > 16000)
+        return fail("The thread excerpt is empty or too large.");
+      await ctx.db.patch(work._id, {
+        readRequested: false,
+        readResult: args.text,
+        ...(work.status === "completed" && !work.resultCollected
+          ? { detail: "The delegated conversation was retrieved for the orchestrator." }
+          : {}),
+        updatedAt: Date.now(),
+      });
+      const now = Date.now();
+      const messageId = mintDomainId(now);
+      await appendChatMessage(ctx, chat, {
+        id: messageId,
+        senderKind: "system",
+        senderId: "delegated-work",
+        senderName: "Pathway",
+        text: `Thread read returned for ${work.title}. Use the retrieved conversation to answer the pending request.`,
+        status: "queued",
+        replyToId: null,
+      });
+      await ctx.db.insert("aiOrchestratorJobs", {
+        id: mintDomainId(now),
+        orchestratorId: orchestrator.id,
+        chatId: chat.id,
+        messageId,
+        companyId: args.companyId,
+        status: "queued",
+        environmentId: null,
+        generation: 0,
+        leaseExpiresAt: 0,
+        modelIndex: 0,
+        error: "",
+        configRevision: orchestrator.revision,
+        chatRevision: chat.revision ?? 0,
+        contextResults: JSON.stringify([
+          {
+            kind: "readWork",
+            detail: { workId: work.id, threadId: work.threadId, text: args.text },
+          },
+        ]),
+        createdAt: now,
+        updatedAt: now,
+      });
+      return true;
+    }
     const thread = await ctx.db
       .query("agentThreads")
       .withIndex("by_company_and_environment_and_thread", (q) =>
@@ -1376,6 +1506,7 @@ export const collectWorkResult = mutation({
     if (args.text.length > 16000) return fail("The worker result is too large.");
     await ctx.db.patch(work._id, {
       resultCollected: true,
+      readResult: undefined,
       resultText: args.text,
       resultRunId: args.runId,
       detail: "The delegated run finished and returned its findings.",

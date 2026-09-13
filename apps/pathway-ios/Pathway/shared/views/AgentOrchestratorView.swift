@@ -74,6 +74,27 @@ struct PathwayOrchestratorAvatar: View {
     var body: some View { Text(String(name.prefix(1)).uppercased()).font(.headline).foregroundStyle(.white).frame(width: 40, height: 40).background(tint, in: Circle()).accessibilityHidden(true) }
 }
 
+private struct PathwayThinkingAvatar: View {
+    let contact: PathwayOrchestratorRecord
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 0.15, paused: reduceMotion || scenePhase != .active)) { context in
+            let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2)
+            PathwayOrchestratorAvatar(name: contact.string("name"), color: contact.string("color"))
+                .scaleEffect(0.5).frame(width: 20, height: 20)
+                .opacity(reduceMotion ? 1 : 0.65 + 0.35 * abs(phase - 1))
+        }
+    }
+}
+
+private struct PathwayOrchestratorTimelineEntry: Identifiable {
+    let record: PathwayOrchestratorRecord
+    let isWork: Bool
+    var id: String { "\(isWork ? "work" : "message"):\(record.id)" }
+}
+
 private struct PathwayOrchestratorConversation: View {
     let chat: PathwayOrchestratorRecord
     let onOpenWork: () -> Void
@@ -86,6 +107,25 @@ private struct PathwayOrchestratorConversation: View {
     private var model: PathwayOrchestratorsModel { appModel.cloud.orchestrators }
     private var current: PathwayOrchestratorRecord { model.chats.first { $0.id == chat.id } ?? chat }
     private var messages: [PathwayOrchestratorRecord] { model.messages[chat.id] ?? [] }
+    private var timeline: [PathwayOrchestratorTimelineEntry] {
+        let work = (model.work[chat.id] ?? []).sorted {
+            if $0.number("createdAt") != $1.number("createdAt") {
+                return $0.number("createdAt") < $1.number("createdAt")
+            }
+            return $0.id < $1.id
+        }
+        var entries: [PathwayOrchestratorTimelineEntry] = []
+        var cursor = 0
+        for message in messages {
+            while cursor < work.count && work[cursor].number("createdAt") < message.number("createdAt") {
+                entries.append(.init(record: work[cursor], isWork: true))
+                cursor += 1
+            }
+            entries.append(.init(record: message, isWork: false))
+        }
+        entries.append(contentsOf: work.dropFirst(cursor).map { .init(record: $0, isWork: true) })
+        return entries
+    }
     private var activityDeadlines: [Date] {
         ([Date()] + (model.activity[chat.id] ?? []).map {
             Date(timeIntervalSince1970: Double($0.number("expiresAt")) / 1000)
@@ -105,25 +145,15 @@ private struct PathwayOrchestratorConversation: View {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     if model.nextBefore[chat.id] != nil { Button("Earlier messages") { Task { do { try await model.loadEarlier(chat.id) } catch { model.errorMessage = error.localizedDescription } } }.frame(maxWidth: .infinity) }
                     if messages.isEmpty { ContentUnavailableView("A continuing conversation", systemImage: "bubble.left.and.bubble.right", description: Text("Share what you need, and your orchestrators will coordinate the work.")) }
-                    ForEach(messages) { message in bubble(message).id(message.id) }
-                    ForEach(model.work[chat.id] ?? []) { item in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label(item.string("title"), systemImage: "checklist").font(.headline)
-                            Text(item.string("status").capitalized).font(.caption).foregroundStyle(.secondary)
-                            Text(item.string("detail")).font(.subheadline)
-                            if !item.string("threadId").isEmpty {
-                                Button("Open thread") {
-                                    guard let project = appModel.cloud.projects.first(where: { $0.project.id == item.string("projectId") }) else { model.errorMessage = "This project's environment is unavailable."; return }
-                                    appModel.pendingThreadRoute = .init(companyId: project.companyId, environmentId: item.string("environmentId"), threadId: item.string("threadId")); onOpenWork()
-                                }
-                            }
-                        }.padding().frame(maxWidth: .infinity, alignment: .leading).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 18))
+                    ForEach(timeline) { entry in
+                        if entry.isWork { workCard(entry.record) }
+                        else { bubble(entry.record) }
                     }
                     Color.clear.frame(height: 1).id("latest").onAppear { followsLatest = true }.onDisappear { followsLatest = false }
                 }.padding()
             }
             .defaultScrollAnchor(.bottom)
-            .onChange(of: messages.last?.id) { if followsLatest { proxy.scrollTo("latest", anchor: .bottom) } }
+            .onChange(of: timeline.map(\.id)) { if followsLatest { proxy.scrollTo("latest", anchor: .bottom) } }
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
@@ -132,12 +162,9 @@ private struct PathwayOrchestratorConversation: View {
                     TimelineView(.explicit(activityDeadlines)) { timeline in
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(activeContacts(at: timeline.date)) { contact in
-                                HStack(spacing: 8) {
-                                    PathwayOrchestratorAvatar(name: contact.string("name"), color: contact.string("color"))
-                                        .scaleEffect(0.6).frame(width: 24, height: 24)
-                                    Text("•••").padding(.horizontal, 10).padding(.vertical, 4)
-                                        .background(.quaternary, in: Capsule()).accessibilityHidden(true)
-                                    Text("\(contact.string("name")) is thinking…").font(.caption).foregroundStyle(.secondary)
+                                HStack(spacing: 6) {
+                                    PathwayThinkingAvatar(contact: contact)
+                                    Text("\(contact.string("name")) is thinking").font(.caption).foregroundStyle(.secondary)
                                 }
                             }
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal)
@@ -163,6 +190,19 @@ private struct PathwayOrchestratorConversation: View {
         .toolbar { ToolbarItem(placement: .primaryAction) { Button("Conversation details", systemImage: "info.circle") { details = true } } }
         .sheet(isPresented: $details) { PathwayOrchestratorParticipants(chat: current) }
         .task(id: "\(chat.id):\(scenePhase == .active)") { if scenePhase == .active { await model.observeConversation(chat.id) } }
+    }
+    private func workCard(_ item: PathwayOrchestratorRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(item.string("title"), systemImage: "checklist").font(.headline)
+            Text(item.string("status").capitalized).font(.caption).foregroundStyle(.secondary)
+            Text(item.string("detail")).font(.subheadline)
+            if !item.string("threadId").isEmpty {
+                Button("Open thread") {
+                    guard let project = appModel.cloud.projects.first(where: { $0.project.id == item.string("projectId") }) else { model.errorMessage = "This project's environment is unavailable."; return }
+                    appModel.pendingThreadRoute = .init(companyId: project.companyId, environmentId: item.string("environmentId"), threadId: item.string("threadId")); onOpenWork()
+                }
+            }
+        }.padding().frame(maxWidth: .infinity, alignment: .leading).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 18))
     }
     private func receipt(_ message: PathwayOrchestratorRecord, own: Bool) -> String {
         let status = message.string("status")

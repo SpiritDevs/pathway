@@ -105,20 +105,17 @@ function Composer({ chat, activity }: { chat: OrchestratorChat; activity: Orches
         <div
           role="status"
           aria-live="polite"
-          className="flex min-h-10 flex-wrap items-center gap-3 px-2 pb-2"
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 empty:hidden [&:not(:empty)]:pb-2"
         >
           {contacts
             .filter((contact) => activeIds.has(contact.id))
             .map((contact) => (
-              <div key={contact.id} className="flex items-center gap-2">
-                <OrchestratorAvatar contact={contact} className="size-6" />
-                <span
-                  aria-hidden="true"
-                  className="rounded-full bg-muted px-2.5 py-1 text-xs tracking-widest text-muted-foreground"
-                >
-                  •••
-                </span>
-                <span className="text-xs text-muted-foreground">{contact.name} is thinking…</span>
+              <div key={contact.id} className="flex items-center gap-1.5">
+                <OrchestratorAvatar
+                  contact={contact}
+                  className="size-5 motion-safe:animate-status-pulse"
+                />
+                <span className="text-xs text-muted-foreground">{contact.name} is thinking</span>
               </div>
             ))}
         </div>

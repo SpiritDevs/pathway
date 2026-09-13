@@ -96,6 +96,7 @@ export const OrchestratorChat = Schema.Struct({
 export type OrchestratorChat = typeof OrchestratorChat.Type;
 export const OrchestratorWorkItem = Schema.Struct({
   id: Schema.String,
+  createdAt: Schema.optionalKey(Schema.Number),
   title: Schema.String,
   orchestratorId: Schema.String,
   environmentId: Schema.String,
@@ -189,6 +190,7 @@ export const DEFAULT_ORCHESTRATOR_REASONING = "high";
 
 /** Coordinator reasoning returns intentions; only the runtime executes allowed actions. */
 export const OrchestratorAction = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("readWork"), workId: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("stopWork"), workId: Schema.String }),
   Schema.Struct({
     kind: Schema.Literal("redirectWork"),
@@ -248,12 +250,14 @@ export const OrchestratorRun = Schema.Struct({
 export type OrchestratorRun = typeof OrchestratorRun.Type;
 
 export const OrchestratorPendingWorkResult = Schema.Struct({
+  readRequestId: Schema.optionalKey(Schema.String),
   runId: Schema.optionalKey(Schema.String),
   workId: Schema.String,
   threadId: Schema.String,
 });
 export type OrchestratorPendingWorkResult = typeof OrchestratorPendingWorkResult.Type;
 export const OrchestratorWorkResult = Schema.Struct({
+  readRequestId: Schema.optionalKey(Schema.String),
   workId: Schema.String,
   threadId: Schema.String,
   runId: Schema.String,

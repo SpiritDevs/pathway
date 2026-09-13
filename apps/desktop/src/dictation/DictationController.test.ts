@@ -131,6 +131,32 @@ describe("desktop dictation lifecycle", () => {
     expect(insert).toHaveBeenCalledWith("Hello from Pathway.");
   });
 
+  it.each(["hold", "locked"] as const)(
+    "returns %s dictation directly to idle after insertion",
+    async (mode) => {
+      const phases: string[] = [];
+      const { controller, insert } = await setup(
+        {},
+        { onState: (state) => phases.push(state.phase) },
+      );
+      await controller.start(mode);
+      await controller.stop();
+      expect(insert).toHaveBeenCalledWith("Hello from Pathway.");
+      expect(controller.getState()).toMatchObject({
+        phase: "idle",
+        mode: "hold",
+        result: null,
+        error: null,
+        durationMs: 0,
+        level: 0,
+      });
+      expect(phases).not.toContain("result");
+      expect(await controller.listHistory()).toMatchObject([
+        { text: "Hello from Pathway.", delivery: "inserted" },
+      ]);
+    },
+  );
+
   it("shows why insertion was unavailable and retains the text for copying", async () => {
     const { controller } = await setup(
       {},
@@ -163,7 +189,7 @@ describe("desktop dictation lifecycle", () => {
     expect(cleanup).toHaveBeenCalledWith(
       expect.objectContaining({ language: "fr", requireLoaded: true }),
     );
-    expect(controller.getState().result?.language).toBe("auto");
+    expect((await controller.listHistory())[0]?.language).toBe("auto");
   });
 
   it("clears a failed model download banner when retrying and after the retry succeeds", async () => {
@@ -331,7 +357,7 @@ describe("desktop dictation lifecycle", () => {
     expect(await NodeFSP.readdir(NodePath.join(directory, "temporary"))).toEqual(["unrelated.txt"]);
     await controller.start("hold");
     await controller.stop();
-    expect(controller.getState().result?.text).toBe("Hello from Pathway.");
+    expect((await controller.listHistory())[0]?.text).toBe("Hello from Pathway.");
     expect(await NodeFSP.readdir(NodePath.join(directory, "temporary"))).toEqual(["unrelated.txt"]);
   });
 
@@ -429,7 +455,7 @@ describe("desktop dictation lifecycle", () => {
       text: "Hello from Pathway.",
       cleanup: "unavailable",
     });
-    expect(controller.getState().error).toContain("Cleanup unavailable");
+    expect(controller.getState()).toMatchObject({ phase: "idle", result: null, error: null });
     expect(await NodeFSP.readdir(NodePath.join(directory, "temporary"))).toEqual([]);
   });
 
@@ -445,9 +471,9 @@ describe("desktop dictation lifecycle", () => {
     await controller.stop();
     expect(insert).toHaveBeenCalledWith(text);
     expect(controller.getState()).toMatchObject({
-      phase: "result",
+      phase: "idle",
       error: null,
-      result: { originalText, text, cleanup: "applied" },
+      result: null,
     });
     expect(await controller.listHistory()).toMatchObject([
       { originalText, text, cleanup: "applied" },

@@ -569,8 +569,19 @@ export class DictationController {
           error = "Your text is ready, but it could not be saved to history.";
         }
       }
-      if (this.current(session))
-        this.publish({ phase: "result", result: entry, durationMs: session.durationMs, error });
+      if (this.current(session)) {
+        if (delivery === "inserted")
+          this.publish({
+            phase: this.idlePhase(),
+            mode: "hold",
+            result: null,
+            level: 0,
+            durationMs: 0,
+            error: null,
+          });
+        else
+          this.publish({ phase: "result", result: entry, durationMs: session.durationMs, error });
+      }
     } catch (error) {
       if (this.current(session))
         this.publish({

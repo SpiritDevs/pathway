@@ -162,6 +162,72 @@ describe("tool-free coordinator reasoning", () => {
       ]);
     }),
   );
+  it.effect(
+    "reads a delegated conversation while it is still running without collecting a final result",
+    () =>
+      Effect.gen(function* () {
+        const captured: Array<{ text: string; readRequestId?: string }> = [];
+        const projection = {
+          runs: [{ id: "running", status: "running" }],
+          messages: [
+            { role: "user", streaming: false, text: "Check the status" },
+            { role: "assistant", streaming: false, text: "Verified finding" },
+            { role: "system", streaming: false, text: "Internal instructions" },
+            { role: "assistant", streaming: true, text: "Unfinished output" },
+          ],
+        } as unknown as OrchestrationV2ThreadProjection;
+        yield* collectOrchestratorResults(
+          {
+            ...backend().api,
+            pendingResults: Effect.succeed([
+              { workId: "work", threadId: "thread", readRequestId: "request" },
+            ]),
+            collectResult: (value) =>
+              Effect.sync(() => {
+                captured.push(value);
+                return true;
+              }),
+          },
+          () => Effect.succeed(projection),
+        );
+        expect(captured).toHaveLength(1);
+        expect(captured[0]!.readRequestId).toBe("request");
+        expect(captured[0]!.text).toContain("Thread status: running");
+        expect(captured[0]!.text).toContain("Check the status");
+        expect(captured[0]!.text).toContain("Verified finding");
+        expect(captured[0]!.text).not.toContain("Internal instructions");
+        expect(captured[0]!.text).not.toContain("Unfinished output");
+      }),
+  );
+  it.effect("bounds delegated reads and favors the latest visible conversation", () =>
+    Effect.gen(function* () {
+      const captured: string[] = [];
+      const projection = {
+        runs: [],
+        messages: Array.from({ length: 30 }, (_, index) => ({
+          role: "assistant",
+          streaming: false,
+          text: index === 29 ? "Latest finding" : "x".repeat(3000),
+        })),
+      } as unknown as OrchestrationV2ThreadProjection;
+      yield* collectOrchestratorResults(
+        {
+          ...backend().api,
+          pendingResults: Effect.succeed([
+            { workId: "work", threadId: "thread", readRequestId: "request" },
+          ]),
+          collectResult: (value) =>
+            Effect.sync(() => {
+              captured.push(value.text);
+              return true;
+            }),
+        },
+        () => Effect.succeed(projection),
+      );
+      expect(captured[0]!.length).toBeLessThanOrEqual(16000);
+      expect(captured[0]).toContain("Latest finding");
+    }),
+  );
   it.effect("retries an absent final answer instead of acknowledging an empty result", () =>
     Effect.gen(function* () {
       const captured: Array<unknown> = [];

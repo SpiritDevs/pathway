@@ -50,7 +50,8 @@ recording can last five minutes. The timer stays hidden until the final 30 secon
 and a limit warning appear. At five minutes, Pathway finishes normally.
 
 Pathway inserts into the editable field focused when processing finishes. Automatic insertion
-preserves your previous clipboard and does not submit a message or form. If no usable field is
+preserves your previous clipboard and does not submit a message or form. Successful insertion returns
+the bar straight to idle without showing a copy panel. If no usable field is
 focused, the result panel shows your text with **Copy text**. The clipboard changes only when you
 select Copy. If insertion could not be confirmed, check the destination before copying to avoid a
 duplicate.

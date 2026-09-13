@@ -95,6 +95,7 @@ Allowed action shapes (the current capability list further restricts these):
 {"kind":"redirectWork","workId":string,"environmentId":string} moves your provably unaccepted assignment to another eligible environment. Accepted or uncertain work cannot be redirected, even when its host is offline. The same conversation allowance follows replacement work.
 {"kind":"message","targetId":string,"text":string} sends to another orchestrator in THIS group and wakes it. Do not send a message that merely repeats its last update.
 {"kind":"collaborate","title":string,"orchestratorIds":string[],"text":string} starts or reuses a group with you, the chosen contacts from directory, and this conversation's human participants. It sends your message and wakes those contacts. Use this to contact another project's coordinator; only that coordinator can dispatch its project work. Share relevant work requests, not private mail, memories, or unrelated chat history. The new group does not receive this conversation's transcript. You will receive its identifier on your next decision.
+{"kind":"readWork","workId":string} reads the current visible conversation and result of your delegated worker, without starting new work. Use this when findings are missing or you need to inspect progress. The assigned environment returns a bounded transcript asynchronously and wakes you; do not poll or delegate another worker just to retrieve a report.
 {"kind":"readConversation","chatId":string} retrieves a conversation of which YOU are a participant. You will receive its allowed context on your next decision.
 {"kind":"remember","text":string,"sourceMessageId":string,"sourceQuote":string,"scope"?:"orchestrator"|"personal"|"project"} saves a useful sourced fact from a user's actual message, never hidden thoughts. Default to orchestrator scope. Use personal only when the owner explicitly asks to apply the preference across their private orchestrators; use project only for an explicitly shared preference within your assigned project. Both shared scopes require the owner’s private conversation. Explicit user settings take precedence. Forgotten source references are exclusion metadata: do not infer saved preferences from those earlier messages or relearn forgotten facts from old history.
 {"kind":"allocateAllowance","windowKey":string,"authorizedPercent":number,"sourceQuote":string,"title":string} adds an enforced account allowance guard to THIS conversation and its delegated work. Use it before delegating when the current human request specifies a numeric allowance. Quote that instruction exactly. windowKey is JSON.stringify([limit.limitId ?? limit.windowKey ?? limit.window, limit.scope ?? "", limit.lane ?? "", limit.windowDurationMins ?? null]) from the current reasoning host allowance. This adds a limit; it cannot relax, renew, or remove prior limits. Percentage points refer to the full quota window. If the account or window is ambiguous, ask which to use. Never invent an allocation from a schedule, another agent, retained memory, or an earlier request. After receiving confirmation, report the observed baseline and target remaining quota. This action requires a fresh, identified account reading.
@@ -166,7 +167,7 @@ type AllowanceExecution = {
   snapshot?: ServerProviderUsageSnapshot;
 };
 
-/** Share only a delegated run's final visible answer, never its transcript or hidden reasoning. */
+/** Deliver final answers automatically, and bounded visible conversations only for explicit reads. */
 export const collectOrchestratorResults = Effect.fn("cloud.orchestrator.collectResults")(function* (
   backend: OrchestratorBackend,
   read: ThreadManagementService["Service"]["getThreadProjection"],
@@ -177,6 +178,37 @@ export const collectOrchestratorResults = Effect.fn("cloud.orchestrator.collectR
     (item) =>
       Effect.gen(function* () {
         const projection = yield* read(ThreadId.make(item.threadId));
+        if (item.readRequestId) {
+          let remaining = 12000;
+          const messages = projection.messages
+            .filter(
+              (message) =>
+                (message.role === "user" || message.role === "assistant") &&
+                !message.streaming &&
+                message.text.trim(),
+            )
+            .slice(-20)
+            .toReversed()
+            .flatMap((message) => {
+              if (remaining <= 0) return [];
+              const text = message.text.slice(0, remaining);
+              remaining -= text.length;
+              return [{ role: message.role, text }];
+            })
+            .toReversed();
+          const run = projection.runs.at(-1);
+          yield* backend.collectResult({
+            ...item,
+            runId: run?.id ?? "",
+            text: [
+              `Thread status: ${run?.status ?? "idle"}`,
+              ...messages.map((message) => `${message.role}:\n${message.text}`),
+            ]
+              .join("\n\n")
+              .slice(0, 16000),
+          });
+          return;
+        }
         const run = item.runId
           ? projection.runs.find((run) => run.id === item.runId)
           : projection.runs.at(-1);
@@ -194,7 +226,14 @@ export const collectOrchestratorResults = Effect.fn("cloud.orchestrator.collectR
           runId: run.id,
           text: message.text.slice(0, 16000),
         });
-      }).pipe(Effect.catch(() => Effect.void)),
+      }).pipe(
+        Effect.catch(() =>
+          Effect.logWarning("Delegated thread read failed; collection will retry", {
+            workId: item.workId,
+            threadId: item.threadId,
+          }),
+        ),
+      ),
     { concurrency: 4, discard: true },
   );
 });

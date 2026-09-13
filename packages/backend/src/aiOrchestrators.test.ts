@@ -652,11 +652,17 @@ describe("coordinator reasoning claims and action boundaries", () => {
     ).toBeUndefined();
   });
 
-  it.each(["legacy", "observed"] as const)(
+  it.each(["legacy", "observed", "non-proactive"] as const)(
     "returns delayed findings for %s assignments, bound to the completed run",
     async (mode) => {
       const test = await coordinatorHarness();
       await seedCoordinatorProject(test.t);
+      if (mode === "non-proactive")
+        await test.owner.mutation(api.aiOrchestrators.configure, {
+          id: test.id,
+          revision: 1,
+          config: { ...config(), proactive: false },
+        });
       await test.owner.mutation(api.aiOrchestrators.cancelMessage, {
         chatId: test.chatId,
         messageId: "greeting",
@@ -750,6 +756,75 @@ describe("coordinator reasoning claims and action boundaries", () => {
           });
         });
       }
+      await test.owner.mutation(api.aiOrchestrators.send, {
+        chatId: test.chatId,
+        id: "inspect-worker",
+        text: "Read the delegated conversation",
+      });
+      const inspect = (await test.claim())!;
+      const readDecision = {
+        companyId: "workspace",
+        jobId: inspect.id,
+        generation: inspect.generation,
+        result: { ...decision(), actions: [{ kind: "readWork", workId: "result-work" }] },
+      };
+      await test.t.run(async (ctx) => {
+        const row = await ctx.db.query("aiOrchestratorWork").first();
+        await ctx.db.patch(row!._id, { chatId: "another-conversation" });
+      });
+      await expect(
+        test.environment().mutation(api.aiOrchestratorJobs.complete, readDecision),
+      ).rejects.toThrow("Only this conversation");
+      await test.t.run(async (ctx) => {
+        const row = await ctx.db.query("aiOrchestratorWork").first();
+        await ctx.db.patch(row!._id, { chatId: test.chatId });
+      });
+      await test.environment().mutation(api.aiOrchestratorJobs.complete, readDecision);
+      const requested = (
+        await test.environment().query(api.aiOrchestratorJobs.pendingWorkResults, {
+          companyId: "workspace",
+        })
+      ).find((item) => item.readRequestId);
+      expect(requested?.readRequestId).toEqual(expect.any(String));
+      const excerpt = {
+        ...requested!,
+        companyId: "workspace",
+        runId: "run-done",
+        text: "assistant: The verified findings are available directly from the worker.",
+      };
+      expect(
+        await test
+          .environment("laptop")
+          .mutation(api.aiOrchestratorJobs.collectWorkResult, excerpt),
+      ).toBe(false);
+      expect(
+        await test.environment().mutation(api.aiOrchestratorJobs.collectWorkResult, {
+          ...excerpt,
+          readRequestId: "stale",
+        }),
+      ).toBe(false);
+      expect(
+        await test.environment().mutation(api.aiOrchestratorJobs.collectWorkResult, excerpt),
+      ).toBe(true);
+      expect(
+        await test.environment().mutation(api.aiOrchestratorJobs.collectWorkResult, excerpt),
+      ).toBe(false);
+      const readReply = (await test.claim())!;
+      expect(JSON.parse(readReply.context).actionResults).toContain(
+        "The verified findings are available directly from the worker.",
+      );
+      expect(JSON.parse(readReply.context).work[0].conversation).toContain(
+        "The verified findings are available directly from the worker.",
+      );
+      expect(readReply.context).toContain(
+        "The verified findings are available directly from the worker.",
+      );
+      await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+        companyId: "workspace",
+        jobId: readReply.id,
+        generation: readReply.generation,
+        result: decision(),
+      });
       const args = {
         companyId: "workspace",
         workId: "result-work",
@@ -1287,7 +1362,22 @@ describe("coordinator delegation and stopping", () => {
     ).toBe(false);
     const work = await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId });
     expect(work).toHaveLength(1);
-    expect(work[0]).toMatchObject({ title: "Review priorities", projectId: null });
+    expect(work[0]).toMatchObject({
+      title: "Review priorities",
+      projectId: null,
+      createdAt: expect.any(Number),
+    });
+    const createdAt = work[0]!.createdAt;
+    await test.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("aiOrchestratorWork")
+        .withIndex("by_domain_id", (q) => q.eq("id", work[0]!.id))
+        .unique();
+      await ctx.db.patch(row!._id, { status: "completed", updatedAt: createdAt + 1000 });
+    });
+    expect(
+      (await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId }))[0]?.createdAt,
+    ).toBe(createdAt);
     await test.owner.mutation(api.aiOrchestrators.setStatus, {
       id: test.id,
       status: "paused",

@@ -126,14 +126,20 @@ const make = Effect.gen(function* () {
     ]);
   const position = (width: number, height: number) => {
     if (!overlay || overlay.isDestroyed()) return;
-    const area = (
-      display ?? Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint())
-    ).workArea;
+    const targetDisplay =
+      display ?? Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint());
+    const area = targetDisplay.workArea;
+    const phase = controller?.getState().phase;
+    const lowerBar =
+      phase === "recording" || phase === "starting" || (phase === "idle" && height <= 100);
+    const bottom = lowerBar
+      ? Math.min(area.y + area.height + 50, targetDisplay.bounds.y + targetDisplay.bounds.height)
+      : area.y + area.height;
     const safeWidth = Math.min(area.width, Math.max(80, Math.round(width)));
     const safeHeight = Math.min(area.height, Math.max(24, Math.round(height)));
     overlay.setBounds({
       x: Math.round(area.x + (area.width - safeWidth) / 2),
-      y: area.y + area.height - safeHeight,
+      y: bottom - safeHeight,
       width: safeWidth,
       height: safeHeight,
     });

@@ -837,7 +837,7 @@ export const work = query({
       if ((row.sourceSequence ?? 0) >= member.fromSequence && (await canSee(row)))
         visible.push(row);
     return visible.map(
-      ({ id, title, orchestratorId, environmentId, projectId, threadId, status, detail }) => ({
+      ({
         id,
         title,
         orchestratorId,
@@ -846,6 +846,17 @@ export const work = query({
         threadId,
         status,
         detail,
+        createdAt,
+      }) => ({
+        id,
+        title,
+        orchestratorId,
+        environmentId,
+        projectId,
+        threadId,
+        status,
+        detail,
+        createdAt,
       }),
     );
   },

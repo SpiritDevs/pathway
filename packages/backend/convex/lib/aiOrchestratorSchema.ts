@@ -214,6 +214,9 @@ export const aiOrchestratorTables = {
     companyId: v.optional(v.string()),
     completionNotified: v.optional(v.boolean()),
     sourceSequence: v.optional(v.number()),
+    readRequested: v.optional(v.boolean()),
+    readRequestId: v.optional(v.string()),
+    readResult: v.optional(v.string()),
     resultRequired: v.optional(v.boolean()),
     resultCollected: v.optional(v.boolean()),
     resultText: v.optional(v.string()),
@@ -228,6 +231,7 @@ export const aiOrchestratorTables = {
     .index("by_chat", ["chatId"])
     .index("by_command", ["commandId"])
     .index("by_company_status", ["companyId", "status"])
+    .index("by_environment_read", ["companyId", "environmentId", "readRequested"])
     .index("by_environment_result", ["companyId", "environmentId", "resultCollected", "status"])
     .index("by_company_notification", ["companyId", "completionNotified", "status"])
     .index("by_orchestrator_notification", ["orchestratorId", "completionNotified", "status"])

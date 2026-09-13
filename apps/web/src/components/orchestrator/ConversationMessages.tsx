@@ -11,6 +11,7 @@ import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { useOrchestrators } from "./OrchestratorContext";
 import { ConversationAvatar, OrchestratorAvatar } from "./OrchestratorAvatar";
+import { buildConversationTimeline } from "./conversationTimeline";
 import { WorkList } from "./ConversationMetadata";
 
 type MessagePage = OrchestratorMessagePage;
@@ -44,6 +45,7 @@ export function ConversationMessages({
         (message.text + message.senderName).toLowerCase().includes(search.toLowerCase()),
       )
     : messages;
+  const timeline = buildConversationTimeline(visible, search ? [] : work);
   useLayoutEffect(() => {
     const element = container.current;
     if (!element || !result.value) return;
@@ -52,7 +54,7 @@ export function ConversationMessages({
       initialized.current = true;
       pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
     } else if (pinned.current) element.scrollTop = element.scrollHeight;
-  }, [result.value, chat.id, state.scrollPositions]);
+  }, [result.value, work, chat.id, state.scrollPositions]);
   const lastSequence = result.value?.messages.at(-1)?.sequence;
   useEffect(() => {
     const client = state.client;
@@ -138,7 +140,19 @@ export function ConversationMessages({
             </p>
           </div>
         )}
-        {visible.map((message, index) => {
+        {timeline.map((entry) => {
+          if (entry.kind === "work") {
+            return (
+              <div key={entry.id} className="ml-10 max-w-lg rounded-2xl border p-4">
+                <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
+                  <ListTodoIcon className="size-4" />
+                  Delegated work
+                </div>
+                <WorkList items={entry.items} />
+              </div>
+            );
+          }
+          const { message, index } = entry;
           const own = message.senderKind === "user" && message.senderId === state.accountID;
           const contact = state.contacts.find((item) => item.id === message.senderId);
           const newDay =
@@ -273,15 +287,6 @@ export function ConversationMessages({
           <p className="text-center text-sm text-muted-foreground">
             No matching messages in the loaded history.
           </p>
-        )}
-        {!search && work.length > 0 && (
-          <div className="ml-10 max-w-lg rounded-2xl border p-4">
-            <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
-              <ListTodoIcon className="size-4" />
-              Delegated work
-            </div>
-            <WorkList items={work.slice(0, 4)} />
-          </div>
         )}
       </div>
     </div>

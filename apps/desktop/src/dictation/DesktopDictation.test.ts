@@ -28,7 +28,10 @@ vi.mock("electron", async () => {
     Menu: { buildFromTemplate: (items: unknown) => items },
     screen: {
       getCursorScreenPoint: () => ({ x: 100, y: 100 }),
-      getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+      getDisplayNearestPoint: () => ({
+        workArea: { x: 0, y: 0, width: 1920, height: 1080 },
+        bounds: { x: 0, y: 0, width: 1920, height: 1140 },
+      }),
     },
     BrowserWindow: function (options: Electron.BrowserWindowConstructorOptions) {
       return native.createOverlay(options);
