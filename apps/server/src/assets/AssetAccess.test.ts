@@ -1,8 +1,15 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { AssetPreviewTypeValidationError, ThreadId } from "@spiritdevs/contracts";
+import {
+  AssetPreviewTypeValidationError,
+  MessageId,
+  ThreadId,
+  TurnItemId,
+  type OrchestrationV2TurnItem,
+} from "@spiritdevs/contracts";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@spiritdevs/shared/projectFavicon";
 import { describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -30,7 +37,139 @@ const testLayer = Layer.mergeAll(
   ServerSecretStore.layer.pipe(Layer.provide(configLayer)),
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
+function visualizationItem(path: string, threadId = ThreadId.make("source-thread")) {
+  return {
+    id: TurnItemId.make("visualization-item"),
+    threadId,
+    runId: null,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 0,
+    status: "completed",
+    title: null,
+    startedAt: null,
+    completedAt: null,
+    updatedAt: DateTime.makeUnsafe(0),
+    type: "assistant_message",
+    messageId: MessageId.make("visualization-message"),
+    streaming: false,
+    text: `Here is the preview.\n\nvisualize${JSON.stringify({ path })}`,
+  } satisfies OrchestrationV2TurnItem;
+}
+
 describe("AssetAccess", () => {
+  it.effect(
+    "serves an exact visualization outside the workspace without granting sibling access",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-visualization-" });
+        const file = path.join(root, "preview #1.html");
+        yield* fs.writeFileString(file, "<button>Preview</button>");
+        yield* fs.writeFileString(path.join(root, "other.html"), "<p>Other</p>");
+        const result = yield* issueAssetUrl({
+          resource: {
+            _tag: "visualization-file",
+            threadId: ThreadId.make("source-thread"),
+            path: file,
+          },
+          workspaceRoot: "/unrelated/workspace",
+          visualizationItems: [visualizationItem(file)],
+        });
+        const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+        const token = suffix.slice(0, suffix.indexOf("/"));
+        expect(yield* resolveAsset(token, "preview%20%231.html")).toEqual({
+          kind: "file",
+          path: yield* fs.realPath(file),
+        });
+        expect(yield* resolveAsset(token, "other.html")).toBeNull();
+        expect(yield* resolveAsset(token, "../preview%20%231.html")).toBeNull();
+        expect(yield* resolveAsset(`${token}tampered`, "preview%20%231.html")).toBeNull();
+        yield* TestClock.setTime(result.expiresAt);
+        expect(yield* resolveAsset(token, "preview%20%231.html")).toBeNull();
+      }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect(
+    "denies guessed host HTML paths without an assistant reference in the source thread",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({
+          prefix: "pathway-visualization-provenance-",
+        });
+        const file = path.join(root, "private.html");
+        yield* fs.writeFileString(file, "<p>Private host file</p>");
+        const item = visualizationItem(file);
+        const userItem = {
+          ...item,
+          type: "user_message",
+          createdBy: "user",
+          creationSource: "web",
+          inputIntent: "turn_start",
+          attachments: [],
+        } satisfies OrchestrationV2TurnItem;
+        const invalidSources: Array<ReadonlyArray<OrchestrationV2TurnItem> | undefined> = [
+          undefined,
+          [],
+          [userItem],
+          [visualizationItem(file, ThreadId.make("unrelated-thread"))],
+          [visualizationItem(path.join(root, "different.html"))],
+          [{ ...item, text: file }],
+          [{ ...item, text: item.text.slice(0, -2) }],
+        ];
+        for (const visualizationItems of invalidSources) {
+          const error = yield* issueAssetUrl({
+            resource: { _tag: "visualization-file", threadId: item.threadId, path: file },
+            ...(visualizationItems === undefined ? {} : { visualizationItems }),
+          }).pipe(Effect.flip);
+          expect(error._tag).toBe("AssetWorkspaceAssetNotFoundError");
+        }
+        // A request for the inherited item's actual source thread remains authorized.
+        const allowed = yield* issueAssetUrl({
+          resource: { _tag: "visualization-file", threadId: item.threadId, path: file },
+          visualizationItems: [item],
+        });
+        expect(allowed.relativeUrl).toContain("/api/assets/");
+      }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("rejects missing, non-HTML and non-file visualization paths", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-visualization-invalid-" });
+      yield* fs.makeDirectory(path.join(root, "directory.html"));
+      yield* fs.writeFileString(path.join(root, "secret.txt"), "secret");
+      yield* fs.symlink(path.join(root, "secret.txt"), path.join(root, "alias.html"));
+      for (const file of [
+        "relative.html",
+        "https://example.com/file.html",
+        path.join(root, "secret.txt"),
+        path.join(root, "missing.html"),
+        path.join(root, "directory.html"),
+        path.join(root, "alias.html"),
+      ]) {
+        const error = yield* issueAssetUrl({
+          resource: {
+            _tag: "visualization-file",
+            threadId: ThreadId.make("thread"),
+            path: file,
+          },
+          visualizationItems: [visualizationItem(file, ThreadId.make("thread"))],
+        }).pipe(Effect.flip);
+        expect(["AssetPreviewTypeValidationError", "AssetWorkspaceAssetNotFoundError"]).toContain(
+          error._tag,
+        );
+      }
+    }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect("signs exact image filenames containing spaces, Unicode and URL delimiters", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -208,6 +347,42 @@ describe("AssetAccess", () => {
       });
       expect(yield* resolveAsset(token, "other.png")).toBeNull();
       expect(yield* resolveAsset(token, "../icon.png")).toBeNull();
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("issues exact workspace URLs for video previews", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "pathway-asset-image-workspace-",
+      });
+      const assetsDirectory = path.join(root, "assets");
+      const imagePath = path.join(assetsDirectory, "clip.mp4");
+      const siblingPath = path.join(assetsDirectory, "other.mp4");
+      yield* fileSystem.makeDirectory(assetsDirectory, { recursive: true });
+      yield* fileSystem.writeFile(imagePath, new Uint8Array([137, 80, 78, 71]));
+      yield* fileSystem.writeFile(siblingPath, new Uint8Array([137, 80, 78, 71]));
+      const canonicalImagePath = yield* fileSystem.realPath(imagePath);
+
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "workspace-file",
+          threadId: ThreadId.make("thread-1"),
+          path: imagePath,
+        },
+        workspaceRoot: root,
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separatorIndex = suffix.indexOf("/");
+      const token = suffix.slice(0, separatorIndex);
+
+      expect(yield* resolveAsset(token, "clip.mp4")).toEqual({
+        kind: "file",
+        path: canonicalImagePath,
+      });
+      expect(yield* resolveAsset(token, "other.mp4")).toBeNull();
+      expect(yield* resolveAsset(token, "../clip.mp4")).toBeNull();
     }).pipe(Effect.provide(testLayer)),
   );
 

@@ -28,6 +28,7 @@ import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
 import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
+import { Route as SettingsTimeTrackerRouteImport } from './routes/settings.time-tracker'
 import { Route as SettingsSyncRouteImport } from './routes/settings.sync'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsSnapShotRouteImport } from './routes/settings.snap-shot'
@@ -47,6 +48,7 @@ import { Route as SettingsIntegrationsRouteImport } from './routes/settings.inte
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
 import { Route as SettingsEnvironmentsRouteImport } from './routes/settings.environments'
 import { Route as SettingsEmailRouteImport } from './routes/settings.email'
+import { Route as SettingsDictationRouteImport } from './routes/settings.dictation'
 import { Route as SettingsDiagnosticsRouteImport } from './routes/settings.diagnostics'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
 import { Route as SettingsCompanyTeamsRouteImport } from './routes/settings.company-teams'
@@ -62,6 +64,11 @@ import { Route as ChatThreadsRouteImport } from './routes/_chat.threads'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as SettingsProjectsProjectKeyRouteImport } from './routes/settings.projects_.$projectKey'
 import { Route as SettingsEmailEnvironmentIdRouteImport } from './routes/settings.email_.$environmentId'
+import { Route as SettingsDictationSettingsRouteImport } from './routes/settings.dictation_.settings'
+import { Route as SettingsDictationPreviewRouteImport } from './routes/settings.dictation_.preview'
+import { Route as SettingsDictationModelsRouteImport } from './routes/settings.dictation_.models'
+import { Route as SettingsDictationHistoryRouteImport } from './routes/settings.dictation_.history'
+import { Route as SettingsDictationDictionaryRouteImport } from './routes/settings.dictation_.dictionary'
 import { Route as SettingsAppearanceActionPaletteRouteImport } from './routes/settings.appearance_.action-palette'
 import { Route as IssuesMilestonesMilestoneIdRouteImport } from './routes/issues_.milestones_.$milestoneId'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
@@ -163,6 +170,11 @@ const SettingsUsageRoute = SettingsUsageRouteImport.update({
   path: '/usage',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsTimeTrackerRoute = SettingsTimeTrackerRouteImport.update({
+  id: '/time-tracker',
+  path: '/time-tracker',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsSyncRoute = SettingsSyncRouteImport.update({
   id: '/sync',
   path: '/sync',
@@ -260,6 +272,11 @@ const SettingsEmailRoute = SettingsEmailRouteImport.update({
   path: '/email',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsDictationRoute = SettingsDictationRouteImport.update({
+  id: '/dictation',
+  path: '/dictation',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsDiagnosticsRoute = SettingsDiagnosticsRouteImport.update({
   id: '/diagnostics',
   path: '/diagnostics',
@@ -337,6 +354,35 @@ const SettingsEmailEnvironmentIdRoute =
     path: '/email/$environmentId',
     getParentRoute: () => SettingsRoute,
   } as any)
+const SettingsDictationSettingsRoute =
+  SettingsDictationSettingsRouteImport.update({
+    id: '/dictation_/settings',
+    path: '/dictation/settings',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsDictationPreviewRoute =
+  SettingsDictationPreviewRouteImport.update({
+    id: '/dictation_/preview',
+    path: '/dictation/preview',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsDictationModelsRoute = SettingsDictationModelsRouteImport.update({
+  id: '/dictation_/models',
+  path: '/dictation/models',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsDictationHistoryRoute =
+  SettingsDictationHistoryRouteImport.update({
+    id: '/dictation_/history',
+    path: '/dictation/history',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsDictationDictionaryRoute =
+  SettingsDictationDictionaryRouteImport.update({
+    id: '/dictation_/dictionary',
+    path: '/dictation/dictionary',
+    getParentRoute: () => SettingsRoute,
+  } as any)
 const SettingsAppearanceActionPaletteRoute =
   SettingsAppearanceActionPaletteRouteImport.update({
     id: '/appearance_/action-palette',
@@ -402,6 +448,7 @@ export interface FileRoutesByFullPath {
   '/settings/company-teams': typeof SettingsCompanyTeamsRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
+  '/settings/dictation': typeof SettingsDictationRoute
   '/settings/email': typeof SettingsEmailRoute
   '/settings/environments': typeof SettingsEnvironmentsRoute
   '/settings/general': typeof SettingsGeneralRoute
@@ -421,12 +468,18 @@ export interface FileRoutesByFullPath {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/sync': typeof SettingsSyncRoute
+  '/settings/time-tracker': typeof SettingsTimeTrackerRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/projects/': typeof ProjectsIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/issues/milestones/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
   '/settings/appearance/action-palette': typeof SettingsAppearanceActionPaletteRoute
+  '/settings/dictation/dictionary': typeof SettingsDictationDictionaryRoute
+  '/settings/dictation/history': typeof SettingsDictationHistoryRoute
+  '/settings/dictation/models': typeof SettingsDictationModelsRoute
+  '/settings/dictation/preview': typeof SettingsDictationPreviewRoute
+  '/settings/dictation/settings': typeof SettingsDictationSettingsRoute
   '/settings/email/$environmentId': typeof SettingsEmailEnvironmentIdRoute
   '/settings/projects/$projectKey': typeof SettingsProjectsProjectKeyRoute
   '/threads/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
@@ -461,6 +514,7 @@ export interface FileRoutesByTo {
   '/settings/company-teams': typeof SettingsCompanyTeamsRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
+  '/settings/dictation': typeof SettingsDictationRoute
   '/settings/email': typeof SettingsEmailRoute
   '/settings/environments': typeof SettingsEnvironmentsRoute
   '/settings/general': typeof SettingsGeneralRoute
@@ -480,12 +534,18 @@ export interface FileRoutesByTo {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/sync': typeof SettingsSyncRoute
+  '/settings/time-tracker': typeof SettingsTimeTrackerRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/projects': typeof ProjectsIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/issues/milestones/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
   '/settings/appearance/action-palette': typeof SettingsAppearanceActionPaletteRoute
+  '/settings/dictation/dictionary': typeof SettingsDictationDictionaryRoute
+  '/settings/dictation/history': typeof SettingsDictationHistoryRoute
+  '/settings/dictation/models': typeof SettingsDictationModelsRoute
+  '/settings/dictation/preview': typeof SettingsDictationPreviewRoute
+  '/settings/dictation/settings': typeof SettingsDictationSettingsRoute
   '/settings/email/$environmentId': typeof SettingsEmailEnvironmentIdRoute
   '/settings/projects/$projectKey': typeof SettingsProjectsProjectKeyRoute
   '/threads/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
@@ -523,6 +583,7 @@ export interface FileRoutesById {
   '/settings/company-teams': typeof SettingsCompanyTeamsRoute
   '/settings/connections': typeof SettingsConnectionsRoute
   '/settings/diagnostics': typeof SettingsDiagnosticsRoute
+  '/settings/dictation': typeof SettingsDictationRoute
   '/settings/email': typeof SettingsEmailRoute
   '/settings/environments': typeof SettingsEnvironmentsRoute
   '/settings/general': typeof SettingsGeneralRoute
@@ -542,12 +603,18 @@ export interface FileRoutesById {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/sync': typeof SettingsSyncRoute
+  '/settings/time-tracker': typeof SettingsTimeTrackerRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/projects/': typeof ProjectsIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
   '/issues_/milestones_/$milestoneId': typeof IssuesMilestonesMilestoneIdRoute
   '/settings/appearance_/action-palette': typeof SettingsAppearanceActionPaletteRoute
+  '/settings/dictation_/dictionary': typeof SettingsDictationDictionaryRoute
+  '/settings/dictation_/history': typeof SettingsDictationHistoryRoute
+  '/settings/dictation_/models': typeof SettingsDictationModelsRoute
+  '/settings/dictation_/preview': typeof SettingsDictationPreviewRoute
+  '/settings/dictation_/settings': typeof SettingsDictationSettingsRoute
   '/settings/email_/$environmentId': typeof SettingsEmailEnvironmentIdRoute
   '/settings/projects_/$projectKey': typeof SettingsProjectsProjectKeyRoute
   '/_chat/threads_/$environmentId/$threadId': typeof ChatThreadsEnvironmentIdThreadIdRoute
@@ -585,6 +652,7 @@ export interface FileRouteTypes {
     | '/settings/company-teams'
     | '/settings/connections'
     | '/settings/diagnostics'
+    | '/settings/dictation'
     | '/settings/email'
     | '/settings/environments'
     | '/settings/general'
@@ -604,12 +672,18 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/sync'
+    | '/settings/time-tracker'
     | '/settings/usage'
     | '/projects/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
     | '/issues/milestones/$milestoneId'
     | '/settings/appearance/action-palette'
+    | '/settings/dictation/dictionary'
+    | '/settings/dictation/history'
+    | '/settings/dictation/models'
+    | '/settings/dictation/preview'
+    | '/settings/dictation/settings'
     | '/settings/email/$environmentId'
     | '/settings/projects/$projectKey'
     | '/threads/$environmentId/$threadId'
@@ -644,6 +718,7 @@ export interface FileRouteTypes {
     | '/settings/company-teams'
     | '/settings/connections'
     | '/settings/diagnostics'
+    | '/settings/dictation'
     | '/settings/email'
     | '/settings/environments'
     | '/settings/general'
@@ -663,12 +738,18 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/sync'
+    | '/settings/time-tracker'
     | '/settings/usage'
     | '/projects'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
     | '/issues/milestones/$milestoneId'
     | '/settings/appearance/action-palette'
+    | '/settings/dictation/dictionary'
+    | '/settings/dictation/history'
+    | '/settings/dictation/models'
+    | '/settings/dictation/preview'
+    | '/settings/dictation/settings'
     | '/settings/email/$environmentId'
     | '/settings/projects/$projectKey'
     | '/threads/$environmentId/$threadId'
@@ -705,6 +786,7 @@ export interface FileRouteTypes {
     | '/settings/company-teams'
     | '/settings/connections'
     | '/settings/diagnostics'
+    | '/settings/dictation'
     | '/settings/email'
     | '/settings/environments'
     | '/settings/general'
@@ -724,12 +806,18 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/sync'
+    | '/settings/time-tracker'
     | '/settings/usage'
     | '/projects/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
     | '/issues_/milestones_/$milestoneId'
     | '/settings/appearance_/action-palette'
+    | '/settings/dictation_/dictionary'
+    | '/settings/dictation_/history'
+    | '/settings/dictation_/models'
+    | '/settings/dictation_/preview'
+    | '/settings/dictation_/settings'
     | '/settings/email_/$environmentId'
     | '/settings/projects_/$projectKey'
     | '/_chat/threads_/$environmentId/$threadId'
@@ -894,6 +982,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsUsageRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/time-tracker': {
+      id: '/settings/time-tracker'
+      path: '/time-tracker'
+      fullPath: '/settings/time-tracker'
+      preLoaderRoute: typeof SettingsTimeTrackerRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/sync': {
       id: '/settings/sync'
       path: '/sync'
@@ -1027,6 +1122,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsEmailRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/dictation': {
+      id: '/settings/dictation'
+      path: '/dictation'
+      fullPath: '/settings/dictation'
+      preLoaderRoute: typeof SettingsDictationRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/diagnostics': {
       id: '/settings/diagnostics'
       path: '/diagnostics'
@@ -1132,6 +1234,41 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsEmailEnvironmentIdRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/dictation_/settings': {
+      id: '/settings/dictation_/settings'
+      path: '/dictation/settings'
+      fullPath: '/settings/dictation/settings'
+      preLoaderRoute: typeof SettingsDictationSettingsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/dictation_/preview': {
+      id: '/settings/dictation_/preview'
+      path: '/dictation/preview'
+      fullPath: '/settings/dictation/preview'
+      preLoaderRoute: typeof SettingsDictationPreviewRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/dictation_/models': {
+      id: '/settings/dictation_/models'
+      path: '/dictation/models'
+      fullPath: '/settings/dictation/models'
+      preLoaderRoute: typeof SettingsDictationModelsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/dictation_/history': {
+      id: '/settings/dictation_/history'
+      path: '/dictation/history'
+      fullPath: '/settings/dictation/history'
+      preLoaderRoute: typeof SettingsDictationHistoryRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/dictation_/dictionary': {
+      id: '/settings/dictation_/dictionary'
+      path: '/dictation/dictionary'
+      fullPath: '/settings/dictation/dictionary'
+      preLoaderRoute: typeof SettingsDictationDictionaryRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/appearance_/action-palette': {
       id: '/settings/appearance_/action-palette'
       path: '/appearance/action-palette'
@@ -1220,6 +1357,7 @@ interface SettingsRouteChildren {
   SettingsCompanyTeamsRoute: typeof SettingsCompanyTeamsRoute
   SettingsConnectionsRoute: typeof SettingsConnectionsRoute
   SettingsDiagnosticsRoute: typeof SettingsDiagnosticsRoute
+  SettingsDictationRoute: typeof SettingsDictationRoute
   SettingsEmailRoute: typeof SettingsEmailRoute
   SettingsEnvironmentsRoute: typeof SettingsEnvironmentsRoute
   SettingsGeneralRoute: typeof SettingsGeneralRoute
@@ -1239,8 +1377,14 @@ interface SettingsRouteChildren {
   SettingsSnapShotRoute: typeof SettingsSnapShotRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
   SettingsSyncRoute: typeof SettingsSyncRoute
+  SettingsTimeTrackerRoute: typeof SettingsTimeTrackerRoute
   SettingsUsageRoute: typeof SettingsUsageRoute
   SettingsAppearanceActionPaletteRoute: typeof SettingsAppearanceActionPaletteRoute
+  SettingsDictationDictionaryRoute: typeof SettingsDictationDictionaryRoute
+  SettingsDictationHistoryRoute: typeof SettingsDictationHistoryRoute
+  SettingsDictationModelsRoute: typeof SettingsDictationModelsRoute
+  SettingsDictationPreviewRoute: typeof SettingsDictationPreviewRoute
+  SettingsDictationSettingsRoute: typeof SettingsDictationSettingsRoute
   SettingsEmailEnvironmentIdRoute: typeof SettingsEmailEnvironmentIdRoute
   SettingsProjectsProjectKeyRoute: typeof SettingsProjectsProjectKeyRoute
 }
@@ -1254,6 +1398,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsCompanyTeamsRoute: SettingsCompanyTeamsRoute,
   SettingsConnectionsRoute: SettingsConnectionsRoute,
   SettingsDiagnosticsRoute: SettingsDiagnosticsRoute,
+  SettingsDictationRoute: SettingsDictationRoute,
   SettingsEmailRoute: SettingsEmailRoute,
   SettingsEnvironmentsRoute: SettingsEnvironmentsRoute,
   SettingsGeneralRoute: SettingsGeneralRoute,
@@ -1273,8 +1418,14 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsSnapShotRoute: SettingsSnapShotRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
   SettingsSyncRoute: SettingsSyncRoute,
+  SettingsTimeTrackerRoute: SettingsTimeTrackerRoute,
   SettingsUsageRoute: SettingsUsageRoute,
   SettingsAppearanceActionPaletteRoute: SettingsAppearanceActionPaletteRoute,
+  SettingsDictationDictionaryRoute: SettingsDictationDictionaryRoute,
+  SettingsDictationHistoryRoute: SettingsDictationHistoryRoute,
+  SettingsDictationModelsRoute: SettingsDictationModelsRoute,
+  SettingsDictationPreviewRoute: SettingsDictationPreviewRoute,
+  SettingsDictationSettingsRoute: SettingsDictationSettingsRoute,
   SettingsEmailEnvironmentIdRoute: SettingsEmailEnvironmentIdRoute,
   SettingsProjectsProjectKeyRoute: SettingsProjectsProjectKeyRoute,
 }

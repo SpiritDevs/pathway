@@ -252,12 +252,12 @@ describe("buildIssueStartWorkPrompt", () => {
       ...base,
       relations: [
         { label: "Blocked by", key: "PAT-3", title: "Auth rewrite" },
-        { label: "Sub-issue of", key: "PAT-1", title: "Login epic" },
+        { label: "Subtask of", key: "PAT-1", title: "Login epic" },
       ],
     });
 
     expect(prompt).toContain(
-      "## Related\n- Blocked by: PAT-3 — Auth rewrite\n- Sub-issue of: PAT-1 — Login epic",
+      "## Related\n- Blocked by: PAT-3 — Auth rewrite\n- Subtask of: PAT-1 — Login epic",
     );
   });
 
@@ -271,7 +271,7 @@ describe("buildIssueStartWorkPrompt", () => {
     expect(prompt).toContain("Pathway MCP's `issues_get` tool");
     expect(prompt).toContain("`issues_update` and `issues_comment`");
     expect(prompt).toContain("`issues_comment_evidence`");
-    expect(prompt).toContain("do not use Linear or another external issue tracker");
+    expect(prompt).toContain("do not use Linear or another external task tracker");
   });
 
   it("adds a due date to the metadata line when the issue has one", () => {
@@ -338,10 +338,10 @@ describe("buildIssuesTalkPrompt", () => {
     const prompt = buildIssuesTalkPrompt(selected, "http://localhost:5733");
     expect(prompt).toContain('<issue id="i1" key="PAT-12" title="Login test is flaky"');
     expect(prompt).toContain('<issue id="i2" key="PAT-18" title="Retries hide auth failures"');
-    expect(prompt).toContain("reading each issue with Pathway MCP's `issues_get` tool");
+    expect(prompt).toContain("reading each task with Pathway MCP's `issues_get` tool");
     expect(prompt).toContain("link this thread to each one with `issues_link_thread`");
-    expect(prompt).toContain("Use each issue's own project as its context");
-    expect(prompt).toContain("treat an issue without a project as a global question");
+    expect(prompt).toContain("Use each task's own project as its context");
+    expect(prompt).toContain("treat a task without a project as a global question");
     expect(prompt).toContain("Do not begin implementation unless I explicitly ask");
   });
 

@@ -59,6 +59,8 @@ import type {
 } from "./ProviderAdapter.ts";
 import { makeLayer as makeProviderAdapterRegistryLayer } from "./ProviderAdapterRegistry.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "./testkit/ReplayFixtureWorkspace.ts";
 
@@ -394,7 +396,13 @@ function makeTakeoverTestLayer(input: {
   // Built against whatever orchestrator it is provided, so the harness can wire
   // the real service into the effect worker and the test can call `recover`.
   const browserTakeoverLayer = browserTakeoverServiceLayer.pipe(
-    Layer.provide(Layer.merge(ThreadManagement.layer, input.registryLayer)),
+    Layer.provide(
+      Layer.mergeAll(
+        ThreadManagement.layer,
+        input.registryLayer,
+        ProjectionStore.layer.pipe(Layer.provide(SqlitePersistenceMemory), Layer.orDie),
+      ),
+    ),
   );
   const orchestratorLayer = makeOrchestratorV2ReplayLayerWithRegistry(
     {

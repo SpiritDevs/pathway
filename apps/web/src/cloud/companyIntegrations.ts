@@ -428,7 +428,7 @@ export function makeCompanyIntegrationsClient(options: {
     saveV2Watch: (args) => mutation(refs.saveV2Watch, args),
     deleteWatch: (args) => mutation<null>(refs.deleteWatch, args).then(() => undefined),
     getAutomation: (companyId) =>
-      query(refs.getAutomation, { companyId }, "Loading issue automation"),
+      query(refs.getAutomation, { companyId }, "Loading task automation"),
     saveAutomation: (args) => mutation(refs.saveAutomation, args),
     setAutomationEnabled: (companyId, enabled) =>
       mutation(refs.setAutomationEnabled, { companyId, enabled }),

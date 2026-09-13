@@ -1,6 +1,7 @@
 import { scopedThreadKey, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import {
   ALL_FOCUS_ID,
+  CONVERSATIONS_FOCUS_ID,
   sortFocuses,
   focusIdForThread,
   focusNotificationProjectKey,
@@ -89,11 +90,13 @@ export function buildFocusNotificationRows(input: {
             ? "Conversation"
             : (input.projectNamesByKey.get(projectKey) ??
               truncatedId(projectIdFromKey(projectKey))),
-        focusId: focus?.id ?? ALL_FOCUS_ID,
-        focusName: focus?.name ?? "All",
+        focusId: resolvedFocusId,
+        focusName:
+          resolvedFocusId === CONVERSATIONS_FOCUS_ID ? "Conversations" : (focus?.name ?? "All"),
         unread: notification.isRead === undefined ? index < unreadCount : !notification.isRead,
       };
-    });
+    })
+    .filter((row) => row.notification.isRead !== true);
 
   const rowsByFocus = new Map<ActiveFocusId, FocusNotificationRowModel[]>();
   for (const row of rows) {
@@ -117,6 +120,13 @@ export function buildFocusNotificationRows(input: {
       groups.push({ focusId, focusName: focus.name, rows: focusRows });
     }
   }
+  const conversations = rowsByFocus.get(CONVERSATIONS_FOCUS_ID);
+  if (conversations)
+    groups.push({
+      focusId: CONVERSATIONS_FOCUS_ID,
+      focusName: "Conversations",
+      rows: conversations,
+    });
   const unassignedRows = rowsByFocus.get(ALL_FOCUS_ID);
   if (unassignedRows !== undefined) {
     groups.push({ focusId: ALL_FOCUS_ID, focusName: "All", rows: unassignedRows });

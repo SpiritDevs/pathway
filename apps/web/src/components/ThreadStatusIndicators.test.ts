@@ -1,5 +1,6 @@
 import type { PullRequestCheckStatus, VcsStatusResult } from "@spiritdevs/contracts";
 import { effectiveSettled } from "@spiritdevs/client-runtime/state/thread-settled";
+import { aggregateThreadPullRequestState } from "../state/threadPullRequest";
 import { makeThreadFixture } from "../test-fixtures";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -8,6 +9,7 @@ import {
   prStatusIndicator,
   resolveThreadPr,
   resolveThreadPrBadge,
+  resolveThreadPrBadges,
   settledPrHoverColorClass,
 } from "./ThreadStatusIndicators";
 
@@ -129,6 +131,83 @@ describe("resolveThreadPrBadge", () => {
     isDraft: false,
     checks: [],
   };
+
+  it.each([
+    ["merged", "open"],
+    ["open", "merged"],
+  ] as const)(
+    "keeps a merged PR settled with branch %s and detail %s",
+    (branchState, detailState) => {
+      const badges = resolveThreadPrBadges({
+        branchPullRequest: { ...status().pr!, ...attached, state: branchState },
+        attachedQueries: [
+          { attachment: attached, data: { ...detail, state: detailState }, error: null },
+        ],
+        provider: undefined,
+      });
+      expect(badges).toHaveLength(1);
+      expect(badges[0]).toMatchObject({
+        changeRequestState: "merged",
+        status: { label: "PR merged" },
+      });
+      expect(
+        effectiveSettled(makeThreadFixture(), {
+          now: "2026-09-10T00:00:00.000Z",
+          autoSettleAfterDays: null,
+          changeRequestState: aggregateThreadPullRequestState(
+            badges.map((badge) => badge.changeRequestState),
+          ),
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("does not apply a different repository's merge to an attachment with the same number", () => {
+    expect(
+      resolveThreadPrBadge({
+        branchPullRequest: { ...status().pr!, number: attached.number, state: "merged" },
+        attachedPullRequest: attached,
+        attachedDetail: detail,
+        provider: undefined,
+      })?.changeRequestState,
+    ).toBe("open");
+  });
+
+  it.each(["open", "closed", null] as const)(
+    "keeps a thread active while another linked PR is %s",
+    (state) => {
+      const other = { ...attached, number: 111, url: attached.url.replace("110", "111") };
+      const badges = resolveThreadPrBadges({
+        branchPullRequest: { ...status().pr!, ...attached, state: "merged" },
+        attachedQueries: [
+          { attachment: attached, data: detail, error: null },
+          { attachment: other, data: state ? { ...detail, ...other, state } : null, error: null },
+        ],
+        provider: undefined,
+      });
+      expect(badges).toHaveLength(2);
+      expect(
+        effectiveSettled(makeThreadFixture({ attachedPullRequests: [attached, other] }), {
+          now: "2026-09-10T00:00:00.000Z",
+          autoSettleAfterDays: null,
+          changeRequestState: aggregateThreadPullRequestState(
+            badges.map((badge) => badge.changeRequestState),
+          ),
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("excludes an unlinked merged branch PR from settlement", () => {
+    expect(
+      resolveThreadPrBadges({
+        branchPullRequest: { ...status().pr!, ...attached, state: "merged" },
+        detachedPullRequestUrls: [attached.url],
+        attachedQueries: [],
+        provider: undefined,
+      }),
+    ).toEqual([]);
+  });
 
   it("shows live status for an attached PR while the thread is on main", () => {
     const branchPullRequest = resolveThreadPr({ threadBranch: "main", gitStatus: status() });

@@ -18,9 +18,7 @@ describe("new issue attachments", () => {
     });
 
     expect(result.accepted.map((file) => file.name)).toStrictEqual(["first", "second"]);
-    expect(result.rejection).toBe(
-      "Only images can be attached to an issue, so 1 file was skipped.",
-    );
+    expect(result.rejection).toBe("Only images can be attached to a task, so 1 file was skipped.");
   });
 
   it("cuts a gesture to the remaining attachment slots", () => {
@@ -40,8 +38,8 @@ describe("new issue attachments", () => {
   });
 
   it("describes the attachment metadata in singular and plural", () => {
-    expect(newIssueAttachmentComment(1)).toContain("Attached an image when creating this issue.");
-    expect(newIssueAttachmentComment(2)).toContain("Attached 2 images when creating this issue.");
+    expect(newIssueAttachmentComment(1)).toContain("Attached an image when creating this task.");
+    expect(newIssueAttachmentComment(2)).toContain("Attached 2 images when creating this task.");
   });
 
   it("identifies only the generated creation-time attachment record", () => {
@@ -65,7 +63,7 @@ describe("new issue attachments", () => {
     ).toBe(false);
     expect(
       isNewIssueAttachmentRecord({
-        body: "Attached an image when creating this issue.",
+        body: "Attached an image when creating this task.",
         attachmentIds: ["iss_first"],
       }),
     ).toBe(false);

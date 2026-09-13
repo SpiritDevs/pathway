@@ -171,7 +171,7 @@ function BurnUpPlot({ chart, today }: { readonly chart: BurnUpChart; readonly to
           tabIndex={0}
         >
           <svg
-            aria-label={`Issues completed against total scope, ${formatIssueDueDate(chart.axisDates[0], today)} to ${formatIssueDueDate(chart.axisDates[2], today)}`}
+            aria-label={`Tasks completed against total scope, ${formatIssueDueDate(chart.axisDates[0], today)} to ${formatIssueDueDate(chart.axisDates[2], today)}`}
             className="h-full w-full"
             preserveAspectRatio="none"
             role="img"

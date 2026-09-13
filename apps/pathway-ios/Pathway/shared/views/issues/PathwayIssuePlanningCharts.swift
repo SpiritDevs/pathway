@@ -106,16 +106,16 @@ struct PathwayIssueMilestoneHistory: View {
                 Chart(points) { point in
                     AreaMark(x: .value("Date", point.date), y: .value("Completed", point.completed))
                         .foregroundStyle(Color.accentColor.opacity(0.12))
-                    LineMark(x: .value("Date", point.date), y: .value("Issues", point.scope), series: .value("Series", "Scope"))
+                    LineMark(x: .value("Date", point.date), y: .value("Tasks", point.scope), series: .value("Series", "Scope"))
                         .foregroundStyle(by: .value("Series", "Scope"))
-                    LineMark(x: .value("Date", point.date), y: .value("Issues", point.completed), series: .value("Series", "Completed"))
+                    LineMark(x: .value("Date", point.date), y: .value("Tasks", point.completed), series: .value("Series", "Completed"))
                         .foregroundStyle(by: .value("Series", "Completed"))
                 }
                 .chartForegroundStyleScale(["Scope": Color.secondary, "Completed": Color.accentColor])
                 .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) }
                 .chartYAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
                 .frame(height: 190)
-                .accessibilityLabel("Milestone scope and completed issues over time")
+                .accessibilityLabel("Milestone scope and completed tasks over time")
                 DisclosureGroup("Daily history") {
                     ForEach(points.reversed()) { point in
                         HStack {
@@ -214,8 +214,8 @@ struct PathwayIssuePlanAssignmentSheet: View {
             .overlay {
                 if visible.isEmpty { ContentUnavailableView.search(text: query) }
             }
-            .searchable(text: $query, prompt: "Find issues")
-            .navigationTitle("Add issues")
+            .searchable(text: $query, prompt: "Find tasks")
+            .navigationTitle("Add tasks")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

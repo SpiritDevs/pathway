@@ -69,7 +69,7 @@ function AttachmentGallery({
             {attachment.mimeType?.startsWith("video/") === true ||
             isIssueVideoAttachmentUrl(attachment.url) ? (
               <video
-                aria-label={`Issue recording ${index + 1}`}
+                aria-label={`Task recording ${index + 1}`}
                 className="h-16 w-28 rounded-md border border-border/60 object-cover"
                 controls
                 onError={() => refresh(index)}
@@ -85,7 +85,7 @@ function AttachmentGallery({
                 type="button"
               >
                 <img
-                  alt={`Issue attachment ${index + 1}`}
+                  alt={`Task attachment ${index + 1}`}
                   className="h-16 w-20 rounded-md border border-border/60 object-cover transition-opacity hover:opacity-80"
                   onError={() => refresh(index)}
                   src={attachment.url}
@@ -93,7 +93,7 @@ function AttachmentGallery({
               </button>
             )}
             <Button
-              aria-label={`Remove issue attachment ${index + 1}`}
+              aria-label={`Remove task attachment ${index + 1}`}
               className="absolute -end-1.5 -top-1.5 rounded-full border border-border/60 bg-background opacity-0 shadow-sm transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 motion-reduce:transition-none"
               onClick={() => onRemoveAttachment(commentId, attachmentId)}
               size="icon-xs"
@@ -174,7 +174,7 @@ export function IssueAttachments({
 
   return (
     <section
-      aria-label="Issue attachments"
+      aria-label="Task attachments"
       className={cn(
         "flex flex-col gap-2 rounded-lg border border-transparent px-1.5 py-1 transition-colors",
         isDropTarget && "border-ring bg-accent/30",

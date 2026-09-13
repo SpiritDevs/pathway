@@ -348,6 +348,36 @@ struct PathwayThreadConversationTests {
         #expect(!model.canRespond(to: item))
     }
 
+    @Test func questionDismissalRequiresCapabilityAndCancelsStaleRequest() async throws {
+        var calls: [JSONValue] = []
+        let model = makeModel { _, value in calls.append(value); return .object([:]) }
+        let question: JSONValue = .object([
+            "id": .string("question-item"), "type": .string("user_input_request"),
+            "status": .string("completed"), "requestId": .string("request-1")
+        ])
+        let runtime: JSONValue = .object([
+            "id": .string("request-1"), "status": .string("pending"), "isBlocking": .bool(false),
+            "responseCapability": .object(["type": .string("not_resumable"), "reason": .string("Previous session")])
+        ])
+        model.installSnapshot(.object(["visibleTurnItems": .array([.object(["item": question])]), "runtimeRequests": .array([runtime])]))
+        let item = try #require(model.items.first)
+        #expect(model.pendingAsyncQuestions == [item])
+        #expect(!model.supportsUserInputDismissal)
+        #expect(!model.canDismissQuestion(item))
+        #expect(!model.canRespond(to: item))
+
+        model.serverConfig = ["environment": .object(["capabilities": .object(["userInputDismissal": .bool(false)])])]
+        #expect(!model.supportsUserInputDismissal)
+        #expect(!model.canDismissQuestion(item))
+
+        model.serverConfig = ["environment": .object(["capabilities": .object(["userInputDismissal": .bool(true)])])]
+        #expect(model.supportsUserInputDismissal)
+        #expect(model.canDismissQuestion(item))
+        try await model.dismissQuestion(requestID: "request-1")
+        #expect(calls.last?.objectValue?["decision"] == .string("cancel"))
+        #expect(calls.last?.objectValue?["answers"] == nil)
+    }
+
     @Test func asyncQuestionsRemainActionableAfterCompletionAndKeepDraftOnReconnect() async throws {
         var calls: [JSONValue] = []
         let model = makeModel { _, value in calls.append(value); return .object([:]) }

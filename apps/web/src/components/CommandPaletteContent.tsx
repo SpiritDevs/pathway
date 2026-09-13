@@ -11,6 +11,7 @@ type CommandPaletteContentProps = Omit<ComponentProps<typeof Command>, "children
   readonly footerCompleteLabel?: ReactNode;
   readonly footerTrailing?: ReactNode;
   readonly inputAccessory?: ReactNode;
+  readonly header?: ReactNode;
   readonly inputProps: ComponentProps<typeof CommandInput>;
   readonly panelClassName?: string;
   readonly showBackHint?: boolean;
@@ -29,6 +30,7 @@ export function CommandPaletteContent({
   footerCompleteLabel,
   footerTrailing,
   inputAccessory,
+  header,
   inputProps,
   panelClassName,
   showBackHint,
@@ -37,6 +39,7 @@ export function CommandPaletteContent({
 }: CommandPaletteContentProps) {
   return (
     <div className="contents" data-testid={testId}>
+      {header}
       <Command {...commandProps}>
         <div className="relative">
           <CommandInput {...inputProps} />

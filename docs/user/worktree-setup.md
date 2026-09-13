@@ -18,8 +18,17 @@ The card stays in the conversation after creation. If preparation fails or is in
 
 **Worktree created** means the files are ready and the setup script has been started. The script runs in its terminal while the agent begins, so this status does not mean dependency installation or other script commands have finished.
 
-While a new worktree is being prepared, choose **Cancel** to return the submitted message and attachments to a new compose draft. The provisional conversation is removed. Text you typed while cancellation was in progress is kept with the restored message. If you have queued follow-up messages, remove them before cancelling.
+**Work locally** and **Cancel** appear throughout preparation, including **Preparing workspace**. They become available once the connected environment registers the run. Choose **Cancel** to return the submitted message and attachments to a new compose draft. The provisional conversation is removed. Text you typed while cancellation was in progress is kept with the restored message. If you have queued follow-up messages, remove them before cancelling.
 
 Choose **Work locally** to run the submitted message in the project's original folder instead. Pathway skips the remaining worktree setup and removes the worktree it created before starting the agent locally. Existing project folders and existing worktrees are never removed by these actions.
 
 If checkout is already running, either action waits for it to finish safely before cleaning up. The buttons show that the action is in progress. Once the agent has started, preparation can no longer be cancelled or switched. If cleanup fails, the error stays visible and the agent is not started by the requested action.
+
+## Switching branches with local changes
+
+On web and desktop, if Git blocks a branch switch because files would be overwritten, the error card offers two actions:
+
+- **Stash & switch** saves tracked and untracked changes in Git’s stash, then retries the selected branch. The stash stays saved for you to restore later; it is not automatically applied to the new branch.
+- **Override & switch** forces the checkout, discarding uncommitted tracked changes and any untracked files that obstruct the checkout. Unrelated untracked files are kept.
+
+If the retry fails, the card shows the new error. Expand **Show Git details** to inspect Git’s explanation. Creating a separate worktree is another way to use a different branch while keeping the current checkout intact.

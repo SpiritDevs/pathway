@@ -70,6 +70,7 @@ export const OrchestrationProject = Schema.Struct({
   // attached later. Every path-shaped feature (worktrees, scripts, checkpoints,
   // file search, favicon) degrades to a no-op until it is set.
   workspaceRoot: Schema.NullOr(TrimmedNonEmptyString),
+  internalWorkspaceRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   // Per-project override for where new threads start. Null/absent means
@@ -427,6 +428,7 @@ export const ProjectCreateCommand = Schema.Struct({
   title: TrimmedNonEmptyString,
   // Null creates a rootless project. `project.meta.update` attaches a directory later.
   workspaceRoot: Schema.NullOr(TrimmedNonEmptyString),
+  internalWorkspaceRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // Ignored when `workspaceRoot` is null.
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
@@ -444,6 +446,7 @@ export const ProjectMetaUpdateCommand = Schema.Struct({
   // Deliberately not nullable: a root can be attached or changed but never
   // cleared, because threads, worktrees, and checkpoints hang off it.
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
+  internalWorkspaceRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   // Same meaning as on `project.create`, so the attach-a-directory prompt can
   // point a rootless project at a folder it is creating. Ignored without
   // `workspaceRoot`.

@@ -21,11 +21,12 @@ import {
   getFilesystemBrowsePath,
 } from "@spiritdevs/client-runtime/state/filesystem";
 import type { EnvironmentId, FilesystemBrowseResult } from "@spiritdevs/contracts";
-import { CornerLeftUpIcon, FolderIcon } from "lucide-react";
-import { useMemo } from "react";
+import { CornerLeftUpIcon, FolderIcon, FolderPlusIcon } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import { filesystemEnvironment } from "~/state/filesystem";
 import { useEnvironmentQuery } from "~/state/query";
+import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
@@ -52,11 +53,16 @@ export function ProjectDirectoryField({
   platform: string;
   currentProjectCwd: string | null;
   value: string;
-  onChange: (next: string) => void;
+  onChange: (next: string, createIfMissing: boolean) => void;
   autoFocus?: boolean;
   disabled?: boolean;
   inputLabel?: string;
 }) {
+  const [explorerOpen, setExplorerOpen] = useState(true);
+  const selectPath = (path: string) => {
+    setExplorerOpen(true);
+    onChange(path, false);
+  };
   const browsePath = useMemo(() => getFilesystemBrowsePath(value, platform), [platform, value]);
   // A relative path with nothing to resolve it against would make the server answer
   // `current_project_required`; not asking keeps the field quiet until it can succeed.
@@ -76,76 +82,114 @@ export function ProjectDirectoryField({
       : null,
   );
   const entries = browseQuery.data?.entries ?? EMPTY_BROWSE_ENTRIES;
-  const { visibleEntries } = useMemo(
+  const { visibleEntries, exactEntry } = useMemo(
     () => filterFilesystemBrowseEntries(entries, browsePath.filterQuery),
     [browsePath.filterQuery, entries],
   );
   const parentPath = browsePath.canBrowseUp ? getBrowseParentPath(browsePath.directoryPath) : null;
+  const directoryExists =
+    browseQuery.data !== undefined &&
+    !browseQuery.isPending &&
+    browseQuery.error === null &&
+    (browsePath.filterQuery === "" || exactEntry !== null);
 
   return (
     <div className="flex min-h-0 flex-col gap-2">
-      <Input
-        aria-label={inputLabel}
-        autoFocus={autoFocus}
-        disabled={disabled}
-        onChange={(event) => onChange(event.currentTarget.value)}
-        onKeyDown={(event) => {
-          if (
-            event.key !== "Tab" ||
-            event.shiftKey ||
-            event.altKey ||
-            event.ctrlKey ||
-            event.metaKey
-          ) {
-            return;
-          }
-          const completion = completeFilesystemBrowsePath(value, entries);
-          if (completion === null) {
-            return;
-          }
-          event.preventDefault();
-          onChange(completion);
-        }}
-        placeholder="~/code/my-project"
-        spellCheck={false}
-        value={value}
-      />
-      <div className="max-h-48 min-h-0 overflow-y-auto rounded-md border border-border/60">
-        {parentPath !== null ? (
-          <DirectoryRow
-            disabled={disabled}
-            icon={<CornerLeftUpIcon className="size-3.5 shrink-0 text-muted-foreground" />}
-            label="Parent directory"
-            onSelect={() => onChange(ensureBrowseDirectoryPath(parentPath))}
-          />
-        ) : null}
-        {visibleEntries.map((entry) => (
-          <DirectoryRow
-            disabled={disabled}
-            icon={<FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />}
-            key={entry.fullPath}
-            label={entry.name}
-            onSelect={() =>
-              onChange(
-                ensureBrowseDirectoryPath(
-                  appendBrowsePathSegment(browsePath.directoryPath, entry.name),
-                ),
-              )
+      <div className="relative">
+        <Input
+          className="pr-20"
+          aria-label={inputLabel}
+          autoFocus={autoFocus}
+          disabled={disabled}
+          onChange={(event) => selectPath(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (
+              event.key !== "Tab" ||
+              event.shiftKey ||
+              event.altKey ||
+              event.ctrlKey ||
+              event.metaKey
+            ) {
+              return;
             }
-          />
-        ))}
-        {parentPath === null && visibleEntries.length === 0 ? (
-          <p className="px-2 py-3 text-center text-xs text-muted-foreground">
-            {browseQuery.isPending
-              ? "Loading…"
-              : relativeNeedsAnchor
-                ? "Relative paths need an active project."
-                : browseQuery.error !== null
-                  ? "That directory could not be read."
-                  : "Type a path to browse."}
-          </p>
+            const completion = completeFilesystemBrowsePath(value, entries);
+            if (completion === null) {
+              return;
+            }
+            event.preventDefault();
+            selectPath(completion);
+          }}
+          placeholder="~/code/my-project"
+          spellCheck={false}
+          value={value}
+        />
+        {explorerOpen && directoryExists ? (
+          <Button
+            className="absolute right-1 top-1/2 -translate-y-1/2"
+            size="xs"
+            disabled={disabled}
+            type="button"
+            onClick={() => {
+              onChange(value, false);
+              setExplorerOpen(false);
+            }}
+          >
+            Attach
+          </Button>
         ) : null}
       </div>
+      {explorerOpen ? (
+        <div className="max-h-48 min-h-0 overflow-y-auto rounded-md border border-border/60">
+          {parentPath !== null ? (
+            <DirectoryRow
+              disabled={disabled}
+              icon={<CornerLeftUpIcon className="size-3.5 shrink-0 text-muted-foreground" />}
+              label="Parent directory"
+              onSelect={() => selectPath(ensureBrowseDirectoryPath(parentPath))}
+            />
+          ) : null}
+          {!directoryExists ? (
+            <DirectoryRow
+              disabled={disabled || !browsePath.isBrowsing || relativeNeedsAnchor}
+              icon={<FolderPlusIcon className="size-3.5 shrink-0 text-muted-foreground" />}
+              label="Create Directory"
+              onSelect={() => {
+                onChange(value, true);
+                setExplorerOpen(false);
+              }}
+            />
+          ) : null}
+          {visibleEntries.length > 0 && (parentPath !== null || !directoryExists) ? (
+            <div role="separator" className="border-t border-border/60" />
+          ) : null}
+          {visibleEntries.map((entry) => (
+            <DirectoryRow
+              disabled={disabled}
+              icon={<FolderIcon className="size-3.5 shrink-0 text-muted-foreground" />}
+              key={entry.fullPath}
+              label={entry.name}
+              onSelect={() =>
+                selectPath(
+                  ensureBrowseDirectoryPath(
+                    appendBrowsePathSegment(browsePath.directoryPath, entry.name),
+                  ),
+                )
+              }
+            />
+          ))}
+          {parentPath === null && visibleEntries.length === 0 ? (
+            <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+              {browseQuery.isPending
+                ? "Loading…"
+                : relativeNeedsAnchor
+                  ? "Relative paths need an active project."
+                  : browseQuery.error !== null
+                    ? "That directory could not be read."
+                    : "Type a path to browse."}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

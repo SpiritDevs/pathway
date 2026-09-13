@@ -120,15 +120,15 @@ function validateSettings(value: unknown): unknown {
     value === null ||
     Array.isArray(value)
   ) {
-    throw backendError("invalid-arguments", "Issue automation settings are invalid or too large.");
+    throw backendError("invalid-arguments", "Task automation settings are invalid or too large.");
   }
   const settings = value as Record<string, unknown>;
   if (settings["schemaVersion"] !== 1) {
-    throw backendError("invalid-arguments", "Issue automation settings need schema version 1.");
+    throw backendError("invalid-arguments", "Task automation settings need schema version 1.");
   }
   for (const key of ["routingRules", "auditRules", "reviewWorkers"] as const) {
     if (!Array.isArray(settings[key])) {
-      throw backendError("invalid-arguments", `Issue automation ${key} must be an array.`);
+      throw backendError("invalid-arguments", `Task automation ${key} must be an array.`);
     }
   }
   const routingRules = settings["routingRules"] as readonly unknown[];
@@ -137,7 +137,7 @@ function validateSettings(value: unknown): unknown {
   if (routingRules.length > 25 || auditRules.length > 25 || reviewWorkers.length > 5) {
     throw backendError(
       "invalid-arguments",
-      "Issue automation settings exceed their configured bounds.",
+      "Task automation settings exceed their configured bounds.",
     );
   }
   return value;
@@ -265,7 +265,7 @@ export const saveSettings = mutation({
     if ((existing?.revision ?? null) !== args.expectedRevision) {
       throw backendError(
         "entity-conflict",
-        "Issue automation settings changed; reload before saving.",
+        "Task automation settings changed; reload before saving.",
       );
     }
     const now = Date.now();
@@ -305,7 +305,7 @@ export const setEnabled = mutation({
       .withIndex("by_company", (q) => q.eq("companyId", actor.company._id))
       .unique();
     if (row === null)
-      throw backendError("entity-not-found", "Configure issue automation before enabling it.");
+      throw backendError("entity-not-found", "Configure task automation before enabling it.");
     if (args.enabled) {
       const now = Date.now();
       const capabilities = await ctx.db
@@ -534,7 +534,7 @@ export const executionContext = query({
       )
       .unique();
     if (issue === null || issue.deletedAt !== null) {
-      throw backendError("entity-not-found", "The automation issue is missing.");
+      throw backendError("entity-not-found", "The automation task is missing.");
     }
     const binding =
       row.cloudProjectId === null

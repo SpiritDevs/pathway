@@ -54,6 +54,72 @@ const append = Effect.fn("test.append")(function* (
 });
 
 layer("durable agent time capture", (it) => {
+  it.effect("persists one completed summary without changing recorded time", () =>
+    Effect.gen(function* () {
+      yield* setup;
+      const store = yield* makeAgentTimeTrackingStore("company-1");
+      yield* append(runEvent("running", 0, "run.created"));
+      yield* store.capture();
+      assert.isNull(yield* store.nextSummary());
+      yield* append(runEvent("completed", 30));
+      yield* store.capture();
+      const session = yield* store.nextSummary();
+      assert.isNotNull(session);
+      if (!session) return;
+      const sql = yield* SqlClient.SqlClient;
+      for (const [runId, text] of [
+        [session.id, "initial draft"],
+        [session.id, "verified checkout recovery"],
+        ["other-run", "unrelated work"],
+      ]) {
+        yield* sql`INSERT INTO orchestration_events(stream_id, event_type, payload_json, metadata_json, application_event_version)
+          VALUES (${session.threadId}, 'message.updated', ${encodeJson({ id: `assistant-${runId}`, text })}, ${encodeJson({ runId })}, 2)`;
+      }
+      const context = yield* store.summaryContext(session);
+      assert.include(context, "completed");
+      assert.include(context, "verified checkout recovery");
+      assert.notInclude(context, "initial draft");
+      assert.notInclude(context, "unrelated work");
+      yield* store.saveSummary(session, {
+        title: "Implement checkout recovery",
+        description: "Added stash and retry actions.",
+      });
+      assert.isNull(yield* store.nextSummary());
+      const pending = yield* store.pending(Date.parse(timestamp(31)));
+      assert.strictEqual(pending[0]?.title, "Implement checkout recovery");
+      assert.deepEqual(pending[0]?.intervals, session.intervals);
+      assert.strictEqual(pending[0]?.revision, session.revision + 1);
+      yield* store.acknowledge(session);
+      const summarized = yield* store.pending(Date.parse(timestamp(32)));
+      assert.strictEqual(summarized.length, 1);
+      yield* store.acknowledge(summarized[0]!);
+      assert.deepEqual(yield* store.pending(Date.parse(timestamp(33))), []);
+    }),
+  );
+  it.effect("retries legacy fallback summaries with a durable backoff", () =>
+    Effect.gen(function* () {
+      yield* setup;
+      const store = yield* makeAgentTimeTrackingStore("company-1");
+      yield* append(runEvent("running", 0, "run.created"));
+      yield* append(runEvent("completed", 30));
+      yield* store.capture();
+      const session = (yield* store.nextSummary())!;
+      yield* store.saveSummary(session, {
+        title: "Agent work completed",
+        description: "Summary unavailable",
+      });
+      assert.isNotNull(yield* store.nextSummary());
+      yield* store.deferSummary(session);
+      assert.isNull(yield* store.nextSummary());
+      yield* TestClock.adjust("5 minutes");
+      assert.isNotNull(yield* store.nextSummary());
+      yield* store.saveSummary(session, {
+        title: "Explain project architecture",
+        description: "Reviewed project documentation and explained the app structure.",
+      });
+      assert.isNull(yield* store.nextSummary());
+    }),
+  );
   for (const scenario of [
     { trigger: "startup", blocking: null, trackedSeconds: 30 },
     { trigger: "startup", blocking: false, trackedSeconds: 30 },
@@ -94,6 +160,13 @@ layer("durable agent time capture", (it) => {
           if (requestEvent) yield* append(requestEvent);
           yield* store.capture();
           yield* store.pending(Date.parse(timestamp(30)));
+          const restartedPublisher = yield* makeAgentTimeTrackingStore("company-1");
+          const beforeRecovery = (yield* restartedPublisher.pending(Date.parse(timestamp(30))))[0]!;
+          assert.equal(beforeRecovery.state, scenario.blocking === true ? "paused" : "running");
+          assert.deepEqual(
+            beforeRecovery.blockedRequestIds,
+            scenario.blocking === true ? ["request-1"] : [],
+          );
           const projection = yield* decodeProjection({
             updatedAt: DateTime.makeUnsafe(timestamp(30)),
             thread: {
@@ -141,13 +214,7 @@ layer("durable agent time capture", (it) => {
             Layer.provide(
               Layer.mergeAll(
                 Layer.mock(ProjectionStore.ProjectionStoreV2)({
-                  getShellSnapshot: () =>
-                    Effect.succeed({
-                      schemaVersion: 2,
-                      snapshotSequence: 0,
-                      threads: [ProjectionStore.threadShellFromProjection(projection)],
-                      archivedThreads: [],
-                    }),
+                  getRecoveryThreadIds: () => Effect.succeed([projection.thread.id]),
                   getThreadProjection: () => Effect.succeed(projection),
                 }),
                 Layer.mock(EventSink.EventSinkV2)({
@@ -222,7 +289,7 @@ layer("durable agent time capture", (it) => {
     }),
   );
 
-  it.effect("caps a crashed process at its last heartbeat and excludes downtime", () =>
+  it.effect("keeps a working agent's clock running across publisher restarts", () =>
     Effect.gen(function* () {
       yield* setup;
       const store = yield* makeAgentTimeTrackingStore("company-1");
@@ -231,21 +298,46 @@ layer("durable agent time capture", (it) => {
       const heartbeat = yield* store.pending(Date.parse(timestamp(30)));
       yield* store.acknowledge(heartbeat[0]!);
       const restarted = yield* makeAgentTimeTrackingStore("company-1");
-      const paused = yield* restarted.pending(Date.parse(timestamp(3600)));
-      assert.equal(paused[0]!.state, "paused");
-      assert.equal(paused[0]!.intervals[0]!.end - paused[0]!.intervals[0]!.start, 30_000);
-      yield* append(runEvent("running", 3600));
-      yield* append(runEvent("completed", 3630));
+      const running = (yield* restarted.pending(Date.parse(timestamp(60))))[0]!;
+      assert.equal(running.state, "running");
+      assert.equal(running.runStatus, "running");
+      assert.equal(running.runningSince, Date.parse(timestamp(0)));
+      assert.deepEqual(running.blockedRequestIds, []);
+      yield* restarted.acknowledge(running);
+      // Tool activity does not emit another run.updated. The heartbeat must keep advancing.
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_events
+        (stream_id, event_type, payload_json, metadata_json, application_event_version)
+        VALUES ('thread-1', 'tool-call.updated', '{}', '{"runId":"run-1"}', 2)`;
       yield* restarted.capture();
-      const ended = yield* restarted.pending(Date.parse(timestamp(3630)));
+      const heartbeatAfterRestart = (yield* restarted.pending(Date.parse(timestamp(90))))[0]!;
+      assert.equal(heartbeatAfterRestart.state, "running");
+      assert.equal(heartbeatAfterRestart.observedAt, Date.parse(timestamp(90)));
+      yield* append(runEvent("completed", 120));
+      yield* restarted.capture();
+      const ended = yield* restarted.pending(Date.parse(timestamp(120)));
       assert.equal(
         ended[0]!.intervals.reduce((total, interval) => total + interval.end - interval.start, 0),
-        60_000,
+        120_000,
       );
     }),
   );
 
-  it.effect("recovers a committed completion before capping an interrupted publisher", () =>
+  it.effect("replays runs started while the publisher was stopped without pausing them", () =>
+    Effect.gen(function* () {
+      yield* setup;
+      yield* makeAgentTimeTrackingStore("company-1");
+      yield* append(runEvent("queued", 0, "run.created"));
+      yield* append(runEvent("running", 10));
+      const restarted = yield* makeAgentTimeTrackingStore("company-1");
+      const session = (yield* restarted.pending(Date.parse(timestamp(30))))[0]!;
+      assert.equal(session.state, "running");
+      assert.equal(session.runningSince, Date.parse(timestamp(10)));
+      assert.deepEqual(session.intervals, []);
+    }),
+  );
+
+  it.effect("recovers a committed completion after a publisher restart", () =>
     Effect.gen(function* () {
       yield* setup;
       const store = yield* makeAgentTimeTrackingStore("company-1");
@@ -353,9 +445,10 @@ layer("durable agent time capture", (it) => {
       const session = (yield* store.pending(Date.parse(timestamp(10))))[0]!;
       yield* store.deferUnbound(session, Date.parse(timestamp(10)));
       assert.deepEqual(yield* store.pending(Date.parse(timestamp(100))), []);
+      yield* append(runEvent("cancelled", 300), "command:runtime-reconcile:startup:thread-1");
       const restarted = yield* makeAgentTimeTrackingStore("company-1");
       const retry = yield* restarted.pending(Date.parse(timestamp(310)));
-      assert.equal(retry[0]!.state, "paused");
+      assert.equal(retry[0]!.state, "stopped");
       assert.equal(retry[0]!.intervals[0]!.end - retry[0]!.intervals[0]!.start, 100_000);
     }),
   );

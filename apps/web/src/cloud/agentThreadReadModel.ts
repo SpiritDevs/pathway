@@ -228,6 +228,7 @@ export function cloudEnvironmentProjectsFromReplicas(
         id: value.localProjectId,
         title: project.name,
         workspaceRoot: value.localWorkspaceRoot,
+        internalWorkspaceRoot: value.internalWorkspaceRoot ?? null,
         ...(value.repositoryIdentity === undefined
           ? {}
           : { repositoryIdentity: value.repositoryIdentity }),
@@ -291,6 +292,28 @@ export function cloudEnvironmentThreadsFromReplicas(
     });
   }
   return threads.length === 0 ? EMPTY_THREADS : threads;
+}
+
+/** Resolve project provenance for new/forked threads, including All companies scope. */
+export function cloudAgentProjectCompanyId(
+  replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
+  environmentId: EnvironmentId,
+  projectId: string | null | undefined,
+): CompanyId | null {
+  if (!projectId) return null;
+  const matches = new Set<CompanyId>();
+  for (const [companyId, replica] of replicas) {
+    for (const value of replica.view.values()) {
+      if (
+        isEnvironmentBinding(value) &&
+        value.environmentId === environmentId &&
+        value.localProjectId === projectId &&
+        value.status === "active"
+      )
+        matches.add(companyId);
+    }
+  }
+  return matches.size === 1 ? [...matches][0]! : null;
 }
 
 export function cloudAgentThreadCompanyId(

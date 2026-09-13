@@ -119,7 +119,7 @@ export function MergeProjectDialog({
         <DialogHeader>
           <DialogTitle>Merge duplicate project</DialogTitle>
           <DialogDescription>
-            Connections, threads, and issues move into {project.displayName}. Choose the Git
+            Connections, threads, and tasks move into {project.displayName}. Choose the Git
             repository every connection should use.
           </DialogDescription>
         </DialogHeader>

@@ -10,6 +10,7 @@ import { createRef, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
 import type { LegendListRef } from "@legendapp/list/react";
+import { withOptimisticWorkspacePreparation } from "../../session-logic";
 
 vi.mock("@legendapp/list/react", async () => {
   const legendListTestId = "legend-list";
@@ -112,7 +113,7 @@ vi.mock("@legendapp/list/react", async () => {
     );
   };
 
-  return { LegendList };
+  return { LegendList, useSyncLayout: () => () => {} };
 });
 
 function MockFileDiff(props: {
@@ -295,6 +296,16 @@ describe("MessagesTimeline", () => {
     expect(fadedMarkup).toContain("chat-timeline-scroll-fade");
   });
 
+  it("initially shows ordinary working animation while a new thread connects", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[]} workingPresentation="connecting" />,
+    );
+    expect(markup).toContain("animate-status-pulse");
+    expect(markup).toContain("Working");
+    expect(markup).not.toContain("Still connecting");
+    expect(markup).not.toContain("Stop loading");
+  });
+
   it("keeps recovery controls available after thread loading is stopped", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -399,14 +410,44 @@ describe("MessagesTimeline", () => {
         scrollLength: 800,
       }),
     ).toBe(false);
-    // The composer inset is part of contentLength and must not count as
-    // distance-to-end.
+    // The composer pads the content but also covers the viewport: content
+    // hidden behind it is no longer at the visible end.
     expect(
       resolveTimelineIsAtEnd(
         { isAtEnd: false, contentLength: 2100, scroll: 1170, scrollLength: 800 },
         100,
       ),
+    ).toBe(false);
+    // LegendList's strict flag ignores the overlay as well. Measured geometry
+    // takes precedence when the last content is inside the covered area.
+    expect(
+      resolveTimelineIsAtEnd(
+        { isAtEnd: true, contentLength: 2100, scroll: 1200, scrollLength: 800 },
+        100,
+      ),
+    ).toBe(false);
+    // Scrolling that content above the composer re-arms follow.
+    expect(
+      resolveTimelineIsAtEnd(
+        { isAtEnd: false, contentLength: 2100, scroll: 1300, scrollLength: 800 },
+        100,
+      ),
     ).toBe(true);
+    // Growing the composer must not expand the follow re-arm band.
+    for (const inset of [0, 100, 240]) {
+      expect(
+        resolveTimelineIsAtEnd(
+          { contentLength: 2000 + inset, scroll: 1160 + inset, scrollLength: 800 },
+          inset,
+        ),
+      ).toBe(true);
+      expect(
+        resolveTimelineIsAtEnd(
+          { contentLength: 2000 + inset, scroll: 1159 + inset, scrollLength: 800 },
+          inset,
+        ),
+      ).toBe(false);
+    }
     // Geometry missing (older state shape): fall back to the nearEnd/strict flags.
     expect(resolveTimelineIsAtEnd({ isNearEnd: true, isAtEnd: false })).toBe(true);
     expect(resolveTimelineIsAtEnd({ isAtEnd: false })).toBe(false);
@@ -773,6 +814,41 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-user-message-collapsible="false"');
     expect(markup).toContain("rounded-2xl bg-accent p-3");
   });
+
+  it.each(["queued", "canceled"] as const)(
+    "renders %s cloud messages with the normal user bubble and message controls",
+    (state) => {
+      const base = buildUserTimelineEntry("Saved while the environment is offline");
+      const entry = { ...base, message: { ...base.message, createdBy: "user" as const } };
+      const markup = renderToStaticMarkup(
+        <MessagesTimeline
+          {...buildProps()}
+          timelineEntries={[entry]}
+          queuedMessageControls={
+            new Map([
+              [
+                entry.message.id,
+                {
+                  state,
+                  editable: true,
+                  cancelable: state === "queued",
+                  retryable: state === "canceled",
+                  waitingToSync: false,
+                  submissionStarted: false,
+                },
+              ],
+            ])
+          }
+        />,
+      );
+      expect(markup).toContain("rounded-2xl bg-accent p-3");
+      expect(markup).toContain('aria-label="Edit message"');
+      expect(markup).toContain(
+        state === "queued" ? 'aria-label="Cancel queued message"' : 'aria-label="Retry message"',
+      );
+      expect(markup).toContain(state === "queued" ? "Queued" : "Canceled");
+    },
+  );
 
   it("shows retry beneath only the failed latest user message", () => {
     const baseEntry = buildUserTimelineEntry("Try this again");
@@ -2427,6 +2503,22 @@ describe("MessagesTimeline", () => {
   });
 });
 
+it("keeps workspace controls visible while the initial run is being registered", async () => {
+  const { MessagesTimeline } = await import("./MessagesTimeline");
+  const markup = renderToStaticMarkup(
+    <MessagesTimeline
+      {...buildProps()}
+      onControlWorkspacePreparation={async () => {}}
+      timelineEntries={withOptimisticWorkspacePreparation([], {
+        threadId: ThreadId.make("thread-1"),
+        startedAt: MESSAGE_CREATED_AT,
+      })}
+    />,
+  );
+  expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>.*?Work locally<\/button>/);
+  expect(markup).toMatch(/<button[^>]*disabled=""[^>]*>.*?Cancel<\/button>/);
+});
+
 it("offers workspace recovery only on the latest local run", async () => {
   const { MessagesTimeline } = await import("./MessagesTimeline");
   for (const scenario of ["latest", "older", "inherited"] as const) {
@@ -2495,4 +2587,10 @@ it("offers workspace recovery only on the latest local run", async () => {
     expect(markup.includes(">Retry</button>")).toBe(scenario === "latest");
     expect(markup.includes("Work locally")).toBe(scenario === "latest");
   }
+});
+
+it("leaves an empty conversation clear without an instructional placeholder", async () => {
+  const { MessagesTimeline } = await import("./MessagesTimeline");
+  const markup = renderToStaticMarkup(<MessagesTimeline {...buildProps()} timelineEntries={[]} />);
+  expect(markup).toBe("");
 });

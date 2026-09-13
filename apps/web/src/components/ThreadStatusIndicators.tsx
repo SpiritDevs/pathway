@@ -170,6 +170,13 @@ export function resolveThreadPrBadge(input: {
     if (attachedDetail && sameAttachedPullRequest(attachedPullRequest, attachedDetail)) {
       const pr = {
         ...attachedDetail,
+        // A merged PR cannot reopen. A newer branch observation must not be
+        // hidden by an older detail-cache response for the same PR.
+        state:
+          branchPullRequest?.state === "merged" &&
+          sameAttachedPullRequest(attachedPullRequest, branchPullRequest)
+            ? ("merged" as const)
+            : attachedDetail.state,
         baseRef: attachedDetail.baseBranch,
         headRef: attachedDetail.headBranch,
       };
@@ -218,6 +225,47 @@ export function resolveThreadPrBadge(input: {
   return branchPullRequest && status
     ? { pullRequest: branchPullRequest, status, changeRequestState: branchPullRequest.state }
     : null;
+}
+
+export function resolveThreadPrBadges({
+  branchPullRequest,
+  detachedPullRequestUrls,
+  attachedQueries,
+  provider,
+}: {
+  branchPullRequest: ThreadPr;
+  detachedPullRequestUrls?: ReadonlyArray<string> | undefined;
+  attachedQueries: ReadonlyArray<{
+    attachment: OrchestrationV2PullRequestAttachment;
+    data: Parameters<typeof resolveThreadPrBadge>[0]["attachedDetail"];
+    error: string | null;
+  }>;
+  provider: SourceControlProviderInfo | null | undefined;
+}) {
+  const visibleBranchPr =
+    branchPullRequest && !detachedPullRequestUrls?.includes(branchPullRequest.url)
+      ? branchPullRequest
+      : null;
+  const badges = attachedQueries.map(
+    (query) =>
+      resolveThreadPrBadge({
+        branchPullRequest: visibleBranchPr,
+        attachedPullRequest: query.attachment,
+        attachedDetail: query.data ?? null,
+        attachedError: query.error,
+        provider,
+      })!,
+  );
+  if (visibleBranchPr && !badges.some((badge) => badge.pullRequest.url === visibleBranchPr.url)) {
+    badges.push(
+      resolveThreadPrBadge({
+        branchPullRequest: visibleBranchPr,
+        attachedPullRequest: null,
+        provider,
+      })!,
+    );
+  }
+  return badges;
 }
 
 export function ChangeRequestStatusIcon({ className }: { className?: string }) {
@@ -381,26 +429,12 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
     gitStatus: gitStatus.data,
   });
   const attachedQueries = useAttachedPullRequests(thread);
-  const visibleBranchPr = pr && !thread.detachedPullRequestUrls?.includes(pr.url) ? pr : null;
-  const badges = attachedQueries.map(
-    (query) =>
-      resolveThreadPrBadge({
-        branchPullRequest: visibleBranchPr,
-        attachedPullRequest: query.attachment,
-        attachedDetail: query.data,
-        attachedError: query.error,
-        provider: gitStatus.data?.sourceControlProvider,
-      })!,
-  );
-  if (visibleBranchPr && !badges.some((badge) => badge.pullRequest.url === visibleBranchPr.url)) {
-    badges.push(
-      resolveThreadPrBadge({
-        branchPullRequest: visibleBranchPr,
-        attachedPullRequest: null,
-        provider: gitStatus.data?.sourceControlProvider,
-      })!,
-    );
-  }
+  const badges = resolveThreadPrBadges({
+    branchPullRequest: pr,
+    detachedPullRequestUrls: thread.detachedPullRequestUrls,
+    attachedQueries,
+    provider: gitStatus.data?.sourceControlProvider,
+  });
   const changeRequestStatus = (
     badges.find((badge) => badge.changeRequestState !== "merged") ?? badges.at(-1)
   )?.status;

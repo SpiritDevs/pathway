@@ -93,7 +93,7 @@ struct PathwayCompanyRoleEditor: View {
             Section("Role") { TextField("Name", text: $name); TextField("Description", text: $description, axis: .vertical) }
             Section("Permissions") {
                 ForEach(model.permissionCatalog, id: \.self) { permission in
-                    Toggle(permission.replacingOccurrences(of: ".", with: " · ").capitalized, isOn: Binding(get: { permissions.contains(permission) }, set: { if $0 { permissions.insert(permission) } else { permissions.remove(permission) } }))
+                    Toggle(permission.replacingOccurrences(of: "issues.", with: "tasks.", options: .anchored).replacingOccurrences(of: ".", with: " · ").capitalized, isOn: Binding(get: { permissions.contains(permission) }, set: { if $0 { permissions.insert(permission) } else { permissions.remove(permission) } }))
                 }
             }
             Button("Save role") { Task { await save() } }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.allows("roles.manage"))

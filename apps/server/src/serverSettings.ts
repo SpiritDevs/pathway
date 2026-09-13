@@ -238,6 +238,10 @@ function resolveIssueEnrichmentProvider(settings: ServerSettings): ServerSetting
  * reader has to remember that there is now more than one selection to resolve.
  */
 function resolveModelSelectionProviders(settings: ServerSettings): ServerSettings {
+  if (!isModelSelectionProviderEnabled(settings, settings.timeTrackerModelSelection)) {
+    const fallback = enabledProviderFallbackSelection(settings);
+    if (fallback) settings = { ...settings, timeTrackerModelSelection: fallback };
+  }
   return resolveIssueEnrichmentProvider(
     resolveContextCompactionProvider(resolveTextGenerationProvider(settings)),
   );
@@ -250,6 +254,7 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "providerHealthRefreshInterval",
   "sourceControlWriterModelSelection",
   "textGenerationModelSelection",
+  "timeTrackerModelSelection",
   "contextCompactionModelSelection",
   "issueEnrichmentModelSelection",
   "issueAutomation",

@@ -32,6 +32,7 @@ export const StorageVolume = Schema.Struct({
   pressure: StoragePressure,
 });
 export const StorageThread = Schema.Struct({
+  hasMessages: Schema.optional(Schema.Boolean),
   threadId: ThreadId,
   title: Schema.String,
   conversationCompanyId: Schema.optional(Schema.NullOr(Schema.String)),
@@ -59,11 +60,14 @@ export const StorageWorktree = Schema.Struct({
   removed: Schema.Boolean,
 });
 export const StorageCleanupInput = Schema.Struct({
+  force: Schema.optional(Schema.Boolean),
   worktreeIds: Schema.Array(Schema.String),
   mode: Schema.Literals(["manual", "emergency", "scheduled"]),
 });
 export type StorageCleanupInput = typeof StorageCleanupInput.Type;
 export const StoragePreviewItem = Schema.Struct({
+  gitStatus: Schema.optional(Schema.String),
+  head: Schema.optional(Schema.String),
   worktreeId: Schema.String,
   path: Schema.String,
   threadIds: Schema.Array(ThreadId),
@@ -85,6 +89,7 @@ export const StorageJobItem = Schema.Struct({
   actualFreeDeltaBytes: Schema.NullOr(Schema.Number),
 });
 export const StorageJob = Schema.Struct({
+  force: Schema.optional(Schema.Boolean),
   id: Schema.String,
   mode: StorageCleanupInput.fields.mode,
   status: Schema.Literals(["running", "completed", "cancelled", "failed"]),

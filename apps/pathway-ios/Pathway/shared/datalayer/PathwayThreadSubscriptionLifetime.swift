@@ -24,10 +24,19 @@ final class PathwayThreadSubscriptionLifetime {
     func release(_ owner: Owner) {
         owners.remove(owner)
         guard owners.isEmpty, running, pendingStop == nil else { return }
+        scheduleStop(restarting: false)
+    }
+
+    func restart() {
+        guard running, pendingStop == nil else { return }
+        scheduleStop(restarting: true)
+    }
+
+    private func scheduleStop(restarting: Bool) {
         pendingStop = Task { [weak self] in
             guard let self else { return }
             // Navigation can hand ownership back before this task starts.
-            guard owners.isEmpty else { pendingStop = nil; return }
+            guard restarting || owners.isEmpty else { pendingStop = nil; return }
             running = false
             await stop()
             pendingStop = nil

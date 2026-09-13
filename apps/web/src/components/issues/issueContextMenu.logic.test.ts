@@ -87,8 +87,8 @@ describe("issueContextMenuIssues", () => {
 describe("issueContextMenuLabel", () => {
   it("names the issue, or counts them", () => {
     expect(issueContextMenuLabel([issue("1")])).toBe("PAT-1");
-    expect(issueContextMenuLabel([issue("1"), issue("2")])).toBe("2 issues");
-    expect(issueContextMenuLabel([])).toBe("No issue");
+    expect(issueContextMenuLabel([issue("1"), issue("2")])).toBe("2 tasks");
+    expect(issueContextMenuLabel([])).toBe("No task");
   });
 });
 

@@ -223,7 +223,7 @@ export function IssuesAssistantPanel({
       filesAvailable={false}
       layoutControls={
         <Button
-          aria-label="Close issues sidebar"
+          aria-label="Close tasks sidebar"
           onClick={() => onOpenChange(false)}
           size="icon-xs"
           variant="ghost"

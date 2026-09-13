@@ -21,7 +21,8 @@ import {
   PreviewTakeoverFenceError,
   type PreviewTakeoverLease,
 } from "../mcp/PreviewAutomationTakeover.ts";
-import type { OrchestratorV2Error } from "./Orchestrator.ts";
+import { OrchestratorDispatchError, type OrchestratorV2Error } from "./Orchestrator.ts";
+import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { isTerminalRunStatus, ThreadManagementService } from "./ThreadManagementService.ts";
 
 /**
@@ -242,6 +243,7 @@ type StepOutcome =
   | { readonly type: "failed"; readonly failure: OrchestrationV2BrowserTakeoverFailure };
 
 export const make = Effect.gen(function* () {
+  const projections = yield* ProjectionStoreV2;
   const threads = yield* ThreadManagementService;
   const fenceRegistry = yield* BrowserTakeoverFenceRegistry;
   // Resolved per call, not captured: the live fence is registered after this
@@ -522,11 +524,28 @@ export const make = Effect.gen(function* () {
     });
 
   const recover = Effect.gen(function* () {
-    const shell = yield* threads.getShellSnapshot();
+    const metadata = yield* projections.getThreadMetadata().pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestratorDispatchError({
+            commandId: CommandId.make("command:system:browser-takeover-recovery"),
+            commandType: "thread.browser-takeover.recover",
+            cause,
+          }),
+      ),
+    );
     let failed = 0;
     let rearmed = 0;
     let completed = 0;
-    for (const summary of [...shell.threads, ...shell.archivedThreads]) {
+    for (const summary of metadata) {
+      const status = summary.browserTakeover?.status;
+      if (
+        status === undefined ||
+        status === "completed" ||
+        status === "cancelled" ||
+        status === "failed"
+      )
+        continue;
       const projection = yield* threads.getThreadProjection(summary.id);
       const marker = projection.thread.browserTakeover ?? null;
       if (marker === null) continue;

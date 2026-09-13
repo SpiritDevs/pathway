@@ -75,6 +75,7 @@ export const FocusNotification = Schema.Struct({
   alertProjectKey: Schema.optionalKey(Schema.String),
   alertEligibleAtCreation: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   isRead: Schema.optionalKey(Schema.Boolean),
+  isSeen: Schema.optionalKey(Schema.Boolean),
   /** The Attention Event id is also the notification id within one user's feed. */
   id: FocusNotificationId,
   eventId: AttentionEventId,

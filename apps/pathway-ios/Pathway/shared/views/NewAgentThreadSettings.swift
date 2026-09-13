@@ -1,12 +1,16 @@
 import SwiftUI
 
-struct NewAgentThreadSettings: View {
+struct NewAgentThreadSettings<Tools: View>: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var model: PathwayAgentThreadCreationModel
+
+    var title = "Thread Settings"
+    @ViewBuilder var tools: () -> Tools
 
     var body: some View {
         NavigationStack {
             Form {
+                tools()
                 Section("Agent") {
                     Picker("Provider", selection: $model.selectedProviderID) {
                         ForEach(model.providers) { provider in
@@ -40,7 +44,7 @@ struct NewAgentThreadSettings: View {
                         }
                     }
 
-                    if !model.isConversation {
+                    if !model.isConversation && !model.usesInternalWorkspace {
                         Picker("Workspace", selection: $model.workspaceMode) {
                             Text("Current checkout").tag("local")
                             Text("New worktree").tag("worktree")
@@ -68,7 +72,7 @@ struct NewAgentThreadSettings: View {
             .onChange(of: model.runtimeMode) { _, _ in model.pinPlacement() }
             .onChange(of: model.interactionMode) { _, _ in model.pinPlacement() }
             .onChange(of: model.startFromOrigin) { _, _ in model.pinPlacement() }
-            .navigationTitle("Thread Settings")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -101,5 +105,11 @@ struct NewAgentThreadSettings: View {
                 }
             }
         }
+    }
+}
+
+extension NewAgentThreadSettings where Tools == EmptyView {
+    init(model: PathwayAgentThreadCreationModel) {
+        self.init(model: model, tools: { EmptyView() })
     }
 }

@@ -105,6 +105,35 @@ describe("DesktopEnvironment", () => {
     }),
   );
 
+  it.effect("uses worktree backend paths when the native development app reports packaged", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment(
+        { isPackaged: true, appPath: "/repo/apps/desktop/dist-electron" },
+        { VITE_DEV_SERVER_URL: "http://localhost:5173" },
+      );
+
+      assert.equal(environment.isPackaged, true);
+      assert.equal(environment.isDevelopment, true);
+      assert.equal(environment.appRoot, "/repo");
+      assert.equal(environment.backendEntryPath, "/repo/apps/server/dist/bin.mjs");
+      assert.equal(environment.backendCwd, "/repo");
+    }),
+  );
+
+  it.effect("uses bundled backend paths in a packaged release", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({ isPackaged: true });
+
+      assert.equal(environment.isDevelopment, false);
+      assert.equal(environment.appRoot, defaultInput.appPath);
+      assert.equal(
+        environment.backendEntryPath,
+        "/Applications/Pathway.app/Contents/Resources/app.asar/apps/server/dist/bin.mjs",
+      );
+      assert.equal(environment.backendCwd, "/Users/alice");
+    }),
+  );
+
   it.effect("uses the stable desktop entry as the packaged Linux portal identity", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment({

@@ -15,6 +15,7 @@ final class PathwayNewThreadAttachments {
     var supportsUploads = false
     var maximumFileBytes: Int?
     var isConnected = false
+    var usesCloudQueue = false
     @ObservationIgnored var request: Request?
     @ObservationIgnored var uploadRequest: UploadRequest?
     @ObservationIgnored var upload: Upload = { request, data in
@@ -119,22 +120,23 @@ final class PathwayNewThreadAttachments {
         guard !discarded else { return }
         let type = mimeType.hasPrefix("image/") ? "image" : "file"
         guard drafts.count < 8 else { errorMessage = "You can attach up to 8 files."; return }
-        guard supportsUploads, type == "image" || maximumFileBytes != nil else {
+        guard usesCloudQueue || (supportsUploads && (type == "image" || maximumFileBytes != nil)) else {
             errorMessage = "This environment does not support uploading this file type."; return
         }
-        let limit = type == "image" ? 10 * 1024 * 1024 : min(50 * 1024 * 1024, maximumFileBytes ?? 0)
+        let limit = type == "image" ? 10 * 1024 * 1024 : min(50 * 1024 * 1024, usesCloudQueue ? 50 * 1024 * 1024 : maximumFileBytes ?? 0)
         guard !data.isEmpty, data.count <= limit else { errorMessage = "This attachment exceeds the environment's upload limit."; return }
         restored = true
         let id = UUID().uuidString
         drafts.append(PathwayThreadAttachmentDraft(id: id, name: String(name.prefix(255)), mimeType: mimeType,
-            type: type, sizeBytes: data.count, state: .uploading, previewData: type == "image" ? data : nil))
+            type: type, sizeBytes: data.count, state: usesCloudQueue ? .ready : .uploading, previewData: type == "image" ? data : nil))
         bytes[id] = data
         await persist()
-        await retry(id: id)
+        if !usesCloudQueue { await retry(id: id) }
     }
 
     func retry(id: String) async {
         guard !discarded, let index = drafts.firstIndex(where: { $0.id == id }), let data = bytes[id] else { return }
+        if usesCloudQueue { drafts[index].state = .ready; errorMessage = nil; await persist(); return }
         let draft = drafts[index]
         drafts[index].state = .uploading
         var uploadedID: String?

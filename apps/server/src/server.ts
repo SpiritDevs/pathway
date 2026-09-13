@@ -1,6 +1,5 @@
 import * as StorageManagement from "./storage/StorageService.ts";
 import { EnvironmentHttpApi } from "@spiritdevs/contracts";
-import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -120,6 +119,7 @@ import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts"
 import * as DesktopParentMonitor from "./background/DesktopParentMonitor.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
+import { threadQueueWorkerLayer } from "./cloud/threadQueueWorker.ts";
 import { environmentCommandClaimantLayer } from "./cloud/environmentCommandClaimant.ts";
 import { companySlackCoordinatorLayer } from "./cloud/companySlackCoordinator.ts";
 import { cloudSyncDaemonLayer } from "./cloud/syncDaemon.ts";
@@ -557,12 +557,11 @@ const EmailProjectCatalogLayerLive = EmailProjectCatalog.layer.pipe(
   Layer.provide(RuntimeCoreDependenciesLive),
 );
 
-const EmailCaptureLayerLive = EmailCapture.layer.pipe(
+const EmailCaptureLayerLive = EmailCapture.startedLayer.pipe(
   Layer.provideMerge(EmailStore.layer),
   Layer.provideMerge(EmailWaitStore.layer),
   Layer.provideMerge(EmailProjectCatalogLayerLive),
   Layer.provide(ServerSettingsLayerLive),
-  Layer.tap((context) => Context.get(context, EmailCapture.EmailCaptureService).start),
 );
 
 const EmailTriggerLayerLive = EmailTrigger.layer.pipe(Layer.provide(RuntimeCoreDependenciesLive));
@@ -662,7 +661,7 @@ export const makeServerLayer = Layer.unwrap(
     const routesReady = yield* Deferred.make<void>();
     const launcherLayer = ServiceLauncherClient.layer;
 
-    yield* fixPath();
+    yield* fixPath({ shellEnvironmentHydrated: config.shellEnvironmentHydrated });
 
     const httpListeningLayer = Layer.effectDiscard(
       Effect.gen(function* () {
@@ -787,6 +786,7 @@ export const makeServerLayer = Layer.unwrap(
       capturedEmailPublisherLayer(),
       mailBrainLayer(),
       environmentCommandClaimantLayer(),
+      threadQueueWorkerLayer(),
       companySlackCoordinatorLayer(),
     );
 

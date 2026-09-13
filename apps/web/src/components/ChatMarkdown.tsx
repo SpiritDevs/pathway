@@ -25,6 +25,7 @@ import {
   type AtomCommandResult,
 } from "@spiritdevs/client-runtime/state/runtime";
 import { getChangeRequestTerminologyFromUrl } from "@spiritdevs/shared/sourceControl";
+import { isWorkspaceMediaPreviewPath } from "@spiritdevs/shared/filePreview";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import React, {
@@ -56,6 +57,8 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { remarkGithubAlerts } from "../markdown-github-alerts";
+import { remarkVisualizations } from "../markdown-visualizations";
+import { ChatVisualization } from "./ChatVisualization";
 import {
   issueMentionSignature,
   parseIssueMentionSignature,
@@ -107,6 +110,8 @@ import {
   type MarkdownFileLinkMeta,
 } from "../markdown-links";
 import { readLocalApi } from "../localApi";
+import { WorkspaceImageGallery } from "./media/WorkspaceImageGallery";
+import { buildMarkdownImageGallery } from "./media/workspaceImageGallery.logic";
 import { cn } from "../lib/utils";
 import { useRightPanelStore } from "../rightPanelStore";
 import { useActiveEnvironmentId } from "../state/entities";
@@ -217,6 +222,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     "*": (defaultSchema.attributes?.["*"] ?? []).filter((attribute) => attribute !== "title"),
     code: [...(defaultSchema.attributes?.code ?? []), "dataCodeMeta", "dataInlineCode"],
     blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataAlert"],
+    p: [...(defaultSchema.attributes?.p ?? []), "dataVisualizationPath", "dataVisualizationTitle"],
   },
   protocols: {
     ...defaultSchema.protocols,
@@ -234,6 +240,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
 } satisfies Parameters<typeof rehypeSanitize>[0];
 
 const CHAT_MARKDOWN_REMARK_PLUGINS = [
+  remarkVisualizations,
   remarkGfm,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
@@ -242,6 +249,7 @@ const CHAT_MARKDOWN_REMARK_PLUGINS = [
 ] satisfies NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
 
 const CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS = [
+  remarkVisualizations,
   remarkGfm,
   remarkGithubAlerts,
   remarkNormalizeListItemIndentation,
@@ -1382,6 +1390,7 @@ function areMarkdownFileLinkPropsEqual(
 }
 
 interface ChatMarkdownComponentsContext {
+  readonly onPanelSurfaceOpen: ChatMarkdownProps["onPanelSurfaceOpen"];
   readonly attachPullRequest: ((href: string) => Promise<void>) | undefined;
   readonly cwd: string | undefined;
   readonly diffThemeName: DiffThemeName;
@@ -1480,7 +1489,19 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
   return {
     // Headings and table cells: no rendering of their own, just the inline transforms.
     ...inlineChildrenComponents(renderInlineChildren),
-    p({ node: _node, children, ...props }) {
+    p({ node, children, ...props }) {
+      const visualizationPath = node?.properties?.dataVisualizationPath;
+      const visualizationTitle = node?.properties?.dataVisualizationTitle;
+      if (typeof visualizationPath === "string" && typeof visualizationTitle === "string") {
+        return (
+          <ChatVisualization
+            path={visualizationPath}
+            title={visualizationTitle}
+            threadRef={threadRef}
+            onOpen={ctx.onPanelSurfaceOpen}
+          />
+        );
+      }
       return <p {...props}>{renderInlineChildren(children)}</p>;
     },
     ol({ node, start, style, ...props }) {
@@ -1727,6 +1748,11 @@ function ChatMarkdown({
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const textRef = useRef(text);
+  const [imageGallery, setImageGallery] = useState<{
+    paths: ReadonlyArray<string>;
+    initialIndex: number;
+  } | null>(null);
+  const closeImageGallery = useCallback(() => setImageGallery(null), []);
   textRef.current = text;
   const settledText = isStreaming ? null : text;
   // What this message could be mentioning, from its own text alone: no store, no subscription, and
@@ -1916,6 +1942,15 @@ function ChatMarkdown({
       // Claimed on every open so a synchronous one supersedes a lookup already
       // in flight.
       const isLatestLookup = claimWorkspaceBasenameLookup();
+      if (isWorkspaceMediaPreviewPath(workspaceRelativePath)) {
+        setImageGallery(
+          buildMarkdownImageGallery(workspaceRelativePath, [
+            ...markdownFileLinkMetaByHref.values(),
+            ...inlineCodeFileLinkMetaByText.values(),
+          ]),
+        );
+        return;
+      }
       const openAt = (path: string) => {
         if (onOpenFilePreview) {
           onOpenFilePreview(path, line);
@@ -1945,11 +1980,19 @@ function ChatMarkdown({
         openAt(match ?? workspaceRelativePath);
       })();
     },
-    [cwd, onOpenFilePreview, searchProjectEntries, threadRef],
+    [
+      cwd,
+      inlineCodeFileLinkMetaByText,
+      markdownFileLinkMetaByHref,
+      onOpenFilePreview,
+      searchProjectEntries,
+      threadRef,
+    ],
   );
   const markdownComponents = useMemo<Components>(
     () =>
       createChatMarkdownComponents({
+        onPanelSurfaceOpen,
         attachPullRequest:
           threadRef && cwd && supportsPullRequestAttachments ? attachPullRequest : undefined,
         cwd,
@@ -1978,6 +2021,7 @@ function ChatMarkdown({
       isStreaming,
       markdownFileLinkMetaByHref,
       mentionedIssuesByKey,
+      onPanelSurfaceOpen,
       onTaskListChange,
       openFileInPanel,
       openInPreferredEditor,
@@ -2018,6 +2062,15 @@ function ChatMarkdown({
       onCopy={handleCopy}
     >
       <MarkdownImageContext value={{ threadRef, cwd }}>{markdownElement}</MarkdownImageContext>
+      {imageGallery && threadRef ? (
+        <WorkspaceImageGallery
+          paths={imageGallery.paths}
+          initialIndex={imageGallery.initialIndex}
+          cwd={cwd}
+          threadRef={threadRef}
+          onClose={closeImageGallery}
+        />
+      ) : null}
     </div>
   );
 }

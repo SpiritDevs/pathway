@@ -1,12 +1,14 @@
 # SnapShots
 
-A SnapShot captures the window you are working in and attaches it to your current draft. The
-attachment carries the app name and window title, and when available the app icon and the window's
-accessibility data (its controls, text, and their positions in the image). Agents can use that data
-to reason about the screenshot.
+A SnapShot captures a window, screen, or region and opens an editor. Draw arrows, shapes, and text
+to explain what matters, then copy the image, save it to your chat draft, or download it.
+Window captures carry the app name and window title, and when available the app icon and the
+window's accessibility data (its controls, text, and their positions in the image). Agents can use
+that data to reason about the screenshot.
 
 SnapShots are off by default and available in the desktop app on macOS, Windows, and Linux with
-Wayland. X11 sessions are not supported.
+Wayland. X11 sessions are not supported. SnapShots settings are only shown in the desktop app,
+not in a web browser.
 
 ## Turning it on
 
@@ -19,37 +21,74 @@ off but keeps anything you already installed, so you can resume where you left o
 - **Windows** needs no setup or permission.
 - **Linux** depends on your desktop. See [Linux desktops](#linux-desktops).
 
-Turning capture off releases the shortcut. It does not uninstall a helper or extension you installed.
+On macOS, choose **Allow** beside **Screen Recording** or **Accessibility**. A small panel stays
+visible while System Settings opens. Drag the app from that panel into the permission list, then
+turn on its switch. You can also click the app to show it in Finder. Use the back arrow or return to
+Pathway to recheck access, and repeat for the other permission. If macOS asks you to quit and reopen
+Pathway after allowing Screen Recording, do so, then resume setup.
+
+Turning capture off releases the shortcuts. It does not uninstall a helper or extension you installed.
 
 ## Taking a capture
 
-Switch to the window you want and press the shortcut. The default on macOS and Windows is both
-Shift keys together. Pathway attaches the image to your draft and brings itself forward. If no thread
-is open it starts a draft in the current project, or a new conversation in the selected environment.
+Choose a capture action from the command palette or **Settings** > **SnapShots** > **Capture…**,
+or press its shortcut from any app:
 
-Pressing the shortcut while Pathway is in front captures Pathway itself. You can also choose
-**Take snapshot** from the command palette. If capture is off, that action opens setup.
+- **Capture active window** captures the window you are working in. Its default shortcut on macOS
+  and Windows is both Shift keys together.
+- **Capture current screen** captures everything visible on the display containing your pointer.
+- **Capture region** shows crosshairs over the live screen, with display-local pixel coordinates
+  and selection dimensions. Drag a rectangle and release to capture that area and open the editor.
+  Press Escape to cancel without taking a screenshot.
 
-Pending captures are kept on disk until the attachment is saved to the draft, so a capture survives
-closing the app mid-way. Pathway retries delivery when you sign in to the same account and a draft
-is available after the next launch. Signing out pauses capture; another account cannot receive your
-pending captures.
-A failed delivery keeps the pending capture so it can be retried. Use **Saved captures** in
+Screen and region capture are available on macOS and Windows. Linux desktops currently support
+window capture only. Screen and region shortcuts start unassigned; choose your own in Settings.
+
+Pressing the window shortcut while Pathway is in front captures Pathway itself. If capture is off,
+the command palette actions open capture settings.
+
+## Editing and sharing
+
+Every capture opens the editor. Use the toolbar to add arrows, rectangles, circles, freehand marks,
+highlights, or text. Select a mark to move or delete it, change the colour and line width, and use
+undo and redo to revise your work. Crop removes the parts of the image you do not need.
+
+Choose one of the three actions when you are finished:
+
+- **Copy** copies the annotated image to your clipboard.
+- **Save to chat** adds the annotated image to your draft. It does not send the message. If no thread
+  is open, Pathway starts a draft in the current project or selected environment.
+- **Download** saves the annotated image as a PNG.
+
+PNG exports keep the captured resolution unless they exceed the export size limit; larger images
+are reduced to fit.
+
+Each action closes the editor after it succeeds. If an action fails, the editor stays open so you
+can retry. Cropping removes app text metadata and retains the capture details, so hidden text is
+not shared outside the selected area. Screen and region captures do not include unrelated app text.
+
+Captured originals are kept on disk until you complete an editor action, so a capture survives
+closing the app mid-way. Pending captures reopen for the same signed-in account after the next
+launch. Signing out pauses capture; another account cannot receive your pending captures.
+A failed action keeps the pending capture so it can be retried. Use **Saved captures** in
 SnapShots settings to discard a pending copy. Discarding it does not remove an image already in a draft.
 
-## Changing the shortcut
+## Changing shortcuts
 
-Select the shortcut in Settings, press the new keys, then **Save**. On macOS and Windows you can use
+Each capture action has its own shortcut in Settings. Select its shortcut, press the new keys, then
+**Save**. Use **Clear** to remove a screen or region shortcut while keeping the action available in
+the capture menu and command palette. On macOS and Windows you can use
 a modifier pair such as Command+Command or Ctrl+Ctrl, or a key chord. Pathway refuses shortcuts
-that collide with its own keybindings or that the operating system already reserves.
+that collide with another capture action, its own keybindings, or an operating system reservation.
 
 On Linux, choose a key chord; modifier pairs are not supported. On Niri and Hyprland the shortcut
 lives in your compositor config, so **Change shortcut** reopens setup to review the change.
 
 ## Include app text
 
-**Include app text** controls whether captures include the window's accessibility data. Turn it off
-to attach screenshots only. On macOS this also drops the Accessibility permission requirement.
+**Include app text** controls whether window captures include accessibility data. Screen and region
+captures include only their image and capture details. Turn it off to attach screenshots only.
+On macOS this also drops the Accessibility permission requirement.
 
 Availability depends on the app. Some apps expose only their window controls, not the document or
 terminal contents. If an app is slow to answer, Pathway attaches the screenshot without the data
@@ -61,11 +100,10 @@ they expose text. Restart the browser after enabling it.
 An icon beside the app name on an attachment shows whether accessibility data was included. Select
 it to inspect what was captured.
 
-## Sound, flash, and animation
+## Sound and flash
 
-Settings controls the capture sound, the brief flash on the captured window, and the animation that
-flies the image into your draft. Each can be turned off independently. The operating system's
-reduced-motion setting also disables the animation.
+Settings controls the capture sound and the brief flash on the captured window. Each can be turned
+off independently. Available effects depend on your desktop.
 
 ## Linux desktops
 

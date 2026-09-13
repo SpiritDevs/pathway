@@ -177,7 +177,7 @@ export function useIssueImageAttachmentDrafts(
     (files: ReadonlyArray<File>) => {
       if (cloud !== null && !cloud.isOnline) {
         reportRejection(
-          "Attachments need an internet connection on cloud-synced issues. You can still post a text comment offline.",
+          "Attachments need an internet connection on cloud-synced tasks. You can still post a text comment offline.",
         );
         return;
       }

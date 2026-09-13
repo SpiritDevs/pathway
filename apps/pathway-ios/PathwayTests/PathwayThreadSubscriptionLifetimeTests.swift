@@ -69,4 +69,21 @@ struct PathwayThreadSubscriptionLifetimeTests {
         _ = await events.next()
         stopped.continuation.finish()
     }
+    @Test func queuePromotionRestartsOnlyWhileAnOwnerRemains() async {
+        var starts = 0
+        var stops = 0
+        let lifetime = PathwayThreadSubscriptionLifetime(start: { starts += 1 }, stop: { stops += 1 })
+        lifetime.retain(.conversation)
+        lifetime.restart()
+        lifetime.restart()
+        await lifetime.pendingStop?.value
+        #expect(starts == 2)
+        #expect(stops == 1)
+        lifetime.restart()
+        lifetime.release(.conversation)
+        await lifetime.pendingStop?.value
+        #expect(starts == 2)
+        #expect(stops == 2)
+    }
+
 }

@@ -243,7 +243,7 @@ async function issueForUpload(
     )
     .unique();
   if (issue === null || issue.deletedAt !== null)
-    throw backendError("entity-not-found", `No issue ${issueId}.`);
+    throw backendError("entity-not-found", `No task ${issueId}.`);
   requireRecordPermission(actor, "comments.create", issue.teamIds);
   return issue;
 }
@@ -253,7 +253,7 @@ async function memberForUpload(ctx: QueryCtx, companyId: string): Promise<Member
   if (actor.kind !== "member")
     throw backendError(
       "permission-denied",
-      "Issue attachments must be uploaded by an active company member.",
+      "Task attachments must be uploaded by an active company member.",
     );
   return actor;
 }
@@ -655,7 +655,7 @@ export const urls = query({
       .unique();
     // Soft deletion moves an issue into the recoverable bin; it does not revoke authorized access
     // to evidence retained on that issue. Hard deletion removes both the issue and its attachments.
-    if (issue === null) throw backendError("entity-not-found", `No issue ${args.issueId}.`);
+    if (issue === null) throw backendError("entity-not-found", `No task ${args.issueId}.`);
     requireRecordPermission(actor, "issues.read", issue.teamIds);
     if (args.attachmentIds.length > 8)
       throw backendError("invalid-arguments", "Resolve at most eight attachment URLs.");

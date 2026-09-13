@@ -15,7 +15,7 @@ export interface ActionPaletteSectionDefinition {
 export const ACTION_PALETTE_SECTION_DEFINITIONS = [
   {
     id: "workspace",
-    label: "Workspace",
+    label: "Environment",
     description: "Environment, branch, and editor controls.",
     defaultVisible: true,
     defaultPosition: 0,
@@ -35,6 +35,13 @@ export const ACTION_PALETTE_SECTION_DEFINITIONS = [
     defaultPosition: 2,
   },
   {
+    id: "questions",
+    label: "Pending questions",
+    description: "Answer or ignore questions from this thread.",
+    defaultVisible: true,
+    defaultPosition: 2.5,
+  },
+  {
     id: "development-environments",
     label: "Development environments",
     description: "Discovered local development servers.",
@@ -50,8 +57,8 @@ export const ACTION_PALETTE_SECTION_DEFINITIONS = [
   },
   {
     id: "issues",
-    label: "Issues",
-    description: "Issues linked to the current thread.",
+    label: "Tasks",
+    description: "Tasks linked to the current thread.",
     defaultVisible: true,
     defaultPosition: 5,
   },

@@ -219,7 +219,13 @@ it("atomically resolves a failed native fork as portable context when startup co
   const now = DateTime.makeUnsafe("2026-08-12T00:00:00.000Z");
   const transferId = ContextTransferId.make("transfer_native_fallback");
   const targetProjection = {
-    thread: { id: threadId, modelSelection, worktreePath: "/workspace" },
+    thread: {
+      id: threadId,
+      modelSelection,
+      worktreePath: "/workspace",
+      runtimeMode: "full-access",
+      interactionMode: "default",
+    },
     runs: [
       {
         id: runId,
@@ -230,6 +236,8 @@ it("atomically resolves a failed native fork as portable context when startup co
         providerInstanceId,
         userMessageId: messageId,
         ordinal: 1,
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
         modelSelection,
       },
     ],
@@ -382,9 +390,7 @@ it("atomically resolves a failed native fork as portable context when startup co
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ open }),
         Layer.mock(RunExecutionService.RunExecutionServiceV2)({ startRootRun }),
-        Layer.mock(RuntimePolicy.RuntimePolicyV2)({
-          resolve: () => Effect.succeed({ cwd: "/workspace" } as never),
-        }),
+        RuntimePolicy.layer,
         unusedTextGenerationLayer,
         serverSettingsLayer,
       ),
@@ -397,6 +403,22 @@ it("atomically resolves a failed native fork as portable context when startup co
     expect(forkThread).toHaveBeenCalledOnce();
     expect(ensureThread).toHaveBeenCalledOnce();
     expect(startRootRun).toHaveBeenCalledOnce();
+    expect(open).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePolicy: expect.objectContaining({
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+        }),
+      }),
+    );
+    expect(startRootRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePolicy: expect.objectContaining({
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+        }),
+      }),
+    );
     expect(durableWrites).toEqual([]);
     const fallbackEvents = currentWrites.flatMap((entry) => entry.events);
     expect(fallbackEvents.some((event) => event.type === "context-handoff.updated")).toBe(true);

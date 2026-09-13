@@ -246,7 +246,7 @@ export function IssuesSidebar() {
 
   return (
     <>
-      <ContextualSidebarHeader title="Issues" />
+      <ContextualSidebarHeader title="Tasks" />
       <SidebarContent>
         <SidebarGroup>
           <SidebarMenu>
@@ -256,7 +256,7 @@ export function IssuesSidebar() {
                 onClick={clearFilters}
               >
                 <InboxIcon />
-                <span>All issues</span>
+                <span>All tasks</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
@@ -271,7 +271,7 @@ export function IssuesSidebar() {
                 onClick={() => applyFilter("assignee", ISSUE_ASSIGNEE_USER_VALUE)}
               >
                 <UserIcon />
-                <span>My issues</span>
+                <span>My tasks</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
             {/* Triage is state outside the workflow, so it is a mode rather than a tab: it takes
@@ -456,7 +456,7 @@ export function IssuesSidebar() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {pendingDeleteView?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              A view is a name for a set of filters, so this deletes the name. No issue is touched,
+              A view is a name for a set of filters, so this deletes the name. No task is touched,
               and there is nothing to undo.
             </AlertDialogDescription>
           </AlertDialogHeader>

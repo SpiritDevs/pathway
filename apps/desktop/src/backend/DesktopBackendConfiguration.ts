@@ -388,6 +388,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         onSome: (desktopEnvironmentId) => ({ desktopEnvironmentId }),
       }),
       desktopParentPid: process.pid,
+      shellEnvironmentHydrated: true,
       desktopTelemetryFd: 4,
       desktopTelemetryControlFd: 5,
       ...Option.match(input.resourceMonitorPath, {

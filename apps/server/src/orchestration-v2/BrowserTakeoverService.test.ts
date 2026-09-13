@@ -30,6 +30,7 @@ import {
   layer as browserTakeoverLayer,
 } from "./BrowserTakeoverService.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
+import * as ProjectionStore from "./ProjectionStore.ts";
 import type { OrchestratorV2Error } from "./Orchestrator.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
@@ -133,7 +134,13 @@ function makeHarness() {
   const outbox = EffectOutbox.layer.pipe(Layer.provide(database));
   const fence = makeFenceProbe();
   const takeover = browserTakeoverLayer.pipe(
-    Layer.provide(Layer.merge(threadManagement, fence.layer)),
+    Layer.provide(
+      Layer.mergeAll(
+        threadManagement,
+        fence.layer,
+        ProjectionStore.layer.pipe(Layer.provide(database)),
+      ),
+    ),
   );
   return {
     layer: Layer.mergeAll(threadManagement, takeover, outbox, database),

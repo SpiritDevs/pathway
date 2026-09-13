@@ -246,6 +246,7 @@ function makeProviderAdapter(
       readonly providerSessionId: ProviderSessionId;
     }) => Effect.Effect<void>;
     readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
+    readonly isAccountCurrent?: Effect.Effect<boolean>;
     readonly hangSessionScopeClose?: boolean;
     readonly providerInstanceId?: ProviderInstanceId;
   } = {},
@@ -314,6 +315,7 @@ function makeProviderAdapter(
           ...(options.hasPendingBackgroundWork === undefined
             ? {}
             : { hasPendingBackgroundWork: options.hasPendingBackgroundWork }),
+          ...(options.isAccountCurrent ? { isAccountCurrent: options.isAccountCurrent } : {}),
           ensureThread: () => unimplemented("ensureThread unused in test"),
           resumeThread: (threadInput) =>
             Ref.update(state, (current) => ({
@@ -358,6 +360,7 @@ function makeTestLayer(input: {
   }) => Effect.Effect<void>;
   readonly failReleaseEventWrites?: boolean;
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
+  readonly isAccountCurrent?: Effect.Effect<boolean>;
   readonly hangSessionScopeClose?: boolean;
   readonly providerInstanceId?: ProviderInstanceId;
 }) {
@@ -367,6 +370,7 @@ function makeTestLayer(input: {
   const registryLayer = makeProviderAdapterRegistryLayer(
     makeProviderAdapter(input.state, {
       failEventStream: input.failEventStream ?? false,
+      ...(input.isAccountCurrent ? { isAccountCurrent: input.isAccountCurrent } : {}),
       ...(input.capabilities === undefined ? {} : { capabilities: input.capabilities }),
       ...(input.mcpConfigs === undefined ? {} : { mcpConfigs: input.mcpConfigs }),
       ...(input.beforeOpen === undefined ? {} : { beforeOpen: input.beforeOpen }),
@@ -601,6 +605,60 @@ it.effect("ProviderSessionManagerV2 opens independent sessions concurrently", ()
           state,
           idleTimeoutMs: 60_000,
           beforeOpen,
+        }),
+      ),
+    );
+  }),
+);
+
+it.effect("ProviderSessionManagerV2 reopens sessions that cannot switch permissions in place", () =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(emptyState);
+    yield* Effect.gen(function* () {
+      const eventSink = yield* EventSinkV2;
+      const idAllocator = yield* IdAllocatorV2;
+      const manager = yield* ProviderSessionManagerV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread-permission-switch");
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      yield* eventSink.write({
+        events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+      });
+      const original = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy,
+      });
+      const restricted = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy: { ...runtimePolicy, runtimeMode: "approval-required" },
+      });
+      assert.notStrictEqual(restricted, original);
+      assert.equal((yield* Ref.get(state)).openCount, 2);
+      assert.equal((yield* Ref.get(state)).closeCount, 1);
+      const reused = yield* manager.open({
+        threadId,
+        providerSessionId,
+        modelSelection,
+        runtimePolicy: { ...runtimePolicy, runtimeMode: "approval-required" },
+      });
+      assert.strictEqual(reused, restricted);
+      assert.equal((yield* Ref.get(state)).openCount, 2);
+    }).pipe(
+      Effect.provide(
+        makeTestLayer({
+          state,
+          idleTimeoutMs: 60_000,
+          capabilities: {
+            ...CodexCapabilities,
+            sessions: { ...CodexCapabilities.sessions, supportsRuntimeModeSwitchInSession: false },
+          },
         }),
       ),
     );
@@ -2645,3 +2703,53 @@ it.effect(
       }).pipe(Effect.provide(makeTestLayer({ state, idleTimeoutMs: 60_000 })));
     }),
 );
+
+for (const pendingWork of [false, true]) {
+  it.effect(`replaces a changed account only when idle (pending work: ${pendingWork})`, () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const current = yield* Ref.make(true);
+      yield* Effect.gen(function* () {
+        const manager = yield* ProviderSessionManagerV2;
+        const eventSink = yield* EventSinkV2;
+        const idAllocator = yield* IdAllocatorV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-account-change");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        const open = manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+        const first = yield* open;
+        assert.strictEqual(yield* open, first);
+        yield* Ref.set(current, false);
+        if (pendingWork) {
+          const result = yield* Effect.result(open);
+          assert.equal(result._tag, "Failure");
+          assert.equal((yield* Ref.get(state)).closeCount, 0);
+          assert.equal((yield* Ref.get(state)).openCount, 1);
+        } else {
+          const replacement = yield* open;
+          assert.notStrictEqual(replacement, first);
+          const thread = makeProviderThread({ idAllocator, threadId, providerSessionId, now });
+          assert.deepEqual(yield* replacement.resumeThread({ providerThread: thread }), thread);
+          assert.equal((yield* Ref.get(state)).openCount, 2);
+          assert.equal((yield* Ref.get(state)).closeCount, 1);
+          assert.equal((yield* Ref.get(state)).resumeCount, 1);
+        }
+      }).pipe(
+        Effect.provide(
+          makeTestLayer({
+            state,
+            idleTimeoutMs: 60_000,
+            isAccountCurrent: Ref.get(current),
+            hasPendingBackgroundWork: Effect.succeed(pendingWork),
+          }),
+        ),
+      );
+    }),
+  );
+}

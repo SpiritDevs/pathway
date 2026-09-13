@@ -18,11 +18,14 @@ export const contactWire = v.object({
   revision: v.number(),
 });
 export const sessionFields = {
+  title: v.optional(v.string()),
   description: v.string(),
   projectKey: v.string(),
   projectName: v.string(),
 };
 export const sessionWire = v.object({
+  threadId: v.optional(v.string()),
+  environmentId: v.optional(v.string()),
   id: v.string(),
   ...sessionFields,
   startedAt: v.string(),
@@ -111,6 +114,7 @@ export const businessToolsTables = {
     runningSince: v.optional(v.union(v.number(), v.null())),
     observedAt: v.optional(v.number()),
     revision: v.optional(v.number()),
+    runStatus: v.optional(v.string()),
   })
     .index("by_user_and_id", ["userId", "id"])
     .index("by_company_environment_and_id", ["companyId", "environmentId", "id"])

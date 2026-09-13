@@ -182,6 +182,7 @@ export type VcsCreateRefResult = typeof VcsCreateRefResult.Type;
 export const VcsSwitchRefInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   refName: TrimmedNonEmptyStringSchema,
+  localChanges: Schema.optional(Schema.Literals(["stash", "discard"])),
 });
 export type VcsSwitchRefInput = typeof VcsSwitchRefInput.Type;
 
@@ -440,6 +441,8 @@ const GitActionFinishedEvent = Schema.Struct({
 const GitActionFailedEvent = Schema.Struct({
   ...GitActionProgressBase.fields,
   kind: Schema.Literal("action_failed"),
+  commitSha: Schema.optional(TrimmedNonEmptyStringSchema),
+  pushed: Schema.optional(Schema.Boolean),
   phase: Schema.NullOr(GitActionProgressPhase),
   message: TrimmedNonEmptyStringSchema,
 });

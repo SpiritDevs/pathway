@@ -22,7 +22,7 @@ import {
   type ProjectWorkspaceTarget,
 } from "../components/projects/projectWorkspace.logic";
 import { requestProjectWorkspace } from "../components/projects/projectWorkspacePrompt";
-import { useAttachProjectDirectory } from "../components/projects/useProjectWorkspaceCommands";
+import { useProvisionInternalWorkspace } from "../components/projects/useProjectWorkspaceCommands";
 
 export interface EnsureProjectWorkspace {
   /** The project's root, or null when it has none (or there is no project). */
@@ -38,24 +38,15 @@ export interface EnsureProjectWorkspace {
 
 export async function ensureProjectWorkspaceRoot(input: {
   readonly project: ProjectWorkspaceTarget | null | undefined;
-  readonly attachDirectory: ReturnType<typeof useAttachProjectDirectory>;
+  readonly provisionWorkspace: ReturnType<typeof useProvisionInternalWorkspace>;
   readonly reason?: string;
 }): Promise<string | null> {
   const decision = ensureProjectWorkspaceDecision(input.project);
   if (decision.kind === "unavailable") return null;
   if (decision.kind === "ready") return decision.workspaceRoot;
   if (decision.kind === "provision") {
-    const attached = await input.attachDirectory({
-      environmentId: decision.project.environmentId,
-      projectId: decision.project.id,
-      plan: {
-        kind: "attach",
-        workspaceRoot: decision.workspaceRoot,
-        createWorkspaceRootIfMissing: true,
-        initializeGit: false,
-      },
-    });
-    if (attached.ok) return decision.workspaceRoot;
+    const workspaceRoot = await input.provisionWorkspace(decision.project);
+    if (workspaceRoot !== null) return workspaceRoot;
   }
   const promptResult = await requestProjectWorkspace({
     project: decision.project,
@@ -69,16 +60,16 @@ export function useEnsureProjectWorkspace(
 ): EnsureProjectWorkspace {
   const decision = useMemo(() => ensureProjectWorkspaceDecision(project), [project]);
 
-  const attachDirectory = useAttachProjectDirectory();
+  const provisionWorkspace = useProvisionInternalWorkspace();
 
   const ensureWorkspaceRoot = useCallback(
     (reason?: string) =>
       ensureProjectWorkspaceRoot({
         project,
-        attachDirectory,
+        provisionWorkspace,
         ...(reason === undefined ? {} : { reason }),
       }),
-    [attachDirectory, project],
+    [provisionWorkspace, project],
   );
 
   return {

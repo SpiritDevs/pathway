@@ -185,6 +185,7 @@ interface LiveSessionEntry {
    */
   readonly mcpCredentialIdByThread: ReadonlyMap<ThreadId, string>;
   readonly supportsMultipleProviderThreads: boolean;
+  readonly runtimeMode: ProviderAdapterV2RuntimePolicy["runtimeMode"];
   readonly runtime: ProviderAdapterV2SessionRuntime;
   readonly exposedRuntime: ProviderAdapterV2SessionRuntime;
   readonly eventSubscribers: Ref.Ref<
@@ -1401,7 +1402,58 @@ export const layerWithOptions = (
             input.providerSessionId,
             Effect.gen(function* () {
               const key = sessionKey(input.providerSessionId);
-              const existing = (yield* Ref.get(sessions)).get(key);
+              let existing = (yield* Ref.get(sessions)).get(key);
+              if (
+                existing?.runtime.isAccountCurrent &&
+                !(yield* existing.runtime.isAccountCurrent)
+              ) {
+                const pendingWork = yield* (
+                  existing.runtime.hasPendingBackgroundWork ?? Effect.succeed(false)
+                );
+                if (existing.busyCount === 0 && !pendingWork) {
+                  yield* releaseEntry({
+                    providerSessionId: input.providerSessionId,
+                    reason: "manual_shutdown",
+                    detail: "Provider account changed; resume with the current sign-in.",
+                    onlyIfIdleGeneration: existing.idleGeneration,
+                  });
+                }
+                existing = (yield* Ref.get(sessions)).get(key);
+                if (existing !== undefined) {
+                  return yield* new ProviderSessionOpenError({
+                    instanceId: input.modelSelection.instanceId,
+                    providerSessionId: input.providerSessionId,
+                    cause:
+                      "The provider account changed. Wait for running work on this connection to finish before continuing.",
+                  });
+                }
+              }
+              if (
+                existing !== undefined &&
+                existing.runtimeMode !== input.runtimePolicy.runtimeMode &&
+                !existing.runtime.providerSession.capabilities.sessions
+                  .supportsRuntimeModeSwitchInSession
+              ) {
+                const pendingWork = yield* (
+                  existing.runtime.hasPendingBackgroundWork ?? Effect.succeed(false)
+                );
+                if (existing.busyCount === 0 && !pendingWork) {
+                  yield* releaseEntry({
+                    providerSessionId: input.providerSessionId,
+                    reason: "manual_shutdown",
+                    detail: "Runtime mode changed; reopen with the requested permissions.",
+                    onlyIfIdleGeneration: existing.idleGeneration,
+                  });
+                }
+                existing = (yield* Ref.get(sessions)).get(key);
+                if (existing !== undefined) {
+                  return yield* new ProviderSessionOpenError({
+                    instanceId: input.modelSelection.instanceId,
+                    providerSessionId: input.providerSessionId,
+                    cause: "Wait for running provider work to finish before changing permissions.",
+                  });
+                }
+              }
               if (existing !== undefined) {
                 if (
                   !existing.attachedThreadIds.has(input.threadId) &&
@@ -1502,6 +1554,7 @@ export const layerWithOptions = (
                 supportsMultipleProviderThreads:
                   runtime.providerSession.capabilities.sessions
                     .supportsMultipleProviderThreadsPerSession,
+                runtimeMode: input.runtimePolicy.runtimeMode,
                 runtime,
                 exposedRuntime,
                 eventSubscribers,

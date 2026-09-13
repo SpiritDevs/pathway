@@ -501,7 +501,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     >
       <div
         className={cn(
-          "workspace-topbar gap-1 pl-2",
+          "workspace-topbar min-w-0 gap-1 pl-2",
           props.mode !== "inline" &&
             props.mode !== "sheet" &&
             "[--workspace-topbar-height:--spacing(11)]",
@@ -512,9 +512,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       >
         <ScrollArea
           ref={tabListRef}
-          hideScrollbars
           scrollFade
-          className={cn("min-w-0 flex-1 rounded-none", ownsDesktopTitleBar && "drag-region")}
+          className="min-w-0 flex-1 rounded-none [-webkit-app-region:no-drag]"
           data-right-panel-tab-list
         >
           <div className="flex h-full w-max min-w-full items-center gap-1">
@@ -660,7 +659,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           </div>
         </ScrollArea>
         <div ref={setTabBarActionsHost} className="flex shrink-0 items-center" />
-        {props.layoutControls}
+        {props.layoutControls ? (
+          <div className="flex h-full shrink-0 items-center">{props.layoutControls}</div>
+        ) : null}
       </div>
       <div className="flex min-h-0 flex-1 flex-col" data-right-panel-surface-content>
         {props.activeSurfaceId === null ? (

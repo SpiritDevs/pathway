@@ -1,3 +1,4 @@
+import { Clock3Icon } from "lucide-react";
 import { CameraIcon } from "lucide-react";
 import {
   useCallback,
@@ -9,6 +10,9 @@ import {
   type KeyboardEvent,
 } from "react";
 import {
+  BookOpenIcon,
+  MicIcon,
+  HistoryIcon,
   BellIcon,
   ActivityIcon,
   HardDriveIcon,
@@ -41,6 +45,9 @@ import {
 } from "lucide-react";
 import { useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
 
+import { useDictationAvailability } from "../../dictation/useDictation";
+import { dictationSettingsPathVisible } from "../dictation/dictationUi";
+import { isElectron } from "../../env";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Kbd } from "../ui/kbd";
@@ -86,6 +93,11 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/appearance": PaletteIcon,
   "/settings/keybindings": KeyboardIcon,
   "/settings/snap-shot": CameraIcon,
+  "/settings/dictation": MicIcon,
+  "/settings/dictation/models": HardDriveIcon,
+  "/settings/dictation/history": HistoryIcon,
+  "/settings/dictation/dictionary": BookOpenIcon,
+  "/settings/dictation/settings": Settings2Icon,
   "/settings/projects": FolderIcon,
   "/settings/members-teams": UsersIcon,
   "/settings/company-members": UserRoundIcon,
@@ -97,6 +109,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/providers": BotIcon,
   "/settings/scheduled-tasks": CalendarClockIcon,
   "/settings/source-control": GitBranchIcon,
+  "/settings/time-tracker": Clock3Icon,
   "/settings/usage": ChartNoAxesColumnIcon,
   "/settings/issues-statuses": CircleDotIcon,
   "/settings/issues-labels": TagsIcon,
@@ -115,6 +128,7 @@ function SettingsSectionIcon({ to }: { to: SettingsSearchPath }) {
 
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const companySettings = useCompanySettings();
+  const dictationAvailability = useDictationAvailability();
   const integrationsClient = useCompanyIntegrationsClient();
   const [integrationsAttentionCount, setIntegrationsAttentionCount] = useState(0);
   const workspaceKind = companySettings.workspaceKind;
@@ -157,10 +171,13 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   const [activeResultIndex, setActiveResultIndex] = useState(0);
   const results = useMemo(
     () =>
-      searchSettings(query).filter((item) =>
-        settingsPathIsVisibleForWorkspace(item.to, workspaceKind),
+      searchSettings(query).filter(
+        (item) =>
+          settingsPathIsVisibleForWorkspace(item.to, workspaceKind) &&
+          (isElectron || item.to !== "/settings/snap-shot") &&
+          dictationSettingsPathVisible(item.to, dictationAvailability),
       ),
-    [query, workspaceKind],
+    [query, workspaceKind, dictationAvailability],
   );
   const isSearching = query.trim().length > 0;
   const hasResults = results.length > 0;
@@ -425,14 +442,21 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
               ))}
             </SidebarMenu>
           ) : (
-            SETTINGS_NAV_GROUPS.map((group) => (
+            SETTINGS_NAV_GROUPS.filter(
+              (group) => group.label !== "Dictation" || dictationAvailability !== "unavailable",
+            ).map((group) => (
               <div key={group.label} className="flex min-w-0 flex-col">
                 <SidebarGroupLabel className="text-sidebar-muted-foreground/75">
                   {group.label}
                 </SidebarGroupLabel>
                 <SidebarMenu className="ps-px">
                   {group.paths
-                    .filter((to) => settingsPathIsVisibleForWorkspace(to, workspaceKind))
+                    .filter(
+                      (to) =>
+                        settingsPathIsVisibleForWorkspace(to, workspaceKind) &&
+                        (isElectron || to !== "/settings/snap-shot") &&
+                        dictationSettingsPathVisible(to, dictationAvailability),
+                    )
                     .map((to) => {
                       const Icon = SETTINGS_SECTION_ICONS[to];
                       // Prefix match keeps the section active on nested routes

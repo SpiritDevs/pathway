@@ -158,6 +158,7 @@ export const make = Effect.gen(function* () {
       const requests = projection.runtimeRequests.filter(
         (request) => request.status === "pending" && request.responseCapability.type !== "message",
       );
+      let closedRequests = requests.length;
       const detail = `Cancelled because the server ${trigger === "startup" ? "restarted" : "shut down"} before the provider work completed.`;
       const commandId = CommandId.make(
         `command:runtime-reconcile:${trigger}:${projection.thread.id}:${DateTime.formatIso(now)}`,
@@ -325,7 +326,8 @@ export const make = Effect.gen(function* () {
       for (const request of projection.runtimeRequests) {
         if (
           request.status !== "resolved" ||
-          request.responseCapability.type !== "message" ||
+          (request.responseCapability.type !== "message" &&
+            request.responseCapability.type !== "live") ||
           request.responseCommandId === undefined
         )
           continue;
@@ -339,10 +341,11 @@ export const make = Effect.gen(function* () {
               }),
           ),
         );
-        const delivery = deliveryEffects.filter(
-          (effect) =>
-            effect.request.type === "provider-turn.start" ||
-            effect.request.type === "provider-turn.steer",
+        const delivery = deliveryEffects.filter((effect) =>
+          request.responseCapability.type === "message"
+            ? effect.request.type === "provider-turn.start" ||
+              effect.request.type === "provider-turn.steer"
+            : effect.request.type === "runtime-request.respond",
         );
         if (delivery.length === 0 || delivery.every((effect) => effect.status === "succeeded"))
           continue;
@@ -352,8 +355,24 @@ export const make = Effect.gen(function* () {
           threadId: projection.thread.id,
           nodeId: request.nodeId,
           occurredAt: now,
-          payload: { ...request, status: "pending", resolvedAt: null },
+          payload:
+            request.responseCapability.type === "live"
+              ? {
+                  ...request,
+                  status: "expired",
+                  responseCapability: {
+                    type: "not_resumable",
+                    reason:
+                      "The server restarted before this runtime request response reached the provider.",
+                  },
+                  resolvedAt: now,
+                }
+              : { ...request, status: "pending", resolvedAt: null },
         });
+        if (request.responseCapability.type === "live") {
+          closedRequests += 1;
+          continue;
+        }
         const node = projection.nodes.find((candidate) => candidate.id === request.nodeId);
         if (node !== undefined)
           events.push({
@@ -533,7 +552,7 @@ export const make = Effect.gen(function* () {
       return {
         terminalizedRuns: runs.length,
         stoppedSessions,
-        closedRequests: requests.length,
+        closedRequests,
         retiredEffects,
       };
     },
@@ -541,8 +560,8 @@ export const make = Effect.gen(function* () {
 
   const reconcile = (trigger: "startup" | "shutdown") =>
     Effect.gen(function* () {
-      const shell = yield* projections
-        .getShellSnapshot()
+      const threadIds = yield* projections
+        .getRecoveryThreadIds()
         .pipe(
           Effect.mapError(
             (cause) => new ProviderRuntimeRecoveryError({ operation: "read-projections", cause }),
@@ -552,13 +571,13 @@ export const make = Effect.gen(function* () {
       let stoppedSessions = 0;
       let closedRequests = 0;
       let retiredEffects = 0;
-      for (const thread of [...shell.threads, ...shell.archivedThreads]) {
-        const projection = yield* projections.getThreadProjection(thread.id).pipe(
+      for (const threadId of threadIds) {
+        const projection = yield* projections.getThreadProjection(threadId).pipe(
           Effect.mapError(
             (cause) =>
               new ProviderRuntimeRecoveryError({
                 operation: "read-projections",
-                threadId: thread.id,
+                threadId,
                 cause,
               }),
           ),

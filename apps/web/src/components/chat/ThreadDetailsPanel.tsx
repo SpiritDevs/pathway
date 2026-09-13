@@ -1,3 +1,4 @@
+import { PendingQuestionsSection } from "./PendingQuestionsSection";
 import type { AutoPlacementOption } from "../BranchToolbar.logic";
 import type {
   EditorId,
@@ -14,7 +15,7 @@ import type { DraftId } from "../../composerDraftStore";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { usePathwayProjectFileScripts } from "../../hooks/usePathwayProjectFileScripts";
 import type { EnvMode, EnvironmentOption } from "../BranchToolbar.logic";
-import { BranchToolbar } from "../BranchToolbar";
+import { BranchToolbar, type BranchToolbarWorkspaceContext } from "../BranchToolbar";
 import { BranchToolbarEnvironmentSelector } from "../BranchToolbarEnvironmentSelector";
 import {
   DevelopmentEnvironmentControls,
@@ -46,8 +47,11 @@ import { useClientSettings } from "../../hooks/useSettings";
 import { resolveActionPaletteSections, type ActionPaletteSectionId } from "./actionPaletteSections";
 
 export interface ThreadDetailsPanelProps {
+  pendingQuestions?: React.ComponentProps<typeof PendingQuestionsSection>;
+  workspaceContext?: BranchToolbarWorkspaceContext;
   mode: "inline" | "popover";
   onClose?: () => void;
+  onOpenDirectory?: ((cwd: string) => void) | undefined;
   environmentId: EnvironmentId;
   environmentConnection: EnvironmentConnectionPresentation | null;
   threadId: ThreadId;
@@ -65,10 +69,11 @@ export interface ThreadDetailsPanelProps {
   showOpenInPicker: boolean;
   gitCwd: string | null;
   isGitRepo: boolean;
+  hasAttachedDirectory?: boolean;
   autoPlacement?: AutoPlacementOption | undefined;
   environmentLocked?: boolean | undefined;
   envLocked: boolean;
-  availableEnvironments: readonly EnvironmentOption[];
+  availableEnvironments: readonly Omit<EnvironmentOption, "projectId">[];
   onEnvironmentChange: (environmentId: EnvironmentId) => void;
   onLinkEnvironmentRequest?: () => void;
   onEnvModeChange: (mode: EnvMode) => void;
@@ -166,7 +171,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     props.environmentConnection?.phase === "connecting" ||
     props.environmentConnection?.phase === "reconnecting";
   const branchToolbarProps = {
+    ...(props.workspaceContext ? { workspaceContext: props.workspaceContext } : {}),
     showGitControls: props.isGitRepo,
+    onOpenDirectory: props.onOpenDirectory,
     environmentId: props.environmentId,
     threadId: props.threadId,
     ...(props.draftId ? { draftId: props.draftId } : {}),
@@ -198,15 +205,23 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
 
   const renderSection = (sectionId: ActionPaletteSectionId) => {
     switch (sectionId) {
+      case "questions":
+        return props.pendingQuestions ? (
+          <PendingQuestionsSection key={sectionId} {...props.pendingQuestions} />
+        ) : null;
       case "workspace":
         return (
-          <section key={sectionId} aria-labelledby="thread-details-workspace-heading">
+          <section
+            key={sectionId}
+            aria-labelledby="thread-details-workspace-heading"
+            className={cn(!connectionIssue && "has-[[data-slot=workspace-controls]:empty]:hidden")}
+          >
             <div className="flex min-h-10 items-center justify-between gap-3 px-3.5 pb-1 pt-3">
               <h3
                 id="thread-details-workspace-heading"
                 className="text-[11px] font-medium text-muted-foreground"
               >
-                Workspace
+                Environment
               </h3>
             </div>
 
@@ -237,7 +252,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
               </div>
             ) : null}
 
-            <div className="flex flex-col px-2 pb-2.5">
+            <div data-slot="workspace-controls" className="flex flex-col px-2 pb-2.5">
               {props.availableEnvironments.length > 0 ? (
                 <BranchToolbarEnvironmentSelector
                   autoPlacement={props.autoPlacement}
@@ -252,7 +267,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 />
               ) : null}
               <BranchToolbar layout="panel" panelSection="workspace" {...branchToolbarProps} />
-              {props.showOpenInPicker ? (
+              {props.showOpenInPicker && props.hasAttachedDirectory !== false ? (
                 <OpenInPicker
                   environmentId={props.environmentId}
                   keybindings={props.keybindings}
@@ -265,7 +280,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           </section>
         );
       case "actions":
-        return (
+        return props.hasAttachedDirectory === false ? null : (
           <ThreadDetailsActionsSection
             key={sectionId}
             activeProjectScripts={props.activeProjectScripts}
@@ -329,7 +344,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           />
         );
       case "version-control":
-        return props.gitCwd ? (
+        return props.gitCwd && props.hasAttachedDirectory !== false ? (
           <section
             key={sectionId}
             aria-labelledby="thread-details-version-control-heading"
@@ -395,9 +410,9 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
         "dropdown-glass isolate contain-paint grid max-h-full grid-rows-[minmax(0,1fr)] overflow-hidden rounded-[20px]",
         // The popup's real ceiling is what base-ui measured for it — the anchor's clipping
         // ancestors, which is how an open terminal drawer shrinks it — less the popover
-        // viewport's own p-2. The dvh term is the fallback's fallback, from before.
+        // viewport's own p-3. The dvh term is the fallback's fallback, from before.
         props.mode === "popover" &&
-          "max-h-[min(calc(100dvh-6.5rem),calc(var(--available-height,100dvh)-1rem))]",
+          "max-h-[min(calc(100dvh-6.5rem),calc(var(--available-height,100dvh)-1.5rem))]",
       )}
       data-thread-details-card
     >

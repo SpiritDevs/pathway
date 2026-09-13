@@ -26,6 +26,10 @@ import {
   providerErrorPresentation,
   type TimelineEntry,
 } from "./session-logic";
+import {
+  computeStableMessagesTimelineRows,
+  deriveMessagesTimelineRows,
+} from "./components/chat/MessagesTimeline.logic";
 import { makeThreadProjectionFixture } from "./test-fixtures";
 import type { ChatMessage } from "./types";
 
@@ -548,79 +552,113 @@ describe("V2 session presentation", () => {
     }
   });
 
-  it("uses projected plan status and file contents in timeline entries", () => {
-    const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
-    const threadId = ThreadId.make("thread-timeline-artifacts");
-    const runId = RunId.make("run-timeline-artifacts");
-    const nodeId = NodeId.make("node-timeline-artifacts");
-    const planId = PlanId.make("plan-timeline-artifacts");
-    const base = {
-      threadId,
-      runId,
-      nodeId,
-      providerThreadId: null,
-      providerTurnId: null,
-      nativeItemRef: null,
-      parentItemId: null,
-      status: "completed" as const,
-      title: null,
-      startedAt: now,
-      completedAt: now,
-      updatedAt: now,
-    };
-    const planItem = {
-      ...base,
-      id: TurnItemId.make("item-proposed-plan"),
-      ordinal: 0,
-      type: "proposed_plan" as const,
-      planId,
-      markdown: "Finished plan",
-      streaming: false,
-    } satisfies OrchestrationV2TurnItem;
-    const fileItem = {
-      ...base,
-      id: TurnItemId.make("item-file-change"),
-      ordinal: 1,
-      type: "file_change" as const,
-      fileName: "src/example.ts",
-      newStr: "export const answer = 42;\n",
-    } satisfies OrchestrationV2TurnItem;
-    const visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = [
-      planItem,
-      fileItem,
-    ].map((item, position) => ({
-      position,
-      visibility: "local",
-      sourceThreadId: threadId,
-      sourceItemId: item.id,
-      item,
-    }));
+  it.each(["local", "inherited"] as const)(
+    "preserves %s plan ownership and artifact contents through timeline rows",
+    (visibility) => {
+      const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
+      const threadId = ThreadId.make("thread-timeline-artifacts");
+      const runId = RunId.make("run-timeline-artifacts");
+      const nodeId = NodeId.make("node-timeline-artifacts");
+      const planId = PlanId.make("plan-timeline-artifacts");
+      const base = {
+        threadId,
+        runId,
+        nodeId,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        status: "completed" as const,
+        title: null,
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+      };
+      const planItem = {
+        ...base,
+        id: TurnItemId.make("item-proposed-plan"),
+        ordinal: 0,
+        type: "proposed_plan" as const,
+        planId,
+        markdown: "![Plan image](./evidence/plan.png)",
+        streaming: false,
+      } satisfies OrchestrationV2TurnItem;
+      const fileItem = {
+        ...base,
+        id: TurnItemId.make("item-file-change"),
+        ordinal: 1,
+        type: "file_change" as const,
+        fileName: "src/example.ts",
+        newStr: "export const answer = 42;\n",
+      } satisfies OrchestrationV2TurnItem;
+      const visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = [
+        planItem,
+        fileItem,
+      ].map((item, position) => ({
+        position,
+        visibility,
+        sourceThreadId: threadId,
+        sourceItemId: item.id,
+        item,
+      }));
 
-    const entries = deriveTimelineEntriesFromVisibleTurnItems({
-      visibleTurnItems,
-      optimisticMessages: [],
-      plans: [
-        {
-          id: planId,
-          threadId,
-          runId,
-          nodeId,
-          kind: "proposed_plan",
-          markdown: planItem.markdown,
-          status: "completed",
-        },
-      ],
-    });
+      const entries = deriveTimelineEntriesFromVisibleTurnItems({
+        visibleTurnItems,
+        optimisticMessages: [],
+        plans: [
+          {
+            id: planId,
+            threadId,
+            runId,
+            nodeId,
+            kind: "proposed_plan",
+            markdown: planItem.markdown,
+            status: "completed",
+          },
+        ],
+      });
 
-    expect(entries[0]?.kind).toBe("proposed-plan");
-    if (entries[0]?.kind === "proposed-plan") {
-      expect(entries[0].proposedPlan.status).toBe("completed");
-    }
-    expect(entries[1]?.kind).toBe("work");
-    if (entries[1]?.kind === "work") {
-      expect(entries[1].entry.detail).toBe(fileItem.newStr);
-    }
-  });
+      expect(entries[0]?.kind).toBe("proposed-plan");
+      if (entries[0]?.kind === "proposed-plan") {
+        expect(entries[0].proposedPlan.status).toBe("completed");
+        expect(entries[0].projectedItem).toBe(visibleTurnItems[0]);
+      }
+      const rows = deriveMessagesTimelineRows({
+        timelineEntries: entries,
+        isWorking: false,
+        activeTurnStartedAt: null,
+        turnDiffSummaryByAssistantMessageId: new Map(),
+        revertTurnCountByUserMessageId: new Map(),
+      });
+      expect(rows.find((row) => row.kind === "proposed-plan")).toMatchObject({
+        proposedPlan: { planMarkdown: planItem.markdown },
+        projectedItem: { sourceThreadId: threadId, visibility },
+      });
+      const planRow = rows.find((row) => row.kind === "proposed-plan");
+      expect(planRow).toBeDefined();
+      if (planRow) {
+        const initial = computeStableMessagesTimelineRows([planRow], {
+          byId: new Map(),
+          result: [],
+        });
+        const repeated = computeStableMessagesTimelineRows([{ ...planRow }], initial);
+        expect(repeated.result[0]).toBe(planRow);
+        const changed = {
+          ...planRow,
+          projectedItem: {
+            ...planRow.projectedItem,
+            sourceThreadId: ThreadId.make("another-source-thread"),
+          },
+        };
+        const updated = computeStableMessagesTimelineRows([changed], repeated);
+        expect(updated.result[0]).toBe(changed);
+      }
+      expect(entries[1]?.kind).toBe("work");
+      if (entries[1]?.kind === "work") {
+        expect(entries[1].entry.detail).toBe(fileItem.newStr);
+      }
+    },
+  );
 
   it("resolves attempt identity through V2 execution nodes", () => {
     const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");

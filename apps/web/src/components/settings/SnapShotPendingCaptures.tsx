@@ -7,7 +7,7 @@ import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
-/** Failed delivery keeps the native original until the user retries or discards it. */
+/** Editor actions keep the native original until the user finishes or discards it. */
 export function SnapShotPendingCaptures() {
   const accountId = useSnapShotAccountId();
   const bridge = getDesktopSnapShotBridge();
@@ -63,8 +63,8 @@ export function SnapShotPendingCaptures() {
   return (
     <SettingsSection title="Saved captures">
       <p className="px-3 py-2 text-xs text-muted-foreground">
-        Captures waiting to attach to a conversation. Discarding a saved capture keeps any copy
-        already attached to a draft.
+        Captures waiting to be edited or saved. Discarding a saved capture keeps any copy already
+        attached to a draft.
       </p>
       {pending.map((capture) => (
         <SettingsRow

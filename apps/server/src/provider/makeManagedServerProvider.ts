@@ -17,6 +17,7 @@ import * as Semaphore from "effect/Semaphore";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { forkParked } from "../serverActivation.ts";
 import type { ServerProviderShape } from "./Services/ServerProvider.ts";
 
 interface ProviderSnapshotState {
@@ -215,7 +216,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
 
   yield* applySnapshot(initialSettings, { forceRefresh: true }).pipe(
     Effect.ignoreCause({ log: true }),
-    Effect.forkScoped,
+    forkParked,
   );
 
   return {

@@ -14,7 +14,8 @@ export function storageThreadMatches(
   filter: StorageThreadFilter,
   query: string,
 ): boolean {
-  if (filter === "inactive" && thread.status === "active") return false;
+  if (filter === "inactive" && thread.status !== "archived" && thread.status !== "settled")
+    return false;
   if (filter !== "inactive" && filter !== "all" && thread.status !== filter) return false;
   const search = query.trim().toLowerCase();
   return (

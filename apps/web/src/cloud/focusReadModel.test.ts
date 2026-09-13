@@ -1,8 +1,17 @@
+import { AtomRegistry } from "effect/unstable/reactivity";
+import { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
+import {
+  AttentionEventId,
+  FocusNotificationId,
+  type FocusNotification,
+} from "@spiritdevs/contracts/focus";
 import { FocusId, FocusProjectKey, type FocusReadModel } from "@spiritdevs/contracts/focus";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   ALL_FOCUS_ID,
+  focusNotificationsAtom,
+  threadHasUnreadNotificationAtom,
   activeFocusIdStorageKey,
   persistActiveFocusSelection,
   readActiveFocusId,
@@ -75,6 +84,28 @@ describe("active Focus persistence", () => {
     ).toBe(ALL_FOCUS_ID);
   });
 
+  it("does not switch to All while company projects are still loading", () => {
+    const { storage } = memoryStorage({ [activeFocusIdStorageKey("account-a")]: WORK });
+    expect(
+      readActiveFocusId({
+        scope: "account-a",
+        readModel: READ_MODEL,
+        visibleProjectKeys: new Set(),
+        projectsReady: false,
+        storage,
+      }),
+    ).toBe(WORK);
+    expect(
+      readActiveFocusId({
+        scope: "account-a",
+        readModel: READ_MODEL,
+        visibleProjectKeys: new Set(),
+        projectsReady: true,
+        storage,
+      }),
+    ).toBe(ALL_FOCUS_ID);
+  });
+
   it("preserves a requested Focus while its projects are hidden", () => {
     const { storage, values } = memoryStorage();
     const overrides = persistActiveFocusSelection({
@@ -123,5 +154,47 @@ describe("active Focus persistence", () => {
         },
       }),
     ).toBe(ALL_FOCUS_ID);
+  });
+});
+
+describe("thread notification dots", () => {
+  it("tracks unread events by environment and clears only after every thread event is read", () => {
+    const registry = AtomRegistry.make();
+    const notification: FocusNotification = {
+      id: FocusNotificationId.make("finished"),
+      eventId: AttentionEventId.make("finished"),
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("thread"),
+      projectKey: FocusProjectKey.make("env:project"),
+      eventKind: "finished-unsettled",
+      createdAt: 1,
+      isRead: false,
+      alertEligibleAtCreation: true,
+    };
+    const second = {
+      ...notification,
+      id: FocusNotificationId.make("second"),
+      eventId: AttentionEventId.make("second"),
+    };
+    const dot = threadHasUnreadNotificationAtom("env:thread");
+    const otherEnvironmentDot = threadHasUnreadNotificationAtom("other:thread");
+    const unmount = registry.mount(dot);
+    try {
+      registry.set(focusNotificationsAtom, [notification, second]);
+      expect(registry.get(dot)).toBe(true);
+      expect(registry.get(otherEnvironmentDot)).toBe(false);
+      registry.set(focusNotificationsAtom, [{ ...notification, isRead: true }, second]);
+      expect(registry.get(dot)).toBe(true);
+      registry.set(focusNotificationsAtom, [
+        { ...notification, isRead: true },
+        { ...second, isRead: true },
+      ]);
+      expect(registry.get(dot)).toBe(false);
+      registry.set(focusNotificationsAtom, [notification]);
+      expect(registry.get(dot)).toBe(true);
+    } finally {
+      unmount();
+      registry.dispose();
+    }
   });
 });

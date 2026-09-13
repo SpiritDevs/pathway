@@ -1,4 +1,11 @@
-"use client";
+import { useDictationAvailability } from "../dictation/useDictation";
+("use client");
+import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
+
+import { ProjectOwnerSelect, useProjectOwner } from "./projects/ProjectOwnerSelect";
+import { useComposerDraftStore } from "../composerDraftStore";
+import type { QuickCreateProjectResult } from "./projects/projectWorkspace.logic";
+import { PERSONAL_PROJECT_OWNER } from "./projects/projectOwner.logic";
 
 import { canSettle } from "@spiritdevs/client-runtime/state/thread-settled";
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -44,6 +51,7 @@ import {
 } from "@spiritdevs/client-runtime/state/runtime";
 import {
   type DesktopWslState,
+  type DesktopSnapShotState,
   type EnvironmentId,
   type FilesystemBrowseResult,
   type ProjectId,
@@ -98,6 +106,10 @@ import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
 import { useSnapShotAccountId } from "../lib/snapShotAccount";
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
+import {
+  SNAP_SHOT_CAPTURE_ACTIONS,
+  snapShotCaptureUnavailableMessage,
+} from "../lib/snapShotCapture";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
@@ -110,6 +122,7 @@ import {
   useProjects,
   useUnscopedProjects,
   useThreadShells,
+  readProject,
   waitForProject,
   waitForUnscopedProject,
 } from "../state/entities";
@@ -190,7 +203,11 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
-import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
+import {
+  deriveLogicalProjectKeyFromSettings,
+  getProjectOrderKey,
+  selectProjectGroupingSettings,
+} from "../logicalProject";
 import { legacyProjectCwdPreferenceKeys, useUiStateStore } from "../uiStateStore";
 import {
   buildSidebarProjectPickerEntries,
@@ -215,6 +232,7 @@ import {
   visibleFocusProjectKeysAtom,
 } from "../cloud/focusReadModel";
 import { useEnvironmentControl } from "../cloud/useEnvironmentControl";
+import { CONVERSATIONS_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 const EMPTY_REPOSITORY_CHOICE_CANDIDATES: ReadonlyArray<SidebarProjectSnapshot> = [];
@@ -583,14 +601,56 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   // and a dialog mounted inside a closing popup would unmount with it.
   const [quickCreateProjectEnvironmentId, setQuickCreateProjectEnvironmentId] =
     useState<EnvironmentId | null>(null);
+  const [quickCreateProjectOwner, setQuickCreateProjectOwner] = useState<string | undefined>();
   const [quickCreateProjectOpen, setQuickCreateProjectOpen] = useState(false);
+  const { routeDraftId, handleNewThread: openCreatedProjectThread } = useHandleNewThread();
+  const creationGroupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const creationActiveCompanyId = useAtomValue(activeCompanyIdAtom);
+  const setCreationActiveCompanyId = useAtomSet(activeCompanyIdAtom);
+  const handleQuickProjectCreated = async (
+    created: QuickCreateProjectResult,
+    companyId: CompanyId,
+  ) => {
+    if (creationActiveCompanyId !== null && creationActiveCompanyId !== companyId) {
+      setCreationActiveCompanyId(companyId);
+    }
+    const projectRef = scopeProjectRef(created.environmentId, created.projectId);
+    if (!(await waitForProject(projectRef))) {
+      throw new Error(
+        "Project created, but its connection is still syncing. Open it from the project picker once it appears.",
+      );
+    }
+    const store = useComposerDraftStore.getState();
+    const session = routeDraftId === null ? null : store.getDraftSession(routeDraftId);
+    if (
+      routeDraftId !== null &&
+      session &&
+      session.projectId === null &&
+      !session.pendingSend &&
+      !session.promotedTo
+    ) {
+      const project = readProject(projectRef);
+      store.setLogicalProjectDraftThreadId(
+        project
+          ? deriveLogicalProjectKeyFromSettings(project, creationGroupingSettings)
+          : scopedProjectKey(projectRef),
+        projectRef,
+        routeDraftId,
+        session.temporary ? { envMode: "worktree", worktreePath: null } : undefined,
+      );
+      return;
+    }
+    await openCreatedProjectThread(projectRef);
+  };
+
   // Like quick-create, this must outlive the command popup. A nested dialog makes the parent close
   // on focus transfer, which immediately unmounts the repository decision.
   const [repositoryChoiceOverlay, setRepositoryChoiceOverlay] =
     useState<ProjectRepositoryChoiceOverlay | null>(null);
   const [repositoryChoiceSubmitting, setRepositoryChoiceSubmitting] = useState(false);
   const openQuickCreateProject = useCallback(
-    (environmentId: EnvironmentId) => {
+    (environmentId: EnvironmentId, owner: string) => {
+      setQuickCreateProjectOwner(owner);
       setQuickCreateProjectEnvironmentId(environmentId);
       setQuickCreateProjectOpen(true);
       setOpen(false);
@@ -666,7 +726,15 @@ export function CommandPalette({ children }: { children: ReactNode }) {
         if (state.open || !isAgentThreadsPath(pathname)) return;
         event.preventDefault();
         event.stopPropagation();
-        setActiveFocusId(nextFocusId({ activeFocusId, visibleFocuses }));
+        setActiveFocusId(
+          nextFocusId({
+            activeFocusId,
+            visibleFocuses,
+            hasConversations: alertRegistry
+              .get(alertThreadShells.threadShellsAtom)
+              .some((thread) => thread.projectId === null),
+          }),
+        );
         return;
       }
       if (command === "themeEditor.toggle") {
@@ -734,6 +802,11 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       >
         {children}
         <QuickCreateProjectDialog
+          {...(quickCreateProjectOwner === undefined
+            ? {}
+            : { initialOwner: quickCreateProjectOwner })}
+          startThread
+          onCreated={handleQuickProjectCreated}
           environmentId={quickCreateProjectEnvironmentId}
           onOpenChange={setQuickCreateProjectOpen}
           open={quickCreateProjectOpen}
@@ -777,7 +850,7 @@ function CommandPaletteDialog(props: {
   readonly setOpen: (open: boolean) => void;
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
-  readonly onQuickCreateProject: (environmentId: EnvironmentId) => void;
+  readonly onQuickCreateProject: (environmentId: EnvironmentId, owner: string) => void;
   readonly onRepositoryChoice: (overlay: ProjectRepositoryChoiceOverlay) => void;
 }) {
   const composerHandleRef = useComposerHandleContext();
@@ -829,10 +902,11 @@ function OpenCommandPaletteDialog(props: {
   readonly setOpen: (open: boolean) => void;
   readonly openOverlayMode: (mode: SearchOverlayMode) => void;
   readonly clearOpenIntent: () => void;
-  readonly onQuickCreateProject: (environmentId: EnvironmentId) => void;
+  readonly onQuickCreateProject: (environmentId: EnvironmentId, owner: string) => void;
   readonly onRepositoryChoice: (overlay: ProjectRepositoryChoiceOverlay) => void;
 }) {
   const navigate = useNavigate();
+  const dictationAvailability = useDictationAvailability();
   const {
     clearOpenIntent,
     onQuickCreateProject,
@@ -850,6 +924,11 @@ function OpenCommandPaletteDialog(props: {
   const activeCompanyId = useAtomValue(activeCompanyIdAtom);
   const setActiveCompanyId = useAtomSet(activeCompanyIdAtom);
   const companies = useAtomValue(companyListAtom);
+  const {
+    owner: projectOwner,
+    setSelectedOwner: setProjectOwner,
+    options: projectOwnerOptions,
+  } = useProjectOwner();
   const { activeFocusId, setActiveFocusId, visibleFocuses } = useFocusSelection();
   const environmentControl = useEnvironmentControl();
   const workspaceProjects = useWorkspaceProjects();
@@ -881,6 +960,7 @@ function OpenCommandPaletteDialog(props: {
   });
   const environmentCatalogState = useAtomValue(environmentCatalog.catalogValueAtom);
   const { environments } = useEnvironments();
+  const queueDestinations = useAtomValue(threadQueueDestinationsAtom);
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
@@ -1392,30 +1472,52 @@ function OpenCommandPaletteDialog(props: {
             description: "Creates a folder for it",
             runProject: openCheckoutlessProject,
           }),
-          environments
-            .filter(
-              (environment) =>
-                environment.serverConfig?.environment.capabilities.threadConversations === true,
-            )
-            .map(
-              (environment): CommandPaletteActionItem => ({
-                kind: "action",
-                value: `new-conversation:${environment.environmentId}`,
-                searchTerms: ["conversation", "new chat", "without project", environment.label],
-                title: "Conversation",
-                description:
-                  activeCompanyId === null ? "Choose a company first" : environment.label,
-                disabled: activeCompanyId === null,
-                icon: <MessageSquareIcon />,
-                run: async () => {
-                  setActiveFocusId(ALL_FOCUS_ID);
-                  await handleNewThread({
-                    environmentId: environment.environmentId,
-                    projectId: null,
-                  });
-                },
-              }),
-            ),
+          queueDestinations.flatMap((environment) =>
+            environment.projects
+              .filter(
+                (project) =>
+                  !projects.some(
+                    (existing) =>
+                      existing.environmentId === environment.environmentId &&
+                      existing.id === project.localProjectId,
+                  ),
+              )
+              .map(
+                (project): CommandPaletteActionItem => ({
+                  kind: "action",
+                  value: `new-queued-project:${environment.environmentId}:${project.localProjectId}`,
+                  searchTerms: [project.title, project.workspaceRoot, environment.label],
+                  title: project.title,
+                  description: `${environment.label} · ${project.workspaceRoot}`,
+                  icon: <FolderIcon />,
+                  run: async () => {
+                    setActiveFocusId(ALL_FOCUS_ID);
+                    await handleNewThread({
+                      environmentId: environment.environmentId as EnvironmentId,
+                      projectId: project.localProjectId as ProjectId,
+                    });
+                  },
+                }),
+              ),
+          ),
+          queueDestinations.map(
+            (environment): CommandPaletteActionItem => ({
+              kind: "action",
+              value: `new-conversation:${environment.environmentId}`,
+              searchTerms: ["conversation", "new chat", "without project", environment.label],
+              title: "Conversation",
+              description: activeCompanyId === null ? "Choose a company first" : environment.label,
+              disabled: activeCompanyId === null,
+              icon: <MessageSquareIcon />,
+              run: async () => {
+                setActiveFocusId(CONVERSATIONS_FOCUS_ID);
+                await handleNewThread({
+                  environmentId: environment.environmentId as EnvironmentId,
+                  projectId: null,
+                });
+              },
+            }),
+          ),
         ),
       ),
     [
@@ -1427,6 +1529,8 @@ function OpenCommandPaletteDialog(props: {
       handleNewThread,
       openCheckoutlessProject,
       pickerProjects,
+      queueDestinations,
+      projects,
       projectEnvironmentLocationById,
       projectGroupByTargetKey,
     ],
@@ -1595,10 +1699,10 @@ function OpenCommandPaletteDialog(props: {
           value: `action:add-project:${environmentId}:rootless`,
           searchTerms: ["name", "empty", "no directory", "rootless", "planning"],
           title: "Name only",
-          description: "Create a project now, attach a directory later",
+          description: "Create a project from a name",
           icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
           run: async () => {
-            onQuickCreateProject(environmentId);
+            onQuickCreateProject(environmentId, projectOwner);
           },
         },
       ];
@@ -1674,7 +1778,13 @@ function OpenCommandPaletteDialog(props: {
 
       return [{ value: `sources:${environmentId}`, label: "Sources", items: sourceItems }];
     },
-    [onQuickCreateProject, openSourceControlSettings, startAddProjectBrowse, startAddProjectClone],
+    [
+      onQuickCreateProject,
+      projectOwner,
+      openSourceControlSettings,
+      startAddProjectBrowse,
+      startAddProjectClone,
+    ],
   );
 
   const openAddProjectSourceSelection = useCallback(
@@ -1900,24 +2010,49 @@ function OpenCommandPaletteDialog(props: {
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
   const snapShotAccountId = useSnapShotAccountId();
   const snapShotBridge = getDesktopSnapShotBridge();
+  const [snapShotState, setSnapShotState] = useState<DesktopSnapShotState | null>(null);
+  useEffect(() => {
+    if (!snapShotBridge || !snapShotAccountId) return;
+    let cancelled = false;
+    void snapShotBridge
+      .getSnapShotState()
+      .then((next) => {
+        if (!cancelled) setSnapShotState(next);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [snapShotBridge, snapShotAccountId, clientSettings.snapShotEnabled]);
   if (snapShotAccountId && snapShotBridge?.captureSnapShot) {
-    actionItems.push({
-      kind: "action",
-      value: "action:snap-shot",
-      searchTerms: ["screenshot", "window capture", "app shots", "snapshots"],
-      title: "Take snapshot",
-      icon: <CameraIcon className={ITEM_ICON_CLASS} />,
-      run: async () => {
-        if (!clientSettings.snapShotEnabled) {
-          await navigate({ to: "/settings/snap-shot" });
-          return;
-        }
-        await new Promise<void>((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-        );
-        await snapShotBridge.captureSnapShot?.();
-      },
-    });
+    for (const action of SNAP_SHOT_CAPTURE_ACTIONS) {
+      const unavailable = snapShotCaptureUnavailableMessage(snapShotState, action.type);
+      actionItems.push({
+        kind: "action",
+        value: action.type === "window" ? "action:snap-shot" : `action:snap-shot-${action.type}`,
+        searchTerms: [
+          action.title,
+          "screenshot",
+          `${action.type} capture`,
+          "app shots",
+          "snapshots",
+        ],
+        title: action.title,
+        description: unavailable ?? "Open in the capture editor",
+        disabled: Boolean(unavailable),
+        icon: <CameraIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          if (!clientSettings.snapShotEnabled) {
+            await navigate({ to: "/settings/snap-shot" });
+            return;
+          }
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          );
+          await snapShotBridge.captureSnapShot?.({ type: action.type });
+        },
+      });
+    }
   }
   actionItems.push({
     kind: "action",
@@ -2217,6 +2352,42 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
+  if (dictationAvailability !== "unavailable") {
+    actionItems.push({
+      kind: "action",
+      value: "action:dictation-record",
+      title: "Record dictation",
+      searchTerms: ["voice", "dictation", "record", "microphone"],
+      icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        const bridge = window.desktopBridge?.dictation;
+        const state = await bridge?.getState();
+        if (!state?.preferences.enabled) {
+          await navigate({ to: "/settings/dictation" });
+          return;
+        }
+        await bridge?.execute({ type: "start", mode: "locked" });
+      },
+    });
+    for (const page of ["models", "history", "dictionary", "settings"] as const) {
+      actionItems.push({
+        kind: "action",
+        value: `action:dictation-${page}`,
+        title: `Dictation ${page}`,
+        searchTerms: ["voice", "dictation", page],
+        icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await navigate({
+            to:
+              dictationAvailability === "setup"
+                ? "/settings/dictation"
+                : `/settings/dictation/${page}`,
+          });
+        },
+      });
+    }
+  }
+
   // Settings → Projects lists every project, but this action skips the list and jumps straight to
   // the contextual project (active thread/draft, falling back to the first sidebar group).
   const contextualProjectGroup =
@@ -2290,7 +2461,30 @@ function OpenCommandPaletteDialog(props: {
         workspaceProjectCount: workspaceProjects.length,
       });
       // #endregion DEBUG
+      if (environmentControl === null) return false;
+      let ownerCompanyId: CompanyId;
+      try {
+        ownerCompanyId =
+          projectOwner === PERSONAL_PROJECT_OWNER
+            ? await environmentControl.provisionPersonalWorkspace()
+            : CompanyId.make(projectOwner);
+      } catch (cause) {
+        toastManager.add({
+          type: "error",
+          title: "Could not prepare project workspace",
+          description: cause instanceof Error ? cause.message : "An error occurred.",
+        });
+        return false;
+      }
       const projectId = newProjectId();
+      const automaticAssignmentProjectKey = scopedProjectKey(
+        scopeProjectRef(input.environmentId, projectId),
+      );
+      markProjectAutomaticAssignmentPending(automaticAssignmentProjectKey, {
+        companyId: input.existingTarget?.companyId ?? ownerCompanyId,
+        cloudProjectId: input.existingTarget?.cloudProjectId ?? null,
+        ...(input.choice?.kind === "new" ? { matchRepository: false } : {}),
+      });
       const targetEnvironmentProviders =
         environments.find((environment) => environment.environmentId === input.environmentId)
           ?.serverConfig?.providers ??
@@ -2348,7 +2542,7 @@ function OpenCommandPaletteDialog(props: {
       const bindingTarget = resolveCreatedProjectBindingTarget({
         choice: input.choice,
         existingTarget: input.existingTarget ?? null,
-        activeCompanyId,
+        activeCompanyId: ownerCompanyId,
         availableCompanyIds: companies.map((company) => company.id),
       });
       // #region DEBUG
@@ -2379,6 +2573,9 @@ function OpenCommandPaletteDialog(props: {
             },
           });
 
+          if (activeCompanyId !== null && activeCompanyId !== bindingTarget.companyId) {
+            setActiveCompanyId(bindingTarget.companyId);
+          }
           const projectVisible = await waitForProject(projectRef);
           // #region DEBUG
           debugAgentThreadProjectCreate("H13", "agent-project-binding-projected", {
@@ -2440,6 +2637,8 @@ function OpenCommandPaletteDialog(props: {
     [
       clientSettings,
       createProject,
+      projectOwner,
+      setActiveCompanyId,
       activeCompanyId,
       companies,
       environmentControl,
@@ -2534,7 +2733,11 @@ function OpenCommandPaletteDialog(props: {
         currentWorkspaceProject?.companyIds[0] === undefined
           ? null
           : CompanyId.make(currentWorkspaceProject.companyIds[0]);
-      const newProjectCompanyId = currentCompanyId ?? activeCompanyId;
+      const newProjectCompanyId =
+        currentCompanyId ??
+        (projectOwner === PERSONAL_PROJECT_OWNER
+          ? ((await environmentControl?.provisionPersonalWorkspace()) ?? null)
+          : CompanyId.make(projectOwner));
       const selectedTarget =
         choice.kind === "existing"
           ? request.candidates.find((candidate) => candidate.group.projectKey === choice.projectKey)
@@ -2591,7 +2794,7 @@ function OpenCommandPaletteDialog(props: {
       return openExistingProject(existing);
     },
     [
-      activeCompanyId,
+      projectOwner,
       clientSettings,
       environmentControl,
       openExistingProject,
@@ -3348,6 +3551,16 @@ function OpenCommandPaletteDialog(props: {
     <CommandPaletteContent
       key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${addProjectCloneFlow?.step ?? "none"}`}
       aria-label="Command palette"
+      header={
+        addProjectEnvironmentId !== null || isAddProjectEnvironmentSelectionView || isBrowsing ? (
+          <ProjectOwnerSelect
+            owner={projectOwner}
+            options={projectOwnerOptions}
+            onChange={setProjectOwner}
+            disabled={isRemoteProjectPending}
+          />
+        ) : null
+      }
       autoHighlight={isBrowsing || isRemoteProjectCloneFlow ? false : "always"}
       footerActionLabel={footerActionLabel}
       footerCompleteLabel={isBrowsing ? "Complete" : undefined}

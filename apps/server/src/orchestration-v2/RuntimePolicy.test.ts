@@ -64,6 +64,7 @@ const TestLayer = layerFromProjectRepository.pipe(
             projectId,
             title: "Project",
             workspaceRoot: "/project-root",
+            internalWorkspaceRoot: "/internal-project",
             defaultModelSelection: null,
             defaultThreadEnvMode: null,
             scripts: [],
@@ -86,6 +87,7 @@ it.layer(TestLayer)("RuntimePolicyV2", (it) => {
         modelSelection,
       });
       assert.equal(resolved.cwd, "/project-root");
+      assert.deepEqual(resolved.additionalDirectories, ["/internal-project"]);
     }),
   );
 
@@ -129,7 +131,10 @@ it.layer(TestLayer)("RuntimePolicyV2", (it) => {
         modelSelection,
       });
       assert.equal(resolved.cwd, "/project-worktree");
-      assert.deepEqual(resolved.additionalDirectories, ["/isolated/userdata/conversations/thread"]);
+      assert.deepEqual(resolved.additionalDirectories, [
+        "/isolated/userdata/conversations/thread",
+        "/internal-project",
+      ]);
     }),
   );
 

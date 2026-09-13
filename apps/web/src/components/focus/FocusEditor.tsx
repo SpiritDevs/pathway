@@ -54,9 +54,7 @@ export function FocusEditor(props: {
               .map((assignment) => assignment.projectKey),
       ),
   );
-  const [includeConversations, setIncludeConversations] = useState(
-    focus?.includeConversations ?? false,
-  );
+
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -98,7 +96,7 @@ export function FocusEditor(props: {
           name: trimmedName,
           iconName,
           accentColor,
-          includeConversations,
+          includeConversations: false,
           orderKey: focusOrderKeyAfter(ordered.at(-1)?.orderKey ?? null),
           projectKeys: [...selectedProjectKeys],
         });
@@ -108,7 +106,7 @@ export function FocusEditor(props: {
           name: trimmedName,
           iconName,
           accentColor,
-          includeConversations,
+          includeConversations: false,
         });
         const currentlyAssigned = new Set(
           props.assignments
@@ -235,20 +233,6 @@ export function FocusEditor(props: {
       <fieldset className="grid min-h-0 gap-2">
         <legend className="text-xs font-medium text-foreground">Projects</legend>
         <div className="max-h-48 overflow-y-auto rounded-lg border border-border/70 p-1">
-          <label className="flex cursor-pointer items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-accent/70">
-            <Checkbox
-              className="mt-0.5"
-              checked={includeConversations}
-              disabled={saving}
-              onCheckedChange={(checked) => setIncludeConversations(checked === true)}
-            />
-            <span className="min-w-0 flex-1">
-              <span className="block text-xs font-medium text-foreground">Conversations</span>
-              <span className="block text-[10px] text-muted-foreground">
-                Threads without a project in the selected company.
-              </span>
-            </span>
-          </label>
           {props.projects.length === 0 ? (
             <p className="px-2 py-4 text-center text-xs text-muted-foreground">
               No projects are visible in this company.

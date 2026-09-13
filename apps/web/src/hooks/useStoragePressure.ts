@@ -53,7 +53,7 @@ function readCachedReading(account: string | null, environmentId: string): Readi
 }
 
 /** The global indicator reads only pressure; full inventories belong to storage and the selected conversation. */
-export function useStoragePressure(account: string | null) {
+export function useStoragePressure(account: string | null, poll = true) {
   const { environments } = useEnvironments();
   const environmentKey = environments
     .filter(
@@ -104,7 +104,7 @@ export function useStoragePressure(account: string | null) {
     });
   }, [account, results]);
   useEffect(() => {
-    if (!environmentKey) return;
+    if (!environmentKey || !poll) return;
     const refresh = () => {
       for (const id of environmentKey.split("\n"))
         appAtomRegistry.refresh(
@@ -113,7 +113,7 @@ export function useStoragePressure(account: string | null) {
     };
     const timer = window.setInterval(refresh, 30_000);
     return () => window.clearInterval(timer);
-  }, [environmentKey]);
+  }, [environmentKey, poll]);
   return useMemo(
     () =>
       environments.map((environment) => {

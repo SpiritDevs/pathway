@@ -14,5 +14,8 @@
   },
   "search.exclude": {
     ".repos/**": true
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
   }
 }

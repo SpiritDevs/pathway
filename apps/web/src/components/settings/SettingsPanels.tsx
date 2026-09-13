@@ -479,6 +479,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.environmentIdentificationMode
         ? ["Environment identification"]
         : []),
+      ...(settings.preferredTerminal !== DEFAULT_UNIFIED_SETTINGS.preferredTerminal
+        ? ["Open in Terminal"]
+        : []),
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
@@ -553,6 +556,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
+      settings.preferredTerminal,
       settings.wordWrap,
       followSystem,
       theme,
@@ -623,6 +627,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       return;
     }
     updateSettings({
+      preferredTerminal: DEFAULT_UNIFIED_SETTINGS.preferredTerminal,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
       persistComposerContextStrip: DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip,
@@ -2061,6 +2066,42 @@ export function GeneralSettingsPanel() {
             }
           />
         ) : null}
+
+        <SettingsRow
+          {...searchableSetting("preferred-terminal")}
+          description="Choose the app used to open project folders in a terminal on their environment."
+          resetAction={
+            settings.preferredTerminal !== "terminal" ? (
+              <SettingResetButton
+                label="terminal"
+                onClick={() => updateSettings({ preferredTerminal: "terminal" })}
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.preferredTerminal}
+              onValueChange={(value) => {
+                if (value === "terminal" || value === "ghostty")
+                  updateSettings({ preferredTerminal: value });
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-40" aria-label="Open in Terminal">
+                <SelectValue>
+                  {settings.preferredTerminal === "ghostty" ? "Ghostty" : "System Terminal"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="terminal">
+                  System Terminal
+                </SelectItem>
+                <SelectItem hideIndicator value="ghostty">
+                  Ghostty
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
 
         <SettingsRow
           {...searchableSetting("time-format")}

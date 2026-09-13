@@ -69,6 +69,7 @@ vi.mock("../state/projects", () => ({ environmentProjects: { projectsAtom: [] } 
 vi.mock("../state/threads", () => ({ environmentThreadShells: { threadShellsAtom: [] } }));
 vi.mock("../rpc/atomRegistry", () => ({ appAtomRegistry: { set: callbacks.setAtom } }));
 vi.mock("../components/ui/toast", () => ({ toastManager: { add: callbacks.toast } }));
+vi.mock("./useReadThreadNotifications", () => ({ useReadThreadNotifications: () => {} }));
 vi.mock("./ThreadAlertHost", () => ({ ThreadAlertHost: () => null }));
 vi.mock("./state", () => ({
   threadAlertAccountAtom: "account",
@@ -112,7 +113,7 @@ describe("notification click navigation", () => {
     expect(callbacks.setAtom).not.toHaveBeenCalled();
   });
   it.each([true, false])(
-    "uses the selected Focus's Conversations setting (%s) for native notification navigation",
+    "opens Conversations regardless of the selected Focus setting (%s)",
     async (includeConversations) => {
       callbacks.activeFocusId = "work";
       callbacks.focuses = [
@@ -140,10 +141,7 @@ describe("notification click navigation", () => {
         },
       ];
       await openNotification();
-      expect(callbacks.setAtom).toHaveBeenCalledWith(
-        "active-focus",
-        includeConversations ? "work" : "all",
-      );
+      expect(callbacks.setAtom).toHaveBeenCalledWith("active-focus", "conversations");
       expect(callbacks.markRead).toHaveBeenCalledWith("event");
     },
   );

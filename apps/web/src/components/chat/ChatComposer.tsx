@@ -149,12 +149,12 @@ import { basenameOfPath } from "../../pierre-icons";
 import { formatAttachmentSizeLabel } from "../../lib/attachmentSize";
 import {
   getUploadedFileAttachments,
-  cancelAttachmentUpload,
   readAttachmentUpload,
   releaseDraftAttachment,
   releasePersistedAttachmentUpload,
   retryAttachmentUpload,
   startAttachmentUpload,
+  cancelAttachmentUpload,
   useAttachmentUploadStore,
 } from "../../lib/attachmentUploadQueue";
 import {
@@ -360,7 +360,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   showInteractionModeToggle: boolean;
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
-  showPlanToggle: boolean;
+  hideInteractionModeLabel: boolean;
   disabledReason?: string;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -396,7 +396,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
             ) : (
               <ComposerControlIcon icon={BotIcon} opticalSize="large" />
             )}
-            <span className="sr-only sm:not-sr-only">
+            <span className={props.hideInteractionModeLabel ? "sr-only" : "sr-only sm:not-sr-only"}>
               {props.interactionMode === "plan" ? "Plan" : "Build"}
             </span>
           </ComposerControl>
@@ -513,9 +513,11 @@ export interface ChatComposerHandle {
 // --------------------------------------------------------------------------
 
 export interface ChatComposerProps {
+  environmentControl?: ReactNode;
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   maxFileAttachmentBytes: number | null;
+  uploadFilesToEnvironment: boolean;
   routeKind: "server" | "draft";
   routeThreadRef: ScopedThreadRef;
   draftId: DraftId | null;
@@ -689,6 +691,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerDraftTarget,
     environmentId,
     maxFileAttachmentBytes: advertisedMaxFileAttachmentBytes,
+    uploadFilesToEnvironment,
     routeKind,
     routeThreadRef,
     draftId,
@@ -1032,12 +1035,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
   const composerProviderControls = useMemo(
     () => ({
-      showInteractionModeToggle: getProviderInteractionModeToggle(
-        providerStatuses,
-        selectedProvider,
-      ),
+      showInteractionModeToggle:
+        activeThread?.projectId !== null &&
+        getProviderInteractionModeToggle(providerStatuses, selectedProvider),
     }),
-    [providerStatuses, selectedProvider],
+    [activeThread?.projectId, providerStatuses, selectedProvider],
   );
   const selectedModelSelection = useMemo<ModelSelection>(
     () => createModelSelection(selectedInstanceId, selectedModel, selectedModelOptionsForDispatch),
@@ -1179,27 +1181,37 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     ) {
       return "Attach the unavailable files again or remove them before sending.";
     }
-    return attachmentUploadBlockReason({
-      fileIds: composerFileAttachments.map((file) => file.id),
-      uploadsByAttachmentId,
-      environmentId,
-    });
-  }, [composerFileAttachments, environmentId, maxFileAttachmentBytes, uploadsByAttachmentId]);
+    return uploadFilesToEnvironment
+      ? attachmentUploadBlockReason({
+          fileIds: composerFileAttachments.map((file) => file.id),
+          uploadsByAttachmentId,
+          environmentId,
+        })
+      : null;
+  }, [
+    composerFileAttachments,
+    environmentId,
+    maxFileAttachmentBytes,
+    uploadFilesToEnvironment,
+    uploadsByAttachmentId,
+  ]);
 
   useEffect(() => {
-    if (maxFileAttachmentBytes === null) {
+    if (!uploadFilesToEnvironment || maxFileAttachmentBytes === null) {
       for (const file of composerFileAttachments) cancelAttachmentUpload(file.id);
       return;
     }
     for (const file of composerFileAttachments) {
       if (file.sizeBytes > maxFileAttachmentBytes || composerFileNeedsReattach(file)) continue;
-      startAttachmentUpload({
-        environmentId,
-        file,
-        draftTarget: composerDraftTarget,
-      });
+      startAttachmentUpload({ environmentId, file, draftTarget: composerDraftTarget });
     }
-  }, [composerDraftTarget, composerFileAttachments, environmentId, maxFileAttachmentBytes]);
+  }, [
+    composerDraftTarget,
+    composerFileAttachments,
+    environmentId,
+    maxFileAttachmentBytes,
+    uploadFilesToEnvironment,
+  ]);
 
   // ------------------------------------------------------------------
   // Derived: composer trigger / menu
@@ -3310,7 +3322,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                   {composerFileNeedsReattach(image)
                                     ? "Attach again"
                                     : (() => {
-                                        const upload = readAttachmentUpload(image.id);
+                                        const upload = uploadFilesToEnvironment
+                                          ? uploadsByAttachmentId[image.id]
+                                          : undefined;
                                         if (
                                           upload?.status === "uploading" &&
                                           upload.environmentId === environmentId
@@ -3335,7 +3349,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                       })()}
                                 </div>
                               </div>
-                              {readAttachmentUpload(image.id)?.status === "failed" &&
+                              {uploadFilesToEnvironment &&
+                              readAttachmentUpload(image.id)?.status === "failed" &&
                               image.file !== null ? (
                                 <button
                                   type="button"
@@ -3590,7 +3605,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     interactionMode={interactionMode}
                     runtimeMode={runtimeMode}
-                    showPlanToggle={false}
+                    hideInteractionModeLabel={Boolean(props.environmentControl)}
                     {...(composerControlsDisabledReason
                       ? { disabledReason: composerControlsDisabledReason }
                       : {})}
@@ -3599,6 +3614,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   />
                 </>
               )}
+              {props.environmentControl ? (
+                <>
+                  <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+                  {props.environmentControl}
+                </>
+              ) : null}
             </div>
 
             {isPreparingWorktree ? (

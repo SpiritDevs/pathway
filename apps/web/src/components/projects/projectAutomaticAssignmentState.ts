@@ -1,6 +1,17 @@
+import type { ProjectBindingTarget } from "./projectRepositoryChoice.logic";
 import { useSyncExternalStore } from "react";
 
 const AUTOMATIC_ASSIGNMENT_TIMEOUT_MS = 30_000;
+// Retain creation intent after a request settles so a delayed replica or retry cannot
+// fall back to personal while the chosen company's binding is still arriving.
+const creationTargets = new Map<
+  string,
+  ProjectBindingTarget & { readonly matchRepository?: boolean }
+>();
+export function projectAutomaticAssignmentTarget(projectKey: string) {
+  return creationTargets.get(projectKey);
+}
+
 const listeners = new Set<() => void>();
 const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let pendingProjectKeys: ReadonlySet<string> = new Set();
@@ -16,8 +27,12 @@ function clearExpiry(projectKey: string): void {
   expiryTimers.delete(projectKey);
 }
 
-/** Suppress the manual owner dialog while this exact checkout is being assigned automatically. */
-export function markProjectAutomaticAssignmentPending(projectKey: string): void {
+/** Reserve the checkout before creating it so background assignment cannot race its owner. */
+export function markProjectAutomaticAssignmentPending(
+  projectKey: string,
+  target?: ProjectBindingTarget & { readonly matchRepository?: boolean },
+): void {
+  if (target !== undefined) creationTargets.set(projectKey, target);
   clearExpiry(projectKey);
   if (!pendingProjectKeys.has(projectKey)) {
     publish(new Set([...pendingProjectKeys, projectKey]));

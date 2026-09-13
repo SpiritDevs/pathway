@@ -1,3 +1,11 @@
+import { useSidebarPrRevalidation } from "../state/sidebarPrRevalidation";
+import { QueuedThreadSidebar } from "./QueuedThreadSidebar";
+import {
+  threadQueueEntriesAtom,
+  threadQueueDestinationsAtom,
+  queuedThreadEnvironmentKeys,
+} from "../cloud/threadQueueState";
+import { CONVERSATIONS_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
 import { GitPullRequestArrowIcon } from "lucide-react";
 import { ThreadPullRequestAction } from "./ThreadPullRequestAction";
 import { activeCompanyIdAtom } from "../cloud/activeCompany";
@@ -10,7 +18,6 @@ import {
 } from "@spiritdevs/contracts/threadAlerts";
 import { ThreadAlertBell } from "./ThreadAlertBell";
 import { threadAlertPoliciesAtom } from "../threadAlerts/state";
-import { autoAnimate } from "@formkit/auto-animate";
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
@@ -32,8 +39,6 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   canSettle,
   canSnooze,
-  effectiveSettled,
-  effectiveSnoozed,
   threadWokeAt,
 } from "@spiritdevs/client-runtime/state/thread-settled";
 import {
@@ -55,7 +60,8 @@ import {
   threadIsVisibleAt,
   type Issue,
   type ScopedThreadRef,
-  type ThreadId,
+  ThreadId,
+  EnvironmentId,
 } from "@spiritdevs/contracts";
 import type { TimestampFormat } from "@spiritdevs/contracts/settings";
 import {
@@ -149,13 +155,19 @@ import {
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import {
-  currentThreadChangeRequestState,
   threadChangeRequestSource,
   useAttachedPullRequests,
   aggregateThreadPullRequestState,
   type ThreadChangeRequestState,
 } from "../state/threadPullRequest";
 import { threadEnvironment } from "../state/threads";
+import {
+  sidebarThreadChangeRequestsAtom,
+  sidebarThreadScopeAtom,
+  sidebarThreadSection,
+  updateSidebarChangeRequest,
+} from "../state/sidebarThreadLifecycle";
+import { threadListReadinessAtom } from "../state/threadListReadiness";
 import { useEnvironmentQuery } from "../state/query";
 import { useStartWorkIssuesByThread } from "../state/issues";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -200,7 +212,7 @@ import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   ThreadWorktreeIndicator,
   resolveThreadPr,
-  resolveThreadPrBadge,
+  resolveThreadPrBadges,
   settledPrHoverColorClass,
   terminalStatusFromRunningIds,
   type TerminalStatusIndicator,
@@ -255,6 +267,7 @@ import {
   focusMutationsAtom,
   focusNotificationsAtom,
   focusUnreadCountAtom,
+  threadHasUnreadNotificationAtom,
   visibleFocusProjectKeysAtom,
 } from "../cloud/focusReadModel";
 import type { FocusNotification } from "@spiritdevs/contracts/focus";
@@ -438,7 +451,7 @@ function SidebarThreadTooltip({
             <button
               type="button"
               className="flex min-w-0 cursor-pointer items-center gap-2 text-left text-foreground/75 outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label={`Open issue ${issue.key}`}
+              aria-label={`Open task ${issue.key}`}
               onClick={() => onOpenIssue(issue.key)}
             >
               <TicketIcon aria-hidden className="size-3 shrink-0 stroke-muted-foreground" />
@@ -672,7 +685,10 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
               className="size-3 shrink-0 text-amber-600 dark:text-amber-300/80"
             />
             {session.projectId === null ? (
-              <MessageSquareIcon className="size-4 shrink-0" />
+              <MessageSquareIcon
+                className="size-4 shrink-0"
+                strokeDasharray={session.temporary ? "3 3" : undefined}
+              />
             ) : (
               <ProjectFavicon
                 environmentId={session.environmentId}
@@ -725,6 +741,11 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   const draftsByThreadKey = useComposerDraftStore((store) => store.draftsByThreadKey);
   const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
   const threadRefs = useThreadRefs();
+  const queuedThreads = useAtomValue(threadQueueEntriesAtom);
+  const queuedThreadKeys = useMemo(
+    () => queuedThreadEnvironmentKeys(queuedThreads),
+    [queuedThreads],
+  );
   const serverThreadKeys = useMemo(() => new Set(threadRefs.map(scopedThreadKey)), [threadRefs]);
   // The open draft's row is FROZEN at the moment the draft became the route:
   // it stays visible (like a thread row) but never repaints while the user
@@ -760,6 +781,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
         draftThreadsByThreadKey,
         draftsByThreadKey,
         serverThreadKeys,
+        queuedThreadKeys,
         frozenActive,
         routeDraftId: props.routeDraftId,
         scopedProjectKeys: props.scopedProjectKeys,
@@ -770,6 +792,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
       draftThreadsByThreadKey,
       draftsByThreadKey,
       serverThreadKeys,
+      queuedThreadKeys,
       frozenActive,
       props.routeDraftId,
       props.scopedProjectKeys,
@@ -818,13 +841,84 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   );
 });
 
+function useSidebarChangeRequest({
+  thread,
+  projectCwd,
+  poll = false,
+  onChangeRequestState,
+}: {
+  thread: EnvironmentThreadShell;
+  projectCwd: string | null;
+  poll?: boolean;
+  onChangeRequestState: (
+    threadKey: string,
+    value: ThreadChangeRequestState,
+    failed?: boolean,
+  ) => void;
+}) {
+  const gitCwd = thread.worktreePath ?? projectCwd;
+  const gitStatus = useEnvironmentQuery(
+    (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
+      ? vcsEnvironment.status({
+          environmentId: thread.environmentId,
+          input: { cwd: gitCwd },
+        })
+      : null,
+  );
+  const pr = resolveThreadPr({
+    threadBranch: thread.branch,
+    gitStatus: gitStatus.data,
+  });
+  const attachedQueries = useAttachedPullRequests(thread, { poll });
+  const visibleBranchPr = pr && !thread.detachedPullRequestUrls?.includes(pr.url) ? pr : null;
+  const badges = resolveThreadPrBadges({
+    branchPullRequest: pr,
+    detachedPullRequestUrls: thread.detachedPullRequestUrls,
+    attachedQueries,
+    provider: gitStatus.data?.sourceControlProvider,
+  });
+
+  const prState = aggregateThreadPullRequestState(badges.map((badge) => badge.changeRequestState));
+  const source = threadChangeRequestSource(thread);
+  const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+  const gitReady =
+    thread.branch === null ||
+    gitCwd === null ||
+    gitStatus.data !== null ||
+    gitStatus.error !== null;
+  const ready = gitReady && attachedQueries.every((query) => !query.isLoading);
+  // A refresh with no result must not erase the last known merged/open state.
+  const failed = gitStatus.error !== null || attachedQueries.some((query) => query.error !== null);
+  useEffect(() => {
+    if (!ready) return;
+    onChangeRequestState(threadKey, { source, state: prState }, failed);
+  }, [ready, failed, source, prState, threadKey, onChangeRequestState]);
+  return { gitStatus, pr, visibleBranchPr, badges, prState };
+}
+
+// Pending rows need only enough data to classify; do not mount hidden cards or terminal observers.
+const SidebarThreadClassification = memo(function SidebarThreadClassification(props: {
+  thread: EnvironmentThreadShell;
+  projectCwd: string | null;
+  onChangeRequestState: (
+    threadKey: string,
+    value: ThreadChangeRequestState,
+    failed?: boolean,
+  ) => void;
+}) {
+  useSidebarChangeRequest(props);
+  return null;
+});
+
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+  queuedStatusLabel?: string | null;
   alertProjectKey: string | null;
   alertPolicies: readonly AlertPolicyRow[] | null;
   alertModifierHeld: boolean;
   thread: SidebarThreadSummary;
   issue: Issue | null;
   variant: "card" | "slim";
+  deferRendering: boolean;
   // Slim rows are either settled (action: un-settle) or merely quiet
   // (seen Ready threads — action: settle).
   variantAction: "settle" | "unsettle" | "unsnooze";
@@ -880,7 +974,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
-  onChangeRequestState: (threadKey: string, value: ThreadChangeRequestState) => void;
+  onChangeRequestState: (
+    threadKey: string,
+    value: ThreadChangeRequestState,
+    failed?: boolean,
+  ) => void;
   onOpenIssue: (issueKey: string) => void;
   onOpenSideChat: (parentRef: ScopedThreadRef, sideChatThreadId: ThreadId) => void;
 }) {
@@ -912,6 +1010,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     [thread.environmentId, thread.id],
   );
   const threadKey = scopedThreadKey(threadRef);
+  const hasUnreadNotification = useAtomValue(threadHasUnreadNotificationAtom(threadKey));
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
@@ -923,46 +1022,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const terminalProcessCount = runningTerminalIds.length;
 
-  const gitCwd = thread.worktreePath ?? props.projectCwd;
-  const gitStatus = useEnvironmentQuery(
-    (thread.branch != null || thread.worktreePath !== null) && gitCwd !== null
-      ? vcsEnvironment.status({
-          environmentId: thread.environmentId,
-          input: { cwd: gitCwd },
-        })
-      : null,
-  );
-  const pr = resolveThreadPr({
-    threadBranch: thread.branch,
-    gitStatus: gitStatus.data,
+  const { gitStatus, visibleBranchPr, badges, prState } = useSidebarChangeRequest({
+    thread,
+    projectCwd: props.projectCwd,
+    poll: props.isActive,
+    onChangeRequestState,
   });
-  const attachedQueries = useAttachedPullRequests(thread, { poll: props.isActive });
-  const visibleBranchPr = pr && !thread.detachedPullRequestUrls?.includes(pr.url) ? pr : null;
-  const badges = attachedQueries.map(
-    (query) =>
-      resolveThreadPrBadge({
-        branchPullRequest: visibleBranchPr,
-        attachedPullRequest: query.attachment,
-        attachedDetail: query.data,
-        attachedError: query.error,
-        provider: gitStatus.data?.sourceControlProvider,
-      })!,
-  );
-  if (visibleBranchPr && !badges.some((badge) => badge.pullRequest.url === visibleBranchPr.url)) {
-    badges.push(
-      resolveThreadPrBadge({
-        branchPullRequest: visibleBranchPr,
-        attachedPullRequest: null,
-        provider: gitStatus.data?.sourceControlProvider,
-      })!,
-    );
-  }
   const displayedPrBadge =
     badges.find((badge) => badge.changeRequestState !== "merged") ?? badges.at(-1) ?? null;
   const displayedPr = displayedPrBadge?.pullRequest ?? null;
   const displayedPrStatus = displayedPrBadge?.status ?? null;
-  const prState = aggregateThreadPullRequestState(badges.map((badge) => badge.changeRequestState));
-  const prSource = threadChangeRequestSource(thread);
 
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
@@ -995,8 +1064,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Status hues follow the system-wide convention set by sidebar v1 and the
   // mobile Live Activity/widgets (amber approval, indigo input, sky working)
   // so a thread reads the same color everywhere it surfaces.
-  const topStatus =
-    status === "working"
+  const topStatus = props.queuedStatusLabel
+    ? { label: props.queuedStatusLabel, icon: null, className: "text-muted-foreground" }
+    : status === "working"
       ? {
           label: "Working",
           icon: "working" as const,
@@ -1055,11 +1125,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     currentGitBranch: gitStatus.data?.refName ?? null,
   });
   const settledPrHoverClass = prState ? settledPrHoverColorClass(prState) : undefined;
-  // Report the PR state up: the parent partitions rows with effectiveSettled,
-  // and a merged PR auto-settles a thread. Only data rows have that state.
-  useEffect(() => {
-    onChangeRequestState(threadKey, { source: prSource, state: prState });
-  }, [onChangeRequestState, prSource, prState, threadKey]);
 
   const modelInstanceId = thread.runtime?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
@@ -1300,6 +1365,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       "opacity-70 transition-opacity hover:opacity-100",
   );
 
+  const unreadDot = hasUnreadNotification ? (
+    <span className="pointer-events-none absolute left-0 top-1/2 z-20 size-1.5 -translate-y-1/2 rounded-full bg-blue-500">
+      <span className="sr-only">Unread notification</span>
+    </span>
+  ) : null;
+
   const title = isRenaming ? (
     <input
       autoFocus
@@ -1400,8 +1471,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     return (
       <li
         data-thread-item
-        className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
+        data-active-thread={props.isActive || undefined}
+        className={cn(
+          "relative -ml-[3px] list-none pl-[3px]",
+          props.deferRendering && "[content-visibility:auto] [contain-intrinsic-size:auto_34px]",
+        )}
       >
+        {unreadDot}
         <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
           <PopoverTrigger
             nativeButton={false}
@@ -1436,7 +1512,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 cwd={props.projectCwd ?? ""}
                 faviconPath={props.projectFaviconPath}
                 className="size-4"
-                fallbackIcon={MessageSquareIcon}
+                fallbackIcon={thread.temporary ? TemporaryConversationIcon : MessageSquareIcon}
               />
             </span>
             {title}
@@ -1566,6 +1642,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   return (
     <li
       data-thread-item
+      data-active-thread={props.isActive || undefined}
       ref={sortable?.setNodeRef}
       style={
         sortable
@@ -1577,10 +1654,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       }
       {...(sortable?.listeners ?? {})}
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]",
+        "relative -ml-[3px] list-none py-0.5 pl-[3px]",
+        props.deferRendering && "[content-visibility:auto] [contain-intrinsic-size:auto_96px]",
         sortable?.isDragging && "z-20 opacity-80",
       )}
     >
+      {unreadDot}
       <Popover open={detailsOpen} onOpenChange={setDetailsOpen}>
         <PopoverTrigger
           nativeButton={false}
@@ -1604,7 +1683,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               {thread.projectId === null ? (
-                <MessageSquareIcon className="size-4 shrink-0" />
+                <MessageSquareIcon
+                  className="size-4 shrink-0"
+                  strokeDasharray={thread.temporary ? "3 3" : undefined}
+                />
               ) : (
                 <ProjectFavicon
                   environmentId={thread.environmentId}
@@ -1700,7 +1782,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             wrapper around the ticking duration would make
                             screen readers announce every second. */}
                         <span role="status">{topStatus.label}</span>
-                        {status === "working" ? (
+                        {status === "working" && !props.queuedStatusLabel ? (
                           <span aria-hidden>
                             <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
                           </span>
@@ -1789,7 +1871,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 <button
                   type="button"
                   className="shrink-0 cursor-pointer font-mono text-[11px] font-medium text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-                  aria-label={`Open issue ${props.issue.key}`}
+                  aria-label={`Open task ${props.issue.key}`}
                   onClick={handleIssueClick}
                 >
                   {props.issue.key}
@@ -1944,7 +2026,7 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
             cwd={props.projectCwd ?? ""}
             faviconPath={props.projectFaviconPath}
             className="size-4 shrink-0"
-            fallbackIcon={MessageSquareIcon}
+            fallbackIcon={thread.temporary ? TemporaryConversationIcon : MessageSquareIcon}
           />
           <span className="min-w-0 flex-1 truncate">{thread.title}</span>
           <span className="shrink-0 text-xs text-muted-foreground/55 tabular-nums">
@@ -2010,13 +2092,16 @@ export default function Sidebar() {
       }),
     [focuses, focusAssignments, visibleFocusProjectKeys],
   );
+  const threads = useThreadShells();
   const focusSwipe = useFocusSwipe({
+    hasConversations: threads.some(
+      (thread) => thread.projectId === null && thread.archivedAt === null,
+    ),
     activeFocusId,
     visibleFocuses: shownFocuses,
     onActiveFocusChange: setActiveFocusId,
   });
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const threads = useThreadShells();
   const threadTitlesByKey = useThreadTitlesByKey();
   const agentThreads = useMemo(
     () => threads.filter((thread) => threadIsVisibleAt(thread, "agents")),
@@ -2198,7 +2283,11 @@ export default function Sidebar() {
     () => filterSidebarWorkspaceProjectsForFocus(workspaceProjects, activeFocusProjectKeys),
     [activeFocusProjectKeys, workspaceProjects],
   );
-  const threadStartAvailability = workspaceThreadStartAvailability(workspaceProjects);
+  const queueDestinations = useAtomValue(threadQueueDestinationsAtom);
+  const threadStartAvailability =
+    queueDestinations.length > 0
+      ? "available"
+      : workspaceThreadStartAvailability(workspaceProjects);
 
   useEffect(() => {
     // #region DEBUG
@@ -2297,23 +2386,57 @@ export default function Sidebar() {
   // fresh clock whenever it recomputes.
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
 
-  // PR states stream in per-row (rows own the VCS subscriptions); a merged
-  // PR auto-settles its thread on the next partition.
-  const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
-    ReadonlyMap<string, ThreadChangeRequestState>
-  >(() => new Map());
-  const handleChangeRequestState = useCallback(
-    (threadKey: string, value: ThreadChangeRequestState) => {
-      setChangeRequestStateByKey((current) => {
-        const previous = current.get(threadKey);
-        if (previous?.source === value.source && previous.state === value.state) return current;
-        const next = new Map(current);
-        next.set(threadKey, value);
-        return next;
-      });
-    },
-    [],
+  const threadScope = useAtomValue(sidebarThreadScopeAtom);
+  const [changeRequestStateByKey, setChangeRequestStateByKey] = useAtom(
+    sidebarThreadChangeRequestsAtom(threadScope),
   );
+  const retainedClassifications = useRef({ scope: threadScope, states: changeRequestStateByKey });
+  if (retainedClassifications.current.scope !== threadScope)
+    retainedClassifications.current = { scope: threadScope, states: changeRequestStateByKey };
+  const retainedStates = retainedClassifications.current.states;
+  const threadListReadiness = useAtomValue(threadListReadinessAtom);
+  const handleChangeRequestState = useCallback(
+    (threadKey: string, value: ThreadChangeRequestState, failed = false) => {
+      setChangeRequestStateByKey((current) =>
+        updateSidebarChangeRequest(current, threadKey, value, failed),
+      );
+    },
+    [setChangeRequestStateByKey],
+  );
+  useEffect(() => {
+    if (threadListReadiness !== "ready") return;
+    const keys = new Set(
+      threads.map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+    );
+    setChangeRequestStateByKey((current) => {
+      if ([...current.keys()].every((key) => keys.has(key))) return current;
+      return new Map([...current].filter(([key]) => keys.has(key)));
+    });
+  }, [threads, threadListReadiness, setChangeRequestStateByKey]);
+  const unavailableEnvironmentIds = useMemo(
+    () =>
+      new Set(
+        environments
+          .filter((environment) =>
+            ["available", "offline", "error", "reconnecting"].includes(
+              environment.connection.phase,
+            ),
+          )
+          .map((environment) => environment.environmentId),
+      ),
+    [environments],
+  );
+  const lifecycleCapabilities = useMemo(() => {
+    const capabilities = new Map(
+      environments.map((environment) => [
+        environment.environmentId,
+        environment.descriptor?.capabilities,
+      ]),
+    );
+    for (const [environmentId, config] of serverConfigs)
+      capabilities.set(environmentId, config.environment.capabilities);
+    return capabilities;
+  }, [environments, serverConfigs]);
 
   // Project scope: one menu above the list. Scoping filters the list without
   // making the header width depend on the number or length of project names.
@@ -2325,6 +2448,14 @@ export default function Sidebar() {
         : (projectGroups.find((project) => project.projectKey === projectScopeKey) ?? null),
     [projectGroups, projectScopeKey],
   );
+  useEffect(() => {
+    if (activeFocusId !== CONVERSATIONS_FOCUS_ID) return;
+    const frame = requestAnimationFrame(() => {
+      document.querySelector('[data-active-thread="true"]')?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeFocusId, routeThreadKey, agentThreads.length]);
+
   // A company project nothing has checked out is a real scope with no threads in it. Without this
   // it would look like an unknown key and the effect below would snap the menu back to All.
   const scopedCheckoutlessProject = useMemo(
@@ -2376,10 +2507,42 @@ export default function Sidebar() {
   // (every non-promoted session with content); it can overcount by one for
   // an open never-left draft, which only softens the empty state.
   const routeDraftIdForRows = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
+  const queuedThreadRows = useAtomValue(threadQueueEntriesAtom);
+  const queuedThreadKeys = useMemo(
+    () => queuedThreadEnvironmentKeys(queuedThreadRows),
+    [queuedThreadRows],
+  );
+  const queuedStatusByThreadId = useMemo(
+    () =>
+      new Map(
+        queuedThreadRows
+          .filter((row) => row.waitingToSync || row.queuedCount > 0 || row.state === "blocked")
+          .map((row) => [
+            scopedThreadKey(
+              scopeThreadRef(EnvironmentId.make(row.environmentId), ThreadId.make(row.threadId)),
+            ),
+            row.waitingToSync
+              ? "Waiting to sync"
+              : row.state === "blocked"
+                ? "Needs attention"
+                : "Queued",
+          ]),
+      ),
+    [queuedThreadRows],
+  );
+  const visibleQueuedThreadCount = queuedThreadRows.filter((row) =>
+    row.localProjectId === null
+      ? includeConversations
+      : scopedProjectKeys === null ||
+        scopedProjectKeys.has(`${row.environmentId}:${row.localProjectId}`),
+  ).length;
   const visibleDraftSessionCount = useComposerDraftStore((store) => {
     let count = 0;
     for (const [draftKey, session] of Object.entries(store.draftThreadsByThreadKey)) {
-      if (session.promotedTo != null) {
+      if (
+        session.promotedTo != null ||
+        queuedThreadKeys.has(`${session.environmentId}:${session.threadId}`)
+      ) {
         continue;
       }
       if (!threadIsVisibleAt(session, "agents")) {
@@ -2434,8 +2597,9 @@ export default function Sidebar() {
     snoozedThreads,
     settledThreads,
     snoozeNow,
+    loadingThreads,
   } = useMemo(() => {
-    const now = `${nowMinute}:00.000Z`;
+    void nowMinute;
     // Snooze classification uses a REAL clock, not the quantized minute:
     // wake times are second-precise and a woken thread must not linger on
     // the shelf for the rest of the minute. snoozeWakeTick re-runs this
@@ -2453,42 +2617,24 @@ export default function Sidebar() {
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
+    const loading: EnvironmentThreadShell[] = [];
+    const sections = { active, pinned, snoozed, settled, loading };
     for (const thread of visible) {
-      // Threads on servers without the settlement capability (old server,
-      // or descriptor not loaded yet) never classify as settled: the user
-      // could neither un-settle nor pin them, so auto-settling them would
-      // strand rows in a tail with no working affordances.
-      const supportsSettlement =
-        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement === true;
-      const supportsSnooze =
-        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
-      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      const changeRequestState = currentThreadChangeRequestState(
-        thread,
-        changeRequestStateByKey.get(threadKey),
-      );
-      // Snooze outranks everything, including a pin: "hide until Tuesday"
-      // temporarily suspends "keep on top". The pin survives underneath —
-      // and so does its pinOrderKey, so on wake the thread reappears at
-      // its exact slot in the pinned block. (For unpinned threads
-      // this is also the snooze-beats-auto-settle rule: the wake time is a
-      // stronger statement about when the thread matters again.)
-      if (supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
-        snoozed.push(thread);
-        // A pin otherwise overrides the lifecycle: pinned threads never
-        // auto-settle out of sight. (The decider clears settled state on
-        // pin and the pin on settle, so pin-vs-settled conflicts only
-        // arise from stale or raced writes.)
-      } else if (thread.pinnedAt != null) {
-        pinned.push(thread);
-      } else if (
-        supportsSettlement &&
-        effectiveSettled(thread, { now, autoSettleAfterDays, changeRequestState })
-      ) {
-        settled.push(thread);
-      } else {
-        active.push(thread);
-      }
+      const capabilities = lifecycleCapabilities.get(thread.environmentId);
+      const section = sidebarThreadSection(thread, {
+        now: preciseNow,
+        unavailable: unavailableEnvironmentIds.has(thread.environmentId),
+        autoSettleAfterDays,
+        queued: queuedStatusByThreadId.has(
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        ),
+        supportsSettlement:
+          capabilities === undefined ? undefined : capabilities.threadSettlement === true,
+        supportsSnooze: capabilities === undefined ? undefined : capabilities.threadSnooze === true,
+        projectCwd: projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null,
+        changeRequests: changeRequestStateByKey,
+      });
+      sections[section].push(thread);
     }
     // One shared rule on every platform (see sortPinnedThreadsByOrderKey):
     // user-arranged keys first, keyless threads in creation order below.
@@ -2515,17 +2661,44 @@ export default function Sidebar() {
       ),
       settledThreads: sortSettledThreadsForSidebar(settled),
       snoozeNow: preciseNow,
+      loadingThreads: loading,
     };
   }, [
     autoSettleAfterDays,
     changeRequestStateByKey,
+    lifecycleCapabilities,
+    unavailableEnvironmentIds,
+    projectCwdByKey,
     nowMinute,
     scopedProjectKeys,
     includeConversations,
     serverConfigs,
     snoozeWakeTick,
     agentThreads,
+    queuedStatusByThreadId,
   ]);
+
+  const retainedSettledThreads = useMemo(
+    () =>
+      settledThreads.filter(
+        (thread) =>
+          thread.settledOverride == null &&
+          environments.some(
+            (environment) =>
+              environment.environmentId === thread.environmentId &&
+              environment.connection.phase === "connected",
+          ) &&
+          retainedStates.has(scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
+      ),
+    [settledThreads, environments, retainedStates],
+  );
+  useSidebarPrRevalidation(
+    threadScope,
+    retainedSettledThreads,
+    projects,
+    retainedStates,
+    handleChangeRequestState,
+  );
 
   // Drag-to-reorder for the active inbox. Purely client-local (this device
   // only): a drop saves the full visible key order, and this memo re-derives
@@ -2562,8 +2735,11 @@ export default function Sidebar() {
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   // Search is global within the active company. Neither the Focus nor the project picker narrows it.
   const searchableThreads = useMemo(
-    () => filterSidebarV2VisibleThreads(agentThreads, null),
-    [agentThreads],
+    () =>
+      filterSidebarV2VisibleThreads(agentThreads, null).filter(
+        (thread) => (thread.projectId === null) === (activeFocusId === CONVERSATIONS_FOCUS_ID),
+      ),
+    [agentThreads, activeFocusId],
   );
   const ungroupedThreadSearchResults = useMemo(
     () => searchSidebarThreadsByTitle(searchableThreads, threadSearchQuery),
@@ -2740,6 +2916,11 @@ export default function Sidebar() {
   // a prop — a fresh array identity per shell update would defeat every row's
   // memoization. The ref keeps shift-range-select working against the list as
   // rendered at click time.
+  // Paint the first screenful without placeholder heights; large lists still skip offscreen work.
+  const eagerThreadKeys = useMemo(
+    () => new Set(orderedThreadKeys.slice(0, 20)),
+    [orderedThreadKeys],
+  );
   const orderedThreadKeysRef = useRef(orderedThreadKeys);
   orderedThreadKeysRef.current = orderedThreadKeys;
   const threadByKey = useMemo(
@@ -2848,9 +3029,7 @@ export default function Sidebar() {
     (thread: EnvironmentThreadShell) => {
       setActiveFocusId(
         thread.projectId === null
-          ? focusIncludesConversations(focuses, activeFocusId)
-            ? activeFocusId
-            : ALL_FOCUS_ID
+          ? CONVERSATIONS_FOCUS_ID
           : (focusIdByProjectKey.get(`${thread.environmentId}:${thread.projectId}`) ??
               ALL_FOCUS_ID),
       );
@@ -3611,6 +3790,66 @@ export default function Sidebar() {
     ],
   );
 
+  const conversationsBulkActionInFlight = useRef(false);
+  const handleConversationsContextMenu = useCallback(
+    async (position: { x: number; y: number }) => {
+      const api = readLocalApi();
+      if (!api || conversationsBulkActionInFlight.current) return;
+      const conversations = agentThreads.filter(
+        (thread) => thread.projectId === null && thread.archivedAt === null,
+      );
+      if (conversations.length === 0) return;
+      conversationsBulkActionInFlight.current = true;
+      try {
+        const clicked = await settlePromise(() =>
+          api.contextMenu.show(
+            [
+              { id: "archive", label: "Archive All" },
+              { id: "delete", label: "Delete All Chats", destructive: true },
+            ],
+            position,
+          ),
+        );
+        if (
+          clicked._tag === "Failure" ||
+          (clicked.value !== "archive" && clicked.value !== "delete")
+        )
+          return;
+        const deleting = clicked.value === "delete";
+        if (deleting || confirmThreadArchive) {
+          const confirmed = await settlePromise(() =>
+            api.dialogs.confirm(
+              deleting
+                ? `Delete all ${conversations.length} chats?\nThis permanently clears their conversation history.`
+                : `Archive all ${conversations.length} chats?`,
+              deleting ? { variant: "destructive" } : undefined,
+            ),
+          );
+          if (confirmed._tag === "Failure" || !confirmed.value) return;
+        }
+        let failed = 0;
+        for (const thread of conversations) {
+          const threadRef = scopeThreadRef(thread.environmentId, thread.id);
+          const result = deleting ? await deleteThread(threadRef) : await archiveThread(threadRef);
+          if (result._tag === "Failure") failed += 1;
+        }
+        if (failed > 0) {
+          toastManager.add({
+            type: "error",
+            title: `Could not ${deleting ? "delete" : "archive"} ${failed} chats`,
+            description:
+              "Some chats may be running or their environment may be disconnected. They remain available so you can try again.",
+          });
+        } else {
+          setActiveFocusId(ALL_FOCUS_ID);
+        }
+      } finally {
+        conversationsBulkActionInFlight.current = false;
+      }
+    },
+    [agentThreads, archiveThread, deleteThread, confirmThreadArchive, setActiveFocusId],
+  );
+
   const handleThreadContextMenu = useCallback(
     (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
       void (async () => {
@@ -3956,12 +4195,6 @@ export default function Sidebar() {
     updateThreadJumpHintsVisibility(shouldShowJumpHintsNow);
   }, [shouldShowJumpHintsNow, updateThreadJumpHintsVisibility]);
 
-  const attachListAutoAnimateRef = useCallback((node: HTMLUListElement | null) => {
-    if (!node) return;
-    const animation = autoAnimate(node, { duration: 150, easing: "ease-out" });
-    return () => animation.destroy?.();
-  }, []);
-
   // New threads open directly in the current thread's project, falling back
   // to the current draft and then the first project in the user's ordering.
   const handleNewThreadClick = useCallback(() => {
@@ -4090,11 +4323,19 @@ export default function Sidebar() {
                     <SettingsIcon className="-mr-px size-4 shrink-0" />
                   </SidebarMenuButton>
                 ) : (
-                  <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
+                  <Menu
+                    open={projectScopeMenuOpen && activeFocusId !== CONVERSATIONS_FOCUS_ID}
+                    onOpenChange={setProjectScopeMenuOpen}
+                  >
                     <MenuTrigger
+                      disabled={activeFocusId === CONVERSATIONS_FOCUS_ID}
                       render={
                         <SidebarMenuButton
-                          aria-label="Filter threads by project"
+                          aria-label={
+                            activeFocusId === CONVERSATIONS_FOCUS_ID
+                              ? "Conversations"
+                              : "Filter threads by project"
+                          }
                           className="min-w-0 flex-1 ps-[calc(var(--sidebar-row-content-inset)-1px)] focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                         />
                       }
@@ -4110,9 +4351,13 @@ export default function Sidebar() {
                         <FolderIcon className="size-4 shrink-0" />
                       )}
                       <span className="min-w-0 flex-1 truncate">
-                        {scopedProjectGroup?.displayName ?? "All projects"}
+                        {activeFocusId === CONVERSATIONS_FOCUS_ID
+                          ? "Conversations"
+                          : (scopedProjectGroup?.displayName ?? "All projects")}
                       </span>
-                      <ChevronDownIcon className="-mr-px size-4 shrink-0" />
+                      {activeFocusId !== CONVERSATIONS_FOCUS_ID && (
+                        <ChevronDownIcon className="-mr-px size-4 shrink-0" />
+                      )}
                     </MenuTrigger>
                     <MenuPopup align="start" className="w-(--anchor-width)">
                       <MenuRadioGroup
@@ -4248,6 +4493,18 @@ export default function Sidebar() {
           ref={focusSwipe.contentRef}
           className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0"
         >
+          {loadingThreads.map((thread) =>
+            lifecycleCapabilities.get(thread.environmentId)?.threadSettlement === true ? (
+              <SidebarThreadClassification
+                key={scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))}
+                thread={thread}
+                projectCwd={
+                  projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
+                }
+                onChangeRequestState={handleChangeRequestState}
+              />
+            ) : null,
+          )}
           {isSearchingThreads ? (
             threadSearchResults.length > 0 ? (
               <TooltipProvider
@@ -4287,7 +4544,11 @@ export default function Sidebar() {
                           ) : (
                             <Layers3Icon className="size-3 shrink-0" />
                           )}
-                          <span className="truncate">{group.focus?.name ?? "All"}</span>
+                          <span className="truncate">
+                            {group.focusId === CONVERSATIONS_FOCUS_ID
+                              ? "Conversations"
+                              : (group.focus?.name ?? "All")}
+                          </span>
                         </li>
                       ) : null}
                       {group.results.map((thread) => {
@@ -4340,14 +4601,14 @@ export default function Sidebar() {
                   ))}
                 </ul>
               </TooltipProvider>
-            ) : (
+            ) : threadListReadiness === "ready" ? (
               <p
                 role="status"
                 className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
               >
                 No threads found
               </p>
-            )
+            ) : null
           ) : null}
           {!isSearchingThreads ? (
             <TooltipProvider
@@ -4356,12 +4617,7 @@ export default function Sidebar() {
               closeDelay={0}
               timeout={400}
             >
-              <ul
-                key={activeFocusId}
-                ref={attachListAutoAnimateRef}
-                role="list"
-                className="flex flex-col gap-px"
-              >
+              <ul key={activeFocusId} role="list" className="flex flex-col gap-px">
                 {(() => {
                   const renderThreadRow = (
                     thread: EnvironmentThreadShell,
@@ -4379,6 +4635,12 @@ export default function Sidebar() {
                     const rowVariant = isCard ? "card" : "slim";
                     return (
                       <SidebarThreadRow
+                        deferRendering={!eagerThreadKeys.has(threadKey)}
+                        queuedStatusLabel={
+                          queuedStatusByThreadId.get(
+                            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                          ) ?? null
+                        }
                         alertPolicies={alertPolicies}
                         alertModifierHeld={shortcutModifiers.ctrlKey || shortcutModifiers.metaKey}
                         alertProjectKey={
@@ -4499,6 +4761,11 @@ export default function Sidebar() {
                   // reorder-capable rows register as sortable (legacy-server
                   // pins render in place as plain rows).
                   const items: ReactNode[] = [
+                    <QueuedThreadSidebar
+                      key="cloud-queued-threads"
+                      scopedProjectKeys={scopedProjectKeys}
+                      includeConversations={includeConversations}
+                    />,
                     <SidebarDraftBlock
                       key="draft-sessions"
                       projectDisplayNameByKey={projectDisplayNameByKey}
@@ -4679,8 +4946,21 @@ export default function Sidebar() {
               </ul>
             </TooltipProvider>
           ) : null}
+          {threadListReadiness !== "ready" || (!isSearchingThreads && loadingThreads.length > 0) ? (
+            <p
+              role="status"
+              className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
+            >
+              {threadListReadiness === "error"
+                ? "Could not load threads. Check your connection."
+                : "Loading threads…"}
+            </p>
+          ) : null}
           {!isSearchingThreads &&
+          threadListReadiness === "ready" &&
+          loadingThreads.length === 0 &&
           visibleDraftSessionCount === 0 &&
+          visibleQueuedThreadCount === 0 &&
           pinnedThreads.length +
             activeThreads.length +
             snoozedThreads.length +
@@ -4709,6 +4989,9 @@ export default function Sidebar() {
         </SidebarGroup>
       </SidebarContent>
       <FocusStrip
+        hasConversations={agentThreads.some(
+          (thread) => thread.projectId === null && thread.archivedAt === null,
+        )}
         focuses={focuses}
         assignments={focusAssignments}
         visibleProjectKeys={visibleFocusProjectKeys}
@@ -4719,9 +5002,14 @@ export default function Sidebar() {
         notifications={focusNotifications}
         threadTitlesByKey={threadTitlesByKey}
         projectNamesByKey={projectDisplayNameByKey}
+        onConversationsContextMenu={(position) => void handleConversationsContextMenu(position)}
         onNotificationSelect={selectFocusNotification}
         mutations={focusMutations}
       />
     </>
   );
+}
+
+function TemporaryConversationIcon({ className }: { className?: string }) {
+  return <MessageSquareIcon className={className} strokeDasharray="3 3" />;
 }

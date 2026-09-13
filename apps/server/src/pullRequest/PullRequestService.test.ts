@@ -1,3 +1,4 @@
+import { TestClock } from "effect/testing";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -2669,4 +2670,68 @@ it.effect(
       yield* service.activity(reference);
       assert.strictEqual(activityCalls, 2);
     }),
+);
+
+it.effect("refreshes expired conflict details in the same response and coalesces readers", () =>
+  Effect.gen(function* () {
+    let mergeability: "conflicting" | "mergeable" | "unknown" = "conflicting";
+    let fail = false;
+    let reads = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: () =>
+            Effect.suspend(() => {
+              reads++;
+              return fail
+                ? Effect.fail(requestFailed)
+                : Effect.succeed({
+                    ...changeRequest(149, "2026-09-12T00:00:00Z"),
+                    mergeability,
+                    body: "",
+                    changedFiles: 1,
+                    mergedAt: null,
+                    closedAt: null,
+                    reviewers: [],
+                    checks: [],
+                    mergeCapabilities: { merge: true, squash: true, rebase: true },
+                    viewerPermissions: {
+                      actions: [],
+                      comment: true,
+                      resolve: true,
+                      verdicts: [],
+                      requestReviewers: true,
+                    },
+                  });
+            }),
+        }),
+      ],
+    });
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 149 };
+    assert.strictEqual((yield* service.detail(reference)).mergeability, "conflicting");
+    mergeability = "mergeable";
+    yield* TestClock.adjust("16 seconds");
+    const answers = yield* Effect.all(
+      Array.from({ length: 10 }, () => service.detail(reference)),
+      { concurrency: "unbounded" },
+    );
+    assert.deepEqual(
+      answers.map((answer) => answer.mergeability),
+      Array(10).fill("mergeable"),
+    );
+    assert.strictEqual(reads, 2);
+    mergeability = "unknown";
+    yield* service.invalidate({ reference });
+    assert.strictEqual((yield* service.detail(reference)).mergeability, "unknown");
+    fail = true;
+    yield* TestClock.adjust("16 seconds");
+    assert.strictEqual(
+      (yield* Effect.flip(service.detail(reference)))._tag,
+      "PullRequestOperationError",
+    );
+    fail = false;
+    mergeability = "mergeable";
+    assert.strictEqual((yield* service.detail(reference)).mergeability, "mergeable");
+  }).pipe(Effect.provide(TestClock.layer())),
 );

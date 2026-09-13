@@ -24,6 +24,7 @@
  * @module schema
  */
 import { defineSchema, defineTable } from "convex/server";
+import { dictationDictionaryLists } from "./lib/dictationDictionary.ts";
 import { v } from "convex/values";
 
 import { mailTables } from "./lib/mailSchema.ts";
@@ -197,6 +198,11 @@ export default defineSchema({
     .index("by_installation_and_createdAt", ["installationId", "createdAt"])
     .index("by_createdAt", ["createdAt"])
     .index("by_sentAt", ["sentAt"]),
+  dictationDictionaries: defineTable({
+    userId: v.string(),
+    revision: v.number(),
+    lists: dictationDictionaryLists,
+  }).index("by_user", ["userId"]),
   ...businessToolsTables,
   ...mailTables,
   // ---------------------------------------------------------------------------
@@ -297,10 +303,11 @@ export default defineSchema({
     .index("by_user_and_event", ["userId", "eventId"])
     .index("by_user_and_created_at", ["userId", "createdAt"]),
 
-  /** One cross-machine mark-all-read watermark plus the next bounded retention scan time. */
+  /** Cross-machine read and tray-open watermarks plus the next bounded retention scan time. */
   focusNotificationStates: defineTable({
     userId: v.string(),
     readThrough: v.number(),
+    seenThrough: v.optional(v.number()),
     nextCleanupAt: v.number(),
     updatedAt: v.number(),
   })
@@ -768,6 +775,7 @@ export default defineSchema({
     environmentId: v.string(),
     localProjectId: v.string(),
     localWorkspaceRoot: v.string(),
+    internalWorkspaceRoot: v.optional(v.union(v.string(), v.null())),
     /** Optional while environments running older publishers still have bindings in the feed. */
     repositoryIdentity: v.optional(v.union(repositoryIdentityArg, v.null())),
     /** Storage-only index key derived from `repositoryIdentity.canonicalKey`. */
@@ -1190,6 +1198,95 @@ export default defineSchema({
     .index("by_company", ["companyId"])
     .index("by_company_and_environment", ["companyId", "environmentId"])
     .index("by_environment", ["environmentId"]),
+
+  /** Cloud-owned submission queue. Payloads remain until explicit cancellation or durable delivery. */
+  threadQueueThreads: defineTable({
+    companyId: v.id("companies"),
+    threadId: v.string(),
+    queueVersion: v.optional(v.literal(1)),
+    listingExpiresAt: v.optional(v.number()),
+    originEnvironmentId: v.optional(v.string()),
+    environmentId: v.string(),
+    localProjectId: v.union(v.string(), v.null()),
+    cloudProjectId: v.union(v.id("cloudProjects"), v.null()),
+    issuedByMembershipId: v.id("memberships"),
+    title: v.string(),
+    /** Contracts ThreadQueueThread.launch, validated by the submission decoder. */
+    launch: v.union(v.any(), v.null()),
+    state: v.union(
+      v.literal("queued"),
+      v.literal("accepted"),
+      v.literal("delivered"),
+      v.literal("blocked"),
+      v.literal("canceled"),
+    ),
+    error: v.union(v.string(), v.null()),
+    revision: v.number(),
+    acceptedAt: v.union(v.number(), v.null()),
+    nextSequence: v.number(),
+    queuedCount: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_company", ["companyId"])
+    .index("by_company_and_listing_expiration", ["companyId", "listingExpiresAt"])
+    .index("by_listing_expiration", ["listingExpiresAt"])
+    .index("by_company_and_thread", ["companyId", "threadId"])
+    .index("by_company_and_member", ["companyId", "issuedByMembershipId"])
+    .index("by_company_and_environment", ["companyId", "environmentId"])
+    .index("by_company_environment_and_thread", ["companyId", "environmentId", "threadId"])
+    .index("by_company_origin_and_thread", ["companyId", "originEnvironmentId", "threadId"])
+    .index("by_company_environment_and_state", ["companyId", "environmentId", "state"]),
+
+  threadQueueMessages: defineTable({
+    companyId: v.id("companies"),
+    threadId: v.string(),
+    queueThreadId: v.optional(v.id("threadQueueThreads")),
+    issuedByMembershipDomainId: v.optional(v.string()),
+    commandId: v.string(),
+    messageId: v.string(),
+    issuedByMembershipId: v.id("memberships"),
+    sequence: v.number(),
+    revision: v.number(),
+    deliveryAttempt: v.optional(v.number()),
+    rejection: v.optional(v.union(v.literal("command"), v.literal("initial-message"), v.null())),
+    retryReusesThread: v.optional(v.boolean()),
+    state: v.union(
+      v.literal("queued"),
+      v.literal("accepted"),
+      v.literal("delivered"),
+      v.literal("blocked"),
+      v.literal("canceled"),
+    ),
+    error: v.union(v.string(), v.null()),
+    /** Contracts ThreadQueueSubmission; nested runtime payload validated at enqueue. */
+    submission: v.any(),
+    /** Immutable original request fingerprint keeps retries safe after edits and moves. */
+    submissionFingerprint: v.string(),
+    attachmentIds: v.array(v.string()),
+    acceptedAt: v.union(v.number(), v.null()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_queue_and_command", ["companyId", "queueThreadId", "commandId"])
+    .index("by_queue_and_message", ["companyId", "queueThreadId", "messageId"])
+    .index("by_queue_and_sequence", ["companyId", "threadId", "queueThreadId", "sequence"])
+    .index("by_queue_and_state", ["companyId", "threadId", "queueThreadId", "state", "sequence"])
+    .index("by_company_and_command", ["companyId", "commandId"])
+    .index("by_company_and_message", ["companyId", "messageId"])
+    .index("by_company_thread_and_sequence", ["companyId", "threadId", "sequence"])
+    .index("by_company_thread_and_state", ["companyId", "threadId", "state", "sequence"]),
+
+  threadQueueAttachments: defineTable({
+    companyId: v.id("companies"),
+    issuedByMembershipId: v.id("memberships"),
+    storageId: v.id("_storage"),
+    /** Contracts ChatAttachment; metadata matched against uploaded bytes before registration. */
+    attachment: v.any(),
+    createdAt: v.number(),
+  })
+    .index("by_storage", ["storageId"])
+    .index("by_company_and_member", ["companyId", "issuedByMembershipId"]),
 
   /** Durable Agent Thread metadata. `shell` omits message text and other rich thread content. */
   agentThreads: defineTable({

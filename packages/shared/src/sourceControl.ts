@@ -27,6 +27,7 @@ export function sourceControlMarkerLabel(
   if (item.pullRequest !== null) {
     return item.committed ? "Committed, pushed, and PR created" : "Pushed and PR created";
   }
+  if (item.committed && item.pushed === false) return "Committed";
   return item.committed ? "Committed and pushed" : "Pushed";
 }
 

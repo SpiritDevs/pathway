@@ -2,7 +2,13 @@
 
 Choose **Conversation** at the bottom of the project picker to start without a project. Select a company and an environment first. A conversation appears in the normal thread list with a chat icon and the label **Conversation**. The agent can use tools and save files in its own working folder on that environment.
 
+Before sending, choose the machine that will run the conversation from the environment selector in the composer’s bottom bar or the action palette’s **Environment** section. Once work begins, the conversation stays on that environment.
+
 Conversations appear in **All** for their company. Enable **Conversations** when editing a Focus to include them there. Several Focuses can include conversations independently.
+
+When you reopen a thread in the web or desktop app, it opens at the newest messages once its history has loaded. If you scroll up while it loads, your position is left alone.
+
+When you scroll away from the latest messages, a **Scroll to end** button appears above the composer. It accounts for messages covered by the composer and shows **working...** while the agent is running. Click it to return to the latest output and resume following new messages.
 
 ## Attach a project
 

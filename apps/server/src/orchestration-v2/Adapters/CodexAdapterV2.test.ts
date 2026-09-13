@@ -1969,6 +1969,84 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
   );
 
+  it.effect("translates a cancelled user-input request to Codex's empty-answer response", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const nativeThreadId = "cancel-user-input-thread";
+        const nativeTurnId = "cancel-user-input-turn";
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({
+            scenario: "cancel-user-input",
+            entries: [
+              ...codexReplayPreamble({
+                nativeThreadId,
+                nativeTurnId,
+                prompt: "Ask a question.",
+              }),
+              {
+                type: "emit_inbound",
+                label: "question",
+                frame: {
+                  id: 71,
+                  method: "item/tool/requestUserInput",
+                  params: {
+                    threadId: nativeThreadId,
+                    turnId: nativeTurnId,
+                    itemId: "cancel-question",
+                    questions: [
+                      {
+                        id: "choice",
+                        header: "Choice",
+                        question: "Proceed?",
+                        isOther: true,
+                        isSecret: false,
+                        options: [],
+                      },
+                    ],
+                  },
+                },
+              },
+              {
+                type: "expect_outbound",
+                label: "cancelled question response",
+                frame: { id: 71, result: { answers: {} } },
+              },
+            ],
+          }),
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-cancel-user-input"),
+            text: "Ask a question.",
+          }),
+        );
+        yield* awaitUntil(
+          () =>
+            harness.events.some(
+              (event) =>
+                event.type === "runtime_request.updated" &&
+                event.runtimeRequest.status === "pending",
+            ),
+          "Codex user-input request",
+        );
+        const request = harness.events.find(
+          (event) =>
+            event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
+        );
+        if (request?.type !== "runtime_request.updated") {
+          return yield* Effect.die("Expected a pending Codex user-input request");
+        }
+        yield* harness.runtime.respondToRuntimeRequest({
+          requestId: request.runtimeRequest.id,
+          decision: "cancel",
+        });
+      }).pipe(Effect.provide(Layer.merge(idAllocatorLayer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("projects async questions with stable identity without blocking turn completion", () =>
     Effect.scoped(
       Effect.gen(function* () {

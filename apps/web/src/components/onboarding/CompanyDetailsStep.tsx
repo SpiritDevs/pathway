@@ -61,7 +61,7 @@ export function CompanyDetailsStep({
         <StepHeader
           description={
             creating
-              ? "Create a separate workspace for its members, issues, and integrations. The extra details help us shape company features."
+              ? "Create a separate workspace for its members, tasks, and integrations. The extra details help us shape company features."
               : ONBOARDING_STEP_DESCRIPTIONS["company-details"]
           }
           title={creating ? "Create a company" : ONBOARDING_STEP_TITLES["company-details"]}

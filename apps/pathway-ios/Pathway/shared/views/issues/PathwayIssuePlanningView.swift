@@ -111,7 +111,7 @@ struct PathwayIssueCatalogView: View {
         .overlay {
             if entities.isEmpty {
                 ContentUnavailableView("No \(kind.title.lowercased())", systemImage: "flag",
-                    description: Text("Create a \(kind.singular) to organize your issues."))
+                    description: Text("Create a \(kind.singular) to organize your tasks."))
             }
         }
         .navigationTitle(kind.title)
@@ -222,7 +222,7 @@ struct PathwayIssueCatalogEditor: View {
             if let entity {
                 Section {
                     if kind == .status {
-                        Picker("Move issues to", selection: $replacement) {
+                        Picker("Move tasks to", selection: $replacement) {
                             Text("Choose a status").tag("")
                             ForEach(model.statuses.filter { $0.companyId == companyID && $0.id != entity.id }) {
                                 Text($0.name).tag($0.id)
@@ -244,7 +244,7 @@ struct PathwayIssueCatalogEditor: View {
         .onAppear(perform: load)
         .confirmationDialog("Delete this \(kind.singular)?", isPresented: $deleting, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { save(removing: true) }
-        } message: { Text("Issues remain in the tracker. Their \(kind.singular) will be cleared or reassigned.") }
+        } message: { Text("Tasks remain in the tracker. Their \(kind.singular) will be cleared or reassigned.") }
     }
 
     private func load() {
@@ -357,8 +357,8 @@ struct PathwayIssuePlanDetailView: View {
                         Button("Remove", role: .destructive) { remove(issue) }
                     }
                 }
-                Button("Add issues", systemImage: "plus") { addingIssues = true }
-            } header: { Text("Issues") }
+                Button("Add tasks", systemImage: "plus") { addingIssues = true }
+            } header: { Text("Tasks") }
             if let error { Text(error).foregroundStyle(.red) }
         }
         .navigationTitle(entity?.name ?? kind.title)

@@ -17,7 +17,6 @@ import { useCallback } from "react";
 
 import { useEnvironmentControl } from "~/cloud/useEnvironmentControl";
 import { usePrimaryEnvironmentId } from "~/state/environments";
-import { scratchWorkspaceRoot } from "./projectWorkspace.logic";
 import { useQuickCreateProject } from "./useProjectWorkspaceCommands";
 import type { WorkspaceProject } from "./workspaceProjects.logic";
 
@@ -55,21 +54,20 @@ export function useMaterializeWorkspaceProject() {
         return { ok: false, message: "Connect an environment before starting work here." };
       }
 
-      const workspaceRoot = scratchWorkspaceRoot({
-        id: project.cloudProjectId ?? project.projectKey,
-        title: project.displayName,
-      });
       const created = await createProject({
         environmentId: primaryEnvironmentId,
         plan: {
           kind: "create",
           title: project.displayName,
-          workspaceRoot,
+          workspaceRoot: null,
           createWorkspaceRootIfMissing: true,
           initializeGit: false,
         },
       });
       if (!created.ok) return created;
+      const workspaceRoot = created.value.workspaceRoot;
+      if (workspaceRoot === null)
+        return { ok: false, message: "The workspace folder is unavailable." };
 
       // Bind it back to the company project so issues filed against the planning-only project keep
       // resolving to this checkout. A failure here leaves a usable local project rather than
@@ -85,6 +83,7 @@ export function useMaterializeWorkspaceProject() {
               id: created.value.projectId,
               title: project.displayName,
               workspaceRoot,
+              internalWorkspaceRoot: created.value.internalWorkspaceRoot ?? null,
             },
           });
         } catch {

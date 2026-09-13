@@ -1,3 +1,4 @@
+import { ThreadQueueRuntime } from "../cloud/threadQueue";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
@@ -80,12 +81,13 @@ function readInitialThreadSidebarWidth(): number {
 
 function SidebarControl({ useArtworkContrast }: { useArtworkContrast: boolean }) {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const { toggleSidebar } = useSidebar();
+  const { toggleSidebar, hoverRevealed } = useSidebar();
   const isSidebarVisible = useSidebarVisibility();
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const stageBackdropVariant = useSidebarStageBackdropVariant(
     useArtworkContrast && environmentIdentificationMode === "artwork",
   );
+  const isSidebarArtworkVisible = isSidebarVisible || hoverRevealed;
   const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle");
 
   useEffect(() => {
@@ -125,10 +127,10 @@ function SidebarControl({ useArtworkContrast }: { useArtworkContrast: boolean })
                 "pointer-events-auto",
                 !useArtworkContrast &&
                   "[&_svg]:stroke-black! [&_svg]:hover:stroke-black! dark:[&_svg]:stroke-white/90! dark:[&_svg]:hover:stroke-white!",
-                isSidebarVisible &&
+                isSidebarArtworkVisible &&
                   stageBackdropVariant &&
                   "focus-visible:ring-white/90 [&_svg]:stroke-white/90! [&_svg]:opacity-100! [&_svg]:hover:stroke-white! [:hover,[data-pressed]]:bg-white/15",
-                isSidebarVisible &&
+                isSidebarArtworkVisible &&
                   stageBackdropVariant &&
                   resolveSidebarStageFocusRingOffsetClass(stageBackdropVariant),
               )}
@@ -212,6 +214,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
       hoverReveal
       style={sidebarProviderStyle}
     >
+      <ThreadQueueRuntime />
       <ProjectProjectionRetention />
       <PrimaryNavigationRail
         expanded={isPrimaryNavigationExpanded}

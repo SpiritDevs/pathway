@@ -75,6 +75,8 @@ export function sameAttachedPullRequest(
 export interface ThreadChangeRequestState {
   readonly source: string;
   readonly state: "open" | "closed" | "merged" | null;
+  /** Last conclusive classification check; retained across sidebar navigation. */
+  readonly checkedAt?: number | undefined;
 }
 
 export function threadChangeRequestSource(
@@ -136,6 +138,8 @@ export function useAttachedPullRequest(
   const matches = attachment && query.data && sameAttachedPullRequest(attachment, query.data);
   return {
     ...query,
+    target: supported ? target : null,
+    isConnected: environment?.connection?.phase === "connected",
     project,
     data: matches ? query.data : null,
     error:
@@ -150,7 +154,7 @@ export function useAttachedPullRequest(
 
 export function aggregateThreadPullRequestState(
   states: ReadonlyArray<"open" | "closed" | "merged" | null>,
-) {
+): ThreadChangeRequestState["state"] {
   if (states.length === 0) return null;
   if (states.every((state) => state === "merged")) return "merged";
   if (states.includes("open")) return "open";
@@ -187,6 +191,7 @@ export const attachedPullRequestsAtom = Atom.family((key: string) =>
         attachment,
         data,
         isPending: result?.waiting ?? false,
+        isLoading: result !== null && result._tag === "Initial",
         error:
           result?._tag === "Failure" || (value && !data)
             ? "Could not refresh pull request status."

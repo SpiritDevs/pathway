@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import UniformTypeIdentifiers
 
@@ -91,8 +92,8 @@ extension PathwayAgentThreadModel {
         let object = value.objectValue ?? [:]
         serverConfig = object
         let capabilities = object["environment"]?.objectValue?["capabilities"]?.objectValue ?? [:]
-        supportsAttachmentUploads = capabilities["attachmentUploads"]?.boolValue == true
-        maximumFileAttachmentBytes = supportsAttachmentUploads ? capabilities["fileAttachments"]?.objectValue?["maxUploadBytes"]?.intValue : nil
+        supportsAttachmentUploads = threadQueue != nil || capabilities["attachmentUploads"]?.boolValue == true
+        maximumFileAttachmentBytes = threadQueue != nil ? 50 * 1024 * 1024 : (supportsAttachmentUploads ? capabilities["fileAttachments"]?.objectValue?["maxUploadBytes"]?.intValue : nil)
         let providerValues = object["providers"]?.arrayValue ?? []
         modelCatalog = providerValues.compactMap(Self.provider)
         providers = modelCatalog.filter { $0.unavailableReason == nil && !$0.models.isEmpty }
@@ -138,6 +139,7 @@ extension PathwayAgentThreadModel {
         if let connect { model = PathwayAgentThreadModel(thread: child, environment: environment, connect: connect, cache: cache, storageDirectory: storageDirectory) }
         else if let injectedRequest { model = PathwayAgentThreadModel(thread: child, environment: environment, request: injectedRequest) }
         else { throw PathwayThreadConversationError.message("Connect to the environment to open this thread.") }
+        model.threadQueue = threadQueue
         model.installSnapshot(projection)
         model.providers = providers
         model.supportsAttachmentUploads = supportsAttachmentUploads
@@ -194,10 +196,10 @@ extension PathwayAgentThreadModel {
         }
         let id = UUID().uuidString
         draftAttachments.append(PathwayThreadAttachmentDraft(id: id, name: String(name.prefix(255)), mimeType: mimeType,
-            type: type, sizeBytes: data.count, state: .uploading, previewData: type == "image" ? data : nil))
+            type: type, sizeBytes: data.count, state: threadQueue != nil ? .ready : .uploading, previewData: type == "image" ? data : nil))
         attachmentData[id] = data
         await persistDraftNow()
-        await retryAttachment(id: id)
+        if threadQueue == nil { await retryAttachment(id: id) }
     }
 
     func retryAttachment(id: String) async {
@@ -205,6 +207,7 @@ extension PathwayAgentThreadModel {
         guard let index = draftAttachments.firstIndex(where: { $0.id == id }) else { return }
         let data = attachmentData[id]
         guard data != nil || draftAttachments[index].localFileURL != nil else { return }
+        if threadQueue != nil { draftAttachments[index].state = .ready; actionError = nil; await persistDraftNow(); return }
         draftAttachments[index].state = .uploading
         let draft = draftAttachments[index]
         var uploadedID: String?
@@ -252,7 +255,16 @@ extension PathwayAgentThreadModel {
         }
     }
 
+    func visualizationURL(_ path: String, threadID: String) async throws -> URL {
+        guard let connect else { throw PathwayThreadConversationError.message("Connect to the environment to open the visualization.") }
+        return try await PathwayEnvironmentHTTP.assetURL(path, threadID: threadID, environment: environment, connect: connect,
+                                                       resourceKind: "visualization-file") { [self] method, payload in
+            try await request(method, payload: payload, reportsErrors: false)
+        }
+    }
+
     func attachmentURL(_ attachment: PathwayMessageAttachment) async throws -> URL {
+        if let url = cloudQueueAttachmentURLs[attachment.id] { return url }
         let value = try await request("assets.createUrl", payload: .object(["resource": .object([
             "_tag": .string("attachment"), "attachmentId": .string(attachment.id), "fileName": .string(attachment.name), "mimeType": .string(attachment.mimeType)
         ])]), reportsErrors: false)
@@ -312,6 +324,20 @@ extension PathwayAgentThreadModel {
         }
         isSending = true
         defer { isSending = false }
+        if let threadQueue {
+            // A plan has one implementation command, including after navigation or restart.
+            let identity = try JSONEncoder().encode([thread.companyId, threadID, planID])
+            let identifier = "implement-plan-" + SHA256.hash(data: identity).map { String(format: "%02x", $0) }.joined()
+            var command = PathwayAgentThreadCommands.dispatchMessage(threadID: threadID,
+                text: "PLEASE IMPLEMENT THIS PLAN:\n" + markdown.trimmingCharacters(in: .whitespacesAndNewlines),
+                hasActiveRun: false, identifier: identifier).objectValue ?? [:]
+            command["modelSelection"] = try Self.json(currentModelSelection)
+            command["sourcePlanRef"] = .object(["threadId": .string(threadID), "planId": .string(planID)])
+            try await threadQueue.enqueue(companyID: thread.companyId, environmentID: environment.environment.environmentId,
+                threadID: threadID, submission: .object(["kind": .string("message"), "input": .object(command),
+                    "runtimeMode": .string(runtimeMode), "interactionMode": .string("default")]))
+            return
+        }
         try await setInteractionMode("default")
         try await dispatch("message.dispatch", fields: ["createdBy": .string("user"), "creationSource": .string("mobile"),
             "messageId": .string(UUID().uuidString), "text": .string("PLEASE IMPLEMENT THIS PLAN:\n" + markdown.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -366,6 +392,50 @@ extension PathwayAgentThreadModel {
         }
         guard let transaction = preparedNewSend else { throw PathwayThreadConversationError.message("The message could not be prepared.") }
         await persistDraftNow()
+        if let threadQueue {
+            let files = try selected.map { try PathwayQueueFile.capture($0, bytes: attachmentData[$0.id]) }
+            var submission: JSONValue
+            if sideChat {
+                guard let run = runs.filter({ $0.status == "completed" }).max(by: { $0.ordinal < $1.ordinal }) else {
+                    throw PathwayThreadConversationError.message("Finish a turn before starting a side chat.")
+                }
+                if !transaction.forkCreated {
+                    try await dispatch("thread.fork", fields: ["commandId": .string(transaction.target),
+                        "sourceThreadId": .string(threadID), "targetThreadId": .string(transaction.target),
+                        "sourcePoint": .object(["type": .string("run"), "runId": .string(run.id)]), "forkKind": .string("side_chat"),
+                        "title": .string(threadTitle + " side chat"), "createdBy": .string("user"), "creationSource": .string("mobile")])
+                    preparedNewSend?.forkCreated = true
+                    await persistDraftNow()
+                }
+                var command = PathwayAgentThreadCommands.dispatchMessage(threadID: transaction.target,
+                    text: text, hasActiveRun: false, identifier: transaction.messageID).objectValue ?? [:]
+                command["modelSelection"] = try Self.json(transaction.modelSelection)
+                submission = .object(["kind": .string("message"), "input": .object(command),
+                    "runtimeMode": .string(transaction.runtimeMode), "interactionMode": .string(transaction.interactionMode)])
+            } else {
+                var workspace: [String: JSONValue] = ["type": .string("root")]
+                if let path = thread.shell.worktreePath { workspace = ["type": .string("existing_worktree"), "worktreePath": .string(path)] }
+                if let branch = thread.shell.branch { workspace["branch"] = .string(branch) }
+                submission = .object(["kind": .string("launch"), "input": .object([
+                    "commandId": .string(transaction.target), "creationSource": .string("mobile"),
+                    "threadId": .string(transaction.target), "projectId": thread.shell.projectId.map(JSONValue.string) ?? .null,
+                    "conversationCompanyId": thread.shell.conversationCompanyId.map(JSONValue.string) ?? .null,
+                    "title": .string(String(text.prefix(100)).isEmpty ? "New chat" : String(text.prefix(100))), "generateTitle": .bool(true),
+                    "modelSelection": try Self.json(transaction.modelSelection), "runtimeMode": .string(transaction.runtimeMode),
+                    "interactionMode": .string(transaction.interactionMode), "locations": .array([.string("agents")]),
+                    "workspaceStrategy": .object(workspace), "initialMessage": .object(["messageId": .string(transaction.messageID),
+                        "text": .string(text), "attachments": .array([])])])])
+            }
+            try await threadQueue.enqueue(companyID: thread.companyId, environmentID: environment.environment.environmentId,
+                threadID: transaction.target, submission: submission, files: files)
+            if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
+            preparedNewSend = nil
+            let sentIDs = Set(ids)
+            draftAttachments.removeAll { sentIDs.contains($0.id) }
+            for id in sentIDs { attachmentData.removeValue(forKey: id) }
+            await persistDraftNow()
+            return transaction.target
+        }
         if !transaction.attachmentsPrepared {
             var attachments: [JSONValue] = []
             if !selected.isEmpty {

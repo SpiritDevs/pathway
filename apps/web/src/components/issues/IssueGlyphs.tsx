@@ -342,7 +342,7 @@ export function IssueInvestigatingChip({
         className,
       )}
       role="img"
-      title="An investigation is running on this issue."
+      title="An investigation is running on this task."
     >
       <span
         aria-hidden

@@ -13,6 +13,7 @@ import type { DesktopSnapShotBridge } from "../../lib/desktopSnapShot";
 import {
   beginSnapShotAnimationWhenReady,
   deliverSnapShot,
+  exportSnapShotFromEditor,
   dismissFailedSnapShot,
   resolveExistingSnapShotTarget,
   resolveSnapShotTargetOnce,
@@ -26,6 +27,20 @@ import {
   setSnapShotAnimationDestination,
   scheduleSnapShotAnimationDestination,
 } from "../../lib/snapShotAnimation";
+
+const editorCapture = {
+  id: "12345678-1234-1234-1234-123456789abc",
+  name: "screen.png",
+  mimeType: "image/png" as const,
+  sizeBytes: 3,
+  dataUrl: "data:image/png;base64,AQID",
+  source: {
+    kind: "snap-shot" as const,
+    capturedAt: "2026-09-12T00:00:00.000Z",
+    appName: "Display",
+    windowTitle: "Current screen",
+  },
+};
 
 const storage = vi.hoisted(() => {
   const values = new Map<string, string>();
@@ -63,6 +78,92 @@ afterEach(() => {
   dismissAllSnapShotAnimations();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe("snapshot editor completion", () => {
+  it.each(["copy", "download"] as const)(
+    "exports the edited PNG before retiring a capture (%s)",
+    async (action) => {
+      const calls: string[] = [];
+      const exportSnapShot = vi.fn(async () => {
+        calls.push("export");
+        return true;
+      });
+      const acknowledgeSnapShot = vi.fn(async () => {
+        calls.push("acknowledge");
+      });
+      const bridge = { exportSnapShot, acknowledgeSnapShot } as unknown as DesktopSnapShotBridge;
+      const edited = { ...editorCapture, dataUrl: "data:image/png;base64,BAUG" };
+      await expect(exportSnapShotFromEditor(bridge, edited, action, () => true)).resolves.toBe(
+        true,
+      );
+      expect(exportSnapShot).toHaveBeenCalledWith({
+        action,
+        name: edited.name,
+        dataUrl: edited.dataUrl,
+      });
+      expect(calls).toEqual(["export", "acknowledge"]);
+      expect(useComposerDraftStore.getState().draftsByThreadKey).toEqual({});
+    },
+  );
+
+  it("keeps the capture and editor when the save dialog is cancelled", async () => {
+    const acknowledgeSnapShot = vi.fn();
+    const bridge = {
+      exportSnapShot: async () => false,
+      acknowledgeSnapShot,
+    } as unknown as DesktopSnapShotBridge;
+    await expect(
+      exportSnapShotFromEditor(bridge, editorCapture, "download", () => true),
+    ).resolves.toBe(false);
+    expect(acknowledgeSnapShot).not.toHaveBeenCalled();
+  });
+
+  it("keeps the capture after an export error", async () => {
+    const acknowledgeSnapShot = vi.fn();
+    const bridge = {
+      exportSnapShot: async () => {
+        throw new Error("Disk is full");
+      },
+      acknowledgeSnapShot,
+    } as unknown as DesktopSnapShotBridge;
+    await expect(
+      exportSnapShotFromEditor(bridge, editorCapture, "download", () => true),
+    ).rejects.toThrow("Disk is full");
+    expect(acknowledgeSnapShot).not.toHaveBeenCalled();
+  });
+
+  it("does not acknowledge a capture if the account changes during export", async () => {
+    let current = true;
+    const acknowledgeSnapShot = vi.fn();
+    const bridge = {
+      exportSnapShot: async () => {
+        current = false;
+        return true;
+      },
+      acknowledgeSnapShot,
+    } as unknown as DesktopSnapShotBridge;
+    await expect(
+      exportSnapShotFromEditor(bridge, editorCapture, "copy", () => current),
+    ).rejects.toThrow("session ended");
+    expect(acknowledgeSnapShot).not.toHaveBeenCalled();
+  });
+
+  it("saves the edited image to chat without re-reading the original capture", async () => {
+    vi.stubGlobal("window", { localStorage: storage, dispatchEvent: vi.fn() });
+    const target = scopeThreadRef(environmentId, ThreadId.make("edited-snapshot-thread"));
+    const readSnapShot = vi.fn(async () => editorCapture);
+    const acknowledgeSnapShot = vi.fn(async () => undefined);
+    const bridge = { readSnapShot, acknowledgeSnapShot } as unknown as DesktopSnapShotBridge;
+    const edited = { ...editorCapture, dataUrl: "data:image/png;base64,BAUG" };
+    await deliverSnapShot(bridge, editorCapture, target, () => true, edited);
+    const draft = useComposerDraftStore.getState().getComposerDraft(target);
+    expect(draft?.images).toHaveLength(1);
+    expect(draft?.images[0]?.previewUrl).toBe(edited.dataUrl);
+    expect(draft?.persistedAttachments[0]?.dataUrl).toBe(edited.dataUrl);
+    expect(readSnapShot).not.toHaveBeenCalled();
+    expect(acknowledgeSnapShot).toHaveBeenCalledWith(editorCapture.id);
+  });
 });
 
 describe("window capture failures", () => {

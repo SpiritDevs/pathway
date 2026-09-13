@@ -524,6 +524,9 @@ export const OrchestrationV2Run = Schema.Struct({
   ordinal: PositiveInt,
   providerInstanceId: ProviderInstanceId,
   modelSelection: ModelSelection,
+  /** Send-time settings; absent only on runs persisted before settings were snapshotted. */
+  runtimeMode: Schema.optional(RuntimeMode),
+  interactionMode: Schema.optional(ProviderInteractionMode),
   providerThreadId: Schema.NullOr(ProviderThreadId),
   userMessageId: MessageId,
   rootNodeId: Schema.NullOr(NodeId),
@@ -1212,6 +1215,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("source_control"),
     committed: Schema.Boolean,
+    pushed: Schema.optional(Schema.Boolean),
     pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached", "detected"])),
     // Absent on historical markers and pushes that had nothing new to commit.
     commitSha: Schema.optional(TrimmedNonEmptyString),
@@ -1979,6 +1983,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("source_control"),
     committed: Schema.Boolean,
+    pushed: Schema.optional(Schema.Boolean),
     pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached", "detected"])),
     // Absent on historical markers and pushes that had nothing new to commit.
     commitSha: Schema.optional(TrimmedNonEmptyString),
@@ -2326,6 +2331,7 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     committed: Schema.Boolean,
+    pushed: Schema.optional(Schema.Boolean),
     pullRequestAction: Schema.optional(Schema.Literals(["attached", "detached", "detected"])),
     commitSha: Schema.optional(TrimmedNonEmptyString),
     pullRequest: Schema.NullOr(OrchestrationV2PullRequestAttachment),
@@ -2505,6 +2511,9 @@ export const OrchestrationV2Command = Schema.Union([
     attachments: Schema.Array(ChatAttachment),
     /** Seed the temporary title and generate a durable replacement for the first message. */
     titleSeed: Schema.optional(TrimmedNonEmptyString),
+    branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    runtimeMode: Schema.optional(RuntimeMode),
+    interactionMode: Schema.optional(ProviderInteractionMode),
     modelSelection: Schema.optional(ModelSelection),
     sourcePlanRef: Schema.optional(Schema.Struct({ threadId: ThreadId, planId: PlanId })),
     delegatedCompletion: Schema.optional(

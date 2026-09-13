@@ -1,3 +1,14 @@
+import { useEnvironmentQuery } from "../state/query";
+import type { Project } from "../types";
+import { vcsEnvironment } from "../state/vcs";
+import { useVcsInitAction } from "../state/sourceControlActions";
+import {
+  squashAtomCommandFailure,
+  isAtomCommandInterrupted,
+} from "@spiritdevs/client-runtime/state/runtime";
+import { toastManager } from "./ui/toast";
+import { EnvironmentStorageIcon } from "./navigation/EnvironmentStorageIcon";
+import { InternalProjectWorkspace } from "./projects/InternalProjectWorkspace";
 import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@spiritdevs/contracts";
 import {
@@ -6,6 +17,7 @@ import {
   FolderGit2Icon,
   FolderGitIcon,
   FolderIcon,
+  GitBranchPlusIcon,
   HistoryIcon,
   MonitorIcon,
   PlusIcon,
@@ -47,9 +59,17 @@ import {
 } from "./ui/menu";
 import { Separator } from "./ui/separator";
 
+export interface BranchToolbarWorkspaceContext {
+  project: Project;
+  worktreePath: string | null;
+  temporary: boolean;
+}
+
 interface BranchToolbarProps {
+  workspaceContext?: BranchToolbarWorkspaceContext;
   layout?: "composer" | "panel";
   panelSection?: "all" | "workspace" | "branch";
+  onOpenDirectory?: ((cwd: string) => void) | undefined;
   environmentId: EnvironmentId;
   threadId: ThreadId;
   showGitControls: boolean;
@@ -78,6 +98,9 @@ interface MobileRunContextSelectorProps {
   environmentLocked?: boolean | undefined;
   envLocked: boolean;
   envModeLocked: boolean;
+  repositoryReady: boolean;
+  onInitializeGit: (() => void) | undefined;
+  initializingGit: boolean;
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[] | undefined;
   showEnvironmentPicker: boolean;
@@ -94,6 +117,9 @@ interface MobileRunContextSelectorProps {
 const MobileRunContextSelector = memo(function MobileRunContextSelector({
   envLocked,
   envModeLocked,
+  repositoryReady,
+  onInitializeGit,
+  initializingGit,
   environmentId,
   availableEnvironments,
   showEnvironmentPicker,
@@ -163,6 +189,9 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
         className="min-w-0 max-w-[48%] flex-1 justify-start text-muted-foreground/70 hover:text-foreground/80 md:hidden"
       >
         {triggerContent}
+        {showEnvironmentIndicator && !autoPlacement?.active ? (
+          <EnvironmentStorageIcon environmentId={environmentId} />
+        ) : null}
         <ChevronDownIcon className="size-3 shrink-0 opacity-50" />
       </MenuTrigger>
       <MenuPopup align="start" side="top" className="w-64">
@@ -196,7 +225,8 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
                     >
                       <span className="flex min-w-0 items-center gap-1.5">
                         <Icon className="size-3" />
-                        <span className="min-w-0 truncate">{env.label}</span>
+                        <span className="min-w-0 flex-1 truncate">{env.label}</span>
+                        <EnvironmentStorageIcon environmentId={env.environmentId} />
                       </span>
                     </MenuRadioItem>
                   );
@@ -219,43 +249,54 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
         ) : null}
         <MenuGroup>
           <MenuGroupLabel>Workspace</MenuGroupLabel>
-          <MenuRadioGroup
-            value={effectiveEnvMode}
-            onValueChange={(value) => {
-              if (value === "previous-worktree") {
-                onUsePreviousWorktree();
-                return;
-              }
-              onEnvModeChange(value as EnvMode);
-            }}
-          >
-            <MenuRadioItem disabled={envModeLocked} value="local">
-              <span className="flex min-w-0 items-center gap-1.5">
-                {activeWorktreePath ? (
-                  <FolderGitIcon className="size-3" />
-                ) : (
-                  <FolderIcon className="size-3" />
-                )}
-                <span className="min-w-0 truncate">
-                  {resolveCurrentWorkspaceLabel(activeWorktreePath)}
-                </span>
-              </span>
-            </MenuRadioItem>
-            <MenuRadioItem disabled={envModeLocked} value="worktree">
-              <span className="flex min-w-0 items-center gap-1.5">
-                <FolderGit2Icon className="size-3" />
-                <span className="min-w-0 truncate">{resolveEnvModeLabel("worktree")}</span>
-              </span>
-            </MenuRadioItem>
-            {previousWorktreeLabel ? (
-              <MenuRadioItem disabled={envModeLocked} value="previous-worktree">
+          {repositoryReady ? (
+            <MenuRadioGroup
+              value={effectiveEnvMode}
+              onValueChange={(value) => {
+                if (value === "previous-worktree") {
+                  onUsePreviousWorktree();
+                  return;
+                }
+                onEnvModeChange(value as EnvMode);
+              }}
+            >
+              <MenuRadioItem disabled={envModeLocked} value="local">
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <HistoryIcon className="size-3" />
-                  <span className="min-w-0 truncate">{previousWorktreeLabel}</span>
+                  {activeWorktreePath ? (
+                    <FolderGitIcon className="size-3" />
+                  ) : (
+                    <FolderIcon className="size-3" />
+                  )}
+                  <span className="min-w-0 truncate">
+                    {resolveCurrentWorkspaceLabel(activeWorktreePath)}
+                  </span>
                 </span>
               </MenuRadioItem>
-            ) : null}
-          </MenuRadioGroup>
+              <MenuRadioItem disabled={envModeLocked} value="worktree">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <FolderGit2Icon className="size-3" />
+                  <span className="min-w-0 truncate">{resolveEnvModeLabel("worktree")}</span>
+                </span>
+              </MenuRadioItem>
+              {previousWorktreeLabel ? (
+                <MenuRadioItem disabled={envModeLocked} value="previous-worktree">
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <HistoryIcon className="size-3" />
+                    <span className="min-w-0 truncate">{previousWorktreeLabel}</span>
+                  </span>
+                </MenuRadioItem>
+              ) : null}
+            </MenuRadioGroup>
+          ) : (
+            <MenuItem disabled={!onInitializeGit || initializingGit} onClick={onInitializeGit}>
+              <GitBranchPlusIcon className="size-3" />
+              {initializingGit
+                ? "Initializing..."
+                : onInitializeGit
+                  ? "Initialize Git"
+                  : "Checking repository..."}
+            </MenuItem>
+          )}
         </MenuGroup>
       </MenuPopup>
     </Menu>
@@ -421,8 +462,10 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
 }
 
 export const BranchToolbar = memo(function BranchToolbar({
+  workspaceContext,
   layout = "composer",
   panelSection = "all",
+  onOpenDirectory,
   environmentId,
   threadId,
   showGitControls,
@@ -457,13 +500,38 @@ export const BranchToolbar = memo(function BranchToolbar({
   const activeProjectRef =
     serverThread && serverThread.projectId !== null
       ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
-      : draftThread && draftThread.projectId !== null
-        ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
-        : null;
-  const activeProject = useProject(activeProjectRef);
+      : workspaceContext
+        ? scopeProjectRef(workspaceContext.project.environmentId, workspaceContext.project.id)
+        : draftThread && draftThread.projectId !== null
+          ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+          : null;
+  const serverProject = useProject(activeProjectRef);
+  const activeProject = serverProject ?? workspaceContext?.project ?? null;
   // A worktree is cut from a repository, so picking one on a rootless project asks for a directory
   // first and applies the mode once there is one. Nothing needs re-reading afterwards: the mode is
   // draft state, and the send path resolves the root again anyway (`ChatView.tsx:5134`).
+  const repositoryCwd = activeProject?.workspaceRoot ?? null;
+  const repositoryStatus = useEnvironmentQuery(
+    repositoryCwd ? vcsEnvironment.status({ environmentId, input: { cwd: repositoryCwd } }) : null,
+  );
+  const initScope = useMemo(
+    () => ({ environmentId, cwd: repositoryCwd }),
+    [environmentId, repositoryCwd],
+  );
+  const initAction = useVcsInitAction(initScope);
+  const initializeGit = useCallback(() => {
+    void initAction.run().then((result) => {
+      if (result._tag === "Success" || isAtomCommandInterrupted(result)) return;
+      const error = squashAtomCommandFailure(result);
+      toastManager.add({
+        type: "error",
+        title: "Git initialization failed",
+        description: error instanceof Error ? error.message : "Unable to initialize Git.",
+      });
+    });
+  }, [initAction]);
+  const repositoryReady = repositoryStatus.data?.isRepo === true;
+  const repositoryMissing = repositoryStatus.data?.isRepo === false;
   const { isRootless: isRootlessProject, ensureWorkspaceRoot } =
     useEnsureProjectWorkspace(activeProject);
   const handleEnvModeChange = useCallback(
@@ -481,8 +549,13 @@ export const BranchToolbar = memo(function BranchToolbar({
     },
     [ensureWorkspaceRoot, isRootlessProject, onEnvModeChange],
   );
-  const hasActiveThread = serverThread !== null || draftThread !== null;
-  const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
+  const hasActiveThread =
+    serverThread !== null || draftThread !== null || workspaceContext !== undefined;
+  const activeWorktreePath =
+    serverThread?.worktreePath ??
+    workspaceContext?.worktreePath ??
+    draftThread?.worktreePath ??
+    null;
   const effectiveEnvMode =
     effectiveEnvModeOverride ??
     resolveEffectiveEnvMode({
@@ -491,7 +564,7 @@ export const BranchToolbar = memo(function BranchToolbar({
       draftThreadEnvMode: draftThread?.envMode,
     });
   const envModeLocked =
-    (serverThread?.temporary ?? draftThread?.temporary ?? false) ||
+    (serverThread?.temporary ?? workspaceContext?.temporary ?? draftThread?.temporary ?? false) ||
     envLocked ||
     (serverThread !== null && activeWorktreePath !== null);
 
@@ -548,11 +621,18 @@ export const BranchToolbar = memo(function BranchToolbar({
 
   if (!hasActiveThread || !activeProject) return null;
 
+  const internalOnly =
+    activeProject.workspaceRoot === null ||
+    activeProject.workspaceRoot === activeProject.internalWorkspaceRoot;
+
   if (layout === "panel") {
     return (
       <div className="flex w-full flex-col" data-thread-panel-run-context>
-        {panelSection !== "branch" ? (
+        {panelSection !== "branch" && !internalOnly ? (
           <BranchToolbarEnvModeSelector
+            repositoryReady={repositoryReady}
+            onInitializeGit={repositoryMissing ? initializeGit : undefined}
+            initializingGit={initAction.isPending}
             displayMode="panel"
             envLocked={envModeLocked}
             effectiveEnvMode={effectiveEnvMode}
@@ -566,7 +646,10 @@ export const BranchToolbar = memo(function BranchToolbar({
             {...(moveToWorktreeTooltip === undefined ? {} : { moveToWorktreeTooltip })}
           />
         ) : null}
-        {panelSection !== "workspace" ? (
+        {panelSection !== "branch" ? (
+          <InternalProjectWorkspace project={activeProject} onOpenDirectory={onOpenDirectory} />
+        ) : null}
+        {panelSection !== "workspace" && !internalOnly ? (
           <BranchToolbarBranchSelector
             displayMode="panel"
             className="w-full"
@@ -593,8 +676,11 @@ export const BranchToolbar = memo(function BranchToolbar({
       data-compact={labelsOverflow ? "" : undefined}
       className="chat-composer-context-strip chat-composer-context-strip-top group/composer-context -mb-4 mx-auto flex w-[calc(100%-2.75rem-2px)] max-w-[calc(48rem-2.75rem-2px)] items-center gap-2 rounded-t-[20px] border border-b-0 border-border/60 px-2 pt-1 pb-5"
     >
-      {isMobile && showGitControls ? (
+      {isMobile && showGitControls && !internalOnly ? (
         <MobileRunContextSelector
+          repositoryReady={repositoryReady}
+          onInitializeGit={repositoryMissing ? initializeGit : undefined}
+          initializingGit={initAction.isPending}
           envLocked={envLocked}
           envModeLocked={envModeLocked}
           environmentId={environmentId}
@@ -625,7 +711,7 @@ export const BranchToolbar = memo(function BranchToolbar({
                   ? { onLinkEnvironmentRequest }
                   : {})}
               />
-              {showGitControls ? (
+              {showGitControls && !internalOnly ? (
                 <Separator
                   orientation="vertical"
                   className="mx-0.5 h-3.5!"
@@ -634,8 +720,11 @@ export const BranchToolbar = memo(function BranchToolbar({
               ) : null}
             </>
           )}
-          {showGitControls ? (
+          {showGitControls && !internalOnly ? (
             <BranchToolbarEnvModeSelector
+              repositoryReady={repositoryReady}
+              onInitializeGit={repositoryMissing ? initializeGit : undefined}
+              initializingGit={initAction.isPending}
               envLocked={envModeLocked}
               effectiveEnvMode={effectiveEnvMode}
               activeWorktreePath={activeWorktreePath}
@@ -647,7 +736,7 @@ export const BranchToolbar = memo(function BranchToolbar({
         </div>
       )}
 
-      {showGitControls ? (
+      {showGitControls && !internalOnly ? (
         <BranchToolbarBranchSelector
           className="min-w-0 flex-1 justify-end md:ml-auto md:flex-none"
           environmentId={environmentId}

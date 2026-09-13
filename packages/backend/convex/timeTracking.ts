@@ -30,6 +30,9 @@ function encode(row: Doc<"trackedSessions">) {
   const { id, description, projectKey, projectName, startedAt, stoppedAt, durationMs } = row;
   return {
     id,
+    ...(row.title === undefined ? {} : { title: row.title }),
+    ...(row.threadId === undefined ? {} : { threadId: row.threadId }),
+    ...(row.environmentId === undefined ? {} : { environmentId: row.environmentId }),
     description,
     projectKey,
     projectName,
@@ -164,6 +167,7 @@ export const start = mutation({
     });
     const id = await ctx.db.insert("trackedSessions", {
       ...fields,
+      ...(args.title?.trim() ? { title: args.title.trim().slice(0, 200) } : {}),
       id: args.id,
       userId: user._id,
       startedAt: new Date().toISOString(),
@@ -436,6 +440,7 @@ export const syncAgentSession = mutation({
       threadId: v.string(),
       localProjectId: v.string(),
       description: v.string(),
+      title: v.optional(v.string()),
       startedAt: v.string(),
       stoppedAt: v.union(v.string(), v.null()),
       state: trackedState,
@@ -443,6 +448,7 @@ export const syncAgentSession = mutation({
       runningSince: v.union(v.number(), v.null()),
       observedAt: v.number(),
       revision: v.number(),
+      runStatus: v.optional(v.string()),
     }),
   },
   returns: v.object({
@@ -554,12 +560,15 @@ export const syncAgentSession = mutation({
     }
     const fields = validate({
       description:
-        existing && session.state === "stopped" ? existing.description : session.description,
+        existing && session.state === "stopped" && !session.title
+          ? existing.description
+          : session.description,
       projectKey: existing?.projectKey ?? project!.id,
       projectName: existing?.projectName ?? project!.name,
     });
     const patch = {
       ...fields,
+      ...(session.title ? { title: session.title.slice(0, 200) } : {}),
       startedAt: new Date(start).toISOString(),
       stoppedAt: stop === null ? null : new Date(stop).toISOString(),
       durationMs,
@@ -574,8 +583,14 @@ export const syncAgentSession = mutation({
       observedAt: session.observedAt,
       revision: session.revision,
     };
-    if (existing) await ctx.db.patch(existing._id, patch);
-    else await ctx.db.insert("trackedSessions", { id, userId, ...patch });
+    if (existing) await ctx.db.patch(existing._id, { ...patch, runStatus: session.runStatus });
+    else
+      await ctx.db.insert("trackedSessions", {
+        id,
+        userId,
+        ...patch,
+        ...(session.runStatus === undefined ? {} : { runStatus: session.runStatus }),
+      });
     return { outcome: "published" as const };
   },
 });

@@ -552,6 +552,6 @@ describe("triageAcceptInput", () => {
 describe("triageAcceptLabel", () => {
   it("names the one issue and counts the many", () => {
     expect(triageAcceptLabel([issue("1")])).toBe("Accept PAT-1");
-    expect(triageAcceptLabel([issue("1"), issue("2")])).toBe("Accept 2 issues");
+    expect(triageAcceptLabel([issue("1"), issue("2")])).toBe("Accept 2 tasks");
   });
 });

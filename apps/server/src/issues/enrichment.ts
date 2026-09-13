@@ -128,10 +128,10 @@ function investigationImageLines(
 ): ReadonlyArray<string> {
   if (images === undefined || images.provided <= 0) return [];
   return [
-    `- ${images.provided} image attachment(s) from this issue are provided with this request.`,
-    "  Look at them: for an issue reported as a screenshot they are the report.",
+    `- ${images.provided} image attachment(s) from this task are provided with this request.`,
+    "  Look at them: for a task reported as a screenshot they are the report.",
     ...(images.omitted > 0
-      ? [`- ${images.omitted} more attachment(s) on this issue were not included.`]
+      ? [`- ${images.omitted} more attachment(s) on this task were not included.`]
       : []),
   ];
 }
@@ -148,42 +148,42 @@ export function buildInvestigationPrompt(input: InvestigationPromptInput): strin
   const openIssues = input.openIssues.slice(0, MAX_OPEN_ISSUES);
 
   return [
-    "You are investigating one issue in a repository you can read but must not change.",
+    "You are investigating one task in a repository you can read but must not change.",
     "Read whatever files you need. Do not edit, create, delete, or run anything that writes.",
     "",
     "Produce, in this order:",
     "1. A restatement of the problem in your own words, concrete about what is wrong and where.",
     "2. The files the work most likely lands in, each with a one-line reason it is on the list.",
-    "3. Which of the open issues listed below are genuinely related, by key.",
+    "3. Which of the open tasks listed below are genuinely related, by key.",
     "4. Which of the existing labels listed below apply.",
     "5. A priority.",
-    "6. A title and a description where the issue rules below allow them.",
+    "6. A title and a description where the task rules below allow them.",
     "",
     "Answer with a single JSON object and nothing else. No prose before or after it, no code",
     "fence. The object has these keys:",
     '  "summary": string — the restated problem, markdown, a few paragraphs at most',
     '  "likelyFiles": array of { "path": string, "reason": string } — repository-relative paths',
-    `  "relatedIssueKeys": array of string — keys taken only from the open issues below`,
+    `  "relatedIssueKeys": array of string — keys taken only from the open tasks below`,
     `  "suggestedLabels": array of string — names taken only from the existing labels below`,
     '  "suggestedPriority": "urgent" | "high" | "medium" | "low" | "none" | null',
     '  "suggestedTitle": string — optional, and omitted entirely unless it applies',
     '  "suggestedDescription": string — optional, and omitted entirely unless it applies',
     "",
-    "Use an empty array where you have nothing to say. Do not invent an issue key or a label name",
+    "Use an empty array where you have nothing to say. Do not invent a task key or a label name",
     "that is not on the lists. Priority and safe missing-field suggestions may be applied",
     "automatically after the run; labels remain for a person to review.",
-    "The summary is appended to the issue description after the run. Write it as a useful,",
-    "standalone explanation of the work; do not merely repeat the issue's source text.",
+    "The summary is appended to the task description after the run. Write it as a useful,",
+    "standalone explanation of the work; do not merely repeat the task's source text.",
     "",
     ...(input.slackIngested
       ? [
-          'This issue was ingested from Slack. Include "suggestedTitle" even though it already has',
+          'This task was ingested from Slack. Include "suggestedTitle" even though it already has',
           "a title: Slack generated that title from the first line, and your title should state the",
           "specific job to be done. A later user edit is protected when the result is applied.",
         ]
       : [
           'Include "suggestedTitle" only when the title above is one of the intake placeholders —',
-          '"Slack message", "Untitled", "New issue", or empty. Otherwise leave the key out; a title a',
+          '"Slack message", "Untitled", "New task", "New issue", or empty. Otherwise leave the key out; a title a',
           "person wrote is not up for replacement, however uninformative it reads.",
         ]),
     "When you do include it: one line, concise, descriptive of the problem, no trailing punctuation.",
@@ -194,7 +194,7 @@ export function buildInvestigationPrompt(input: InvestigationPromptInput): strin
     "",
     "---",
     "",
-    `Issue ${input.key}: ${input.title}`,
+    `Task ${input.key}: ${input.title}`,
     `Status: ${input.statusName}`,
     `Priority: ${input.priority}`,
     `Labels: ${input.labelNames.length > 0 ? input.labelNames.join(", ") : "(none)"}`,
@@ -224,7 +224,7 @@ export function buildInvestigationPrompt(input: InvestigationPromptInput): strin
       input.availableLabels.map((label) => `- ${label}`),
     ),
     ...section(
-      "Open issues:",
+      "Open tasks:",
       openIssues.map((issue) => `- ${issue.key}: ${issue.title}`),
     ),
     "",
@@ -472,7 +472,7 @@ export function buildInvestigationComment(input: InvestigationBlockInput): strin
       ),
     ),
     ...section(
-      "**Related issues**",
+      "**Related tasks**",
       result.relatedIssueKeys.length > 0 ? [result.relatedIssueKeys.join(", ")] : [],
     ),
     ...section("**Suggested**", [

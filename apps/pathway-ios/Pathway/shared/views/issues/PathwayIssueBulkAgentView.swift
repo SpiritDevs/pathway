@@ -23,7 +23,7 @@ struct PathwayIssueBulkAgentView: View {
         NavigationStack {
             Form {
                 if bindings.isEmpty {
-                    ContentUnavailableView("No connected project", systemImage: "externaldrive.badge.wifi", description: Text("Connect an environment to a project to discuss or investigate these issues."))
+                    ContentUnavailableView("No connected project", systemImage: "externaldrive.badge.wifi", description: Text("Connect an environment to a project to discuss or investigate these tasks."))
                 } else {
                     Section("Project and environment") {
                         Picker("Use", selection: $bindingID) {
@@ -32,14 +32,14 @@ struct PathwayIssueBulkAgentView: View {
                             }
                         }
                         .disabled(busy)
-                        Text("\(issues.count) \(issues.count == 1 ? "issue" : "issues") selected")
+                        Text("\(issues.count) \(issues.count == 1 ? "task" : "tasks") selected")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     if let creation { discussionSection(creation) }
                     Section("Investigate") {
-                        Text("Investigating assigns the selected issues to this project and researches each issue using the investigation model in Issue settings.")
+                        Text("Investigating assigns the selected tasks to this project and researches each task using the investigation model in Task settings.")
                             .font(.subheadline).foregroundStyle(.secondary)
-                        Button("Investigate \(issues.count) \(issues.count == 1 ? "issue" : "issues")", systemImage: "sparkle.magnifyingglass") { investigate() }
+                        Button("Investigate \(issues.count) \(issues.count == 1 ? "task" : "tasks")", systemImage: "sparkle.magnifyingglass") { investigate() }
                             .disabled(busy || selectedBinding == nil || creation?.connectionState != .live || creation?.storageAllowsLaunch == false)
                     }
                 }
@@ -96,7 +96,8 @@ struct PathwayIssueBulkAgentView: View {
                   $0.companyId == binding.companyId && $0.environment.environmentId == binding.binding.environmentId
               }) else { return }
         let model = PathwayAgentThreadCreationModel(binding: binding, environment: environment, connect: connect, storageDirectory: appModel.localStorageDirectory)
-        model.prompt = "Discuss the following issues and help me decide the next steps.\n\n" + issues.map {
+        model.threadQueue = appModel.cloud.threadQueue
+        model.prompt = "Discuss the following tasks and help me decide the next steps.\n\n" + issues.map {
             "\($0.key): \($0.title)\n\($0.description)"
         }.joined(separator: "\n\n")
         model.runtimeMode = "approval-required"

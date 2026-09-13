@@ -111,6 +111,7 @@ export const EnvironmentBinding = Schema.Struct({
   /** The environment-local Pathway project record. Meaningless anywhere else. */
   localProjectId: ProjectId,
   localWorkspaceRoot: TrimmedNonEmptyString,
+  internalWorkspaceRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   status: EnvironmentBindingStatus,
   lastSeenAt: Schema.NullOr(CloudTimestamp),
   createdAt: CloudTimestamp,

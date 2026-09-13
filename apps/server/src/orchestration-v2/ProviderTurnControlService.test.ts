@@ -223,6 +223,13 @@ it.effect(
           getShellSnapshot: () => Effect.die("unused getShellSnapshot"),
           getThreadShell: () => Effect.die("unused getThreadShell"),
           getThreadProjection: () => Ref.get(projection),
+          getRecoveryThreadIds: () => Effect.die("unused getRecoveryThreadIds"),
+          getDelegatedCompletionRecoveryThreadIds: () =>
+            Effect.die("unused getDelegatedCompletionRecoveryThreadIds"),
+          getThreadMetadata: () => Effect.die("unused getThreadMetadata"),
+          getQueuedRunThreadIds: () => Effect.die("unused getQueuedRunThreadIds"),
+          getPendingSubagentCompletionThreads: () =>
+            Effect.die("unused getPendingSubagentCompletionThreads"),
           getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),
         }),
       );

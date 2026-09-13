@@ -535,6 +535,7 @@ export const SyncEnvironmentBindingPayload = Schema.Struct({
   environmentId: EnvironmentId,
   localProjectId: ProjectId,
   localWorkspaceRoot: TrimmedNonEmptyString,
+  internalWorkspaceRoot: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /**
    * Repository identity observed by the bound environment. Optional for rows published before
    * repository-aware cloud grouping shipped; a connected environment fills it on reconciliation.

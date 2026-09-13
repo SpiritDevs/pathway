@@ -2289,6 +2289,8 @@ export const make = Effect.gen(function* () {
     function* (input, options) {
       const progress = yield* createProgressEmitter(input, options);
       const currentPhase = yield* Ref.make<Option.Option<GitActionProgressPhase>>(Option.none());
+      const completedCommitSha = yield* Ref.make<string | undefined>(undefined);
+      const completedPush = yield* Ref.make(false);
 
       const runAction = Effect.fn("runStackedAction.runAction")(function* (): Effect.fn.Return<
         GitRunStackedActionResult,
@@ -2426,6 +2428,10 @@ export const make = Effect.gen(function* () {
             )
           : { status: "skipped_not_requested" as const };
 
+        if (commit.status === "created") {
+          yield* Ref.set(completedCommitSha, commit.commitSha);
+        }
+
         const push = wantsPush
           ? yield* progress
               .emit({
@@ -2438,6 +2444,8 @@ export const make = Effect.gen(function* () {
                 Effect.flatMap(() => gitCore.pushCurrentBranch(input.cwd, currentBranch)),
               )
           : { status: "skipped_not_requested" as const };
+
+        yield* Ref.set(completedPush, push.status === "pushed");
 
         const pr = wantsPr
           ? yield* progress
@@ -2480,13 +2488,17 @@ export const make = Effect.gen(function* () {
       return yield* runAction().pipe(
         Effect.ensuring(invalidateStatus(input.cwd)),
         Effect.tapError((error) =>
-          Effect.flatMap(Ref.get(currentPhase), (phase) =>
-            progress.emit({
+          Effect.gen(function* () {
+            const phase = yield* Ref.get(currentPhase);
+            const commitSha = yield* Ref.get(completedCommitSha);
+            const pushed = yield* Ref.get(completedPush);
+            yield* progress.emit({
               kind: "action_failed",
+              ...(commitSha === undefined ? {} : { commitSha, pushed }),
               phase: Option.getOrNull(phase),
               message: error.message,
-            }),
-          ),
+            });
+          }),
         ),
       );
     },

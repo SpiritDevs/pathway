@@ -40,7 +40,7 @@ enum AppDestination: String, CaseIterable, Identifiable, Hashable, Sendable {
     var title: String {
         switch self {
         case .dashboard: "Dashboard"
-        case .issues: "Issues"
+        case .issues: "Tasks"
         case .agentThreads: "Agent Threads"
         case .email: "Email"
         case .sourceControl: "Source Control"
@@ -88,7 +88,7 @@ enum AppDestination: String, CaseIterable, Identifiable, Hashable, Sendable {
             ]
         case .issues:
             [
-                .init(id: "all", title: "All issues", systemImage: "checklist"),
+                .init(id: "all", title: "All tasks", systemImage: "checklist"),
                 .init(id: "assigned", title: "Assigned to me", systemImage: "person.crop.circle"),
                 .init(id: "triage", title: "Triage", systemImage: "tray")
             ]

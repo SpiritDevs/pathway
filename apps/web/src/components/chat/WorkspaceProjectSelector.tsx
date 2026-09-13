@@ -2,7 +2,7 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { scopedProjectKey } from "@spiritdevs/client-runtime/environment";
 import { ALL_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
 import type { EnvironmentId, ScopedProjectRef } from "@spiritdevs/contracts";
-import { FolderPlusIcon, MessageCircleIcon } from "lucide-react";
+import { FolderPlusIcon, MessageSquareIcon } from "lucide-react";
 import { useCallback, useMemo, type ReactNode } from "react";
 
 import { openCommandPalette } from "~/commandPaletteBus";
@@ -218,7 +218,7 @@ export function WorkspaceProjectSelector({
               onSelectConversation();
             }}
           >
-            <MessageCircleIcon />
+            <MessageSquareIcon />
             Conversation
           </MenuItem>
         ) : null}

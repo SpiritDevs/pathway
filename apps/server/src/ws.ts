@@ -512,6 +512,18 @@ export function wsProjectUpdateInputFromMutation(
     ...(mutation.title === undefined ? {} : { title: mutation.title }),
     ...(mutation.titleIsCustom === undefined ? {} : { titleIsCustom: mutation.titleIsCustom }),
     ...(mutation.workspaceRoot === undefined ? {} : { workspaceRoot: mutation.workspaceRoot }),
+    ...(mutation.createWorkspaceRootIfMissing === undefined
+      ? {}
+      : { createWorkspaceRootIfMissing: mutation.createWorkspaceRootIfMissing }),
+    ...(mutation.useInternalWorkspace === undefined
+      ? {}
+      : { useInternalWorkspace: mutation.useInternalWorkspace }),
+    ...(mutation.copyInternalWorkspaceFiles === undefined
+      ? {}
+      : { copyInternalWorkspaceFiles: mutation.copyInternalWorkspaceFiles }),
+    ...(mutation.disconnectInternalWorkspace === undefined
+      ? {}
+      : { disconnectInternalWorkspace: mutation.disconnectInternalWorkspace }),
     ...(mutation.defaultModelSelection === undefined
       ? {}
       : { defaultModelSelection: mutation.defaultModelSelection }),
@@ -2168,6 +2180,12 @@ const makeWsRpcLayer = (
                       }),
                   ),
                 );
+              if (input.resource._tag === "visualization-file") {
+                return yield* issueAssetUrl({
+                  resource: input.resource,
+                  visualizationItems: thread.turnItems,
+                });
+              }
               if (thread.thread.projectId === null) {
                 return yield* issueAssetUrl({
                   resource: input.resource,
@@ -2254,7 +2272,27 @@ const makeWsRpcLayer = (
                 .runStackedAction(input, {
                   actionId: input.actionId,
                   progressReporter: {
-                    publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
+                    publish: (event) =>
+                      Effect.gen(function* () {
+                        if (
+                          event.kind === "action_failed" &&
+                          event.commitSha !== undefined &&
+                          input.threadId !== undefined
+                        ) {
+                          yield* threadManagement
+                            .dispatch({
+                              type: "thread.source-control.record",
+                              commandId: CommandId.make(`${input.actionId}:source-control`),
+                              threadId: input.threadId,
+                              committed: true,
+                              commitSha: event.commitSha,
+                              pushed: event.pushed ?? false,
+                              pullRequest: null,
+                            })
+                            .pipe(Effect.ignoreCause({ log: true }));
+                        }
+                        yield* Queue.offer(queue, event);
+                      }),
                   },
                 })
                 .pipe(

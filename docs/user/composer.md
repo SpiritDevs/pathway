@@ -23,6 +23,12 @@ Checkout and branch controls sit above the input. Model, reasoning, and permissi
 controls in the options menu. These menus do not expand the composer. The same layout applies
 to new threads and existing conversations, including phone-sized web windows.
 
+Conversations without a project omit the Build/Plan toggle from the web and desktop
+composer, including its compact options menu.
+
+Notices above the checkout controls form a stack, with each card behind the first appearing
+narrower. Hover over the notices or focus their controls to lift the stack and reveal more notices.
+
 Approval requests, questions from an agent, and plan follow-ups keep their own controls. Native
 mobile apps retain their existing composer layout.
 
@@ -46,3 +52,34 @@ over a project skill with the same name.
 Provider slash commands appear only when `/` starts the whole message, where the
 provider can expand them. Pathway's `/model`, `/plan`, and `/default` commands
 remain available at the beginning of any line.
+
+## Action palette
+
+The action palette sits at the right of the conversation in web and desktop. When the
+conversation becomes too narrow, including when you resize a neighboring pane, the palette
+hides automatically. Toggle thread details to reopen it floating above the conversation
+without squeezing messages or the composer. Widening the conversation restores the inline
+layout. You can toggle the palette independently in each layout.
+
+## Pending questions
+
+The action palette lists pending questions for the current thread. Select a request to answer
+it in the composer, even when the original question is earlier in the conversation. Requests
+with several questions open together so you can answer each one before submitting.
+
+Select the X beside a request to ignore it. You have five seconds to select Undo before the
+request is sent. Leaving the conversation during that window keeps the question open. Native
+question forms also provide Ignore and Undo; leaving the form cancels an unsent dismissal.
+
+Ignoring removes the request from all connected clients without sending a follow-up message.
+An agent waiting for an answer receives its provider's cancellation response. If delivery fails,
+the question reappears so you can retry. The thread's Input marker clears when no pending input
+remains. Ignore is available only when the connected environment supports question dismissal.
+
+You can show, hide, and reorder Pending questions in the action palette settings.
+
+# Returning to the latest message
+
+When you scroll up in a thread, a button above the composer takes you back to the end.
+It shows a down chevron while the thread is idle, or a working orb beside “working...”
+while the agent is busy. The orb respects your reduced-motion preference.

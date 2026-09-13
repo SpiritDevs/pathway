@@ -22,6 +22,17 @@ Generic files are downloaded instead of rendered as active web content. Unknown 
 from a newer environment remain visible as unsupported, inert rows rather than preventing the chat
 from loading.
 
+## Viewing images
+
+On web and desktop, click an image file link in a conversation to open a gallery over the dimmed app.
+Image links in the same message appear together. Use the previous and next buttons, arrow keys,
+thumbnails, or swipe horizontally to move between images. You can also scroll horizontally with a
+trackpad, or hold Shift while scrolling with a mouse.
+
+Use the zoom buttons or the `+` and `-` keys to zoom. Drag a zoomed image to pan, and click the zoom
+percentage or press `0` to fit it to the window. Download saves the original image. Press Escape,
+click the background, or use the close button to return to the conversation.
+
 ## Answering questions with attachments
 
 You can paste a photo, drag a file, or use the paperclip while answering an agent's question.

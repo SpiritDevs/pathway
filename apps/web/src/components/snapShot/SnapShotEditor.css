@@ -1,0 +1,380 @@
+.shot-editor-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: rgb(0 0 0 / 42%);
+}
+
+.shot-editor {
+  position: fixed;
+  inset: 14px;
+  z-index: 151;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #bfc0c2;
+  border-radius: 16px;
+  background: #efeff0;
+  color: #535353;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 13px;
+  box-shadow: 0 20px 80px rgb(0 0 0 / 28%);
+  outline: none;
+  color-scheme: light;
+  -webkit-app-region: no-drag;
+}
+
+.shot-editor-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 76px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  overflow-x: auto;
+  border-bottom: 1px solid #c8c8ca;
+  background: #fff;
+  user-select: none;
+}
+
+.shot-editor-window-controls {
+  flex: 0 0 auto;
+}
+
+.shot-editor-close {
+  position: relative;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #822a21;
+  cursor: pointer;
+}
+.shot-editor-close::before {
+  position: absolute;
+  width: 17px;
+  height: 17px;
+  border: 1px solid #e85049;
+  border-radius: 50%;
+  background: #ff6058;
+  box-shadow: inset 0 1px 2px rgb(255 255 255 / 28%);
+  content: "";
+}
+.shot-editor-close svg {
+  position: relative;
+}
+.shot-editor-close:hover:not(:disabled) {
+  background: #f0f0f0;
+}
+
+.shot-editor-close svg {
+  opacity: 0;
+}
+.shot-editor-close:hover svg,
+.shot-editor-close:focus-visible svg {
+  opacity: 1;
+}
+
+.shot-editor-group {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  padding-right: 12px;
+  border-right: 1px solid #dedede;
+}
+
+.shot-editor-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #595959;
+  cursor: pointer;
+}
+
+.shot-editor-button:hover:not(:disabled) {
+  background: #f0f0f0;
+}
+.shot-editor-button[aria-pressed="true"] {
+  background: #e5e5e5;
+  color: #3b3b3b;
+}
+.shot-editor-button:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+.shot-editor-button:focus-visible,
+.shot-editor button:focus-visible,
+.shot-editor select:focus-visible {
+  outline: 2px solid #1687ff;
+  outline-offset: 2px;
+}
+
+.shot-editor-inspector {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+  margin-left: auto;
+}
+
+.shot-editor-color {
+  position: relative;
+  display: block;
+  width: 44px;
+  height: 44px;
+  padding: 8px;
+  cursor: pointer;
+}
+.shot-editor-color > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 1px solid rgb(0 0 0 / 25%);
+  border-radius: 50%;
+}
+.shot-editor-color input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.shot-editor-color:focus-within {
+  border-radius: 50%;
+  outline: 2px solid #1687ff;
+  outline-offset: 3px;
+}
+.shot-editor-color-info,
+.shot-editor-size,
+.shot-editor-zoom {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+.shot-editor-color-info strong,
+.shot-editor-size strong {
+  color: #393939;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.shot-editor-color-info label,
+.shot-editor-size > span,
+.shot-editor-zoom > span {
+  color: #888;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.shot-editor-color-info select {
+  min-width: 64px;
+  min-height: 44px;
+  padding: 0 8px;
+  appearance: auto;
+  border: 0;
+  background: none;
+  color: #777;
+  cursor: pointer;
+  outline: none;
+}
+.shot-editor-size {
+  padding: 0 12px;
+  border-right: 1px solid #e0e0e0;
+  border-left: 1px solid #e0e0e0;
+}
+.shot-editor-size strong span {
+  font-size: 11px;
+  font-weight: 400;
+}
+.shot-editor-zoom {
+  min-width: 60px;
+}
+.shot-editor-zoom select {
+  min-width: 84px;
+  min-height: 44px;
+  padding: 0 8px;
+  appearance: auto;
+  border: 0;
+  background: none;
+  color: #393939;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.shot-editor-workspace {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.shot-editor-stage-wrap {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  padding: 24px;
+  place-items: center;
+}
+.shot-editor-stage {
+  position: relative;
+  flex-shrink: 0;
+  background: #fff;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 16%);
+  touch-action: none;
+  user-select: none;
+  outline: none;
+}
+.shot-editor-stage > svg {
+  display: block;
+  overflow: hidden;
+}
+.shot-editor-stage:focus-visible {
+  outline: 1px solid #a3c9f5;
+  outline-offset: 4px;
+}
+.shot-editor-text-input {
+  position: absolute;
+  z-index: 1;
+  max-width: 90%;
+  padding: 0;
+  border: 1px dashed #1687ff;
+  border-radius: 0;
+  outline: none;
+  background: rgb(255 255 255 / 70%);
+  font-family: Arial, sans-serif;
+  font-weight: 600;
+  resize: both;
+}
+.shot-editor-loading {
+  padding: 40px;
+  color: #777;
+}
+
+.shot-editor-footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 32px;
+  padding: 0 13px;
+  border-top: 1px solid #d8d8da;
+  background: #f9f9f9;
+  color: #818181;
+  font-size: 11px;
+}
+.shot-editor-hint {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shot-editor-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.shot-editor-footer-actions button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  color: #007aff;
+  cursor: pointer;
+}
+.shot-editor-small-button {
+  width: 44px;
+  height: 44px;
+}
+.shot-editor-small-button svg {
+  width: 14px;
+  height: 14px;
+}
+.shot-editor-status {
+  white-space: nowrap;
+}
+.shot-editor-error {
+  position: absolute;
+  right: 20px;
+  bottom: 48px;
+  left: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 15px;
+  border: 1px solid #e7aaa6;
+  border-radius: 8px;
+  background: #fff0ef;
+  color: #9e2d25;
+  box-shadow: 0 4px 20px rgb(0 0 0 / 10%);
+}
+.shot-editor-error button {
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.shot-editor-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 1200px) {
+  .shot-editor-toolbar {
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  .shot-editor-group {
+    gap: 2px;
+    padding-right: 8px;
+  }
+  .shot-editor-tools {
+    order: 2;
+    flex-wrap: wrap;
+    width: 100%;
+    border: 0;
+    padding: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .shot-editor {
+    inset: 4px;
+    border-radius: 10px;
+  }
+  .shot-editor-toolbar {
+    padding: 8px;
+  }
+  .shot-editor-size {
+    display: none;
+  }
+  .shot-editor-inspector {
+    flex-wrap: wrap;
+  }
+  .shot-editor-footer {
+    flex-wrap: wrap;
+  }
+  .shot-editor-hint {
+    font-size: 10px;
+  }
+}

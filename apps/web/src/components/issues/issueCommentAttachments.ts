@@ -181,7 +181,7 @@ export function isIssueVideoAttachmentUrl(url: string): boolean {
 
 /** The visible Activity comment that owns images added from the description attachment shelf. */
 export function issueAttachmentComment(count: number): string {
-  return count === 1 ? "Added an image to this issue." : `Added ${count} images to this issue.`;
+  return count === 1 ? "Added an image to this task." : `Added ${count} images to this task.`;
 }
 
 export interface IssueCommentComposerState {

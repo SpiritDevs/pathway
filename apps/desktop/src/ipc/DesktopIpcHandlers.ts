@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import { getDictationState, executeDictation, listDictationHistory } from "./methods/dictation.ts";
 
 import * as DesktopIpc from "./DesktopIpc.ts";
 import * as ThreadAlerts from "./methods/threadAlerts.ts";
@@ -39,11 +40,13 @@ import {
   pickFolder,
   pickThemeFiles,
   setTheme,
+  setWindowButtonsVisible,
   showContextMenu,
 } from "./methods/window.ts";
 import {
   acknowledgeSnapShot,
   captureSnapShot,
+  exportSnapShot,
   setSnapShotAccount,
   checkSnapShotShortcut,
   dismissSnapShotAnimation,
@@ -62,6 +65,9 @@ import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./m
 
 export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers")(function* () {
   const ipc = yield* DesktopIpc.DesktopIpc;
+  yield* ipc.handle(getDictationState);
+  yield* ipc.handle(executeDictation);
+  yield* ipc.handle(listDictationHistory);
   yield* ipc.handle(ThreadAlerts.getThreadAlertSupport);
   yield* ipc.handle(ThreadAlerts.showThreadAlert);
   yield* ipc.handle(ThreadAlerts.closeThreadAlert);
@@ -80,6 +86,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(getConnectionCatalog);
   yield* ipc.handle(getSnapShotState);
   yield* ipc.handle(captureSnapShot);
+  yield* ipc.handle(exportSnapShot);
   yield* ipc.handle(setSnapShotAccount);
   yield* ipc.handle(setupSnapShot);
   yield* ipc.handle(previewSnapShotConfig);
@@ -116,6 +123,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(pickFolder);
   yield* ipc.handle(pickThemeFiles);
   yield* ipc.handle(setTheme);
+  yield* ipc.handle(setWindowButtonsVisible);
   yield* ipc.handle(showContextMenu);
   yield* ipc.handle(openExternal);
   yield* ipc.handle(getUpdateState);

@@ -43,11 +43,11 @@ struct PathwayIssueDetailView: View {
                 if let issue {
                     issueContent(issue)
                 } else {
-                    ContentUnavailableView("Issue unavailable", systemImage: "doc.text.magnifyingglass",
-                                           description: Text("This issue may have been removed or moved to another workspace."))
+                    ContentUnavailableView("Task unavailable", systemImage: "doc.text.magnifyingglass",
+                                           description: Text("This task may have been removed or moved to another workspace."))
                 }
             }
-            .navigationTitle(issue?.key ?? "Issue")
+            .navigationTitle(issue?.key ?? "Task")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarVisibility(.visible, for: .navigationBar)
             .preference(key: IssueDetailNavigationActiveKey.self, value: true)
@@ -58,31 +58,31 @@ struct PathwayIssueDetailView: View {
                         .accessibilityIdentifier("issue-detail-edit")
                         .disabled(busy)
                     Menu {
-                        Button("Edit issue", systemImage: "pencil") { editor = true }
-                        Button("Add sub-issue", systemImage: "plus.square.on.square") { creatingChild = true }
+                        Button("Edit task", systemImage: "pencil") { editor = true }
+                        Button("Add subtask", systemImage: "plus.square.on.square") { creatingChild = true }
                         Button("Add relation", systemImage: "link") { showRelationPicker = true }
                         Button("Agent work & investigation", systemImage: "sparkles") { showWork = true }
                         if let issue {
-                            Button("Copy issue key", systemImage: "doc.on.doc") { UIPasteboard.general.string = issue.key }
+                            Button("Copy task key", systemImage: "doc.on.doc") { UIPasteboard.general.string = issue.key }
                                 .accessibilityIdentifier("issue-copy-key")
                             if let url = issueURL(issue) {
-                                Button("Copy issue link", systemImage: "link") { UIPasteboard.general.url = url }
+                                Button("Copy task link", systemImage: "link") { UIPasteboard.general.url = url }
                                     .accessibilityIdentifier("issue-copy-link")
-                                ShareLink("Share issue link", item: url)
+                                ShareLink("Share task link", item: url)
                             }
                             ShareLink(item: "\(issue.key): \(issue.title)\n\(issue.description)") {
-                                Label("Share issue", systemImage: "square.and.arrow.up")
+                                Label("Share task", systemImage: "square.and.arrow.up")
                             }
                             if issue.isDeleted {
-                                Button("Restore issue", systemImage: "arrow.uturn.backward") {
+                                Button("Restore task", systemImage: "arrow.uturn.backward") {
                                     perform { try await model.restore(issue) }
                                 }
                             } else {
-                                Button("Delete issue", systemImage: "trash", role: .destructive) { confirmDelete = true }
+                                Button("Delete task", systemImage: "trash", role: .destructive) { confirmDelete = true }
                             }
                         }
                     } label: { Image(systemName: "ellipsis") }
-                    .accessibilityLabel("Issue actions")
+                    .accessibilityLabel("Task actions")
                     .accessibilityIdentifier("issue-detail-actions")
                     .disabled(busy)
                 }
@@ -116,16 +116,16 @@ struct PathwayIssueDetailView: View {
                                          commentAttachmentIDs: attachmentIDs, onCommentSent: clearComment)
                 }
             }
-            .confirmationDialog("Delete this issue?", isPresented: $confirmDelete, titleVisibility: .visible) {
-                Button("Delete issue", role: .destructive) {
+            .confirmationDialog("Delete this task?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                Button("Delete task", role: .destructive) {
                     if let issue { perform { try await model.remove(issue); dismiss() } }
                 }
-            } message: { Text("Deleted issues can be restored from the issue menu.") }
+            } message: { Text("Deleted tasks can be restored from the task menu.") }
             .alert("Couldn’t save change", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("OK") { errorMessage = nil }
             } message: { Text(errorMessage ?? "") }
-            .alert("Edit task", isPresented: Binding(get: { editingTodo != nil }, set: { if !$0 { editingTodo = nil } })) {
-                TextField("Task", text: $editedTodoText)
+            .alert("Edit checklist item", isPresented: Binding(get: { editingTodo != nil }, set: { if !$0 { editingTodo = nil } })) {
+                TextField("Checklist item", text: $editedTodoText)
                 Button("Save") {
                     if let todo = editingTodo, let issue {
                         mutate(issue, kind: "issueTodo.update", id: todo.id, args: ["text": .string(editedTodoText.trimmingCharacters(in: .whitespacesAndNewlines))])
@@ -176,7 +176,7 @@ struct PathwayIssueDetailView: View {
                     switch selectedTab {
                     case "Comments": commentSections(issue, detail: detail)
                     case "Attachments": attachmentSections(issue, detail: detail)
-                    case "Sub-issues": subIssueSections(issue)
+                    case "Subtasks": subIssueSections(issue)
                     case "AI": aiSections(issue, detail: detail)
                     default: activitySections(detail)
                     }
@@ -205,7 +205,7 @@ struct PathwayIssueDetailView: View {
 
     private var sectionMenu: some View {
         Menu {
-            ForEach(["Details", "Comments", "Attachments", "Sub-issues", "AI", "Activity"], id: \.self) { tab in
+            ForEach(["Details", "Comments", "Attachments", "Subtasks", "AI", "Activity"], id: \.self) { tab in
                 Button {
                     selectedTab = tab
                 } label: {
@@ -219,7 +219,7 @@ struct PathwayIssueDetailView: View {
                 .frame(width: 48, height: 48)
                 .background(.regularMaterial, in: Circle())
         }
-        .accessibilityLabel("Issue sections, \(selectedTab)")
+        .accessibilityLabel("Task sections, \(selectedTab)")
         .accessibilityIdentifier("issue-tabs")
     }
 
@@ -227,7 +227,7 @@ struct PathwayIssueDetailView: View {
         switch tab {
         case "Comments": "bubble.left.and.bubble.right"
         case "Attachments": "paperclip"
-        case "Sub-issues": "square.stack.3d.up"
+        case "Subtasks": "square.stack.3d.up"
         case "AI": "sparkles"
         case "Activity": "clock.arrow.circlepath"
         default: "square.grid.2x2"
@@ -242,7 +242,7 @@ struct PathwayIssueDetailView: View {
             if let parent = model.records.first(where: { $0.companyId == companyID && $0.id == issue.parentId }) {
                 Button { openIssue(parent.id) } label: {
                     HStack(spacing: 7) {
-                        Text("Sub-issue of").foregroundStyle(.primary)
+                        Text("Subtask of").foregroundStyle(.primary)
                         Image(systemName: "circle").foregroundStyle(.secondary)
                         Text(parent.title).foregroundStyle(.secondary).lineLimit(1)
                     }.font(.subheadline)
@@ -434,7 +434,7 @@ struct PathwayIssueDetailView: View {
                                args: ["done": .bool(!(todo.fields["done"]?.boolValue ?? false))])
                     } label: {
                         Image(systemName: todo.fields["done"]?.boolValue == true ? "checkmark.circle.fill" : "circle")
-                    }.accessibilityLabel(todo.fields["done"]?.boolValue == true ? "Mark incomplete" : "Complete task")
+                    }.accessibilityLabel(todo.fields["done"]?.boolValue == true ? "Mark incomplete" : "Complete checklist item")
                     Text(todo.fields["text"]?.stringValue ?? "")
                         .strikethrough(todo.fields["done"]?.boolValue == true)
                     Spacer()
@@ -445,7 +445,7 @@ struct PathwayIssueDetailView: View {
                             .disabled(detail.todos.first?.id == todo.id)
                         Button("Move down", systemImage: "arrow.down") { moveTodo(issue, todo: todo, offset: 1) }
                             .disabled(detail.todos.last?.id == todo.id)
-                    } label: { Image(systemName: "ellipsis").padding(8) }.accessibilityLabel("Reorder task")
+                    } label: { Image(systemName: "ellipsis").padding(8) }.accessibilityLabel("Reorder checklist item")
                 }
                 .swipeActions { Button("Delete", role: .destructive) { mutate(issue, kind: "issueTodo.delete", id: todo.id) } }
                 .swipeActions(edge: .leading) {
@@ -453,7 +453,7 @@ struct PathwayIssueDetailView: View {
                 }
             }
             HStack {
-                TextField("Add a task…", text: $todoText).onSubmit { addTodo(issue) }
+                TextField("Add a checklist item…", text: $todoText).onSubmit { addTodo(issue) }
                 if !todoText.isEmpty { Button("Add", systemImage: "plus") { addTodo(issue) }.labelStyle(.iconOnly) }
             }
         }
@@ -499,8 +499,8 @@ struct PathwayIssueDetailView: View {
                     Label(child.title, systemImage: "circle").lineLimit(1).foregroundStyle(.primary)
                 }.disabled(!canNavigate)
             }
-            Button("Add sub-issue", systemImage: "plus") { creatingChild = true }
-        } header: { Text("Sub-issues") }
+            Button("Add subtask", systemImage: "plus") { creatingChild = true }
+        } header: { Text("Subtasks") }
     }
 
     @ViewBuilder
@@ -510,7 +510,7 @@ struct PathwayIssueDetailView: View {
             Button("Agent work & investigation", systemImage: "slider.horizontal.3") { showWork = true }
                 .accessibilityIdentifier("issue-ai-controls")
             if runs.isEmpty {
-                Text("Investigate this issue or choose an agent to start work.").foregroundStyle(.secondary)
+                Text("Investigate this task or choose an agent to start work.").foregroundStyle(.secondary)
             }
             ForEach(runs) { run in
                 VStack(alignment: .leading, spacing: 8) {
@@ -695,7 +695,7 @@ struct PathwayIssueDetailView: View {
         let before = target > 0 ? reordered[target - 1].fields["sortOrder"]?.stringValue : nil
         let after = target + 1 < reordered.count ? reordered[target + 1].fields["sortOrder"]?.stringValue : nil
         guard let key = PathwayIssueOrder.between(before, after) else {
-            errorMessage = "These tasks have conflicting order values. Refresh the issue before reordering."; return
+            errorMessage = "These checklist items have conflicting order values. Refresh the task before reordering."; return
         }
         mutate(issue, kind: "issueTodo.update", id: todo.id, args: ["sortOrder": .string(key)])
     }
@@ -759,7 +759,7 @@ struct PathwayIssueDetailView: View {
                 let fields = changes.keys.sorted().joined(separator: ", ")
                 return "\(actorName(event.fields["actor"])) changed \(fields)"
             }
-            return "\(actorName(event.fields["actor"])) changed \(payload["field"]?.stringValue ?? "issue")"
+            return "\(actorName(event.fields["actor"])) changed \(payload["field"]?.stringValue ?? "task")"
         }
         return "\(actorName(event.fields["actor"])) · \(kind.replacingOccurrences(of: "_", with: " "))"
     }
@@ -804,7 +804,7 @@ struct PathwayIssueRelationPicker: View {
                 }
             }
             .disabled(busy)
-            .searchable(text: $query, prompt: "Find an issue")
+            .searchable(text: $query, prompt: "Find a task")
             .navigationTitle("Add relation").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
         }

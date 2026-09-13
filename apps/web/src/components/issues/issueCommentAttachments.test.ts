@@ -166,8 +166,8 @@ describe("issue attachment shelf", () => {
   });
 
   it("describes shelf uploads in singular and plural", () => {
-    expect(issueAttachmentComment(1)).toBe("Added an image to this issue.");
-    expect(issueAttachmentComment(3)).toBe("Added 3 images to this issue.");
+    expect(issueAttachmentComment(1)).toBe("Added an image to this task.");
+    expect(issueAttachmentComment(3)).toBe("Added 3 images to this task.");
   });
 });
 

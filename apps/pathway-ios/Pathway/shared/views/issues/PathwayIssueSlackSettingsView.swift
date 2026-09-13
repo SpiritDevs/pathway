@@ -49,7 +49,7 @@ struct PathwayIssueSlackSettingsView: View {
                     }
                 }.disabled(status["configured"]?.boolValue != true)
             } header: { Text("Watched channels") } footer: {
-                Text("Each channel controls which messages become triage issues. Reaction routes run in the order shown.")
+                Text("Each channel controls which messages become triage tasks. Reaction routes run in the order shown.")
             }
             if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
         }

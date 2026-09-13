@@ -62,7 +62,7 @@ export function IssueActionPanel({
         <ActionRow
           disabled={talkAboutIssueBlockReason !== null}
           icon={<MessageSquareIcon className="size-3.5" />}
-          label="Talk about issue"
+          label="Talk about task"
           onClick={onTalkAboutIssue}
           title={talkAboutIssueBlockReason ?? undefined}
         />
@@ -73,7 +73,7 @@ export function IssueActionPanel({
         />
         <ActionRow
           icon={<GitBranchIcon className="size-3.5" />}
-          label="Add sub-issue"
+          label="Add subtask"
           onClick={onAddSubIssue}
         />
         <ActionRow

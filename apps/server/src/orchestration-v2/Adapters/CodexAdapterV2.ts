@@ -35,6 +35,7 @@ import type {
   ThreadId,
 } from "@spiritdevs/contracts";
 import * as CodexClient from "effect-codex-app-server/client";
+import { readCodexAccountIdentity } from "../../provider/CodexAccountIdentity.ts";
 import type * as CodexRpc from "effect-codex-app-server/rpc";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Context from "effect/Context";
@@ -1637,6 +1638,11 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
     planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
     openSession: (input) =>
       Effect.gen(function* () {
+        const readAccountIdentity = readCodexAccountIdentity(
+          adapterOptions.settings.homePath,
+          adapterOptions.environment,
+        ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+        const accountIdentity = yield* readAccountIdentity;
         const client = yield* clientFactory.open({
           instanceId: adapterOptions.instanceId,
           threadId: input.threadId,
@@ -5098,11 +5104,24 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           driver: CODEX_PROVIDER,
           providerSessionId: input.providerSessionId,
           providerSession: session,
+          isAccountCurrent: readAccountIdentity.pipe(
+            Effect.map(
+              (current) =>
+                accountIdentity === undefined ||
+                current === undefined ||
+                current === accountIdentity,
+            ),
+          ),
           events: Stream.fromEffectRepeat(Queue.take(events)),
           // Provider activity resets the manager's idle window. Completed
           // children do not pin a silent process indefinitely; actual child
           // turns and registration still in flight keep it resident.
           hasPendingBackgroundWork: Effect.gen(function* () {
+            if (
+              (yield* Ref.get(activeTurns)).size > 0 ||
+              (yield* Ref.get(pendingRootTurns)).size > 0
+            )
+              return true;
             if ((yield* Ref.get(pendingSubagentTurns)).size > 0) return true;
             for (const items of (yield* Ref.get(runningCommandItemsByTurn)).values()) {
               if (items.size > 0) {
@@ -5645,6 +5664,11 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 });
               }
               if (pending.type === "user_input") {
+                if (requestInput.decision === "cancel") {
+                  // Codex's requestUserInput response has no cancellation variant.
+                  yield* Deferred.succeed(pending.answers, {});
+                  return;
+                }
                 if (requestInput.answers === undefined) {
                   return yield* new ProviderAdapterRuntimeRequestResponseError({
                     driver: CODEX_PROVIDER,

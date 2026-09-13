@@ -19,6 +19,7 @@ import { ServerConfig } from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
+import { EventStoreV2, layer as eventStoreLayer } from "../orchestration-v2/EventStore.ts";
 import { issueAssetUrl } from "../assets/AssetAccess.ts";
 import { type BrowserArtifact, RemoteBrowserRuntime } from "./RemoteBrowserRuntime.ts";
 
@@ -244,6 +245,7 @@ export const layer = Layer.effect(
     const broker = yield* PreviewAutomationBroker;
     const environment = yield* ServerEnvironment;
     const threads = yield* ThreadManagementService;
+    const events = yield* EventStoreV2;
     const environmentId = yield* environment.getEnvironmentId;
     const assetContext = yield* Effect.context<Effect.Services<ReturnType<typeof issueAssetUrl>>>();
     const runtime = yield* Effect.acquireRelease(
@@ -255,8 +257,7 @@ export const layer = Layer.effect(
     );
     // Capture the durable cursor before exposing any browser entry point. A live-only
     // subscription could miss a deletion committed before its worker starts reading.
-    const snapshot = yield* threads.getShellSnapshot();
-    let afterSequence = snapshot.snapshotSequence;
+    let afterSequence = yield* events.latestSequence();
     const deletedThreads = Stream.unwrap(
       Effect.sync(() => threads.streamStoredEventsFrom({ afterSequence })),
     ).pipe(
@@ -293,4 +294,4 @@ export const layer = Layer.effect(
         ),
     });
   }),
-);
+).pipe(Layer.provide(eventStoreLayer));

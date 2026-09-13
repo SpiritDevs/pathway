@@ -1,3 +1,7 @@
+import * as NodeOS from "node:os";
+import { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
+import { agentTimeSummaryPrompt, parseAgentTimeSummary } from "./agentTimeSummary.ts";
 /** Sends durable agent work intervals while clients are closed or disconnected. */
 import { makeFunctionReference } from "convex/server";
 import type { EnvironmentId } from "@spiritdevs/contracts";
@@ -57,6 +61,45 @@ export const runCloudTimeTrackingPublisher = Effect.fn("cloud.time_tracking_publ
   function* (options: TimeTrackingPublisherOptions) {
     const store = yield* makeAgentTimeTrackingStore(options.companyId);
     const threads = yield* ThreadManagement.ThreadManagementService;
+    const generation = yield* TextGeneration;
+    const settingsService = yield* ServerSettingsService;
+    const summarize = Effect.fn("cloud.time_tracking.summarize")(function* () {
+      const session = yield* store.nextSummary();
+      if (session === null) return;
+      const context = yield* store.summaryContext(session);
+      const settings = yield* settingsService.getSettings;
+      if (context.length === 0) {
+        yield* store.deferSummary(session);
+        return;
+      }
+      yield* generation
+        .investigate({
+          cwd: NodeOS.tmpdir(),
+          contentOnly: true,
+          prompt: agentTimeSummaryPrompt(context),
+          modelSelection: settings.timeTrackerModelSelection,
+        })
+        .pipe(
+          Effect.timeout(Duration.seconds(45)),
+          Effect.flatMap((result) => Effect.try(() => parseAgentTimeSummary(result.text))),
+          Effect.flatMap((summary) => store.saveSummary(session, summary)),
+          Effect.catch((error) =>
+            Effect.logWarning("Time entry summary failed; retrying in five minutes", {
+              runId: session.id,
+              error,
+            }).pipe(Effect.andThen(store.deferSummary(session))),
+          ),
+        );
+    });
+    yield* Effect.forkChild(
+      Stream.runForEach(Stream.tick(Duration.seconds(2)), () =>
+        summarize().pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Time entry summary will retry", { cause }),
+          ),
+        ),
+      ),
+    );
     const client = options.client ?? convexHttpClientLike(options.convexUrl);
     const publish = Effect.fn("cloud.time_tracking_publisher.publish")(function* () {
       // Drain persisted lifecycle changes before advancing any live clock to the heartbeat time.
@@ -131,6 +174,8 @@ export const cloudTimeTrackingPublisherLayer = (): Layer.Layer<
   | ThreadManagement.ThreadManagementService
   | HttpClient.HttpClient
   | SqlClient.SqlClient
+  | TextGeneration
+  | ServerSettingsService
 > =>
   Layer.effectDiscard(
     Effect.gen(function* () {

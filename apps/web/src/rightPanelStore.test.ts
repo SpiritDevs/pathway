@@ -447,6 +447,26 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("keeps temporary and attached directory files separate", () => {
+    useRightPanelStore.getState().openDirectory(refA, "/internal/project");
+    let state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces).toEqual([{ id: "files", kind: "files", cwd: "/internal/project" }]);
+    useRightPanelStore.getState().openFile(refA, "notes.txt", undefined, "/internal/project");
+    useRightPanelStore.getState().openFile(refA, "notes.txt");
+    state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces).toHaveLength(2);
+    expect(state.surfaces[0]).toMatchObject({
+      kind: "file",
+      relativePath: "notes.txt",
+      cwd: "/internal/project",
+    });
+    expect(state.surfaces[1]).toMatchObject({ id: "file:notes.txt", kind: "file" });
+    useRightPanelStore.getState().open(refA, "files");
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces.at(-1),
+    ).toEqual({ id: "files", kind: "files" });
+  });
+
   it("replaces the standalone explorer with peer file surfaces", () => {
     useRightPanelStore.getState().open(refA, "files");
     useRightPanelStore.getState().openFile(refA, "src/index.ts");

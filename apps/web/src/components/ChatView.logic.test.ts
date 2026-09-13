@@ -296,36 +296,24 @@ describe("loadQueuedComposerImages", () => {
 });
 
 describe("copyMessageAttachmentsForNewThread", () => {
-  it("sends file bytes through the pending upload path", async () => {
+  it("retains fetched file bytes for the durable queue without an environment upload", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response(new Blob(["file bytes"], { type: "application/pdf" })));
-    const uploadFile = vi.fn().mockResolvedValue({
-      type: "file",
-      id: "pending-00000000-0000-4000-8000-000000000001-pdf",
-      name: "large.pdf",
-      mimeType: "application/pdf",
-      sizeBytes: 20 * 1024 * 1024,
-    });
-
     try {
+      const attachment = {
+        type: "file" as const,
+        id: "source-file",
+        name: "large.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+      };
       const [copied] = await copyMessageAttachmentsForNewThread(
-        [
-          {
-            type: "file",
-            id: "source-file",
-            name: "large.pdf",
-            mimeType: "application/pdf",
-            sizeBytes: 20 * 1024 * 1024,
-          },
-        ],
+        [attachment],
         new Map([["source-file", "https://example.test/large.pdf"]]),
-        uploadFile,
       );
-
-      expect(uploadFile).toHaveBeenCalledOnce();
-      expect(uploadFile.mock.calls[0]?.[0]).toBeInstanceOf(File);
-      expect(copied).toMatchObject({ id: expect.stringContaining("pending-"), type: "file" });
+      expect(copied?.metadata).toEqual(attachment);
+      expect(await copied?.blob.text()).toBe("file bytes");
       expect(copied).not.toHaveProperty("dataUrl");
     } finally {
       fetchSpy.mockRestore();

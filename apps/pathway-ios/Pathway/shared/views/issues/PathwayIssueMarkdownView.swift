@@ -25,7 +25,11 @@ struct PathwayIssueMarkdownView: View {
                 .padding(.top, block.id == 0 ? 0 : 8)
                 .accessibilityAddTraits(.isHeader)
         case .paragraph:
-            inline(block.text)
+            if let visualization = PathwayVisualization.parse(block.text), let imageContext {
+                AgentVisualization(visualization: visualization, context: imageContext)
+            } else {
+                inline(block.text)
+            }
         case .task(let checked, let depth):
             HStack(alignment: .top, spacing: 9) {
                 if let toggleTask {

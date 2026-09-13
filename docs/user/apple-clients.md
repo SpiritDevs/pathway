@@ -26,7 +26,7 @@ Open a thread's Workspace for current changes, branches, commit/push/pull, pull 
 
 ## Business tools
 
-- **Issues:** plan and track work, discuss changes, attach files and start agent investigations.
+- **Tasks:** plan and track work, discuss changes, attach files and start agent investigations.
 - **Calendar:** use schedule, day, week, month or work timeline views; edit events, reminders, invitees, attachments and sharing. Drag and resize events in the hour grid, or use the equivalent accessible actions.
 - **Email:** read mail captured by your environment, search and filter, mark read/unread, tag and apply bulk actions. Capture settings include retention and trigger history. This is a captured inbox, not a general outgoing-mail client.
 - **Contacts:** manage shared company contacts and favorites. Desktop users can explicitly import contacts previously stored only in their browser.

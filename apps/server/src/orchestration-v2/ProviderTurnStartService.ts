@@ -275,7 +275,11 @@ export const layer: Layer.Layer<
       }
 
       const resolvedRuntimePolicy = yield* runtimePolicy.resolve({
-        thread: projection.thread,
+        thread: {
+          ...projection.thread,
+          runtimeMode: run.runtimeMode ?? projection.thread.runtimeMode,
+          interactionMode: run.interactionMode ?? projection.thread.interactionMode,
+        },
         modelSelection: run.modelSelection,
       });
       const existingSessionProjection = projection.providerSessions.find(

@@ -1,5 +1,18 @@
 # Agent Threads on iOS
 
+When starting a thread, tap the environment dropdown below the project name to choose where
+it will run. The menu lists the environments linked to that project and marks the selected
+environment with a checkmark. It remains available when the project has only one environment.
+
+The new-thread composer keeps the workspace choice and base branch above the message field.
+Tap **+** to open **Composer Options** for attachments, saved prompts, the agent and model,
+access settings, and temporary threads. The sheet can expand for more room. Paste images
+straight into the message field to attach them without replacing your text.
+
+When a thread connects or reconnects, a status bubble above the composer shows that messages
+are syncing. It temporarily replaces the file-change summary until the latest updates arrive.
+You can still scroll to the latest message while reconnecting.
+
 Active threads show the project above the thread title, with the branch and environment below it.
 The branch stays on the left; the environment name sits on the right beside the provider logo.
 The filter icon opens **Thread options**, with **Focus** and **Filters** submenus.

@@ -465,7 +465,7 @@ export function IssueDetailProperties({
         />
       </PropertyRow>
 
-      <PropertyRow label="Sub-issue of">
+      <PropertyRow label="Subtask of">
         <IssueParentPicker
           issue={issue}
           issues={issues}

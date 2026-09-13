@@ -10,9 +10,16 @@ struct AgentThreadTranscript: View {
     @State private var preparingEditID: String?
     @State private var layoutCache = AgentThreadTranscriptLayoutCache()
 
+    private var transcriptItems: [PathwayTimelineItem] {
+        let visibleEnvironmentIDs = Set(model.transcriptItems.map(\.id))
+        return model.conversationItems.filter {
+            $0.fields["queueCommandId"]?.stringValue != nil || visibleEnvironmentIDs.contains($0.id)
+        }
+    }
+
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 22) {
-            ForEach(layoutCache.rows(model.transcriptItems, activeRunID: model.activeRunID)) { row in
+            ForEach(layoutCache.rows(transcriptItems, activeRunID: model.activeRunID)) { row in
                 switch row.content {
                 case .item(let item):
                     itemView(item)
@@ -37,8 +44,8 @@ struct AgentThreadTranscript: View {
     private func itemView(_ item: PathwayTimelineItem) -> some View {
         if item.isConversation {
             AgentTranscriptMessage(item: item, model: model) {
-                if item.isUserMessage && !item.isGeneratedQuestionReply && model.canPrepareEdit(item) {
-                    Button("Edit and restart", systemImage: "pencil") { beginEditing(item) }
+                if item.isUserMessage && !item.isGeneratedQuestionReply && (model.canPrepareEdit(item) || model.canEditCloudQueueMessage(item)) {
+                    Button(model.cloudQueueMessage(for: item) == nil ? "Edit and restart" : "Edit queued message", systemImage: "pencil") { beginEditing(item) }
                         .accessibilityIdentifier("thread-message-edit-\(item.id)")
                         .disabled(preparingEditID != nil)
                 }
@@ -53,6 +60,22 @@ struct AgentThreadTranscript: View {
                         .disabled(forkingID != nil || model.thread.shell.isTemporary)
                     if model.thread.shell.isTemporary { Text("Keep conversation before forking this thread.") }
                 }
+            }
+            if let message = model.cloudQueueMessage(for: item) {
+                HStack(spacing: 14) {
+                    Text(cloudMessageStatus(message)).font(.caption).foregroundStyle(.secondary)
+                    if ["blocked", "canceled"].contains(message["state"]?.stringValue ?? "") {
+                        Button("Retry", systemImage: "arrow.clockwise") { mutateCloudMessage(item, action: "retry") }
+                    }
+                    if model.canEditCloudQueueMessage(item) {
+                        Button("Edit", systemImage: "pencil") { beginEditing(item) }
+                    }
+                    if model.canCancelCloudQueueMessage(item) {
+                        Button("Cancel", systemImage: "xmark") { mutateCloudMessage(item, action: "cancel") }
+                    }
+                }
+                .font(.caption).buttonStyle(.plain)
+                if let error = message["error"]?.stringValue { Text(error).font(.footnote).foregroundStyle(.red) }
             }
         } else if item.type == "approval_request" {
             AgentTranscriptApproval(item: item, model: model)
@@ -70,7 +93,7 @@ struct AgentThreadTranscript: View {
 
     private func beginEditing(_ item: PathwayTimelineItem) {
         guard preparingEditID == nil, !item.isGeneratedQuestionReply else { return }
-        if model.activeRunID == nil {
+        if model.canEditCloudQueueMessage(item) || model.activeRunID == nil {
             editingItem = item
             return
         }
@@ -82,6 +105,24 @@ struct AgentThreadTranscript: View {
                 try await model.interrupt()
                 editingItem = item
             } catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    private func cloudMessageStatus(_ message: [String: JSONValue]) -> String {
+        switch message["state"]?.stringValue {
+        case "local": "Waiting to sync"
+        case "accepted": "Starting"
+        case "blocked": "Needs attention"
+        case "canceled": "Canceled"
+        case "delivered": "Sent to environment"
+        default: "Queued · Saved to cloud"
+        }
+    }
+
+    private func mutateCloudMessage(_ item: PathwayTimelineItem, action: String) {
+        Task {
+            do { try await model.mutateCloudQueueMessage(item, action: action) }
+            catch { errorMessage = error.localizedDescription }
         }
     }
 
@@ -196,7 +237,7 @@ private struct AgentTranscriptAttachment: View {
         Group {
             if let url {
                 if attachment.type == "image" {
-                    AsyncImage(url: url) { phase in
+                    AgentTranscriptAttachmentImage(url: url, maximumPixelSize: 840) { phase in
                         switch phase {
                         case .success(let image):
                             Button { showPreview = true } label: {
@@ -235,7 +276,7 @@ private struct AgentTranscriptAttachment: View {
         .sheet(isPresented: $showPreview) {
             AgentTranscriptAttachmentPreview(attachment: attachment, model: model, initialURL: url)
         }
-        .task(id: attempt) {
+        .task(id: "\(attempt):\(model.cloudQueueAttachmentURLs[attachment.id]?.absoluteString ?? "")") {
             do { url = try await model.attachmentURL(attachment); errorMessage = nil }
             catch { errorMessage = error.localizedDescription }
         }
@@ -268,7 +309,7 @@ struct AgentTranscriptAttachmentPreview: View {
                 if let url, attachment.type == "image" {
                     GeometryReader { geometry in
                         ScrollView([.horizontal, .vertical]) {
-                            AsyncImage(url: url) { phase in
+                            AgentTranscriptAttachmentImage(url: url, maximumPixelSize: 2_560) { phase in
                                 switch phase {
                                 case .success(let image):
                                     image.resizable().scaledToFit()
@@ -311,9 +352,10 @@ struct AgentTranscriptAttachmentPreview: View {
                     if let url { ShareLink(item: url).labelStyle(.iconOnly) }
                 }
             }
-            .task(id: attempt) {
+            .task(id: "\(attempt):\(model.cloudQueueAttachmentURLs[attachment.id]?.absoluteString ?? "")") {
                 do {
-                    if attempt == 0, let initialURL { url = initialURL }
+                    if markdownSource == nil, let saved = model.cloudQueueAttachmentURLs[attachment.id] { url = saved }
+                    else if attempt == 0, let initialURL { url = initialURL }
                     else if case .workspace(let path) = markdownSource {
                         url = try await model.markdownImageURL(path, threadID: sourceThreadID ?? model.threadID)
                     } else if case .web(let remote) = markdownSource { url = remote }
@@ -628,15 +670,24 @@ private struct AgentTranscriptMessageEditor: View {
     @State private var busy = false
     @State private var error: String?
     @FocusState private var focused: Bool
+    private var isCloudQueued: Bool { item.fields["queueCommandId"]?.stringValue != nil }
+    private var isQueued: Bool { isCloudQueued }
+    private var queuedMessageDeparted: Bool {
+        if isCloudQueued { return !model.canEditCloudQueueMessage(item) }
+        return false
+    }
+
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
                 TextEditor(text: $text).focused($focused).accessibilityIdentifier("thread-message-edit-input")
                 if let error { Text(error).font(.subheadline).foregroundStyle(.red) }
-                Text("The agent will restart from this message.").font(.footnote).foregroundStyle(.secondary)
-                if model.activeRunID != nil {
+                Text(!isQueued ? "The agent will restart from this message." : "This changes the queued message before the agent starts it.").font(.footnote).foregroundStyle(.secondary)
+                if queuedMessageDeparted {
+                    Text("This message is no longer queued. Your draft is still here to copy.").font(.footnote).foregroundStyle(.secondary)
+                } else if !isQueued && model.activeRunID != nil {
                     Text("Waiting for the agent to stop before restarting.").font(.footnote).foregroundStyle(.secondary)
-                } else if !model.canEdit(item) {
+                } else if !isQueued && !model.canEdit(item) {
                     Text("This message can no longer be restarted. Your draft is still here to copy.").font(.footnote).foregroundStyle(.secondary)
                 }
             }.padding(20)
@@ -644,17 +695,20 @@ private struct AgentTranscriptMessageEditor: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save and restart") {
+                    Button(!isQueued ? "Save and restart" : "Save") {
                         busy = true
                         Task {
                             defer { busy = false }
                             do {
-                                try await model.editLatestUserMessage(item, text: text)
+                                if isCloudQueued {
+                                    guard !queuedMessageDeparted else { throw PathwayThreadConversationError.message("This message is no longer editable. Your draft has been kept.") }
+                                    try await model.mutateCloudQueueMessage(item, action: "edit", text: PathwayAgentThreadModel.preservingMessageContext(original: item.text ?? "", edited: text))
+                                } else { try await model.editLatestUserMessage(item, text: text) }
                                 dismiss()
                             }
                             catch { self.error = error.localizedDescription }
                         }
-                    }.disabled(busy || !model.canEdit(item) || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }.disabled(busy || queuedMessageDeparted || (!isQueued && !model.canEdit(item)) || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             .disabled(busy).interactiveDismissDisabled(busy)

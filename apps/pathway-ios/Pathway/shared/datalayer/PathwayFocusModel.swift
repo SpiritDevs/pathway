@@ -22,6 +22,7 @@ struct PathwayFocusNotification: Decodable, Identifiable {
     let projectKey: String
     let eventKind: String
     let createdAt: Double
+    var isRead: Bool? = nil
     var title: String {
         switch eventKind {
         case "pending-approval": "Approval needed"
@@ -44,6 +45,7 @@ struct PathwayFocusNotification: Decodable, Identifiable {
     private(set) var assignments: [PathwayFocusAssignment] = []
     private(set) var notifications: [PathwayFocusNotification] = []
     private(set) var unreadCount = 0
+    private(set) var unreadThreadKeys: Set<String> = []
     var selectedID = "all" { didSet { if let preferenceKey { UserDefaults.standard.set(selectedID, forKey: preferenceKey) } } }
     var errorMessage: String?
     @ObservationIgnored private var preferenceKey: String?
@@ -82,7 +84,7 @@ struct PathwayFocusNotification: Decodable, Identifiable {
     func observe(cloud: PathwayCloudModel, storageDirectory: URL?) async {
         observationGeneration += 1
         let generation = observationGeneration
-        focuses = []; assignments = []; notifications = []; unreadCount = 0; errorMessage = nil
+        focuses = []; assignments = []; notifications = []; unreadCount = 0; unreadThreadKeys = []; errorMessage = nil
         preferenceKey = storageDirectory.map { "pathway.focus.\($0.lastPathComponent)" }
         selectedID = preferenceKey.flatMap { UserDefaults.standard.string(forKey: $0) } ?? "all"
         #if DEBUG
@@ -118,11 +120,29 @@ struct PathwayFocusNotification: Decodable, Identifiable {
 
     private func observeNotifications(cloud: PathwayCloudModel, generation: Int) async {
         do {
-            for try await value in cloud.subscribe(name: "focusNotifications:list", arguments: .object(["limit": .number(100)])) {
+            for try await value in cloud.subscribe(name: "focusNotifications:list", arguments: .object(["limit": .number(200)])) {
                 guard !Task.isCancelled, generation == observationGeneration else { return }
-                notifications = try decodePathwayPayload([PathwayFocusNotification].self, from: value)
+                notifications = try decodePathwayPayload([PathwayFocusNotification].self, from: value).filter { $0.isRead != true }
+                unreadThreadKeys = Set(notifications.map { "\($0.environmentId):\($0.threadId)" })
             }
         } catch is CancellationError {} catch { if generation == observationGeneration { errorMessage = error.localizedDescription } }
+    }
+
+    func hasUnreadNotification(_ thread: PathwayAgentThread) -> Bool {
+        unreadThreadKeys.contains("\(thread.environmentId):\(thread.threadId)")
+    }
+
+    static func readThreadNotifications(environmentID: String, threadID: String, cloud: PathwayCloudModel) async throws {
+        var acknowledged: Set<String> = []
+        for try await value in cloud.subscribe(name: "focusNotifications:list", arguments: .object(["limit": .number(200)])) {
+            let rows = try decodePathwayPayload([PathwayFocusNotification].self, from: value)
+            acknowledged.formIntersection(rows.map(\.id))
+            for row in rows where row.isRead != true && row.environmentId == environmentID && row.threadId == threadID && !acknowledged.contains(row.id) {
+                try Task.checkCancellation()
+                _ = try await cloud.request(kind: "mutation", name: "focusNotifications:markRead", arguments: .object(["eventId": .string(row.id)]))
+                acknowledged.insert(row.id)
+            }
+        }
     }
 
     private func observeUnread(cloud: PathwayCloudModel, generation: Int) async {

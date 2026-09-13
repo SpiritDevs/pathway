@@ -1,12 +1,14 @@
 import type {
   EnvironmentId,
-  ProjectId,
   ServerProvider,
   PathwayProjectFileScript,
   ThreadId,
 } from "@spiritdevs/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+
+vi.mock("@clerk/react", () => ({ useAuth: () => ({ userId: "test-user" }) }));
+vi.mock("../../hooks/useStoragePressure", () => ({ useStoragePressure: () => [] }));
 
 const testState = vi.hoisted(() => ({
   actionPaletteSections: [] as Array<{ id: string; visible: boolean }>,
@@ -179,7 +181,6 @@ describe("ThreadDetailsPanel", () => {
       availableEnvironments: [
         {
           environmentId,
-          projectId: "project:pathway" as ProjectId,
           label: "Corey's MacBook Pro",
           isPrimary: true,
         },
@@ -247,6 +248,19 @@ describe("ThreadDetailsPanel", () => {
     expect(versionControlIndex).toBeGreaterThan(-1);
     expect(issuesIndex).toBeGreaterThan(runtimeIndex);
     expect(issuesIndex).toBeLessThan(versionControlIndex);
+
+    const internalWorkspaceHtml = renderToStaticMarkup(
+      <ThreadDetailsPanel
+        {...props}
+        activeProjectScripts={[]}
+        showOpenInPicker={true}
+        hasAttachedDirectory={false}
+      />,
+    );
+    expect(internalWorkspaceHtml).not.toContain("Version Control");
+    expect(internalWorkspaceHtml).not.toContain("Add project script");
+    expect(internalWorkspaceHtml).not.toContain("Open in");
+    expect(internalWorkspaceHtml).toContain("terminal-controls-sentinel");
   });
 
   it("restores provider usage for the active environment", () => {
@@ -406,7 +420,7 @@ describe("ThreadDetailsPanel", () => {
 
       const html = renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
 
-      expect(html.indexOf("issues-panel-sentinel")).toBeLessThan(html.indexOf("Workspace"));
+      expect(html.indexOf("issues-panel-sentinel")).toBeLessThan(html.indexOf("Environment"));
       expect(html).not.toContain("development-controls-sentinel");
       expect(html).toContain("terminal-controls-sentinel");
       expect(testState.developmentControls).not.toHaveBeenCalled();

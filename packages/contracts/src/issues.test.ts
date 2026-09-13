@@ -272,7 +272,7 @@ const COMMENT_AGENT_RUN_JSON = {
   finishedAt: null,
 };
 
-describe("Issue", () => {
+describe("Task", () => {
   /**
    * The RPC builds this codec at call time, so a shape it cannot lower fails as an interrupted
    * request rather than as a schema error. Building it here turns that into a test failure.
@@ -851,8 +851,10 @@ describe("isPlaceholderIssueTitle", () => {
       "  SLACK MESSAGE  ",
       "Untitled",
       "untitled",
-      "New issue",
+      "New task",
       "new ISSUE",
+      "New issue",
+      "  NEW TASK  ",
     ]) {
       expect(isPlaceholderIssueTitle(title)).toBe(true);
     }

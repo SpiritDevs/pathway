@@ -1,3 +1,5 @@
+import { useAtomValue } from "@effect/atom-react";
+import { threadQueueEntriesAtom, findQueuedThread } from "../cloud/threadQueueState";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { useEffect } from "react";
@@ -29,6 +31,12 @@ function DraftChatThreadRouteView() {
   const { draftId: rawDraftId } = Route.useParams();
   const draftId = DraftId.make(rawDraftId);
   const draftSession = useComposerDraftStore((store) => store.getDraftSession(draftId));
+  const queuedThreads = useAtomValue(threadQueueEntriesAtom);
+  const queuedThread = findQueuedThread(
+    queuedThreads,
+    draftSession?.environmentId,
+    draftSession?.threadId,
+  );
   const threadRefs = useThreadRefs();
   const inferredThreadRef = draftSession
     ? (threadRefs.find(
@@ -48,7 +56,7 @@ function DraftChatThreadRouteView() {
       ? null
       : Option.getOrNull(unfilteredEnvironmentShell.data.snapshot);
   const promotedThreadUnavailable = promotedDraftThreadIsUnavailable({
-    hasPromotedThread: draftSession?.promotedTo != null,
+    hasPromotedThread: draftSession?.promotedTo != null && !queuedThread,
     promotedThreadExists:
       serverThreadRef !== null &&
       (unfilteredSnapshot?.threads.some((thread) => thread.id === serverThreadRef.threadId) ??
@@ -56,6 +64,17 @@ function DraftChatThreadRouteView() {
     promotedThreadVisible: serverThread !== null,
     promotedThreadDeleted: serverThreadStatus === "deleted",
   });
+  useEffect(() => {
+    if (!queuedThread) return;
+    const currentEnvironmentId = draftSession?.environmentId;
+    if (queuedThread.environmentId === currentEnvironmentId) return;
+    void navigate({
+      to: "/threads/$environmentId/$threadId",
+      params: { environmentId: queuedThread.environmentId, threadId: queuedThread.threadId },
+      search: queuedThread.queueId ? { queueId: queuedThread.queueId } : {},
+      replace: true,
+    });
+  }, [navigate, queuedThread, draftSession]);
   const serverThreadStarted = threadHasStarted(serverThread);
   const serverVisibleTurnItems = useThreadVisibleTurnItems(serverThreadRef);
   // ChatView owns the optimistic first message while this draft route stays

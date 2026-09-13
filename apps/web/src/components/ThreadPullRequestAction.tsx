@@ -1,3 +1,4 @@
+import { useThreadPullRequestRefresh } from "../state/useThreadPullRequestRefresh";
 import { scopeThreadRef } from "@spiritdevs/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@spiritdevs/client-runtime/state/shell";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
@@ -75,10 +76,11 @@ function ThreadPullRequestRow({
   attachment: OrchestrationV2PullRequestAttachment;
   branchPullRequest: ThreadPr;
 }) {
-  const query = useAttachedPullRequest(
+  const attachedQuery = useAttachedPullRequest(
     { ...thread, attachedPullRequest: attachment },
     { poll: true },
   );
+  const query = useThreadPullRequestRefresh(thread, attachedQuery);
   const openPrLink = useOpenPrLink(scopeThreadRef(thread.environmentId, thread.id));
   const project = query.project;
   const configs = useServerConfigs();
@@ -103,11 +105,11 @@ function ThreadPullRequestRow({
       environmentId={thread.environmentId}
       project={project ?? null}
       pr={pr}
+      detailQuery={query}
       status={badge.status}
       label={`#${attachment.number}${pr.title ? `: ${pr.title}` : ` · ${badge.status.label.replace(/^(PR|MR) /, "")}`}`}
       openAriaLabel={badge.status.tooltip}
       onOpen={(event) => openPrLink(event, attachment.url)}
-      onActed={query.refresh}
       onUnlink={
         configs.get(thread.environmentId)?.environment.capabilities.threadPullRequestAttachments
           ? () => {

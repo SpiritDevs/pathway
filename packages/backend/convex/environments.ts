@@ -11,6 +11,7 @@
  * @module environments
  */
 import { v } from "convex/values";
+import type { ExecutionEnvironmentCapabilities } from "@spiritdevs/contracts";
 
 import { isRegisteredProofKey, tokenProofKeyThumbprint } from "../src/environmentRegistrations.ts";
 import type { Doc, Id } from "./_generated/dataModel.js";
@@ -69,10 +70,14 @@ const executionEnvironmentDescriptor = v.object({
   ),
   serverVersion: v.string(),
   capabilities: v.object({
+    durableThreadQueue: v.optional(v.boolean()),
     repositoryIdentity: v.boolean(),
     projectDirectoryInspection: v.optional(v.boolean()),
     connectionProbe: v.optional(v.boolean()),
     attachmentUploads: v.optional(v.boolean()),
+    questionAttachments: v.optional(v.boolean()),
+    userInputDismissal: v.optional(v.boolean()),
+    storageManagement: v.optional(v.boolean()),
     fileAttachments: v.optional(v.object({ maxUploadBytes: v.number() })),
     pullRequests: v.optional(v.boolean()),
     threadPullRequestAttachments: v.optional(v.boolean()),
@@ -90,7 +95,8 @@ const executionEnvironmentDescriptor = v.object({
       v.union(v.literal("boot-service"), v.literal("respawn"), v.literal("desktop-managed")),
     ),
     serverSelfUpdateProgress: v.optional(v.boolean()),
-  }),
+    desktopAppUpdate: v.optional(v.boolean()),
+  } satisfies Record<keyof ExecutionEnvironmentCapabilities, unknown>),
 });
 
 const registrationResult = v.object({
@@ -165,10 +171,14 @@ function descriptorKey(value: Descriptor): string {
     value.device?.modelIdentifier,
     value.runtime?.mode,
     value.serverVersion,
+    capabilities["durableThreadQueue"],
     capabilities["repositoryIdentity"],
     capabilities["projectDirectoryInspection"],
     capabilities["connectionProbe"],
     capabilities["attachmentUploads"],
+    capabilities["questionAttachments"],
+    capabilities["userInputDismissal"],
+    capabilities["storageManagement"],
     (capabilities["fileAttachments"] as { maxUploadBytes?: number } | undefined)?.maxUploadBytes,
     capabilities["pullRequests"],
     capabilities["threadPullRequestAttachments"],
@@ -184,6 +194,7 @@ function descriptorKey(value: Descriptor): string {
     capabilities["threadVisitedTracking"],
     capabilities["serverSelfUpdate"],
     capabilities["serverSelfUpdateProgress"],
+    capabilities["desktopAppUpdate"],
   ]);
 }
 

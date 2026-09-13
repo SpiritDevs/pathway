@@ -34,9 +34,9 @@ Cleanup runs on that environment even when the dashboard is closed. Each environ
 
 The default warning limits are **20 GB or 10% available**. The default critical limits are **10 GB or 5% available**. Either limit can trigger the corresponding warning. Adjust them in the environment's policy.
 
-Pathway shows low-storage status outside this dashboard and alerts you when an environment crosses a threshold. When a conversation targets a critically low machine, it offers **Clean up**, **Choose another environment**, and **Continue anyway**.
+The storage icon in the top bar turns amber for low storage and red for critical storage. Click it to see each environment’s status and available capacity, or open Storage & cleanup settings. Low and critical storage icons also appear beside environments in the workspace selector. Offline environments show their last known status. Pathway alerts you when an environment crosses a threshold. Before the first message, a compact **Critical Storage** card offers **Cleanup** to open the storage dashboard. You can dismiss the card or send your message immediately. The warning never blocks sending and does not appear in conversations that already have messages.
 
-The conversation cleanup action shows an estimate before you click. It reclaims the oldest eligible worktrees until available space exceeds both warning limits. It can bypass the scheduled age limit, but retains the other protections. It keeps your draft and does not send your message. Emergency cleanup always requires your click. Scheduled tasks continue under their existing scheduling rules.
+The card opens the storage dashboard so you can review estimates and choose what to clean up. Opening the dashboard does not remove files or send your draft. Scheduled tasks continue under their existing scheduling rules.
 
 **Avoid critically low environments in Auto** starts off. Enable it to prefer another eligible machine for new conversations when a healthy alternative exists. Existing conversations stay on their environment.
 
@@ -45,3 +45,13 @@ The conversation cleanup action shows an estimate before you click. It reclaims 
 Cleanup history records manual and scheduled runs for each environment. Successful removals stay completed even if another removal fails. Retry targets failed worktrees, and each retry gets another eligibility review. Offline environments are skipped; Pathway does not queue their deletion for a later reconnection.
 
 **Cancel remaining** stops before the next worktree. It cannot restore worktrees already removed. If cleanup cannot recover enough space, use the remaining blockers and disk readings to decide what to clean up next.
+
+The main Threads table lists threads with existing Git worktrees. It defaults to archived and settled threads; select Snoozed or All threads to include snoozed worktrees. Below it, switch between Unlinked worktrees, Empty threads (no user messages), and Archived threads. These lists follow the selected environment. Older environments that do not report whether a thread has messages cannot populate the Empty threads list until updated.
+
+### Inspect an unlinked worktree
+
+Open its three-dot menu and choose **Review** to measure its disk usage and check cleanup eligibility. Large worktrees can exceed the bounded measurement limit and remain unmeasured.
+
+**Ask AI** opens a conversation in that environment with a worktree report attached. The report includes its path, repository, branch or detached HEAD, and any size or review details already available. Opening the conversation does not wait for a new disk scan or Git review; the AI can inspect details when needed. Type your question in the empty message input; nothing is sent automatically.
+
+**Delete** opens a separate review showing modified or untracked files and other risks. You can choose **Ask AI** from this dialog too. **Force delete** permanently removes the unlinked worktree, including uncommitted and ignored files, even without a preserved branch. Repository roots, locks, and active-use protections still prevent removal. Ordinary Review and automatic cleanup retain their existing protections.

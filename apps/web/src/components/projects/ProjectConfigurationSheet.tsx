@@ -34,6 +34,27 @@ export function ProjectConfigurationSheet({
   const [moveOpen, setMoveOpen] = useState(false);
   const canMove = project.cloudProjectId !== null && companies.length > 1;
 
+  const companySection = (
+    <SettingsSection id="project-owner" title="Company">
+      <p className="text-sm text-muted-foreground">
+        {owners.length === 0
+          ? "This project has no owning company yet."
+          : `Owned by ${owners.map((company) => company.name).join(", ")}.`}
+      </p>
+      {canMove ? (
+        <div className="mt-3">
+          <Button size="sm" variant="outline" onClick={() => setMoveOpen(true)}>
+            Move to another company…
+          </Button>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Tasks and milestones move with the project. Task keys are re-issued under the new
+            company&rsquo;s prefix and cannot be changed back.
+          </p>
+        </div>
+      ) : null}
+    </SettingsSection>
+  );
+
   return (
     <>
       <MoveProjectWizard project={project} open={moveOpen} onOpenChange={setMoveOpen} />
@@ -45,30 +66,15 @@ export function ProjectConfigurationSheet({
         footer={<SheetClose render={<Button variant="outline" />}>Done</SheetClose>}
       >
         {project.group === null ? (
-          <SettingsSection id="project-checkout" title="Pending setup">
-            <PendingProjectSetup key={project.projectKey} project={project} />
-          </SettingsSection>
+          <>
+            <SettingsSection id="project-checkout" title="Pending setup">
+              <PendingProjectSetup key={project.projectKey} project={project} />
+            </SettingsSection>
+            {companySection}
+          </>
         ) : (
-          <ProjectDetail group={project.group} />
+          <ProjectDetail group={project.group} beforeDanger={companySection} />
         )}
-        <SettingsSection id="project-owner" title="Company">
-          <p className="text-sm text-muted-foreground">
-            {owners.length === 0
-              ? "This project has no owning company yet."
-              : `Owned by ${owners.map((company) => company.name).join(", ")}.`}
-          </p>
-          {canMove ? (
-            <div className="mt-3">
-              <Button size="sm" variant="outline" onClick={() => setMoveOpen(true)}>
-                Move to another company…
-              </Button>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Issues and milestones move with the project. Issue keys are re-issued under the new
-                company&rsquo;s prefix and cannot be changed back.
-              </p>
-            </div>
-          ) : null}
-        </SettingsSection>
       </CompanySettingsSheet>
     </>
   );

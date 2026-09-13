@@ -1,4 +1,5 @@
 import type { SnapShotSource } from "@spiritdevs/contracts";
+import { Dialog } from "@base-ui/react/dialog";
 import {
   SnapShotAccessibilityData,
   SnapShotContentsButton,
@@ -11,6 +12,7 @@ import {
   DownloadIcon,
   ExternalLinkIcon,
   MessageSquarePlusIcon,
+  FilmIcon,
   XIcon,
   ZoomInIcon,
   ZoomOutIcon,
@@ -18,13 +20,13 @@ import {
 import type { LucideIcon } from "lucide-react";
 import {
   memo,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
@@ -35,14 +37,17 @@ import {
   clampPanOffset,
   imageDownloadFileName,
   MIN_IMAGE_ZOOM,
+  MAX_IMAGE_ZOOM,
   steppedZoom,
   wrapImageIndex,
 } from "./imageLightbox.logic";
 import { copyImageToClipboard, downloadImageFile } from "./imageTransfer";
 
 export interface LightboxImage {
+  readonly kind?: "image" | "video";
   readonly src: string;
   readonly name: string;
+  readonly loading?: boolean;
   readonly source?: SnapShotSource | undefined;
 }
 
@@ -101,13 +106,13 @@ function IconAction({
         render={
           <Button
             aria-label={label}
-            className="text-white/80 hover:bg-white/10 hover:text-white"
+            className="text-white/80 [:hover,[data-pressed]]:bg-white/10 hover:text-white"
             disabled={disabled}
             onClick={onClick}
             size="icon-sm"
             variant="ghost"
           >
-            <Icon />
+            <Icon className="text-current" />
           </Button>
         }
       />
@@ -117,7 +122,7 @@ function IconAction({
 }
 
 /**
- * Full-window image viewer: a slideshow over one gallery with zoom, save, and
+ * Full-window media viewer: images with zoom and videos with native playback controls, plus
  * whatever contextual actions the call site provides. Nothing here leaves the app.
  */
 export const ImageLightbox = memo(function ImageLightbox({
@@ -135,18 +140,41 @@ export const ImageLightbox = memo(function ImageLightbox({
   const [commentBody, setCommentBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [showContents, setShowContents] = useState(false);
+  const [failedSource, setFailedSource] = useState<string | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const commentRef = useRef<HTMLTextAreaElement>(null);
   const dragRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const swipeRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+  const wheelRef = useRef({ total: 0, lastTime: 0, navigated: false });
+  const selectedThumbnailRef = useRef<HTMLButtonElement>(null);
 
   const image = images[wrapImageIndex(index, images.length)];
+  const isVideo = image?.kind === "video";
+  const mediaGallery = images.some((item) => item.kind === "video");
+  const mediaLabel = isVideo ? "video" : "image";
   const multiple = images.length > 1;
+  const imageUnavailable = !image?.src || failedSource === image.src;
+  const hasImage = image !== undefined;
+
+  useEffect(() => {
+    const bridge = window.desktopBridge;
+    if (!hasImage || !bridge?.setWindowButtonsVisible) return;
+    const setVisible = (visible: boolean) => {
+      void bridge.setWindowButtonsVisible?.(visible).catch((error: unknown) => {
+        console.error("Could not update native window buttons", error);
+      });
+    };
+    setVisible(false);
+    return () => setVisible(true);
+  }, [hasImage]);
 
   const resetView = useCallback(() => {
     setShowContents(false);
     setZoom(MIN_IMAGE_ZOOM);
     setPan(ORIGIN);
+    dragRef.current = null;
+    swipeRef.current = null;
   }, []);
 
   const navigate = useCallback(
@@ -165,69 +193,85 @@ export const ImageLightbox = memo(function ImageLightbox({
     [images.length, resetView],
   );
 
-  const changeZoom = useCallback((direction: -1 | 1) => {
-    setZoom((current) => {
-      const next = steppedZoom(current, direction);
+  const changeZoom = useCallback(
+    (direction: -1 | 1) => {
+      const next = steppedZoom(zoom, direction);
+      setZoom(next);
+      const viewport = viewportRef.current;
+      const element = imageRef.current;
       if (next === MIN_IMAGE_ZOOM) setPan(ORIGIN);
-      return next;
-    });
-  }, []);
+      else if (viewport && element) {
+        setPan((current) => ({
+          x: clampPanOffset(current.x, element.offsetWidth * next - viewport.clientWidth),
+          y: clampPanOffset(current.y, element.offsetHeight * next - viewport.clientHeight),
+        }));
+      }
+    },
+    [zoom],
+  );
+
+  const onKeyDown = (event: ReactKeyboardEvent) => {
+    const target = event.target as HTMLElement | null;
+    const typing =
+      target?.tagName === "TEXTAREA" ||
+      target?.tagName === "INPUT" ||
+      target?.isContentEditable === true;
+
+    if (event.key === "Escape" && commentOpen) {
+      event.preventDefault();
+      event.stopPropagation();
+      setCommentOpen(false);
+      return;
+    }
+    if (typing || target?.tagName === "VIDEO") return;
+    if (event.key === "ArrowLeft" && images.length > 1) {
+      event.preventDefault();
+      event.stopPropagation();
+      navigate(-1);
+      return;
+    }
+    if (event.key === "ArrowRight" && images.length > 1) {
+      event.preventDefault();
+      event.stopPropagation();
+      navigate(1);
+      return;
+    }
+    if (isVideo) return;
+    if (event.key === "+" || event.key === "=") {
+      event.preventDefault();
+      event.stopPropagation();
+      changeZoom(1);
+      return;
+    }
+    if (event.key === "-" || event.key === "_") {
+      event.preventDefault();
+      event.stopPropagation();
+      changeZoom(-1);
+      return;
+    }
+    if (event.key !== "0") return;
+    event.preventDefault();
+    event.stopPropagation();
+    resetView();
+  };
 
   useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const typing =
-        target?.tagName === "TEXTAREA" ||
-        target?.tagName === "INPUT" ||
-        target?.isContentEditable === true;
-
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (commentOpen) {
-          setCommentOpen(false);
-          return;
-        }
-        onClose();
-        return;
-      }
-      if (typing) return;
-      if (event.key === "ArrowLeft" && images.length > 1) {
-        event.preventDefault();
-        event.stopPropagation();
-        navigate(-1);
-        return;
-      }
-      if (event.key === "ArrowRight" && images.length > 1) {
-        event.preventDefault();
-        event.stopPropagation();
-        navigate(1);
-        return;
-      }
-      if (event.key === "+" || event.key === "=") {
-        event.preventDefault();
-        changeZoom(1);
-        return;
-      }
-      if (event.key === "-" || event.key === "_") {
-        event.preventDefault();
-        changeZoom(-1);
-        return;
-      }
-      if (event.key !== "0") return;
-      event.preventDefault();
-      resetView();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [changeZoom, commentOpen, images.length, navigate, onClose, resetView]);
+    selectedThumbnailRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [index]);
 
   useEffect(() => {
     if (commentOpen) commentRef.current?.focus();
   }, [commentOpen]);
 
   const onPointerDown = (event: ReactPointerEvent<HTMLImageElement>) => {
-    if (zoom === MIN_IMAGE_ZOOM) return;
+    if (event.button !== 0) return;
+    if (zoom === MIN_IMAGE_ZOOM) {
+      if (event.pointerType !== "mouse" && multiple) {
+        swipeRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }
+      return;
+    }
     event.preventDefault();
     dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -248,9 +292,17 @@ export const ImageLightbox = memo(function ImageLightbox({
   };
 
   const endDrag = (event: ReactPointerEvent<HTMLImageElement>) => {
-    if (dragRef.current?.pointerId !== event.pointerId) return;
+    const swipe = swipeRef.current;
+    if (swipe?.pointerId === event.pointerId && event.type !== "pointercancel") {
+      const dx = event.clientX - swipe.x;
+      const dy = event.clientY - swipe.y;
+      if (Math.abs(dx) >= 50 && Math.abs(dx) > Math.abs(dy)) navigate(dx < 0 ? 1 : -1);
+    }
+    swipeRef.current = null;
     dragRef.current = null;
-    event.currentTarget.releasePointerCapture(event.pointerId);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   };
 
   const runTransfer = (title: string, transfer: () => Promise<void>) => {
@@ -276,236 +328,330 @@ export const ImageLightbox = memo(function ImageLightbox({
     setCommentOpen(false);
   };
 
-  // Portalled to the body: the viewer opens from panels that clip, scroll, and transform,
-  // and a `fixed` overlay inside one of those would be trapped by it.
-  return createPortal(
-    <div
-      aria-label="Image viewer"
-      aria-modal="true"
-      className="fixed inset-0 z-50 flex flex-col bg-black/85 [-webkit-app-region:no-drag]"
-      role="dialog"
+  return (
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
     >
-      <header className="flex shrink-0 items-center gap-2 border-white/10 border-b px-3 py-2">
-        <div className="flex min-w-0 flex-col">
-          <span className="truncate text-sm text-white/90">{image.name}</span>
-          {multiple ? (
-            <span className="text-[11px] text-white/50 tabular-nums">
-              {index + 1} of {images.length}
-            </span>
-          ) : null}
-        </div>
-        <div className="ms-auto flex items-center gap-1">
-          <IconAction
-            disabled={zoom === MIN_IMAGE_ZOOM}
-            icon={ZoomOutIcon}
-            label="Zoom out"
-            onClick={() => changeZoom(-1)}
-          />
-          <Button
-            className="min-w-12 text-white/80 tabular-nums hover:bg-white/10 hover:text-white"
-            onClick={resetView}
-            size="sm"
-            variant="ghost"
-          >
-            {Math.round(zoom * 100)}%
-          </Button>
-          <IconAction icon={ZoomInIcon} label="Zoom in" onClick={() => changeZoom(1)} />
-          <IconAction
-            icon={ExternalLinkIcon}
-            label="Open in browser"
-            onClick={() => {
-              void readLocalApi()
-                ?.shell.openExternal(image.src)
-                .catch((error: unknown) => reportImageFailure("Could not open the image", error));
-            }}
-          />
-          <IconAction icon={XIcon} label="Close image viewer" onClick={onClose} />
-        </div>
-      </header>
-
-      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
-        <button
-          aria-label="Close image viewer"
-          className="absolute inset-0 cursor-zoom-out"
-          onClick={onClose}
-          type="button"
-        />
-        <div
-          className="pointer-events-none relative flex size-full items-center justify-center p-4"
-          ref={viewportRef}
+      <Dialog.Portal>
+        <Dialog.Popup
+          aria-label={mediaGallery ? "Media viewer" : "Image viewer"}
+          className="fixed inset-0 z-[140] flex flex-col bg-black/85 outline-none [-webkit-app-region:no-drag]"
+          onKeyDown={onKeyDown}
         >
-          {showContents && contents ? (
-            <SnapShotAccessibilityData
-              details={contents}
-              className="pointer-events-auto h-full w-full max-w-3xl rounded-lg bg-background p-4 text-xs leading-5 text-foreground"
-            />
-          ) : (
-            <img
-              alt={image.name}
-              className={cn(
-                "pointer-events-auto max-h-full max-w-full select-none object-contain",
-                zoom === MIN_IMAGE_ZOOM ? "cursor-zoom-in" : "cursor-grab active:cursor-grabbing",
-              )}
-              draggable={false}
-              onDoubleClick={() => (zoom === MIN_IMAGE_ZOOM ? changeZoom(1) : resetView())}
-              onError={() => onImageError?.(image, index)}
-              onPointerCancel={endDrag}
-              onPointerDown={onPointerDown}
-              onPointerMove={onPointerMove}
-              onPointerUp={endDrag}
-              ref={imageRef}
-              src={image.src}
-              style={{
-                transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
-              }}
-            />
-          )}
-        </div>
-        {multiple ? (
-          <>
-            <Button
-              aria-label="Previous image"
-              className="-translate-y-1/2 absolute top-1/2 left-2 text-white/90 hover:bg-white/10 hover:text-white sm:left-6"
-              onClick={() => navigate(-1)}
-              size="icon"
-              variant="ghost"
-            >
-              <ChevronLeftIcon className="size-5" />
-            </Button>
-            <Button
-              aria-label="Next image"
-              className="-translate-y-1/2 absolute top-1/2 right-2 text-white/90 hover:bg-white/10 hover:text-white sm:right-6"
-              onClick={() => navigate(1)}
-              size="icon"
-              variant="ghost"
-            >
-              <ChevronRightIcon className="size-5" />
-            </Button>
-          </>
-        ) : null}
-      </div>
-
-      <footer className="flex shrink-0 flex-col gap-2 border-white/10 border-t px-3 py-2">
-        {multiple ? (
-          <ul className="flex justify-center gap-1.5 overflow-x-auto">
-            {images.map((thumbnail, thumbnailIndex) => (
-              <li key={`${thumbnail.name}:${thumbnail.src}`}>
-                <button
-                  aria-current={thumbnailIndex === index}
-                  aria-label={`Show ${thumbnail.name}`}
-                  className={cn(
-                    "block size-12 shrink-0 overflow-hidden rounded-md border transition-opacity",
-                    thumbnailIndex === index
-                      ? "border-white/80"
-                      : "border-white/20 opacity-60 hover:opacity-100",
-                  )}
-                  onClick={() => showImage(thumbnailIndex)}
-                  type="button"
-                >
-                  <img
-                    alt=""
-                    className="size-full object-cover"
-                    draggable={false}
-                    onError={() => onImageError?.(thumbnail, thumbnailIndex)}
-                    src={thumbnail.src}
+          <header className="flex shrink-0 items-center gap-2 border-white/10 border-b px-3 py-2">
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate text-sm text-white/90">{image.name}</span>
+              {multiple ? (
+                <span className="text-[11px] text-white/50 tabular-nums">
+                  {index + 1} of {images.length}
+                </span>
+              ) : null}
+            </div>
+            <div className="ms-auto flex items-center gap-1">
+              {!isVideo ? (
+                <>
+                  <IconAction
+                    disabled={imageUnavailable || zoom === MIN_IMAGE_ZOOM}
+                    icon={ZoomOutIcon}
+                    label="Zoom out"
+                    onClick={() => changeZoom(-1)}
                   />
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
+                  <Button
+                    aria-label="Fit image to window"
+                    className="min-w-12 text-white/80 tabular-nums [:hover,[data-pressed]]:bg-white/10 hover:text-white"
+                    onClick={resetView}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    {Math.round(zoom * 100)}%
+                  </Button>
+                  <IconAction
+                    disabled={imageUnavailable || zoom === MAX_IMAGE_ZOOM}
+                    icon={ZoomInIcon}
+                    label="Zoom in"
+                    onClick={() => changeZoom(1)}
+                  />
+                </>
+              ) : null}
+              <IconAction
+                icon={ExternalLinkIcon}
+                disabled={imageUnavailable}
+                label="Open in browser"
+                onClick={() => {
+                  void readLocalApi()
+                    ?.shell.openExternal(image.src)
+                    .catch((error: unknown) =>
+                      reportImageFailure(`Could not open the ${mediaLabel}`, error),
+                    );
+                }}
+              />
+              <Dialog.Close
+                render={
+                  <Button
+                    aria-label={mediaGallery ? "Close media viewer" : "Close image viewer"}
+                    title={mediaGallery ? "Close media viewer" : "Close image viewer"}
+                    className="text-white/80 [:hover,[data-pressed]]:bg-white/10 hover:text-white"
+                    size="icon-sm"
+                    variant="ghost"
+                  >
+                    <XIcon className="text-current" />
+                  </Button>
+                }
+              />
+            </div>
+          </header>
 
-        <div className="flex flex-wrap items-center justify-center gap-1.5">
-          <Button
-            disabled={busy}
-            onClick={() =>
-              runTransfer("Could not download the image", () =>
-                downloadImageFile(image.src, imageDownloadFileName(image.name, image.src)),
+          <div
+            className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden"
+            onWheel={(event) => {
+              if (
+                !multiple ||
+                zoom !== MIN_IMAGE_ZOOM ||
+                event.ctrlKey ||
+                showContents ||
+                (event.target as HTMLElement).tagName === "VIDEO"
               )
-            }
-            size="sm"
-            variant="outline"
+                return;
+              const delta = event.shiftKey ? event.deltaY : event.deltaX;
+              if (!delta || (!event.shiftKey && Math.abs(delta) <= Math.abs(event.deltaY))) return;
+              const wheel = wheelRef.current;
+              if (event.timeStamp - wheel.lastTime > 180) {
+                wheel.total = 0;
+                wheel.navigated = false;
+              }
+              wheel.lastTime = event.timeStamp;
+              if (wheel.navigated) return;
+              wheel.total += delta * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 100 : 1);
+              if (Math.abs(wheel.total) < 60) return;
+              wheel.navigated = true;
+              navigate(wheel.total > 0 ? 1 : -1);
+            }}
           >
-            <DownloadIcon />
-            Download
-          </Button>
-          <Button
-            disabled={busy}
-            onClick={() =>
-              runTransfer("Could not copy the image", () => copyImageToClipboard(image.src))
-            }
-            size="sm"
-            variant="outline"
-          >
-            <CopyIcon />
-            Copy
-          </Button>
-          {hasContents ? (
-            <Button
-              aria-pressed={showContents}
-              onClick={() => setShowContents((current) => !current)}
-              size="sm"
-              variant="outline"
-            >
-              {showContents
-                ? "Show screenshot"
-                : image.source?.accessibility?.format === "element-tree"
-                  ? "Show accessibility JSON"
-                  : "Show extracted text"}
-            </Button>
-          ) : image.source ? (
-            <SnapShotContentsButton source={image.source} side="top" />
-          ) : null}
-          {actions.map((action) => (
-            <Button
-              disabled={action.disabled === true}
-              key={action.id}
-              onClick={() => action.onSelect(image, index)}
-              size="sm"
-              variant="outline"
-            >
-              <action.icon />
-              {action.label}
-            </Button>
-          ))}
-          {comment === undefined ? null : (
-            <Button
-              onClick={() => setCommentOpen((open) => !open)}
-              size="sm"
-              variant={commentOpen ? "secondary" : "outline"}
-            >
-              <MessageSquarePlusIcon />
-              Comment
-            </Button>
-          )}
-        </div>
-
-        {comment !== undefined && commentOpen ? (
-          <div className="mx-auto flex w-full max-w-2xl items-end gap-2">
-            <textarea
-              aria-label="Comment on this image"
-              className="min-h-16 flex-1 resize-y rounded-md border border-white/20 bg-black/40 px-2 py-1.5 text-sm text-white outline-none placeholder:text-white/40 focus-visible:ring-2 focus-visible:ring-ring"
-              onChange={(event) => setCommentBody(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
-                event.preventDefault();
-                submitComment();
-              }}
-              placeholder={comment.placeholder ?? "Add a comment about this image…"}
-              ref={commentRef}
-              value={commentBody}
+            <button
+              aria-label={mediaGallery ? "Close media viewer" : "Close image viewer"}
+              className="absolute inset-0 cursor-zoom-out"
+              onClick={onClose}
+              type="button"
             />
-            <Button
-              disabled={commentBody.trim().length === 0 || comment.pending === true}
-              onClick={submitComment}
-              size="sm"
+            <div
+              className="pointer-events-none relative flex size-full items-center justify-center p-4"
+              ref={viewportRef}
             >
-              Comment
-            </Button>
+              {showContents && contents ? (
+                <SnapShotAccessibilityData
+                  details={contents}
+                  className="pointer-events-auto h-full w-full max-w-3xl rounded-lg bg-background p-4 text-xs leading-5 text-foreground"
+                />
+              ) : image.loading || imageUnavailable ? (
+                <p role="status" className="text-sm text-white/70">
+                  {image.loading
+                    ? `Loading ${mediaLabel}…`
+                    : `This ${mediaLabel} could not be loaded.`}
+                </p>
+              ) : isVideo ? (
+                <video
+                  key={image.src}
+                  aria-label={image.name}
+                  className="pointer-events-auto max-h-full max-w-full object-contain"
+                  controls
+                  playsInline
+                  preload="metadata"
+                  src={image.src}
+                  onError={() => {
+                    setFailedSource(image.src);
+                    onImageError?.(image, index);
+                  }}
+                />
+              ) : (
+                <img
+                  key={image.src}
+                  alt={image.name}
+                  className={cn(
+                    "pointer-events-auto max-h-full max-w-full touch-none select-none object-contain",
+                    zoom === MIN_IMAGE_ZOOM
+                      ? "cursor-zoom-in"
+                      : "cursor-grab active:cursor-grabbing",
+                  )}
+                  draggable={false}
+                  onDoubleClick={() => (zoom === MIN_IMAGE_ZOOM ? changeZoom(1) : resetView())}
+                  onError={() => {
+                    setFailedSource(image.src);
+                    onImageError?.(image, index);
+                  }}
+                  onPointerCancel={endDrag}
+                  onPointerDown={onPointerDown}
+                  onPointerMove={onPointerMove}
+                  onPointerUp={endDrag}
+                  ref={imageRef}
+                  src={image.src}
+                  style={{
+                    transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
+                  }}
+                />
+              )}
+            </div>
+            {multiple ? (
+              <>
+                <Button
+                  aria-label={mediaGallery ? "Previous media" : "Previous image"}
+                  className="-translate-y-1/2 absolute top-1/2 left-2 border border-white/15 bg-black/60 text-white [:hover,[data-pressed]]:bg-black/80 hover:text-white sm:left-6"
+                  onClick={() => navigate(-1)}
+                  size="icon"
+                  variant="ghost"
+                >
+                  <ChevronLeftIcon className="size-5 text-current" />
+                </Button>
+                <Button
+                  aria-label={mediaGallery ? "Next media" : "Next image"}
+                  className="-translate-y-1/2 absolute top-1/2 right-2 border border-white/15 bg-black/60 text-white [:hover,[data-pressed]]:bg-black/80 hover:text-white sm:right-6"
+                  onClick={() => navigate(1)}
+                  size="icon"
+                  variant="ghost"
+                >
+                  <ChevronRightIcon className="size-5 text-current" />
+                </Button>
+              </>
+            ) : null}
           </div>
-        ) : null}
-      </footer>
-    </div>,
-    document.body,
+
+          <footer className="flex shrink-0 flex-col gap-2 border-white/10 border-t px-3 py-2">
+            {multiple ? (
+              <ul className="flex gap-1.5 overflow-x-auto overscroll-x-contain py-1">
+                {images.map((thumbnail, thumbnailIndex) => (
+                  <li
+                    className="shrink-0 first:ms-auto last:me-auto"
+                    key={`${thumbnail.name}:${thumbnail.src}`}
+                  >
+                    <button
+                      aria-current={thumbnailIndex === index}
+                      aria-label={`Show ${thumbnail.name}`}
+                      className={cn(
+                        "block size-12 shrink-0 overflow-hidden rounded-md border transition-opacity",
+                        thumbnailIndex === index
+                          ? "border-white/80"
+                          : "border-white/20 opacity-60 hover:opacity-100",
+                      )}
+                      onClick={() => showImage(thumbnailIndex)}
+                      type="button"
+                      ref={thumbnailIndex === index ? selectedThumbnailRef : undefined}
+                    >
+                      {thumbnail.kind === "video" ? (
+                        <FilmIcon aria-hidden="true" className="m-auto size-6 text-white/80" />
+                      ) : thumbnail.src ? (
+                        <img
+                          alt=""
+                          className="size-full object-cover"
+                          draggable={false}
+                          loading="lazy"
+                          onError={() => onImageError?.(thumbnail, thumbnailIndex)}
+                          src={thumbnail.src}
+                        />
+                      ) : (
+                        <span className="text-xs text-white/60">{thumbnailIndex + 1}</span>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            <div className="flex flex-wrap items-center justify-center gap-1.5">
+              <Button
+                disabled={busy || (isVideo ? !image.src || image.loading : imageUnavailable)}
+                onClick={() =>
+                  runTransfer(`Could not download the ${mediaLabel}`, () =>
+                    downloadImageFile(image.src, imageDownloadFileName(image.name, image.src)),
+                  )
+                }
+                size="sm"
+                variant="outline"
+              >
+                <DownloadIcon />
+                Download
+              </Button>
+              {!isVideo ? (
+                <Button
+                  disabled={busy || imageUnavailable}
+                  onClick={() =>
+                    runTransfer("Could not copy the image", () => copyImageToClipboard(image.src))
+                  }
+                  size="sm"
+                  variant="outline"
+                >
+                  <CopyIcon />
+                  Copy
+                </Button>
+              ) : null}
+              {hasContents ? (
+                <Button
+                  aria-pressed={showContents}
+                  onClick={() => setShowContents((current) => !current)}
+                  size="sm"
+                  variant="outline"
+                >
+                  {showContents
+                    ? "Show screenshot"
+                    : image.source?.accessibility?.format === "element-tree"
+                      ? "Show accessibility JSON"
+                      : "Show extracted text"}
+                </Button>
+              ) : image.source ? (
+                <SnapShotContentsButton source={image.source} side="top" />
+              ) : null}
+              {actions.map((action) => (
+                <Button
+                  disabled={action.disabled === true}
+                  key={action.id}
+                  onClick={() => action.onSelect(image, index)}
+                  size="sm"
+                  variant="outline"
+                >
+                  <action.icon />
+                  {action.label}
+                </Button>
+              ))}
+              {comment === undefined ? null : (
+                <Button
+                  onClick={() => setCommentOpen((open) => !open)}
+                  size="sm"
+                  variant={commentOpen ? "secondary" : "outline"}
+                >
+                  <MessageSquarePlusIcon />
+                  Comment
+                </Button>
+              )}
+            </div>
+
+            {comment !== undefined && commentOpen ? (
+              <div className="mx-auto flex w-full max-w-2xl items-end gap-2">
+                <textarea
+                  aria-label="Comment on this image"
+                  className="min-h-16 flex-1 resize-y rounded-md border border-white/20 bg-black/40 px-2 py-1.5 text-sm text-white outline-none placeholder:text-white/40 focus-visible:ring-2 focus-visible:ring-ring"
+                  onChange={(event) => setCommentBody(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
+                    event.preventDefault();
+                    submitComment();
+                  }}
+                  placeholder={comment.placeholder ?? "Add a comment about this image…"}
+                  ref={commentRef}
+                  value={commentBody}
+                />
+                <Button
+                  disabled={commentBody.trim().length === 0 || comment.pending === true}
+                  onClick={submitComment}
+                  size="sm"
+                >
+                  Comment
+                </Button>
+              </div>
+            ) : null}
+          </footer>
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 });

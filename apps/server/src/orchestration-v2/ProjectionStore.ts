@@ -1,4 +1,5 @@
 import type {
+  OrchestrationV2AppThread,
   OrchestrationV2ConversationMessage,
   OrchestrationV2DomainEvent,
   OrchestrationV2ProjectedTurnItem,
@@ -95,11 +96,23 @@ export class ProjectionStoreReadError extends Schema.TaggedErrorClass<Projection
   }
 }
 
+export class ProjectionStoreRecoveryReadError extends Schema.TaggedErrorClass<ProjectionStoreRecoveryReadError>()(
+  "ProjectionStoreRecoveryReadError",
+  {
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return "Failed to read orchestration recovery candidates.";
+  }
+}
+
 export const ProjectionStoreV2Error = Schema.Union([
   ProjectionStoreSetupError,
   ProjectionStoreApplyEventError,
   ProjectionStoreThreadNotFoundError,
   ProjectionStoreReadError,
+  ProjectionStoreRecoveryReadError,
 ]);
 export type ProjectionStoreV2Error = typeof ProjectionStoreV2Error.Type;
 
@@ -117,6 +130,30 @@ export interface ProjectionStoreV2Shape {
   readonly getThreadProjection: (
     threadId: ThreadId,
   ) => Effect.Effect<OrchestrationV2ThreadProjection, ProjectionStoreV2Error>;
+  /** Conservative candidates for process-loss recovery, including archived threads. */
+  readonly getRecoveryThreadIds: () => Effect.Effect<
+    ReadonlyArray<ThreadId>,
+    ProjectionStoreV2Error
+  >;
+  /** Non-deleted thread metadata, including archived threads, without conversation history. */
+  readonly getThreadMetadata: () => Effect.Effect<
+    ReadonlyArray<OrchestrationV2AppThread>,
+    ProjectionStoreV2Error
+  >;
+  /** Non-archived candidates; recovery still checks current queue ownership. */
+  readonly getQueuedRunThreadIds: () => Effect.Effect<
+    ReadonlyArray<ThreadId>,
+    ProjectionStoreV2Error
+  >;
+  readonly getPendingSubagentCompletionThreads: () => Effect.Effect<
+    ReadonlyArray<OrchestrationV2AppThread>,
+    ProjectionStoreV2Error
+  >;
+  /** Candidates include archived threads; recovery checks current state under the thread lock. */
+  readonly getDelegatedCompletionRecoveryThreadIds: () => Effect.Effect<
+    ReadonlyArray<ThreadId>,
+    ProjectionStoreV2Error
+  >;
   readonly getThreadSnapshot: (threadId: ThreadId) => Effect.Effect<
     {
       readonly schemaVersion: number;
@@ -2656,6 +2693,60 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         } satisfies ShellThreadState;
       });
 
+    const getRecoveryThreadIds: ProjectionStoreV2Shape["getRecoveryThreadIds"] = () =>
+      sql<{ readonly thread_id: string }>`
+        SELECT thread_id
+        FROM orchestration_v2_projection_threads
+        WHERE deleted_at IS NULL AND thread_id IN (
+          SELECT thread_id FROM orchestration_v2_projection_runs
+          WHERE status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
+          UNION
+          SELECT thread_id FROM orchestration_v2_projection_runtime_requests
+          WHERE status IN ('pending', 'resolved')
+          UNION
+          SELECT thread_id FROM orchestration_v2_projection_turn_items
+          WHERE status IN ('pending', 'running', 'waiting')
+          UNION
+          SELECT bindings.thread_id
+          FROM orchestration_v2_projection_provider_session_bindings AS bindings
+          JOIN orchestration_v2_projection_provider_sessions AS sessions
+            ON sessions.provider_session_id = bindings.provider_session_id
+          WHERE sessions.status NOT IN ('stopped', 'error')
+          UNION
+          SELECT provider_threads.thread_id
+          FROM orchestration_v2_projection_provider_threads AS provider_threads
+          WHERE provider_threads.status = 'active'
+            OR json_array_length(provider_threads.payload_json, '$.pendingBackgroundTasks') > 0
+          UNION
+          SELECT nodes.thread_id
+          FROM orchestration_v2_projection_provider_threads AS provider_threads
+          JOIN orchestration_v2_projection_nodes AS nodes
+            ON nodes.node_id = provider_threads.owner_node_id
+          WHERE provider_threads.status = 'active'
+            OR json_array_length(provider_threads.payload_json, '$.pendingBackgroundTasks') > 0
+          UNION
+          SELECT subagents.thread_id
+          FROM orchestration_v2_projection_provider_threads AS provider_threads
+          JOIN orchestration_v2_projection_subagents AS subagents
+            ON subagents.provider_thread_id = provider_threads.provider_thread_id
+          WHERE provider_threads.status = 'active'
+            OR json_array_length(provider_threads.payload_json, '$.pendingBackgroundTasks') > 0
+          UNION
+          SELECT thread_id FROM orchestration_v2_effect_outbox
+          WHERE status IN ('pending', 'running')
+        )
+        ORDER BY thread_id ASC
+      `.pipe(
+        Effect.map((rows) => rows.map((row) => ThreadId.make(row.thread_id))),
+        Effect.mapError(
+          (cause) =>
+            new ProjectionStoreReadError({
+              threadId: ThreadId.make("thread:recovery"),
+              cause,
+            }),
+        ),
+      );
+
     const getShellSnapshot: ProjectionStoreV2Shape["getShellSnapshot"] = () =>
       sql
         .withTransaction(
@@ -2805,11 +2896,109 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
+    const getThreadMetadata = Effect.fn("ProjectionStoreV2.getThreadMetadata")(
+      function* () {
+        const rows = yield* sql<PayloadRow>`
+          SELECT payload_json FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NULL
+          ORDER BY archived_at IS NOT NULL, updated_at ASC, thread_id ASC
+        `;
+        return yield* Effect.forEach(rows, (row) => decodeThreadPayload(row.payload_json));
+      },
+      Effect.mapError((cause) => new ProjectionStoreRecoveryReadError({ cause })),
+    );
+
+    const getQueuedRunThreadIds = Effect.fn("ProjectionStoreV2.getQueuedRunThreadIds")(
+      function* () {
+        const rows = yield* sql<{ readonly thread_id: string }>`
+          SELECT thread_id FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NULL AND archived_at IS NULL
+            AND thread_id IN (
+              SELECT thread_id FROM orchestration_v2_projection_runs WHERE status = 'queued'
+            )
+          ORDER BY updated_at ASC, thread_id ASC
+        `;
+        return rows.map((row) => ThreadId.make(row.thread_id));
+      },
+      Effect.mapError((cause) => new ProjectionStoreRecoveryReadError({ cause })),
+    );
+
+    const getPendingSubagentCompletionThreads = Effect.fn(
+      "ProjectionStoreV2.getPendingSubagentCompletionThreads",
+    )(
+      function* () {
+        const rows = yield* sql<PayloadRow>`
+          SELECT t.payload_json FROM orchestration_v2_projection_threads t
+          WHERE t.deleted_at IS NULL
+            AND json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+            AND json_extract(t.payload_json, '$.forkedFrom.type') = 'node'
+            AND EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_subagents task
+              WHERE task.thread_id = json_extract(t.payload_json, '$.lineage.parentThreadId')
+                AND task.subagent_id = json_extract(t.payload_json, '$.forkedFrom.nodeId')
+                AND task.child_thread_id = t.thread_id AND task.origin = 'app_owned'
+            )
+            AND (
+              SELECT status FROM orchestration_v2_projection_runs r WHERE r.thread_id = t.thread_id
+              ORDER BY r.ordinal DESC, r.run_id DESC LIMIT 1
+            ) IN ('completed', 'interrupted', 'failed', 'cancelled', 'rolled_back')
+            AND NOT EXISTS (
+              SELECT 1 FROM orchestration_v2_projection_context_transfers transfer
+              WHERE transfer.source_thread_id = t.thread_id
+                AND transfer.target_thread_id = json_extract(t.payload_json, '$.lineage.parentThreadId')
+                AND transfer.type = 'subagent_result'
+            )
+          ORDER BY t.archived_at IS NOT NULL, t.updated_at ASC, t.thread_id ASC
+        `;
+        return yield* Effect.forEach(rows, (row) => decodeThreadPayload(row.payload_json));
+      },
+      Effect.mapError((cause) => new ProjectionStoreRecoveryReadError({ cause })),
+    );
+
+    const getDelegatedCompletionRecoveryThreadIds = Effect.fn(
+      "ProjectionStoreV2.getDelegatedCompletionRecoveryThreadIds",
+    )(
+      function* () {
+        // Inspect only delivery ownership. Hydrating projections here also reads
+        // unrelated messages, tool output and fork history for every thread.
+        // Include malformed rows so one corrupt thread still goes through the
+        // per-thread error handling instead of aborting candidate discovery.
+        const rows = yield* sql<{ readonly thread_id: string }>`
+          SELECT thread_id
+          FROM orchestration_v2_projection_threads
+          WHERE deleted_at IS NULL
+            AND thread_id IN (
+              SELECT thread_id
+              FROM orchestration_v2_projection_messages
+              WHERE CASE WHEN json_valid(payload_json)
+                THEN json_type(payload_json, '$.delegatedCompletion') = 'object'
+                ELSE 1
+              END
+              UNION
+              SELECT thread_id
+              FROM orchestration_v2_projection_runs
+              WHERE CASE WHEN json_valid(payload_json)
+                THEN json_type(payload_json, '$.delegatedCompletion.delivery') = 'object'
+                ELSE 1
+              END
+            )
+          ORDER BY thread_id ASC
+        `;
+        return rows.map((row) => ThreadId.make(row.thread_id));
+      },
+      Effect.mapError((cause) => new ProjectionStoreRecoveryReadError({ cause })),
+    );
+
     return {
       apply,
       getShellSnapshot,
       getThreadShell,
       getThreadProjection,
+      getRecoveryThreadIds,
+      getThreadMetadata,
+      getQueuedRunThreadIds,
+      getPendingSubagentCompletionThreads,
+      getDelegatedCompletionRecoveryThreadIds,
       getThreadSnapshot,
     } satisfies ProjectionStoreV2Shape;
   }),
@@ -2872,6 +3061,88 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             .pipe(Effect.map(threadShellFromProjection));
           return shell.deletedAt === null ? shell : null;
         }),
+      getThreadMetadata: () =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .map((projection) => projection.thread)
+              .filter((thread) => thread.deletedAt === null)
+              .toSorted(
+                (left, right) =>
+                  Number(left.archivedAt !== null) - Number(right.archivedAt !== null) ||
+                  DateTime.toEpochMillis(left.updatedAt) -
+                    DateTime.toEpochMillis(right.updatedAt) ||
+                  String(left.id).localeCompare(String(right.id)),
+              ),
+          ),
+        ),
+      getQueuedRunThreadIds: () =>
+        Effect.gen(function* () {
+          const state = yield* Ref.get(replayState);
+          const threads = yield* service.getThreadMetadata();
+          return threads
+            .filter(
+              (thread) =>
+                thread.archivedAt === null &&
+                state.projections.get(thread.id)?.runs.some((run) => run.status === "queued"),
+            )
+            .map((thread) => thread.id);
+        }),
+      getPendingSubagentCompletionThreads: () =>
+        Effect.gen(function* () {
+          const state = yield* Ref.get(replayState);
+          const threads = yield* service.getThreadMetadata();
+          return threads.filter((thread) => {
+            const parentId = thread.lineage.parentThreadId;
+            const fork = thread.forkedFrom;
+            if (
+              thread.lineage.relationshipToParent !== "subagent" ||
+              parentId === null ||
+              fork?.type !== "node"
+            )
+              return false;
+            const parent = state.projections.get(parentId);
+            const latestRun = state.projections.get(thread.id)?.runs.at(-1);
+            return (
+              latestRun !== undefined &&
+              ["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
+                latestRun.status,
+              ) &&
+              parent?.subagents.some(
+                (task) =>
+                  task.id === fork.nodeId &&
+                  task.origin === "app_owned" &&
+                  task.childThreadId === thread.id,
+              ) === true &&
+              !parent.contextTransfers.some(
+                (transfer) =>
+                  transfer.type === "subagent_result" &&
+                  transfer.sourceThreadId === thread.id &&
+                  transfer.targetThreadId === parentId,
+              )
+            );
+          });
+        }),
+      getDelegatedCompletionRecoveryThreadIds: () =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .filter(
+                (projection) =>
+                  projection.thread.deletedAt === null &&
+                  (projection.messages.some(
+                    (message) => message.delegatedCompletion !== undefined,
+                  ) ||
+                    projection.runs.some(
+                      (run) =>
+                        run.delegatedCompletion !== undefined &&
+                        run.delegatedCompletion.delivery !== null,
+                    )),
+              )
+              .map((projection) => projection.thread.id)
+              .toSorted(),
+          ),
+        ),
       getThreadProjection: (threadId) =>
         Effect.gen(function* () {
           const existing = (yield* Ref.get(replayState)).projections;
@@ -2905,6 +3176,14 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           }
           return projection;
         }),
+      getRecoveryThreadIds: () =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .filter((projection) => projection.thread.deletedAt === null)
+              .map((projection) => projection.thread.id),
+          ),
+        ),
       getThreadSnapshot: (threadId) =>
         service.getThreadProjection(threadId).pipe(
           Effect.flatMap((projection) =>

@@ -337,6 +337,6 @@ export function triageAcceptInput(input: {
 
 /** `Accept 3 items` / `Accept PAT-12`, which is the confirm button and the dialog's title. */
 export function triageAcceptLabel(issues: ReadonlyArray<Issue>): string {
-  if (issues.length === 1) return `Accept ${issues[0]?.key ?? "issue"}`;
-  return `Accept ${issues.length} issues`;
+  if (issues.length === 1) return `Accept ${issues[0]?.key ?? "task"}`;
+  return `Accept ${issues.length} tasks`;
 }

@@ -636,6 +636,49 @@ it.effect("backs off failed upstream refreshes across linked worktrees", () =>
 );
 
 it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
+  for (const localChanges of ["stash", "discard"] as const) {
+    it.effect(`resolves checkout conflicts with ${localChanges}`, () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(cwd, ["checkout", "-b", "target"]);
+        yield* writeTextFile(cwd, "README.md", "target content\n");
+        yield* git(cwd, ["commit", "-am", "target change"]);
+        yield* git(cwd, ["checkout", initialBranch]);
+        yield* writeTextFile(cwd, "README.md", "local work\n");
+        yield* writeTextFile(cwd, "notes.txt", "untracked work\n");
+        yield* driver.switchRef({ cwd, refName: "target" }).pipe(Effect.flip);
+        const result = yield* driver.switchRef({ cwd, refName: "target", localChanges });
+        assert.equal(result.refName, "target");
+        assert.equal(yield* git(cwd, ["diff", "--", "README.md"]), "");
+        const stashes = yield* git(cwd, ["stash", "list"]);
+        if (localChanges === "stash") {
+          assert.include(stashes, "Pathway: before switching to target");
+          assert.include(yield* git(cwd, ["stash", "show", "-p"]), "local work");
+          assert.equal(yield* git(cwd, ["status", "--porcelain"]), "");
+        } else {
+          assert.equal(stashes, "");
+          assert.include(yield* git(cwd, ["status", "--porcelain"]), "notes.txt");
+        }
+      }),
+    );
+  }
+
+  it.effect("includes Git's checkout rejection in switchRef errors", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir();
+      yield* initRepoWithCommit(cwd);
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      const error = yield* driver
+        .switchRef({ cwd, refName: "missing-diagnostic-branch" })
+        .pipe(Effect.flip);
+      assert.equal(error._tag, "GitCommandError");
+      assert.include(error.message, "missing-diagnostic-branch");
+      assert.include(error.message, "pathspec");
+    }),
+  );
+
   describe("process environment", () => {
     it.effect("preserves the caller locale for general Git subprocesses", () =>
       Effect.gen(function* () {

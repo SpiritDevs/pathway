@@ -1,4 +1,31 @@
+import type { OrchestrationV2RunStatus, RunId } from "@spiritdevs/contracts";
+
 export type TimelineScrollMode = "following-end" | "anchoring-new-turn" | "free-scrolling";
+
+export interface TimelineActivityObservation {
+  readonly threadKey: string | null;
+  readonly runId: RunId | null;
+  readonly runStatus: OrchestrationV2RunStatus | null;
+  readonly isLive: boolean;
+}
+
+/** Only anchor work that starts while viewing a synchronized thread, never replayed history. */
+export function shouldAnchorTimelineActivity(
+  previous: TimelineActivityObservation,
+  current: TimelineActivityObservation,
+): boolean {
+  return (
+    previous.threadKey === current.threadKey &&
+    previous.isLive &&
+    current.isLive &&
+    current.runId !== null &&
+    (current.runStatus === "preparing" ||
+      current.runStatus === "starting" ||
+      current.runStatus === "running" ||
+      current.runStatus === "waiting") &&
+    (previous.runId !== current.runId || previous.runStatus === "queued")
+  );
+}
 
 export interface TimelineListMeasurementState {
   readonly data: readonly unknown[];

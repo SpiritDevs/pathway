@@ -48,7 +48,7 @@ struct AgentMarkdownImage: View {
         Group {
             if let failure { unavailable(failure) }
             else if let url {
-                AsyncImage(url: url) { phase in
+                AgentTranscriptAttachmentImage(url: url, maximumPixelSize: 840) { phase in
                     switch phase {
                     case .success(let image):
                         Button {

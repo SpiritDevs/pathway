@@ -264,6 +264,9 @@ final class PathwayAgentThreadModel {
     var providers: [PathwayServerProvider] = []
     var modelCatalog: [PathwayServerProvider] = []
     var currentModelSelection: PathwayModelSelection
+    @ObservationIgnored private var hasComposerModelOverride = false
+    @ObservationIgnored private var hasComposerRuntimeOverride = false
+    @ObservationIgnored private var hasComposerInteractionOverride = false
     private(set) var runtimeMode: String
     private(set) var interactionMode: String
     private(set) var activeRunID: String?
@@ -302,11 +305,19 @@ final class PathwayAgentThreadModel {
     }
     var isRestoringQueuedMessage = false
     var pendingQueuedEditRunID: String? { didSet { saveDraft() } }
+    @ObservationIgnored var threadQueue: PathwayThreadQueueModel? {
+        didSet { if threadQueue != nil { supportsAttachmentUploads = true; maximumFileAttachmentBytes = 50 * 1024 * 1024 } }
+    }
+    var cloudQueuedThread: PathwayQueuedThread?
+    var cloudQueueMessages: [JSONValue] = []
+    var cloudQueueError: String?
+    var cloudQueueAttachmentURLs: [String: URL] = [:]
     var storageAllowsSend = true
     var canSend: Bool {
         (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftAttachments.isEmpty)
-            && draft.count <= 120_000 && !isSending && draftAttachments.allSatisfy { $0.state == .ready }
-            && !isRestoringQueuedMessage && pendingQueuedEditRunID == nil && isSubscriptionReady && storageAllowsSend && (rpc != nil || injectedRequest != nil)
+            && draft.count <= 120_000 && !isSending && (threadQueue != nil || draftAttachments.allSatisfy { $0.state == .ready })
+            && !isRestoringQueuedMessage && pendingQueuedEditRunID == nil
+            && (threadQueue != nil || (isSubscriptionReady && (rpc != nil || injectedRequest != nil))) && storageAllowsSend
     }
 
     private(set) var isSubscriptionReady = false
@@ -432,6 +443,7 @@ final class PathwayAgentThreadModel {
     }
 
     func send(mode: String = "queue") async {
+        if let threadQueue { await enqueueMessage(using: threadQueue, mode: mode); return }
         guard canSend else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         var selected = draftAttachments
@@ -474,6 +486,39 @@ final class PathwayAgentThreadModel {
             if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
             preparedSend = nil
             let sentIDs = Set(selected.map(\.id))
+            draftAttachments.removeAll { sentIDs.contains($0.id) }
+            for id in sentIDs { attachmentData.removeValue(forKey: id) }
+            await persistDraftNow()
+        } catch { actionError = error.localizedDescription }
+    }
+
+    private func enqueueMessage(using queue: PathwayThreadQueueModel, mode: String) async {
+        guard canSend else { return }
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selected = draftAttachments
+        isSending = true
+        defer { isSending = false }
+        do {
+            let ids = selected.map(\.id)
+            if preparedSend?.text != text || preparedSend?.ids != ids || preparedSend?.requestedMode != mode {
+                preparedSend = PathwayThreadPreparedSend(ids: ids, messageID: UUID().uuidString.lowercased(), text: text,
+                    requestedMode: mode, attachments: [], dispatchMode: .object(["type": .string("queue_after_active")]))
+            }
+            guard let preparedSend else { return }
+            await persistDraftNow()
+            let files = try selected.map { try PathwayQueueFile.capture($0, bytes: attachmentData[$0.id]) }
+            var command = PathwayAgentThreadCommands.dispatchMessage(threadID: threadID, text: text,
+                hasActiveRun: true, identifier: preparedSend.messageID).objectValue ?? [:]
+            command["modelSelection"] = try Self.json(currentModelSelection)
+            if mode == "steer", let activeRunID {
+                command["dispatchMode"] = .object(["type": .string("steer_active"), "targetRunId": .string(activeRunID)])
+            }
+            try await queue.enqueue(companyID: thread.companyId, environmentID: environment.environment.environmentId,
+                threadID: threadID, submission: .object(["kind": .string("message"), "input": .object(command),
+                    "runtimeMode": .string(runtimeMode), "interactionMode": .string(interactionMode)]), files: files)
+            if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
+            self.preparedSend = nil
+            let sentIDs = Set(ids)
             draftAttachments.removeAll { sentIDs.contains($0.id) }
             for id in sentIDs { attachmentData.removeValue(forKey: id) }
             await persistDraftNow()
@@ -537,19 +582,27 @@ final class PathwayAgentThreadModel {
     }
     func changeModelSelection(_ selection: PathwayModelSelection) async throws {
         guard !isConfigurationLocked else { throw PathwayThreadConversationError.message("This subagent is managed by its parent thread.") }
-        try await dispatch("thread.model-selection.set", fields: ["modelSelection": try Self.json(selection)])
+        if threadQueue == nil { try await dispatch("thread.model-selection.set", fields: ["modelSelection": try Self.json(selection)]) }
         currentModelSelection = selection
+        hasComposerModelOverride = threadQueue != nil
+        saveDraft()
         if providers.first(where: { $0.id == selection.instanceId })?.showsInteractionMode == false && interactionMode != "default" {
             try await setInteractionMode("default")
         }
     }
     func setRuntimeMode(_ value: String) async throws {
         guard !isConfigurationLocked else { throw PathwayThreadConversationError.message("This subagent is managed by its parent thread.") }
-        try await dispatch("thread.runtime-mode.set", fields: ["runtimeMode": .string(value)]); runtimeMode = value
+        if threadQueue == nil { try await dispatch("thread.runtime-mode.set", fields: ["runtimeMode": .string(value)]) }
+        runtimeMode = value
+        hasComposerRuntimeOverride = threadQueue != nil
+        saveDraft()
     }
     func setInteractionMode(_ value: String) async throws {
         guard !isConfigurationLocked else { throw PathwayThreadConversationError.message("This subagent is managed by its parent thread.") }
-        try await dispatch("thread.interaction-mode.set", fields: ["interactionMode": .string(value)]); interactionMode = value
+        if threadQueue == nil { try await dispatch("thread.interaction-mode.set", fields: ["interactionMode": .string(value)]) }
+        interactionMode = value
+        hasComposerInteractionOverride = threadQueue != nil
+        saveDraft()
     }
     var pendingAsyncQuestions: [PathwayTimelineItem] {
         items.filter { item in
@@ -593,6 +646,17 @@ final class PathwayAgentThreadModel {
             return fields?["id"]?.stringValue == id && fields?["status"]?.stringValue == "pending" && (capability == "live" || capability == "message")
         }
     }
+    var supportsUserInputDismissal: Bool {
+        serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue?["userInputDismissal"]?.boolValue == true
+    }
+    func canDismissQuestion(_ item: PathwayTimelineItem) -> Bool {
+        guard supportsUserInputDismissal, isSubscriptionReady, item.type == "user_input_request",
+              let id = item.requestID else { return false }
+        return runtimeRequests.contains { request in
+            let fields = request.objectValue
+            return fields?["id"]?.stringValue == id && fields?["status"]?.stringValue == "pending"
+        }
+    }
     func responseUnavailableReason(for item: PathwayTimelineItem) -> String? {
         if !isSubscriptionReady { return "Reconnect and wait for the latest thread state before responding." }
         return canRespond(to: item) ? nil : "This request is no longer connected to a live agent."
@@ -633,6 +697,13 @@ final class PathwayAgentThreadModel {
         for (_, store) in stores {
             for draft in store.drafts { await store.remove(id: draft.id) }
         }
+    }
+    func dismissQuestion(requestID: String) async throws {
+        guard let item = items.first(where: { $0.requestID == requestID }), canDismissQuestion(item) else {
+            throw PathwayThreadConversationError.message("This question can no longer be ignored.")
+        }
+        let payload: [String: JSONValue] = ["requestId": .string(requestID), "decision": .string("cancel")]
+        try await dispatch("runtime-request.respond", fields: payload)
     }
 
     var supportsQuestionAttachments: Bool {
@@ -788,9 +859,9 @@ final class PathwayAgentThreadModel {
         }
         if let value = object["browserTakeover"] { browserTakeover = value.objectValue }
         if let value = object["title"]?.stringValue { threadTitle = value }
-        if let value = object["runtimeMode"]?.stringValue { runtimeMode = value }
-        if let value = object["interactionMode"]?.stringValue { interactionMode = value }
-        if let value = object["modelSelection"], let selection = try? JSONDecoder().decode(PathwayModelSelection.self, from: JSONEncoder().encode(value)) { currentModelSelection = selection }
+        if !hasComposerRuntimeOverride, let value = object["runtimeMode"]?.stringValue { runtimeMode = value }
+        if !hasComposerInteractionOverride, let value = object["interactionMode"]?.stringValue { interactionMode = value }
+        if !hasComposerModelOverride, let value = object["modelSelection"], let selection = try? JSONDecoder().decode(PathwayModelSelection.self, from: JSONEncoder().encode(value)) { currentModelSelection = selection }
         deriveActiveRun()
         applyChildRosterSelection()
     }
@@ -831,9 +902,22 @@ final class PathwayAgentThreadModel {
         guard let restored = await draftStore.load(expirePendingUploads: true) else { return }
         // Do not overwrite a draft the user already started while disk I/O was pending.
         guard draft.isEmpty, draftAttachments.isEmpty else { return }
+        if let selection = restored.composerModelSelection, !hasComposerModelOverride {
+            currentModelSelection = selection; hasComposerModelOverride = true
+        }
+        if let value = restored.composerRuntimeMode, !hasComposerRuntimeOverride {
+            runtimeMode = value; hasComposerRuntimeOverride = true
+        }
+        if let value = restored.composerInteractionMode, !hasComposerInteractionOverride {
+            interactionMode = value; hasComposerInteractionOverride = true
+        }
         draft = restored.text
         attachmentData = restored.data
-        draftAttachments = restored.attachments
+        draftAttachments = restored.attachments.map { attachment in
+            var restoredAttachment = attachment
+            if threadQueue != nil, restored.data[attachment.id] != nil || attachment.localFileURL != nil { restoredAttachment.state = .ready }
+            return restoredAttachment
+        }
         preparedSend = restored.preparedSend
         preparedNewSend = restored.preparedNewSend
         pendingQueuedEditRunID = restored.pendingQueuedEditRunID
@@ -852,7 +936,11 @@ final class PathwayAgentThreadModel {
 
     func draftSnapshot() -> PathwayConversationDraftSnapshot {
         PathwayConversationDraftSnapshot(text: draft, attachments: draftAttachments, data: attachmentData,
-            preparedSend: preparedSend, preparedNewSend: preparedNewSend, revision: DispatchTime.now().uptimeNanoseconds, pendingQueuedEditRunID: pendingQueuedEditRunID)
+            preparedSend: preparedSend, preparedNewSend: preparedNewSend, revision: DispatchTime.now().uptimeNanoseconds,
+            pendingQueuedEditRunID: pendingQueuedEditRunID,
+            composerModelSelection: hasComposerModelOverride ? currentModelSelection : nil,
+            composerRuntimeMode: hasComposerRuntimeOverride ? runtimeMode : nil,
+            composerInteractionMode: hasComposerInteractionOverride ? interactionMode : nil)
     }
 
     func persistDraftNow() async {

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct AgentThreadStatusBadge: View {
+    @Environment(PathwayAppModel.self) private var appModel
     let thread: PathwayAgentThread
 
     private var status: PathwayThreadStatus {
@@ -20,15 +21,22 @@ struct AgentThreadStatusBadge: View {
         }
     }
 
+    private var label: String {
+        appModel.cloud.threadQueue.threads.first {
+            $0.companyID == thread.companyId && $0.environmentID == thread.environmentId
+                && $0.threadID == thread.threadId && $0.state != "delivered"
+        }?.status ?? status.rawValue
+    }
+
     var body: some View {
-        Text(status.rawValue)
+        Text(label)
             .font(.caption.weight(.medium))
             .foregroundStyle(color)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(color.opacity(0.1), in: .capsule)
             .fixedSize()
-            .accessibilityLabel("Status: \(status.rawValue)")
+            .accessibilityLabel("Status: \(label)")
             .accessibilityIdentifier("agent-thread-status")
     }
 }

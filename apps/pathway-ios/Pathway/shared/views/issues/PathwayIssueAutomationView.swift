@@ -27,7 +27,7 @@ struct PathwayIssueAutomationView: View {
             }
             Section("Assignment model") {
                 if providers.isEmpty {
-                    Text("Select an environment in Issue settings to discover available models. Saved selections are retained.")
+                    Text("Select an environment in Task settings to discover available models. Saved selections are retained.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 PathwayIssueModelSelectionPicker(selection: value("routingModelSelection"), providers: providers)

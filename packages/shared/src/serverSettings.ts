@@ -146,6 +146,7 @@ export function applyServerSettingsPatch(
   patch: ServerSettingsPatch,
 ): ServerSettings {
   const selectionPatch = patch.textGenerationModelSelection;
+  const timeTrackerSelectionPatch = patch.timeTrackerModelSelection;
   const compactionSelectionPatch = patch.contextCompactionModelSelection;
   const enrichmentSelectionPatch = patch.issueEnrichmentModelSelection;
   const {
@@ -235,6 +236,14 @@ export function applyServerSettingsPatch(
           textGenerationModelSelection: applyModelSelectionPatch(
             current.textGenerationModelSelection,
             selectionPatch,
+          ),
+        }
+      : {}),
+    ...(timeTrackerSelectionPatch
+      ? {
+          timeTrackerModelSelection: applyModelSelectionPatch(
+            current.timeTrackerModelSelection,
+            timeTrackerSelectionPatch,
           ),
         }
       : {}),

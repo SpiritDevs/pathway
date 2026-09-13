@@ -2282,7 +2282,7 @@ const syncedTriageAcceptCommand = routeIssueMutationCommand(legacyIssueCommands.
   ...syncWriteOptions,
   plan: (input, registry) => {
     const current = registry.get(issuesStoreAtom).issuesById.get(input.issueId);
-    if (current === undefined) throw new Error(`No issue with id ${input.issueId}.`);
+    if (current === undefined) throw new Error(`No task with id ${input.issueId}.`);
     const issue: Issue = {
       ...current,
       statusId: input.statusId,
@@ -2662,7 +2662,7 @@ export const issueCommands = {
     ...syncWriteOptions,
     plan: (input, registry) => {
       const current = registry.get(issuesStoreAtom).issuesById.get(input.issueId);
-      if (current === undefined) throw new Error(`No issue with id ${input.issueId}.`);
+      if (current === undefined) throw new Error(`No task with id ${input.issueId}.`);
       const timestamp = new Date().toISOString();
       return {
         operations: [issueTriageRejectOperation(input)],
@@ -2723,7 +2723,7 @@ function usePrimaryIssueCommand<
         ? Promise.resolve(
             AsyncResult.fail<IssueTrackerUnavailableError, IssueCommandSuccess<C>>(
               new IssueTrackerUnavailableError({
-                message: "No environment is connected, so the issue tracker cannot be written to.",
+                message: "No environment is connected, so the task tracker cannot be written to.",
               }),
             ),
           )

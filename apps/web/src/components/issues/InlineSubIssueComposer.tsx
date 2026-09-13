@@ -203,7 +203,7 @@ export function InlineSubIssueComposer({
     setSubmitting(true);
     void (async () => {
       const result = await createIssue({ ...input, timeTracking: composerTime.capture() });
-      if (reportIssueWriteFailure("Failed to create the sub-issue", result)) {
+      if (reportIssueWriteFailure("Failed to create the subtask", result)) {
         setSubmitting(false);
         return;
       }
@@ -225,7 +225,7 @@ export function InlineSubIssueComposer({
       className="rounded-xl border border-border/70 bg-muted/20 p-3 shadow-xs"
     >
       <input
-        aria-label="Sub-issue title"
+        aria-label="Subtask title"
         className="w-full bg-transparent text-sm font-medium leading-5 outline-none placeholder:text-placeholder"
         disabled={submitting}
         onChange={(event) => setTitle(event.currentTarget.value)}
@@ -239,12 +239,12 @@ export function InlineSubIssueComposer({
           event.preventDefault();
           submit();
         }}
-        placeholder="Issue title"
+        placeholder="Task title"
         ref={titleRef}
         value={title}
       />
       <textarea
-        aria-label="Sub-issue description"
+        aria-label="Subtask description"
         className="field-sizing-content mt-1 min-h-8 max-h-36 w-full resize-none overflow-y-auto bg-transparent text-[13px] leading-5 outline-none placeholder:text-placeholder"
         disabled={submitting}
         onChange={(event) => setDescription(event.currentTarget.value)}

@@ -1,3 +1,5 @@
+import { useEnvironments } from "../state/environments";
+import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
 import { activeCompanyIdAtom } from "../cloud/activeCompany";
 import { useAtomValue } from "@effect/atom-react";
 import { scopeProjectRef, scopeThreadRef } from "@spiritdevs/client-runtime/environment";
@@ -72,6 +74,8 @@ function threadIsInActiveProfile(
 }
 
 export function useNewThreadHandler() {
+  const { environments } = useEnvironments();
+  const queueDestinations = useAtomValue(threadQueueDestinationsAtom);
   const activeCompanyId = useAtomValue(activeCompanyIdAtom);
   const projects = useProjects();
   const serverConfigs = useServerConfigs();
@@ -109,7 +113,10 @@ export function useNewThreadHandler() {
       if (
         (projectRef.projectId === null || options?.temporary) &&
         serverConfigs.get(projectRef.environmentId)?.environment.capabilities
-          .threadConversations !== true
+          .threadConversations !== true &&
+        !queueDestinations.some(
+          (destination) => destination.environmentId === projectRef.environmentId,
+        )
       ) {
         throw new Error("Update this environment to use conversations and temporary threads.");
       }
@@ -165,10 +172,20 @@ export function useNewThreadHandler() {
       // query atom caches per project after the first call.
       const resolveDefaultEnvMode = async (): Promise<DraftThreadEnvMode> => {
         if (projectRef.projectId === null) return "local";
+        if (
+          project?.internalWorkspaceRoot != null &&
+          project.workspaceRoot === project.internalWorkspaceRoot
+        )
+          return "local";
         if (options?.temporary) return "worktree";
         // pathway.json is read out of the project directory; a rootless project has none to read.
         const consultProjectFile =
           project !== undefined &&
+          environments.some(
+            (environment) =>
+              environment.environmentId === projectRef.environmentId &&
+              environment.connection.phase === "connected",
+          ) &&
           project.defaultThreadEnvMode == null &&
           project.workspaceRoot !== null;
         return resolveDefaultThreadEnvMode({
@@ -443,6 +460,8 @@ export function useNewThreadHandler() {
       projects,
       router,
       serverConfigs,
+      queueDestinations,
+      environments,
     ],
   );
 }

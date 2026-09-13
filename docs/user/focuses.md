@@ -5,7 +5,7 @@ between sets such as Work and Personal without changing or moving the threads th
 is a filter, not a container. Pinned, snoozed, active, and settled states still belong to each thread.
 
 The **All** tab always comes first in the Focus Strip at the bottom of the sidebar. It shows every
-project and thread available in the current company scope. You cannot edit, reorder, or delete it.
+project and project thread available in the current company scope. You cannot edit, reorder, or delete it.
 
 ## Create and manage Focuses
 
@@ -19,9 +19,11 @@ Focus shows **Moving from _Focus name_** and moves the project when you save. Yo
 project from the **Focus** section in its project menu. Choose **None** there to remove its Focus
 assignment.
 
-Enable **Conversations** alongside the project choices to include threads without a project.
-Several Focuses can enable this independently. Conversations remain scoped to the company selected
-at creation. Attaching a project makes the thread follow that project's Focus.
+**Conversations** appears in the strip when you have unarchived normal or temporary conversations. These
+threads appear only in Conversations, including when All is selected. Sending the first message
+in a new conversation switches to Conversations and brings the thread into view. Conversations
+remain scoped to the company selected at creation. Attaching a project makes the thread follow
+that project's Focus.
 
 Deleting a Focus unlinks its projects. It does not delete projects or threads. The unlinked projects
 remain available under **All**.
@@ -51,13 +53,19 @@ scrolling still scrolls the thread list. The slide animation respects reduced-mo
 
 ## Notifications
 
-The bell in the Focus Strip opens the notification tray. Pathway adds an attention event when:
+The bell in the Focus Strip toggles the notification tray open and closed. Pathway adds an attention event when:
 
 - an agent run finishes on an unsettled thread
 - a thread needs approval
 - a thread is waiting for your input
 - a run fails
 
-Opening the tray marks every notification as read on all your machines. Read notifications remain
-for 7 days and unread notifications remain for 30 days. Pathway keeps at most 200 notifications per
-user and removes the oldest records first when the limit is reached.
+**Clear all** removes all read and unread notifications from your account. It appears in the tray header whenever notifications are present.
+
+Opening the tray marks notifications as seen on all your machines. Opening a thread marks all its notifications as read, removes them from the tray, and reduces the unread count. A small blue dot in the thread's left margin shows that it has unread notifications. New events are marked read while you have that thread open in the foreground.
+
+The bell shows a count for new unread notifications and a green dot for unread notifications you have already seen in the tray. It disappears when no unread notifications remain. Unread notifications expire after 30 days. Pathway keeps at most 200 notifications per account and removes the oldest records first when the limit is reached.
+
+Starting a project thread from Conversations switches to the profile containing that project after the first successful send, or to All if the project has no profile.
+
+Right-click the Conversations button to **Archive All** or **Delete All Chats** in the current conversation list. Deletion asks for confirmation and permanently removes their history. When no unarchived conversations remain, the button disappears and the sidebar returns to All. Archived chats remain available in Storage & cleanup.

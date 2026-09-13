@@ -13,7 +13,7 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Electron from "electron";
-import { vi } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
 
 vi.mock("electron", async (importOriginal) => ({
   ...(await importOriginal<typeof import("electron")>()),
@@ -105,6 +105,7 @@ function makeFakeBrowserWindow() {
     setAutoHideCursor: vi.fn(),
     setTitle: vi.fn(),
     setTitleBarOverlay: vi.fn(),
+    setWindowButtonVisibility: vi.fn(),
     show: vi.fn(),
     webContents,
   };
@@ -945,7 +946,7 @@ describe("DesktopWindow", () => {
     }),
   );
 
-  it.effect("publishes native macOS fullscreen changes to the renderer", () =>
+  it.effect("publishes macOS fullscreen changes and restores window buttons on reload", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
@@ -961,6 +962,13 @@ describe("DesktopWindow", () => {
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
 
         const enterFullscreen = fakeWindow.windowListeners.get("enter-full-screen");
+        const startNavigation = fakeWindow.webContentsListeners.get("did-start-navigation");
+        assert.isDefined(startNavigation);
+        startNavigation!({ isSameDocument: true, isMainFrame: true });
+        startNavigation!({ isSameDocument: false, isMainFrame: false });
+        expect(fakeWindow.window.setWindowButtonVisibility).not.toHaveBeenCalled();
+        startNavigation!({ isSameDocument: false, isMainFrame: true });
+        expect(fakeWindow.window.setWindowButtonVisibility).toHaveBeenCalledWith(true);
         const leaveFullscreen = fakeWindow.windowListeners.get("leave-full-screen");
         if (!enterFullscreen || !leaveFullscreen) {
           return yield* Effect.die("fullscreen listeners were not registered");

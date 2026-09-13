@@ -4122,11 +4122,15 @@ function appendMissingDraftItems<T extends { id: string }>(restored: T[], curren
   }
 }
 
-/** Reconcile pending sends using an authoritative, unfiltered environment shell. */
+/** A draft handoff completes only once the accepted thread is visible in the scoped sidebar. */
 export function reconcilePendingDraftSends(input: {
   status: EnvironmentShellStatus;
   environmentId: EnvironmentId;
   acceptedThreadIds: ReadonlySet<ThreadId>;
+  visibleThreadIds?: ReadonlySet<ThreadId>;
+  queuedThreadIds?: ReadonlySet<string>;
+  queuedThreadKeys?: ReadonlySet<string>;
+  queueHydrated?: boolean;
   activeDraftId: string | null;
 }) {
   if (input.status !== "live") return;
@@ -4148,7 +4152,11 @@ export function reconcilePendingDraftSends(input: {
       if (session.environmentId !== input.environmentId || !session.pendingSend) continue;
       if (input.acceptedThreadIds.has(session.threadId)) {
         // The active draft route owns its handoff until the message is visible.
-        if (draftKey === input.activeDraftId) continue;
+        if (
+          draftKey === input.activeDraftId ||
+          (input.visibleThreadIds && !input.visibleThreadIds.has(session.threadId))
+        )
+          continue;
         const canonicalKey = scopedThreadKey(
           scopeThreadRef(session.environmentId, session.threadId),
         );
@@ -4169,7 +4177,12 @@ export function reconcilePendingDraftSends(input: {
           if (mappedDraft === draftKey)
             delete next.logicalProjectDraftThreadKeyByLogicalProjectKey[key];
         }
-      } else if (session.pendingSendNeedsReconciliation) {
+      } else if (
+        session.pendingSendNeedsReconciliation &&
+        input.queueHydrated !== false &&
+        !input.queuedThreadIds?.has(session.threadId) &&
+        !input.queuedThreadKeys?.has(`${session.environmentId}:${session.threadId}`)
+      ) {
         const restored = toHydratedThreadDraft(
           session.pendingSend.recoveryDraft ?? {
             prompt: session.pendingSend.text,

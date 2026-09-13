@@ -17,6 +17,8 @@ import { AlertDeliverySettings, DEFAULT_ALERT_DELIVERY_SETTINGS } from "./thread
 
 // ── Client Settings (local-only) ───────────────────────────────
 
+export const PreferredTerminal = Schema.Literals(["terminal", "ghostty"]);
+
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
 export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
@@ -338,6 +340,7 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarThreadPreviewCount: SidebarThreadPreviewCount.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT)),
   ),
+  preferredTerminal: PreferredTerminal.pipe(Schema.withDecodingDefault(Effect.succeed("terminal"))),
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
   ),
@@ -347,6 +350,12 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   snapShotShortcut: SnapShotShortcut.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNAP_SHOT_SHORTCUT)),
+  ),
+  snapShotScreenShortcut: Schema.NullOr(SnapShotShortcut).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  snapShotRegionShortcut: Schema.NullOr(SnapShotShortcut).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   snapShotPlaySound: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   snapShotSound: SnapShotSound.pipe(
@@ -888,6 +897,9 @@ export const ServerSettings = Schema.Struct({
   textGenerationModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TEXT_GENERATION_MODEL_SELECTION)),
   ),
+  timeTrackerModelSelection: ModelSelection.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_TEXT_GENERATION_MODEL_SELECTION)),
+  ),
   contextCompactionModelSelection: ModelSelection.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CONTEXT_COMPACTION_MODEL_SELECTION)),
   ),
@@ -1049,6 +1061,7 @@ export const ServerSettingsPatch = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  timeTrackerModelSelection: Schema.optionalKey(ModelSelectionPatch),
   contextCompactionModelSelection: Schema.optionalKey(ModelSelectionPatch),
   issueEnrichmentModelSelection: Schema.optionalKey(ModelSelectionPatch),
   issueAutomation: Schema.optionalKey(IssueAutomationSettings),
@@ -1141,10 +1154,13 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarProjectSortOrder: Schema.optionalKey(SidebarProjectSortOrder),
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
+  preferredTerminal: Schema.optionalKey(PreferredTerminal),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   snapShotEnabled: Schema.optionalKey(Schema.Boolean),
   snapShotIncludeAccessibility: Schema.optionalKey(Schema.Boolean),
   snapShotShortcut: Schema.optionalKey(SnapShotShortcut),
+  snapShotScreenShortcut: Schema.optionalKey(Schema.NullOr(SnapShotShortcut)),
+  snapShotRegionShortcut: Schema.optionalKey(Schema.NullOr(SnapShotShortcut)),
   snapShotPlaySound: Schema.optionalKey(Schema.Boolean),
   snapShotSound: Schema.optionalKey(SnapShotSound),
   snapShotFlash: Schema.optionalKey(Schema.Boolean),

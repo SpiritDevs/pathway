@@ -8,6 +8,12 @@ import {
   TrimmedString,
 } from "./baseSchemas.ts";
 
+export const SNAP_SHOT_EXPORT_MAX_BYTES = 32_000_000;
+export const SNAP_SHOT_EXPORT_MAX_DIMENSION = 16_384;
+export const SNAP_SHOT_EXPORT_MAX_PIXELS = 40_000_000;
+export const SNAP_SHOT_EXPORT_MAX_DATA_URL_CHARS =
+  "data:image/png;base64,".length + Math.ceil(SNAP_SHOT_EXPORT_MAX_BYTES / 3) * 4;
+
 export const SNAP_SHOT_ACCESSIBLE_TEXT_MAX_CHARS = 32_000;
 export const SNAP_SHOT_ACCESSIBILITY_MAX_NODES = 10_000;
 export const SNAP_SHOT_ACCESSIBILITY_MAX_SERIALIZED_CHARS = 32_000;
@@ -96,9 +102,22 @@ export const SnapShotAccessibility = SnapShotAccessibilityWire.check(
 );
 export type SnapShotAccessibility = typeof SnapShotAccessibility.Type;
 
+export const SnapShotCaptureType = Schema.Literals(["window", "screen", "region"]);
+export type SnapShotCaptureType = typeof SnapShotCaptureType.Type;
+
 export const SnapShotSource = Schema.Struct({
   kind: Schema.Literal("snap-shot"),
   capturedAt: IsoDateTime,
+  captureType: Schema.optional(SnapShotCaptureType),
+  /** Capture rectangle in desktop logical coordinates; origins may be negative. */
+  captureBounds: Schema.optional(
+    Schema.Struct({
+      x: Schema.Number.check(Schema.isFinite()),
+      y: Schema.Number.check(Schema.isFinite()),
+      width: PositiveInt,
+      height: PositiveInt,
+    }),
+  ),
   appName: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
   windowTitle: TrimmedString.check(Schema.isMaxLength(1_000)),
   accessibleText: Schema.optional(

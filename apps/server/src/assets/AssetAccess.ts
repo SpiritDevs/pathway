@@ -1,4 +1,4 @@
-import type { AssetResource } from "@spiritdevs/contracts";
+import type { AssetResource, OrchestrationV2TurnItem } from "@spiritdevs/contracts";
 import {
   AssetAttachmentNotFoundError,
   AssetPreviewTypeValidationError,
@@ -15,6 +15,7 @@ import {
 } from "@spiritdevs/contracts";
 import {
   isWorkspaceImagePreviewPath,
+  isWorkspaceMediaPreviewPath,
   isWorkspacePreviewEntryPath,
   WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
   WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
@@ -46,6 +47,9 @@ export const ASSET_ROUTE_PREFIX = "/api/assets";
 
 const SIGNING_SECRET_NAME = "asset-access-signing-key";
 const ASSET_TOKEN_TTL_MS = 60 * 60 * 1000;
+const decodeVisualizationReference = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ path: Schema.String })),
+);
 const PROJECT_FAVICON_TOKEN_BUCKET_MS = 30 * 60 * 1000;
 const PROJECT_FAVICON_VERSION_PREFIX = "v";
 const PREVIEW_ASSET_EXTENSIONS = new Set([
@@ -179,6 +183,8 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   readonly resource: AssetResource;
   readonly workspaceRoot?: string;
   readonly projectFaviconPath?: string;
+  /** Trusted persisted items loaded by the server, never supplied by the RPC caller. */
+  readonly visualizationItems?: ReadonlyArray<OrchestrationV2TurnItem>;
 }) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -189,6 +195,50 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
   let sourcePath: string | undefined;
 
   switch (input.resource._tag) {
+    case "visualization-file": {
+      const resource = input.resource;
+      const referencedBySource = input.visualizationItems?.some((item) => {
+        if (item.threadId !== resource.threadId || item.type !== "assistant_message") return false;
+        for (const match of item.text.matchAll(/visualize(\{[\s\S]*?\})/g)) {
+          const reference = decodeVisualizationReference(match[1]);
+          if (Option.isSome(reference) && reference.value.path === resource.path) return true;
+        }
+        return false;
+      });
+      if (!referencedBySource) {
+        return yield* new AssetWorkspaceAssetNotFoundError({ resource });
+      }
+      // Provider visualizations may live outside the workspace (including /tmp).
+      // Grant access to this HTML file only, never its directory or sibling assets.
+      if (!path.isAbsolute(input.resource.path) || !/\.html?$/i.test(input.resource.path)) {
+        return yield* new AssetPreviewTypeValidationError({ resource: input.resource });
+      }
+      const canonicalFile = yield* optionOnNotFound(fileSystem.realPath(input.resource.path)).pipe(
+        Effect.mapError(
+          (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
+        ),
+      );
+      if (Option.isNone(canonicalFile) || !/\.html?$/i.test(canonicalFile.value)) {
+        return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
+      }
+      const info = yield* optionOnNotFound(fileSystem.stat(canonicalFile.value)).pipe(
+        Effect.mapError(
+          (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
+        ),
+      );
+      if (Option.isNone(info) || info.value.type !== "File") {
+        return yield* new AssetWorkspaceAssetNotFoundError({ resource: input.resource });
+      }
+      fileName = path.basename(canonicalFile.value);
+      claims = {
+        version: 1,
+        kind: "workspace-file-exact",
+        workspaceRoot: path.dirname(canonicalFile.value),
+        relativePath: fileName,
+        expiresAt,
+      };
+      break;
+    }
     case "workspace-file": {
       if (!input.workspaceRoot) {
         return yield* new AssetWorkspaceContextNotFoundError({
@@ -251,7 +301,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
             }),
         ),
       );
-      claims = isWorkspaceImagePreviewPath(previewPath)
+      claims = isWorkspaceMediaPreviewPath(previewPath)
         ? {
             version: 1,
             kind: "workspace-file-exact",

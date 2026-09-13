@@ -28,8 +28,8 @@ export function issueContextMenuIssues(
 /** `PAT-221` for one row, `3 issues` for several — the menu's own heading. */
 export function issueContextMenuLabel(issues: ReadonlyArray<Issue>): string {
   const first = issues[0];
-  if (first === undefined) return "No issue";
-  return issues.length === 1 ? first.key : `${issues.length} issues`;
+  if (first === undefined) return "No task";
+  return issues.length === 1 ? first.key : `${issues.length} tasks`;
 }
 
 /**
@@ -97,9 +97,9 @@ export const ISSUE_CONTEXT_MENU_COPY_FIELDS: ReadonlyArray<IssueContextMenuCopyF
 ];
 
 export const ISSUE_CONTEXT_MENU_COPY_LABELS: Readonly<Record<IssueContextMenuCopyField, string>> = {
-  key: "Issue ID",
-  title: "Issue title",
-  url: "Issue link",
+  key: "Task ID",
+  title: "Task title",
+  url: "Task link",
   markdown: "Markdown link",
 };
 

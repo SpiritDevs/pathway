@@ -10,11 +10,13 @@ import type { CompanyId } from "@spiritdevs/contracts/company";
 import * as Schema from "effect/Schema";
 import { useMemo } from "react";
 
+import { companyRegistryReplicasAtom } from "~/cloud/companyRegistryReplica";
+import type { CompanyRegistryReplicaState } from "@spiritdevs/client-runtime/connection";
 import { scopedCompanyRegistryReplicasAtom } from "~/cloud/activeCompany";
 import { environmentBindingMatchesProject } from "~/cloud/agentThreadReadModel";
 import { syncedIssueDomainFromReplica } from "~/cloud/issueDomainReadModel";
 import type { SidebarProjectGroupMember, SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
-import { useProjectGroups } from "../projects/useProjectGroups";
+import { useProjectGroups, useUnscopedProjectGroups } from "../projects/useProjectGroups";
 
 export interface IssueProjectChoice {
   readonly id: ProjectId;
@@ -265,6 +267,19 @@ export function buildIssueProjectOptions(input: {
 export function useIssueProjectOptions(): ReadonlyArray<IssueProjectOption> {
   const groups = useProjectGroups();
   const replicas = useAtomValue(scopedCompanyRegistryReplicasAtom);
+  return useMergedIssueProjectOptions(groups, replicas);
+}
+
+export function useUnscopedIssueProjectOptions(): ReadonlyArray<IssueProjectOption> {
+  const groups = useUnscopedProjectGroups();
+  const replicas = useAtomValue(companyRegistryReplicasAtom);
+  return useMergedIssueProjectOptions(groups, replicas);
+}
+
+function useMergedIssueProjectOptions(
+  groups: ReadonlyArray<SidebarProjectSnapshot>,
+  replicas: ReadonlyMap<CompanyId, CompanyRegistryReplicaState>,
+): ReadonlyArray<IssueProjectOption> {
   return useMemo(() => {
     // No replica in scope: either cloud sync is off, or the persisted company selection has no
     // live replica yet — a state that persists, not a startup flicker. Options built here carry an

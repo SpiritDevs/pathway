@@ -582,7 +582,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
       issues: {
         destination: "issues",
         icon: ListTodoIcon,
-        label: "Issues",
+        label: "Tasks",
         onNavigate: navigateToIssues,
       },
       "pull-requests": {

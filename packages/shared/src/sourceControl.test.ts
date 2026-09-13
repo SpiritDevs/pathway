@@ -20,6 +20,14 @@ const sourceControlItem = {
 describe("source control timeline markers", () => {
   it("describes the completed source-control steps", () => {
     expect(sourceControlMarkerLabel(sourceControlItem)).toBe("Pushed");
+    expect(
+      sourceControlMarkerLabel({
+        ...sourceControlItem,
+        committed: true,
+        pushed: false,
+        commitSha: "abc123",
+      }),
+    ).toBe("Committed");
     expect(sourceControlMarkerLabel({ ...sourceControlItem, committed: true })).toBe(
       "Committed and pushed",
     );

@@ -91,7 +91,7 @@ export class IssueEnrichmentEngine extends Context.Service<
 >()("@spiritdevs/pathway/issues/IssueEnrichmentEngine") {}
 
 /** Every refusal this stub gives, so the message is one string rather than three. */
-const UNAVAILABLE = "Issue enrichment is not available on this server.";
+const UNAVAILABLE = "Task enrichment is not available on this server.";
 
 /**
  * The engine before there is an engine.

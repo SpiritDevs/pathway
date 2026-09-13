@@ -65,6 +65,22 @@ describe("parseCsv", () => {
 });
 
 describe("previewIssueCsv", () => {
+  it("accepts task headers alongside legacy issue headers", () => {
+    for (const keyHeader of ["Task ID", "Task key", "Issue ID", "Issue key"]) {
+      for (const parentHeader of ["Parent task", "Parent issue"]) {
+        const preview = previewIssueCsv(
+          `${keyHeader},Title,${parentHeader}\nPAT-2,Prepare campaign,PAT-1\n`,
+        );
+        assert.strictEqual(preview.error, null);
+        assert.strictEqual(preview.rowCount, 1);
+        assert.deepStrictEqual(
+          preview.columns.map(({ column }) => column),
+          ["key", "title", "parent"],
+        );
+      }
+    }
+  });
+
   it("counts data rows and names the field behind each header", () => {
     const preview = previewIssueCsv(
       [

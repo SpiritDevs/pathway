@@ -42,7 +42,7 @@ import {
   StarIcon,
   Trash2Icon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { releaseProjectDraftUploads } from "../../lib/composerDraftUploads";
@@ -325,7 +325,7 @@ export function CheckoutlessProjectSettings({
       api.dialogs.confirm(
         [
           `Remove project "${project.displayName}"?`,
-          "This removes the company project, its issues, captured emails, and connected automation from every Pathway app. Files on disk are not touched.",
+          "This removes the company project, its tasks, captured emails, and connected automation from every Pathway app. Files on disk are not touched.",
           "This action cannot be undone.",
         ].join("\n"),
         { variant: "destructive" },
@@ -377,7 +377,10 @@ export function CheckoutlessProjectSettings({
       <SettingsSection title="Pending setup">
         <PendingProjectSetup key={project.projectKey} project={project} />
       </SettingsSection>
-      <SettingsSection title="Danger">
+      <SettingsSection
+        title="Danger"
+        className="rounded-xl border border-destructive/20 bg-destructive/5 p-4"
+      >
         <SettingsRow
           title="Remove project"
           description="Deletes the company project from every Pathway app. Files on disk are not touched."
@@ -402,11 +405,13 @@ export function ProjectDetail({
   workspaceProject = null,
   companyContext = null,
   workspaceProjects = EMPTY_WORKSPACE_PROJECTS,
+  beforeDanger,
 }: {
   group: SidebarProjectSnapshot;
   workspaceProject?: WorkspaceProject | null;
   companyContext?: ProjectCompanyContext | null;
   workspaceProjects?: ReadonlyArray<WorkspaceProject>;
+  beforeDanger?: ReactNode;
 }) {
   const navigate = useNavigate();
   const settings = usePrimarySettings();
@@ -927,7 +932,7 @@ export function ProjectDetail({
               ? ["This permanently clears conversation history for those threads."]
               : []),
             isWholeGroup && workspaceProject?.cloudProjectId != null
-              ? "This removes the company project, its issues, captured emails, connected automation, and every checkout. Offline checkouts are removed when they reconnect; files on disk are not touched."
+              ? "This removes the company project, its tasks, captured emails, connected automation, and every checkout. Offline checkouts are removed when they reconnect; files on disk are not touched."
               : isWholeGroup
                 ? "This removes only the project entries, not the files on disk."
                 : "Other entries in this grouped project are unaffected.",
@@ -1476,7 +1481,9 @@ export function ProjectDetail({
                         <CopyIcon className="size-3.5" />
                         Copy path
                       </MenuItem>
-                      {connection.directory === null && member !== null ? (
+                      {member !== null &&
+                      (connection.directory === null ||
+                        member.workspaceRoot === member.internalWorkspaceRoot) ? (
                         <MenuItem
                           onClick={() => {
                             setSelectedCheckoutKey(member.physicalProjectKey);
@@ -1840,7 +1847,12 @@ export function ProjectDetail({
           />
         </SettingsSection>
 
-        <SettingsSection title="Danger">
+        {beforeDanger}
+
+        <SettingsSection
+          title="Danger"
+          className="rounded-xl border border-destructive/20 bg-destructive/5 p-4"
+        >
           <SettingsRow
             title={
               group.memberProjects.length > 1 ? "Remove this project everywhere" : "Remove project"

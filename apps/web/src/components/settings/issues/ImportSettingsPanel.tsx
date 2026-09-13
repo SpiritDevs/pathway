@@ -108,8 +108,8 @@ export function ImportSettingsPanel() {
             type: outcome.value.created === 0 ? "error" : "success",
             title:
               outcome.value.created === 1
-                ? "Imported 1 issue"
-                : `Imported ${outcome.value.created} issues`,
+                ? "Imported 1 task"
+                : `Imported ${outcome.value.created} tasks`,
             description:
               outcome.value.skipped.length === 0
                 ? `${selected.name} landed with nothing skipped.`
@@ -242,7 +242,7 @@ export function ImportSettingsPanel() {
         {result !== null ? (
           <div className="mx-3 mt-3 space-y-3 rounded-xl border border-border p-3 sm:mx-4 sm:p-4">
             <p className="text-sm font-medium text-foreground">
-              {result.created === 1 ? "1 issue created" : `${result.created} issues created`}
+              {result.created === 1 ? "1 task created" : `${result.created} tasks created`}
               {result.skipped.length === 0
                 ? ""
                 : `, ${result.skipped.length} ${result.skipped.length === 1 ? "row" : "rows"} skipped`}

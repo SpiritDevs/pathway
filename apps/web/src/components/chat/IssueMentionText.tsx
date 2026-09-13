@@ -54,9 +54,7 @@ export function IssueMentionLink(props: { readonly issueKey: string; readonly ti
     <Link
       to="/issues"
       search={{ issue: issueKey }}
-      aria-label={
-        props.title.length > 0 ? `Issue ${issueKey}: ${props.title}` : `Issue ${issueKey}`
-      }
+      aria-label={props.title.length > 0 ? `Task ${issueKey}: ${props.title}` : `Task ${issueKey}`}
       data-markdown-copy={issueKey}
     >
       {issueKey}

@@ -815,7 +815,7 @@ export const makeCompanyAutomationExecutor = Effect.fn("cloud.company_automation
       if (job.kind === "slack-investigation") {
         const generated = yield* textGeneration.investigate({
           cwd: cwd!,
-          prompt: `Investigate this issue in the repository. Return a concise evidence-backed report with likely cause, relevant files, and recommended next step. Do not modify files.\n\nIssue ${issue.key}: ${issue.title}\n\n${issue.description}`,
+          prompt: `Investigate this task in the repository. Return a concise evidence-backed report with likely cause, relevant files, and recommended next step. Do not modify files.\n\nIssue ${issue.key}: ${issue.title}\n\n${issue.description}`,
           modelSelection: selected.selection,
         });
         return {

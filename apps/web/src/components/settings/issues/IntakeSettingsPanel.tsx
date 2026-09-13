@@ -841,7 +841,7 @@ export function IntakeSettingsPanel({
                       </span>
                     </span>
                     <Switch
-                      aria-label={`Automatically investigate issues filed from #${watch.channelName}`}
+                      aria-label={`Automatically investigate tasks filed from #${watch.channelName}`}
                       checked={watch.autoInvestigate}
                       disabled={busy}
                       onCheckedChange={(checked) =>
@@ -865,7 +865,7 @@ export function IntakeSettingsPanel({
                       </span>
                     </span>
                     <Switch
-                      aria-label={`Automatically assign issues filed from #${watch.channelName}`}
+                      aria-label={`Automatically assign tasks filed from #${watch.channelName}`}
                       checked={watch.autoAssign === true}
                       disabled={busy}
                       onCheckedChange={(checked) =>
@@ -910,9 +910,9 @@ export function IntakeSettingsPanel({
           <AlertDialogHeader>
             <AlertDialogTitle>Stop watching #{pendingDelete?.channelName}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Nothing new files from this channel. The issues it already filed keep their source,
-              and the bot keeps replying in their threads. Turning every trigger off pauses the
-              channel instead, which is usually what you want.
+              Nothing new files from this channel. The tasks it already filed keep their source, and
+              the bot keeps replying in their threads. Turning every trigger off pauses the channel
+              instead, which is usually what you want.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

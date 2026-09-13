@@ -13,8 +13,9 @@ export function useConversationStorage(input: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
   enabled: boolean;
+  isStartingConversation: boolean;
 }) {
-  const { environmentId, threadId, enabled } = input;
+  const { environmentId, threadId, enabled, isStartingConversation } = input;
   const companyId = useAtomValue(activeCompanyIdAtom);
   const replicas = useAtomValue(scopedCompanyRegistryReplicasAtom);
   const snapshot = useEnvironmentQuery(
@@ -58,7 +59,7 @@ export function useConversationStorage(input: {
     );
   }, [snapshot.data, scopedSnapshot]);
   const previewResult = useEnvironmentQuery(
-    enabled && pressure === "critical"
+    enabled && isStartingConversation && pressure === "critical"
       ? serverEnvironment.storagePreview({
           environmentId,
           input: { worktreeIds, mode: "emergency" },
@@ -92,7 +93,8 @@ export function useConversationStorage(input: {
   const reclaimed =
     snapshot.data?.threads.find((thread) => thread.threadId === threadId)?.reclaimedAt != null;
 
-  const canSend = !reclaimed && (pressure !== "critical" || allowedScope === scope);
+  const allowed = !isStartingConversation || allowedScope === scope;
+  const canSend = !reclaimed;
   const checkCanSend = useCallback(
     (onBlocked: (reclaimed: boolean) => void) => {
       if (canSend) return true;
@@ -181,12 +183,13 @@ export function useConversationStorage(input: {
 
   return {
     pressure,
+    isStartingConversation,
     preview,
     job,
     running,
     reclaimed,
     error: error?.scope === scope ? error.message : preview.error,
-    allowed: allowedScope === scope,
+    allowed,
     canSend,
     checkCanSend,
     allow: () => setAllowedScope(scope),

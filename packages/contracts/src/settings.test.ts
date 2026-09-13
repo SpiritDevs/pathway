@@ -630,3 +630,13 @@ describe("ClientSettings window capture", () => {
     ).toThrow();
   });
 });
+
+describe("ClientSettings preferred terminal", () => {
+  it("defaults to system terminal and accepts Ghostty", () => {
+    expect(decodeClientSettings({}).preferredTerminal).toBe("terminal");
+    expect(decodeClientSettingsPatch({ preferredTerminal: "ghostty" }).preferredTerminal).toBe(
+      "ghostty",
+    );
+    expect(() => decodeClientSettingsPatch({ preferredTerminal: "unknown" })).toThrow();
+  });
+});

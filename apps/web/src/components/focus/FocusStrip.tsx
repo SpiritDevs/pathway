@@ -11,6 +11,7 @@ import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dn
 import { CSS } from "@dnd-kit/utilities";
 import {
   ALL_FOCUS_ID,
+  CONVERSATIONS_FOCUS_ID,
   sortFocuses,
   visibleFocuses,
   type ActiveFocusId,
@@ -21,7 +22,7 @@ import type {
   FocusId,
   FocusNotification,
 } from "@spiritdevs/contracts/focus";
-import { BellIcon, Layers3Icon, PlusIcon } from "lucide-react";
+import { BellIcon, Layers3Icon, MessageSquareIcon, PlusIcon } from "lucide-react";
 import {
   memo,
   useEffect,
@@ -34,7 +35,7 @@ import {
 
 import type { FocusMutations } from "../../cloud/focusReadModel";
 import { cn } from "../../lib/utils";
-import { Popover, PopoverPopup } from "../ui/popover";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 import { FocusEditor, type FocusProjectOption } from "./FocusEditor";
 import { FocusIcon } from "./FocusIcon";
@@ -43,40 +44,44 @@ import { focusOrderKeyForMove } from "./FocusStrip.logic";
 
 export interface FocusNotificationBadgeProps {
   readonly unreadCount: number;
-  readonly onOpen?: () => void;
+  readonly notificationCount: number;
+  readonly newCount: number;
+  readonly interactive?: boolean;
 }
 
 export const FocusNotificationBadge = memo(function FocusNotificationBadge(
   props: FocusNotificationBadgeProps,
 ) {
+  if (props.notificationCount === 0) return null;
   const label =
-    props.unreadCount === 0
-      ? "No unread notifications"
-      : `${props.unreadCount} unread notification${props.unreadCount === 1 ? "" : "s"}`;
+    props.newCount > 0
+      ? `${props.newCount} new notifications`
+      : props.unreadCount === 0
+        ? "No unread notifications"
+        : `${props.unreadCount} unread notification${props.unreadCount === 1 ? "" : "s"}`;
   const content = (
     <>
       <BellIcon aria-hidden className="size-3.5" />
-      {props.unreadCount > 0 ? (
+      {props.newCount > 0 ? (
         <span className="absolute -right-0.5 -top-0.5 min-w-3.5 rounded-full bg-primary px-0.5 text-center text-[8px] font-semibold leading-3.5 text-primary-foreground tabular-nums">
-          {props.unreadCount > 99 ? "99+" : props.unreadCount}
+          {props.newCount > 99 ? "99+" : props.newCount}
         </span>
       ) : (
-        <span className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-muted-foreground/35" />
+        <span
+          className={cn(
+            "absolute right-0.5 top-0.5 size-1.5 rounded-full",
+            props.unreadCount > 0 ? "bg-emerald-500" : "bg-muted-foreground/35",
+          )}
+        />
       )}
     </>
   );
   const className =
     "relative flex size-6 shrink-0 items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring";
-  return props.onOpen ? (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={props.onOpen}
-      className={className}
-    >
+  return props.interactive ? (
+    <PopoverTrigger type="button" aria-label={label} title={label} className={className}>
       {content}
-    </button>
+    </PopoverTrigger>
   ) : (
     <span role="status" aria-label={label} title={label} className={className}>
       {content}
@@ -140,6 +145,7 @@ const SortableFocusTab = memo(function SortableFocusTab(props: {
 });
 
 export function FocusStrip(props: {
+  readonly hasConversations?: boolean;
   readonly focuses: ReadonlyArray<Focus>;
   readonly assignments: ReadonlyArray<FocusAssignment>;
   readonly visibleProjectKeys: ReadonlySet<string>;
@@ -150,13 +156,13 @@ export function FocusStrip(props: {
   readonly notifications: ReadonlyArray<FocusNotification>;
   readonly threadTitlesByKey: ReadonlyMap<string, string>;
   readonly projectNamesByKey: ReadonlyMap<string, string>;
+  readonly onConversationsContextMenu: (position: { x: number; y: number }) => void;
   readonly onNotificationSelect: (notification: FocusNotification) => void;
   readonly mutations: FocusMutations | null;
 }) {
   const [editorFocusId, setEditorFocusId] = useState<FocusId | null | undefined>(undefined);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [trayUnreadCount, setTrayUnreadCount] = useState(0);
-  const [trayNotifications, setTrayNotifications] = useState<ReadonlyArray<FocusNotification>>([]);
+  const [clearingNotifications, setClearingNotifications] = useState(false);
   const [stripElement, setStripElement] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
     stripElement
@@ -227,34 +233,56 @@ export function FocusStrip(props: {
   );
   const openNotifications = useCallback(() => {
     setEditorFocusId(undefined);
-    setTrayUnreadCount(props.unreadCount);
-    setTrayNotifications([...props.notifications]);
     setNotificationsOpen(true);
-    void props.mutations?.markAllNotificationsRead().catch((error: unknown) => {
+    void props.mutations?.markAllNotificationsSeen().catch((error: unknown) => {
       toastManager.add({
         type: "error",
-        title: "Could not mark notifications read",
-        description: error instanceof Error ? error.message : "The notifications stayed unread.",
+        title: "Could not mark notifications seen",
+        description: error instanceof Error ? error.message : "Please try opening the tray again.",
       });
     });
-  }, [props.mutations, props.notifications, props.unreadCount]);
+  }, [props.mutations]);
   useEffect(() => {
     window.addEventListener("pathway:open-notification-tray", openNotifications);
     return () => window.removeEventListener("pathway:open-notification-tray", openNotifications);
   }, [openNotifications]);
+  const clearNotifications = async () => {
+    if (props.mutations === null || clearingNotifications) return;
+    setClearingNotifications(true);
+    try {
+      await props.mutations.clearAllNotifications();
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not clear notifications",
+        description: error instanceof Error ? error.message : "Please try again.",
+      });
+    } finally {
+      setClearingNotifications(false);
+    }
+  };
   const selectNotification = useCallback(
     (notification: FocusNotification) => {
+      void props.mutations?.markNotificationRead?.(notification.eventId).catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: "Could not mark notification read",
+          description: error instanceof Error ? error.message : "Please try again.",
+        });
+      });
       props.onNotificationSelect(notification);
       setNotificationsOpen(false);
     },
-    [props.onNotificationSelect],
+    [props.onNotificationSelect, props.mutations],
   );
 
   return (
     <Popover
       open={editorFocusId !== undefined || notificationsOpen}
-      onOpenChange={(open) => {
-        if (!open) {
+      onOpenChange={(open, details) => {
+        if (open || (details.reason === "trigger-press" && !notificationsOpen)) {
+          openNotifications();
+        } else {
           setEditorFocusId(undefined);
           setNotificationsOpen(false);
         }
@@ -313,23 +341,58 @@ export function FocusStrip(props: {
             </SortableContext>
           </DndContext>
         </div>
-        {props.mutations === null ? null : (
-          <div className="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
-            <FocusNotificationBadge unreadCount={props.unreadCount} onOpen={openNotifications} />
+        <div className="ml-auto flex shrink-0 items-center gap-0.5 pl-2">
+          {props.hasConversations && (
             <button
               type="button"
-              aria-label="Create Focus"
-              title="Create Focus"
-              onClick={() => {
-                setNotificationsOpen(false);
-                setEditorFocusId(null);
+              role="button"
+              onContextMenu={(event) => {
+                event.preventDefault();
+                props.onConversationsContextMenu({ x: event.clientX, y: event.clientY });
               }}
-              className="flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+              onKeyDown={(event) => {
+                if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                  event.preventDefault();
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  props.onConversationsContextMenu({ x: bounds.right, y: bounds.top });
+                }
+              }}
+              aria-label="Conversations"
+              title="Conversations"
+              aria-pressed={props.activeFocusId === CONVERSATIONS_FOCUS_ID}
+              onClick={() => props.onActiveFocusChange(CONVERSATIONS_FOCUS_ID)}
+              className="flex h-7 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-sidebar-ring"
             >
-              <PlusIcon className="size-3.5" />
+              <FocusTabVisual active={props.activeFocusId === CONVERSATIONS_FOCUS_ID}>
+                <MessageSquareIcon className="size-4" />
+              </FocusTabVisual>
             </button>
-          </div>
-        )}
+          )}
+          <FocusNotificationBadge
+            unreadCount={props.unreadCount}
+            notificationCount={
+              props.notifications.filter((notification) => !notification.isRead).length
+            }
+            newCount={
+              props.notifications.filter(
+                (notification) => !notification.isRead && !notification.isSeen,
+              ).length
+            }
+            interactive
+          />
+          <button
+            type="button"
+            aria-label="Create Focus"
+            title="Create Focus"
+            onClick={() => {
+              setNotificationsOpen(false);
+              setEditorFocusId(null);
+            }}
+            className="flex size-6 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          >
+            <PlusIcon className="size-3.5" />
+          </button>
+        </div>
       </div>
       {notificationsOpen ? (
         <PopoverPopup
@@ -341,13 +404,15 @@ export function FocusStrip(props: {
           viewportClassName="p-0"
         >
           <FocusNotificationTray
-            notifications={trayNotifications}
-            unreadCount={trayUnreadCount}
+            notifications={props.notifications}
+            unreadCount={props.unreadCount}
             focuses={orderedFocuses}
             assignments={props.assignments}
             activeFocusId={props.activeFocusId}
             threadTitlesByKey={props.threadTitlesByKey}
             projectNamesByKey={props.projectNamesByKey}
+            onClearAll={clearNotifications}
+            clearing={clearingNotifications || props.mutations === null}
             onSelect={selectNotification}
           />
         </PopoverPopup>

@@ -584,6 +584,10 @@ export const make = Effect.gen(function* () {
     });
 
     if (environment.platform === "darwin") {
+      // A renderer reload cannot run the media viewer's unmount cleanup.
+      window.webContents.on("did-start-navigation", (details) => {
+        if (details.isMainFrame && !details.isSameDocument) window.setWindowButtonVisibility(true);
+      });
       window.on("enter-full-screen", () => {
         window.webContents.send(WINDOW_FULLSCREEN_STATE_CHANNEL, true);
       });

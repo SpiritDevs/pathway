@@ -40,6 +40,7 @@ export function encodeActivity(row: Doc<"trackedSessions">) {
     (row.stoppedAt ? [{ start: Date.parse(row.startedAt), end: Date.parse(row.stoppedAt) }] : []);
   return {
     id: row.id,
+    ...(row.title ? { title: row.title } : {}),
     description: row.description,
     projectKey: row.projectKey,
     projectName: row.projectName,
@@ -86,7 +87,14 @@ export async function activeSessions(ctx: QueryCtx, userId: Id<"users">) {
       .take(TRACKED_READ_LIMIT + 1),
   ]);
   return {
-    rows: [...running, ...paused].slice(0, TRACKED_READ_LIMIT),
+    // Queued/startup work and post-turn draining are not active agent timers.
+    // Older environments omit runStatus, so retain their existing behavior.
+    rows: [...running, ...paused]
+      .filter(
+        (row) =>
+          row.source !== "agent" || row.runStatus === undefined || row.runStatus === "running",
+      )
+      .slice(0, TRACKED_READ_LIMIT),
     complete: running.length + paused.length <= TRACKED_READ_LIMIT,
   };
 }
@@ -120,7 +128,7 @@ export async function recordIssueSession(
   )
     throw backendError(
       "invalid-arguments",
-      "Issue composition time must be within the last 30 days and below 24 hours.",
+      "Task composition time must be within the last 30 days and below 24 hours.",
     );
   // Duration is derived from actual intervals; clients cannot inflate credit with an independent number.
   await ctx.db.insert("trackedSessions", {
@@ -129,7 +137,8 @@ export async function recordIssueSession(
     companyId: input.companyId,
     issueId: input.issueId,
     source: "issue",
-    description: input.description.slice(0, 2_000),
+    title: input.description.slice(0, 200),
+    description: `Created task: ${input.description}`.slice(0, 2_000),
     projectKey: input.projectKey,
     projectName: input.projectName,
     startedAt: new Date(intervals[0]?.start ?? now).toISOString(),

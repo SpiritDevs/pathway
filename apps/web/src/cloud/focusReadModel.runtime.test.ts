@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const runtime = vi.hoisted(() => {
-  const effects: (() => void | (() => void))[] = [];
+  const effects: { effect: () => void | (() => void); deps: readonly unknown[] }[] = [];
   class Client {
     static instances: Client[] = [];
     readonly subscriptions: {
@@ -34,12 +34,13 @@ const runtime = vi.hoisted(() => {
 
 vi.mock("react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("react")>()),
-  useEffect: (effect: () => void | (() => void)) => {
-    runtime.effects.push(effect);
+  useEffect: (effect: () => void | (() => void), deps: readonly unknown[]) => {
+    runtime.effects.push({ effect, deps });
   },
 }));
 vi.mock("convex/browser", () => ({ ConvexClient: runtime.Client }));
 
+import { focusReadModelAtom } from "@spiritdevs/client-runtime/state/focuses";
 import { appAtomRegistry, resetAppAtomRegistryForTests } from "../rpc/atomRegistry";
 import { threadAlertNotificationsReadyAtom } from "../threadAlerts/state";
 import {
@@ -50,25 +51,34 @@ import {
 
 const cleanups = new Set<() => void>();
 function mount(accountScope: string) {
-  useFocusReadModelRuntime({
-    enabled: true,
-    accountScope,
-    convexUrl: "https://example.convex.cloud",
-    fetchToken: async () => "token",
-  });
-  const cleanup = runtime.effects.pop()?.();
-  if (typeof cleanup !== "function") throw new Error("Expected a subscribed Focus runtime.");
+  const mounted: { deps: readonly unknown[]; cleanup: (() => void) | void }[] = [];
+  const render = (scope: string) => {
+    useFocusReadModelRuntime({
+      enabled: true,
+      accountScope: scope,
+      convexUrl: "https://example.convex.cloud",
+      fetchToken: async () => "token",
+    });
+    runtime.effects.splice(0).forEach(({ effect, deps }, index) => {
+      const previous = mounted[index];
+      if (previous && deps.every((dep, i) => Object.is(dep, previous.deps[i]))) return;
+      previous?.cleanup?.();
+      mounted[index] = { deps, cleanup: effect() };
+    });
+    return runtime.Client.instances.at(-1)!;
+  };
+  const client = render(accountScope);
   const stop = () => {
-    if (cleanups.delete(stop)) cleanup();
+    if (cleanups.delete(stop)) mounted.forEach(({ cleanup }) => cleanup?.());
   };
   cleanups.add(stop);
-  const client = runtime.Client.instances.at(-1)!;
   const notifications = client.subscriptions.find(
     (row) => row.reference === FOCUS_FUNCTION_REFERENCES.notifications,
   );
   if (notifications === undefined) throw new Error("Expected a notification subscription.");
-  return { client, notifications, stop };
+  return { client, notifications, stop, render };
 }
+
 function notification(eventId: string) {
   return {
     id: eventId,
@@ -141,5 +151,37 @@ describe("Focus notification subscription readiness", () => {
       "current-event",
     ]);
     expect(appAtomRegistry.get(threadAlertNotificationsReadyAtom)).toBe(true);
+  });
+});
+
+describe("Focus definitions across subscription restarts", () => {
+  const model = { focuses: [], assignments: [] };
+  const definitions = (client: InstanceType<typeof runtime.Client>) =>
+    client.subscriptions.find((row) => row.reference === FOCUS_FUNCTION_REFERENCES.readModel)!;
+  it("retains a complete same-account view while a replacement subscription loads", () => {
+    const current = mount("account-a");
+    definitions(current.client).receive(model);
+    const previousValue = appAtomRegistry.get(focusReadModelAtom);
+    expect(previousValue).toEqual(model);
+    const replacement = current.render("account-a");
+    expect(replacement).not.toBe(current.client);
+    expect(current.client.close).toHaveBeenCalledOnce();
+    expect(appAtomRegistry.get(focusReadModelAtom)).toBe(previousValue);
+    definitions(replacement).fail(new Error("temporarily offline"));
+    expect(appAtomRegistry.get(focusReadModelAtom)).toBe(previousValue);
+    definitions(current.client).receive({ invalid: true });
+    expect(appAtomRegistry.get(focusReadModelAtom)).toBe(previousValue);
+    current.stop();
+    expect(appAtomRegistry.get(focusReadModelAtom)).toBeNull();
+  });
+  it("clears the previous account before accepting another account's definitions", () => {
+    const current = mount("account-a");
+    definitions(current.client).receive(model);
+    const replacement = current.render("account-b");
+    expect(appAtomRegistry.get(focusReadModelAtom)).toBeNull();
+    definitions(current.client).receive(model);
+    expect(appAtomRegistry.get(focusReadModelAtom)).toBeNull();
+    definitions(replacement).receive(model);
+    expect(appAtomRegistry.get(focusReadModelAtom)).toEqual(model);
   });
 });

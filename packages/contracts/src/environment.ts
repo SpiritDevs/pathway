@@ -91,6 +91,8 @@ export const ServerSelfUpdateCapability = Schema.Literals([
 export type ServerSelfUpdateCapability = typeof ServerSelfUpdateCapability.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
+  /** Can consume cloud-persisted thread and message submissions after reconnecting. */
+  durableThreadQueue: Schema.optionalKey(Schema.Boolean),
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** Server can resolve repository identity for an arbitrary directory before project creation. */
   projectDirectoryInspection: Schema.optionalKey(Schema.Boolean),
@@ -99,6 +101,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   attachmentUploads: Schema.optionalKey(Schema.Boolean),
   /** Question responses accept saved attachments grouped by question. */
   questionAttachments: Schema.optionalKey(Schema.Boolean),
+  /** Server supports ignoring questions without dispatching a follow-up turn. */
+  userInputDismissal: Schema.optionalKey(Schema.Boolean),
   /** Missing on servers that only accept inline image attachments. */
   fileAttachments: Schema.optionalKey(
     Schema.Struct({

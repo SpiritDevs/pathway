@@ -195,6 +195,8 @@ export function appendSnapShotPromptText(input: {
         attachmentId: attachment.id,
         attachmentName: attachment.name,
         capturedAt: source.capturedAt,
+        ...(source.captureType ? { captureType: source.captureType } : {}),
+        ...(source.captureBounds ? { captureBounds: source.captureBounds } : {}),
         appName: source.appName,
         windowTitle: source.windowTitle,
         ...(source.appIdentifier ? { appIdentifier: source.appIdentifier } : {}),

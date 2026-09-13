@@ -45,7 +45,7 @@ export async function applyDirectIssueOperation(
   };
   const apply = ISSUE_DOMAIN_APPLY[input.kind as keyof typeof ISSUE_DOMAIN_APPLY];
   if (apply === undefined)
-    throw backendError("invalid-arguments", "Unknown direct issue operation.");
+    throw backendError("invalid-arguments", "Unknown direct task operation.");
   const outcome = await apply(ctx, systemActor, operation);
   if (outcome.status === "rejected") throw backendError(outcome.code, outcome.message);
 
@@ -57,7 +57,7 @@ export async function applyDirectIssueOperation(
   const feedActor = syncOperationActorRecord(systemActor, operation.actor, operation.environmentId);
   for (const [index, change] of outcome.changes.entries()) {
     const version = assignment.versions[index];
-    if (version === undefined) throw new Error("A direct issue change was not assigned a version.");
+    if (version === undefined) throw new Error("A direct task change was not assigned a version.");
     if (change.versionDocId !== null) await ctx.db.patch(change.versionDocId, { version });
     await ctx.db.insert("syncChanges", {
       companyId: company._id,

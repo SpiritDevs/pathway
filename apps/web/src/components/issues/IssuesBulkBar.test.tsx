@@ -47,7 +47,7 @@ describe("IssuesBulkBar", () => {
     );
 
     expect(html).toContain("Investigate");
-    expect(html).toContain('aria-label="Ask AI about 1 selected issue"');
+    expect(html).toContain('aria-label="Ask AI about 1 selected task"');
     expect(html).not.toContain("Discuss in project");
   });
 });

@@ -1,4 +1,5 @@
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
+import { DictationAccountCoordinator } from "../dictation/cloud";
 import { type AuthSessionState, type ServerLifecycleWelcomePayload } from "@spiritdevs/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import {
@@ -33,7 +34,7 @@ import { TemporaryThreadDiscardDialog } from "../components/TemporaryThreadDisca
 import { WorkspaceCleanupNoticeHost } from "../components/WorkspaceCleanupNoticeHost";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { PullRequestAgentReviewHost } from "../components/pullRequest/PullRequestAgentReviewHost";
-import { AssignProjectCompanyDialog } from "../components/projects/AssignProjectCompanyDialog";
+import { AssignPersonalProjectOwnership } from "../components/projects/AssignPersonalProjectOwnership";
 import { AttachProjectDirectoryHost } from "../components/projects/AttachProjectDirectoryDialog";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
@@ -405,13 +406,14 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         <ConnectOnboardingDialog />
         <SshPasswordPromptDialog />
         <SnapShotCoordinator />
+        <DictationAccountCoordinator />
         <ConfirmDialogHost />
         <TemporaryThreadDiscardDialog />
         <WorkspaceCleanupNoticeHost />
         {/* A rootless project prompts for a directory just in time, from anywhere in the app. */}
         <AttachProjectDirectoryHost />
         {/* Every project needs an owning company before it can carry issues. */}
-        {primaryEnvironmentAuthenticated ? <AssignProjectCompanyDialog /> : null}
+        {primaryEnvironmentAuthenticated ? <AssignPersonalProjectOwnership /> : null}
         <SlowRpcRequestToastCoordinator />
         <PullRequestAgentReviewHost />
         <HostedStaticEnvironmentBootstrap />

@@ -10,6 +10,8 @@ struct AgentComposerTextInput: UIViewRepresentable {
     let placeholder: String
     let pasteImages: @MainActor ([NSItemProvider]) -> Void
 
+    var accessibilityIdentifier = "agent-thread-composer-field"
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> AgentComposerTextView {
@@ -20,7 +22,7 @@ struct AgentComposerTextInput: UIViewRepresentable {
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
         view.delegate = context.coordinator
-        view.accessibilityIdentifier = "agent-thread-composer-field"
+        view.accessibilityIdentifier = accessibilityIdentifier
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return view
     }

@@ -116,7 +116,7 @@ describe("Slack workspace wizard navigation", () => {
     expect(nextSlackWizardStep(2, draft.rules)).toBe(3);
     expect(resolveSlackWizardNavigation(0, 4, draft)).toEqual({
       step: 3,
-      error: "Save issue automation settings before continuing.",
+      error: "Save task automation settings before continuing.",
     });
     expect(resolveSlackWizardNavigation(0, 4, draft, { automationConfigured: true })).toEqual({
       step: 4,

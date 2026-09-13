@@ -282,7 +282,7 @@ export function IssueDescriptionEditor({
         <RichTextPlugin
           contentEditable={
             <ContentEditable
-              aria-label="Issue description"
+              aria-label="Task description"
               aria-multiline="true"
               className="min-h-9 w-full px-3 py-1.5 leading-5 outline-none"
               onBlur={(event) => {

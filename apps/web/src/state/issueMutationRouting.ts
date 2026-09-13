@@ -90,7 +90,7 @@ export function routeIssueMutationCommand<I, A, E>(
           ? routingFailure(
               new IssueMutationRoutingError({
                 reason: "ambiguous-company",
-                message: "Choose a company before changing environment-owned issue fields.",
+                message: "Choose a company before changing environment-owned task fields.",
               }),
             )
           : legacy.run(registry, target);
@@ -234,7 +234,7 @@ function routeIssueSyncOperations(
       if (companyId === undefined) {
         return new IssueMutationRoutingError({
           reason: "ambiguous-company",
-          message: "Choose a company before creating this issue item.",
+          message: "Choose a company before creating this task item.",
         });
       }
     } else if (
@@ -263,7 +263,7 @@ function routeIssueSyncOperations(
     if (targetCompanyId !== null && companyId !== targetCompanyId) {
       return new IssueMutationRoutingError({
         reason: "cross-company-reference",
-        message: "This issue setting belongs to a different company.",
+        message: "This task setting belongs to a different company.",
       });
     }
 
@@ -278,7 +278,7 @@ function routeIssueSyncOperations(
       if (referenceCompanyId !== companyId) {
         return new IssueMutationRoutingError({
           reason: "cross-company-reference",
-          message: "Issue relationships and workflow values must belong to the same company.",
+          message: "Task relationships and workflow values must belong to the same company.",
         });
       }
     }
@@ -301,7 +301,7 @@ function preflightIssueSyncCompanies(
       return new IssueSyncUnavailableError({
         companyId,
         reason: "not-leader",
-        message: "This tab is not the cloud-sync leader, so it cannot enqueue issue changes.",
+        message: "This tab is not the cloud-sync leader, so it cannot enqueue task changes.",
       });
     }
     if (!handles.has(companyId)) {

@@ -135,7 +135,7 @@ export function MilestoneDetailPage({ milestoneId }: { milestoneId: string }) {
             <EmptyDescription>
               {storeStatus === "disconnected"
                 ? "Milestones live on the machine you are connected to. Connect one to open this."
-                : "It was deleted, or it belongs to another environment. Its issues are unaffected."}
+                : "It was deleted, or it belongs to another environment. Its tasks are unaffected."}
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
@@ -408,7 +408,7 @@ function MilestoneDetail({ milestone }: { milestone: IssueMilestone }) {
 
         <section aria-label="Milestone health" className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <MilestoneStatTile
-            hint={kpis.total === 0 ? "No issues yet" : `${Math.round(kpis.ratio * 100)}% complete`}
+            hint={kpis.total === 0 ? "No tasks yet" : `${Math.round(kpis.ratio * 100)}% complete`}
             label="Completed"
             value={`${kpis.done}/${kpis.total}`}
           />
@@ -497,7 +497,7 @@ function MilestoneDetail({ milestone }: { milestone: IssueMilestone }) {
 
         <section className="flex min-w-0 flex-col gap-2">
           <div className="flex items-center gap-2">
-            <h2 className="text-xs font-medium text-muted-foreground">Issues</h2>
+            <h2 className="text-xs font-medium text-muted-foreground">Tasks</h2>
             <span className="text-xs tabular-nums text-muted-foreground/70">{view.total}</span>
             <Button
               className="ms-auto"
@@ -506,16 +506,16 @@ function MilestoneDetail({ milestone }: { milestone: IssueMilestone }) {
               variant="outline"
             >
               <PlusIcon />
-              Add issue
+              Add task
             </Button>
           </div>
           {rows.length === 0 ? (
             <Empty className="rounded-lg border border-border/60 py-8">
               <EmptyHeader>
-                <EmptyTitle>No issues in this milestone</EmptyTitle>
+                <EmptyTitle>No tasks in this milestone</EmptyTitle>
                 <EmptyDescription>
-                  Add a new one here, or open an issue that already exists and pick this milestone
-                  in its properties — which is also how one leaves again.
+                  Add a new one here, or open a task that already exists and pick this milestone in
+                  its properties — which is also how one leaves again.
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -527,7 +527,7 @@ function MilestoneDetail({ milestone }: { milestone: IssueMilestone }) {
               }}
             >
               <LegendList<IssuesListRowModel>
-                aria-label={`Issues in ${milestone.name}`}
+                aria-label={`Tasks in ${milestone.name}`}
                 className="scrollbar-gutter-both h-full min-h-0 overflow-x-hidden"
                 data={rows}
                 estimatedItemSize={ESTIMATED_ROW_HEIGHT}

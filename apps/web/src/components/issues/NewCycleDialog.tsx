@@ -83,7 +83,7 @@ export function NewCycleDialog({
         <DialogHeader>
           <DialogTitle>New cycle</DialogTitle>
           <DialogDescription>
-            Cycles span every project. Unfinished issues move to the next one when this one ends.
+            Cycles span every project. Unfinished tasks move to the next one when this one ends.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">

@@ -3306,10 +3306,52 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               ? ["checkout", localTrackingBranch]
               : ["checkout", input.refName];
 
-      yield* executeGit("GitVcsDriver.switchRef.checkout", input.cwd, checkoutArgs, {
-        timeoutMs: 10_000,
-        fallbackErrorDetail: "git checkout failed",
-      });
+      if (input.localChanges === "stash") {
+        yield* executeGit(
+          "GitVcsDriver.switchRef.stash",
+          input.cwd,
+          [
+            "stash",
+            "push",
+            "--include-untracked",
+            "--message",
+            `Pathway: before switching to ${input.refName}`,
+          ],
+          {
+            timeoutMs: 10_000,
+            fallbackErrorDetail: "Could not stash changes; checkout was not attempted.",
+          },
+        );
+      }
+      if (input.localChanges === "discard") {
+        checkoutArgs.splice(1, 0, "--force");
+      }
+
+      const checkoutResult = yield* executeGit(
+        "GitVcsDriver.switchRef.checkout",
+        input.cwd,
+        checkoutArgs,
+        {
+          timeoutMs: 10_000,
+          allowNonZeroExit: true,
+        },
+      );
+      if (checkoutResult.exitCode !== 0) {
+        const diagnostic = checkoutResult.stderr.trim();
+        return yield* new GitCommandError({
+          ...gitCommandContext({
+            operation: "GitVcsDriver.switchRef.checkout",
+            cwd: input.cwd,
+            args: checkoutArgs,
+          }),
+          detail: diagnostic
+            ? `git checkout failed: ${diagnostic.slice(0, 4_000)}${diagnostic.length > 4_000 ? "\n[truncated]" : ""}`
+            : "git checkout failed",
+          ...(checkoutResult.exitCode === null ? {} : { exitCode: checkoutResult.exitCode }),
+          stdoutLength: checkoutResult.stdout.length,
+          stderrLength: checkoutResult.stderr.length,
+        });
+      }
 
       const refName = yield* runGitStdout("GitVcsDriver.switchRef.currentBranch", input.cwd, [
         "branch",

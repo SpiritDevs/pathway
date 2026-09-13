@@ -319,6 +319,7 @@ function mapProjectShellRow(
     title: row.title,
     titleIsCustom: row.titleIsCustom === 1,
     workspaceRoot: row.workspaceRoot,
+    internalWorkspaceRoot: row.internalWorkspaceRoot ?? null,
     repositoryIdentity,
     defaultModelSelection: row.defaultModelSelection,
     defaultThreadEnvMode: row.defaultThreadEnvMode,
@@ -409,6 +410,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           title,
           title_is_custom AS "titleIsCustom",
           workspace_root AS "workspaceRoot",
+          internal_workspace_root AS "internalWorkspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
           default_thread_env_mode AS "defaultThreadEnvMode",
           favicon_path AS "faviconPath",
@@ -866,6 +868,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           title,
           title_is_custom AS "titleIsCustom",
           workspace_root AS "workspaceRoot",
+          internal_workspace_root AS "internalWorkspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
           default_thread_env_mode AS "defaultThreadEnvMode",
           favicon_path AS "faviconPath",
@@ -891,6 +894,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           title,
           title_is_custom AS "titleIsCustom",
           workspace_root AS "workspaceRoot",
+          internal_workspace_root AS "internalWorkspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
           default_thread_env_mode AS "defaultThreadEnvMode",
           favicon_path AS "faviconPath",
@@ -930,6 +934,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           threads.thread_id AS "threadId",
           threads.project_id AS "projectId",
           projects.workspace_root AS "workspaceRoot",
+          internal_workspace_root AS "internalWorkspaceRoot",
           threads.worktree_path AS "worktreePath"
         FROM projection_threads AS threads
         INNER JOIN projection_projects AS projects
@@ -1311,6 +1316,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           threads.thread_id AS "threadId",
           threads.project_id AS "projectId",
           projects.workspace_root AS "workspaceRoot",
+          internal_workspace_root AS "internalWorkspaceRoot",
           threads.worktree_path AS "worktreePath",
           (
             SELECT MAX(turns.checkpoint_turn_count)
@@ -1567,6 +1573,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 id: row.projectId,
                 title: row.title,
                 workspaceRoot: row.workspaceRoot,
+                internalWorkspaceRoot: row.internalWorkspaceRoot ?? null,
                 repositoryIdentity: repositoryIdentities.get(row.projectId) ?? null,
                 defaultModelSelection: row.defaultModelSelection,
                 defaultThreadEnvMode: row.defaultThreadEnvMode,
@@ -1699,6 +1706,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   id: row.projectId,
                   title: row.title,
                   workspaceRoot: row.workspaceRoot,
+                  internalWorkspaceRoot: row.internalWorkspaceRoot ?? null,
                   defaultModelSelection: row.defaultModelSelection,
                   defaultThreadEnvMode: row.defaultThreadEnvMode,
                   faviconPath: row.faviconPath ?? null,

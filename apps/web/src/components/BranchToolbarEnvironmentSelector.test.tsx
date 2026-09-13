@@ -5,6 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 
+vi.mock("@clerk/react", () => ({ useAuth: () => ({ userId: "test-user" }) }));
+vi.mock("../hooks/useStoragePressure", () => ({ useStoragePressure: () => [] }));
+
 const select = vi.hoisted(() => ({ change: undefined as ((value: string) => void) | undefined }));
 
 // Render the normally portalled popup so these unit tests can inspect its

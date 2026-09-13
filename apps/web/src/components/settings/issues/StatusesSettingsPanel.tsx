@@ -212,7 +212,7 @@ function StatusRow({
         onValueChange={(category) => onRecategorize(status, category)}
       />
       <span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-        {issueCount === 1 ? "1 issue" : `${issueCount} issues`}
+        {issueCount === 1 ? "1 task" : `${issueCount} tasks`}
       </span>
       <Button
         size="icon-xs"
@@ -355,7 +355,7 @@ export function StatusesSettingsPanel() {
         >
           <SettingsRow
             title="Select a company"
-            description="Choose the company whose issue statuses you want to configure."
+            description="Choose the company whose task statuses you want to configure."
           />
         </SettingsSection>
       </SettingsPageContainer>
@@ -368,7 +368,7 @@ export function StatusesSettingsPanel() {
         <SettingsSection {...searchableSetting("issue-statuses")}>
           <SettingsRow
             title="No environment connected"
-            description="The issue tracker belongs to the environment you are connected to. Connect one to configure its statuses."
+            description="The task tracker belongs to the environment you are connected to. Connect one to configure its statuses."
           />
         </SettingsSection>
       </SettingsPageContainer>
@@ -470,19 +470,19 @@ export function StatusesSettingsPanel() {
         <SettingsSection {...searchableSetting("issue-key-prefix")}>
           <SettingsRow
             title="Prefix"
-            description="The letters in front of every issue number. New issues take this prefix; keys already handed out keep the one they were minted with."
-            status={config === null ? null : `Next issue: ${config.keyPrefix}-${config.nextNumber}`}
+            description="The letters in front of every task number. New tasks take this prefix; keys already handed out keep the one they were minted with."
+            status={config === null ? null : `Next task: ${config.keyPrefix}-${config.nextNumber}`}
             control={
               <Input
                 key={config?.keyPrefix ?? "loading"}
                 className="w-full font-mono sm:w-32"
-                aria-label="Issue key prefix"
+                aria-label="Task key prefix"
                 maxLength={ISSUE_KEY_PREFIX_MAX_CHARS}
                 spellCheck={false}
                 autoCapitalize="characters"
                 defaultValue={config?.keyPrefix ?? ""}
                 disabled
-                title="Company issue prefixes are assigned when the company is created."
+                title="Company task prefixes are assigned when the company is created."
               />
             }
           />
@@ -504,8 +504,8 @@ export function StatusesSettingsPanel() {
             <AlertDialogTitle>Delete {pendingDelete?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
               {movingCount === 0
-                ? "No issues sit in this status, but one still has to be named for anything that lands there mid-delete."
-                : `${movingCount === 1 ? "1 issue moves" : `${movingCount} issues move`} to the status you pick. The move is recorded on each issue's activity feed.`}
+                ? "No tasks sit in this status, but one still has to be named for anything that lands there mid-delete."
+                : `${movingCount === 1 ? "1 task moves" : `${movingCount} tasks move`} to the status you pick. The move is recorded on each task's activity feed.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="px-4 pb-1">
@@ -513,7 +513,7 @@ export function StatusesSettingsPanel() {
               value={reassignToId}
               onValueChange={(value) => setReassignToId(value as string)}
             >
-              <SelectTrigger className="w-full" aria-label="Reassign issues to">
+              <SelectTrigger className="w-full" aria-label="Reassign tasks to">
                 <SelectValue>
                   {reassignOptions.find((option) => option.id === reassignToId)?.name ??
                     "Choose a status…"}

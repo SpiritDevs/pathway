@@ -78,6 +78,17 @@ describe("Git reclamation safety", () => {
       await git(root, ["worktree", "add", "--", tree, "topic"]);
       expect(await NodeFSP.readFile(NodePath.join(tree, "valuable"), "utf8")).toBe("unique work");
       await expect(NodeFSP.stat(NodePath.join(tree, "generated"))).rejects.toThrow();
+      await git(tree, ["checkout", "--detach"]);
+      await NodeFSP.writeFile(NodePath.join(tree, "valuable"), "modified work");
+      await NodeFSP.writeFile(NodePath.join(tree, "untracked"), "untracked work");
+      await expect(removeStorageGitWorktree(tree, root, null)).rejects.toThrow();
+      await git(root, ["worktree", "lock", tree]);
+      await expect(removeStorageGitWorktree(tree, root, null, true)).rejects.toThrow();
+      await git(root, ["worktree", "unlock", tree]);
+      await expect(removeStorageGitWorktree(root, root, "main", true)).rejects.toThrow();
+      await removeStorageGitWorktree(tree, root, null, true);
+      await expect(NodeFSP.stat(tree)).rejects.toThrow();
+      expect((await git(root, ["rev-parse", "topic"])).stdout.trim()).toBe(tip);
     } finally {
       await NodeFSP.rm(fixture, { recursive: true, force: true });
     }

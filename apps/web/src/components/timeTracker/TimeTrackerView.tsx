@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { useBusinessToolsCloud, useBusinessToolsQuery } from "../contacts/businessToolsCloud";
 import type { Value } from "convex/values";
 import { makeFunctionReference } from "convex/server";
@@ -11,7 +12,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { randomUUID } from "~/lib/utils";
-import { useProjects } from "~/state/entities";
+import { useProjects, useThreadTitlesByKey } from "~/state/entities";
 import {
   useSyncedCloudProjects,
   useSyncedEnvironmentBindings,
@@ -65,6 +66,7 @@ function formatEntryDate(value: string): string {
 }
 
 export function TimeTrackerView() {
+  const threadTitles = useThreadTitlesByKey();
   const localProjects = useProjects().filter(({ workspaceRoot }) => workspaceRoot !== null);
   const cloudProjects = useSyncedCloudProjects();
   const bindings = useSyncedEnvironmentBindings();
@@ -206,6 +208,9 @@ export function TimeTrackerView() {
             name: "start",
             args: {
               id: raw.args.id,
+              ...("title" in raw.args && typeof raw.args.title === "string"
+                ? { title: raw.args.title }
+                : {}),
               description: raw.args.description,
               projectKey: raw.args.projectKey,
               projectName: raw.args.projectName,
@@ -243,21 +248,24 @@ export function TimeTrackerView() {
     setPending(next);
     await retryPending(next);
   };
+  const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [projectKey, setProjectKey] = useState("");
 
   const startTimer = (event: FormEvent) => {
     event.preventDefault();
     const trimmedDescription = description.trim();
-    if (!trimmedDescription || state.active) return;
+    if (!title.trim() || !trimmedDescription || state.active) return;
     const project = projects.find(({ key }) => key === projectKey);
     void run(async () => {
       await command("start", {
         id: randomUUID(),
+        title: title.trim(),
         description: trimmedDescription,
         projectKey,
         projectName: project?.title ?? "No project",
       });
+      setTitle("");
       setDescription("");
     });
   };
@@ -283,7 +291,7 @@ export function TimeTrackerView() {
               </h1>
             </div>
             <p className="max-w-sm text-sm leading-6 text-muted-foreground">
-              Manual time, agent work, and issue creation, together. Concurrent sessions each
+              Manual time, agent work, and task creation, together. Concurrent sessions each
               contribute to your project totals.
             </p>
           </div>
@@ -401,8 +409,17 @@ export function TimeTrackerView() {
             ) : (
               <form className="flex flex-col gap-3 lg:flex-row" onSubmit={startTimer}>
                 <Input
-                  aria-label="Time entry description"
+                  aria-label="Time entry title"
                   placeholder="What are you working on?"
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  required
+                  maxLength={200}
+                  className="min-w-0 flex-1"
+                />
+                <Input
+                  aria-label="Time entry description"
+                  placeholder="Describe the work"
                   value={description}
                   onChange={(event) => setDescription(event.target.value)}
                   className="min-w-0 flex-1"
@@ -431,6 +448,7 @@ export function TimeTrackerView() {
                     !!activePending ||
                     !cloud.client ||
                     !result.value ||
+                    !title.trim() ||
                     !description.trim()
                   }
                 >
@@ -456,10 +474,19 @@ export function TimeTrackerView() {
                   <EmptyMedia variant="icon">
                     <Clock3Icon />
                   </EmptyMedia>
-                  <EmptyTitle>No time tracked yet</EmptyTitle>
+                  <EmptyTitle>
+                    {result.error
+                      ? "Time entries unavailable"
+                      : !result.value
+                        ? "Loading time entries…"
+                        : "No time tracked yet"}
+                  </EmptyTitle>
                   <EmptyDescription>
-                    Start a manual timer or work in a thread. Completed agent, manual, and issue
-                    sessions collect here.
+                    {result.error
+                      ? "Your history could not be loaded. Check the connection and try again."
+                      : !result.value
+                        ? "Waiting for your tracked activity to load."
+                        : "Start a manual timer or work in a thread. Completed agent, manual, and task sessions collect here."}
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
@@ -471,12 +498,30 @@ export function TimeTrackerView() {
                     className="group grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,0.35fr)_8rem_2rem]"
                   >
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{entry.description}</p>
+                      <p className="text-sm font-medium">
+                        {entry.title ?? entry.description.split("\n")[0]}
+                      </p>
+                      {entry.title && (
+                        <p className="mt-1 text-xs text-muted-foreground whitespace-pre-wrap">
+                          {entry.description}
+                        </p>
+                      )}
+                      {entry.threadId && entry.environmentId && (
+                        <Link
+                          className="mt-1 block text-xs text-primary hover:underline"
+                          to="/threads/$environmentId/$threadId"
+                          params={{ environmentId: entry.environmentId, threadId: entry.threadId }}
+                        >
+                          Thread:{" "}
+                          {threadTitles.get(`${entry.environmentId}:${entry.threadId}`) ??
+                            entry.threadId}
+                        </Link>
+                      )}
                       <span className="mt-1 inline-flex rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                         {entry.source === "agent"
                           ? "Agent"
                           : entry.source === "issue"
-                            ? "Issue creation"
+                            ? "Task creation"
                             : "Manual"}
                       </span>
                       <p className="mt-1 text-xs text-muted-foreground sm:hidden">
@@ -487,8 +532,8 @@ export function TimeTrackerView() {
                       {entry.projectName}
                     </p>
                     <div className="text-right">
-                      <p className="font-mono text-sm tabular-nums">
-                        {formatTrackedDuration(entry.durationMs)}
+                      <p className="font-mono text-sm whitespace-nowrap tabular-nums">
+                        {formatTrackedDuration(entry.durationMs, true)}
                       </p>
                       <p className="mt-1 text-[11px] text-muted-foreground">
                         {formatEntryDate(entry.startedAt)}

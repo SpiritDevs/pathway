@@ -135,11 +135,11 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
               sideOffset={0}
               positionerClassName={
                 threadPanelPopoverAnchor
-                  ? "w-[min(var(--thread-details-panel-width),var(--anchor-width))] !transition-none"
+                  ? "w-[min(var(--thread-details-panel-width),var(--anchor-width))] -translate-x-[var(--app-scrollbar-width)] !transition-none"
                   : "w-[min(var(--thread-details-panel-width),calc(100vw-1rem))] !transition-none"
               }
               className="w-full !overflow-visible rounded-none border-0 bg-transparent shadow-none before:hidden [--viewport-inline-padding:0] [-webkit-backdrop-filter:none] [backdrop-filter:none]"
-              viewportClassName="!overflow-visible p-2"
+              viewportClassName="!overflow-visible p-3"
             >
               {threadPanelPopoverContent}
             </PopoverPopup>

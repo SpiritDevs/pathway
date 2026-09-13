@@ -117,6 +117,57 @@ describe("Focus notifications", () => {
     await expect(h.user.query(api.focusNotifications.unreadCount, {})).resolves.toBe(0);
   });
 
+  it("clears read and unread notifications only for the signed-in user", async () => {
+    const h = harness();
+    await seed(h, ["user-1", "user-2"]);
+    await h.relay.mutation(api.focusNotifications.record, event("read"));
+    await h.relay.mutation(api.focusNotifications.record, event("unread"));
+    await h.user.mutation(api.focusNotifications.markRead, { eventId: "read" });
+    await expect(h.t.mutation(api.focusNotifications.clearAll, {})).rejects.toThrow();
+    await h.user.mutation(api.focusNotifications.clearAll, {});
+    expect(await h.user.query(api.focusNotifications.list, {})).toEqual([]);
+    expect(await h.user.query(api.focusNotifications.unreadCount, {})).toBe(0);
+    expect(await h.secondUser.query(api.focusNotifications.list, {})).toHaveLength(2);
+    expect(
+      await h.t.run((ctx) => ctx.db.query("focusNotificationAcknowledgements").collect()),
+    ).toEqual([]);
+    await h.user.mutation(api.focusNotifications.clearAll, {});
+    await h.relay.mutation(api.focusNotifications.record, event("new"));
+    expect(await h.user.query(api.focusNotifications.list, {})).toEqual([
+      expect.objectContaining({ eventId: "new", isRead: false }),
+    ]);
+  });
+
+  it("tracks tray opens separately from reads and counts later events as unseen", async () => {
+    const h = harness();
+    await seed(h, ["user-1", "user-2"]);
+    await h.relay.mutation(api.focusNotifications.record, event("first"));
+    await expect(h.t.mutation(api.focusNotifications.markAllSeen, {})).rejects.toThrow();
+    await h.user.mutation(api.focusNotifications.markAllSeen, {});
+    expect(await h.user.query(api.focusNotifications.list, {})).toEqual([
+      expect.objectContaining({ eventId: "first", isRead: false, isSeen: true }),
+    ]);
+    expect(await h.user.query(api.focusNotifications.unreadCount, {})).toBe(1);
+    expect(await h.secondUser.query(api.focusNotifications.list, {})).toEqual([
+      expect.objectContaining({ isSeen: false }),
+    ]);
+    await h.relay.mutation(api.focusNotifications.record, event("second"));
+    expect(await h.user.query(api.focusNotifications.list, {})).toEqual([
+      expect.objectContaining({ eventId: "second", isRead: false, isSeen: false }),
+      expect.objectContaining({ eventId: "first", isRead: false, isSeen: true }),
+    ]);
+    await h.user.mutation(api.focusNotifications.markAllSeen, {});
+    await h.user.mutation(api.focusNotifications.markRead, { eventId: "first" });
+    await h.user.mutation(api.focusNotifications.markRead, { eventId: "second" });
+    expect(
+      (await h.user.query(api.focusNotifications.list, {})).every(
+        (row) => row.isRead && row.isSeen,
+      ),
+    ).toBe(true);
+    await h.user.mutation(api.focusNotifications.clearAll, {});
+    expect(await h.user.query(api.focusNotifications.list, {})).toEqual([]);
+  });
+
   it("fans one relay event out to every linked user", async () => {
     const h = harness();
     await seed(h, ["user-1", "user-2"]);

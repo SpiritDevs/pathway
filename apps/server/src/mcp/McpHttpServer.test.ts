@@ -251,7 +251,7 @@ it.effect(
       expect(
         result.content.some(
           (content) =>
-            content.type === "text" && content.text.includes("1 issue attachment was not included"),
+            content.type === "text" && content.text.includes("1 task attachment was not included"),
         ),
       ).toBe(true);
 

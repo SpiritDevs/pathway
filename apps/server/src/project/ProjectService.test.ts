@@ -4,6 +4,8 @@ import { CommandId, type Project, ProjectId, ProviderInstanceId } from "@spiritd
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -48,14 +50,15 @@ const makeTestLayer = (
     | ProjectFaviconResolver.ProjectFaviconResolver
     | RepositoryIdentityResolver.RepositoryIdentityResolver
   >,
+  realDirectories = false,
 ) =>
   ProjectServiceLayerLive.pipe(
     Layer.provideMerge(ProjectEnrichmentService.layer),
-    Layer.provideMerge(workspacePathsLayer),
+    Layer.provideMerge(realDirectories ? WorkspacePaths.layer : workspacePathsLayer),
     Layer.provideMerge(projectMetadataLayer),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "project-service-test-" })),
-    Layer.provide(NodeServices.layer),
+    Layer.provideMerge(NodeServices.layer),
   );
 
 const TestLayer = makeTestLayer(metadataLayer);
@@ -199,7 +202,7 @@ it.layer(TestLayer)("ProjectService", (it) => {
     }),
   );
 
-  it.effect("creates rootless projects without filesystem enrichment", () =>
+  it.effect("creates name-only projects in a stable internal workspace", () =>
     Effect.gen(function* () {
       const service = yield* ProjectService.ProjectService;
       const projectId = ProjectId.make("project:rootless");
@@ -212,10 +215,14 @@ it.layer(TestLayer)("ProjectService", (it) => {
         workspaceRoot: null,
       });
 
-      assert.isNull(created.workspaceRoot);
+      assert.include(created.workspaceRoot!, "/project-workspaces/");
+      assert.equal(created.internalWorkspaceRoot, created.workspaceRoot);
       assert.isNull(created.repositoryIdentity);
       assert.isNull(created.faviconPath);
-      assert.isNull(Option.getOrThrow(yield* service.getById(projectId)).workspaceRoot);
+      assert.equal(
+        Option.getOrThrow(yield* service.getById(projectId)).internalWorkspaceRoot,
+        created.workspaceRoot,
+      );
     }),
   );
 
@@ -454,3 +461,140 @@ it.effect("invalidates workspace-derived metadata when a project moves", () =>
     }).pipe(Effect.provide(makeTestLayer(versionedMetadataLayer)));
   }),
 );
+
+it.layer(makeTestLayer(metadataLayer, true))("Internal project directories", (it) => {
+  it.effect("retains files and project identity through attachment and disconnection", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const projectId = ProjectId.make("internal-file-retention");
+      const created = yield* service.create({
+        commandId: CommandId.make("internal-create"),
+        projectId,
+        title: "Notes",
+        workspaceRoot: null,
+      });
+      const internal = created.workspaceRoot!;
+      assert.equal(created.internalWorkspaceRoot, internal);
+      assert.isTrue(yield* fs.exists(internal));
+      yield* fs.writeFileString(path.join(internal, "notes.txt"), "keep this work");
+      const premature = yield* service
+        .update({
+          commandId: CommandId.make("early-disconnect"),
+          projectId,
+          disconnectInternalWorkspace: true,
+        })
+        .pipe(Effect.flip);
+      assert.include(premature.message, "Attach your own directory");
+      const renamed = yield* service.update({
+        commandId: CommandId.make("internal-rename"),
+        projectId,
+        title: "Renamed",
+      });
+      assert.equal(renamed.workspaceRoot, internal);
+      const another = yield* service.create({
+        commandId: CommandId.make("another-create"),
+        projectId: ProjectId.make("another-notes"),
+        title: "Notes",
+        workspaceRoot: null,
+      });
+      assert.notEqual(another.workspaceRoot, internal);
+      const destination = yield* fs.makeTempDirectoryScoped();
+      const attached = yield* service.update({
+        commandId: CommandId.make("internal-attach"),
+        projectId,
+        workspaceRoot: destination,
+        copyInternalWorkspaceFiles: true,
+      });
+      assert.equal(attached.id, projectId);
+      assert.equal(attached.workspaceRoot, destination);
+      assert.equal(attached.internalWorkspaceRoot, internal);
+      assert.equal(yield* fs.readFileString(path.join(destination, "notes.txt")), "keep this work");
+      assert.equal(yield* fs.readFileString(path.join(internal, "notes.txt")), "keep this work");
+      const disconnected = yield* service.update({
+        commandId: CommandId.make("internal-disconnect"),
+        projectId,
+        disconnectInternalWorkspace: true,
+      });
+      assert.isNull(disconnected.internalWorkspaceRoot);
+      assert.equal(disconnected.workspaceRoot, destination);
+      assert.isTrue(yield* fs.exists(path.join(internal, "notes.txt")));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("refuses attachment and disconnection while a project has active work", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const sql = yield* SqlClient.SqlClient;
+      const projectId = ProjectId.make("busy-internal-project");
+      yield* service.create({
+        commandId: CommandId.make("busy-create"),
+        projectId,
+        title: "Busy",
+        workspaceRoot: null,
+      });
+      yield* sql`INSERT INTO orchestration_v2_projection_threads
+      (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+      VALUES ('busy-thread', ${projectId}, 'Busy', 'codex', 'full-access', 'default', '2026-09-10', '2026-09-10', '{}')`;
+      yield* sql`INSERT INTO orchestration_v2_projection_runs
+      (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+      VALUES ('busy-run', 'busy-thread', 1, 'codex', 'running', '2026-09-10', '{}')`;
+      const error = yield* service
+        .update({
+          commandId: CommandId.make("busy-attach"),
+          projectId,
+          workspaceRoot: "/unused-destination",
+        })
+        .pipe(Effect.flip);
+      assert.include(error.message, "Finish or stop active agent work");
+      const disconnect = yield* service
+        .update({
+          commandId: CommandId.make("busy-disconnect"),
+          projectId,
+          disconnectInternalWorkspace: true,
+        })
+        .pipe(Effect.flip);
+      assert.include(disconnect.message, "Finish or stop active agent work");
+    }),
+  );
+
+  it.effect("keeps both sets of files untouched when a copy would collide", () =>
+    Effect.gen(function* () {
+      const service = yield* ProjectService.ProjectService;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const projectId = ProjectId.make("internal-copy-conflict");
+      const created = yield* service.create({
+        commandId: CommandId.make("conflict-create"),
+        projectId,
+        title: "Notes",
+        workspaceRoot: null,
+      });
+      const internal = created.workspaceRoot!;
+      const destination = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(path.join(internal, "notes.txt"), "internal");
+      yield* fs.writeFileString(path.join(internal, "another.txt"), "internal");
+      yield* fs.writeFileString(path.join(destination, "notes.txt"), "user");
+      const conflict = yield* service
+        .update({
+          commandId: CommandId.make("conflict-attach"),
+          projectId,
+          workspaceRoot: destination,
+          copyInternalWorkspaceFiles: true,
+        })
+        .pipe(Effect.flip);
+      assert.include(conflict.message, "already contains notes.txt");
+      assert.equal(yield* fs.readFileString(path.join(destination, "notes.txt")), "user");
+      assert.isFalse(yield* fs.exists(path.join(destination, "another.txt")));
+      assert.equal(Option.getOrThrow(yield* service.getById(projectId)).workspaceRoot, internal);
+      const attached = yield* service.update({
+        commandId: CommandId.make("keep-internal-attach"),
+        projectId,
+        workspaceRoot: destination,
+      });
+      assert.equal(attached.internalWorkspaceRoot, internal);
+      assert.equal(yield* fs.readFileString(path.join(internal, "notes.txt")), "internal");
+    }).pipe(Effect.scoped),
+  );
+});

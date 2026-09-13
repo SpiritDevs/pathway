@@ -1658,7 +1658,7 @@ describe("IssueTrackerService", () => {
         { line: 3, reason: "Unbalanced quotes." },
         { line: 4, reason: "Expected 3 columns, found 2." },
         { line: 5, reason: "Missing title." },
-        { line: 6, reason: "An issue with key PAT-1 already exists." },
+        { line: 6, reason: "A task with key PAT-1 already exists." },
       ]);
       assert.deepStrictEqual(
         (yield* tracker.getSnapshot()).issues.map((issue) => issue.key).toSorted(),
@@ -1785,7 +1785,7 @@ describe("IssueTrackerService", () => {
         .update({ issueId: second.issue.id, patch: { parentId: third.issue.id } }, ACTOR)
         .pipe(Effect.flip);
       assert.strictEqual(shallowMove.reason, "invalid");
-      assert.strictEqual(shallowMove.message, "An issue cannot be moved under its own sub-issue.");
+      assert.strictEqual(shallowMove.message, "A task cannot be moved under its own subtask.");
 
       const selfParent = yield* tracker
         .update({ issueId: root.issue.id, patch: { parentId: root.issue.id } }, ACTOR)

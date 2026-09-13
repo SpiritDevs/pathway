@@ -24,9 +24,16 @@ import * as Schema from "effect/Schema";
 import { Atom } from "effect/unstable/reactivity";
 import { useEffect } from "react";
 
-import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
+import {
+  scopedProjectKey,
+  scopeProjectRef,
+  scopedThreadKey,
+  scopeThreadRef,
+} from "@spiritdevs/client-runtime/environment";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "../state/projects";
+import { allEnvironmentShellsBootstrappedAtom } from "../state/shell";
+import { companyThreadReadinessAtom, type ThreadListReadiness } from "./companyReadiness";
 import {
   subscribeThreadAlertPolicies,
   threadAlertNotificationsReadyAtom,
@@ -85,6 +92,8 @@ export const FOCUS_FUNCTION_REFERENCES = {
   notifications: queryReference<{ readonly limit?: number }, ReadonlyArray<FocusNotification>>(
     "focusNotifications:list",
   ),
+  clearAll: mutationReference<{}, null>("focusNotifications:clearAll"),
+  markAllSeen: mutationReference<{}, null>("focusNotifications:markAllSeen"),
   markAllRead: mutationReference<{}, null>("focusNotifications:markAllRead"),
   markRead: mutationReference<{ eventId: string }, null>("focusNotifications:markRead"),
 } as const;
@@ -116,6 +125,8 @@ export interface FocusMutations {
     readonly projectKey: FocusProjectKey;
   }) => Promise<null>;
   readonly unassignProject: (input: { readonly projectKey: FocusProjectKey }) => Promise<null>;
+  readonly clearAllNotifications: () => Promise<null>;
+  readonly markAllNotificationsSeen: () => Promise<null>;
   readonly markAllNotificationsRead: () => Promise<null>;
   readonly markNotificationRead?: (eventId: string) => Promise<null>;
 }
@@ -136,6 +147,21 @@ export const focusNotificationsAtom = Atom.make<ReadonlyArray<FocusNotification>
   EMPTY_FOCUS_NOTIFICATIONS,
 ).pipe(Atom.keepAlive, Atom.withLabel("focuses:notifications"));
 
+const unreadNotificationThreadKeysAtom = Atom.make(
+  (get) =>
+    new Set(
+      get(focusNotificationsAtom)
+        .filter((notification) => !notification.isRead)
+        .map((notification) =>
+          scopedThreadKey(scopeThreadRef(notification.environmentId, notification.threadId)),
+        ),
+    ),
+);
+
+export const threadHasUnreadNotificationAtom = Atom.family((threadKey: string) =>
+  Atom.make((get) => get(unreadNotificationThreadKeysAtom).has(threadKey)),
+);
+
 function makeFocusMutations(client: ConvexClient): FocusMutations {
   return {
     create: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.create, input),
@@ -144,6 +170,8 @@ function makeFocusMutations(client: ConvexClient): FocusMutations {
     remove: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.remove, input),
     assignProject: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.assignProject, input),
     unassignProject: (input) => client.mutation(FOCUS_FUNCTION_REFERENCES.unassignProject, input),
+    clearAllNotifications: () => client.mutation(FOCUS_FUNCTION_REFERENCES.clearAll, {}),
+    markAllNotificationsSeen: () => client.mutation(FOCUS_FUNCTION_REFERENCES.markAllSeen, {}),
     markAllNotificationsRead: () => client.mutation(FOCUS_FUNCTION_REFERENCES.markAllRead, {}),
     markNotificationRead: (eventId) =>
       client.mutation(FOCUS_FUNCTION_REFERENCES.markRead, { eventId }),
@@ -168,6 +196,7 @@ export function readActiveFocusId(options: {
   readonly readModel: FocusReadModel | null;
   readonly visibleProjectKeys: ReadonlySet<string>;
   readonly storage: ActiveFocusStorage | null;
+  readonly projectsReady?: boolean;
 }): ActiveFocusId {
   if (options.scope === null) return ALL_FOCUS_ID;
   let persisted: string | null = null;
@@ -177,7 +206,7 @@ export function readActiveFocusId(options: {
     // A blocked storage API should not make Focus selection unavailable.
   }
   const preferredId = persistedActiveFocusId(persisted);
-  return options.readModel === null
+  return options.readModel === null || options.projectsReady === false
     ? preferredId
     : resolveActiveFocusId({
         preferredId,
@@ -243,6 +272,14 @@ const activeFocusAccountScopeAtom = Atom.make((get) => {
   return accountId ? accountId : null;
 }).pipe(Atom.withLabel("focuses:active-account-scope"));
 
+const focusReadModelOwnerAtom = Atom.make<string | null>(null).pipe(Atom.keepAlive);
+const focusReadModelErrorAtom = Atom.make(false).pipe(Atom.keepAlive);
+export const focusReadModelReadinessAtom = Atom.make((get): ThreadListReadiness => {
+  if (get(focusReadModelOwnerAtom) !== get(activeFocusAccountScopeAtom)) return "loading";
+  if (get(focusReadModelAtom) !== null) return "ready";
+  return get(focusReadModelErrorAtom) ? "error" : "loading";
+});
+
 const activeFocusOverridesAtom = Atom.make<ReadonlyMap<string, ActiveFocusId>>(new Map()).pipe(
   Atom.keepAlive,
   Atom.withLabel("focuses:active-overrides"),
@@ -251,11 +288,13 @@ const activeFocusOverridesAtom = Atom.make<ReadonlyMap<string, ActiveFocusId>>(n
 export const activeFocusIdAtom = Atom.writable(
   (get) => {
     const scope = get(activeFocusAccountScopeAtom);
-    const readModel = get(focusReadModelAtom);
+    const readModel = get(focusReadModelOwnerAtom) === scope ? get(focusReadModelAtom) : null;
+    const projectsReady =
+      get(companyThreadReadinessAtom) === "ready" && get(allEnvironmentShellsBootstrappedAtom);
     const visibleProjectKeys = get(visibleFocusProjectKeysAtom);
     const override = scope === null ? undefined : get(activeFocusOverridesAtom).get(scope);
     if (override !== undefined) {
-      return readModel === null
+      return readModel === null || !projectsReady
         ? override
         : resolveActiveFocusId({
             preferredId: override,
@@ -268,6 +307,7 @@ export const activeFocusIdAtom = Atom.writable(
       scope,
       readModel,
       visibleProjectKeys,
+      projectsReady,
       storage: ambientLocalStorage(),
     });
   },
@@ -296,6 +336,19 @@ export function useFocusReadModelRuntime(options: {
   readonly convexUrl: string | null;
   readonly fetchToken: ConvexAuthTokenFetcher;
 }): void {
+  // Restarting a subscription for a new token keeps the same account's last complete view.
+  // Changing identity/deployment or unmounting the runtime still clears it.
+  useEffect(() => {
+    appAtomRegistry.set(focusReadModelOwnerAtom, options.enabled ? options.accountScope : null);
+    appAtomRegistry.set(focusReadModelErrorAtom, false);
+    return () => {
+      appAtomRegistry.set(focusReadModelOwnerAtom, null);
+      appAtomRegistry.set(focusReadModelAtom, null);
+      appAtomRegistry.set(focusUnreadCountAtom, 0);
+      appAtomRegistry.set(focusNotificationsAtom, EMPTY_FOCUS_NOTIFICATIONS);
+      appAtomRegistry.set(threadAlertNotificationsReadyAtom, false);
+    };
+  }, [options.accountScope, options.convexUrl, options.enabled]);
   useEffect(() => {
     if (!options.enabled || options.accountScope === null || options.convexUrl === null) {
       appAtomRegistry.set(focusReadModelAtom, null);
@@ -319,10 +372,19 @@ export function useFocusReadModelRuntime(options: {
         (value) => {
           if (!active) return;
           const decoded = decodeFocusReadModel(value);
-          if (Option.isSome(decoded)) appAtomRegistry.set(focusReadModelAtom, decoded.value);
-          else console.warn("Convex returned an invalid Focus read model.");
+          if (Option.isSome(decoded)) {
+            appAtomRegistry.set(focusReadModelAtom, decoded.value);
+            appAtomRegistry.set(focusReadModelErrorAtom, false);
+          } else {
+            appAtomRegistry.set(focusReadModelErrorAtom, true);
+            console.warn("Convex returned an invalid Focus read model.");
+          }
         },
-        (error) => console.warn("Could not subscribe to Focus definitions.", error),
+        (error) => {
+          if (!active) return;
+          appAtomRegistry.set(focusReadModelErrorAtom, true);
+          console.warn("Could not subscribe to Focus definitions.", error);
+        },
       ),
       client.onUpdate(
         FOCUS_FUNCTION_REFERENCES.unreadCount,
@@ -364,9 +426,6 @@ export function useFocusReadModelRuntime(options: {
         appAtomRegistry.set(focusMutationsAtom, null);
       }
       void client.close();
-      appAtomRegistry.set(focusReadModelAtom, null);
-      appAtomRegistry.set(focusUnreadCountAtom, 0);
-      appAtomRegistry.set(focusNotificationsAtom, EMPTY_FOCUS_NOTIFICATIONS);
     };
   }, [options.accountScope, options.convexUrl, options.enabled, options.fetchToken]);
 }

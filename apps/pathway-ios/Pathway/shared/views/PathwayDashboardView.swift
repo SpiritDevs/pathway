@@ -22,7 +22,7 @@ struct PathwayDashboardView: View {
                     NavigationLink("Connect a server") { PathwayConnectionsDestination() }
                     LabeledContent("Companies", value: String(appModel.cloud.companies.count))
                     NavigationLink { PathwayProjectsDestination() } label: { LabeledContent("Projects", value: String(appModel.cloud.projects.count)) }
-                    NavigationLink("Issues") { PathwayIssuesDestinationView() }
+                    NavigationLink("Tasks") { PathwayIssuesDestinationView() }
                     NavigationLink("Calendar") { PathwayCalendarView(model: appModel.cloud.calendar, companies: appModel.cloud.companies) }
                 }
             }

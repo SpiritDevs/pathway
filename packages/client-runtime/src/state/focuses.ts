@@ -1,3 +1,4 @@
+import { FocusId as FocusIdSchema } from "@spiritdevs/contracts/focus";
 import type {
   Focus,
   FocusAssignment,
@@ -11,16 +12,14 @@ import { Atom } from "effect/unstable/reactivity";
 import { sortBySyncOrder, syncOrderKeyAfter, syncOrderKeyBetween } from "../sync/orderKey.ts";
 
 export const ALL_FOCUS_ID = "all" as const;
+export const CONVERSATIONS_FOCUS_ID = FocusIdSchema.make("conversations");
 export type ActiveFocusId = FocusId | typeof ALL_FOCUS_ID;
 
 export function focusIncludesConversations(
-  focuses: ReadonlyArray<Pick<Focus, "id" | "includeConversations">>,
+  _focuses: ReadonlyArray<Pick<Focus, "id" | "includeConversations">>,
   activeFocusId: ActiveFocusId,
 ): boolean {
-  return (
-    activeFocusId === ALL_FOCUS_ID ||
-    focuses.some((focus) => focus.id === activeFocusId && focus.includeConversations === true)
-  );
+  return activeFocusId === CONVERSATIONS_FOCUS_ID;
 }
 
 /** Conversation attention records use an environment-qualified key, not a project assignment. */
@@ -39,10 +38,7 @@ export function focusIdForThread(input: {
   focuses: ReadonlyArray<Pick<Focus, "id" | "includeConversations">>;
   focusIdByProjectKey: ReadonlyMap<string, FocusId>;
 }): ActiveFocusId {
-  if (input.projectKey === null)
-    return focusIncludesConversations(input.focuses, input.activeFocusId)
-      ? input.activeFocusId
-      : ALL_FOCUS_ID;
+  if (input.projectKey === null) return CONVERSATIONS_FOCUS_ID;
   if (input.projectKey === undefined) return ALL_FOCUS_ID;
   const assigned = input.focusIdByProjectKey.get(input.projectKey);
   return assigned !== undefined && input.focuses.some((focus) => focus.id === assigned)
@@ -135,9 +131,11 @@ export function nextFocusId(input: {
   readonly activeFocusId: ActiveFocusId;
   readonly visibleFocuses: ReadonlyArray<Pick<Focus, "id">>;
   readonly direction?: -1 | 1;
+  readonly hasConversations?: boolean;
 }): ActiveFocusId {
   const ids: ReadonlyArray<ActiveFocusId> = [
     ALL_FOCUS_ID,
+    ...(input.hasConversations ? [CONVERSATIONS_FOCUS_ID] : []),
     ...input.visibleFocuses.map((focus) => focus.id),
   ];
   const index = ids.indexOf(input.activeFocusId);
@@ -151,6 +149,7 @@ export function resolveActiveFocusId(input: {
   readonly assignments: ReadonlyArray<Pick<FocusAssignment, "focusId" | "projectKey">>;
   readonly visibleProjectKeys: ReadonlySet<string>;
 }): ActiveFocusId {
+  if (input.preferredId === CONVERSATIONS_FOCUS_ID) return CONVERSATIONS_FOCUS_ID;
   if (input.preferredId === ALL_FOCUS_ID) return ALL_FOCUS_ID;
   if (!input.focuses.some((focus) => focus.id === input.preferredId)) return ALL_FOCUS_ID;
   return focusIsVisible({
@@ -180,6 +179,7 @@ export function groupSearchResultsByFocus<Result>(input: {
 
   for (const result of input.results) {
     const projectKey = input.projectKey(result);
+    if ((projectKey === null) !== (input.activeFocusId === CONVERSATIONS_FOCUS_ID)) continue;
     const assignedFocusId =
       projectKey === null
         ? input.activeFocusId !== ALL_FOCUS_ID &&
@@ -188,9 +188,11 @@ export function groupSearchResultsByFocus<Result>(input: {
           : undefined
         : focusIdByProject.get(projectKey);
     const focusId =
-      assignedFocusId !== undefined && focusById.has(assignedFocusId)
-        ? assignedFocusId
-        : ALL_FOCUS_ID;
+      projectKey === null
+        ? CONVERSATIONS_FOCUS_ID
+        : assignedFocusId !== undefined && focusById.has(assignedFocusId)
+          ? assignedFocusId
+          : ALL_FOCUS_ID;
     const group = resultsByFocus.get(focusId) ?? [];
     group.push(result);
     resultsByFocus.set(focusId, group);
@@ -209,6 +211,9 @@ export function groupSearchResultsByFocus<Result>(input: {
     const focus = focusById.get(focusId);
     if (results !== undefined && focus !== undefined) groups.push({ focusId, focus, results });
   }
+  const conversations = resultsByFocus.get(CONVERSATIONS_FOCUS_ID);
+  if (conversations)
+    groups.push({ focusId: CONVERSATIONS_FOCUS_ID, focus: null, results: conversations });
   const unassigned = resultsByFocus.get(ALL_FOCUS_ID);
   if (unassigned !== undefined) {
     groups.push({ focusId: ALL_FOCUS_ID, focus: null, results: unassigned });

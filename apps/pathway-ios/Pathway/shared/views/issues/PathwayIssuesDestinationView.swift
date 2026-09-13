@@ -18,12 +18,12 @@ struct PathwayIssuesDestinationView: View {
         .overlay {
             if appModel.cloud.companies.isEmpty {
                 if appModel.cloud.connectionState == .syncing || appModel.cloud.connectionState == .connecting {
-                    ProgressView("Syncing issues…")
+                    ProgressView("Syncing tasks…")
                 } else {
                     ContentUnavailableView {
-                        Label("Your issues are unavailable", systemImage: "wifi.exclamationmark")
+                        Label("Your tasks are unavailable", systemImage: "wifi.exclamationmark")
                     } description: {
-                        Text(appModel.cloud.errorMessage ?? "Connect to your workspace to view issues.")
+                        Text(appModel.cloud.errorMessage ?? "Connect to your workspace to view tasks.")
                     } actions: {
                         Button("Reconnect") { Task { await appModel.cloud.retry() } }
                     }

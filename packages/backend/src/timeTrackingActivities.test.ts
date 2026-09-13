@@ -136,6 +136,119 @@ async function setup() {
 }
 
 describe("Automatic tracked activities", () => {
+  it("shows working and input-blocked runs without listing queued follow-ups as paused timers", async () => {
+    const { user, environment, snapshot } = await setup();
+    const now = Date.now();
+    const active = snapshot("active", now - 60_000, now);
+    active.session.state = "running";
+    active.session.stoppedAt = null;
+    active.session.intervals = [];
+    active.session.runningSince = now - 60_000;
+    await environment.mutation(api.timeTracking.syncAgentSession, {
+      ...active,
+      session: { ...active.session, runStatus: "running" },
+    });
+    const followUp = snapshot("follow-up", now - 30_000, now);
+    followUp.session.threadId = active.session.threadId;
+    followUp.session.state = "paused";
+    followUp.session.stoppedAt = null;
+    followUp.session.intervals = [];
+    for (const [index, runStatus] of ["queued", "preparing", "starting"].entries()) {
+      await environment.mutation(api.timeTracking.syncAgentSession, {
+        ...followUp,
+        session: { ...followUp.session, runStatus, revision: index + 1 },
+      });
+      const timers = await user.query(api.timeTracking.listActive, {});
+      expect(timers.complete).toBe(true);
+      expect(timers.sessions).toHaveLength(1);
+      expect(timers.sessions[0]).toMatchObject({ state: "running", runningSince: now - 60_000 });
+    }
+    await environment.mutation(api.timeTracking.syncAgentSession, {
+      ...active,
+      session: {
+        ...active.session,
+        state: "stopped",
+        stoppedAt: new Date(now).toISOString(),
+        runningSince: null,
+        intervals: [{ start: now - 60_000, end: now }],
+        revision: 2,
+        runStatus: "completed",
+      },
+    });
+    await environment.mutation(api.timeTracking.syncAgentSession, {
+      ...followUp,
+      session: {
+        ...followUp.session,
+        runStatus: "running",
+        state: "running",
+        runningSince: now,
+        revision: 4,
+      },
+    });
+    expect((await user.query(api.timeTracking.listActive, {})).sessions).toMatchObject([
+      { state: "running", runningSince: now },
+    ]);
+    // A real blocking request can pause immediately, before any duration accumulates.
+    await environment.mutation(api.timeTracking.syncAgentSession, {
+      ...followUp,
+      session: { ...followUp.session, runStatus: "running", revision: 5 },
+    });
+    expect((await user.query(api.timeTracking.listActive, {})).sessions).toMatchObject([
+      { state: "paused", durationMs: 0 },
+    ]);
+    await environment.mutation(api.timeTracking.syncAgentSession, {
+      ...followUp,
+      session: { ...followUp.session, runStatus: "waiting", revision: 6 },
+    });
+    expect((await user.query(api.timeTracking.listActive, {})).sessions).toEqual([]);
+  });
+
+  it("accepts snapshots from older environments without retaining a stale queued status", async () => {
+    const { user, environment, snapshot } = await setup();
+    const now = Date.now();
+    const input = snapshot("legacy", now - 60_000, now);
+    input.session.state = "paused";
+    input.session.stoppedAt = null;
+    input.session.intervals = [];
+    await environment.mutation(api.timeTracking.syncAgentSession, {
+      ...input,
+      session: { ...input.session, runStatus: "queued" },
+    });
+    expect((await user.query(api.timeTracking.listActive, {})).sessions).toEqual([]);
+    await environment.mutation(api.timeTracking.syncAgentSession, {
+      ...input,
+      session: { ...input.session, revision: 2 },
+    });
+    expect((await user.query(api.timeTracking.listActive, {})).sessions).toMatchObject([
+      { state: "paused" },
+    ]);
+  });
+
+  it("updates completed summaries and retains source links without changing duration", async () => {
+    const { user, environment, snapshot } = await setup();
+    const end = Date.now();
+    const input = snapshot("summary", end - 60000, end);
+    await environment.mutation(api.timeTracking.syncAgentSession, input);
+    await environment.mutation(api.timeTracking.syncAgentSession, {
+      ...input,
+      session: {
+        ...input.session,
+        revision: 2,
+        title: "Repair project selection",
+        description: "Updated the selector and verified the fallback.",
+      },
+    });
+    await environment.mutation(api.timeTracking.syncAgentSession, input);
+    const entry = (await user.query(api.timeTracking.listMine, {})).entries[0];
+    expect(entry).toMatchObject({
+      title: "Repair project selection",
+      description: "Updated the selector and verified the fallback.",
+      durationMs: 60000,
+      environmentId: "env",
+      threadId: input.session.threadId,
+    });
+  });
+
   it("sums eight concurrent agents while elapsed activity uses their union, and replay is idempotent", async () => {
     const { user, environment, snapshot } = await setup();
     const end = Date.now(),
@@ -230,7 +343,7 @@ describe("Automatic tracked activities", () => {
     const base = {
       userId: ids.userId,
       companyId: ids.companyId,
-      description: "Issue",
+      description: "Task",
       projectKey: "project",
       projectName: "Project",
     };

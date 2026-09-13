@@ -5609,6 +5609,10 @@ export function makeClaudeAdapterV2(
                 });
               }
               if (pending.type === "user_input") {
+                if (requestInput.decision === "cancel") {
+                  yield* Deferred.succeed(pending.answers, null);
+                  return;
+                }
                 if (requestInput.answers !== undefined) {
                   yield* Deferred.succeed(pending.answers, requestInput.answers);
                   return;

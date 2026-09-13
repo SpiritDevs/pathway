@@ -4,6 +4,11 @@ export type SettingsPath =
   | "/settings/appearance"
   | "/settings/keybindings"
   | "/settings/snap-shot"
+  | "/settings/dictation"
+  | "/settings/dictation/models"
+  | "/settings/dictation/history"
+  | "/settings/dictation/dictionary"
+  | "/settings/dictation/settings"
   | "/settings/projects"
   | "/settings/members-teams"
   | "/settings/company-members"
@@ -15,6 +20,7 @@ export type SettingsPath =
   | "/settings/providers"
   | "/settings/scheduled-tasks"
   | "/settings/source-control"
+  | "/settings/time-tracker"
   | "/settings/usage"
   | "/settings/issues-statuses"
   | "/settings/issues-labels"
@@ -45,8 +51,12 @@ export function settingsSectionPathForLocation(pathname: string): SettingsPath |
   const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
   return (
     (Object.keys(SETTINGS_SECTION_LABELS) as ReadonlyArray<SettingsPath>).find(
-      (path) => normalizedPathname === path || normalizedPathname.startsWith(`${path}/`),
-    ) ?? null
+      (path) => normalizedPathname === path,
+    ) ??
+    (Object.keys(SETTINGS_SECTION_LABELS) as ReadonlyArray<SettingsPath>).find((path) =>
+      normalizedPathname.startsWith(`${path}/`),
+    ) ??
+    null
   );
 }
 
@@ -96,9 +106,15 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/company-roles": "Roles",
   "/settings/calendars": "Calendars",
   "/settings/environments": "Environments",
+  "/settings/dictation": "Set up dictation",
+  "/settings/dictation/models": "Models",
+  "/settings/dictation/history": "History",
+  "/settings/dictation/dictionary": "Dictionary",
+  "/settings/dictation/settings": "Settings",
   "/settings/providers": "Providers",
   "/settings/scheduled-tasks": "Schedule Tasks",
   "/settings/source-control": "Source Control",
+  "/settings/time-tracker": "Time Tracker",
   "/settings/usage": "Usage",
   "/settings/issues-statuses": "Statuses",
   "/settings/issues-labels": "Labels",
@@ -144,16 +160,27 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     ],
   },
   {
+    label: "Dictation",
+    paths: [
+      "/settings/dictation",
+      "/settings/dictation/models",
+      "/settings/dictation/history",
+      "/settings/dictation/dictionary",
+      "/settings/dictation/settings",
+    ],
+  },
+  {
     label: "Agents",
     paths: [
       "/settings/providers",
       "/settings/scheduled-tasks",
       "/settings/source-control",
+      "/settings/time-tracker",
       "/settings/usage",
     ],
   },
   {
-    label: "Issues",
+    label: "Tasks",
     paths: [
       "/settings/issues-statuses",
       "/settings/issues-labels",
@@ -182,6 +209,50 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
  * here once instead of separately in the panel and the index.
  */
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "dictation-setup",
+    title: "Set up dictation",
+    to: "/settings/dictation",
+    targetId: "dictation-models",
+  },
+  {
+    id: "dictation-models",
+    title: "Dictation speech models",
+    to: "/settings/dictation/models",
+    searchTerms: ["whisper", "download", "transcription"],
+  },
+  {
+    id: "dictation-cleanup",
+    title: "Dictation text cleanup",
+    to: "/settings/dictation/models",
+    searchTerms: ["qwen", "fillers"],
+  },
+  { id: "dictation-history", title: "Dictation history", to: "/settings/dictation/history" },
+  {
+    id: "dictation-dictionary",
+    title: "Dictation dictionary",
+    to: "/settings/dictation/dictionary",
+    searchTerms: ["spelling", "aliases", "corrections"],
+  },
+  { id: "dictation-enabled", title: "Enable dictation", to: "/settings/dictation/settings" },
+  { id: "dictation-microphone", title: "Dictation microphone", to: "/settings/dictation/settings" },
+  { id: "dictation-shortcut", title: "Dictation shortcut", to: "/settings/dictation/settings" },
+  { id: "dictation-language", title: "Dictation language", to: "/settings/dictation/settings" },
+  {
+    id: "dictation-bar",
+    title: "Dictation bar and model memory",
+    to: "/settings/dictation/settings",
+  },
+  {
+    id: "dictation-retention",
+    title: "Dictation history retention",
+    to: "/settings/dictation/settings",
+  },
+  {
+    id: "dictation-permissions",
+    title: "Dictation permissions",
+    to: "/settings/dictation/settings",
+  },
   { id: "thread-alerts", title: "Thread alerts", to: "/settings/notifications" },
   {
     id: "alert-project-overrides",
@@ -324,6 +395,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "preferred-terminal",
+    title: "Open in Terminal",
+    to: "/settings/general",
+  },
+  {
     id: "time-format",
     title: "Time format",
     to: "/settings/general",
@@ -432,7 +508,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "snap-shot-enabled",
-    searchTerms: ["window capture screenshot", "app shots"],
+    searchTerms: ["window capture screenshot", "app shots", "annotation editor"],
     title: "SnapShots",
     to: "/settings/snap-shot",
   },
@@ -445,7 +521,22 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "snap-shot-shortcut",
-    title: "Capture shortcut",
+    title: "Active window shortcut",
+    searchTerms: ["capture shortcut", "window hotkey"],
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "snap-shot-screen-shortcut",
+    title: "Current screen shortcut",
+    searchTerms: ["fullscreen capture", "whole screen", "display monitor hotkey"],
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
+  },
+  {
+    id: "snap-shot-region-shortcut",
+    title: "Region shortcut",
+    searchTerms: ["region capture", "area selection hotkey"],
     to: "/settings/snap-shot",
     targetId: "snap-shot-enabled",
   },
@@ -462,15 +553,15 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "snap-shot-enabled",
   },
   {
-    id: "snap-shot-animations",
-    title: "Capture animations",
-    to: "/settings/snap-shot",
-    targetId: "snap-shot-enabled",
-  },
-  {
     id: "providers",
     title: "Providers",
     to: "/settings/providers",
+  },
+  {
+    id: "time-tracker",
+    title: "Time Tracker summary model",
+    to: "/settings/time-tracker",
+    searchTerms: ["time", "tracking", "title", "description", "model"],
   },
   {
     id: "source-control",
@@ -479,27 +570,27 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "issue-statuses",
-    title: "Issue statuses",
+    title: "Task statuses",
     to: "/settings/issues-statuses",
   },
   {
     id: "issue-key-prefix",
-    title: "Issue key prefix",
+    title: "Task key prefix",
     to: "/settings/issues-statuses",
   },
   {
     id: "issue-labels",
-    title: "Issue labels",
+    title: "Task labels",
     to: "/settings/issues-labels",
   },
   {
     id: "issue-milestones",
-    title: "Issue milestones",
+    title: "Task milestones",
     to: "/settings/issues-milestones",
   },
   {
     id: "issue-import",
-    title: "Import issues",
+    title: "Import tasks",
     to: "/settings/issues-import",
   },
   {
@@ -521,12 +612,12 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "issue-intake-automation",
-    title: "Issue auto-assignment and audits",
+    title: "Task auto-assignment and audits",
     to: "/settings/integrations",
   },
   {
     id: "issue-enrichment",
-    title: "Issue enrichment",
+    title: "Task enrichment",
     to: "/settings/issues-enrichment",
   },
   {

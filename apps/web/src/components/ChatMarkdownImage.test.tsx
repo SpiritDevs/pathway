@@ -39,7 +39,10 @@ vi.mock("../state/assets", () => ({
         state.failure
           ? AsyncResult.failure(Cause.fail(new Error("File unavailable")))
           : AsyncResult.success<AssetCreateUrlResult>({
-              relativeUrl: "/api/assets/signed/image.jpg",
+              relativeUrl:
+                target.input.resource._tag === "visualization-file"
+                  ? "/api/assets/signed/preview.html"
+                  : "/api/assets/signed/image.jpg",
               expiresAt: state.expired ? 0 : Date.now() + 3_600_000,
             }),
       );
@@ -76,6 +79,61 @@ beforeEach(() => {
   state.failure = false;
   state.expired = false;
   state.requests = [];
+});
+
+describe("conversation visualizations", () => {
+  const path = "/tmp/pathway-background-services-97f9e984/background-services.html";
+  const marker = `visualize${JSON.stringify({ path })}`;
+
+  it("renders historical markers as browser cards through their owning environment", () => {
+    const html = render(`Here's a mockup.\n\n${marker}`, "remote-owner");
+    expect(html).toContain("background services");
+    expect(html).toContain('href="https://remote-owner.example/api/assets/signed/preview.html"');
+    expect(html).toContain('target="_blank"');
+    expect(html).not.toContain("");
+    expect(state.requests).toEqual([
+      {
+        environmentId: "remote-owner",
+        input: { resource: { _tag: "visualization-file", threadId: "same-thread", path } },
+      },
+    ]);
+    state.activeEnvironment = "unrelated";
+    expect(render(marker, "remote-owner")).toContain('href="https://remote-owner.example/');
+  });
+
+  it("preserves JSON escapes and treats titles as plain text", () => {
+    const path = String.raw`C:\scratch\some_file.html`;
+    const title = "A **bold** <script> title";
+    const html = render(`visualize${JSON.stringify({ path, title, mode: "wide" })}`);
+    expect(html).toContain("A **bold** &lt;script&gt; title");
+    expect(state.requests).toContainEqual({
+      environmentId: "owner",
+      input: {
+        resource: { _tag: "visualization-file", threadId: "same-thread", path },
+      },
+    });
+  });
+
+  it("keeps fenced and inline examples literal and ignores incomplete or invalid markers", () => {
+    for (const value of [
+      "```text\n" + marker + "\n```",
+      "`" + marker + "`",
+      "visualize{",
+      'visualize{"path":"https://evil.example/a.html"}',
+    ]) {
+      expect(render(value)).not.toContain("Open visualization in browser");
+    }
+    expect(state.requests).toEqual([]);
+  });
+
+  it("shows an unavailable state for disconnected environments and missing files", () => {
+    expect(render(marker, null)).toContain("Visualization unavailable");
+    state.connected = false;
+    expect(render(marker)).toContain("Visualization unavailable");
+    state.connected = true;
+    state.failure = true;
+    expect(render(marker)).toContain("Retry visualization");
+  });
 });
 
 describe("conversation Markdown images", () => {

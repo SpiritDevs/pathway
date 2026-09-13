@@ -6,7 +6,10 @@ import UniformTypeIdentifiers
 struct NewAgentThreadMessageEditor: View {
     @Bindable var model: PathwayAgentThreadCreationModel
     @Binding var isFocused: Bool
+    @Binding var showsOptions: Bool
     @State private var selection: NSRange?
+    @State private var pendingTool: Tool?
+    private enum Tool { case photos, files, camera, document, stash }
     @State private var showsFiles = false
     @State private var showsPhotos = false
     #if os(iOS)
@@ -26,43 +29,20 @@ struct NewAgentThreadMessageEditor: View {
                 NewAgentThreadSuggestions(model: model, trigger: trigger, select: selectSuggestion)
             }
             if !model.attachments.drafts.isEmpty { attachmentStrip }
-            AgentComposerTextInput(text: $model.prompt, selection: $selection, isFocused: $isFocused,
-                placeholder: "Ask anything…", pasteImages: pasteImages)
+            AgentComposerTextInput(text: $model.prompt, selection: $selection,
+                isFocused: $isFocused,
+                placeholder: "Ask anything…", pasteImages: pasteImages,
+                accessibilityIdentifier: "new-agent-thread-prompt")
                 .overlay(alignment: .topLeading) {
                     if model.prompt.isEmpty {
-                        Text("Ask anything…").foregroundStyle(.tertiary)
-                            .allowsHitTesting(false).accessibilityHidden(true)
+                        Text("Ask anything…").foregroundStyle(.tertiary).allowsHitTesting(false)
+                            .accessibilityHidden(true)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .accessibilityIdentifier("new-agent-thread-prompt")
             if model.prompt.count > 120_000 {
                 Text("Use 120,000 characters or fewer.").font(.caption).foregroundStyle(.red)
             }
-            HStack(spacing: 8) {
-                Menu {
-                    Button("Photos", systemImage: "photo.on.rectangle") { showsPhotos = true }
-                    Button("Choose files", systemImage: "folder") { showsFiles = true }
-                    #if os(iOS)
-                    if PathwayCameraCapture.isSupported {
-                        Button("Take photo", systemImage: "camera") { requestCapture(.camera) }
-                    }
-                    if PathwayDocumentCapture.isSupported, model.attachments.maximumFileBytes != nil {
-                        Button("Scan document", systemImage: "document.viewfinder") { requestCapture(.document) }
-                    }
-                    #endif
-                } label: {
-                    Label("Attach", systemImage: "paperclip").frame(minHeight: 44)
-                }
-                .disabled(!model.attachments.supportsUploads || model.attachments.drafts.count >= 8 || model.isLaunching)
-                Button("Save draft", systemImage: "tray.and.arrow.down") { stashDraft() }
-                    .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
-                    .disabled(stash == nil || isStashing || model.isLaunching || (model.prompt.isEmpty && model.attachments.drafts.isEmpty))
-                Button("Saved prompts (\(stashCount))", systemImage: "tray.full") { showsStash = true }
-                    .frame(minHeight: 44).disabled(stash == nil || model.isLaunching)
-                Spacer(minLength: 0)
-            }
-            .font(.subheadline)
             if let error = errorMessage ?? model.attachments.errorMessage {
                 HStack(alignment: .top) {
                     Text(error).font(.caption).foregroundStyle(.red)
@@ -71,6 +51,43 @@ struct NewAgentThreadMessageEditor: View {
                         .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
                 }
             }
+        }
+        .sheet(isPresented: $showsOptions, onDismiss: presentPendingTool) {
+            NewAgentThreadSettings(model: model, title: "Composer Options") {
+                Section("Attachments") {
+                    Group {
+                        Button("Photos", systemImage: "photo.on.rectangle") { chooseTool(.photos) }
+                        Button("Choose files", systemImage: "folder") { chooseTool(.files) }
+                        #if os(iOS)
+                        if PathwayCameraCapture.isSupported {
+                            Button("Take photo", systemImage: "camera") { chooseTool(.camera) }
+                        }
+                        if PathwayDocumentCapture.isSupported, model.attachments.maximumFileBytes != nil {
+                            Button("Scan document", systemImage: "document.viewfinder") { chooseTool(.document) }
+                        }
+                        #endif
+                        PasteButton(supportedContentTypes: [.image]) { providers in
+                            showsOptions = false
+                            pasteImages(providers)
+                        }
+                    }
+                    .disabled(!model.attachments.supportsUploads || model.attachments.drafts.count >= 8 || model.isLaunching)
+                }
+                if model.supportsConversations, !model.usesInternalWorkspace {
+                    Section {
+                        Toggle("Temporary thread", isOn: $model.temporary)
+                            .accessibilityHint("Deletes this thread and its working files when it settles")
+                    }
+                }
+                Section("Prompts") {
+                    Button("Save draft", systemImage: "tray.and.arrow.down") { stashDraft() }
+                        .disabled(stash == nil || isStashing || model.isLaunching || (model.prompt.isEmpty && model.attachments.drafts.isEmpty))
+                    Button("Saved prompts (\(stashCount))", systemImage: "tray.full") { chooseTool(.stash) }
+                        .disabled(stash == nil || model.isLaunching)
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .fileImporter(isPresented: $showsFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             switch result {
@@ -132,19 +149,9 @@ struct NewAgentThreadMessageEditor: View {
         ScrollView(.horizontal) {
             HStack(spacing: 8) {
                 ForEach(model.attachments.drafts) { attachment in
-                    HStack(spacing: 5) {
-                        Label(attachment.name, systemImage: attachment.type == "image" ? "photo" : "doc")
-                            .font(.caption).lineLimit(1).frame(maxWidth: 140)
-                        switch attachment.state {
-                        case .uploading: ProgressView().controlSize(.small)
-                        case .failed:
-                            Button("Retry \(attachment.name)", systemImage: "arrow.clockwise") { Task { await model.attachments.retry(id: attachment.id) } }
-                                .labelStyle(.iconOnly).frame(width: 44, height: 44)
-                        case .ready: EmptyView()
-                        }
-                        Button("Remove \(attachment.name)", systemImage: "xmark.circle.fill") { Task { await model.attachments.remove(id: attachment.id) } }
-                            .labelStyle(.iconOnly).frame(width: 44, height: 44)
-                    }.padding(.leading, 10).background(.quaternary, in: Capsule())
+                    AgentThreadComposerAttachmentChip(attachment: attachment,
+                        remove: { Task { await model.attachments.remove(id: attachment.id) } },
+                        retry: { Task { await model.attachments.retry(id: attachment.id) } })
                 }
             }
         }.scrollIndicators(.hidden).disabled(model.isLaunching)
@@ -173,10 +180,32 @@ struct NewAgentThreadMessageEditor: View {
         isFocused = true
     }
 
+    private func chooseTool(_ tool: Tool) {
+        pendingTool = tool
+        showsOptions = false
+    }
+
+    private func presentPendingTool() {
+        let tool = pendingTool
+        pendingTool = nil
+        switch tool {
+        case .photos: showsPhotos = true
+        case .files: showsFiles = true
+        case .stash: showsStash = true
+        #if os(iOS)
+        case .camera: requestCapture(.camera)
+        case .document: requestCapture(.document)
+        #else
+        case .camera, .document: break
+        #endif
+        case nil: break
+        }
+    }
+
     private func pasteImages(_ providers: [NSItemProvider]) {
+        guard !model.isLaunching else { return }
         guard model.attachments.supportsUploads else {
-            errorMessage = "This environment does not support uploading images."
-            return
+            errorMessage = "This environment does not support uploading images."; return
         }
         let room = max(0, 8 - model.attachments.drafts.count)
         guard room > 0 else { errorMessage = "You can attach up to 8 files."; return }
