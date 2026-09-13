@@ -74,6 +74,7 @@ struct PathwayThreadAttachmentDraft: Codable, Identifiable, Equatable, Sendable 
     var state: State
     var attachment: PathwayMessageAttachment?
     var previewData: Data?
+    var source: JSONValue? = nil
 }
 
 extension PathwayMessageAttachment {
@@ -174,12 +175,12 @@ extension PathwayAgentThreadModel {
     }
 
     func addAttachment(data: Data, name: String, mimeType: String) async {
-        let type = mimeType.hasPrefix("image/") ? "image" : "file"
         let image: PathwayImageUpload
         do { image = try await PathwayImageUpload.prepare(data: data, name: name, mimeType: mimeType) }
         catch is CancellationError { return }
         catch { actionError = error.localizedDescription; return }
         let data = image.data, name = image.name, mimeType = image.mimeType
+        let type = mimeType.hasPrefix("image/") ? "image" : "file"
         guard supportsAttachmentUploads, type == "image" || maximumFileAttachmentBytes != nil else {
             actionError = "This environment does not support uploading this file type."; return
         }
@@ -220,7 +221,7 @@ extension PathwayAgentThreadModel {
             guard let index = draftAttachments.firstIndex(where: { $0.id == id }) else {
                 _ = try? await self.request("attachments.delete", payload: .object(["attachmentId": .string(attachmentID)])); return
             }
-            draftAttachments[index].attachment = PathwayMessageAttachment(id: attachmentID, type: draft.type, name: draft.name, mimeType: draft.mimeType, sizeBytes: data.count)
+            draftAttachments[index].attachment = PathwayMessageAttachment(id: attachmentID, type: draft.type, name: draft.name, mimeType: draft.mimeType, sizeBytes: data.count, source: draft.source)
             draftAttachments[index].state = .ready
         } catch {
             if let uploadedID { _ = try? await request("attachments.delete", payload: .object(["attachmentId": .string(uploadedID)])) }
@@ -236,12 +237,6 @@ extension PathwayAgentThreadModel {
         if let attachmentID { _ = try? await request("attachments.delete", payload: .object(["attachmentId": .string(attachmentID)])) }
     }
 
-    func attachmentURL(_ attachment: PathwayMessageAttachment) async throws -> URL {
-        let value = try await request("assets.createUrl", payload: .object(["resource": .object([
-            "_tag": .string("attachment"), "attachmentId": .string(attachment.id), "fileName": .string(attachment.name), "mimeType": .string(attachment.mimeType)
-        ])]), reportsErrors: false)
-        guard let relative = value.objectValue?["relativeUrl"]?.stringValue else { throw PathwayThreadConversationError.message("The attachment URL was unavailable.") }
-        return try await resolveAssetURL(relative)
     func markdownImageURL(_ path: String, threadID: String) async throws -> URL {
         guard let connect else { throw PathwayThreadConversationError.message("Connect to the environment to access images.") }
         return try await PathwayEnvironmentHTTP.assetURL(path, threadID: threadID, environment: environment, connect: connect) { [self] method, payload in
@@ -249,6 +244,12 @@ extension PathwayAgentThreadModel {
         }
     }
 
+    func attachmentURL(_ attachment: PathwayMessageAttachment) async throws -> URL {
+        let value = try await request("assets.createUrl", payload: .object(["resource": .object([
+            "_tag": .string("attachment"), "attachmentId": .string(attachment.id), "fileName": .string(attachment.name), "mimeType": .string(attachment.mimeType)
+        ])]), reportsErrors: false)
+        guard let relative = value.objectValue?["relativeUrl"]?.stringValue else { throw PathwayThreadConversationError.message("The attachment URL was unavailable.") }
+        return try await resolveAssetURL(relative)
     }
     private func resolveAssetURL(_ relative: String) async throws -> URL {
         guard let connect else { throw PathwayThreadConversationError.message("Connect to the environment to access files.") }

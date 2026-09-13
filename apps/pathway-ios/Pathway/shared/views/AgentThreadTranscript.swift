@@ -5,7 +5,6 @@ struct AgentThreadTranscript: View {
     let model: PathwayAgentThreadModel
     let onOpenChild: (String) -> Void
     @State private var editingItem: PathwayTimelineItem?
-    @State private var queuedEditingRunID: String?
     @State private var errorMessage: String?
     @State private var forkingID: String?
     @State private var preparingEditID: String?
@@ -13,7 +12,7 @@ struct AgentThreadTranscript: View {
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 22) {
-            ForEach(layoutCache.rows(model.items, activeRunID: model.activeRunID)) { row in
+            ForEach(layoutCache.rows(model.transcriptItems, activeRunID: model.activeRunID)) { row in
                 switch row.content {
                 case .item(let item):
                     itemView(item)
@@ -21,10 +20,11 @@ struct AgentThreadTranscript: View {
                     AgentTranscriptWorkGroup(label: label, items: items, settled: settled, model: model, onOpenChild: onOpenChild)
                 }
             }
+            AgentTranscriptActivity(model: model)
             Color.clear.frame(height: 1).id("agent-transcript-bottom")
         }
         .sheet(item: $editingItem) { item in
-            AgentTranscriptMessageEditor(item: item, model: model, queuedRunID: queuedEditingRunID)
+            AgentTranscriptMessageEditor(item: item, model: model)
         }
         .alert("Couldn’t complete action", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK") { errorMessage = nil }
@@ -35,11 +35,10 @@ struct AgentThreadTranscript: View {
 
     @ViewBuilder
     private func itemView(_ item: PathwayTimelineItem) -> some View {
-        let queued = queuedRun(for: item)
         if item.isConversation {
             AgentTranscriptMessage(item: item, model: model) {
-                if item.isUserMessage && !item.isGeneratedQuestionReply && (model.canPrepareEdit(item) || queued != nil) {
-                    Button(queued == nil ? "Edit and restart" : "Edit queued message", systemImage: "pencil") { beginEditing(item, queuedRunID: queued?.id) }
+                if item.isUserMessage && !item.isGeneratedQuestionReply && model.canPrepareEdit(item) {
+                    Button("Edit and restart", systemImage: "pencil") { beginEditing(item) }
                         .accessibilityIdentifier("thread-message-edit-\(item.id)")
                         .disabled(preparingEditID != nil)
                 }
@@ -55,9 +54,6 @@ struct AgentThreadTranscript: View {
                     if model.thread.shell.isTemporary { Text("Keep conversation before forking this thread.") }
                 }
             }
-            if let run = queued {
-                AgentTranscriptQueueActions(run: run, model: model, canEdit: !item.isGeneratedQuestionReply) { beginEditing(item, queuedRunID: run.id) }
-            }
         } else if item.type == "approval_request" {
             AgentTranscriptApproval(item: item, model: model)
         } else if item.type == "user_input_request" {
@@ -72,10 +68,9 @@ struct AgentThreadTranscript: View {
         }
     }
 
-    private func beginEditing(_ item: PathwayTimelineItem, queuedRunID: String?) {
+    private func beginEditing(_ item: PathwayTimelineItem) {
         guard preparingEditID == nil, !item.isGeneratedQuestionReply else { return }
-        if queuedRunID != nil || model.activeRunID == nil {
-            queuedEditingRunID = queuedRunID
+        if model.activeRunID == nil {
             editingItem = item
             return
         }
@@ -85,15 +80,9 @@ struct AgentThreadTranscript: View {
             defer { preparingEditID = nil }
             do {
                 try await model.interrupt()
-                queuedEditingRunID = nil
                 editingItem = item
             } catch { errorMessage = error.localizedDescription }
         }
-    }
-
-    private func queuedRun(for item: PathwayTimelineItem) -> PathwayThreadRun? {
-        guard item.isUserMessage else { return nil }
-        return model.queuedRuns.first { $0.id == item.runID || (item.messageID != nil && $0.userMessageID == item.messageID) }
     }
 
     private func fork(_ item: PathwayTimelineItem) {
@@ -103,6 +92,26 @@ struct AgentThreadTranscript: View {
             defer { forkingID = nil }
             do { onOpenChild(try await model.fork(from: item)) }
             catch { errorMessage = error.localizedDescription }
+        }
+    }
+}
+
+private struct AgentTranscriptActivity: View {
+    let model: PathwayAgentThreadModel
+
+    var body: some View {
+        if let activity = model.activity {
+            Label {
+                Text(activity.rawValue)
+            } icon: {
+                Image(systemName: activity == .waiting ? "pause.circle" : "ellipsis")
+                    .accessibilityHidden(true)
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 4)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("agent-thread-activity")
         }
     }
 }
@@ -244,6 +253,8 @@ struct AgentTranscriptAttachmentPreview: View {
     let attachment: PathwayMessageAttachment
     let model: PathwayAgentThreadModel
     let initialURL: URL?
+    var markdownSource: PathwayMarkdownImageSource? = nil
+    var sourceThreadID: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var url: URL?
     @State private var attempt = 0
@@ -253,8 +264,6 @@ struct AgentTranscriptAttachmentPreview: View {
 
     var body: some View {
         NavigationStack {
-    var markdownSource: PathwayMarkdownImageSource? = nil
-    var sourceThreadID: String? = nil
             Group {
                 if let url, attachment.type == "image" {
                     GeometryReader { geometry in
@@ -305,6 +314,9 @@ struct AgentTranscriptAttachmentPreview: View {
             .task(id: attempt) {
                 do {
                     if attempt == 0, let initialURL { url = initialURL }
+                    else if case .workspace(let path) = markdownSource {
+                        url = try await model.markdownImageURL(path, threadID: sourceThreadID ?? model.threadID)
+                    } else if case .web(let remote) = markdownSource { url = remote }
                     else { url = try await model.attachmentURL(attachment) }
                     errorMessage = nil
                 } catch { errorMessage = error.localizedDescription }
@@ -314,9 +326,6 @@ struct AgentTranscriptAttachmentPreview: View {
     private func failure(_ message: String) -> some View {
         ContentUnavailableView {
             Label("Preview unavailable", systemImage: "photo")
-                    else if case .workspace(let path) = markdownSource {
-                        url = try await model.markdownImageURL(path, threadID: sourceThreadID ?? model.threadID)
-                    } else if case .web(let remote) = markdownSource { url = remote }
         } description: { Text(message) } actions: {
             Button("Retry") { url = nil; errorMessage = nil; attempt += 1 }
         }
@@ -614,27 +623,20 @@ private struct AgentTranscriptCodeBlock: View {
 private struct AgentTranscriptMessageEditor: View {
     let item: PathwayTimelineItem
     let model: PathwayAgentThreadModel
-    let queuedRunID: String?
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var busy = false
     @State private var error: String?
     @FocusState private var focused: Bool
-    private var queuedMessageDeparted: Bool {
-        queuedRunID.map { id in !model.queuedRuns.contains { $0.id == id } } ?? false
-    }
-
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
                 TextEditor(text: $text).focused($focused).accessibilityIdentifier("thread-message-edit-input")
                 if let error { Text(error).font(.subheadline).foregroundStyle(.red) }
-                Text(queuedRunID == nil ? "The agent will restart from this message." : "This changes the queued message before the agent starts it.").font(.footnote).foregroundStyle(.secondary)
-                if queuedMessageDeparted {
-                    Text("This message is no longer queued. Your draft is still here to copy.").font(.footnote).foregroundStyle(.secondary)
-                } else if queuedRunID == nil && model.activeRunID != nil {
+                Text("The agent will restart from this message.").font(.footnote).foregroundStyle(.secondary)
+                if model.activeRunID != nil {
                     Text("Waiting for the agent to stop before restarting.").font(.footnote).foregroundStyle(.secondary)
-                } else if queuedRunID == nil && !model.canEdit(item) {
+                } else if !model.canEdit(item) {
                     Text("This message can no longer be restarted. Your draft is still here to copy.").font(.footnote).foregroundStyle(.secondary)
                 }
             }.padding(20)
@@ -642,20 +644,17 @@ private struct AgentTranscriptMessageEditor: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(busy) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(queuedRunID == nil ? "Save and restart" : "Save") {
+                    Button("Save and restart") {
                         busy = true
                         Task {
                             defer { busy = false }
                             do {
-                                if let queuedRunID {
-                                    guard !queuedMessageDeparted else { throw PathwayThreadConversationError.message("This message is no longer queued. Your draft has been kept.") }
-                                    try await model.editQueuedRun(queuedRunID, text: PathwayAgentThreadModel.preservingMessageContext(original: item.text ?? "", edited: text))
-                                } else { try await model.editLatestUserMessage(item, text: text) }
+                                try await model.editLatestUserMessage(item, text: text)
                                 dismiss()
                             }
                             catch { self.error = error.localizedDescription }
                         }
-                    }.disabled(busy || queuedMessageDeparted || (queuedRunID == nil && !model.canEdit(item)) || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }.disabled(busy || !model.canEdit(item) || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             .disabled(busy).interactiveDismissDisabled(busy)

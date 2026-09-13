@@ -275,6 +275,11 @@ final class PathwayAgentThreadModel {
     private(set) var checkpoints: [JSONValue] = []
     private(set) var plans: [JSONValue] = []
     var isSending = false
+    var activity: PathwayThreadActivity? {
+        let run = runs.first { $0.id == activeRunID }
+            ?? runs.first { $0.status == "queued" }
+        return PathwayThreadActivity(isSynchronized: isSubscriptionReady && connectionState == .live, isSending: isSending, runStatus: run?.status)
+    }
     var actionError: String?
     var isProviderNativeChild = false
     var isParentRosterLoading = false

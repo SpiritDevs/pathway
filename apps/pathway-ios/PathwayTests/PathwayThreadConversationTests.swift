@@ -4,6 +4,115 @@ import Testing
 
 @MainActor
 struct PathwayThreadConversationTests {
+    @Test func queuedMessagesStayOutOfTranscriptUntilStarted() {
+        let model = makeModel { _, _ in .object([:]) }
+        model.installSnapshot(snapshot(status: "queued"), sequence: 1)
+        #expect(model.items.count == 1)
+        #expect(model.transcriptItems.isEmpty)
+        model.applySubscriptionValue(event(sequence: 2, type: "run.updated", payload: run(status: "running")))
+        #expect(model.transcriptItems.count == 1)
+        model.applySubscriptionValue(event(sequence: 3, type: "run.updated", payload: run(status: "cancelled")))
+        #expect(model.transcriptItems.isEmpty)
+    }
+
+    @Test func editingQueuedMessageCancelsThenRestoresTheComposer() async throws {
+        var commands: [[String: JSONValue]] = []
+        let model = makeModel { method, payload in
+            #expect(method == "orchestration.dispatchCommand")
+            commands.append(try #require(payload.objectValue))
+            return .object([:])
+        }
+        model.installSnapshot(snapshot(status: "queued"), sequence: 1)
+        try await model.restoreQueuedMessage("run-1")
+        #expect(commands.count == 1)
+        #expect(commands[0]["type"]?.stringValue == "queued-run.cancel")
+        #expect(commands[0]["runId"]?.stringValue == "run-1")
+        #expect(model.draft == "Original\n<issue_context>Keep this</issue_context>")
+        model.applySubscriptionValue(event(sequence: 2, type: "run.updated", payload: run(status: "cancelled")))
+        model.draft = "Edited\n<issue_context>Keep this</issue_context>"
+        await model.send()
+        #expect(commands.last?["type"]?.stringValue == "message.dispatch")
+        #expect(commands.last?["text"]?.stringValue == "Edited\n<issue_context>Keep this</issue_context>")
+        #expect(model.draft.isEmpty)
+    }
+
+    @Test func rejectedQueueCancellationLeavesTheDraftAndQueueAlone() async {
+        let model = makeModel { _, _ in throw PathwayRPCError.remote("The run has already started.") }
+        model.installSnapshot(snapshot(status: "queued"), sequence: 1)
+        do {
+            try await model.restoreQueuedMessage("run-1")
+            Issue.record("A rejected cancellation must not restore a second copy to send.")
+        } catch {}
+        #expect(model.draft.isEmpty)
+        #expect(model.queuedRuns.count == 1)
+    }
+
+    @Test func queueEditingDoesNotReplaceAnExistingDraft() async {
+        var calls = 0
+        let model = makeModel { _, _ in calls += 1; return .object([:]) }
+        model.installSnapshot(snapshot(status: "queued"), sequence: 1)
+        model.draft = "Keep my unsent draft"
+        do {
+            try await model.restoreQueuedMessage("run-1")
+            Issue.record("Editing must preserve an existing draft.")
+        } catch {}
+        #expect(calls == 0)
+        #expect(model.draft == "Keep my unsent draft")
+    }
+
+    @Test func queueEditingPreservesDraftChangesDuringCancellation() async throws {
+        var updateDraft: (() -> Void)?
+        let model = makeModel { _, _ in updateDraft?(); return .object([:]) }
+        model.installSnapshot(snapshot(status: "queued"), sequence: 1)
+        updateDraft = { model.draft = "New text" }
+        try await model.restoreQueuedMessage("run-1")
+        #expect(model.draft == "Original\n<issue_context>Keep this</issue_context>\n\nNew text")
+    }
+
+    @Test func reorderUsesTheMovedRunAndItsNewSuccessor() async throws {
+        var command: [String: JSONValue] = [:]
+        let model = makeModel { _, payload in command = payload.objectValue ?? [:]; return .object([:]) }
+        model.installSnapshot(snapshot(status: "queued"), sequence: 1)
+        try await model.reorderQueuedRun("run-1", beforeRunID: "run-2")
+        #expect(command["type"]?.stringValue == "queued-run.reorder")
+        #expect(command["runId"]?.stringValue == "run-1")
+        #expect(command["beforeRunId"]?.stringValue == "run-2")
+        try await model.reorderQueuedRun("run-1", beforeRunID: nil)
+        #expect(command["beforeRunId"] == .null)
+    }
+
+    @Test func activityFollowsLiveRunEventsAndReconnects() {
+        let model = makeModel { _, _ in .object([:]) }
+        model.installSnapshot(snapshot(status: "starting"), sequence: 1)
+        #expect(model.activity == .starting)
+        model.applySubscriptionValue(event(sequence: 2, type: "run.updated", payload: run(status: "running")))
+        #expect(model.activity == .working)
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("disconnected")]))
+        #expect(model.activity == nil)
+        model.installSnapshot(snapshot(status: "completed"), sequence: 3)
+        model.applySubscriptionValue(.object(["kind": .string("synchronized")]))
+        #expect(model.activity == nil)
+        model.applySubscriptionValue(event(sequence: 4, type: "run.updated", payload: run(status: "running")))
+        #expect(model.activity == .working)
+        model.applySubscriptionValue(event(sequence: 5, type: "run.updated", payload: run(status: "interrupted")))
+        #expect(model.activity == nil)
+    }
+
+    @Test func activeWorkTakesPrecedenceOverQueuedFollowups() {
+        let model = makeModel { _, _ in .object([:]) }
+        model.installSnapshot(snapshot(status: "running"), sequence: 1)
+        model.applySubscriptionValue(event(sequence: 2, type: "run.created", payload: .object([
+            "id": .string("run-2"), "ordinal": .number(2), "status": .string("queued")
+        ])))
+        #expect(model.activity == .working)
+        model.applySubscriptionValue(event(sequence: 3, type: "run.updated", payload: run(status: "completed")))
+        #expect(model.activity == .queued)
+        model.applySubscriptionValue(event(sequence: 4, type: "run.updated", payload: .object([
+            "id": .string("run-2"), "ordinal": .number(2), "status": .string("cancelled")
+        ])))
+        #expect(model.activity == nil)
+    }
+
     @Test func captureMetadataSurvivesNativeDecodeCacheAndResend() throws {
         let source: JSONValue = .object([
             "kind": .string("snap-shot"), "appName": .string("Editor"),
@@ -30,6 +139,27 @@ struct PathwayThreadConversationTests {
         let browser = PathwayRemoteBrowserModel(thread: thread)
         #expect(browser.canTakeControl == ["preparing", "starting", "running"].contains(status))
         if status == "waiting" { #expect(thread.activeRunID != nil) }
+    }
+
+    @Test func failedBrowserTabLoadOffersReconnectAndRetryCanRecover() async {
+        let thread = makeModel { _, _ in .object([:]) }
+        @MainActor final class BrowserResponseState { var failList = true }
+        let responseState = BrowserResponseState()
+        let browser = PathwayRemoteBrowserModel(thread: thread, request: { _, payload in
+            if payload.objectValue?["action"]?.stringValue == "list", responseState.failList {
+                throw PathwayRPCError.remote("Browser is unavailable")
+            }
+            return .object(["tabs": .array([]), "selectedTabId": .null])
+        })
+        await browser.start()
+        #expect(!browser.isHostReady)
+        #expect(browser.error == "Browser is unavailable")
+        #expect(!(await browser.command("open")))
+        responseState.failList = false
+        await browser.start()
+        #expect(browser.isHostReady)
+        #expect(browser.error == nil)
+        await browser.stop()
     }
 
     @Test func environmentBrowserWaitsForHostSelectionBeforeLoadingTabs() async throws {
@@ -139,27 +269,6 @@ struct PathwayThreadConversationTests {
         #expect(model.activeRunID == nil)
         model.applySubscriptionValue(event(sequence: 2, type: "run.updated", payload: run(status: "running")))
         #expect(model.activeRunID == nil)
-    }
-
-    @Test func failedBrowserTabLoadOffersReconnectAndRetryCanRecover() async {
-        let thread = makeModel { _, _ in .object([:]) }
-        @MainActor final class BrowserResponseState { var failList = true }
-        let responseState = BrowserResponseState()
-        let browser = PathwayRemoteBrowserModel(thread: thread, request: { _, payload in
-            if payload.objectValue?["action"]?.stringValue == "list", responseState.failList {
-                throw PathwayRPCError.remote("Browser is unavailable")
-            }
-            return .object(["tabs": .array([]), "selectedTabId": .null])
-        })
-        await browser.start()
-        #expect(!browser.isHostReady)
-        #expect(browser.error == "Browser is unavailable")
-        #expect(!(await browser.command("open")))
-        responseState.failList = false
-        await browser.start()
-        #expect(browser.isHostReady)
-        #expect(browser.error == nil)
-        await browser.stop()
     }
 
     @Test func editEligibilityAndHiddenContextArePreserved() async throws {

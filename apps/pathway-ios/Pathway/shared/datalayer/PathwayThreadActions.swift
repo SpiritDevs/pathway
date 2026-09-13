@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 enum PathwayThreadAction: Equatable, Sendable {
-    case pin, unpin, settle, reopen, wake
+    case pin, unpin, settle, reopen, wake, forceSettle, regenerateTitle
     case sleep(until: Date)
     case rename(String), archive, restore, delete, reorder(String)
     case keepConversation, attachProject(String), discardAndSettle
@@ -26,6 +26,12 @@ enum PathwayThreadAction: Equatable, Sendable {
             type = "thread.pin.reorder"
             fields["orderKey"] = .string(orderKey)
         case .settle: type = "thread.settle"
+        case .forceSettle:
+            type = "thread.settle"
+            fields["force"] = .bool(true)
+        case .regenerateTitle:
+            type = "thread.metadata.update"
+            fields["regenerateTitle"] = .bool(true)
         case .discardAndSettle:
             type = "thread.settle"
             fields["discardChanges"] = .bool(true)
