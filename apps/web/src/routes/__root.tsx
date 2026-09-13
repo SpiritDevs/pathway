@@ -1,4 +1,5 @@
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
+import { DictationAccountCoordinator } from "../dictation/cloud";
 import { type AuthSessionState, type ServerLifecycleWelcomePayload } from "@spiritdevs/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@spiritdevs/client-runtime/environment";
 import {
@@ -405,6 +406,7 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
         <ConnectOnboardingDialog />
         <SshPasswordPromptDialog />
         <SnapShotCoordinator />
+        <DictationAccountCoordinator />
         <ConfirmDialogHost />
         <TemporaryThreadDiscardDialog />
         <WorkspaceCleanupNoticeHost />

@@ -1,4 +1,5 @@
-"use client";
+import { useDictationAvailability } from "../dictation/useDictation";
+("use client");
 import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
 
 import { ProjectOwnerSelect, useProjectOwner } from "./projects/ProjectOwnerSelect";
@@ -905,6 +906,7 @@ function OpenCommandPaletteDialog(props: {
   readonly onRepositoryChoice: (overlay: ProjectRepositoryChoiceOverlay) => void;
 }) {
   const navigate = useNavigate();
+  const dictationAvailability = useDictationAvailability();
   const {
     clearOpenIntent,
     onQuickCreateProject,
@@ -2349,6 +2351,42 @@ function OpenCommandPaletteDialog(props: {
       await navigate({ to: "/settings" });
     },
   });
+
+  if (dictationAvailability !== "unavailable") {
+    actionItems.push({
+      kind: "action",
+      value: "action:dictation-record",
+      title: "Record dictation",
+      searchTerms: ["voice", "dictation", "record", "microphone"],
+      icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        const bridge = window.desktopBridge?.dictation;
+        const state = await bridge?.getState();
+        if (!state?.preferences.enabled) {
+          await navigate({ to: "/settings/dictation" });
+          return;
+        }
+        await bridge?.execute({ type: "start", mode: "locked" });
+      },
+    });
+    for (const page of ["models", "history", "dictionary", "settings"] as const) {
+      actionItems.push({
+        kind: "action",
+        value: `action:dictation-${page}`,
+        title: `Dictation ${page}`,
+        searchTerms: ["voice", "dictation", page],
+        icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await navigate({
+            to:
+              dictationAvailability === "setup"
+                ? "/settings/dictation"
+                : `/settings/dictation/${page}`,
+          });
+        },
+      });
+    }
+  }
 
   // Settings → Projects lists every project, but this action skips the list and jumps straight to
   // the contextual project (active thread/draft, falling back to the first sidebar group).

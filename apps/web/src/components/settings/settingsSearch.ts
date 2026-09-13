@@ -4,6 +4,11 @@ export type SettingsPath =
   | "/settings/appearance"
   | "/settings/keybindings"
   | "/settings/snap-shot"
+  | "/settings/dictation"
+  | "/settings/dictation/models"
+  | "/settings/dictation/history"
+  | "/settings/dictation/dictionary"
+  | "/settings/dictation/settings"
   | "/settings/projects"
   | "/settings/members-teams"
   | "/settings/company-members"
@@ -46,8 +51,12 @@ export function settingsSectionPathForLocation(pathname: string): SettingsPath |
   const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
   return (
     (Object.keys(SETTINGS_SECTION_LABELS) as ReadonlyArray<SettingsPath>).find(
-      (path) => normalizedPathname === path || normalizedPathname.startsWith(`${path}/`),
-    ) ?? null
+      (path) => normalizedPathname === path,
+    ) ??
+    (Object.keys(SETTINGS_SECTION_LABELS) as ReadonlyArray<SettingsPath>).find((path) =>
+      normalizedPathname.startsWith(`${path}/`),
+    ) ??
+    null
   );
 }
 
@@ -97,6 +106,11 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/company-roles": "Roles",
   "/settings/calendars": "Calendars",
   "/settings/environments": "Environments",
+  "/settings/dictation": "Set up dictation",
+  "/settings/dictation/models": "Models",
+  "/settings/dictation/history": "History",
+  "/settings/dictation/dictionary": "Dictionary",
+  "/settings/dictation/settings": "Settings",
   "/settings/providers": "Providers",
   "/settings/scheduled-tasks": "Schedule Tasks",
   "/settings/source-control": "Source Control",
@@ -146,6 +160,16 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     ],
   },
   {
+    label: "Dictation",
+    paths: [
+      "/settings/dictation",
+      "/settings/dictation/models",
+      "/settings/dictation/history",
+      "/settings/dictation/dictionary",
+      "/settings/dictation/settings",
+    ],
+  },
+  {
     label: "Agents",
     paths: [
       "/settings/providers",
@@ -185,6 +209,50 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
  * here once instead of separately in the panel and the index.
  */
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "dictation-setup",
+    title: "Set up dictation",
+    to: "/settings/dictation",
+    targetId: "dictation-models",
+  },
+  {
+    id: "dictation-models",
+    title: "Dictation speech models",
+    to: "/settings/dictation/models",
+    searchTerms: ["whisper", "download", "transcription"],
+  },
+  {
+    id: "dictation-cleanup",
+    title: "Dictation text cleanup",
+    to: "/settings/dictation/models",
+    searchTerms: ["qwen", "fillers"],
+  },
+  { id: "dictation-history", title: "Dictation history", to: "/settings/dictation/history" },
+  {
+    id: "dictation-dictionary",
+    title: "Dictation dictionary",
+    to: "/settings/dictation/dictionary",
+    searchTerms: ["spelling", "aliases", "corrections"],
+  },
+  { id: "dictation-enabled", title: "Enable dictation", to: "/settings/dictation/settings" },
+  { id: "dictation-microphone", title: "Dictation microphone", to: "/settings/dictation/settings" },
+  { id: "dictation-shortcut", title: "Dictation shortcut", to: "/settings/dictation/settings" },
+  { id: "dictation-language", title: "Dictation language", to: "/settings/dictation/settings" },
+  {
+    id: "dictation-bar",
+    title: "Dictation bar and model memory",
+    to: "/settings/dictation/settings",
+  },
+  {
+    id: "dictation-retention",
+    title: "Dictation history retention",
+    to: "/settings/dictation/settings",
+  },
+  {
+    id: "dictation-permissions",
+    title: "Dictation permissions",
+    to: "/settings/dictation/settings",
+  },
   { id: "thread-alerts", title: "Thread alerts", to: "/settings/notifications" },
   {
     id: "alert-project-overrides",

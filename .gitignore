@@ -37,3 +37,6 @@ node_modules/
 *.log
 .env*
 !.env.example
+
+# Locally compiled dictation hosts, model engines, and downloaded test weights.
+native/dictation/build/
