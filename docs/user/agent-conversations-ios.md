@@ -26,4 +26,6 @@ The model picker shows Favourites first, followed by provider submenus. Every fa
 
 Tap the compose button at the top of a conversation to start a new thread. The new-thread sheet preselects the current project, environment, provider, model and reasoning options, access mode, chat or plan mode, and temporary setting. You can change the defaults before sending. The existing conversation and its draft stay intact.
 
+The new-thread project picker displays each project's icon when available. Projects without an available icon use the folder symbol; conversations use the conversation symbol. Project icons share the thread list's cache.
+
 HEIC and HEIF photos are converted before upload so other clients and image-capable agents receive JPEG files, or PNG when transparency is present. The conversion preserves orientation and limits the longest edge to 4,096 pixels. Photo selection, pasting, file attachments, and imported shares use the same conversion. Already-sent HEIC files are unchanged and need to be resent to use the compatible format.
