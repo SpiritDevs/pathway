@@ -14,6 +14,8 @@ Queued messages appear in a count button beside the changed-file counter. Tap it
 
 The queue and question sheets close automatically when their last item is removed or resolved. The changed-files sheet also closes if its list becomes empty.
 
+On iPhone and narrow iPad windows, the bottom row has compact navigation on the left, the message composer in the middle, and the orchestrator button on the right. Tap the middle composer to expand it for writing; tapping the conversation returns to the compact row and keeps your draft. Expanding navigation temporarily hides the middle composer until you collapse navigation again. Wider iPad windows keep the editor alongside sidebar navigation.
+
 Tap the floating composer to write. Tap the conversation or the controls above the composer to unfocus the message field and dismiss the keyboard. Your draft stays in place; tap the field to continue writing. Add photos, images from the clipboard, or files using the attachment menu. Upload failures leave the attachment available to retry or remove. The model menu lists the models available on the connected environment. Conversation options include the provider's supported settings, reasoning effort, access mode, and planning mode.
 
 While the agent works, stop the response or queue another message. Hold Send to choose whether to queue the message or steer the current turn. Sending and property changes report failures without discarding the draft. The same Send menu can start a new thread or a side chat when the provider supports it.
