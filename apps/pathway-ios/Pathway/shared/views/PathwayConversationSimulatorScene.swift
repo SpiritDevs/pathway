@@ -4,21 +4,32 @@ import SwiftUI
 /// Isolated conversation transport for repeatable simulator interaction tests.
 struct PathwayConversationSimulatorScene: View {
     @State private var workspace = ConversationSimulatorWorkspace()
-    @State private var chrome = CompactThreadChromeState()
-    @State private var path = [ConversationSimulatorRoute.thread]
+    @State private var selectedDestination: AppDestination? = .agentThreads
+    @State private var presentedSheet: MainTabSheet?
+    @State private var showsSettings = false
+    @State private var showsThread = true
     var body: some View {
-        NavigationStack(path: $path) {
-            List { NavigationLink("Bring conversations to mobile", value: ConversationSimulatorRoute.thread) }
+        CompactAppShell(
+            selectedDestination: $selectedDestination,
+            presentedSheet: $presentedSheet,
+            showsSettings: $showsSettings
+        ) { _, _ in
+            List { Button("Bring conversations to mobile") { showsThread = true } }
                 .navigationTitle("Threads")
-                .navigationDestination(for: ConversationSimulatorRoute.self) { _ in AgentThreadConversationView(model: workspace.model) }
+                .navigationDestination(isPresented: $showsThread) { AgentThreadConversationView(model: workspace.model) }
         }
-        .environment(\.compactThreadChrome, chrome)
+        .sheet(item: $presentedSheet) { sheet in
+            if sheet == .agentOrchestrator {
+                AgentOrchestratorView()
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.hidden)
+                    .presentationCornerRadius(36)
+            }
+        }
         .environment(workspace.appModel)
         .preferredColorScheme(.light)
     }
 }
-
-private enum ConversationSimulatorRoute: Hashable { case thread }
 
 @MainActor
 private final class ConversationSimulatorWorkspace {

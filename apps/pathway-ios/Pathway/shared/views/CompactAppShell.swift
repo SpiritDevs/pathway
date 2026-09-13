@@ -19,11 +19,12 @@ enum CompactAppShellMetrics {
     private let tabBarSpring = Animation.spring(duration: 0.48, bounce: 0.22)
     private let tabSelectionSpring = Animation.spring(duration: 0.36, bounce: 0.14)
 
-    struct CompactAppShell: View {
+    struct CompactAppShell<Content: View>: View {
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Binding var selectedDestination: AppDestination?
         @Binding var presentedSheet: MainTabSheet?
         @Binding var showsSettings: Bool
+        @ViewBuilder var content: (AppDestination, @escaping () -> Void) -> Content
         @State private var isMoreMenuPresented = false
         @State private var isIssueDetailActive = false
         @State private var threadChrome = CompactThreadChromeState()
@@ -31,10 +32,7 @@ enum CompactAppShellMetrics {
         var body: some View {
             ZStack(alignment: .bottom) {
                 NavigationStack {
-                    PathwayFeatureDestinationView(
-                        destination: activeDestination,
-                        newThreadAction: presentNewAgentThread
-                    )
+                    content(activeDestination, presentNewAgentThread)
                     .navigationDestination(isPresented: $showsSettings) {
                         PathwaySettingsView()
                     }
@@ -112,6 +110,25 @@ enum CompactAppShellMetrics {
             withAnimation(animation) {
                 isMoreMenuPresented = false
                 threadChrome.collapseNavigation()
+            }
+        }
+    }
+
+    extension CompactAppShell where Content == PathwayFeatureDestinationView {
+        init(
+            selectedDestination: Binding<AppDestination?>,
+            presentedSheet: Binding<MainTabSheet?>,
+            showsSettings: Binding<Bool>
+        ) {
+            self.init(
+                selectedDestination: selectedDestination,
+                presentedSheet: presentedSheet,
+                showsSettings: showsSettings
+            ) { destination, newThreadAction in
+                PathwayFeatureDestinationView(
+                    destination: destination,
+                    newThreadAction: newThreadAction
+                )
             }
         }
     }
