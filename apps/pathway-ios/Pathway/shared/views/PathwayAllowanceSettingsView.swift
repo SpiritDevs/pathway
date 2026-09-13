@@ -5,7 +5,6 @@ struct PathwayAllowanceSettingsView: View {
   let environmentID: String
   let provider: PathwayAdministrationProvider
   @State private var selectedWork = ""
-  @State private var accountKey: String?
   private var thread: PathwayAgentThread? {
     appModel.cloud.threads.first {
       $0.environmentId == environmentID && "thread:\($0.threadId)" == selectedWork
@@ -28,6 +27,7 @@ struct PathwayAllowanceSettingsView: View {
   private var chats: [PathwayOrchestratorRecord] {
     model.chats.filter {
       $0.string("ownerSubject") == appModel.accountID
+        && ($0.strings("companyIds").isEmpty || $0.strings("companyIds").contains(companyID))
     }
   }
   private var scopes: [JSONValue] {
@@ -43,18 +43,13 @@ struct PathwayAllowanceSettingsView: View {
   }
   private var visibleBudgets: [PathwayOrchestratorRecord] {
     budgets.filter { budget in
-      let matchesAccount = (budget.fields["allocations"]?.arrayValue ?? []).contains {
-        $0.objectValue?["provider"]?.stringValue == provider.driver
-          && $0.objectValue?["accountKey"]?.stringValue == accountKey && accountKey != nil
-      }
-      return matchesAccount
-        && (budget.fields["scopes"]?.arrayValue ?? []).contains { scope in
-          if let thread {
-            return scope.objectValue?["environmentId"]?.stringValue == thread.environmentId
-              && scope.objectValue?["threadId"]?.stringValue == thread.threadId
-          }
-          return scope.objectValue?["chatId"]?.stringValue == chatID
+      (budget.fields["scopes"]?.arrayValue ?? []).contains { scope in
+        if let thread {
+          return scope.objectValue?["environmentId"]?.stringValue == thread.environmentId
+            && scope.objectValue?["threadId"]?.stringValue == thread.threadId
         }
+        return scope.objectValue?["chatId"]?.stringValue == chatID
+      }
     }
   }
   var body: some View {
@@ -72,10 +67,10 @@ struct PathwayAllowanceSettingsView: View {
             Text("Conversation · \(chat.string("title"))").tag("chat:\(chat.id)")
           }
         }
-        if accountKey == nil {
-          Text("Connect this provider account to load its allowance readings.")
-            .font(.footnote).foregroundStyle(.secondary)
-        }
+        Text(
+          "All allowances for this work are shown, including previous accounts. Add fallback account windows to the same allocation."
+        )
+        .font(.footnote).foregroundStyle(.secondary)
         Text(
           "Percentage points refer to the full provider window: 10 points takes 60% remaining to 50%. All activity on the account counts. Delayed readings can allow overshoot."
         ).font(.footnote).foregroundStyle(.secondary)
@@ -83,14 +78,6 @@ struct PathwayAllowanceSettingsView: View {
       if let error { Text(error).foregroundStyle(.red) }
       ForEach(visibleBudgets) { budget in
         Section(budget.string("title")) {
-          if (budget.fields["allocations"]?.arrayValue ?? []).contains(where: {
-            $0.objectValue?["provider"]?.stringValue != provider.driver
-              || $0.objectValue?["accountKey"]?.stringValue != accountKey
-          }) {
-            Text(
-              "This allowance also covers other accounts. Actions below apply to the whole allowance."
-            ).font(.footnote).foregroundStyle(.secondary)
-          }
           if let schedule = budget.fields["scheduledResume"]?.objectValue,
             let at = schedule["at"]?.numericValue
           {
@@ -134,8 +121,7 @@ struct PathwayAllowanceSettingsView: View {
           renewal = nil
           editing = true
         }.disabled(
-          companyID.isEmpty || (thread == nil && !chats.contains(where: { $0.id == chatID }))
-            || accountKey == nil)
+          companyID.isEmpty || (thread == nil && !chats.contains(where: { $0.id == chatID })))
       }
     }
     .navigationTitle("\(provider.name) allowance")
@@ -146,7 +132,6 @@ struct PathwayAllowanceSettingsView: View {
       renewal = nil
       companyID = ""
       selectedWork = ""
-      accountKey = nil
       error = nil
     }
     .onChange(of: companyID) { _, _ in
@@ -158,23 +143,6 @@ struct PathwayAllowanceSettingsView: View {
       if companyID.isEmpty {
         companyID = thread?.companyId ?? appModel.cloud.companies.first?.id ?? ""
       }
-    }
-    .task(id: "\(appModel.accountID ?? ""):\(environmentID):\(provider.instanceId)") {
-      accountKey = nil
-      guard
-        let environment = appModel.cloud.environments.first(where: {
-          $0.environment.environmentId == environmentID
-        })
-      else { return }
-      do {
-        let snapshot = try await appModel.cloud.environmentRequest(
-          environment: environment, method: "server.getProviderUsage",
-          payload: .object([
-            "instanceId": .string(provider.instanceId), "provider": .string(provider.driver),
-          ]))
-        try Task.checkCancellation()
-        accountKey = snapshot.objectValue?["accountKey"]?.stringValue
-      } catch is CancellationError {} catch { self.error = error.localizedDescription }
     }
     .task(id: "\(appModel.accountID ?? ""):\(companyID)") {
       budgets = []
@@ -196,8 +164,7 @@ struct PathwayAllowanceSettingsView: View {
           title: thread?.shell.title ?? chats.first(where: { $0.id == chatID })?.string("title")
             ?? "Conversation allowance", renewal: renewal,
           initialEnvironmentID: environmentID,
-          provider: provider,
-          accountKey: accountKey)
+          provider: provider)
       }
     }
   }
@@ -252,13 +219,6 @@ private struct PathwayAllowanceEditor: View {
   let renewal: PathwayOrchestratorRecord?
   let initialEnvironmentID: String
   let provider: PathwayAdministrationProvider
-  let accountKey: String?
-  private var multipleAccounts: Bool {
-    (renewal?.fields["allocations"]?.arrayValue ?? []).contains {
-      $0.objectValue?["provider"]?.stringValue != provider.driver
-        || $0.objectValue?["accountKey"]?.stringValue != accountKey
-    }
-  }
   @Environment(PathwayAppModel.self) private var appModel
   @Environment(\.dismiss) private var dismiss
   @State private var environmentID = ""
@@ -308,21 +268,22 @@ private struct PathwayAllowanceEditor: View {
       }
     }
   }
-  private var window: Window? { windows.first { $0.id == selected } ?? windows.first }
+  private var window: Window? { windows.first { $0.id == selected } }
   var body: some View {
     Form {
       Section {
-        if multipleAccounts {
+        if renewal != nil {
           Text(
-            "This allowance covers multiple accounts. Renew every account you want included; authorizing replaces the whole allocation."
+            "Renew every account you want included; authorizing replaces the whole allocation."
           ).font(.footnote).foregroundStyle(.secondary)
-          Picker("Environment", selection: $environmentID) {
-            ForEach(appModel.cloud.environments) {
-              Text($0.environment.label).tag($0.environment.environmentId)
-            }
+        }
+        Picker("Environment", selection: $environmentID) {
+          ForEach(appModel.cloud.environments) {
+            Text($0.environment.label).tag($0.environment.environmentId)
           }
         }
         Picker("Account window", selection: $selected) {
+          Text("Choose an account window").tag("")
           ForEach(windows) { Text($0.label).tag($0.id) }
         }
         TextField("Allowance in percentage points", text: $percent).keyboardType(.decimalPad)
@@ -399,11 +360,6 @@ private struct PathwayAllowanceEditor: View {
         guard let fields = provider.objectValue, let driver = fields["driver"]?.stringValue,
           ["codex", "claudeAgent", "cursor"].contains(driver), let id = fields["instanceId"]
         else { continue }
-        if !multipleAccounts
-          && (id.stringValue != self.provider.instanceId || driver != self.provider.driver)
-        {
-          continue
-        }
         next.append(
           try await appModel.cloud.environmentRequest(
             environment: environment, method: "server.getProviderUsage",
@@ -416,8 +372,12 @@ private struct PathwayAllowanceEditor: View {
       else { return }
       snapshots = next
       selected =
-        windows.first(where: { $0.snapshot["instanceId"]?.stringValue == self.provider.instanceId }
-        )?.id ?? windows.first?.id ?? ""
+        environmentID == initialEnvironmentID
+        ? windows.first(where: {
+          $0.snapshot["instanceId"]?.stringValue == self.provider.instanceId
+            && $0.snapshot["provider"]?.stringValue == self.provider.driver
+        })?.id ?? ""
+        : ""
     } catch {
       if !Task.isCancelled && accountID == appModel.accountID && readingID == requestID {
         self.error = error.localizedDescription

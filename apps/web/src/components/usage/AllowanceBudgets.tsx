@@ -72,26 +72,10 @@ export function AllowanceBudgets({
     "providerAllowanceBudgets:list",
     { companyId },
   );
-  const accountTarget = useMemo(
-    () => serverEnvironment.providerUsageLive({ environmentId: target.environmentId, input: {} }),
-    [target.environmentId],
-  );
-  const accountUsage = useEnvironmentQuery(accountTarget);
-  const account = accountUsage.data?.find(
-    (snapshot) =>
-      snapshot.instanceId === target.instanceId && snapshot.provider === target.provider,
-  );
   const keys = new Set(scopes.map(allowanceScopeKey));
+  // Every budget on this work participates in admission, even after an account changes.
   const budgets =
-    rows.value?.filter(
-      (b) =>
-        b.scopes.some((s) => keys.has(allowanceScopeKey(s))) &&
-        b.allocations.some(
-          (allocation) =>
-            allocation.provider === target.provider &&
-            allocation.accountKey === account?.accountKey,
-        ),
-    ) ?? [];
+    rows.value?.filter((b) => b.scopes.some((s) => keys.has(allowanceScopeKey(s)))) ?? [];
   const [editing, setEditing] = useState<ProviderAllowanceBudget | "new" | null>(null);
   const [choices, setChoices] = useState<WindowChoice[]>([]);
   const [windowKey, setWindowKey] = useState("");
@@ -115,38 +99,25 @@ export function AllowanceBudgets({
     return () => {
       generation.current++;
     };
-  }, [companyId, cloud.accountID, scopeKey, account?.accountKey]);
+  }, [companyId, cloud.accountID, scopeKey]);
   const refreshUsage = useAtomCommand(serverEnvironment.refreshProviderUsage, {
     reportFailure: false,
   });
-  const editingMultipleAccounts =
-    editing !== null &&
-    editing !== "new" &&
-    editing.allocations.some(
-      (allocation) =>
-        allocation.provider !== target.provider || allocation.accountKey !== account?.accountKey,
-    );
-  const windows = (usage.data ?? [])
-    .filter(
-      (snapshot) =>
-        editingMultipleAccounts ||
-        (environmentId === target.environmentId &&
-          snapshot.instanceId === target.instanceId &&
-          snapshot.provider === target.provider),
-    )
-    .flatMap((snapshot) =>
-      snapshot.limits.map((limit) => ({
-        snapshot,
-        limit,
-        key: JSON.stringify([snapshot.instanceId, allowanceWindowKey(limit)]),
-      })),
-    );
-  const selected =
-    windows.find((w) => w.key === windowKey) ??
-    windows.find(
-      (w) => w.snapshot.instanceId === target.instanceId && w.snapshot.provider === target.provider,
-    ) ??
-    windows[0];
+  const windows = (usage.data ?? []).flatMap((snapshot) =>
+    snapshot.limits.map((limit) => ({
+      snapshot,
+      limit,
+      key: JSON.stringify([snapshot.instanceId, allowanceWindowKey(limit)]),
+    })),
+  );
+  const selected = windowKey
+    ? windows.find((w) => w.key === windowKey)
+    : environmentId === target.environmentId
+      ? windows.find(
+          (w) =>
+            w.snapshot.instanceId === target.instanceId && w.snapshot.provider === target.provider,
+        )
+      : undefined;
   const preview = selected
     ? allocateProviderAllowance(
         selected.snapshot,
@@ -228,7 +199,7 @@ export function AllowanceBudgets({
         <Button
           variant="outline"
           size="sm"
-          disabled={pending || !scopes.length || !account?.accountKey}
+          disabled={pending || !scopes.length}
           onClick={() => {
             setEditing("new");
             setEnvironmentId(target.environmentId);
@@ -246,11 +217,10 @@ export function AllowanceBudgets({
         Allocate percentage points of a full account window. For example, 10 points takes 60%
         remaining to 50%. All activity on that account counts. Delayed readings can allow overshoot.
       </p>
-      {!account?.accountKey && (
-        <p className="text-sm text-muted-foreground">
-          {accountUsage.error ?? "Connect this provider account to load its allowance readings."}
-        </p>
-      )}
+      <p className="text-sm text-muted-foreground">
+        All allowances for this work are shown, including previous accounts. Start with{" "}
+        {target.displayName} and add windows for any fallback accounts to the same allocation.
+      </p>
       {budgets.map((budget) => (
         <div key={budget.id} className="space-y-3 rounded-xl border p-4">
           <div className="flex justify-between gap-3 text-sm">
@@ -259,15 +229,6 @@ export function AllowanceBudgets({
               {budget.status === "closed" ? "Limit removed" : budget.status}
             </span>
           </div>
-          {budget.allocations.some(
-            (allocation) =>
-              allocation.provider !== target.provider ||
-              allocation.accountKey !== account?.accountKey,
-          ) && (
-            <p className="text-xs text-muted-foreground">
-              This allowance also covers other accounts. Actions below apply to the whole allowance.
-            </p>
-          )}
           {budget.scheduledResume && (
             <div className="space-y-2 text-xs">
               <p>
@@ -411,32 +372,29 @@ export function AllowanceBudgets({
             This applies to the selected conversation or thread and its delegated work. Each
             fallback account needs its own allocation. A reset does not renew it.
           </p>
-          {editingMultipleAccounts && (
+          {editing !== "new" && (
             <p className="rounded-lg border p-3 text-sm text-muted-foreground">
-              This existing allowance covers multiple accounts. Renew every account you want to
-              include; authorizing replaces the whole allocation. Pause and remove actions also
-              affect the whole allowance.
+              Renew every account you want to include; authorizing replaces the whole allocation.
+              Pause and remove actions also affect the whole allowance.
             </p>
           )}
-          {editingMultipleAccounts && (
-            <label className="grid gap-1 text-xs">
-              Environment
-              <select
-                className={field}
-                value={environment?.environmentId ?? ""}
-                onChange={(e) => {
-                  setEnvironmentId(e.target.value);
-                  setWindowKey("");
-                }}
-              >
-                {environments.map((e) => (
-                  <option key={e.environmentId} value={e.environmentId}>
-                    {e.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+          <label className="grid gap-1 text-xs">
+            Environment
+            <select
+              className={field}
+              value={environment?.environmentId ?? ""}
+              onChange={(e) => {
+                setEnvironmentId(e.target.value);
+                setWindowKey("");
+              }}
+            >
+              {environments.map((e) => (
+                <option key={e.environmentId} value={e.environmentId}>
+                  {e.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="grid gap-1 text-xs">
             Account window
             <select
@@ -444,6 +402,7 @@ export function AllowanceBudgets({
               value={selected?.key ?? ""}
               onChange={(e) => setWindowKey(e.target.value)}
             >
+              <option value="">Choose an account window</option>
               {windows.map((w) => (
                 <option key={w.key} value={w.key}>
                   {environment?.serverConfig?.providers.find(

@@ -12,6 +12,9 @@ const state = vi.hoisted(() => ({
   snapshots: [] as ServerProviderUsageSnapshot[],
   budgets: [] as ProviderAllowanceBudget[],
   queriedEnvironments: [] as string[],
+  remoteSnapshots: [] as ServerProviderUsageSnapshot[],
+  request: vi.fn(),
+  refresh: vi.fn(),
 }));
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -39,13 +42,16 @@ vi.mock("../../state/server", () => ({
 vi.mock("../../state/query", () => ({
   useEnvironmentQuery: (environmentId: string) => {
     state.queriedEnvironments.push(environmentId);
-    return { data: environmentId === "studio" ? state.snapshots : [], error: null };
+    return {
+      data: environmentId === "studio" ? state.snapshots : state.remoteSnapshots,
+      error: null,
+    };
   },
 }));
-vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
+vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.refresh }));
 vi.mock("../../hooks/useNowMinute", () => ({ useNowMinute: () => "2026-09-14T00:00:00Z" }));
 vi.mock("../contacts/businessToolsCloud", () => ({
-  useBusinessToolsCloud: () => ({ client: null, accountID: "owner", request: vi.fn() }),
+  useBusinessToolsCloud: () => ({ client: null, accountID: "owner", request: state.request }),
   useBusinessToolsQuery: () => ({ value: state.budgets }),
 }));
 
@@ -64,7 +70,14 @@ function snapshot(instanceId: string, accountKey: string, provider: "codex" | "c
     provider,
     accountKey,
     status: "ok",
-    limits: [{ window: "Weekly", usedPercent: 50 }],
+    limits: [
+      {
+        window: "Weekly",
+        usedPercent: 50,
+        fetchedAt: new Date().toISOString(),
+        resetsAt: new Date(Date.now() + 86400000).toISOString(),
+      },
+    ],
     updatedAt: "2026-09-14T00:00:00Z",
     usageLines: [],
     source: "test",
@@ -116,14 +129,24 @@ function click(tree: unknown, label: string) {
   expect(button).not.toBeNull();
   (button!.props.onClick as () => void)();
 }
-function options(tree: unknown) {
-  const values: string[] = [];
-  visitElements(tree, (element) => {
-    if (element.type === "option") values.push(String(element.props.value));
-    return false;
-  });
-  return values;
+function field(tree: unknown, name: string) {
+  const label = visitElements(
+    tree,
+    (element) =>
+      element.type === "label" &&
+      Array.isArray(element.props.children) &&
+      element.props.children[0] === name,
+  );
+  const input = visitElements(label, (element) => typeof element.props.onChange === "function");
+  expect(input).not.toBeNull();
+  return input!;
 }
+function change(tree: unknown, name: string, value: string) {
+  (field(tree, name).props.onChange as (event: { target: { value: string } }) => void)({
+    target: { value },
+  });
+}
+const windowKey = (id: string) => JSON.stringify([id, JSON.stringify(["Weekly", "", "", null])]);
 
 describe("provider allowance settings", () => {
   beforeEach(() => {
@@ -132,53 +155,127 @@ describe("provider allowance settings", () => {
     state.snapshots = [
       snapshot("personal", "personal-account"),
       snapshot("work", "work-account"),
-      snapshot("cursor", "work-account", "cursor"),
+      snapshot("cursor", "cursor-account", "cursor"),
     ];
+    state.remoteSnapshots = [snapshot("remote-work", "remote-account")];
     state.budgets = [];
+    state.request.mockReset();
+    state.refresh
+      .mockReset()
+      .mockImplementation(
+        async ({
+          environmentId,
+          input,
+        }: {
+          environmentId: string;
+          input: { instanceId: string };
+        }) => ({
+          _tag: "Success",
+          value: (environmentId === "studio" ? state.snapshots : state.remoteSnapshots).find(
+            (reading) => reading.instanceId === input.instanceId,
+          ),
+        }),
+      );
   });
-  it("uses the selected environment and instance when adding an allowance", () => {
+  it("defaults to the settings provider while offering fallback accounts", () => {
     click(render(), "Set allowance");
-    expect(options(render())).toEqual([
-      JSON.stringify(["work", JSON.stringify(["Weekly", "", "", null])]),
-    ]);
+    const tree = render();
+    expect(field(tree, "Environment").props.value).toBe("studio");
+    expect(field(tree, "Account window").props.value).toBe(windowKey("work"));
+    for (const id of ["personal", "work", "cursor"]) {
+      expect(
+        visitElements(
+          tree,
+          (element) => element.type === "option" && element.props.value === windowKey(id),
+        ),
+      ).not.toBeNull();
+    }
     expect(new Set(state.queriedEnvironments)).toEqual(new Set(["studio"]));
   });
-  it("shows only budgets for the selected provider account and work", () => {
+  it("shows all budgets affecting the selected work, across provider accounts", () => {
     state.budgets = [
       budget("work-budget", "work-account"),
       budget("personal-budget", "personal-account"),
-      budget("cursor-budget", "work-account", "cursor"),
+      budget("cursor-budget", "cursor-account", "cursor"),
       budget("other-thread-budget", "work-account", "codex", "other-thread"),
     ];
     const tree = render();
-    expect(
-      visitElements(tree, (element) => element.props.children === "work-budget"),
-    ).not.toBeNull();
-    for (const title of ["personal-budget", "cursor-budget", "other-thread-budget"]) {
-      expect(visitElements(tree, (element) => element.props.children === title)).toBeNull();
+    for (const title of ["work-budget", "personal-budget", "cursor-budget"]) {
+      expect(visitElements(tree, (element) => element.props.children === title)).not.toBeNull();
     }
     expect(
-      visitElements(tree, (element) => element.props.children === "Remove limit and resume"),
-    ).not.toBeNull();
-    click(tree, "Authorize new allocation");
-    expect(options(render())).toHaveLength(1);
+      visitElements(tree, (element) => element.props.children === "other-thread-budget"),
+    ).toBeNull();
   });
-  it("does not fall back to another account when the selected instance has no reading", () => {
-    state.snapshots = state.snapshots.filter(
-      (snapshot) => snapshot.instanceId !== target.instanceId,
-    );
-    const button = visitElements(render(), (element) => element.props.children === "Set allowance");
-    expect(button?.props.disabled).toBe(true);
+  it.each(["changed", "missing"])(
+    "keeps removal and renewal available when the account reading is %s",
+    (reading) => {
+      state.budgets = [budget("old-account-limit", "old-account")];
+      state.snapshots = reading === "changed" ? [snapshot("work", "new-account")] : [];
+      const tree = render();
+      expect(
+        visitElements(tree, (element) => element.props.children === "old-account-limit"),
+      ).not.toBeNull();
+      click(tree, "Remove limit and resume");
+      expect(state.request).toHaveBeenCalledWith("providerAllowanceBudgets:close", {
+        companyId: "workspace",
+        budgetId: "old-account-limit",
+      });
+      click(tree, "Authorize new allocation");
+      expect(field(render(), "Account window").props.value).toBe(
+        reading === "changed" ? windowKey("work") : "",
+      );
+    },
+  );
+  it("requires an explicit account choice if the settings provider has no reading", () => {
+    state.snapshots = [snapshot("personal", "personal-account")];
+    click(render(), "Set allowance");
+    const tree = render();
+    expect(field(tree, "Account window").props.value).toBe("");
+    expect(
+      visitElements(tree, (element) => element.props.children === "Add account window")?.props
+        .disabled,
+    ).toBe(true);
   });
-  it("keeps all account choices available when renewing an existing multi-account allowance", () => {
-    const mixed = budget("mixed", "work-account");
-    state.budgets = [
-      {
-        ...mixed,
-        allocations: [...mixed.allocations, ...budget("other", "personal-account").allocations],
-      },
-    ];
-    click(render(), "Authorize new allocation");
-    expect(options(render())).toHaveLength(5);
-  });
+  it.each(["new", "renew"])(
+    "saves primary and fallback account windows together for a %s allocation",
+    async (mode) => {
+      if (mode === "renew") state.budgets = [budget("existing", "work-account")];
+      click(render(), mode === "new" ? "Set allowance" : "Authorize new allocation");
+      change(render(), "Allowance in percentage points", "10");
+      click(render(), "Add account window");
+      change(render(), "Account window", windowKey("cursor"));
+      click(render(), "Add account window");
+      change(render(), "Environment", "laptop");
+      change(render(), "Account window", windowKey("remote-work"));
+      click(render(), "Add account window");
+      let markSent!: () => void;
+      const sent = new Promise<void>((resolve) => {
+        markSent = resolve;
+      });
+      state.request.mockImplementationOnce(() => {
+        markSent();
+        return Promise.resolve();
+      });
+      click(render(), "Authorize allocation");
+      await sent;
+      expect(state.request).toHaveBeenCalledWith(
+        mode === "new" ? "providerAllowanceBudgets:create" : "providerAllowanceBudgets:resume",
+        expect.objectContaining({
+          companyId: "workspace",
+          allocations: ["work", "cursor", "remote-work"].map((id) =>
+            expect.objectContaining({
+              snapshot: expect.objectContaining({ instanceId: id }),
+              authorizedPercent: 10,
+            }),
+          ),
+        }),
+      );
+      expect(state.refresh.mock.calls.map(([args]) => args.environmentId)).toEqual([
+        "studio",
+        "studio",
+        "laptop",
+      ]);
+    },
+  );
 });

@@ -26,7 +26,7 @@ export type AllowanceProviderTarget = {
   displayName: string;
 };
 
-function ProviderAllowanceContent({ target }: { target: AllowanceProviderTarget }) {
+export function ProviderAllowanceContent({ target }: { target: AllowanceProviderTarget }) {
   const active = useAtomValue(activeCompanyIdAtom);
   const companies = useAtomValue(companyListAtom);
   const threads = useThreadShells();
@@ -51,7 +51,12 @@ function ProviderAllowanceContent({ target }: { target: AllowanceProviderTarget 
         label: `Thread · ${thread.title}`,
       })),
     ...orchestrators.chats
-      .filter((chat) => chat.ownerSubject === orchestrators.accountID)
+      .filter(
+        (chat) =>
+          chat.ownerSubject === orchestrators.accountID &&
+          (chat.companyIds.length === 0 ||
+            (companyId !== undefined && chat.companyIds.includes(companyId))),
+      )
       .map((chat) => ({
         scope: { kind: "chat" as const, chatId: chat.id },
         title: chat.title,
@@ -125,8 +130,7 @@ export function ProviderAllowanceDialog(target: AllowanceProviderTarget) {
           <DialogHeader className="pr-12">
             <DialogTitle>{target.displayName} allowance</DialogTitle>
             <DialogDescription>
-              Limit this provider account’s usage for a thread or conversation and its delegated
-              work.
+              Start with this provider and include fallback accounts in the allowance for your work.
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
