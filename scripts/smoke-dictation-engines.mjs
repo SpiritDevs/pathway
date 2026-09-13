@@ -59,6 +59,8 @@ if (directory) {
     engineDirectory,
     modelDirectory: directory,
     device: option("--device") ?? "auto",
+    // Measure native quality independently of the desktop's five-second fallback.
+    inferenceTimeoutMs: 65000,
   });
   const temporary = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "pathway-native-smoke-"));
   try {

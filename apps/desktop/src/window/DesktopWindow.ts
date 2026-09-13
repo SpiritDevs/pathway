@@ -305,24 +305,9 @@ export const make = Effect.gen(function* () {
     }
   });
 
-  // currentMainOrFirst / focusedMainOrFirst fall back to "any first window",
-  // which during WSL-only boot is the connecting splash. The splash is never
-  // registered via setMain, so it must be treated as "no real main window" --
-  // otherwise ensureMain/activate/dispatchMenuAction latch onto it and never
-  // open (or retry) the real main. That is the failure the pool's swallowed
-  // post-readiness window-open error would otherwise strand the user in:
-  // splash up, backend ready, no main, and activation only re-reveals splash.
-  const withoutSplash = (window: Option.Option<Electron.BrowserWindow>) =>
-    Ref.get(splashWindowRef).pipe(
-      Effect.map((splash) =>
-        Option.isSome(splash) && Option.isSome(window) && window.value === splash.value
-          ? Option.none<Electron.BrowserWindow>()
-          : window,
-      ),
-    );
-
-  const currentMainWindow = electronWindow.currentMainOrFirst.pipe(Effect.flatMap(withoutSplash));
-  const focusedMainWindow = electronWindow.focusedMainOrFirst.pipe(Effect.flatMap(withoutSplash));
+  // Dictation panels and the connecting splash can exist before the app window.
+  // Only a window registered by createMain can satisfy main-window operations.
+  const currentMainWindow = electronWindow.main;
 
   const createWindow = Effect.fn("desktop.window.createWindow")(function* (): Effect.fn.Return<
     Electron.BrowserWindow,
@@ -783,7 +768,7 @@ export const make = Effect.gen(function* () {
       // Only when nothing is shown yet: no real window, no existing splash.
       const existingSplash = yield* Ref.get(splashWindowRef);
       if (Option.isSome(existingSplash)) return;
-      const existingWindow = yield* electronWindow.currentMainOrFirst;
+      const existingWindow = yield* currentMainWindow;
       if (Option.isSome(existingWindow)) return;
 
       const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
@@ -834,7 +819,7 @@ export const make = Effect.gen(function* () {
     payload: unknown,
     { reveal = true }: { readonly reveal?: boolean } = {},
   ) {
-    const existingWindow = yield* reveal ? focusedMainWindow : electronWindow.main;
+    const existingWindow = yield* currentMainWindow;
     if (Option.isNone(existingWindow) && (!reveal || !(yield* Ref.get(backendReadyRef)))) return;
     const targetWindow = Option.isSome(existingWindow) ? existingWindow.value : yield* ensureMain;
     if (targetWindow.isDestroyed()) return;
@@ -924,7 +909,7 @@ export const make = Effect.gen(function* () {
     }),
     zoomMain: Effect.fn("desktop.window.zoomMain")(function* (direction) {
       yield* Effect.annotateCurrentSpan({ direction });
-      const window = yield* focusedMainWindow;
+      const window = yield* currentMainWindow;
       if (Option.isNone(window) || window.value.isDestroyed()) {
         return;
       }

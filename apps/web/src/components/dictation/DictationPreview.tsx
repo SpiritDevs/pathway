@@ -109,7 +109,7 @@ export function DictationPreview() {
     void (async () => {
       const { createDictationWidgetHtml }: { createDictationWidgetHtml: () => string } =
         await import(/* @vite-ignore */ widgetModuleUrl);
-      const bootstrap = `window.dictationOverlay = {getState:async()=>(${JSON.stringify(state)}), execute:async()=>(${JSON.stringify(state)}), listHistory:async()=>(${JSON.stringify(dictationHistoryFixtures)}), onState:()=>()=>{}, resize:()=>{}};`;
+      const bootstrap = `window.dictationOverlay = {getState:async()=>(${JSON.stringify(state)}), execute:async()=>(${JSON.stringify(state)}), listHistory:async()=>(${JSON.stringify(dictationHistoryFixtures)}), onState:()=>()=>{}, resize:()=>{}, hide:()=>{document.getElementById("widget").style.visibility="hidden"}};`;
       if (active)
         setOverlayHtml(createDictationWidgetHtml().replace("<script>", `<script>${bootstrap}`));
     })().catch((cause: unknown) => {

@@ -8,6 +8,10 @@ if (process.argv.includes("--fixture-cold")) {
 
 for await (const line of NodeReadline.createInterface({ input: process.stdin })) {
   const request = JSON.parse(line);
+  if (request.type === "fixture-ready") {
+    emit({ type: "ready", engineVersion: "fixture" });
+    continue;
+  }
   const mode = request.path ?? request.text;
   process.stderr.write("received\n");
   if (mode === "echo-language") {
@@ -34,7 +38,7 @@ for await (const line of NodeReadline.createInterface({ input: process.stdin }))
   }
   emit({ type: "progress", id: request.id, value: 0.5 });
   const output = Buffer.from(
-    JSON.stringify({ type: "result", id: request.id, text: "Olá, 世界!" }) + "\n",
+    JSON.stringify({ type: "result", id: request.id, text: "Olá, 世界!", language: "pt" }) + "\n",
   );
   const cut = output.indexOf(Buffer.from("世")) + 1;
   process.stdout.write(output.subarray(0, cut));

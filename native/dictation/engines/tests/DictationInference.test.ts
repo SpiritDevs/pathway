@@ -39,6 +39,97 @@ function setup(cold = false) {
 }
 
 describe("DictationInference", () => {
+  it("loads both workers during capture and reuses them for processing", async () => {
+    const { inference, childSpawn, received } = setup();
+    const abort = new AbortController();
+    await inference.prepare({ modelId: "whisper-base", cleanup: true, signal: abort.signal });
+    expect(inference.getLoadedModelIds()).toEqual(["whisper-base", "qwen-cleanup"]);
+    expect(await inference.transcribeWithLanguage(request())).toEqual({
+      text: "Olá, 世界!",
+      language: "pt",
+    });
+    await received.promise;
+    await inference.cleanup({ text: "hello", terms: [] });
+    expect(childSpawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps preparing cleanup after delivering a short recording without it", async () => {
+    const { inference, received, childSpawn } = setup(true);
+    const prepared = inference.prepare({
+      modelId: "whisper-base",
+      cleanup: true,
+      signal: new AbortController().signal,
+    });
+    await received.promise;
+    await expect(
+      inference.cleanup({ text: "hello", terms: [], requireLoaded: true }),
+    ).rejects.toThrow("still loading");
+    expect(childSpawn).toHaveBeenCalledTimes(2);
+    for (const child of childSpawn.mock.results) {
+      expect(child.value.killed).toBe(false);
+      child.value.stdin.write(JSON.stringify({ type: "fixture-ready" }) + "\n");
+    }
+    await prepared;
+    expect(await inference.cleanup({ text: "hello", terms: [], requireLoaded: true })).toBe(
+      "Olá, 世界!",
+    );
+    expect(childSpawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares workers when processing starts before preparation finishes", async () => {
+    const { inference, childSpawn } = setup();
+    const prepared = inference.prepare({
+      modelId: "whisper-base",
+      cleanup: true,
+      signal: new AbortController().signal,
+    });
+    const transcription = inference.transcribeWithLanguage(request());
+    await Promise.all([prepared, transcription]);
+    expect(childSpawn).toHaveBeenCalledTimes(2);
+    expect(await transcription).toMatchObject({ language: "pt" });
+  });
+
+  it("cancels eager loading without leaving a worker behind", async () => {
+    const { inference, received, childSpawn } = setup(true);
+    const abort = new AbortController();
+    const prepared = inference.prepare({
+      modelId: "whisper-base",
+      cleanup: true,
+      signal: abort.signal,
+    });
+    const rejected = expect(prepared).rejects.toMatchObject({ name: "AbortError" });
+    await received.promise;
+    abort.abort();
+    await rejected;
+    await inference.unload();
+    expect(inference.getLoadedModelIds()).toEqual([]);
+    for (const child of childSpawn.mock.results) expect(child.value.signalCode).toBe("SIGKILL");
+  });
+
+  it("unloading invalidates queued preparation before it can launch a worker", async () => {
+    const { inference, childSpawn } = setup();
+    const prepared = inference.prepare({
+      modelId: "whisper-base",
+      cleanup: true,
+      signal: new AbortController().signal,
+    });
+    const rejected = expect(prepared).rejects.toMatchObject({ name: "AbortError" });
+    await inference.unload();
+    await rejected;
+    expect(childSpawn).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("bounds cleanup including cold loading (%s)", async (cold) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { inference, received } = setup(cold);
+    const cleanup = inference.cleanup({ text: "hang", terms: [] });
+    const rejected = expect(cleanup).rejects.toThrow("time limit");
+    await received.promise;
+    await vi.advanceTimersByTimeAsync(5000);
+    await rejected;
+    expect(inference.warmed).toBe(false);
+  });
+
   it("passes an explicit cleanup language and defaults to auto for older callers", async () => {
     const { inference } = setup();
     expect(await inference.cleanup({ text: "echo-language", terms: [], language: "fr" })).toBe(
