@@ -8,7 +8,7 @@ The file count above the composer opens the changed files and available diffs. C
 
 Hold the latest message you sent and choose **Edit and restart** when the provider supports restoring that conversation point. Editing preserves attached context. Messages that have already changed workspace files may no longer be editable. Queued messages have their own edit and queue actions.
 
-Tap the floating composer to write. Add photos, images from the clipboard, or files using the attachment menu. Upload failures leave the attachment available to retry or remove. The model menu lists the models available on the connected environment. Conversation options include the provider's supported settings, reasoning effort, access mode, and planning mode.
+Tap the floating composer to write. Tap the conversation or the controls above the composer to unfocus the message field and dismiss the keyboard. Your draft stays in place; tap the field to continue writing. Add photos, images from the clipboard, or files using the attachment menu. Upload failures leave the attachment available to retry or remove. The model menu lists the models available on the connected environment. Conversation options include the provider's supported settings, reasoning effort, access mode, and planning mode.
 
 While the agent works, stop the response or queue another message. Hold Send to choose whether to queue the message or steer the current turn. Sending and property changes report failures without discarding the draft. The same Send menu can start a new thread or a side chat when the provider supports it.
 

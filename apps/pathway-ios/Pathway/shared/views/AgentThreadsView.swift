@@ -963,6 +963,8 @@ struct AgentThreadConversationView: View {
                         .accessibilityIdentifier("agent-thread-jump-bottom")
                     }
             }
+            .contentShape(.rect)
+            .simultaneousGesture(TapGesture().onEnded { isComposerFocused = false })
             .safeAreaInset(edge: .bottom, spacing: 4) {
                 VStack(spacing: 8) {
                     if let connect = appModel.connect {
@@ -970,6 +972,7 @@ struct AgentThreadConversationView: View {
                             chooseEnvironment: { showsAlternateEnvironment = true },
                             onAvailabilityChanged: { model.storageAllowsSend = $0 })
                             .id(model.environment.id)
+                            .simultaneousGesture(TapGesture().onEnded { isComposerFocused = false })
                     }
                     HStack(spacing: 8) {
                     if !changedItems.isEmpty {
@@ -991,6 +994,8 @@ struct AgentThreadConversationView: View {
                         AgentThreadQueueControl(model: model, isComposerExpanded: $isComposerExpanded, isComposerFocused: $isComposerFocused)
                         AgentThreadSubagentPicker(model: model, openThread: openChild)
                     }
+                    .contentShape(.rect)
+                    .simultaneousGesture(TapGesture().onEnded { isComposerFocused = false })
                     AgentThreadComposer(model: model, isExpanded: $isComposerExpanded,
                         isFocused: $isComposerFocused, modelName: model.currentModelSelection.model,
                         usesCompactPresentation: true, isNavigationExpanded: false, onOpenThread: openChild, workspaceRoot: workspaceRoot, onOpenBrowser: { showsBrowser = true })
