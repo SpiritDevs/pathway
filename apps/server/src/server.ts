@@ -119,6 +119,7 @@ import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts"
 import * as DesktopParentMonitor from "./background/DesktopParentMonitor.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
+import { assetProcessingWorkerLayer } from "./cloud/assetProcessingWorker.ts";
 import { threadQueueWorkerLayer } from "./cloud/threadQueueWorker.ts";
 import { environmentCommandClaimantLayer } from "./cloud/environmentCommandClaimant.ts";
 import { companySlackCoordinatorLayer } from "./cloud/companySlackCoordinator.ts";
@@ -787,6 +788,7 @@ export const makeServerLayer = Layer.unwrap(
       mailBrainLayer(),
       environmentCommandClaimantLayer(),
       threadQueueWorkerLayer(),
+      assetProcessingWorkerLayer(),
       companySlackCoordinatorLayer(),
     );
 

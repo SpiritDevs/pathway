@@ -45,6 +45,7 @@ struct PathwayQueueFile: Codable, Sendable {
     var metadata: JSONValue
     var data: Data
     var cloudID: String?
+    var assetID: String?
     var localDataFile: String?
 
     static func captureUpload(_ value: JSONValue) throws -> Self {
@@ -61,7 +62,7 @@ struct PathwayQueueFile: Codable, Sendable {
     static func capture(_ draft: PathwayThreadAttachmentDraft, bytes: Data?) throws -> Self {
         guard let bytes else { throw PathwayThreadConversationError.message("Attachment bytes are unavailable. Add the file again before sending.") }
         return Self(metadata: .object(["id": .string(draft.id), "name": .string(draft.name),
-                                       "mimeType": .string(draft.mimeType), "type": .string(draft.type), "sizeBytes": .number(Double(bytes.count))]), data: bytes)
+                                       "mimeType": .string(draft.mimeType), "type": .string(draft.type), "sizeBytes": .number(Double(bytes.count))]), data: bytes, assetID: draft.attachment?.assetId)
     }
 }
 
@@ -77,6 +78,25 @@ struct PathwayLocalQueueEntry: Codable, Sendable, Identifiable {
     var submissionStarted: Bool?
     var queueID: String?
     var id: String { "\(companyID):\(environmentID):\(threadID):\(commandID)" }
+
+    /// Outbox previews retain local IDs; only the cloud submission uses durable asset identity.
+    var assetSubmission: JSONValue {
+        var submission = self.submission.objectValue ?? [:]
+        var input = submission["input"]?.objectValue ?? [:]
+        let attachments: [JSONValue] = files.map { file in
+            guard let assetID = file.assetID else { return file.metadata }
+            var metadata = file.metadata.objectValue ?? [:]
+            metadata["type"] = .string("asset"); metadata["id"] = .string(assetID)
+            metadata["assetId"] = .string(assetID); metadata["companyId"] = .string(companyID)
+            return .object(metadata)
+        }
+        if submission["kind"]?.stringValue == "launch" {
+            var message = input["initialMessage"]?.objectValue ?? [:]
+            message["attachments"] = .array(attachments); input["initialMessage"] = .object(message)
+        } else { input["attachments"] = .array(attachments) }
+        submission["input"] = .object(input)
+        return .object(submission)
+    }
 }
 
 actor PathwayThreadQueueStore {
@@ -265,6 +285,13 @@ final class PathwayThreadQueueModel {
         }
         observers = [:]; pages = [:]; stopDrain(); companyIDs = []; captures = []
         if clear { local = []; remote = [:]; detailCache = [:]; acknowledgedRows = [:]; threads = []; store = nil; storageReady = false; errorMessage = nil }
+    }
+
+    func originalAssetURL(assetID: String, companyID: String) async throws -> URL {
+        guard companyIDs.contains(companyID) else { throw PathwayThreadConversationError.message("This company is unavailable.") }
+        let value = try await request("query", "assets:get", .object(["companyId": .string(companyID), "assetId": .string(assetID)]))
+        guard let asset = PathwayAsset(value, companyID: companyID) else { throw PathwayThreadConversationError.message("This asset is unavailable.") }
+        return try await PathwayAssetsModel(request: request).resolve(asset, original: true)
     }
 
     func enqueue(companyID: String, environmentID: String, threadID: String, submission: JSONValue, files: [PathwayQueueFile] = []) async throws {
@@ -544,20 +571,19 @@ final class PathwayThreadQueueModel {
                     try await queueStore.save(local)
                     try check(first.companyID)
                     var entry = first
-                    for index in entry.files.indices where entry.files[index].cloudID == nil {
-                        let uploadURL = try await request("mutation", "threadQueue:generateUploadUrl", .object(["companyId": .string(entry.companyID)]))
+                    for index in entry.files.indices where entry.files[index].cloudID == nil && entry.files[index].assetID == nil {
+                        let file = entry.files[index]
+                        guard let fileID = file.metadata.objectValue?["id"]?.stringValue else { throw URLError(.badServerResponse) }
+                        let fileURL = queueStore.attachmentURL(entryID: entry.id, attachmentID: fileID, persistedName: file.localDataFile)
+                        let uploader = PathwayAssetsModel(request: request)
+                        await uploader.upload(url: fileURL, companyID: entry.companyID,
+                            clientRequestID: "queue-" + entry.commandID + "-" + fileID,
+                            fileName: file.metadata.objectValue?["name"]?.stringValue ?? "File", retryFinalization: first.error != nil)
                         try check(entry.companyID)
-                        guard let url = uploadURL.stringValue.flatMap(URL.init(string:)) else { throw URLError(.badServerResponse) }
-                        var upload = URLRequest(url: url); upload.httpMethod = "POST"
-                        upload.setValue(entry.files[index].metadata.objectValue?["mimeType"]?.stringValue ?? "application/octet-stream", forHTTPHeaderField: "Content-Type")
-                        let (data, response) = try await URLSession.shared.upload(for: upload, from: entry.files[index].data)
-                        try check(entry.companyID)
-                        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode),
-                              let storageID = try JSONDecoder().decode(JSONValue.self, from: data).objectValue?["storageId"] else { throw URLError(.badServerResponse) }
-                        let registered = try await request("mutation", "threadQueue:registerAttachment", .object(["companyId": .string(entry.companyID), "storageId": storageID, "attachment": entry.files[index].metadata]))
-                        try check(entry.companyID)
-                        guard let cloudID = registered.stringValue else { throw URLError(.badServerResponse) }
-                        entry.files[index].cloudID = cloudID
+                        guard let assetID = uploader.lastUploadedAssetID else {
+                            throw PathwayThreadConversationError.message(uploader.error ?? "The asset upload is pending. Retry when connected.")
+                        }
+                        entry.files[index].assetID = assetID
                         guard let position = local.firstIndex(where: { $0.id == entry.id }) else { return }
                         local[position] = entry
                         try await queueStore.save(local)
@@ -570,7 +596,11 @@ final class PathwayThreadQueueModel {
                     try await queueStore.save(local)
                     try check(entry.companyID)
                     rebuild()
-                    var enqueueFields: [String: JSONValue] = ["companyId": .string(entry.companyID), "environmentId": .string(entry.environmentID), "threadId": .string(entry.threadID), "submission": entry.submission, "attachmentIds": .array(entry.files.compactMap { $0.cloudID.map(JSONValue.string) })]
+                    var enqueueFields: [String: JSONValue] = ["companyId": .string(entry.companyID), "environmentId": .string(entry.environmentID), "threadId": .string(entry.threadID), "submission": entry.assetSubmission, "attachmentIds": .array(entry.files.compactMap { $0.cloudID.map(JSONValue.string) })]
+                    enqueueFields["assetRefs"] = .array(entry.files.compactMap { file in
+                        guard let assetID = file.assetID else { return nil }
+                        return .object(["type": .string("asset"), "assetId": .string(assetID), "companyId": .string(entry.companyID)])
+                    })
                     if let queueID = entry.queueID { enqueueFields["queueId"] = .string(queueID) }
                     let receipt = try await request("mutation", "threadQueue:enqueue", .object(enqueueFields))
                     try check(entry.companyID)

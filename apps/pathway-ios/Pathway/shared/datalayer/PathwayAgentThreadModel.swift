@@ -43,6 +43,8 @@ struct PathwayMessageAttachment: Codable, Equatable, Identifiable, Sendable {
     let mimeType: String
     let sizeBytes: Int
     var source: JSONValue? = nil
+    var assetId: String? = nil
+    var companyId: String? = nil
 
     var snapShotSource: [String: JSONValue]? {
         guard type == "image", let fields = source?.objectValue,
@@ -132,17 +134,18 @@ struct PathwayTimelineItem: Codable, Equatable, Identifiable, Sendable {
     static func attachment(_ value: JSONValue) -> PathwayMessageAttachment? {
         guard
             let object = value.objectValue,
-            let id = object["id"]?.stringValue,
-            let type = object["type"]?.stringValue,
-            let name = object["name"]?.stringValue
+            let id = object["id"]?.stringValue ?? object["assetId"]?.stringValue,
+            let type = object["type"]?.stringValue
         else { return nil }
         return PathwayMessageAttachment(
             id: id,
             type: type,
-            name: name,
+            name: object["name"]?.stringValue ?? "Asset",
             mimeType: object["mimeType"]?.stringValue ?? "application/octet-stream",
             sizeBytes: object["sizeBytes"]?.intValue ?? 0,
-            source: object["source"]
+            source: object["source"],
+            assetId: object["assetId"]?.stringValue,
+            companyId: object["companyId"]?.stringValue
         )
     }
 
@@ -300,7 +303,7 @@ final class PathwayAgentThreadModel {
         serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue?["threadConversations"]?.boolValue == true
     }
     @ObservationIgnored var threadQueue: PathwayThreadQueueModel? {
-        didSet { if threadQueue != nil { supportsAttachmentUploads = true; maximumFileAttachmentBytes = 50 * 1024 * 1024 } }
+        didSet { if threadQueue != nil { supportsAttachmentUploads = true; maximumFileAttachmentBytes = 250 * 1024 * 1024 } }
     }
     var cloudQueuedThread: PathwayQueuedThread?
     var cloudQueueMessages: [JSONValue] = []

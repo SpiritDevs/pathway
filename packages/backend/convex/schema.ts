@@ -23,6 +23,7 @@
  *
  * @module schema
  */
+import { assetTables } from "./lib/assetSchema.ts";
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
@@ -178,6 +179,7 @@ const relayActivityAggregateState = v.object({
 });
 
 export default defineSchema({
+  ...assetTables,
   // Anonymous login diagnostics. Delivery fields are private server bookkeeping.
   loginErrorReports: defineTable({
     reportId: v.string(),

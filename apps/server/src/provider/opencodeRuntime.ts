@@ -1,3 +1,4 @@
+import { providerAttachment } from "../attachmentStore.ts";
 import * as NodeURL from "node:url";
 
 import type { ChatAttachment, ProviderApprovalDecision, RuntimeMode } from "@spiritdevs/contracts";
@@ -325,7 +326,8 @@ export function toOpenCodeFileParts(input: {
 }): Array<FilePartInput> {
   const parts: Array<FilePartInput> = [];
 
-  for (const attachment of input.attachments ?? []) {
+  for (const original of input.attachments ?? []) {
+    const attachment = providerAttachment(original);
     const attachmentPath = input.resolveAttachmentPath(attachment);
     if (!attachmentPath) {
       continue;

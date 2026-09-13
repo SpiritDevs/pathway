@@ -1,3 +1,4 @@
+import { removeAssetContext } from "../assets.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations are not Effect programs; the transaction clock is `Date.now()`.
 /**
  * The issue-domain apply handlers behind `sync.applyOperations`, plus the row readers and payload
@@ -1203,6 +1204,7 @@ const issueDelete: EnvApply = async ({ ctx, actor, company, feedActor, operation
   if (issue.deletedAt !== null) return applied();
 
   await ctx.db.patch(issue._id, { deletedAt: now, updatedAt: now });
+  await removeAssetContext(ctx, company._id, { kind: "task", id: issue.id });
   const doc = await mustGet(ctx, issue._id);
   return applied(
     tombstone("issue", doc.id, doc.teamIds, issue._id),
@@ -1232,6 +1234,7 @@ const issueTriageReject: EnvApply = async ({ ctx, actor, company, feedActor, ope
   if (!issue.triage) return rejected("invalid-arguments", "Only a triage item can be rejected.");
 
   await ctx.db.patch(issue._id, { deletedAt: now, updatedAt: now });
+  await removeAssetContext(ctx, company._id, { kind: "task", id: issue.id });
   const doc = await mustGet(ctx, issue._id);
   return applied(
     tombstone("issue", doc.id, doc.teamIds, issue._id),

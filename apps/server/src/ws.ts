@@ -243,6 +243,7 @@ const persistChatAttachments = Effect.fn("ws.assets.persistChatAttachments")(fun
   return yield* Effect.forEach(
     input.attachments.map((attachment, index) => ({ attachment, index })),
     Effect.fn("ws.assets.persistChatAttachment")(function* ({ attachment, index }) {
+      if (attachment.type === "asset") return yield* new PersistChatAttachmentsError({ message: "Company assets must be sent through the cloud thread queue so their context and private access are verified." });
       if ("id" in attachment) {
         const claim = planAttachmentClaim({
           attachmentsDir: config.attachmentsDir,

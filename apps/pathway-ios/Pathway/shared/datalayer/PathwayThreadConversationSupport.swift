@@ -82,6 +82,8 @@ extension PathwayMessageAttachment {
     var json: JSONValue {
         var fields: [String: JSONValue] = ["id": .string(id), "type": .string(type), "name": .string(name), "mimeType": .string(mimeType), "sizeBytes": .number(Double(sizeBytes))]
         if let source { fields["source"] = source }
+        if let assetId { fields["assetId"] = .string(assetId) }
+        if let companyId { fields["companyId"] = .string(companyId) }
         return .object(fields)
     }
 }
@@ -92,7 +94,7 @@ extension PathwayAgentThreadModel {
         serverConfig = object
         let capabilities = object["environment"]?.objectValue?["capabilities"]?.objectValue ?? [:]
         supportsAttachmentUploads = threadQueue != nil || capabilities["attachmentUploads"]?.boolValue == true
-        maximumFileAttachmentBytes = threadQueue != nil ? 50 * 1024 * 1024 : (supportsAttachmentUploads ? capabilities["fileAttachments"]?.objectValue?["maxUploadBytes"]?.intValue : nil)
+        maximumFileAttachmentBytes = threadQueue != nil ? 250 * 1024 * 1024 : (supportsAttachmentUploads ? capabilities["fileAttachments"]?.objectValue?["maxUploadBytes"]?.intValue : nil)
         let providerValues = object["providers"]?.arrayValue ?? []
         modelCatalog = providerValues.compactMap(Self.provider)
         providers = modelCatalog.filter { $0.unavailableReason == nil && !$0.models.isEmpty }
@@ -158,12 +160,13 @@ extension PathwayAgentThreadModel {
     }
 
     func addAttachment(fileURL: URL) async {
+        let limit = threadQueue != nil ? 250 * 1024 * 1024 : 50 * 1024 * 1024
         let reader = Task.detached(priority: .userInitiated) {
             let access = fileURL.startAccessingSecurityScopedResource()
             defer { if access { fileURL.stopAccessingSecurityScopedResource() } }
             try Task.checkCancellation()
             let size = try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard size > 0, size <= 50 * 1024 * 1024 else { throw PathwayThreadConversationError.message("Choose a file under 50 MB.") }
+            guard size > 0, size <= limit else { throw PathwayThreadConversationError.message("Choose a file under \(limit / 1024 / 1024) MB.") }
             let data = try Data(contentsOf: fileURL)
             try Task.checkCancellation()
             return data
@@ -178,7 +181,7 @@ extension PathwayAgentThreadModel {
 
     func addAttachment(data: Data, name: String, mimeType: String) async {
         let image: PathwayImageUpload
-        do { image = try await PathwayImageUpload.prepare(data: data, name: name, mimeType: mimeType) }
+        do { image = threadQueue != nil ? PathwayImageUpload(data: data, name: name, mimeType: mimeType) : try await PathwayImageUpload.prepare(data: data, name: name, mimeType: mimeType) }
         catch is CancellationError { return }
         catch { actionError = error.localizedDescription; return }
         let data = image.data, name = image.name, mimeType = image.mimeType
@@ -190,12 +193,15 @@ extension PathwayAgentThreadModel {
             actionError = "This file exceeds the environment's upload limit."; return
         }
         guard draftAttachments.count < 8 else { actionError = "You can attach up to 8 files."; return }
-        guard !data.isEmpty, data.count <= (type == "image" ? 10 : 50) * 1024 * 1024 else {
-            actionError = type == "image" ? "Choose an image under 10 MB." : "Choose a file under 50 MB."; return
+        let limit = (threadQueue != nil ? 250 : type == "image" ? 10 : 50) * 1024 * 1024
+        guard !data.isEmpty, data.count <= limit else {
+            actionError = "Choose a file under \(limit / 1024 / 1024) MB."; return
         }
+        let preview = type == "image" ? await PathwayImageUpload.thumbnail(data) : nil
+        guard !Task.isCancelled, draftAttachments.count < 8 else { return }
         let id = UUID().uuidString
         draftAttachments.append(PathwayThreadAttachmentDraft(id: id, name: String(name.prefix(255)), mimeType: mimeType,
-            type: type, sizeBytes: data.count, state: threadQueue != nil ? .ready : .uploading, previewData: type == "image" ? data : nil))
+            type: type, sizeBytes: data.count, state: threadQueue != nil ? .ready : .uploading, previewData: preview))
         attachmentData[id] = data
         await persistDraftNow()
         if threadQueue == nil { await retryAttachment(id: id) }
@@ -256,6 +262,10 @@ extension PathwayAgentThreadModel {
     }
 
     func attachmentURL(_ attachment: PathwayMessageAttachment) async throws -> URL {
+        if let assetID = attachment.assetId {
+            guard let threadQueue else { throw PathwayThreadConversationError.message("Connect to Pathway Cloud to open this asset.") }
+            return try await threadQueue.originalAssetURL(assetID: assetID, companyID: attachment.companyId ?? thread.companyId)
+        }
         if let url = cloudQueueAttachmentURLs[attachment.id] { return url }
         let value = try await request("assets.createUrl", payload: .object(["resource": .object([
             "_tag": .string("attachment"), "attachmentId": .string(attachment.id), "fileName": .string(attachment.name), "mimeType": .string(attachment.mimeType)

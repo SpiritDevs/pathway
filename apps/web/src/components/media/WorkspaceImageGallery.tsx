@@ -1,8 +1,9 @@
+import { useWorkspaceAssetPublishAction } from "../assets/useWorkspaceAssetPublishAction";
 import { isWorkspaceVideoPreviewPath } from "@spiritdevs/shared/filePreview";
 import type { ScopedThreadRef } from "@spiritdevs/contracts";
 import { useEffect, useState } from "react";
 
-import { resolveAssetUrl } from "~/assets/assetUrls";
+import { resolveAssetUrl } from "@spiritdevs/client-runtime/state/assets";
 import { assetEnvironment } from "~/state/assets";
 import { projectEnvironment } from "~/state/projects";
 import { usePreparedConnection } from "~/state/session";
@@ -43,6 +44,20 @@ export function WorkspaceImageGallery({
     })),
   );
 
+  const [resolvedPaths] = useState(() => new Map<number, string>());
+  const publishActions = useWorkspaceAssetPublishAction(threadRef, async (index) => {
+    const path = resolvedPaths.get(index);
+    if (!path || !httpBaseUrl)
+      throw new Error("Connect to the environment and load the original file first.");
+    const result = await createAssetUrl({
+      environmentId: threadRef.environmentId,
+      input: { resource: { _tag: "workspace-file", threadId: threadRef.threadId, path } },
+    });
+    if (result._tag !== "Success") throw new Error("The original file is unavailable.");
+    const url = resolveAssetUrl(httpBaseUrl, result.value.relativeUrl);
+    if (!url) throw new Error("The original file is unavailable.");
+    return url;
+  });
   useEffect(() => {
     let cancelled = false;
     const load = async (originalPath: string) => {
@@ -64,12 +79,13 @@ export function WorkspaceImageGallery({
       if (result._tag !== "Success") throw new Error("This media file is unavailable.");
       const src = resolveAssetUrl(httpBaseUrl, result.value.relativeUrl);
       if (!src) throw new Error("This media file is unavailable.");
-      return src;
+      return { src, path };
     };
     paths.forEach((path, index) => {
       void load(path).then(
-        (src) => {
+        ({ src, path: resolvedPath }) => {
           if (cancelled) return;
+          resolvedPaths.set(index, resolvedPath);
           setImages((current) =>
             current.map((image, i) => (i === index ? { ...image, src, loading: false } : image)),
           );
@@ -87,7 +103,14 @@ export function WorkspaceImageGallery({
     return () => {
       cancelled = true;
     };
-  }, [createAssetUrl, cwd, httpBaseUrl, paths, searchEntries, threadRef]);
+  }, [createAssetUrl, cwd, httpBaseUrl, paths, resolvedPaths, searchEntries, threadRef]);
 
-  return <ImageLightbox images={images} initialIndex={initialIndex} onClose={onClose} />;
+  return (
+    <ImageLightbox
+      actions={publishActions}
+      images={images}
+      initialIndex={initialIndex}
+      onClose={onClose}
+    />
+  );
 }

@@ -93,13 +93,14 @@ final class PathwayNewThreadAttachments {
     }
 
     func add(fileURL: URL) async {
+        let limit = usesCloudQueue ? 250 * 1024 * 1024 : 50 * 1024 * 1024
         let reader = Task.detached(priority: .userInitiated) {
             let granted = fileURL.startAccessingSecurityScopedResource()
             defer { if granted { fileURL.stopAccessingSecurityScopedResource() } }
             try Task.checkCancellation()
             let size = try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard (1...50 * 1024 * 1024).contains(size) else {
-                throw PathwayThreadConversationError.message("Choose a file under 50 MB.")
+            guard (1...limit).contains(size) else {
+                throw PathwayThreadConversationError.message("Choose a file under \(limit / 1024 / 1024) MB.")
             }
             return try Data(contentsOf: fileURL)
         }
@@ -113,7 +114,7 @@ final class PathwayNewThreadAttachments {
 
     func add(data: Data, name: String, mimeType: String) async {
         let image: PathwayImageUpload
-        do { image = try await PathwayImageUpload.prepare(data: data, name: name, mimeType: mimeType) }
+        do { image = usesCloudQueue ? PathwayImageUpload(data: data, name: name, mimeType: mimeType) : try await PathwayImageUpload.prepare(data: data, name: name, mimeType: mimeType) }
         catch is CancellationError { return }
         catch { errorMessage = error.localizedDescription; return }
         let data = image.data, name = image.name, mimeType = image.mimeType
@@ -123,12 +124,14 @@ final class PathwayNewThreadAttachments {
         guard usesCloudQueue || (supportsUploads && (type == "image" || maximumFileBytes != nil)) else {
             errorMessage = "This environment does not support uploading this file type."; return
         }
-        let limit = type == "image" ? 10 * 1024 * 1024 : min(50 * 1024 * 1024, usesCloudQueue ? 50 * 1024 * 1024 : maximumFileBytes ?? 0)
+        let limit = usesCloudQueue ? 250 * 1024 * 1024 : type == "image" ? 10 * 1024 * 1024 : min(50 * 1024 * 1024, maximumFileBytes ?? 0)
         guard !data.isEmpty, data.count <= limit else { errorMessage = "This attachment exceeds the environment's upload limit."; return }
+        let preview = type == "image" ? await PathwayImageUpload.thumbnail(data) : nil
+        guard !Task.isCancelled, !discarded, drafts.count < 8 else { return }
         restored = true
         let id = UUID().uuidString
         drafts.append(PathwayThreadAttachmentDraft(id: id, name: String(name.prefix(255)), mimeType: mimeType,
-            type: type, sizeBytes: data.count, state: usesCloudQueue ? .ready : .uploading, previewData: type == "image" ? data : nil))
+            type: type, sizeBytes: data.count, state: usesCloudQueue ? .ready : .uploading, previewData: preview))
         bytes[id] = data
         await persist()
         if !usesCloudQueue { await retry(id: id) }

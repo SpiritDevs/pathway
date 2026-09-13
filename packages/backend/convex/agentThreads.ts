@@ -1,5 +1,6 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Environment-published, cloud-safe Agent Thread discovery metadata. */
+import { removeAssetContext } from "./assets.ts";
 import { v } from "convex/values";
 
 import type { Doc } from "./_generated/dataModel.js";
@@ -310,6 +311,11 @@ export const remove = mutation({
       .unique();
     if (row === null) await deleteThreadAlertPolicies(ctx, environmentId, threadId);
     await removeRows(ctx, actor, row === null ? [] : [row]);
+    await removeAssetContext(ctx, actor.company._id, {
+      kind: "thread",
+      id: threadId,
+      environmentId,
+    });
     return null;
   },
 });

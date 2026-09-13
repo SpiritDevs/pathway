@@ -16,7 +16,7 @@ import {
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@spiritdevs/shared/git";
 import { resolveSpawnCommand } from "@spiritdevs/shared/shell";
 
-import { resolveAttachmentPath } from "../attachmentStore.ts";
+import { providerAttachment, resolveAttachmentPath } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import { codexExecLaunchArgs, resolveCodexLaunchArgs } from "../provider/Layers/codexLaunchArgs.ts";
@@ -191,7 +191,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     }
 
     const candidates: string[] = [];
-    for (const attachment of attachments) {
+    for (const attachment of attachments.map(providerAttachment)) {
       if (attachment.type !== "image") {
         continue;
       }

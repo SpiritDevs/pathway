@@ -30,7 +30,11 @@ import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { createDeterministicAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
+import {
+  createDeterministicAttachmentId,
+  providerAttachment,
+  resolveAttachmentPath,
+} from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { randomUuidV4 } from "../orchestration-v2/RandomUuid.ts";
@@ -209,6 +213,7 @@ export const makeThreadQueueBackend = Effect.fn("cloud.thread_queue.backend")(fu
   readonly companyId: CompanyId;
   readonly tokens: ConvexServiceTokenProvider;
 }) {
+  const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
   const client = yield* Effect.acquireRelease(
     Effect.sync(() => new ConvexClient(input.convexUrl)),
     (convex) => Effect.promise(() => convex.close()),
@@ -246,7 +251,53 @@ export const makeThreadQueueBackend = Effect.fn("cloud.thread_queue.backend")(fu
         ).pipe(Effect.asVoid),
       { bufferSize: 1, strategy: "sliding" },
     ),
-    prepare: (head) => call(() => client.query(api.threadQueue.prepare, args(head))),
+    prepare: (head) =>
+      Effect.gen(function* () {
+        const accepted = yield* call(() => client.query(api.threadQueue.prepare, args(head)));
+        if (accepted === null) return null;
+        const attachments = yield* Effect.forEach(accepted.attachments, (item) =>
+          Effect.gen(function* () {
+            const original = item.attachment;
+            if (original.type !== "asset" || !("assetId" in original)) return item;
+            const image = original.mimeType.startsWith("image/");
+            const compatible = /^(image\/(png|jpeg|gif|webp))$/i.test(original.mimeType);
+            const access = yield* call(() =>
+              client.mutation(api.assets.resolve, {
+                companyId: input.companyId,
+                assetId: original.assetId,
+                context: {
+                  kind: "thread",
+                  id: head.threadId,
+                  environmentId: String(environmentId),
+                },
+                representation:
+                  image && (!compatible || original.sizeBytes > 10 * 1024 * 1024)
+                    ? "preview"
+                    : "original",
+              }),
+            );
+            const limit = image ? 10 * 1024 * 1024 : 50 * 1024 * 1024;
+            if (access.byteSize > limit)
+              return yield* Effect.fail(
+                "The asset is uploaded, but exceeds this provider's attachment input limit.",
+              );
+            return {
+              ...item,
+              url: access.url,
+              attachment: {
+                ...original,
+                providerAttachment: {
+                  type: image ? ("image" as const) : ("file" as const),
+                  name: access.name,
+                  mimeType: access.mimeType,
+                  sizeBytes: access.byteSize,
+                },
+              },
+            };
+          }),
+        );
+        return { ...accepted, attachments };
+      }),
     accept: (head) => call(() => client.mutation(api.threadQueue.accept, args(head))),
     acknowledge: (head) =>
       call(() => client.mutation(api.threadQueue.acknowledge, args(head))).pipe(Effect.asVoid),
@@ -278,8 +329,9 @@ export const persistThreadQueueAttachment = Effect.fn("cloud.thread_queue.attach
     return yield* Effect.fail(
       `Attachment ${attachment.name} is not supported by this environment.`,
     );
+  const provider = providerAttachment(attachment);
   const existing = yield* fs.stat(finalPath).pipe(Effect.option);
-  if (Option.isSome(existing) && existing.value.size === BigInt(attachment.sizeBytes))
+  if (Option.isSome(existing) && existing.value.size === BigInt(provider.sizeBytes))
     return attachment;
   const partPath = `${finalPath}.${yield* randomUuidV4}.part`;
   yield* fs.makeDirectory(config.attachmentsDir, { recursive: true });
@@ -292,14 +344,14 @@ export const persistThreadQueueAttachment = Effect.fn("cloud.thread_queue.attach
       response.stream.pipe(
         Stream.mapEffect((chunk) => {
           receivedBytes += chunk.byteLength;
-          return receivedBytes > attachment.sizeBytes
+          return receivedBytes > provider.sizeBytes
             ? Effect.fail(`Attachment ${attachment.name} exceeds its saved size.`)
             : Effect.succeed(chunk);
         }),
       ),
       fs.sink(partPath),
     );
-    if (receivedBytes !== attachment.sizeBytes)
+    if (receivedBytes !== provider.sizeBytes)
       return yield* Effect.fail(
         `Attachment ${attachment.name} was incomplete. Retry to download it again.`,
       );

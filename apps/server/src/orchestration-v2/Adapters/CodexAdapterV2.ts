@@ -55,7 +55,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { providerAttachment, resolveAttachmentPath } from "../../attachmentStore.ts";
 import { appendFileAttachmentPromptText } from "../../attachmentPrompt.ts";
 import { CodexModelCatalog, resolveCodexTurnOptions } from "../../codexModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
@@ -2706,8 +2706,9 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             return planId;
           });
 
-        const resolveCodexAttachment = (attachment: ChatAttachment) =>
+        const resolveCodexAttachment = (original: ChatAttachment) =>
           Effect.gen(function* () {
+            const attachment = providerAttachment(original);
             if (attachment.type !== "image") return null;
             const attachmentPath = resolveAttachmentPath({
               attachmentsDir: serverConfig.attachmentsDir,

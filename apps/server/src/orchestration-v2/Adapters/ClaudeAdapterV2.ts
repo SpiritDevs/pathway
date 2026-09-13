@@ -74,7 +74,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { providerAttachment, resolveAttachmentPath } from "../../attachmentStore.ts";
 import { compileClaudeModelSelection } from "../../claudeModelOptions.ts";
 import { ServerConfig } from "../../config.ts";
 import { makeClaudeEnvironment } from "../../provider/Drivers/ClaudeHome.ts";
@@ -1200,7 +1200,7 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   // The model's tools cannot dereference inlined pixels. Appending the
   // on-disk path is what lets a turn like "include this screenshot in the
   // PR" copy the actual file (the query grants attachmentsDir for reads).
-  const attachmentPathLines = input.attachments.flatMap((attachment) => {
+  const attachmentPathLines = input.attachments.map(providerAttachment).flatMap((attachment) => {
     const attachmentPath = resolveAttachmentPath({
       attachmentsDir: input.attachmentsDir,
       attachment,
@@ -1231,7 +1231,7 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
     content.push({ type: "text", text: leadingText });
   }
 
-  for (const attachment of input.attachments) {
+  for (const attachment of input.attachments.map(providerAttachment)) {
     if (attachment.type !== "image") continue;
     if (!isSupportedClaudeImageMimeType(attachment.mimeType)) {
       return yield* new ProviderAdapterProtocolError({

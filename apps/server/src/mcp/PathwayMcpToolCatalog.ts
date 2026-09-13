@@ -1,3 +1,4 @@
+import { AssetsToolkit } from "./toolkits/assets/tools.ts";
 import * as Context from "effect/Context";
 import { Tool } from "effect/unstable/ai";
 
@@ -14,6 +15,7 @@ export const PATHWAY_MCP_TOOLS = [
   ...Object.values(OrchestratorToolkit.tools),
   ...Object.values(WorktreeToolkit.tools),
   ...Object.values(EmailToolkit.tools),
+  ...Object.values(AssetsToolkit.tools),
 ] as const;
 
 export const PATHWAY_MCP_TOOL_NAMES = PATHWAY_MCP_TOOLS.map(({ name }) => name);

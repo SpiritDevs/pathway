@@ -166,11 +166,24 @@ export function parseIssueSegmentFromAttachmentId(attachmentId: string): string 
   return match[1]?.toLowerCase() ?? null;
 }
 
+/** Resolve the verified provider representation without changing durable asset identity. */
+export function providerAttachment(attachment: ChatAttachment): ChatAttachment {
+  if (
+    attachment.type === "asset" &&
+    "providerAttachment" in attachment &&
+    attachment.providerAttachment
+  ) {
+    return { ...attachment.providerAttachment, id: attachment.id };
+  }
+  return attachment;
+}
+
 export function attachmentRelativePath(
   attachment: ChatImageAttachment | ChatFileAttachment,
 ): string;
 export function attachmentRelativePath(attachment: ChatAttachment): string | null;
 export function attachmentRelativePath(attachment: ChatAttachment): string | null {
+  attachment = providerAttachment(attachment);
   switch (attachment.type) {
     case "image": {
       const extension = inferImageExtension({

@@ -1,0 +1,17 @@
+.asset-reveal {
+  opacity: 0;
+  filter: blur(8px);
+  transition:
+    opacity 180ms ease-out,
+    filter 220ms ease-out;
+}
+.asset-reveal[data-loaded="true"] {
+  opacity: 1;
+  filter: blur(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .asset-reveal {
+    filter: none;
+    transition: none;
+  }
+}

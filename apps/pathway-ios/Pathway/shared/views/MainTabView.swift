@@ -520,6 +520,7 @@ struct PathwaySettingsView: View {
             Section("Appearance") {
                 NavigationLink("General") { PathwayGeneralSettingsView() }
                 NavigationLink("Appearance") { PathwayAppearanceSettingsView() }
+                NavigationLink("Assets") { PathwayAssetsSettingsView() }
                 NavigationLink("Storage & cleanup") { PathwayEnvironmentStorageView() }
                 NavigationLink("Keyboard Shortcuts") { PathwayKeyboardSettingsView() }
             }

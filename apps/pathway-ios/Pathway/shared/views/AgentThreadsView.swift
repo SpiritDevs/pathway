@@ -633,6 +633,7 @@ private struct ThreadLifecycleShelfHeader: View {
 }
 
 private struct CompactAgentThreadRow: View {
+    @Environment(PathwayAppModel.self) private var appModel
     let thread: PathwayAgentThread
     let icon: String
 
@@ -645,6 +646,7 @@ private struct CompactAgentThreadRow: View {
             Text(thread.shell.title)
                 .lineLimit(1)
 
+            if appModel.cloud.assetsIndex.count(thread) > 0 { Image(systemName: "paperclip").font(.caption).accessibilityLabel("Has attachments") }
             AgentThreadStatusBadge(thread: thread)
 
             Spacer(minLength: 8)
@@ -720,6 +722,7 @@ private struct AgentThreadRow: View {
                 environmentDetails
                     .layoutPriority(1)
 
+                if appModel.cloud.assetsIndex.count(thread) > 0 { Image(systemName: "paperclip").accessibilityLabel("Has attachments") }
                 providerIcon
             }
             .font(.subheadline)
@@ -953,6 +956,7 @@ struct AgentThreadConversationView: View {
     private let workspaceRoot: String?
     @State private var childDestination: AgentThreadDestination?
     @State private var isOpeningChild = false
+    @State private var showsAssets = false
     @State private var showsChanges = false
     @State private var navigationError: String?
     @State private var isForking = false
@@ -1108,6 +1112,10 @@ struct AgentThreadConversationView: View {
                         .accessibilityIdentifier("agent-thread-changes")
                     }
                         AgentThreadQueueControl(model: model, isComposerExpanded: $isComposerExpanded, isComposerFocused: $isComposerFocused)
+                        if appModel.cloud.assetsIndex.count(model.thread) > 0 {
+                            Button { showsAssets = true } label: { Label("Assets", systemImage: "paperclip").font(.caption) }
+                                .buttonStyle(.bordered).buttonBorderShape(.capsule)
+                        }
                         AgentThreadSubagentPicker(model: model, openThread: openChild)
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -1163,6 +1171,12 @@ struct AgentThreadConversationView: View {
 
     var body: some View {
         conversationWithActions
+        .sheet(isPresented: $showsAssets) {
+            NavigationStack {
+                PathwayAssetsView(companyID: model.thread.companyId, threadID: model.threadID, environmentID: model.thread.environmentId, cloud: appModel.cloud)
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showsAssets = false } } }
+            }
+        }
         .sheet(isPresented: $showsChanges) { AgentThreadChangesView(model: model) }
         .onChange(of: changedItems.isEmpty) { _, empty in
             if empty { showsChanges = false }
@@ -1249,6 +1263,7 @@ struct AgentThreadConversationView: View {
     }
     private var threadActionsMenu: some View {
         Menu {
+        Button("Assets", systemImage: "paperclip") { showsAssets = true }
         Button("Rename thread", systemImage: "pencil") {
             renameTitle = model.threadTitle
             showsRename = true

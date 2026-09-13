@@ -38,7 +38,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { providerAttachment, resolveAttachmentPath } from "../../attachmentStore.ts";
 import { appendFileAttachmentPromptText } from "../../attachmentPrompt.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
@@ -2041,7 +2041,7 @@ export function makeCursorAdapterV2(
             attachments: turnInput.message.attachments,
           });
           const images = yield* Effect.forEach(
-            turnInput.message.attachments.filter((attachment) => attachment.type === "image"),
+            turnInput.message.attachments.map(providerAttachment).filter((attachment) => attachment.type === "image"),
             (attachment: ChatAttachment) =>
               Effect.gen(function* () {
                 const path = resolveAttachmentPath({

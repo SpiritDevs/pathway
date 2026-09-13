@@ -1,3 +1,4 @@
+import { useMigratedTimelineAssets } from "./assets/useMigratedTimelineAssets";
 import { isPendingQueuedChatMessage } from "../cloud/threadQueueChat";
 import { useQuestionDismissal } from "./chat/useQuestionDismissal";
 import { ScrollToEndButton } from "./chat/ScrollToEndButton";
@@ -2696,15 +2697,10 @@ function ChatViewContent(props: ChatViewProps) {
   const modelPickerLockedProvider = supportsProviderSwitchingViaHandoff ? null : lockedProvider;
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
-  const uploadFilesToEnvironment =
-    activeEnvironmentConnectionPhase === "connected" &&
-    !queuedChat.row?.waitingToSync &&
-    (queuedChat.row?.queuedCount ?? 0) === 0;
-  const maxFileAttachmentBytes = uploadFilesToEnvironment
-    ? serverConfig?.environment.capabilities.attachmentUploads === true
-      ? (serverConfig.environment.capabilities.fileAttachments?.maxUploadBytes ?? null)
-      : null
-    : 50 * 1024 * 1024;
+  // New attachment originals always use private company storage. Environment/provider
+  // materialization applies its separate input limits when the message is delivered.
+  const uploadFilesToEnvironment = false;
+  const maxFileAttachmentBytes = 250 * 1024 * 1024;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -3579,7 +3575,7 @@ function ChatViewContent(props: ChatViewProps) {
       ),
     [optimisticUserMessages],
   );
-  const timelineEntries = useMemo(
+  const originalTimelineEntries = useMemo(
     () =>
       withOptimisticWorkspacePreparation(
         isServerThread ? serverTimelineEntries : draftTimelineEntries,
@@ -3595,6 +3591,10 @@ function ChatViewContent(props: ChatViewProps) {
       localDispatchStartedAt,
       activeThread,
     ],
+  );
+  const timelineEntries = useMigratedTimelineAssets(
+    originalTimelineEntries,
+    activeThread?.conversationCompanyId ?? missingThreadCompanyId ?? activeCompanyId,
   );
   const [dockedDraftHeroThreadKey, setDockedDraftHeroThreadKey] = useState<string | null>(null);
   const draftHeroDockRequested =
@@ -9312,6 +9312,8 @@ function ChatViewContent(props: ChatViewProps) {
     ) : null
   ) : null;
   const threadDetailsPanelProps: Omit<ThreadDetailsPanelProps, "mode"> = {
+    assetCompanyId:
+      activeThread?.conversationCompanyId ?? missingThreadCompanyId ?? activeCompanyId,
     pendingQuestions: {
       prompts: allPendingUserInputs,
       respondingRequestIds: [

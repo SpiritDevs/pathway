@@ -21,7 +21,7 @@ export function validateAttachment(value: unknown): ChatAttachment {
   identifier(item.id, "Attachment id");
   if (!/^[a-z0-9_-]+$/i.test(item.id) || item.id.length > 128)
     throw new Error("Invalid attachment id.");
-  if (item.type !== "image" && item.type !== "file")
+  if (item.type !== "image" && item.type !== "file" && item.type !== "asset")
     throw new Error("Unsupported attachment type.");
   if (typeof item.name !== "string" || !item.name.trim() || item.name.length > 255)
     throw new Error("Invalid attachment name.");
@@ -33,7 +33,14 @@ export function validateAttachment(value: unknown): ChatAttachment {
     throw new Error("Invalid attachment media type.");
   if (item.type === "image" && !item.mimeType.startsWith("image/"))
     throw new Error("Invalid image media type.");
-  const maximum = (item.type === "image" ? 10 : 50) * 1024 * 1024;
+  if (item.type === "asset") {
+    if (item.providerAttachment !== undefined)
+      throw new Error("Provider representation metadata is environment-owned.");
+    identifier(item.assetId, "Asset id");
+    identifier(item.companyId, "Asset company");
+    if (item.id !== item.assetId) throw new Error("Asset attachment id must match its asset.");
+  }
+  const maximum = (item.type === "asset" ? 250 : item.type === "image" ? 10 : 50) * 1024 * 1024;
   if (
     typeof item.sizeBytes !== "number" ||
     !Number.isSafeInteger(item.sizeBytes) ||

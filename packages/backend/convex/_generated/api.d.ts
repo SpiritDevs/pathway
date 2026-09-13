@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as assets from "../assets.js";
+import type * as assetStorage from "../assetStorage.js";
 import type * as agentThreads from "../agentThreads.js";
 import type * as browserPasswords from "../browserPasswords.js";
 import type * as calendarAccounts from "../calendarAccounts.js";
@@ -64,6 +66,8 @@ import type * as trustedEmailSenders from "../trustedEmailSenders.js";
 import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  assets: typeof assets;
+  assetStorage: typeof assetStorage;
   agentThreads: typeof agentThreads;
   browserPasswords: typeof browserPasswords;
   calendarAccounts: typeof calendarAccounts;

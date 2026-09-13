@@ -1,3 +1,4 @@
+import { assetFunctions, useAssetClient } from "../../cloud/assetClient";
 import type { ChatAttachmentId, EnvironmentId, IssueId } from "@spiritdevs/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -27,6 +28,10 @@ export function useIssueAttachmentUrls(input: {
   readonly environmentId: EnvironmentId | null;
   readonly issueId: IssueId;
 }): IssueAttachmentUrlsState {
+  const assetClient = useAssetClient();
+  const [privateRows, setPrivateRows] = useState<
+    ReadonlyMap<ChatAttachmentId, IssueAttachmentDisplay | null>
+  >(new Map());
   const legacyResources = useMemo(
     () =>
       input.cloud === null
@@ -83,6 +88,60 @@ export function useIssueAttachmentUrls(input: {
     };
   }, [input.attachmentIds, input.cloud, input.issueId, replicaRefreshVersion]);
 
+  useEffect(() => {
+    let current = true;
+    setPrivateRows(new Map());
+    if (!assetClient || !input.cloud) return;
+    const companyId = input.cloud.companyId;
+    const revisions = new Map<ChatAttachmentId, number>();
+    const stops = input.attachmentIds.map((legacyId) =>
+      assetClient.onUpdate(
+        assetFunctions.resolveLegacy,
+        { companyId, source: "tasks", legacyId },
+        (asset) => {
+          if (!current) return;
+          const revision = (revisions.get(legacyId) ?? 0) + 1;
+          revisions.set(legacyId, revision);
+          if (!asset) {
+            setPrivateRows((rows) => {
+              const next = new Map(rows);
+              next.delete(legacyId);
+              return next;
+            });
+            return;
+          }
+          // Once migrated, never fall back to the old public URL if private access fails.
+          setPrivateRows((rows) => new Map(rows).set(legacyId, null));
+          void assetClient
+            .mutation(assetFunctions.resolve, {
+              companyId,
+              assetId: asset.id,
+              representation: asset.previewState === "ready" ? "preview" : "original",
+            })
+            .then(
+              ({ url }) => {
+                if (current && revisions.get(legacyId) === revision)
+                  setPrivateRows((rows) =>
+                    new Map(rows).set(legacyId, {
+                      url,
+                      fileName: asset.name,
+                      mimeType: asset.mimeType,
+                      byteSize: asset.byteSize,
+                    }),
+                  );
+              },
+              () => {},
+            );
+        },
+        () => {},
+      ),
+    );
+    return () => {
+      current = false;
+      stops.forEach((stop) => stop());
+    };
+  }, [assetClient, input.cloud, input.attachmentIds, replicaRefreshVersion]);
+
   const refresh = useCallback(
     (index: number) => {
       if (input.cloud === null) {
@@ -103,6 +162,7 @@ export function useIssueAttachmentUrls(input: {
             url === null ? null : { url, fileName: null, mimeType: null, byteSize: null },
           )
         : input.attachmentIds.map((attachmentId) => {
+            if (privateRows.has(attachmentId)) return privateRows.get(attachmentId) ?? null;
             const row = replicaRows.get(attachmentId);
             return row === undefined
               ? null
@@ -113,7 +173,7 @@ export function useIssueAttachmentUrls(input: {
                   byteSize: row.byteSize,
                 };
           }),
-    [input.attachmentIds, input.cloud, legacy.urls, replicaRows],
+    [input.attachmentIds, input.cloud, legacy.urls, privateRows, replicaRows],
   );
   return { attachments, refresh };
 }

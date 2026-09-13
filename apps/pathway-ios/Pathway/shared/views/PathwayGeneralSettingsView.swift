@@ -23,6 +23,7 @@ struct PathwayGeneralSettingsView: View {
     @State private var preferences = PathwayGeneralPreferences.shared
     var body: some View {
         Form {
+            Section("Files") { NavigationLink("Assets") { PathwayAssetsSettingsView() } }
             Section("Conversations") {
                 Picker("Send while an agent is running", selection: $preferences.activeTurnSendMode) {
                     Text("Queue for the next turn").tag("queue")

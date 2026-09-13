@@ -1,3 +1,4 @@
+import { AssetLibrary } from "../assets/AssetLibrary";
 import { PendingQuestionsSection } from "./PendingQuestionsSection";
 import type { AutoPlacementOption } from "../BranchToolbar.logic";
 import type {
@@ -55,6 +56,7 @@ export interface ThreadDetailsPanelProps {
   environmentId: EnvironmentId;
   environmentConnection: EnvironmentConnectionPresentation | null;
   threadId: ThreadId;
+  assetCompanyId?: string | null;
   draftId?: DraftId;
   activeProjectName: string | undefined;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
@@ -393,7 +395,19 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
     }
   };
 
-  const sectionContent = visibleSections.map((section) => renderSection(section.id));
+  const sectionContent = (
+    <>
+      {visibleSections.map((section) => renderSection(section.id))}
+      {props.assetCompanyId && !props.draftId && (
+        <AssetLibrary
+          companyId={props.assetCompanyId}
+          threadId={props.threadId}
+          environmentId={props.environmentId}
+          compact
+        />
+      )}
+    </>
+  );
   const relationshipSectionsVisible =
     !props.draftId &&
     visibleSections.some((section) => section.id === "chats" || section.id === "lineage");

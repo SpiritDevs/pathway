@@ -89,6 +89,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/keybindings": KeyboardIcon,
   "/settings/snap-shot": CameraIcon,
   "/settings/projects": FolderIcon,
+  "/settings/assets": FileUpIcon,
   "/settings/members-teams": UsersIcon,
   "/settings/company-members": UserRoundIcon,
   "/settings/company-teams": UsersRoundIcon,

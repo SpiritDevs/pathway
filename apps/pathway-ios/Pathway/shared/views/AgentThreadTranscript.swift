@@ -210,6 +210,8 @@ private struct AgentTranscriptMessage<Actions: View>: View {
 }
 
 private struct AgentTranscriptAttachment: View {
+    @Environment(PathwayAppModel.self) private var appModel
+    @State private var migratedAsset: PathwayAsset?
     let attachment: PathwayMessageAttachment
     let model: PathwayAgentThreadModel
     @State private var url: URL?
@@ -219,7 +221,11 @@ private struct AgentTranscriptAttachment: View {
 
     var body: some View {
         Group {
-            if let url {
+            if let migratedAsset {
+                PathwayTranscriptAsset(assetID: migratedAsset.id, companyID: migratedAsset.companyID, threadID: model.threadID, environmentID: model.thread.environmentId)
+            } else if attachment.type == "asset", let assetID = attachment.assetId {
+                PathwayTranscriptAsset(assetID: assetID, companyID: attachment.companyId ?? model.thread.companyId, threadID: model.threadID, environmentID: model.thread.environmentId)
+            } else if let url {
                 if attachment.type == "image" {
                     AgentTranscriptAttachmentImage(url: url, maximumPixelSize: 840) { phase in
                         switch phase {
@@ -261,6 +267,10 @@ private struct AgentTranscriptAttachment: View {
             AgentTranscriptAttachmentPreview(attachment: attachment, model: model, initialURL: url)
         }
         .task(id: "\(attempt):\(model.cloudQueueAttachmentURLs[attachment.id]?.absoluteString ?? "")") {
+            guard attachment.type != "asset" else { return }
+            let migration = try? await appModel.cloud.request(kind: "query", name: "assets:resolveLegacy", arguments: .object([
+                "companyId": .string(model.thread.companyId), "source": .string("queue"), "legacyId": .string(attachment.id)]))
+            if let migration, let asset = PathwayAsset(migration, companyID: model.thread.companyId) { migratedAsset = asset; return }
             do { url = try await model.attachmentURL(attachment); errorMessage = nil }
             catch { errorMessage = error.localizedDescription }
         }
@@ -275,6 +285,7 @@ private struct AgentTranscriptAttachment: View {
 }
 
 struct AgentTranscriptAttachmentPreview: View {
+    @Environment(PathwayAppModel.self) private var appModel
     let attachment: PathwayMessageAttachment
     let model: PathwayAgentThreadModel
     let initialURL: URL?
@@ -286,6 +297,21 @@ struct AgentTranscriptAttachmentPreview: View {
     @State private var errorMessage: String?
     @State private var zoom: CGFloat = 1
     @State private var baseZoom: CGFloat = 1
+    @State private var publishing = false
+    @State private var publishError: String?
+    @State private var publishedAsset: PathwayAsset?
+    @State private var showPublishedAsset = false
+    @State private var assetUploader: PathwayAssetsModel?
+    @State private var publishOriginal: URL?
+    private var canPublishOriginal: Bool {
+        if attachment.type == "asset" { return false }
+        if case .web = markdownSource { return false }
+        return true
+    }
+    private var publicationContext: JSONValue { .object([
+        "kind": .string("thread"), "id": .string(sourceThreadID ?? model.threadID), "environmentId": .string(model.thread.environmentId)
+    ]) }
+
 
     var body: some View {
         NavigationStack {
@@ -325,9 +351,25 @@ struct AgentTranscriptAttachmentPreview: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .bottom) {
-                if let source = attachment.snapShotSource {
-                    AgentSnapShotDetails(source: source)
-                }
+                VStack(spacing: 10) {
+                    if let source = attachment.snapShotSource { AgentSnapShotDetails(source: source) }
+                    if canPublishOriginal {
+                        if let publishedAsset {
+                            Button { showPublishedAsset = true } label: { Label("Available across devices", systemImage: "checkmark.icloud") }.buttonStyle(.bordered)
+                            Button("Copy asset reference", systemImage: "link") { UIPasteboard.general.string = "pathway-asset:\(publishedAsset.companyID)/\(publishedAsset.id)" }.font(.caption)
+                        } else {
+                            Button { publishAcrossDevices() } label: {
+                                if publishing { Label(assetUploader?.uploadLabel ?? "Preparing original…", systemImage: "arrow.up.doc") }
+                                else { Label("Make available across devices", systemImage: "icloud.and.arrow.up") }
+                            }.buttonStyle(.borderedProminent).disabled(publishing || url == nil)
+                            if publishing { ProgressView() }
+                        }
+                        if let publishError { Text(publishError).font(.caption).foregroundStyle(.red) }
+                    }
+                }.padding(.horizontal).padding(.bottom, 8)
+            }
+            .sheet(isPresented: $showPublishedAsset) {
+                if let publishedAsset, let assetUploader { PathwayAssetDetailView(asset: publishedAsset, model: assetUploader) }
             }
             .navigationTitle(attachment.name).navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -347,6 +389,52 @@ struct AgentTranscriptAttachmentPreview: View {
                     errorMessage = nil
                 } catch { errorMessage = error.localizedDescription }
             }
+        }
+    }
+    private func publishAcrossDevices() {
+        guard let url, !publishing else { return }
+        publishing = true; publishError = nil
+        Task {
+            defer { publishing = false }
+            do {
+                let uploader: PathwayAssetsModel
+                if let assetUploader { uploader = assetUploader }
+                else {
+                    uploader = PathwayAssetsModel { kind, name, args in try await appModel.cloud.request(kind: kind, name: name, arguments: args) }
+                    assetUploader = uploader
+                }
+                if let publishOriginal {
+                    await uploader.retryUpload(companyID: model.thread.companyId, context: publicationContext)
+                    if uploader.lastUploadedAssetID == nil, uploader.uploadLabel == nil {
+                        await uploader.upload(url: publishOriginal, companyID: model.thread.companyId, context: publicationContext)
+                    }
+                } else {
+                    let source: URL
+                    if url.isFileURL { source = url }
+                    else {
+                        let (downloaded, response) = try await URLSession.shared.download(from: url)
+                        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.resourceUnavailable) }
+                        source = downloaded
+                    }
+                    defer { if !url.isFileURL { try? FileManager.default.removeItem(at: source) } }
+                    let byteSize = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                    guard byteSize > 0, byteSize <= uploader.maxFileBytes else { throw PathwayThreadConversationError.message("This file is empty or exceeds the company asset upload limit.") }
+                    let directory = FileManager.default.temporaryDirectory.appending(path: "PathwayPublishedOriginals/\(UUID().uuidString)")
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    let suggestedName: String
+                    if case .workspace(let path) = markdownSource { suggestedName = URL(fileURLWithPath: path).lastPathComponent }
+                    else { suggestedName = attachment.name }
+                    let original = directory.appending(path: URL(fileURLWithPath: suggestedName).lastPathComponent)
+                    try await Task.detached(priority: .utility) { try FileManager.default.copyItem(at: source, to: original) }.value
+                    publishOriginal = original
+                    await uploader.upload(url: original, companyID: model.thread.companyId, context: publicationContext)
+                }
+                guard let assetID = uploader.lastUploadedAssetID else { throw PathwayThreadConversationError.message(uploader.error ?? "Upload pending. The original has been kept for retry.") }
+                let value = try await appModel.cloud.request(kind: "query", name: "assets:get", arguments: .object(["companyId": .string(model.thread.companyId), "assetId": .string(assetID)]))
+                publishedAsset = PathwayAsset(value, companyID: model.thread.companyId)
+                guard publishedAsset != nil else { throw PathwayThreadConversationError.message("The upload is verified, but its details could not be loaded. Open Thread assets to view it.") }
+                if let publishOriginal { try? FileManager.default.removeItem(at: publishOriginal.deletingLastPathComponent()); self.publishOriginal = nil }
+            } catch { publishError = error.localizedDescription }
         }
     }
     private func failure(_ message: String) -> some View {

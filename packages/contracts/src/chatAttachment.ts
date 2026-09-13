@@ -48,7 +48,7 @@ export type ChatFileAttachment = typeof ChatFileAttachment.Type;
 export const ChatUnknownAttachment = Schema.Struct({
   type: TrimmedNonEmptyString.check(
     Schema.isMaxLength(50),
-    Schema.isPattern(/^(?!(?:image|file)$)/),
+    Schema.isPattern(/^(?!(?:image|file|asset)$)/),
   ),
   id: ChatAttachmentId,
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
@@ -83,7 +83,39 @@ export const UploadChatFileAttachment = Schema.Struct({
 });
 export type UploadChatFileAttachment = typeof UploadChatFileAttachment.Type;
 
+export const ChatAssetAttachment = Schema.Struct({
+  type: Schema.Literal("asset"),
+  providerAttachment: Schema.optional(
+    Schema.Union([
+      Schema.Struct({
+        type: Schema.Literal("image"),
+        name: TrimmedNonEmptyString,
+        mimeType: TrimmedNonEmptyString,
+        sizeBytes: NonNegativeInt.check(
+          Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES),
+        ),
+      }),
+      Schema.Struct({
+        type: Schema.Literal("file"),
+        name: TrimmedNonEmptyString,
+        mimeType: TrimmedNonEmptyString,
+        sizeBytes: NonNegativeInt.check(
+          Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES),
+        ),
+      }),
+    ]),
+  ),
+  id: ChatAttachmentId,
+  assetId: ChatAttachmentId,
+  companyId: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
+  sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(250 * 1024 * 1024)),
+});
+export type ChatAssetAttachment = typeof ChatAssetAttachment.Type;
+
 export const ChatAttachment = Schema.Union([
+  ChatAssetAttachment,
   ChatImageAttachment,
   ChatFileAttachment,
   ChatUnknownAttachment,
@@ -110,6 +142,7 @@ const PendingChatAttachmentId = ChatAttachmentId.check(
 );
 
 export const PendingChatAttachment = Schema.Union([
+  ChatAssetAttachment,
   Schema.Struct({ ...ChatImageAttachment.fields, id: PendingChatAttachmentId }),
   Schema.Struct({ ...ChatFileAttachment.fields, id: PendingChatAttachmentId }),
 ]);

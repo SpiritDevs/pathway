@@ -263,3 +263,51 @@ export const AssetAccessError = Schema.Union([
   AssetSigningKeyLoadError,
 ]);
 export type AssetAccessError = typeof AssetAccessError.Type;
+
+/** Durable company asset identity; delivery URLs are short-lived, never stored in messages. */
+export type AssetContext = {
+  kind: "thread" | "task";
+  id: string;
+  environmentId?: string;
+  messageId?: string;
+  title?: string;
+};
+export type AssetState = "uploading" | "preparing" | "ready" | "failed" | "trashed" | "purged";
+export type AssetKind = "image" | "video" | "audio" | "document" | "file";
+export interface Asset {
+  id: string;
+  companyId: string;
+  name: string;
+  mimeType: string;
+  byteSize: number;
+  kind: AssetKind;
+  state: AssetState;
+  previewState: "pending" | "ready" | "unsupported" | "failed";
+  originalReady: boolean;
+  createdAt: number;
+  updatedAt: number;
+  uploaderId: string;
+  uploaderName?: string;
+  keepInLibrary: boolean;
+  trashedAt: number | null;
+  error: string | null;
+  contexts: AssetContext[];
+  shares: { id: string; expiresAt: number; revokedAt: number | null }[];
+  permissions: { canManage: boolean; canShare: boolean };
+  reference: { type: "asset"; assetId: string; companyId: string };
+}
+export interface AssetPage {
+  canConfigureQuota?: boolean;
+  items: Asset[];
+  nextCursor: string | null;
+  usage: {
+    canConfigureQuota?: boolean;
+    usedBytes: number;
+    reservedBytes: number;
+    maxBytes: number;
+    maxFileBytes: number;
+  };
+}
+export const ASSET_MAX_FILE_BYTES = 250 * 1024 * 1024;
+export const ASSET_COMPANY_MAX_BYTES = 10 * 1024 * 1024 * 1024;
+export const ASSET_TRASH_RETENTION_MS = 30 * 86400_000;

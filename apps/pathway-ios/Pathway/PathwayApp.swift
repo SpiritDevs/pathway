@@ -18,7 +18,7 @@ struct PathwayApp: App {
     init() {
         missingConfigurationKeys = AppConfiguration.missingRequiredKeys
         #if DEBUG && !os(visionOS)
-        if ProcessInfo.processInfo.arguments.contains("--uitest-issues") || ProcessInfo.processInfo.arguments.contains("--uitest-conversation") || ProcessInfo.processInfo.arguments.contains("--uitest-parity") {
+        if ProcessInfo.processInfo.arguments.contains("--uitest-assets") || ProcessInfo.processInfo.arguments.contains("--uitest-issues") || ProcessInfo.processInfo.arguments.contains("--uitest-conversation") || ProcessInfo.processInfo.arguments.contains("--uitest-parity") {
             _appModel = State(initialValue: nil)
             return
         }
@@ -92,7 +92,9 @@ struct PathwayApp: App {
     @ViewBuilder
     private var mainContent: some View {
         #if DEBUG && !os(visionOS)
-        if ProcessInfo.processInfo.arguments.contains("--uitest-issues") {
+        if ProcessInfo.processInfo.arguments.contains("--uitest-assets") {
+            PathwayAssetsSimulatorScene()
+        } else if ProcessInfo.processInfo.arguments.contains("--uitest-issues") {
             PathwayIssuesSimulatorScene()
         } else if ProcessInfo.processInfo.arguments.contains("--uitest-conversation") {
             PathwayConversationSimulatorScene()

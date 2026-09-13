@@ -51,6 +51,12 @@ extension PathwayIssuesModel {
         guard let cloudRequest else {
             throw PathwayIssueWriteError(message: "Connect to Pathway to open attachments.")
         }
+        if let value = try? await cloudRequest("query", "assets:resolveLegacy", .object([
+            "companyId": .string(issue.companyId), "source": .string("tasks"), "legacyId": .string(attachmentID)
+        ])), let asset = PathwayAsset(value, companyID: issue.companyId) {
+            let assets = PathwayAssetsModel(request: cloudRequest)
+            return try await assets.resolve(asset, original: asset.previewState != "ready")
+        }
         let result = try await cloudRequest("query", "issueAttachments:urls", .object([
             "companyId": .string(issue.companyId), "issueId": .string(issue.id),
             "attachmentIds": .array([.string(attachmentID)])

@@ -5,7 +5,7 @@ import {
   type SnapShotAccessibilityNode,
 } from "@spiritdevs/contracts";
 
-import { resolveAttachmentPath } from "./attachmentStore.ts";
+import { providerAttachment, resolveAttachmentPath } from "./attachmentStore.ts";
 
 function sanitizePromptFileName(name: string): string {
   // eslint-disable-next-line no-control-regex
@@ -18,7 +18,8 @@ export function appendFileAttachmentPromptText(input: {
   readonly attachmentsDir: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
 }): string {
-  const lines = input.attachments.flatMap((attachment) => {
+  const lines = input.attachments.flatMap((original) => {
+    const attachment = providerAttachment(original);
     if (attachment.type !== "file") return [];
     const attachmentPath = resolveAttachmentPath({
       attachmentsDir: input.attachmentsDir,

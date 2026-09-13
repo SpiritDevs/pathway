@@ -1,5 +1,6 @@
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Cloud-owned thread intent. Acceptance is a permanent fence, never an expiring execution lease. */
+import { bindQueuedAsset, queuedAssetMetadata } from "./assets.ts";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import type {
@@ -351,7 +352,7 @@ async function attachmentsForSubmission(
   submission: ThreadQueueSubmission,
   ids: string[],
 ) {
-  const attachments = submissionMessage(submission).attachments;
+  const attachments = submissionMessage(submission).attachments.filter((a) => a.type !== "asset");
   if (ids.length !== attachments.length || new Set(ids).size !== ids.length)
     throw invalid("Every attachment must be uploaded before submission.");
   for (let index = 0; index < ids.length; index++) {
@@ -376,6 +377,9 @@ export const enqueue = mutation({
     environmentId: v.string(),
     submission: v.any(),
     attachmentIds: v.array(v.string()),
+    assetRefs: v.optional(
+      v.array(v.object({ type: v.literal("asset"), assetId: v.string(), companyId: v.string() })),
+    ),
   },
   handler: async (ctx, args): Promise<ThreadQueueDetail> => {
     const actor = await requireCompanyActor(ctx, args.companyId);
@@ -524,6 +528,26 @@ export const enqueue = mutation({
       throw invalid(
         "This thread has too many pending messages. Cancel or deliver some before adding more.",
       );
+    const durableAttachments = content.attachments.filter((a) => a.type === "asset");
+    if (durableAttachments.length !== (args.assetRefs ?? []).length)
+      throw invalid("Every asset attachment needs its durable reference.");
+    for (const ref of args.assetRefs ?? []) {
+      if (ref.companyId !== args.companyId || !durableAttachments.some((a) => a.id === ref.assetId))
+        throw invalid("Asset reference does not match this message.");
+      await bindQueuedAsset(ctx, actor, ref.assetId, {
+        kind: "thread",
+        id: thread.threadId,
+        environmentId: thread.environmentId,
+        messageId: content.messageId,
+      });
+      const metadata = await queuedAssetMetadata(ctx, actor, ref.assetId);
+      const attachment = durableAttachments.find((a) => a.id === ref.assetId);
+      if (
+        attachment?.sizeBytes !== metadata.sizeBytes ||
+        attachment?.mimeType !== metadata.mimeType
+      )
+        throw invalid("Asset metadata does not match stored original.");
+    }
     const messageId = await ctx.db.insert("threadQueueMessages", {
       companyId: actor.company._id,
       threadId: args.threadId,
@@ -771,6 +795,14 @@ async function prepareAcceptance(
     attachments.push({ attachment: row.attachment, url });
   }
   const original = message.submission as ThreadQueueSubmission;
+  for (const attachment of submissionMessage(original).attachments) {
+    if (attachment.type !== "asset") continue;
+    const metadata = await queuedAssetMetadata(ctx, actor, attachment.id);
+    attachments.push({
+      attachment: metadata,
+      url: `pathway-asset:${encodeURIComponent(actor.company.id)}/${encodeURIComponent(metadata.assetId)}`,
+    });
+  }
   const submission =
     original.kind === "launch" && message.retryReusesThread
       ? { ...original, input: { ...original.input, reuseExistingThread: true } }

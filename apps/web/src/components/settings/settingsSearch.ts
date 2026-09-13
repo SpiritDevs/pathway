@@ -5,6 +5,7 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/projects"
+  | "/settings/assets"
   | "/settings/members-teams"
   | "/settings/company-members"
   | "/settings/company-teams"
@@ -72,6 +73,7 @@ export function settingsLocationIsVisibleForWorkspace(
 }
 
 const COMPANY_SCOPED_SETTINGS_PATHS: ReadonlySet<SettingsPath> = new Set([
+  "/settings/assets",
   "/settings/members-teams",
   "/settings/company-members",
   "/settings/company-teams",
@@ -91,6 +93,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": "Keybindings",
   "/settings/snap-shot": "SnapShots",
   "/settings/projects": "Projects",
+  "/settings/assets": "Assets",
   "/settings/members-teams": "Members & Teams",
   "/settings/company-members": "Members",
   "/settings/company-teams": "Teams",
@@ -132,6 +135,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
       "/settings/keybindings",
       "/settings/snap-shot",
       "/settings/projects",
+      "/settings/assets",
     ],
   },
   {
@@ -185,6 +189,12 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
  * here once instead of separately in the panel and the index.
  */
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "assets",
+    title: "Assets",
+    to: "/settings/assets",
+    searchTerms: ["files", "uploads", "storage", "sharing", "trash", "media"],
+  },
   { id: "thread-alerts", title: "Thread alerts", to: "/settings/notifications" },
   {
     id: "alert-project-overrides",

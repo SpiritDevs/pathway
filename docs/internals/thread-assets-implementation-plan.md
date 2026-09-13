@@ -1,6 +1,6 @@
 # Pathway assets implementation plan
 
-Status: approved for implementation, including subagents and screenshot/video verification with PlanLink evidence.
+Status: implemented on `feat/company-assets`; focused checks and sample UI evidence complete. Production deployment and cross-device storage acceptance remain pending. See [implementation status](../operations/company-assets-status.md).
 
 ## Outcome
 

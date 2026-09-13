@@ -1,3 +1,4 @@
+import { uploadAsset } from "./assetClient";
 import { useAuth } from "@clerk/react";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -98,6 +99,7 @@ const ref = {
       queueId?: string;
       submission: ThreadQueueSubmission;
       attachmentIds: string[];
+      assetRefs?: Array<{ type: "asset"; assetId: string; companyId: string }>;
     },
     ThreadQueueDetail
   >("threadQueue:enqueue"),
@@ -180,45 +182,66 @@ export function flushThreadQueue(): Promise<void> {
         const attachmentIds: string[] = [];
         let superseded = false;
         for (const [index, file] of row.attachments.entries()) {
-          let storageId = file.storageId;
-          if (!storageId) {
-            const url = await current.client.mutation(ref.generateUploadUrl, {
+          if (file.metadata.type === "asset" && "assetId" in file.metadata) continue;
+          const asset = await uploadAsset(
+            current.client,
+            {
               companyId: row.companyId,
-            });
-            if (!stillCurrent()) return;
-            const response = await fetch(url, {
-              method: "POST",
-              body: file.blob,
-              headers: { "Content-Type": file.metadata.mimeType },
-            });
-            if (!stillCurrent()) return;
-            if (!response.ok) throw new Error(`Attachment upload failed (${response.status}).`);
-            const uploaded = (await response.json()) as { storageId: string };
-            if (!stillCurrent()) return;
-            storageId = uploaded.storageId;
-            const updated = await changeQueuedIntent(row.key, (stored) => {
-              if ((stored.revision ?? 1) !== revision || stored.canceled) return null;
-              return {
-                ...stored,
-                attachments: stored.attachments.map((entry, i) =>
-                  i === index ? { ...entry, storageId: uploaded.storageId } : entry,
-                ),
-              };
-            });
-            if (!stillCurrent()) return;
-            if (!updated) {
-              superseded = true;
-              break;
-            }
-            row = updated as ThreadQueueOutboxRecord<ThreadQueueSubmission>;
-          }
-          const id = await current.client.mutation(ref.registerAttachment, {
-            companyId: row.companyId,
-            storageId,
-            attachment: file.metadata as ChatAttachment,
+              file: new File([file.blob], file.metadata.name, { type: file.metadata.mimeType }),
+              clientRequestId: `${row.submission.input.commandId}:${index}`,
+            },
+            () => {},
+          );
+          if (!stillCurrent()) return;
+          const updated = await changeQueuedIntent(row.key, (stored) => {
+            if ((stored.revision ?? 1) !== revision || stored.canceled) return null;
+            const attachments = stored.attachments.map((entry, i) =>
+              i === index
+                ? {
+                    ...entry,
+                    metadata: {
+                      type: "asset" as const,
+                      id: ChatAttachmentId.make(asset.id),
+                      assetId: asset.id,
+                      companyId: asset.companyId,
+                      name: asset.name,
+                      mimeType: asset.mimeType,
+                      sizeBytes: asset.byteSize,
+                    },
+                  }
+                : entry,
+            );
+            const submission = stored.submission as ThreadQueueSubmission;
+            return {
+              ...stored,
+              attachments,
+              submission:
+                submission.kind === "launch"
+                  ? {
+                      ...submission,
+                      input: {
+                        ...submission.input,
+                        initialMessage: {
+                          ...submission.input.initialMessage!,
+                          attachments: attachments.map((entry) => entry.metadata),
+                        },
+                      },
+                    }
+                  : {
+                      ...submission,
+                      input: {
+                        ...submission.input,
+                        attachments: attachments.map((entry) => entry.metadata),
+                      },
+                    },
+            };
           });
           if (!stillCurrent()) return;
-          attachmentIds.push(id);
+          if (!updated) {
+            superseded = true;
+            break;
+          }
+          row = updated as ThreadQueueOutboxRecord<ThreadQueueSubmission>;
         }
         if (superseded) {
           blocked.add(threadKey);
@@ -236,6 +259,8 @@ export function flushThreadQueue(): Promise<void> {
         await announce(current.accountId);
         if (!stillCurrent()) return;
         notifyOtherTabs();
+        if (row.submission.kind === "launch") decodeQueueLaunch(row.submission.input);
+        else decodeQueueMessage(row.submission.input);
         const accepted = await current.client.mutation(ref.enqueue, {
           companyId: row.companyId,
           environmentId: row.environmentId,
@@ -243,6 +268,21 @@ export function flushThreadQueue(): Promise<void> {
           ...(row.queueId ? { queueId: row.queueId } : {}),
           submission: row.submission,
           attachmentIds,
+          assetRefs: row.attachments.flatMap((file) =>
+            file.metadata.type === "asset" &&
+            "assetId" in file.metadata &&
+            typeof file.metadata.assetId === "string" &&
+            "companyId" in file.metadata &&
+            typeof file.metadata.companyId === "string"
+              ? [
+                  {
+                    type: "asset" as const,
+                    assetId: file.metadata.assetId,
+                    companyId: file.metadata.companyId,
+                  },
+                ]
+              : [],
+          ),
         });
         if (!stillCurrent()) return;
         if (!current.companyId || row.companyId === current.companyId) {
@@ -447,6 +487,8 @@ export async function queueThreadTurn(target: QueuedThreadTurnTarget) {
   if (!current) throw new Error("Sign in to Pathway Cloud before sending.");
   const files = target.durableAttachments
     ? target.durableAttachments.map((file, index) => {
+        if (file.metadata.type === "asset" && "assetId" in file.metadata)
+          return { ...file, blob: file.blob ?? new Blob() };
         if (file.blob === null)
           throw new Error(`Attach ${file.metadata.name} again so it can be saved while offline.`);
         return {
@@ -460,6 +502,8 @@ export async function queueThreadTurn(target: QueuedThreadTurnTarget) {
       })
     : await Promise.all(
         target.input.message.attachments.map(async (attachment, index) => {
+          if (attachment.type === "asset" && "assetId" in attachment)
+            return { metadata: attachment, blob: new Blob() };
           if (!("dataUrl" in attachment))
             throw new Error(`Attach ${attachment.name} again so it can be saved to the cloud.`);
           const blob = await (await fetch(attachment.dataUrl)).blob();
@@ -508,9 +552,17 @@ export async function queueThreadTurn(target: QueuedThreadTurnTarget) {
     existingThread,
     existingThread?.runtime?.activeRunId,
   );
-  // Refuse invalid commands before clearing the composer or creating an unretryable outbox row.
-  if (submission.kind === "launch") decodeQueueLaunch(submission.input);
-  else decodeQueueMessage(submission.input);
+  // Validate command shape now. Stored original metadata is converted to verified asset
+  // references during the drain; environment-specific attachment limits do not apply here.
+  for (const file of files)
+    if (file.metadata.sizeBytes > 250 * 1024 * 1024)
+      throw new Error(`${file.metadata.name} exceeds the 250 MB asset limit.`);
+  if (submission.kind === "launch")
+    decodeQueueLaunch({
+      ...submission.input,
+      initialMessage: { ...submission.input.initialMessage, attachments: [] },
+    });
+  else decodeQueueMessage({ ...submission.input, attachments: [] });
   const queueId = queuedThread?.queueId;
   const record: ThreadQueueOutboxRecord<ThreadQueueSubmission> = {
     key: `${current.accountId}:${companyId}:${target.environmentId}:${submission.input.commandId}`,
@@ -595,7 +647,13 @@ export function useQueuedStartThreadTurn() {
           pendingCloudMessages: localPending || (queued?.queuedCount ?? 0) > 0,
         });
       };
-      if (!canSendDirectly()) return settlePromise(() => queueThreadTurn(target));
+      // Media uses the durable cloud path even while its environment is online. The outbox
+      // keeps originals available for retry and binds verified asset IDs before delivery.
+      if (
+        (target.durableAttachments?.length ?? target.input.message.attachments.length) > 0 ||
+        !canSendDirectly()
+      )
+        return settlePromise(() => queueThreadTurn(target));
       const attachments = await settlePromise(() =>
         target.durableAttachments
           ? prepareDirectTurnAttachments(target.durableAttachments, async ({ metadata, blob }) => {
@@ -624,7 +682,13 @@ export function useQueuedStartThreadTurn() {
             "The account changed while preparing this message. Send it again from the current account.",
           );
         });
-      if (!canSendDirectly()) return settlePromise(() => queueThreadTurn(target));
+      // Media uses the durable cloud path even while its environment is online. The outbox
+      // keeps originals available for retry and binds verified asset IDs before delivery.
+      if (
+        (target.durableAttachments?.length ?? target.input.message.attachments.length) > 0 ||
+        !canSendDirectly()
+      )
+        return settlePromise(() => queueThreadTurn(target));
       // Do not resubmit through cloud after a transport failure: the environment
       // may already have accepted this turn before the acknowledgement was lost.
       return startTurn({

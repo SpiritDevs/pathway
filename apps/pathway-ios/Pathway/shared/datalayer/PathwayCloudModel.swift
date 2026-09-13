@@ -30,6 +30,7 @@ extension PathwayConvexClient: PathwayCloudSyncClient {}
 @MainActor
 @Observable
 final class PathwayCloudModel {
+    @ObservationIgnored lazy var assetsIndex = PathwayAssetsIndex(cloud: self)
     private(set) var connectionState: PathwayCloudConnectionState = .disconnected
     private(set) var companies: [PathwayCompany] = []
     private(set) var environments: [PathwayCompanyEnvironment] = []
@@ -326,6 +327,7 @@ final class PathwayCloudModel {
     }
 
     func stop(clearContent: Bool = true) async {
+        assetsIndex.stop()
         threadQueue.stop(clear: clearContent)
         cancelWork()
         connectedEnvironmentIDs = []
@@ -511,6 +513,7 @@ extension PathwayCloudModel {
             return
         }
 
+        assetsIndex.observe(companies: newCompanies.map(\.id))
         threadQueue.observe(companies: newCompanies.map(\.id))
         let activeCompanyIds = Set(newCompanies.map(\.id))
         removeCompanies(notIn: activeCompanyIds)

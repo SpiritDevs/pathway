@@ -39,7 +39,6 @@ import {
 } from "@spiritdevs/contracts";
 import type { EnvironmentConnectionPresentation } from "@spiritdevs/client-runtime/connection";
 import {
-  clampFileAttachmentUploadBytes,
   fileAttachmentTooLargeMessage,
 } from "@spiritdevs/client-runtime/state/attachments";
 import { serializeComposerFileLink } from "@spiritdevs/shared/composerTrigger";
@@ -766,10 +765,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onExpandImage,
     onOpenIssueContext,
   } = props;
-  const maxFileAttachmentBytes =
-    advertisedMaxFileAttachmentBytes === null
-      ? null
-      : clampFileAttachmentUploadBytes(advertisedMaxFileAttachmentBytes);
+  const maxFileAttachmentBytes = advertisedMaxFileAttachmentBytes;
   const composerControlsDisabledReason = contextCompactionInProgress
     ? "Wait for context compaction to finish"
     : composerControlsLocked

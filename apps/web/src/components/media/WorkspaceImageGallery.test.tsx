@@ -5,6 +5,12 @@ import { reactHookHarness as hooks } from "~/test/reactHookHarness";
 import { WorkspaceImageGallery } from "./WorkspaceImageGallery";
 import type { ImageLightboxProps } from "./ImageLightbox";
 
+vi.mock("../assets/useWorkspaceAssetPublishAction", () => ({
+  useWorkspaceAssetPublishAction: () => [],
+}));
+
+vi.mock("./ImageLightbox", () => ({ ImageLightbox: () => null }));
+
 const state = vi.hoisted(() => ({
   effects: [] as Array<() => () => void>,
   createUrl: vi.fn(),

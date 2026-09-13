@@ -70,10 +70,13 @@ extension PathwayAgentThreadModel {
                   data.count == attachment.sizeBytes else {
                 throw PathwayThreadConversationError.message("Could not load \(attachment.name). The message is still queued.")
             }
+            let type = attachment.mimeType.hasPrefix("image/") ? "image" : "file"
+            let preview = type == "image" ? await PathwayImageUpload.thumbnail(data) : nil
             var draft = PathwayThreadAttachmentDraft(id: UUID().uuidString, name: attachment.name,
-                mimeType: attachment.mimeType, type: attachment.type, sizeBytes: data.count,
-                state: .uploading, previewData: attachment.type == "image" ? data : nil)
+                mimeType: attachment.mimeType, type: type, sizeBytes: data.count,
+                state: .uploading, previewData: preview)
             draft.source = attachment.source
+            if attachment.assetId != nil { draft.attachment = attachment }
             restored.append((draft, data))
         }
         guard draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, draftAttachments.isEmpty, !isSending else {

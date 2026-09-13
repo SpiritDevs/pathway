@@ -2,11 +2,27 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Converts HEIF-family photos before upload metadata or draft bytes are persisted.
+/// Image representations for previews and legacy delivery. Company assets retain original bytes.
 struct PathwayImageUpload: Sendable {
     let data: Data
     let name: String
     let mimeType: String
+
+    /// Composer previews are bounded independently of the immutable uploaded original.
+    static func thumbnail(_ data: Data) async -> Data? {
+        await Task.detached(priority: .utility) {
+            guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+                  let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 1024
+                  ] as CFDictionary) else { return nil }
+            let result = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(result, UTType.png.identifier as CFString, 1, nil) else { return nil }
+            CGImageDestinationAddImage(destination, image, nil)
+            return CGImageDestinationFinalize(destination) ? result as Data : nil
+        }.value
+    }
 
     static func prepare(data: Data, name: String, mimeType: String) async throws -> Self {
         let worker = Task.detached(priority: .userInitiated) {

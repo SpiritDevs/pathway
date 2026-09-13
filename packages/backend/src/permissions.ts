@@ -47,6 +47,9 @@ export const PERMISSIONS = [
   "remoteAgents.control",
   "audit.read",
   "data.export",
+  "assets.share",
+  "assets.manage",
+  "assets.process",
 ] as const;
 export type PermissionKey = (typeof PERMISSIONS)[number];
 
@@ -73,6 +76,9 @@ export const COMPANY_ADMINISTRATION_PERMISSIONS: ReadonlySet<PermissionKey> = ne
   "integrations.manage",
   "environments.manage",
   "data.export",
+  "assets.share",
+  "assets.manage",
+  "assets.process",
 ]);
 
 export type RoleAssignmentScope =

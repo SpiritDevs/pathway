@@ -194,7 +194,7 @@ describe("connected thread delivery without cloud queue readiness", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
-  it("reuses an uploaded file for a direct launch without requiring cloud sync", async () => {
+  it("does not bypass durable cloud publication with an environment-only file", async () => {
     const metadata = {
       id: "composer-file",
       type: "file" as const,
@@ -212,18 +212,12 @@ describe("connected thread delivery without cloud queue readiness", () => {
         ...target,
         durableAttachments: [{ metadata, blob: null }],
       }),
-    ).toMatchObject({ _tag: "Success" });
-    expect(startTurn).toHaveBeenCalledExactlyOnceWith({
-      ...target,
-      input: {
-        ...target.input,
-        message: { ...target.input.message, attachments: [{ ...metadata, id: "pending-file" }] },
-      },
-    });
+    ).toMatchObject({ _tag: "Failure" });
+    expect(startTurn).not.toHaveBeenCalled();
     expect(uploadStandaloneFileAttachment).not.toHaveBeenCalled();
   });
 
-  it("rechecks connectivity after preparing attachments", async () => {
+  it("does not upload originals to the environment before cloud publication", async () => {
     vi.mocked(verifyReadyAttachmentUpload).mockImplementationOnce(async () => {
       appAtomRegistry.set(connection, AsyncResult.success({ phase: "disconnected" }));
       return null;
@@ -252,7 +246,7 @@ describe("connected thread delivery without cloud queue readiness", () => {
         ],
       }),
     ).toMatchObject({ _tag: "Failure" });
-    expect(uploadStandaloneFileAttachment).toHaveBeenCalledOnce();
+    expect(uploadStandaloneFileAttachment).not.toHaveBeenCalled();
     expect(startTurn).not.toHaveBeenCalled();
   });
 

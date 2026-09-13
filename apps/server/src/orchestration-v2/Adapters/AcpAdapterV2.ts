@@ -45,7 +45,7 @@ import * as Stream from "effect/Stream";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { providerAttachment, resolveAttachmentPath } from "../../attachmentStore.ts";
 import { appendFileAttachmentPromptText } from "../../attachmentPrompt.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
@@ -5007,7 +5007,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
             prompt.push({ type: "text", text });
           }
           if (
-            turnInput.message.attachments.some((attachment) => attachment.type === "image") &&
+            turnInput.message.attachments.map(providerAttachment).some((attachment) => attachment.type === "image") &&
             !supportsImagePrompts
           ) {
             return yield* new ProviderAdapterProtocolError({
@@ -5015,7 +5015,7 @@ export function makeAcpAdapterV2(options: AcpAdapterV2Options): ProviderAdapterV
               detail: "ACP driver did not negotiate image prompt support",
             });
           }
-          for (const attachment of turnInput.message.attachments) {
+          for (const attachment of turnInput.message.attachments.map(providerAttachment)) {
             if (attachment.type !== "image") continue;
             const path = resolveAttachmentPath({
               attachmentsDir: serverConfig.attachmentsDir,

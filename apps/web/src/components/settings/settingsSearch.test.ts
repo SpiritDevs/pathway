@@ -286,6 +286,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "/settings/keybindings",
       "/settings/snap-shot",
       "/settings/projects",
+      "/settings/assets",
     ]);
     expect(searchSettings("projects")[0]).toMatchObject({
       id: "projects",

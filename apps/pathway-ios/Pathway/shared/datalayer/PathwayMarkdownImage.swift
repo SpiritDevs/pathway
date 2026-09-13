@@ -36,7 +36,7 @@ enum PathwayMarkdownImageSource: Equatable {
 }
 
 struct PathwayMarkdownInlinePart: Identifiable {
-    enum Content { case text(String), image(source: String, alt: String, link: URL?) }
+    enum Content { case text(String), image(source: String, alt: String, link: URL?), asset(companyID: String, assetID: String), workspaceFile(source: String, label: String) }
     let id: Int
     let content: Content
 
@@ -77,6 +77,28 @@ struct PathwayMarkdownInlinePart: Identifiable {
                 if codeFence == 0 { codeFence = count } else if codeFence == count { codeFence = 0 }
                 index += count; continue
             }
+            // An escaped image marker leaves its opening bracket in the scanner. It must
+            // remain literal text rather than being reinterpreted as an independent file link.
+            let startsPlainLink = characters[index] == "[" && (index == 0 || characters[index - 1] != "!")
+            if codeFence == 0, startsPlainLink, let labelEnd = endOf(index, open: "[", close: "]"),
+               let destinationEnd = endOf(labelEnd + 1, open: "(", close: ")"),
+               let attributed = try? AttributedString(markdown: "[Asset]" + String(characters[(labelEnd + 1)...destinationEnd])),
+               let target = attributed.runs.first?.link?.absoluteString, let asset = PathwayAssetReference.parse(target) {
+                if index > start { parts.append(Self(id: start, content: .text(String(characters[start..<index])))) }
+                parts.append(Self(id: index, content: .asset(companyID: asset.companyID, assetID: asset.assetID)))
+                index = destinationEnd + 1; start = index; continue
+            }
+            if codeFence == 0, startsPlainLink, let labelEnd = endOf(index, open: "[", close: "]"),
+               let destinationEnd = endOf(labelEnd + 1, open: "(", close: ")"),
+               let attributed = try? AttributedString(markdown: "[File]" + String(characters[(labelEnd + 1)...destinationEnd])),
+               let target = attributed.runs.first?.link,
+               target.scheme == nil || target.scheme == "file",
+               ["mp4", "mov", "m4v", "png", "jpg", "jpeg", "gif", "heic", "heif", "webp", "pdf", "csv", "zip", "docx", "xlsx", "mp3", "m4a", "wav"].contains(target.pathExtension.lowercased()) {
+                if index > start { parts.append(Self(id: start, content: .text(String(characters[start..<index])))) }
+                let label = String(characters[(index + 1)..<labelEnd])
+                parts.append(Self(id: index, content: .workspaceFile(source: target.absoluteString, label: label)))
+                index = destinationEnd + 1; start = index; continue
+            }
             guard codeFence == 0, characters[index] == "!", let labelEnd = endOf(index + 1, open: "[", close: "]"),
                   let destinationEnd = endOf(labelEnd + 1, open: "(", close: ")") else { index += 1; continue }
             let destination = String(characters[(labelEnd + 1)...destinationEnd])
@@ -94,10 +116,23 @@ struct PathwayMarkdownInlinePart: Identifiable {
                 link = target; imageStart -= 1; imageEnd = linkEnd + 1
             }
             if imageStart > start { parts.append(Self(id: start, content: .text(String(characters[start..<imageStart])))) }
-            parts.append(Self(id: imageStart, content: .image(source: source, alt: alt, link: link)))
+            if let asset = PathwayAssetReference.parse(source) {
+                parts.append(Self(id: imageStart, content: .asset(companyID: asset.companyID, assetID: asset.assetID)))
+            } else { parts.append(Self(id: imageStart, content: .image(source: source, alt: alt, link: link))) }
             index = imageEnd; start = imageEnd
         }
         if start < characters.count { parts.append(Self(id: start, content: .text(String(characters[start...])))) }
         return parts
+    }
+}
+
+struct PathwayAssetReference: Equatable {
+    let companyID: String
+    let assetID: String
+    static func parse(_ value: String) -> Self? {
+        guard value.range(of: #"^pathway-asset:[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$"#, options: .regularExpression) != nil else { return nil }
+        let identifiers = value.dropFirst("pathway-asset:".count).split(separator: "/")
+        guard identifiers.count == 2 else { return nil }
+        return Self(companyID: String(identifiers[0]), assetID: String(identifiers[1]))
     }
 }

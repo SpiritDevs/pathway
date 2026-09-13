@@ -76,6 +76,10 @@ struct PathwayIssueMarkdownView: View {
                 ForEach(PathwayMarkdownInlinePart.parse(text)) { part in
                     switch part.content {
                     case .text(let value): inlineText(value)
+                    case .workspaceFile(let source, let label):
+                        AgentMarkdownFileLink(source: source, label: label, context: imageContext)
+                    case .asset(let companyID, let assetID):
+                        PathwayTranscriptAsset(assetID: assetID, companyID: companyID, threadID: imageContext.threadID, environmentID: imageContext.model.thread.environmentId)
                     case .image(let source, let alt, let link):
                         AgentMarkdownImage(source: source, alt: alt, link: link, context: imageContext)
                     }

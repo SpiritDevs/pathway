@@ -1,3 +1,4 @@
+import { AssetReference } from "../assets/AssetReference";
 import {
   SNAP_SHOT_ATTACHMENT_FRAME_CLASS,
   SnapShotAttachmentDetails,
@@ -1421,8 +1422,11 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       (reply) => reply.attachments?.map((attachment) => attachment.id) ?? [],
     ) ?? [],
   );
+  const durableAssets = userAttachments.filter(
+    (attachment) => attachment.type === "asset" && "assetId" in attachment,
+  );
   const genericAttachments = userAttachments.filter(
-    (attachment) => !answerAttachmentIds.has(attachment.id),
+    (attachment) => attachment.type !== "asset" && !answerAttachmentIds.has(attachment.id),
   );
   const previewImages = genericAttachments.filter(
     (attachment) =>
@@ -1469,6 +1473,18 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           isEditingMessage ? "w-[min(32rem,80%)]" : "max-w-[80%]",
         )}
       >
+        {durableAssets.map((attachment) =>
+          "assetId" in attachment &&
+          typeof attachment.assetId === "string" &&
+          "companyId" in attachment &&
+          typeof attachment.companyId === "string" ? (
+            <AssetReference
+              key={attachment.id}
+              companyId={attachment.companyId}
+              assetId={attachment.assetId}
+            />
+          ) : null,
+        )}
         {regularImages.length > 0 && (
           <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
             {regularImages.map((image: NonNullable<TimelineMessage["attachments"]>[number]) => (

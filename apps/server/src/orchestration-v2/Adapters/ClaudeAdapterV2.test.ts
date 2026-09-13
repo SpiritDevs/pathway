@@ -793,7 +793,25 @@ describe("ClaudeAdapterV2 attachments", () => {
               now,
               attemptId,
               text: initialText,
-              attachments: [attachment],
+              attachments: [
+                initialText === "The budget is $100"
+                  ? {
+                      type: "asset" as const,
+                      id: attachment.id,
+                      assetId: "asset-image-test",
+                      companyId: "company-test",
+                      name: "original.heic",
+                      mimeType: "image/heic",
+                      sizeBytes: 4,
+                      providerAttachment: {
+                        type: "image" as const,
+                        name: attachment.name,
+                        mimeType: attachment.mimeType,
+                        sizeBytes: attachment.sizeBytes,
+                      },
+                    }
+                  : attachment,
+              ],
             }),
           );
 

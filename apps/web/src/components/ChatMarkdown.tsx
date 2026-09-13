@@ -1,3 +1,4 @@
+import { AssetReference, parseAssetReference } from "./assets/AssetReference";
 import { useAtomValue } from "@effect/atom-react";
 import {
   CheckIcon,
@@ -228,7 +229,7 @@ const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
     ...defaultSchema.protocols,
     // `mention:` carries an agent mention pill. Unlisted protocols lose their href to the
     // sanitizer, which would leave the pill's own scheme indistinguishable from plain text.
-    href: [...(defaultSchema.protocols?.href ?? []), "file", ISSUE_AGENT_MENTION_PROTOCOL],
+    href: [...(defaultSchema.protocols?.href ?? []), "file", "pathway-asset", ISSUE_AGENT_MENTION_PROTOCOL],
     // Local sources reach only ChatMarkdownImage, which resolves authorized assets.
     src: [
       ...(defaultSchema.protocols?.src ?? []),
@@ -1555,6 +1556,8 @@ function createChatMarkdownComponents(ctx: ChatMarkdownComponentsContext): Compo
       );
     },
     a({ node, href, children, title: _title, ...props }) {
+      const assetReference = parseAssetReference(href);
+      if (assetReference) return <AssetReference {...assetReference} {...(ctx.threadRef ? {threadId: ctx.threadRef.threadId, environmentId: ctx.threadRef.environmentId} : {})} />;
       // A linked image must retain its image child, including when its target is a file.
       if (node?.children.some((child) => child.type === "element" && child.tagName === "img")) {
         const file = resolveMarkdownFileLinkMeta(href, cwd);
@@ -1870,7 +1873,7 @@ function ChatMarkdown({
     if (key === "src") return markdownImageUrlTransform(href);
     // `defaultUrlTransform` drops every protocol it does not know, which would empty the mention
     // href the anchor component keys the pill off.
-    if (parseIssueAgentMentionHref(href) !== null) return href;
+    if (parseIssueAgentMentionHref(href) !== null || parseAssetReference(href) !== null) return href;
     return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
   }, []);
   // Re-emit highlighted content as markdown so copying out of the rendered

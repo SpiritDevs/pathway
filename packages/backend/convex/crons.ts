@@ -42,4 +42,13 @@ crons.hourly(
   internal.loginErrorReports.pruneSent,
 );
 
+crons.hourly("purge expired company assets", { minuteUTC: 37 }, internal.assetStorage.cleanup, {});
+
+crons.interval(
+  "release abandoned representation storage",
+  { minutes: 5 },
+  internal.assetStorage.cleanupRepresentations,
+  {},
+);
+
 export default crons;

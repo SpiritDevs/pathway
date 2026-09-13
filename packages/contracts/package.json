@@ -58,6 +58,10 @@
     "./threadQueue": {
       "types": "./src/threadQueue.ts",
       "import": "./src/threadQueue.ts"
+    },
+    "./assets": {
+      "types": "./src/assets.ts",
+      "import": "./src/assets.ts"
     }
   },
   "scripts": {

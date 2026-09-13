@@ -54,10 +54,12 @@ import { Route as SettingsCompanyTeamsRouteImport } from './routes/settings.comp
 import { Route as SettingsCompanyRolesRouteImport } from './routes/settings.company-roles'
 import { Route as SettingsCompanyMembersRouteImport } from './routes/settings.company-members'
 import { Route as SettingsCalendarsRouteImport } from './routes/settings.calendars'
+import { Route as SettingsAssetsRouteImport } from './routes/settings.assets'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as IssuesMilestonesRouteImport } from './routes/issues_.milestones'
+import { Route as DevAssetReviewRouteImport } from './routes/dev.asset-review'
 import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
 import { Route as ChatThreadsRouteImport } from './routes/_chat.threads'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
@@ -296,6 +298,11 @@ const SettingsCalendarsRoute = SettingsCalendarsRouteImport.update({
   path: '/calendars',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsAssetsRoute = SettingsAssetsRouteImport.update({
+  id: '/assets',
+  path: '/assets',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsArchivedRoute = SettingsArchivedRouteImport.update({
   id: '/archived',
   path: '/archived',
@@ -314,6 +321,11 @@ const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
 const IssuesMilestonesRoute = IssuesMilestonesRouteImport.update({
   id: '/issues_/milestones',
   path: '/issues/milestones',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DevAssetReviewRoute = DevAssetReviewRouteImport.update({
+  id: '/dev/asset-review',
+  path: '/dev/asset-review',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConnectCallbackRoute = ConnectCallbackRouteImport.update({
@@ -398,10 +410,12 @@ export interface FileRoutesByFullPath {
   '/pull-requests': typeof ChatPullRequestsRoute
   '/threads': typeof ChatThreadsRoute
   '/connect/callback': typeof ConnectCallbackRoute
+  '/dev/asset-review': typeof DevAssetReviewRoute
   '/issues/milestones': typeof IssuesMilestonesRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/assets': typeof SettingsAssetsRoute
   '/settings/calendars': typeof SettingsCalendarsRoute
   '/settings/company-members': typeof SettingsCompanyMembersRoute
   '/settings/company-roles': typeof SettingsCompanyRolesRoute
@@ -458,10 +472,12 @@ export interface FileRoutesByTo {
   '/pull-requests': typeof ChatPullRequestsRoute
   '/threads': typeof ChatThreadsRoute
   '/connect/callback': typeof ConnectCallbackRoute
+  '/dev/asset-review': typeof DevAssetReviewRoute
   '/issues/milestones': typeof IssuesMilestonesRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/assets': typeof SettingsAssetsRoute
   '/settings/calendars': typeof SettingsCalendarsRoute
   '/settings/company-members': typeof SettingsCompanyMembersRoute
   '/settings/company-roles': typeof SettingsCompanyRolesRoute
@@ -521,10 +537,12 @@ export interface FileRoutesById {
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/_chat/threads': typeof ChatThreadsRoute
   '/connect_/callback': typeof ConnectCallbackRoute
+  '/dev/asset-review': typeof DevAssetReviewRoute
   '/issues_/milestones': typeof IssuesMilestonesRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
+  '/settings/assets': typeof SettingsAssetsRoute
   '/settings/calendars': typeof SettingsCalendarsRoute
   '/settings/company-members': typeof SettingsCompanyMembersRoute
   '/settings/company-roles': typeof SettingsCompanyRolesRoute
@@ -584,10 +602,12 @@ export interface FileRouteTypes {
     | '/pull-requests'
     | '/threads'
     | '/connect/callback'
+    | '/dev/asset-review'
     | '/issues/milestones'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/assets'
     | '/settings/calendars'
     | '/settings/company-members'
     | '/settings/company-roles'
@@ -644,10 +664,12 @@ export interface FileRouteTypes {
     | '/pull-requests'
     | '/threads'
     | '/connect/callback'
+    | '/dev/asset-review'
     | '/issues/milestones'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/assets'
     | '/settings/calendars'
     | '/settings/company-members'
     | '/settings/company-roles'
@@ -706,10 +728,12 @@ export interface FileRouteTypes {
     | '/_chat/pull-requests'
     | '/_chat/threads'
     | '/connect_/callback'
+    | '/dev/asset-review'
     | '/issues_/milestones'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
+    | '/settings/assets'
     | '/settings/calendars'
     | '/settings/company-members'
     | '/settings/company-roles'
@@ -767,6 +791,7 @@ export interface RootRouteChildren {
   TimeTrackerRoute: typeof TimeTrackerRoute
   UsageRoute: typeof UsageRoute
   ConnectCallbackRoute: typeof ConnectCallbackRoute
+  DevAssetReviewRoute: typeof DevAssetReviewRoute
   IssuesMilestonesRoute: typeof IssuesMilestonesRoute
   IssuesMilestonesMilestoneIdRoute: typeof IssuesMilestonesMilestoneIdRoute
 }
@@ -1088,6 +1113,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsCalendarsRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/assets': {
+      id: '/settings/assets'
+      path: '/assets'
+      fullPath: '/settings/assets'
+      preLoaderRoute: typeof SettingsAssetsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/archived': {
       id: '/settings/archived'
       path: '/archived'
@@ -1114,6 +1146,13 @@ declare module '@tanstack/react-router' {
       path: '/issues/milestones'
       fullPath: '/issues/milestones'
       preLoaderRoute: typeof IssuesMilestonesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dev/asset-review': {
+      id: '/dev/asset-review'
+      path: '/dev/asset-review'
+      fullPath: '/dev/asset-review'
+      preLoaderRoute: typeof DevAssetReviewRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/connect_/callback': {
@@ -1233,6 +1272,7 @@ const ProjectsRouteWithChildren = ProjectsRoute._addFileChildren(
 interface SettingsRouteChildren {
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
+  SettingsAssetsRoute: typeof SettingsAssetsRoute
   SettingsCalendarsRoute: typeof SettingsCalendarsRoute
   SettingsCompanyMembersRoute: typeof SettingsCompanyMembersRoute
   SettingsCompanyRolesRoute: typeof SettingsCompanyRolesRoute
@@ -1268,6 +1308,7 @@ interface SettingsRouteChildren {
 const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsArchivedRoute: SettingsArchivedRoute,
+  SettingsAssetsRoute: SettingsAssetsRoute,
   SettingsCalendarsRoute: SettingsCalendarsRoute,
   SettingsCompanyMembersRoute: SettingsCompanyMembersRoute,
   SettingsCompanyRolesRoute: SettingsCompanyRolesRoute,
@@ -1323,6 +1364,7 @@ const rootRouteChildren: RootRouteChildren = {
   TimeTrackerRoute: TimeTrackerRoute,
   UsageRoute: UsageRoute,
   ConnectCallbackRoute: ConnectCallbackRoute,
+  DevAssetReviewRoute: DevAssetReviewRoute,
   IssuesMilestonesRoute: IssuesMilestonesRoute,
   IssuesMilestonesMilestoneIdRoute: IssuesMilestonesMilestoneIdRoute,
 }

@@ -1,3 +1,5 @@
+import { useThreadAssetCounts } from "../cloud/assetClient";
+import { PaperclipIcon as ThreadAssetPaperclipIcon } from "lucide-react";
 import { useSidebarPrRevalidation } from "../state/sidebarPrRevalidation";
 import { QueuedThreadSidebar } from "./QueuedThreadSidebar";
 import {
@@ -8,7 +10,7 @@ import {
 import { CONVERSATIONS_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
 import { GitPullRequestArrowIcon } from "lucide-react";
 import { ThreadPullRequestAction } from "./ThreadPullRequestAction";
-import { activeCompanyIdAtom } from "../cloud/activeCompany";
+import { activeCompanyIdAtom, companyListAtom } from "../cloud/activeCompany";
 import { selectSidebarDraftRows, type SidebarDraftRowData } from "./sidebarDrafts";
 import { DraftSendReconciliation } from "./DraftSendReconciliation";
 import {
@@ -911,6 +913,7 @@ const SidebarThreadClassification = memo(function SidebarThreadClassification(pr
 });
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
+  assetCount?: number;
   queuedStatusLabel?: string | null;
   alertProjectKey: string | null;
   alertPolicies: readonly AlertPolicyRow[] | null;
@@ -1412,6 +1415,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       )}
     >
       {thread.title}
+      {(props.assetCount ?? 0) > 0 && <ThreadAssetPaperclipIcon className="ml-1 inline size-3 text-muted-foreground" aria-label={`${props.assetCount} assets attached`} />}
     </span>
   );
 
@@ -2075,6 +2079,8 @@ export default function Sidebar() {
     [projects],
   );
   const activeCompanyId = useAtomValue(activeCompanyIdAtom);
+  const assetCompanies = useAtomValue(companyListAtom);
+  const assetCounts = useThreadAssetCounts(activeCompanyId, assetCompanies.map(company => company.id));
   const focuses = useAtomValue(focusListAtom);
   const focusAssignments = useAtomValue(focusAssignmentsAtom);
   const activeFocusProjectKeys = useAtomValue(activeFocusProjectKeysAtom);
@@ -4635,6 +4641,7 @@ export default function Sidebar() {
                     const rowVariant = isCard ? "card" : "slim";
                     return (
                       <SidebarThreadRow
+                        assetCount={assetCounts.get(`${thread.environmentId}:${thread.id}`) ?? 0}
                         deferRendering={!eagerThreadKeys.has(threadKey)}
                         queuedStatusLabel={
                           queuedStatusByThreadId.get(

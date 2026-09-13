@@ -1,3 +1,6 @@
+import { AssetsToolkit } from "./toolkits/assets/tools.ts";
+import { AssetsToolkitHandlersLive } from "./toolkits/assets/handlers.ts";
+import * as AssetMcpService from "./toolkits/assets/AssetMcpService.ts";
 import {
   CLIENT_CAPABILITIES_META_KEY,
   McpServer as SdkMcpServer,
@@ -1128,6 +1131,7 @@ const OrchestratorMcpServiceLive = OrchestratorMcpService.layer.pipe(
 );
 
 const ToolkitHandlersLive = Layer.mergeAll(
+  AssetsToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
   PreviewSnapshotToolkitHandlersLive,
   IssuesToolkitHandlersLive,
@@ -1137,6 +1141,7 @@ const ToolkitHandlersLive = Layer.mergeAll(
 );
 
 const McpToolkitServicesLive = Layer.mergeAll(
+  AssetMcpService.layer,
   OrchestratorMcpServiceLive,
   WorktreeMcpService.layer,
   EmailMcpServiceLive,
@@ -1153,8 +1158,9 @@ const buildPathwayMcpToolkits = Effect.gen(function* () {
   const orchestrator = (yield* OrchestratorToolkit) as unknown as BuiltToolkit;
   const worktree = (yield* WorktreeToolkit) as unknown as BuiltToolkit;
   const email = (yield* EmailToolkit) as unknown as BuiltToolkit;
+  const assets = (yield* AssetsToolkit) as unknown as BuiltToolkit;
   return {
-    toolkits: [standardPreview, issues, orchestrator, worktree, email],
+    toolkits: [standardPreview, issues, orchestrator, worktree, email, assets],
     snapshot,
   };
 });
