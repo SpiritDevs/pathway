@@ -11,3 +11,16 @@ Six image-conversion tests passed, including orientation, transparency, byte-for
 Artifacts: `~/GitHub/pathway-testflight-18-release/.pathway/releases/1.0.13`.
 
 Next: verify actual packaged plists, signatures, entitlements, and production configuration; export and upload through the saved Xcode account. Upload and tester availability are unconfirmed. Native checkout commits bypassed the JavaScript hook because vite-plus dependencies are not installed there.
+
+## Signed package validation
+
+Release archive and App Store distribution export succeeded for `659a2e946`.
+Both actual app plists contain `ITSAppUsesNonExemptEncryption` as boolean false.
+All three bundles are 1.0.13 (18) in archive and IPA. Strict signatures pass.
+Entitlements match build 17 and embedded profiles. Exported debug access is disabled,
+profiles are for App Store distribution, and APNs is production. Public runtime settings match build 17.
+Conversion source and its six tested cases are byte-identical to the validated files.
+
+IPA SHA-256: `0fcccc798cd472214c515df527051f9870c82f433050c3f0e8ad8d84838504da`.
+Validation outputs: `validation-archive.txt` and `validation-export.txt` in the artifact directory.
+Next: upload the validated archive. Processing and tester availability are unconfirmed.
