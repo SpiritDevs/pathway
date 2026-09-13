@@ -118,6 +118,12 @@ export function SettingsBreadcrumb({ pathname }: { pathname: string }) {
           <WorkspaceBreadcrumbSeparator />
         </>
       ) : null}
+      {pathname.startsWith("/settings/orchestrators-") ? (
+        <>
+          <WorkspaceBreadcrumbItem>Orchestrators</WorkspaceBreadcrumbItem>
+          <WorkspaceBreadcrumbSeparator />
+        </>
+      ) : null}
       {projectKey ? (
         <>
           <WorkspaceBreadcrumbItem>

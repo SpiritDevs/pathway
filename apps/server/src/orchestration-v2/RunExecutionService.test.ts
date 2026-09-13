@@ -1,4 +1,5 @@
 import { assert, it, vi } from "@effect/vitest";
+import * as TestClock from "effect/testing/TestClock";
 import {
   CheckpointScopeId,
   CommandId,
@@ -34,6 +35,10 @@ import * as Stream from "effect/Stream";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import {
+  ProviderAllowanceRuntime,
+  type AllowanceAdmission,
+} from "../providerUsage/AllowanceRuntime.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { IdAllocatorV2, layer as idAllocatorLayer } from "./IdAllocator.ts";
@@ -3464,6 +3469,80 @@ function rootTerminalEvent(
   } as ProviderAdapterV2Event;
 }
 
+it.effect(
+  "continues allowance supervision after the root reply and interrupts its native child",
+  () =>
+    Effect.gen(function* () {
+      const key = "allowance-native-child";
+      const ids = backgroundScenarioIds(key);
+      const childThread = ProviderThreadId.make(`${ids.providerThreadId}:child`);
+      const childTurn = ProviderTurnId.make(`${ids.rootProviderTurnId}:child`);
+      const firstCheck = yield* Deferred.make<void>();
+      const rootDone = yield* Deferred.make<void>();
+      const childStopped = yield* Deferred.make<void>();
+      const interrupted: ProviderTurnId[] = [];
+      let reads = 0;
+      const childEvent = (status: "running" | "interrupted") =>
+        ({
+          type: "provider_turn.updated",
+          driver,
+          threadId: ids.childThreadId,
+          providerTurn: {
+            id: childTurn,
+            providerThreadId: childThread,
+            runAttemptId: null,
+            status,
+          },
+        }) as ProviderAdapterV2Event;
+      yield* runBackgroundItemScenario(key, () => [], {
+        guardCheck: Effect.gen(function* () {
+          if (reads++ === 0) {
+            yield* Deferred.succeed(firstCheck, undefined);
+            return { canStart: true, shouldInterrupt: false, detail: "Available", budgets: [] };
+          }
+          return {
+            canStart: false,
+            shouldInterrupt: true,
+            detail: "Paused by the user",
+            budgets: [],
+          };
+        }),
+        onFinalized: Deferred.succeed(rootDone, undefined).pipe(Effect.asVoid),
+        afterStart: Deferred.await(rootDone).pipe(Effect.andThen(TestClock.adjust("10 seconds"))),
+        onInterrupt: ({ providerThread, providerTurnId }) =>
+          Effect.gen(function* () {
+            interrupted.push(providerTurnId);
+            if (providerTurnId === childTurn) {
+              assert.equal(providerThread.id, childThread);
+              yield* Deferred.succeed(childStopped, undefined);
+            }
+          }),
+        events: () =>
+          Stream.fromEffect(Deferred.await(firstCheck)).pipe(
+            Stream.flatMap(() =>
+              Stream.fromIterable([
+                childThreadCreatedEvent(ids),
+                {
+                  type: "provider_thread.updated",
+                  driver,
+                  providerThread: { id: childThread, appThreadId: ids.childThreadId, driver },
+                } as ProviderAdapterV2Event,
+                childEvent("running"),
+                rootTerminalEvent(ids, "completed"),
+              ]),
+            ),
+            Stream.concat(
+              Stream.fromEffect(Deferred.await(childStopped)).pipe(
+                Stream.map(() => childEvent("interrupted")),
+              ),
+            ),
+          ),
+      });
+      assert.include(interrupted, childTurn);
+      assert.isAtLeast(reads, 2);
+    }),
+);
+
 function runBackgroundItemScenario(
   key: string,
   makeEvents: (ids: BackgroundScenarioIds) => ReadonlyArray<ProviderAdapterV2Event>,
@@ -3473,6 +3552,11 @@ function runBackgroundItemScenario(
       ReadonlyArray<{ readonly id: TurnItemId; readonly runId: RunId }>
     >;
     readonly onSubscribe?: Effect.Effect<void>;
+    readonly guardCheck?: Effect.Effect<AllowanceAdmission>;
+    readonly onFinalized?: Effect.Effect<void>;
+    readonly afterStart?: Effect.Effect<void>;
+    readonly onInterrupt?: ProviderAdapterV2SessionRuntime["interruptTurn"];
+    readonly events?: (ids: BackgroundScenarioIds) => Stream.Stream<ProviderAdapterV2Event>;
   },
 ) {
   return Effect.gen(function* () {
@@ -3494,6 +3578,7 @@ function runBackgroundItemScenario(
                   )
                 ) {
                   yield* Ref.update(observed, (current) => [...current, "root-finalized"]);
+                  yield* options?.onFinalized ?? Effect.void;
                 }
                 return [];
               }),
@@ -3520,6 +3605,9 @@ function runBackgroundItemScenario(
               }),
           }),
           ServerSettingsService.layerTest(),
+          options?.guardCheck
+            ? Layer.mock(ProviderAllowanceRuntime)({ checkThread: () => options.guardCheck! })
+            : Layer.empty,
         ),
       ),
     );
@@ -3534,7 +3622,7 @@ function runBackgroundItemScenario(
           events: Stream.empty,
           subscribeEvents: Effect.gen(function* () {
             yield* options?.onSubscribe ?? Effect.void;
-            const events = Stream.fromIterable(makeEvents(ids));
+            const events = options?.events?.(ids) ?? Stream.fromIterable(makeEvents(ids));
             return {
               events:
                 options?.keepEventStreamOpen === true
@@ -3544,6 +3632,7 @@ function runBackgroundItemScenario(
             };
           }),
           startTurn: () => Effect.void,
+          interruptTurn: options?.onInterrupt ?? (() => Effect.void),
         } as unknown as ProviderAdapterV2SessionRuntime,
         run: {
           id: ids.runId,
@@ -3591,7 +3680,7 @@ function runBackgroundItemScenario(
         },
       });
     }).pipe(Effect.provide(testLayer));
-
+    yield* options?.afterStart ?? Effect.void;
     const closed = yield* Deferred.await(ingestionDone).pipe(Effect.timeoutOption("2 seconds"));
     assert.isTrue(Option.isSome(closed), "event ingestion fiber did not finish");
     return yield* Ref.get(observed);

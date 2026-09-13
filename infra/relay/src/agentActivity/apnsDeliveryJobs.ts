@@ -1,4 +1,5 @@
 import * as NodeCrypto from "node:crypto";
+import { OrchestratorPushDestination } from "@spiritdevs/contracts/aiOrchestrator";
 
 import {
   RelayAgentActivityAggregateState,
@@ -42,6 +43,7 @@ export const ApnsNotificationPayload = Schema.Struct({
   environmentId: Schema.String,
   threadId: Schema.String,
   deepLink: Schema.String,
+  orchestrator: Schema.optional(OrchestratorPushDestination),
   // Optional so delivery jobs queued by older relay builds still decode.
   // New jobs use these fields to avoid delivering a stale Done/attention
   // notification after the thread has moved to another phase.

@@ -166,6 +166,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "Account",
       "Dictation",
       "Agents",
+      "Orchestrators",
       "Tasks",
       "Email",
       "System",

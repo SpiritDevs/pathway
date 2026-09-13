@@ -35,6 +35,11 @@ struct PathwaySettingsView: View {
                 NavigationLink("Agent notifications") { PathwayNotificationsSettingsView() }
                 NavigationLink("Shared Drafts") { PathwaySharedDraftsDestination() }
             }
+            Section("Orchestrators") {
+                ForEach(PathwayOrchestratorSettingsPage.allCases) { page in
+                    NavigationLink(page.rawValue) { PathwayOrchestratorSettingsView(page: page) }
+                }
+            }
             Section("Tasks") {
                 ForEach(appModel.cloud.companies) { company in
                     NavigationLink(company.name) {

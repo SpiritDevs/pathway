@@ -113,6 +113,7 @@ struct PathwayPullRequestAttachment: Codable, Equatable, Sendable {
 }
 
 struct PathwayAgentThreadShell: Codable, Equatable, Sendable {
+    var allowanceHold: String? = nil
     let id: String
     let projectId: String?
     let title: String

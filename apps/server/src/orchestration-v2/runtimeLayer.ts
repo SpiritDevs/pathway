@@ -52,6 +52,8 @@ import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.t
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
+import { layer as allowanceRuntimeLayer } from "../providerUsage/AllowanceRuntime.ts";
+import { layer as allowanceResumeLayer } from "../providerUsage/AllowanceResume.ts";
 
 export const ProjectServiceLayerLive = projectServiceLayer.pipe(
   Layer.provide(Layer.merge(ProjectionProjectRepositoryLive, OrchestrationLayerLive)),
@@ -94,6 +96,7 @@ const contextHandoffServiceProvided = contextHandoffServiceLayer.pipe(
 );
 
 const providerAdapterRegistryProvided = providerAdapterRegistryLayerFromProviderInstances;
+const allowanceRuntimeProvided = allowanceRuntimeLayer.pipe(Layer.provide(projectionStoreLayer));
 const providerSwitchServiceProvided = providerSwitchServiceLayer.pipe(
   Layer.provide(providerAdapterRegistryProvided),
 );
@@ -315,4 +318,7 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   scheduledTaskProvided,
   providerContinuationWorkerProvided,
   temporaryThreadSettlementLayer.pipe(Layer.provide(threadManagementProvided)),
-);
+  allowanceResumeLayer.pipe(
+    Layer.provide(Layer.mergeAll(threadManagementProvided, projectionStoreLayer)),
+  ),
+).pipe(Layer.provideMerge(allowanceRuntimeProvided));

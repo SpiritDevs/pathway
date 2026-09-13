@@ -361,6 +361,7 @@ export const layerWithOptions = (
                 const credential = yield* mcpSessionRegistry.issue({
                   threadId,
                   projectId: projection.thread.projectId,
+                  orchestratorOrigin: projection.thread.orchestratorOrigin,
                   providerInstanceId,
                   providerDriverKind,
                 });

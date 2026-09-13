@@ -80,6 +80,13 @@ final class PathwayCloudModel {
         }
     )
 
+    @ObservationIgnored lazy var orchestrators = PathwayOrchestratorsModel(request: { [weak self] kind, name, arguments in
+        guard let self else { throw CancellationError() }
+        return try await request(kind: kind, name: name, arguments: arguments)
+    }, subscribe: { [weak self] name, arguments in
+        self?.subscribe(name: name, arguments: arguments) ?? AsyncThrowingStream { $0.finish(throwing: CancellationError()) }
+    })
+
     @ObservationIgnored lazy var threadQueue = PathwayThreadQueueModel(request: { [weak self] kind, name, arguments in
         guard let self else { throw CancellationError() }
         return try await request(kind: kind, name: name, arguments: arguments)
@@ -326,6 +333,7 @@ final class PathwayCloudModel {
     }
 
     func stop(clearContent: Bool = true) async {
+        orchestrators.stop(clear: clearContent)
         threadQueue.stop(clear: clearContent)
         cancelWork()
         connectedEnvironmentIDs = []

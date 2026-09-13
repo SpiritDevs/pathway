@@ -115,6 +115,7 @@ export const ThreadAlertTarget = Schema.NullOr(
       eventId: Schema.String,
     }),
     Schema.Struct({ kind: Schema.Literal("storage"), environmentId: Schema.String }),
+    Schema.Struct({ kind: Schema.Literal("orchestrator"), chatId: Schema.String }),
   ]),
 );
 export type ThreadAlertTarget = typeof ThreadAlertTarget.Type;

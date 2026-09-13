@@ -201,6 +201,45 @@ const runHappy = (claimed: ClaimedEnvironmentCommand, projectionValue = projecti
   });
 
 describe("environment command claimant", () => {
+  it.effect("launches a PA assignment as a company conversation with its delegation origin", () =>
+    Effect.gen(function* () {
+      let launchInput: Parameters<LocalEnvironmentCommandServices["launch"]>[0] | undefined;
+      const executor = makeLocalEnvironmentCommandExecutor({
+        companyId: COMPANY_ID,
+        launch: (input) =>
+          Effect.sync(() => {
+            launchInput = input;
+            return { threadId: THREAD_ID, projection: projection(), resumed: false };
+          }),
+        dispatch: () => Effect.die("No direct dispatch"),
+        getThreadProjection: () => Effect.succeed(projection()),
+        resolveStartTarget: () => Effect.succeed({ projectId: null, modelSelection: MODEL }),
+      });
+      const assignment = command(
+        "startThread",
+        { kind: "startThread", prompt: "Review my priorities", modelSelection: null },
+        {
+          cloudProjectId: null,
+          onBehalfOfActor: {
+            kind: "agent",
+            provider: "orchestrator:chief",
+            onBehalfOfMembershipId: "membership-command-issuer",
+          },
+        },
+      );
+      yield* executor.execute(assignment);
+      expect(launchInput).toMatchObject({
+        projectId: null,
+        conversationCompanyId: COMPANY_ID,
+        orchestratorOrigin: {
+          orchestratorId: "chief",
+          companyId: COMPANY_ID,
+          commandId: assignment.id,
+        },
+        workspaceStrategy: { type: "root" },
+      });
+    }),
+  );
   it.effect("keeps claim routing separate for every registered company", () =>
     Effect.gen(function* () {
       const convex = backendHarness({ claim: () => Effect.succeed([]) });

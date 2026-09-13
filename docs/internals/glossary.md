@@ -2,6 +2,60 @@
 
 Project-specific vocabulary beyond the small glossary in `AGENTS.md`. Be opinionated: one canonical word per concept; alternates go under _Avoid_.
 
+## AI coordination
+
+These terms describe the [orchestrator design in progress](../plans/pathway-ai-orchestrators.md), not shipped behavior.
+
+**Orchestrator**:
+A persistent AI contact with a name, persona, memory, and assigned roles and privileges. It coordinates and delegates work across its authorized scope, independently of the chats it participates in; it is distinct from the server orchestration engine.
+_Avoid_: Thread as a synonym for the orchestrator's identity
+
+**Personal orchestrator**:
+A user's private assistant spanning their accessible companies, projects, and environments.
+
+**Project orchestrator**:
+An orchestrator responsible for coordinating a project's work, which can be explicitly shared with other users. Its standing scope is its own project; participation in cross-project collaboration requires being brought into that collaboration.
+
+**Orchestrator chat**:
+A continuing exchange among human and orchestrator participants, either a direct message or a named group for a project or event. It is distinct from the existing environment-owned projectless Conversation and from delegated agent threads.
+
+**Orchestrator DM**:
+The ongoing direct chat between a user and one orchestrator, spanning individual tasks.
+
+**Orchestrator group chat**:
+A named chat with multiple participants, including multiple orchestrators, organized around a project, event, or other shared purpose.
+
+**Group lead**:
+The orchestrator responsible for unaddressed requests and consolidated updates in an orchestrator group chat. Participants can address another orchestrator directly without changing the lead.
+
+**Orchestrator execution host**:
+The eligible environment currently running an orchestrator's model. It can change without changing the orchestrator's identity, chats, or memory.
+
+**Direction authority**:
+Permission to assign work to an orchestrator within its configured role. It is separate from chat participation and from the action privileges the orchestrator holds.
+
+**Orchestrator memory**:
+Durable knowledge or preferences retained by an orchestrator beyond an individual model context. Memories have a visibility scope and can be inspected, corrected, deleted, or shared by the user; inferred observations retain their sources.
+
+**Cross-project collaboration**:
+A shared undertaking involving multiple projects and their orchestrators, with authorized access to relevant project context. Each project orchestrator retains responsibility for dispatching its project's work and requests dependent work from the other coordinators.
+
+## Provider allowance
+
+These terms describe [allowance controls in design](../plans/pathway-provider-allowance-budgets.md), applicable to ordinary agents and orchestrators.
+
+**Provider allowance**:
+A provider-reported account usage quota for a particular window and scope. It is distinct from a thread's context capacity, token count, or API-equivalent cost.
+
+**Allowance window**:
+The period to which a provider allowance applies, such as a session, week, or month, with its provider-reported reset boundary when available.
+
+**Allowance budget**:
+A user-assigned allocation in percentage points of a selected full provider allowance window for a body of work and its descendants. It is conservatively measured against observed account-wide consumption, including unrelated activity.
+
+**Allowance guard**:
+The control that gates an assignment and its descendants against an allowance budget across environments. It pauses work when the observed threshold is reached or reliable readings are unavailable; provider reporting delay can still cause overshoot.
+
 ## Tasks
 
 **Task**:

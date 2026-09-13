@@ -4,8 +4,9 @@ enum PathwayThreadStatus: String, Sendable {
     case working = "Working", queued = "Queued", preparing = "Preparing", waiting = "Waiting"
     case question = "Question", approval = "Approval", plan = "Review plan", needsYou = "Needs you"
     case failed = "Failed", stopped = "Stopped", ready = "Ready"
+    case waitingForAllowance = "Waiting for allowance"
 
-    init(requestKind: String?, hasPlan: Bool, runStatus: String, hasActiveRun: Bool, hasError: Bool) {
+    init(requestKind: String?, hasPlan: Bool, runStatus: String, hasActiveRun: Bool, hasError: Bool, hasAllowanceHold: Bool = false) {
         switch requestKind {
         case "user_input", "tool_user_input": self = .question; return
         case "command", "file-read", "file-change": self = .approval; return
@@ -13,6 +14,7 @@ enum PathwayThreadStatus: String, Sendable {
         default: self = .needsYou; return
         }
         if hasPlan { self = .plan; return }
+        if hasAllowanceHold { self = .waitingForAllowance; return }
         switch runStatus {
         case "queued": self = .queued
         case "preparing", "starting": self = .preparing

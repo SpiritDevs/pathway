@@ -137,3 +137,20 @@ it.effect("does not keep credentials of other threads alive", () =>
     expect(yield* registry.resolve(token)).toBeUndefined();
   }),
 );
+
+it.effect("retains the assignment origin in a provider credential", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1000);
+    const origin = { orchestratorId: "chief", companyId: "company", commandId: "assignment-start" };
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("worker"),
+      projectId,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      orchestratorOrigin: origin,
+    });
+    const resolved = yield* registry.resolve(
+      issued.config.authorizationHeader.slice("Bearer ".length),
+    );
+    expect(resolved?.orchestratorOrigin).toEqual(origin);
+  }),
+);

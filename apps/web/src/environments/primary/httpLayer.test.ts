@@ -32,6 +32,9 @@ describe.sequential("primary environment HTTP layer", () => {
       const request = new Request(fetchMock.mock.calls[0]?.[0], fetchMock.mock.calls[0]?.[1]);
       expect(request.credentials).toBe("include");
       expect(request.headers.get("authorization")).toBeNull();
+      yield* HttpClient.get("https://relay.example.test/v1/client/environment-link-challenges");
+      const relay = new Request(fetchMock.mock.calls[1]?.[0], fetchMock.mock.calls[1]?.[1]);
+      expect(relay.credentials).toBe("omit");
     }).pipe(Effect.provide(makePrimaryEnvironmentHttpLayer()));
   });
 

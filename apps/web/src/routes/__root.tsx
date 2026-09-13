@@ -28,6 +28,7 @@ import {
   resolveConvexClerkTokenOptions,
 } from "../cloud/publicConfig";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
+import { OrchestratorProvider } from "../components/orchestrator/OrchestratorProvider";
 import { PairingRouteSurface } from "../components/auth/PairingRouteSurface";
 import { CommandPalette } from "../components/CommandPalette";
 import { TemporaryThreadDiscardDialog } from "../components/TemporaryThreadDiscardDialog";
@@ -389,11 +390,13 @@ function RootRouteContent({ pathname }: { readonly pathname: string }) {
   }
 
   const appShell = (
-    <CommandPalette>
-      <AppSidebarLayout>
-        <Outlet />
-      </AppSidebarLayout>
-    </CommandPalette>
+    <OrchestratorProvider>
+      <CommandPalette>
+        <AppSidebarLayout>
+          <Outlet />
+        </AppSidebarLayout>
+      </CommandPalette>
+    </OrchestratorProvider>
   );
 
   return (

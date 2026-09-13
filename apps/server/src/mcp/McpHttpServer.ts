@@ -1,3 +1,4 @@
+import * as DelegatedBusiness from "../cloud/delegatedBusiness.ts";
 import {
   CLIENT_CAPABILITIES_META_KEY,
   McpServer as SdkMcpServer,
@@ -49,6 +50,7 @@ import {
 import packageJson from "../../package.json" with { type: "json" };
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as PeerEnvironments from "../cloud/peerEnvironments.ts";
+import * as OrchestratorWorkerAuthority from "../cloud/orchestratorWorkerAuthority.ts";
 import * as RemoteDispatch from "../cloud/remoteDispatch.ts";
 import * as ServerConfig from "../config.ts";
 import * as EmailStoreLive from "../email/EmailStore.ts";
@@ -727,6 +729,11 @@ export interface PathwayMcpHandler {
 }
 
 interface HandlerBuildOptions {
+  readonly authorize?: (
+    invocation: McpInvocationContext.McpInvocationScope,
+    name: string,
+    payload: unknown,
+  ) => Promise<void>;
   readonly toolkits: ReadonlyArray<BuiltToolkit>;
   readonly snapshot?: BuiltToolkit;
   readonly issueAttachmentContext?: Context.Context<
@@ -1042,6 +1049,51 @@ const makePathwayMcpHandler = (options: HandlerBuildOptions): PathwayMcpHandler 
           .json()
           .catch(() => undefined);
       }
+      if (options.authorize && invocation.orchestratorOrigin) {
+        if (Array.isArray(parsedBody))
+          return jsonRpcError(null, -32600, "Send one Pathway action per request.");
+        const method = Predicate.hasProperty(parsedBody, "method")
+          ? parsedBody.method
+          : request.headers.get("mcp-method");
+        const params = Predicate.hasProperty(parsedBody, "params") ? parsedBody.params : parsedBody;
+        const toolName =
+          method === "tools/call"
+            ? Predicate.hasProperty(params, "name") && typeof params.name === "string"
+              ? params.name
+              : request.headers.get("mcp-name")
+            : method;
+        if (
+          typeof toolName === "string" &&
+          ![
+            "initialize",
+            "notifications/initialized",
+            "ping",
+            "tools/list",
+            "resources/list",
+            "resources/templates/list",
+            "notifications/cancelled",
+          ].includes(toolName)
+        ) {
+          try {
+            await options.authorize(
+              invocation,
+              toolName,
+              Predicate.hasProperty(params, "arguments") ? params.arguments : params,
+            );
+          } catch (error) {
+            return jsonRpcError(
+              Predicate.hasProperty(parsedBody, "id") &&
+                (typeof parsedBody.id === "string" || typeof parsedBody.id === "number")
+                ? parsedBody.id
+                : null,
+              -32003,
+              error instanceof Error
+                ? error.message
+                : "The assignment does not have permission for this action.",
+            );
+          }
+        }
+      }
       const classified = classifyInboundRequest({
         httpMethod: request.method,
         ...(request.headers.get("mcp-protocol-version") === null
@@ -1137,6 +1189,7 @@ const ToolkitHandlersLive = Layer.mergeAll(
 );
 
 const McpToolkitServicesLive = Layer.mergeAll(
+  DelegatedBusiness.layer,
   OrchestratorMcpServiceLive,
   WorktreeMcpService.layer,
   EmailMcpServiceLive,
@@ -1259,7 +1312,10 @@ const McpV2HttpHandlerLive = Layer.effect(
     const httpClient = yield* HttpClient.HttpClient;
     const issueTracker = yield* IssueTrackerService;
     const runtimeContext = yield* Effect.context<never>();
+    const authority = yield* OrchestratorWorkerAuthority.OrchestratorWorkerAuthority;
     const handler = makePathwayMcpHandler({
+      authorize: (invocation, name, payload) =>
+        Effect.runPromiseWith(runtimeContext)(authority.authorize(invocation, name, payload)),
       toolkits,
       snapshot,
       issueAttachmentContext: Context.make(ServerConfig.ServerConfig, serverConfig).pipe(
@@ -1282,7 +1338,11 @@ const McpV2HttpHandlerLive = Layer.effect(
     yield* Effect.addFinalizer(() => Effect.promise(() => handler.close()).pipe(Effect.orDie));
     return handler;
   }),
-).pipe(Layer.provide(ToolkitHandlersLive), Layer.provideMerge(McpToolkitServicesLive));
+).pipe(
+  Layer.provide(ToolkitHandlersLive),
+  Layer.provideMerge(McpToolkitServicesLive),
+  Layer.provide(OrchestratorWorkerAuthority.layer),
+);
 
 const McpRouteLive = Layer.unwrap(
   Effect.map(McpV2HttpHandler, (handler) =>

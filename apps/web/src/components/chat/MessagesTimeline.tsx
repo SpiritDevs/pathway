@@ -194,6 +194,7 @@ interface QueuedMessageControl {
 const EMPTY_QUEUED_MESSAGE_CONTROLS: ReadonlyMap<string, QueuedMessageControl> = new Map();
 
 interface TimelineRowSharedState {
+  allowanceHold: string | null;
   timestampFormat: TimestampFormat;
   timestampNowMs: number;
   routeThreadKey: string;
@@ -291,6 +292,7 @@ type AsyncQuestionsProps = ComponentProps<typeof ComposerAsyncQuestions>;
 const TimelineQuestionsCtx = createContext<AsyncQuestionsProps | null>(null);
 
 interface MessagesTimelineProps {
+  allowanceHold?: string | null;
   asyncQuestions?: AsyncQuestionsProps;
   isWorking: boolean;
   workingPresentation?: WorkingPresentation;
@@ -380,6 +382,7 @@ const NOOP_WAIT_FOR_USAGE_RESET = () => undefined;
 const LOCAL_DAY_CLOCK_RECHECK_MS = 60_000;
 
 export const MessagesTimeline = memo(function MessagesTimeline({
+  allowanceHold = null,
   asyncQuestions,
   isWorking,
   workingPresentation = "activity",
@@ -827,6 +830,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const sharedState = useMemo<TimelineRowSharedState>(
     () => ({
+      allowanceHold,
       timestampFormat,
       timestampNowMs,
       routeThreadKey,
@@ -877,6 +881,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleAttemptFold,
     }),
     [
+      allowanceHold,
       timestampFormat,
       timestampNowMs,
       routeThreadKey,
@@ -2438,6 +2443,14 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
   const isConnecting =
     row.presentation !== "activity" && (!awaitingActiveThread || connectionDetailsReady);
   const loadingStopped = row.presentation === "connecting-stopped";
+  if (ctx.allowanceHold)
+    return (
+      <div role="status" className="space-y-1 py-2 text-xs text-muted-foreground">
+        <p className="font-medium text-foreground">Waiting for allowance</p>
+        <p>{ctx.allowanceHold}</p>
+        <p>Your request is retained. Use Manage allowance in thread details to resume.</p>
+      </div>
+    );
   return (
     <div className="py-0.5 pl-1.5">
       <div

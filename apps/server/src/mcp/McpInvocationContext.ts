@@ -1,3 +1,4 @@
+import type { OrchestratorAssignmentOrigin } from "@spiritdevs/contracts/aiOrchestrator";
 import {
   type EnvironmentId,
   PreviewAutomationUnavailableError,
@@ -15,6 +16,7 @@ export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number];
 export interface McpInvocationScope {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  readonly orchestratorOrigin?: OrchestratorAssignmentOrigin | undefined;
   /** Local project owning the calling thread, used to resolve its company-scoped data. */
   readonly projectId?: ProjectId | undefined;
   readonly providerSessionId: string;

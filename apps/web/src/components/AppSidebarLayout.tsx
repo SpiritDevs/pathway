@@ -22,6 +22,7 @@ import { CalendarSidebar } from "./calendar/CalendarSidebar";
 import { EmailSidebar } from "./email/EmailSidebar";
 import { IssuesSidebar } from "./issues/IssuesSidebar";
 import { OrchestratorSidebar } from "./orchestrator/OrchestratorSidebar";
+import { OrchestratorOverlay } from "./orchestrator/OrchestratorConversation";
 import { ProjectsSidebar } from "./projects/ProjectsSidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { ContextualSidebarHeader } from "./sidebar/ContextualSidebarHeader";
@@ -281,6 +282,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         </div>
       </div>
       {shouldRenderSecondarySidebar ? <SidebarControl useArtworkContrast /> : null}
+      <OrchestratorOverlay />
     </SidebarProvider>
   );
 }

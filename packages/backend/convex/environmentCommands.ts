@@ -35,6 +35,10 @@ import {
   type EnvironmentActor,
 } from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
+import {
+  orchestratorCommandAllowed,
+  orchestratorCommandPaused,
+} from "./lib/aiOrchestratorAuthority.ts";
 
 const LIST_DEFAULT_LIMIT = 100;
 const LIST_MAX_LIMIT = 500;
@@ -444,6 +448,17 @@ export const claim = mutation({
     const changed: Doc<"environmentCommands">[] = [];
     const returned: Doc<"environmentCommands">[] = [];
     for (const row of selected) {
+      if (await orchestratorCommandPaused(ctx, row)) continue;
+      if (!(await orchestratorCommandAllowed(ctx, row))) {
+        const patch = {
+          state: "canceled" as const,
+          error: "Orchestrator permission or scope changed.",
+          updatedAt: now,
+        };
+        await ctx.db.patch(row._id, patch);
+        changed.push({ ...row, ...patch });
+        continue;
+      }
       if (row.state === "claimed" && row.claimExpiresAt !== null && row.claimExpiresAt > now) {
         returned.push(row);
         continue;
@@ -483,6 +498,8 @@ export const renewClaim = mutation({
     if (row === null) throw backendError("entity-not-found", "The environment command is missing.");
     const now = Date.now();
     requireLiveOwnedClaim(row, actor, args.claimGeneration, now);
+    if (!(await orchestratorCommandAllowed(ctx, row)))
+      throw backendError("permission-denied", "Orchestrator permission or scope changed.");
     await ctx.db.patch(row._id, {
       claimExpiresAt: Math.min(now + claimTtl(args.claimTtlMs), row.expiresAt),
       updatedAt: now,

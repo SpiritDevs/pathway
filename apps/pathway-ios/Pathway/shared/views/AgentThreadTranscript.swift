@@ -27,7 +27,15 @@ struct AgentThreadTranscript: View {
                     AgentTranscriptWorkGroup(label: label, items: items, settled: settled, model: model, onOpenChild: onOpenChild)
                 }
             }
-            AgentTranscriptActivity(model: model)
+            if let hold = model.thread.shell.allowanceHold {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Waiting for allowance", systemImage: "pause.circle")
+                    Text(hold).foregroundStyle(.secondary)
+                    Text("Your request and partial work are retained.").foregroundStyle(.secondary)
+                }.font(.footnote)
+            } else {
+                AgentTranscriptActivity(model: model)
+            }
             Color.clear.frame(height: 1).id("agent-transcript-bottom")
         }
         .sheet(item: $editingItem) { item in

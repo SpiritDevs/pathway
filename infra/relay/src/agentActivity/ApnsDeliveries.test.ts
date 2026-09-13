@@ -30,6 +30,7 @@ import * as AgentActivityRows from "./AgentActivityRows.ts";
 import * as ApnsDeliveries from "./ApnsDeliveries.ts";
 import * as ApnsClient from "./ApnsClient.ts";
 import * as ApnsProviderTokens from "./ApnsProviderTokens.ts";
+import { RelayConvexClient } from "../db.ts";
 
 const config = RelayConfiguration.RelayConfiguration.of({
   relayIssuer: "https://relay.example.test",
@@ -148,6 +149,7 @@ const target: LiveActivities.TargetRow = {
 };
 
 function makeLayer(input: {
+  readonly orchestratorCurrent?: boolean;
   readonly attempts: Array<DeliveryAttempts.DeliveryAttemptInput>;
   readonly sourceJobClaims?: ReadonlyMap<string, DeliveryAttempts.DeliverySourceJobClaimResult>;
   readonly queuedJobs?: Array<SignedApnsDeliveryJob>;
@@ -182,6 +184,13 @@ function makeLayer(input: {
     Layer.provide(ApnsDeliveryQueue.layer.pipe(Layer.provide(NodeCryptoLayer.layer))),
     Layer.provide(
       Layer.mergeAll(
+        input.orchestratorCurrent === undefined
+          ? Layer.empty
+          : Layer.succeed(RelayConvexClient, {
+              query: (() =>
+                Effect.succeed(input.orchestratorCurrent)) as RelayConvexClient["Service"]["query"],
+              mutation: (() => Effect.void) as RelayConvexClient["Service"]["mutation"],
+            }),
         Layer.succeed(AgentActivityRows.AgentActivityRows, {
           upsert: () => Effect.void,
           remove: () => Effect.void,
@@ -258,6 +267,44 @@ function makeLayer(input: {
 }
 
 describe("ApnsDeliveries", () => {
+  for (const current of [true, false])
+    it.effect(`rechecks cloud conversation access before mobile delivery: ${current}`, () => {
+      const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+      let sent = 0;
+      const device = { ...target, push_token: "push-token" };
+      return Effect.gen(function* () {
+        const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+        yield* deliveries.sendPushNotification({
+          target: device,
+          token: "push-token",
+          sourceJobId: "orchestrator:chat:8",
+          notification: {
+            title: "Chief",
+            body: "Ready",
+            environmentId: "cloud-orchestrator",
+            threadId: "chat",
+            deepLink: "pathway://orchestrator",
+            orchestrator: { accountID: device.user_id, chatID: "chat", sequence: 8 },
+          },
+        });
+        expect(sent).toBe(current ? 1 : 0);
+        if (!current) expect(attempts[0]?.apnsReason).toContain("skipped");
+      }).pipe(
+        Effect.provide(
+          makeLayer({
+            attempts,
+            currentTargets: [device],
+            config: signingConfig,
+            orchestratorCurrent: current,
+            execute: (request) =>
+              Effect.sync(() => {
+                sent++;
+                return HttpClientResponse.fromWeb(request, new Response("{}", { status: 200 }));
+              }),
+          }),
+        ),
+      );
+    });
   it.effect(
     "delivers visionOS attention as notifications even with a stale Live Activity token",
     () => {

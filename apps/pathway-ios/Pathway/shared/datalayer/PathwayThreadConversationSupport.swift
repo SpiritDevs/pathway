@@ -12,6 +12,7 @@ struct PathwayThreadRun: Equatable, Identifiable, Sendable {
     let fields: [String: JSONValue]
     var ordinal: Int { fields["ordinal"]?.intValue ?? 0 }
     var status: String { fields["status"]?.stringValue ?? "completed" }
+    var allowanceHold: String? { fields["allowanceHold"]?.stringValue }
     var isActive: Bool { ["preparing", "starting", "running", "waiting"].contains(status) }
     var isSettled: Bool { ["completed", "interrupted", "failed", "cancelled", "rolled_back"].contains(status) }
     var startedAt: Date? { fields["startedAt"]?.stringValue.flatMap(pathwayDate(from:)) }

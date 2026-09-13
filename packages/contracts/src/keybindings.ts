@@ -67,6 +67,7 @@ export type CalendarKeybindingCommand = (typeof CALENDAR_KEYBINDING_COMMANDS)[nu
 
 export const BUILT_IN_KEYBINDING_COMMANDS = [
   "sidebar.toggle",
+  "orchestrator.toggle",
   "terminal.toggle",
   "terminal.split",
   "terminal.splitVertical",

@@ -1578,6 +1578,9 @@ function ChatViewContent(props: ChatViewProps) {
     threadLoadStopped ? null : routeThreadDetailRef,
   );
   const serverProjection = serverThreadProjection?.projection ?? null;
+  const allowanceHold =
+    serverProjection?.runs.findLast((run) => run.status === "starting" || run.status === "running")
+      ?.allowanceHold ?? null;
   // Agents surface (#5219): on orchestration-v2 the panel model comes from the
   // projected subagent entities — the v2 leg of the spec's mapper swap. The
   // native-activity fold never runs on this branch.
@@ -9648,6 +9651,7 @@ function ChatViewContent(props: ChatViewProps) {
                 })}
                 activeTurnInProgress={isWorking || !latestRunSettled}
                 activeTurnStartedAt={activeWorkStartedAt}
+                allowanceHold={allowanceHold}
                 pendingBackgroundTasks={pendingBackgroundTasks}
                 listRef={legendListRef}
                 asyncQuestions={timelineAsyncQuestions}

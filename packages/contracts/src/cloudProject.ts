@@ -266,6 +266,8 @@ export const ENVIRONMENT_COMMAND_CLAIM_RENEW_INTERVAL_MS = 30_000;
 export const EnvironmentCommandArgs = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("startThread"),
+    /** Reserves an identity before dispatch so inherited assignment limits can be bound first. */
+    threadId: Schema.optional(ThreadId),
     prompt: TrimmedNonEmptyString,
     /** Null lets the target pick its own default rather than pinning the issuer's. */
     modelSelection: Schema.NullOr(ModelSelection),

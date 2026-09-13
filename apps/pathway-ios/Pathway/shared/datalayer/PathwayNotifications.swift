@@ -220,6 +220,36 @@ struct PathwayNotificationPreferences: Codable, Equatable {
         if preferences.liveActivitiesEnabled { await PathwayLiveActivities.shared.refresh() }
         #endif
     }
+
+    func orchestratorUpdate(accountID: String, chatID: String, update: [String: JSONValue]) async {
+        guard let appModel, appModel.accountID == accountID,
+              preferences.notificationsEnabled, authorization == .authorized,
+              update["urgent"]?.boolValue == true ? preferences.notifyOnInput : preferences.notifyOnCompletion,
+              let sequence = update["sequence"]?.intValue,
+              appModel.cloud.orchestrators.chats.contains(where: { $0.id == chatID && !$0.flag("archived") && $0.number("readSequence") < sequence }) else { return }
+        let content = UNMutableNotificationContent()
+        content.title = update["senderName"]?.stringValue ?? "Pathway"
+        content.body = update["text"]?.stringValue ?? "A new orchestrator message is ready."
+        content.sound = .default
+        content.threadIdentifier = "orchestrator:\(chatID)"
+        content.userInfo = PathwayOrchestratorNotificationDestination(accountID: accountID, chatID: chatID).userInfo
+        content.userInfo["sequence"] = sequence
+        let id = "orchestrator:\(accountID):\(chatID):\(sequence)"
+        let epoch = generation
+        try? await UNUserNotificationCenter.current().add(.init(identifier: id, content: content, trigger: nil))
+        if generation != epoch { UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id]) }
+    }
+
+    func presentOrchestratorNotification(_ destination: PathwayOrchestratorNotificationDestination, sequence: Int?) -> Bool {
+        guard let appModel, appModel.accountID == destination.accountID,
+              let sequence,
+              appModel.cloud.orchestrators.visibleConversationID != destination.chatID,
+              appModel.cloud.orchestrators.chats.contains(where: { $0.id == destination.chatID && !$0.flag("archived") && $0.number("readSequence") < sequence }) else { return false }
+        let key = "pathway.orchestrator.notification.\(destination.accountID).\(destination.chatID)"
+        guard UserDefaults.standard.integer(forKey: key) < sequence else { return false }
+        UserDefaults.standard.set(sequence, forKey: key)
+        return true
+    }
 }
 
 final class PathwayNotificationDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -227,6 +257,8 @@ final class PathwayNotificationDelegate: NSObject, UIApplicationDelegate, UNUser
     @MainActor var onOpenStorage: ((PathwayStorageNotificationDestination) -> Void)?
     @MainActor var pendingStorage: PathwayStorageNotificationDestination?
     @MainActor var pendingLink: PathwayProductLink?
+    @MainActor var onOpenOrchestrator: ((PathwayOrchestratorNotificationDestination) -> Void)?
+    @MainActor var pendingOrchestrator: PathwayOrchestratorNotificationDestination?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
@@ -241,9 +273,24 @@ final class PathwayNotificationDelegate: NSObject, UIApplicationDelegate, UNUser
         Task { @MainActor in PathwayNotifications.shared.errorMessage = error.localizedDescription }
     }
 
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions { [.banner, .sound, .list] }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        let info = notification.request.content.userInfo
+        if let destination = PathwayOrchestratorNotificationDestination(notification: info) {
+            let sequence = info["sequence"] as? Int
+            return await MainActor.run {
+                PathwayNotifications.shared.presentOrchestratorNotification(destination, sequence: sequence) ? [.banner, .sound, .list] : []
+            }
+        }
+        return [.banner, .sound, .list]
+    }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        if let destination = PathwayOrchestratorNotificationDestination(notification: response.notification.request.content.userInfo) {
+            await MainActor.run {
+                if let onOpenOrchestrator { onOpenOrchestrator(destination) } else { pendingOrchestrator = destination }
+            }
+            return
+        }
         if let storage = PathwayStorageNotificationDestination(notification: response.notification.request.content.userInfo) {
             await MainActor.run {
                 if let onOpenStorage { onOpenStorage(storage) } else { pendingStorage = storage }

@@ -1,3 +1,4 @@
+import { delegatedBusinessOrigin } from "./delegatedBusinessOwner.ts";
 /** Private connected mail storage. Kept outside company change feeds. */
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
@@ -240,6 +241,7 @@ export const mailTables = {
     .index("by_claimant", ["companyId", "claimedByEnvironmentId", "status"]),
   mailDrafts: defineTable({
     ...scope,
+    delegatedOrigin: delegatedBusinessOrigin,
     id: v.string(),
     accountId: v.string(),
     replyToMessageId: v.optional(v.string()),

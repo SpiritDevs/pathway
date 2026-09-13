@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { WorkspaceOverview } from "../components/workspace/WorkspaceOverview";
+import { OrchestratorFullView } from "../components/orchestrator/OrchestratorConversation";
 
 export const Route = createFileRoute("/orchestrator")({
-  component: () => <WorkspaceOverview orchestrator />,
+  component: OrchestratorFullView,
 });

@@ -44,6 +44,7 @@ import {
   supportsProviderUsage,
 } from "../usage/ProviderUsage";
 import { useClientSettings } from "../../hooks/useSettings";
+import { ThreadAllowanceDialog } from "../usage/ThreadAllowanceDialog";
 import { resolveActionPaletteSections, type ActionPaletteSectionId } from "./actionPaletteSections";
 
 export interface ThreadDetailsPanelProps {
@@ -303,20 +304,22 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             showSpark={isSparkUsageModel(props.selectedModel)}
           />
         ) : usageProvider ? (
-          <EnvironmentProviderUsage
-            key={sectionId}
-            environmentId={props.environmentId}
-            provider={usageProvider}
-            showSpark={isSparkUsageModel(props.selectedModel)}
-            enabled={props.resourcesEnabled}
-            displayMode="panel"
-            {...(props.activeProviderEntry
-              ? { iconDisplayName: props.activeProviderEntry.displayName }
-              : {})}
-            {...(props.activeProviderIconBadge === undefined
-              ? {}
-              : { showIconBadge: props.activeProviderIconBadge })}
-          />
+          <div key={sectionId}>
+            <EnvironmentProviderUsage
+              environmentId={props.environmentId}
+              provider={usageProvider}
+              showSpark={isSparkUsageModel(props.selectedModel)}
+              enabled={props.resourcesEnabled}
+              displayMode="panel"
+              {...(props.activeProviderEntry
+                ? { iconDisplayName: props.activeProviderEntry.displayName }
+                : {})}
+              {...(props.activeProviderIconBadge === undefined
+                ? {}
+                : { showIconBadge: props.activeProviderIconBadge })}
+            />
+            <ThreadAllowanceDialog environmentId={props.environmentId} threadId={props.threadId} />
+          </div>
         ) : null;
       case "development-environments":
         return (

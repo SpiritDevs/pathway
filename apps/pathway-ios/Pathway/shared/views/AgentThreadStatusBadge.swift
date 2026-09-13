@@ -8,7 +8,8 @@ struct AgentThreadStatusBadge: View {
         PathwayThreadStatus(requestKind: thread.shell.pendingRuntimeRequest?.kind,
             hasPlan: thread.shell.hasActionableProposedPlan,
             runStatus: thread.shell.activityRunStatus ?? thread.shell.status,
-            hasActiveRun: thread.shell.activeRunId != nil, hasError: thread.shell.lastError != nil)
+            hasActiveRun: thread.shell.activeRunId != nil, hasError: thread.shell.lastError != nil,
+            hasAllowanceHold: thread.shell.allowanceHold != nil)
     }
 
     private var color: Color {
@@ -17,7 +18,7 @@ struct AgentThreadStatusBadge: View {
         case .approval, .needsYou: .orange
         case .working, .preparing, .queued: .blue
         case .failed: .red
-        case .waiting, .stopped, .ready: .secondary
+        case .waiting, .waitingForAllowance, .stopped, .ready: .secondary
         }
     }
 

@@ -25,6 +25,7 @@ final class PathwayAppModel {
     private(set) var loginReportState: PathwayLoginReportState = .sending
     var pendingThreadRoute: PathwayPendingThreadRoute?
     var pendingStorageNotification: PathwayStorageNotificationDestination?
+    var pendingOrchestratorNotification: PathwayOrchestratorNotificationDestination?
     var pendingProductLink: PathwayProductLink?
     private(set) var localStorageDirectory: URL?
     private(set) var accountID: String?

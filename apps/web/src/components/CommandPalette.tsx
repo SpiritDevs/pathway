@@ -1,6 +1,7 @@
+"use client";
 import { useDictationAvailability } from "../dictation/useDictation";
-("use client");
 import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
+import { useOrchestrators } from "./orchestrator/OrchestratorContext";
 
 import { ProjectOwnerSelect, useProjectOwner } from "./projects/ProjectOwnerSelect";
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -2008,6 +2009,38 @@ function OpenCommandPaletteDialog(props: {
   const alertPolicies = useAtomValue(threadAlertPoliciesAtom);
   const alertPoliciesReady = useAtomValue(threadAlertPoliciesReadyAtom);
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
+  const orchestrators = useOrchestrators();
+  actionItems.push({
+    kind: "action",
+    value: "action:orchestrator-companion",
+    searchTerms: ["orchestrator", "companion", "assistant", "chat", "floating"],
+    title: orchestrators.floating
+      ? "Minimize orchestrator companion"
+      : "Open orchestrator companion",
+    icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
+    run: async () => orchestrators.setFloating((value) => !value),
+  });
+  actionItems.push({
+    kind: "action",
+    value: "action:orchestrator-conversations",
+    searchTerms: ["orchestrator", "conversations", "messages", "chat"],
+    title: "Open orchestrator conversations",
+    icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      orchestrators.setFloating(false);
+      await navigate({ to: "/orchestrator" });
+    },
+  });
+  actionItems.push({
+    kind: "action",
+    value: "action:orchestrator-settings",
+    searchTerms: ["orchestrator", "settings", "persona", "permissions"],
+    title: "Open Orchestrators settings",
+    icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/settings/orchestrators-overview" });
+    },
+  });
   const snapShotAccountId = useSnapShotAccountId();
   const snapShotBridge = getDesktopSnapShotBridge();
   const [snapShotState, setSnapShotState] = useState<DesktopSnapShotState | null>(null);

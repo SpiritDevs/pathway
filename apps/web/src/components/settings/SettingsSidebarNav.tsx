@@ -89,6 +89,15 @@ const SETTINGS_SECTION_ICONS: Readonly<
   Record<SettingsPath, ComponentType<{ className?: string }>>
 > = {
   "/settings/notifications": BellIcon,
+  "/settings/orchestrators-overview": BotIcon,
+  "/settings/orchestrators-instructions": WandSparklesIcon,
+  "/settings/orchestrators-models": BotIcon,
+  "/settings/orchestrators-environments": ServerIcon,
+  "/settings/orchestrators-responsibilities": CircleDotIcon,
+  "/settings/orchestrators-permissions": ShieldIcon,
+  "/settings/orchestrators-memory": HardDriveIcon,
+  "/settings/orchestrators-notifications": BellIcon,
+  "/settings/orchestrators-work-limits": ChartNoAxesColumnIcon,
   "/settings/general": Settings2Icon,
   "/settings/appearance": PaletteIcon,
   "/settings/keybindings": KeyboardIcon,

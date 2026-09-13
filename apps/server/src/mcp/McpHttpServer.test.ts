@@ -477,9 +477,18 @@ it.effect("serves every production Pathway toolkit through one endpoint", () =>
       const actual = listed.tools.map(({ name }) => name).sort();
       const expected = [...PATHWAY_MCP_TOOL_NAMES].sort();
 
-      expect(expected).toHaveLength(49);
+      expect(expected).toHaveLength(55);
       expect(new Set(expected).size).toBe(expected.length);
       expect(actual).toEqual(expected);
+      expect(actual).toContain("pathway_allowance_allocate");
+      expect(actual).toEqual(
+        expect.arrayContaining([
+          "pathway_mail_read",
+          "pathway_mail_write",
+          "pathway_time_read",
+          "pathway_time_write",
+        ]),
+      );
       expect(actual).toContain("issues_get");
       expect(actual).toContain("issues_get_attachment");
       expect(actual).toContain("issues_update");

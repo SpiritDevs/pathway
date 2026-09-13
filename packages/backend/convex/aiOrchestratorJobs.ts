@@ -1,0 +1,1473 @@
+import {
+  readableOrchestratorEnvironment,
+  notifyOrchestratorEnvironmentChange,
+} from "./lib/aiOrchestratorEnvironmentSignals.ts";
+import { readableOrchestratorIssue } from "./lib/aiOrchestratorIssueSignals.ts";
+import { canReviewResponsibilities } from "./aiOrchestratorReviews.ts";
+// @effect-diagnostics globalDate:off -- Convex supplies the transaction clock.
+/** Renewable reasoning claims. All effects commit here, after checking the live identity and grants. */
+import { v } from "convex/values";
+import { budgetAdmission } from "@spiritdevs/contracts/providerAllowanceBudget";
+import { budgetsForScopes, allocateFromInstruction } from "./providerAllowanceBudgets.ts";
+import {
+  readableOrchestratorMail,
+  readableOrchestratorThread,
+} from "./lib/aiOrchestratorSignals.ts";
+import {
+  ModelSelection,
+  CloudAgentThreadShell,
+  ExecutionEnvironmentDescriptor,
+  HostResourcesSnapshot,
+} from "@spiritdevs/contracts";
+import * as Schema from "effect/Schema";
+import {
+  OrchestratorDecision,
+  DEFAULT_ORCHESTRATOR_MODEL,
+  COORDINATOR_DRIVERS,
+} from "@spiritdevs/contracts/aiOrchestrator";
+import type { OrchestratorRun } from "@spiritdevs/contracts/aiOrchestrator";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server.js";
+import type { Doc } from "./_generated/dataModel.js";
+import { requireCompanyActor } from "./lib/identity.ts";
+import { backendError } from "./lib/errors.ts";
+import { mintDomainId } from "./lib/domainIds.ts";
+import {
+  eligibleOrchestratorEnvironment,
+  orchestratorCanReadWork,
+  orchestratorCommandAllowed,
+  orchestratorOwnerScope,
+} from "./lib/aiOrchestratorAuthority.ts";
+import { appendChatMessage, canDirectOrchestrator, findOrchestrator } from "./aiOrchestrators.ts";
+import { hasRecordPermission } from "../src/permissions.ts";
+import { collaborationDirectory, startCollaboration } from "./lib/aiOrchestratorCollaboration.ts";
+import {
+  queueOrchestratorWork,
+  refreshOrchestratorWork,
+  controlOrchestratorWork,
+} from "./lib/aiOrchestratorWork.ts";
+import {
+  boundedConversationMessages,
+  memoryVisibilityForConversation,
+  audienceProjectPermissions,
+  workVisibilityForConversation,
+  sharedHistoryBoundary,
+} from "./lib/aiOrchestratorContext.ts";
+
+const LEASE_MS = 90_000;
+const identityArgs = { companyId: v.string(), jobId: v.string(), generation: v.number() };
+const decodeDecision = Schema.decodeUnknownSync(OrchestratorDecision);
+const decodeSelection = Schema.decodeUnknownSync(ModelSelection);
+const inspectResources = Schema.decodeUnknownExit(HostResourcesSnapshot);
+const decodeResources = Schema.decodeUnknownSync(HostResourcesSnapshot);
+const decodeDescriptor = Schema.decodeUnknownExit(ExecutionEnvironmentDescriptor);
+const inspectThreadShell = Schema.decodeUnknownExit(CloudAgentThreadShell);
+const decodeThreadShell = Schema.decodeUnknownSync(CloudAgentThreadShell);
+const terminalWorkStates = ["completed", "failed", "cancelled"] as const;
+const fail = (message: string): never => {
+  throw backendError("orchestrator-action", message);
+};
+async function environmentActor(ctx: QueryCtx, companyId: string) {
+  const actor = await requireCompanyActor(ctx, companyId);
+  if (actor.kind !== "environment")
+    return fail("An authorized environment must run coordinator reasoning.");
+  return actor;
+}
+async function findChat(ctx: QueryCtx, id: string) {
+  return await ctx.db
+    .query("aiOrchestratorChats")
+    .withIndex("by_domain_id", (q) => q.eq("id", id))
+    .unique();
+}
+async function currentClaim(
+  ctx: QueryCtx,
+  args: { companyId: string; jobId: string; generation: number },
+) {
+  const actor = await environmentActor(ctx, args.companyId);
+  const job = await ctx.db
+    .query("aiOrchestratorJobs")
+    .withIndex("by_domain_id", (q) => q.eq("id", args.jobId))
+    .unique();
+  if (
+    !job ||
+    job.companyId !== args.companyId ||
+    job.status !== "running" ||
+    job.environmentId !== actor.registration.environmentId ||
+    job.generation !== args.generation ||
+    job.leaseExpiresAt <= Date.now()
+  )
+    return null;
+  const orchestrator = await findOrchestrator(ctx, job.orchestratorId);
+  if (
+    !orchestrator ||
+    orchestrator.status !== "active" ||
+    job.configRevision !== orchestrator.revision ||
+    !(await eligibleOrchestratorEnvironment(ctx, orchestrator, actor.registration))
+  )
+    return null;
+  const chat = await findChat(ctx, job.chatId);
+  if (!chat || chat.archived || !chat.orchestratorIds.includes(orchestrator.id)) return null;
+  if (job.responsibilityReview && !canReviewResponsibilities(orchestrator, chat)) return null;
+  if ((job.chatRevision ?? 0) !== (chat.revision ?? 0)) return null;
+  if (
+    job.mailMessageId &&
+    !(await readableOrchestratorMail(ctx, orchestrator, chat, args.companyId, job.mailMessageId))
+  )
+    return null;
+  if (
+    job.threadSignalId &&
+    !(await readableOrchestratorThread(ctx, orchestrator, chat, args.companyId, job.threadSignalId))
+  )
+    return null;
+  if (
+    job.issueSignalId &&
+    !(await readableOrchestratorIssue(ctx, orchestrator, chat, args.companyId, job.issueSignalId))
+  )
+    return null;
+  if (
+    job.environmentSignalId &&
+    !(await readableOrchestratorEnvironment(
+      ctx,
+      orchestrator,
+      chat,
+      args.companyId,
+      job.environmentSignalId,
+    ))
+  )
+    return null;
+  const message = await ctx.db
+    .query("aiOrchestratorMessages")
+    .withIndex("by_domain_id", (q) => q.eq("id", job.messageId))
+    .unique();
+  if (!message || message.status === "cancelled") return null;
+  const historyStart =
+    chat.orchestratorHistory?.find((entry) => entry.orchestratorId === orchestrator.id)
+      ?.fromSequence ?? 0;
+  if (message.sequence < historyStart) return null;
+  if (message.senderKind === "orchestrator") {
+    const sender = await findOrchestrator(ctx, message.senderId);
+    if (
+      !sender ||
+      sender.status === "deleted" ||
+      !chat.orchestratorIds.includes(sender.id) ||
+      !sender.capabilities.includes("orchestrators.message") ||
+      !canDirectOrchestrator(orchestrator, chat.ownerSubject)
+    )
+      return null;
+  }
+  if (message.senderKind === "user") {
+    const member = await ctx.db
+      .query("aiOrchestratorChatMembers")
+      .withIndex("by_chat_subject", (q) => q.eq("chatId", chat.id).eq("subject", message.senderId))
+      .unique();
+    if (!member || !canDirectOrchestrator(orchestrator, message.senderId)) return null;
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", message.senderId))
+      .unique();
+    if (!user) return null;
+    for (const companyId of chat.companyIds) {
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", companyId))
+        .unique();
+      if (!company || company.lifecycleState !== "active") return null;
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_company_and_user", (q) =>
+          q.eq("companyId", company._id).eq("userId", user._id),
+        )
+        .unique();
+      if (membership?.state !== "active") return null;
+    }
+  }
+  return { actor, job, orchestrator, chat, message };
+}
+
+async function contextFor(
+  ctx: QueryCtx,
+  orchestrator: Doc<"aiOrchestrators">,
+  chat: Doc<"aiOrchestratorChats">,
+  companyId: string,
+  results: string,
+  trigger: Doc<"aiOrchestratorMessages">,
+  mailMessageId?: string,
+  threadSignalId?: string,
+  issueSignalId?: string,
+  environmentSignalId?: string,
+) {
+  const historyStart = await sharedHistoryBoundary(ctx, chat, chat);
+  if (historyStart === null)
+    return fail("Conversation membership changed. Review its participants before continuing.");
+  const messages = await ctx.db
+    .query("aiOrchestratorMessages")
+    .withIndex("by_chat_sequence", (q) => q.eq("chatId", chat.id).gte("sequence", historyStart))
+    .order("desc")
+    .take(40);
+  const ownMemories = await ctx.db
+    .query("aiOrchestratorMemory")
+    .withIndex("by_orchestrator_forgotten", (q) =>
+      q.eq("orchestratorId", orchestrator.id).eq("forgotten", false),
+    )
+    .order("desc")
+    .take(80);
+  const personal = orchestrator.shared
+    ? []
+    : await ctx.db
+        .query("aiOrchestratorMemory")
+        .withIndex("by_owner_scope_forgotten", (q) =>
+          q
+            .eq("ownerSubject", orchestrator.ownerSubject)
+            .eq("scope", "personal")
+            .eq("forgotten", false),
+        )
+        .order("desc")
+        .take(100);
+  const projectMemories = orchestrator.projectId
+    ? await ctx.db
+        .query("aiOrchestratorMemory")
+        .withIndex("by_owner_scope", (q) =>
+          q.eq("ownerSubject", orchestrator.ownerSubject).eq("scope", "project"),
+        )
+        .take(100)
+    : [];
+  const candidates = [
+    ...new Map(
+      [
+        ...ownMemories,
+        ...personal,
+        ...projectMemories.filter(
+          (m) =>
+            m.sharedProjectId === orchestrator.projectId &&
+            m.sharedCompanyId === orchestrator.companyId,
+        ),
+      ].map((m) => [m.id, m]),
+    ).values(),
+  ]
+    .filter((m) => !m.forgotten)
+    .sort((a, b) => Number(b.explicit) - Number(a.explicit) || b.updatedAt - a.updatedAt);
+  const memories = [];
+  const memoryVisible = memoryVisibilityForConversation(ctx, chat);
+  let memoryBudget = 24000;
+  for (const memory of candidates) {
+    if (memory.text.length > memoryBudget || !(await memoryVisible(memory))) continue;
+    memories.push(memory);
+    memoryBudget -= memory.text.length;
+    if (memories.length >= 40) break;
+  }
+  const forgotten = await ctx.db
+    .query("aiOrchestratorMemory")
+    .withIndex("by_orchestrator_forgotten", (q) =>
+      q.eq("orchestratorId", orchestrator.id).eq("forgotten", true),
+    )
+    .order("desc")
+    .take(20);
+  const exclusions = [];
+  for (const memory of forgotten) if (await memoryVisible(memory)) exclusions.push(memory);
+  const scope = await orchestratorOwnerScope(ctx, orchestrator, companyId);
+  const readers = scope ? await audienceProjectPermissions(ctx, chat, companyId) : null;
+  const projects =
+    scope && orchestrator.capabilities.includes("projects.read")
+      ? (
+          await ctx.db
+            .query("cloudProjects")
+            .withIndex("by_company", (q) => q.eq("companyId", scope.company._id))
+            .take(200)
+        )
+          .filter(
+            (project) =>
+              project.deletedAt === null &&
+              project.archivedAt === null &&
+              (!orchestrator.projectId || orchestrator.projectId === project.id) &&
+              readers?.every((reader) =>
+                hasRecordPermission(reader, "projects.read", project.teamIds),
+              ) &&
+              hasRecordPermission(scope.permissions, "projects.read", project.teamIds),
+          )
+          .map((project) => ({
+            id: project.id,
+            cloudId: project._id,
+            name: project.name,
+            companyId,
+          }))
+      : [];
+  const registrations =
+    scope && orchestrator.capabilities.includes("environments.read")
+      ? await ctx.db
+          .query("environmentRegistrations")
+          .withIndex("by_company_and_state", (q) =>
+            q.eq("companyId", scope.company._id).eq("state", "active"),
+          )
+          .take(50)
+      : [];
+  const environments = [];
+  for (const registration of registrations) {
+    if (await eligibleOrchestratorEnvironment(ctx, orchestrator, registration))
+      environments.push({
+        descriptor: (() => {
+          const parsed = decodeDescriptor(registration.descriptor);
+          return parsed._tag === "Success" ? parsed.value : null;
+        })(),
+        id: registration.environmentId,
+        online: (registration.lastSeenAt ?? 0) > Date.now() - LEASE_MS,
+        lastSeenAt: registration.lastSeenAt,
+        resources: (() => {
+          const parsed = inspectResources(registration.orchestratorResources);
+          return parsed._tag === "Success" && Date.now() - parsed.value.sampledAt <= 90000
+            ? parsed.value
+            : null;
+        })(),
+        resourceNote:
+          "Resources are sampled when a coordinator runs here; null means no fresh observation, not an idle host.",
+      });
+  }
+  const contacts = [];
+  for (const id of chat.orchestratorIds) {
+    const contact = await findOrchestrator(ctx, id);
+    if (contact && contact.status !== "deleted")
+      contacts.push({
+        id,
+        name: contact.name,
+        projectId: contact.projectId,
+        companyId: contact.companyId,
+        status: contact.status,
+      });
+  }
+  const directory = orchestrator.capabilities.includes("orchestrators.message")
+    ? await collaborationDirectory(ctx, chat, companyId)
+    : [];
+  const conversations = [];
+  if (orchestrator.capabilities.includes("orchestrators.message")) {
+    const candidates = await ctx.db
+      .query("aiOrchestratorChats")
+      .withIndex("by_owner", (q) => q.eq("ownerSubject", chat.ownerSubject))
+      .take(100);
+    for (const candidate of candidates) {
+      if (
+        !candidate.archived &&
+        candidate.orchestratorIds.includes(orchestrator.id) &&
+        (await sharedHistoryBoundary(ctx, candidate, chat)) !== null
+      )
+        conversations.push({ id: candidate.id, title: candidate.title });
+    }
+  }
+  const workRows = await ctx.db
+    .query("aiOrchestratorWork")
+    .withIndex("by_chat", (q) => q.eq("chatId", chat.id))
+    .order("desc")
+    .take(50);
+  const canSeeWork = workVisibilityForConversation(ctx, chat);
+  const work = [];
+  for (const row of workRows) if (await canSeeWork(row)) work.push(row);
+  const recentThreads = [];
+  const recentIssues = [];
+  if (scope && readers) {
+    if (orchestrator.capabilities.includes("threads.read")) {
+      const rows = await ctx.db
+        .query("agentThreads")
+        .withIndex("by_company_updated", (q) => q.eq("companyId", scope.company._id))
+        .order("desc")
+        .take(100);
+      for (const row of rows) {
+        const project = projects.find((p) => p.cloudId === row.cloudProjectId);
+        if (!project || !environments.some((e) => e.id === row.environmentId)) continue;
+        const parsed = inspectThreadShell(row.shell);
+        if (parsed._tag !== "Success") continue;
+        const shell = parsed.value;
+        recentThreads.push({
+          threadId: row.threadId,
+          environmentId: row.environmentId,
+          projectId: project.id,
+          title: shell.title.slice(0, 300),
+          status: shell.status,
+          allowanceHold: shell.allowanceHold,
+          updatedAt: row.updatedAt,
+        });
+        if (recentThreads.length >= 20) break;
+      }
+    }
+    if (orchestrator.capabilities.includes("tasks.read")) {
+      const rows = await ctx.db
+        .query("issues")
+        .withIndex("by_company_and_version", (q) => q.eq("companyId", scope.company._id))
+        .order("desc")
+        .take(100);
+      for (const issue of rows) {
+        if (
+          issue.deletedAt !== null ||
+          (issue.projectId
+            ? !projects.some((p) => p.id === issue.projectId)
+            : Boolean(orchestrator.projectId)) ||
+          !hasRecordPermission(scope.permissions, "issues.read", issue.teamIds) ||
+          !readers.every((reader) => hasRecordPermission(reader, "issues.read", issue.teamIds))
+        )
+          continue;
+        recentIssues.push({
+          id: issue.id,
+          key: issue.key,
+          title: issue.title.slice(0, 300),
+          projectId: issue.projectId,
+          statusId: issue.statusId,
+          priority: issue.priority,
+          dueDate: issue.dueDate,
+          updatedAt: issue.updatedAt,
+        });
+        if (recentIssues.length >= 20) break;
+      }
+    }
+  }
+  let workResultBudget = 32000;
+  return JSON.stringify({
+    companyId,
+    chat: { id: chat.id, title: chat.title, leadId: chat.leadId },
+    capabilities: orchestrator.capabilities,
+    responsibilities: orchestrator.responsibilities,
+    environmentUpdate: environmentSignalId
+      ? await readableOrchestratorEnvironment(
+          ctx,
+          orchestrator,
+          chat,
+          companyId,
+          environmentSignalId,
+        )
+      : null,
+    issueUpdate: issueSignalId
+      ? await readableOrchestratorIssue(ctx, orchestrator, chat, companyId, issueSignalId)
+      : null,
+    threadUpdate: threadSignalId
+      ? await readableOrchestratorThread(ctx, orchestrator, chat, companyId, threadSignalId)
+      : null,
+    privateMail: mailMessageId
+      ? await readableOrchestratorMail(ctx, orchestrator, chat, companyId, mailMessageId)
+      : null,
+    contacts,
+    directory: directory.map(({ id, name, companyId, projectId, status }) => ({
+      id,
+      name,
+      companyId,
+      projectId,
+      status,
+    })),
+    conversations,
+    projects: projects.map(({ cloudId, ...project }) => {
+      void cloudId;
+      return project;
+    }),
+    environments,
+    workspaceActivity: {
+      scope:
+        "Up to 20 permitted results from the 100 most recently updated records; not a complete inventory. Delegate a scoped worker for detailed queries.",
+      recentThreads,
+      recentIssues,
+    },
+    summary: chat.summaryThroughSequence < historyStart ? "" : chat.summary.slice(0, 8000),
+    summaryThroughSequence: chat.summaryThroughSequence,
+    messages: boundedConversationMessages(
+      messages,
+      trigger.sequence >= historyStart ? trigger : undefined,
+    ),
+    respondingToMessageId: trigger.id,
+    memories: memories.map(({ id, text, source, explicit }) => ({ id, text, source, explicit })),
+    forgotten: exclusions.map(({ sourceChatId, sourceSequence, updatedAt }) => ({
+      sourceChatId,
+      sourceSequence,
+      forgottenAt: updatedAt,
+    })),
+    work: work
+      .filter((item) => (item.sourceSequence ?? 0) >= historyStart)
+      .map(({ id, title, status, environmentId, projectId, threadId, detail, resultText }) => {
+        const result = resultText?.slice(0, workResultBudget);
+        workResultBudget -= result?.length ?? 0;
+        return {
+          id,
+          title,
+          status,
+          environmentId,
+          projectId,
+          threadId,
+          detail,
+          result,
+        };
+      }),
+    actionResults: results.slice(0, 16000),
+  });
+}
+
+async function notifyFinishedWork(ctx: MutationCtx, orchestrator: Doc<"aiOrchestrators">) {
+  if (orchestrator.status !== "active") return;
+  const batches = await Promise.all(
+    terminalWorkStates.map((status) =>
+      ctx.db
+        .query("aiOrchestratorWork")
+        .withIndex("by_orchestrator_notification", (q) =>
+          q
+            .eq("orchestratorId", orchestrator.id)
+            .eq("completionNotified", false)
+            .eq("status", status),
+        )
+        .take(32),
+    ),
+  );
+  const groups = new Map<string, Array<Doc<"aiOrchestratorWork">>>();
+  for (const work of batches.flat()) {
+    if (
+      work.status === "completed" &&
+      work.resultRequired &&
+      !work.resultCollected &&
+      Date.now() - work.updatedAt < LEASE_MS
+    )
+      continue;
+    if (!orchestrator.proactive || work.stopRequested) {
+      await ctx.db.patch(work._id, { completionNotified: true });
+      continue;
+    }
+    const key = orchestrator.batchCompletions ? work.chatId : work.id;
+    groups.set(key, [...(groups.get(key) ?? []), work]);
+  }
+  for (const work of groups.values()) {
+    const chat = await findChat(ctx, work[0]!.chatId);
+    if (!chat || chat.archived || !chat.orchestratorIds.includes(orchestrator.id)) {
+      for (const item of work) await ctx.db.patch(item._id, { completionNotified: true });
+      continue;
+    }
+    const boundary = await sharedHistoryBoundary(ctx, chat, chat);
+    const canSeeWork = workVisibilityForConversation(ctx, chat);
+    const visibleWork = [];
+    for (const item of work)
+      if (boundary !== null && (item.sourceSequence ?? 0) >= boundary && (await canSeeWork(item)))
+        visibleWork.push(item);
+    if (!visibleWork.length) {
+      for (const item of work) await ctx.db.patch(item._id, { completionNotified: true });
+      continue;
+    }
+    const text = visibleWork
+      .map((item) => `${item.title}: ${item.status}. ${item.detail}`)
+      .join("\n");
+    const now = Date.now(),
+      messageId = mintDomainId(now);
+    await appendChatMessage(ctx, chat, {
+      id: messageId,
+      senderKind: "system",
+      senderId: "delegated-work",
+      senderName: "Pathway",
+      text,
+      status: "queued",
+      replyToId: null,
+    });
+    await ctx.db.insert("aiOrchestratorJobs", {
+      id: mintDomainId(now),
+      orchestratorId: orchestrator.id,
+      chatId: chat.id,
+      messageId,
+      companyId: work[0]!.companyId ?? orchestrator.companyId ?? "",
+      status: "queued",
+      environmentId: null,
+      generation: 0,
+      leaseExpiresAt: 0,
+      modelIndex: 0,
+      error: "",
+      createdAt: now,
+      updatedAt: now,
+    });
+    for (const item of work) await ctx.db.patch(item._id, { completionNotified: true });
+  }
+}
+
+export const claim = mutation({
+  args: {
+    companyId: v.string(),
+    providers: v.array(v.object({ instanceId: v.string(), driver: v.string() })),
+  },
+  handler: async (ctx, args): Promise<OrchestratorRun | null> => {
+    if (args.providers.length > 50) return fail("Too many provider instances.");
+    const actor = await environmentActor(ctx, args.companyId);
+    const now = Date.now();
+    if (
+      (actor.registration.lastSeenAt ?? 0) < now - 30_000 ||
+      actor.registration.orchestratorPresence !== "online"
+    ) {
+      await ctx.db.patch(actor.registration._id, {
+        lastSeenAt: now,
+        orchestratorPresence: "online",
+      });
+      if (actor.registration.orchestratorPresence === "offline")
+        await notifyOrchestratorEnvironmentChange(ctx, {
+          ...actor.registration,
+          lastSeenAt: now,
+          orchestratorPresence: "online",
+        });
+    }
+    const tracked = await Promise.all(
+      (["queued", "working", "unknown"] as const).map((status) =>
+        ctx.db
+          .query("aiOrchestratorWork")
+          .withIndex("by_company_status", (q) =>
+            q.eq("companyId", args.companyId).eq("status", status),
+          )
+          .take(32),
+      ),
+    );
+    const finished = await Promise.all(
+      terminalWorkStates.map((status) =>
+        ctx.db
+          .query("aiOrchestratorWork")
+          .withIndex("by_company_notification", (q) =>
+            q.eq("companyId", args.companyId).eq("completionNotified", false).eq("status", status),
+          )
+          .take(32),
+      ),
+    );
+    for (const id of new Set(
+      [...tracked.flat(), ...finished.flat()].map((work) => work.orchestratorId),
+    )) {
+      const orchestrator = await findOrchestrator(ctx, id);
+      if (
+        orchestrator &&
+        (await eligibleOrchestratorEnvironment(ctx, orchestrator, actor.registration))
+      ) {
+        await refreshOrchestratorWork(ctx, orchestrator);
+        await notifyFinishedWork(ctx, orchestrator);
+      }
+    }
+    const groups = await Promise.all(
+      [...new Set([args.companyId, ""])].flatMap((companyId) =>
+        (["running", "queued"] as const).map((status) =>
+          status === "queued"
+            ? ctx.db
+                .query("aiOrchestratorJobs")
+                .withIndex("by_company_ready", (q) =>
+                  q.eq("companyId", companyId).eq("status", status).lte("notBefore", now),
+                )
+                .take(32)
+            : ctx.db
+                .query("aiOrchestratorJobs")
+                .withIndex("by_company_status", (q) =>
+                  q.eq("companyId", companyId).eq("status", status),
+                )
+                .take(32),
+        ),
+      ),
+    );
+    for (const job of groups
+      .flat()
+      .sort(
+        (a, b) =>
+          a.updatedAt - b.updatedAt ||
+          Number(Boolean(a.contextResults)) - Number(Boolean(b.contextResults)) ||
+          a.createdAt - b.createdAt,
+      )) {
+      if ((job.notBefore ?? 0) > now) continue;
+      if (job.status === "running" && job.leaseExpiresAt > now) continue;
+      const orchestrator = await findOrchestrator(ctx, job.orchestratorId);
+      if (
+        !orchestrator ||
+        orchestrator.status !== "active" ||
+        !(await eligibleOrchestratorEnvironment(ctx, orchestrator, actor.registration))
+      )
+        continue;
+      const chat = await findChat(ctx, job.chatId);
+      if (!chat || chat.archived || !chat.orchestratorIds.includes(orchestrator.id)) continue;
+      if (job.responsibilityReview && !canReviewResponsibilities(orchestrator, chat)) {
+        await ctx.db.patch(job._id, { status: "cancelled", updatedAt: now });
+        const trigger = await ctx.db
+          .query("aiOrchestratorMessages")
+          .withIndex("by_domain_id", (q) => q.eq("id", job.messageId))
+          .unique();
+        if (trigger) await ctx.db.patch(trigger._id, { status: "cancelled" });
+        continue;
+      }
+      const running = await ctx.db
+        .query("aiOrchestratorJobs")
+        .withIndex("by_orchestrator_status", (q) =>
+          q.eq("orchestratorId", orchestrator.id).eq("status", "running"),
+        )
+        .take(20);
+      if (running.some((other) => other.id !== job.id && other.leaseExpiresAt > now)) continue;
+      const earlier = await ctx.db
+        .query("aiOrchestratorJobs")
+        .withIndex("by_orchestrator_chat_status", (q) =>
+          q.eq("orchestratorId", orchestrator.id).eq("chatId", chat.id).eq("status", "queued"),
+        )
+        .first();
+      if (earlier && earlier.id !== job.id && earlier.createdAt < job.createdAt) continue;
+      if ((job.attempts ?? 0) >= 12) {
+        await ctx.db.patch(job._id, {
+          status: "failed",
+          error:
+            "Coordinator reasoning was interrupted repeatedly. Retry when an environment is ready.",
+          updatedAt: now,
+        });
+        const message = await ctx.db
+          .query("aiOrchestratorMessages")
+          .withIndex("by_domain_id", (q) => q.eq("id", job.messageId))
+          .unique();
+        if (message) await ctx.db.patch(message._id, { status: "failed" });
+        continue;
+      }
+      if (job.failedEnvironmentIds?.includes(actor.registration.environmentId)) continue;
+      const choice = orchestrator.models[job.modelIndex];
+      const provider = args.providers.find(
+        (provider) =>
+          COORDINATOR_DRIVERS.some((driver) => driver === provider.driver) &&
+          (choice
+            ? provider.instanceId === choice.selection.instanceId
+            : provider.driver === "codex"),
+      );
+      if (!provider || (orchestrator.models.length && !choice)) continue;
+      if (
+        choice &&
+        choice.environmentId !== actor.registration.environmentId &&
+        !job.failedEnvironmentIds?.includes(choice.environmentId)
+      ) {
+        const preferred = await ctx.db
+          .query("environmentRegistrations")
+          .withIndex("by_company_and_environment", (q) =>
+            q.eq("companyId", actor.company._id).eq("environmentId", choice.environmentId),
+          )
+          .unique();
+        if (
+          preferred &&
+          preferred.state === "active" &&
+          (preferred.lastSeenAt ?? 0) > now - LEASE_MS &&
+          job.updatedAt > now - LEASE_MS
+        )
+          continue;
+      }
+      const selection = choice?.selection ?? {
+        instanceId: provider.instanceId,
+        model: DEFAULT_ORCHESTRATOR_MODEL,
+        options: [{ id: "reasoningEffort", value: "high" }],
+      };
+      const generation = job.generation + 1;
+      await ctx.db.patch(job._id, {
+        status: "running",
+        companyId: args.companyId,
+        environmentId: actor.registration.environmentId,
+        generation,
+        configRevision: orchestrator.revision,
+        chatRevision: chat.revision ?? 0,
+        leaseExpiresAt: now + LEASE_MS,
+        attempts: (job.attempts ?? 0) + 1,
+        contextThroughSequence: chat.lastSequence,
+        updatedAt: now,
+      });
+      const claim = await currentClaim(ctx, {
+        companyId: args.companyId,
+        jobId: job.id,
+        generation,
+      });
+      if (!claim) {
+        await ctx.db.patch(job._id, {
+          status: "cancelled",
+          error: "Conversation access or direction permission changed.",
+          leaseExpiresAt: 0,
+          updatedAt: now,
+        });
+        const message = await ctx.db
+          .query("aiOrchestratorMessages")
+          .withIndex("by_domain_id", (q) => q.eq("id", job.messageId))
+          .unique();
+        if (message && (message.status === "queued" || message.status === "working"))
+          await ctx.db.patch(message._id, { status: "cancelled" });
+        continue;
+      }
+      await ctx.db.patch(claim.message._id, { status: "working" });
+      return {
+        id: job.id,
+        generation,
+        selection: decodeSelection(selection),
+        name: orchestrator.name,
+        persona: orchestrator.persona,
+        instructions: orchestrator.instructions,
+        context: await contextFor(
+          ctx,
+          orchestrator,
+          chat,
+          args.companyId,
+          job.chatRevision === (chat.revision ?? 0) && job.configRevision === orchestrator.revision
+            ? (job.contextResults ?? "")
+            : "",
+          claim.message,
+          job.mailMessageId,
+          job.threadSignalId,
+          job.issueSignalId,
+          job.environmentSignalId,
+        ),
+      };
+    }
+    return null;
+  },
+});
+/** A quota hold yields the reasoning slot and preserves the original queued request. */
+async function holdAllowanceClaim(
+  ctx: MutationCtx,
+  claim: NonNullable<Awaited<ReturnType<typeof currentClaim>>>,
+  reason: string,
+) {
+  const detail = reason.slice(0, 500);
+  await ctx.db.patch(claim.job._id, {
+    status: "queued",
+    environmentId: null,
+    leaseExpiresAt: 0,
+    notBefore: Date.now() + 30_000,
+    allowanceHold: detail,
+    attempts: Math.max(0, (claim.job.attempts ?? 1) - 1),
+    updatedAt: Date.now(),
+  });
+  await ctx.db.patch(claim.message._id, { status: "queued" });
+  if (claim.job.allowanceHold !== detail)
+    await appendChatMessage(ctx, claim.chat, {
+      id: mintDomainId(Date.now()),
+      senderKind: "system",
+      senderId: claim.orchestrator.id,
+      senderName: "Pathway",
+      text: detail + " Your request is retained. Review the allowance allocation to resume.",
+      status: "sent",
+      replyToId: claim.message.id,
+    });
+}
+export const holdForAllowance = mutation({
+  args: { ...identityArgs, detail: v.string() },
+  handler: async (ctx, args) => {
+    const claim = await currentClaim(ctx, args);
+    if (!claim) return false;
+    await holdAllowanceClaim(ctx, claim, args.detail);
+    return true;
+  },
+});
+export const renew = mutation({
+  args: identityArgs,
+  handler: async (ctx, args) => {
+    const claim = await currentClaim(ctx, args);
+    if (!claim) return false;
+    await ctx.db.patch(claim.job._id, { leaseExpiresAt: Date.now() + LEASE_MS });
+    return true;
+  },
+});
+
+async function remember(
+  ctx: MutationCtx,
+  claim: NonNullable<Awaited<ReturnType<typeof currentClaim>>>,
+  action: Extract<OrchestratorDecision["actions"][number], { kind: "remember" }>,
+) {
+  if (
+    !claim.orchestrator.capabilities.includes("memory.manage") ||
+    !claim.orchestrator.rememberAutomatically
+  )
+    return fail("Automatic memory is disabled for this orchestrator.");
+  if (!action.text.trim() || action.text.length > 4000 || !action.sourceQuote.trim())
+    return fail("A memory needs a short fact and a quoted source.");
+  const source = await ctx.db
+    .query("aiOrchestratorMessages")
+    .withIndex("by_domain_id", (q) => q.eq("id", action.sourceMessageId))
+    .unique();
+  if (
+    !source ||
+    source.chatId !== claim.chat.id ||
+    source.senderKind !== "user" ||
+    !source.text.includes(action.sourceQuote)
+  )
+    return fail("A memory must cite a user message from this conversation.");
+  const memoryScope = action.scope ?? "orchestrator";
+  if (
+    memoryScope !== "orchestrator" &&
+    (source.senderId !== claim.orchestrator.ownerSubject ||
+      claim.chat.participantSubjects.length !== 1 ||
+      claim.chat.participantSubjects[0] !== claim.orchestrator.ownerSubject)
+  )
+    return fail(
+      "Only the owner can share a sourced preference beyond this orchestrator from their private conversation.",
+    );
+  if (memoryScope === "personal" && claim.orchestrator.shared)
+    return fail("Save personal preferences through a private orchestrator.");
+  if (memoryScope === "project" && (!claim.orchestrator.projectId || !claim.orchestrator.companyId))
+    return fail("Project memory needs this orchestrator's assigned project.");
+  const sharedForgotten = await ctx.db
+    .query("aiOrchestratorMemory")
+    .withIndex("by_owner_scope_forgotten", (q) =>
+      q
+        .eq("ownerSubject", claim.orchestrator.ownerSubject)
+        .eq("scope", "personal")
+        .eq("forgotten", true),
+    )
+    .order("desc")
+    .first();
+  if (sharedForgotten && source.createdAt <= sharedForgotten.updatedAt)
+    return fail("Forgotten shared information cannot be learned again from old messages.");
+  const latestForgotten = await ctx.db
+    .query("aiOrchestratorMemory")
+    .withIndex("by_orchestrator_forgotten", (q) =>
+      q.eq("orchestratorId", claim.orchestrator.id).eq("forgotten", true),
+    )
+    .order("desc")
+    .first();
+  if (latestForgotten && source.createdAt <= latestForgotten.updatedAt)
+    return fail("Forgotten information cannot be learned again from old messages.");
+  const normalized = action.text.trim().toLocaleLowerCase();
+  const existing = await ctx.db
+    .query("aiOrchestratorMemory")
+    .withIndex("by_orchestrator_forgotten", (q) =>
+      q.eq("orchestratorId", claim.orchestrator.id).eq("forgotten", false),
+    )
+    .take(500);
+  const duplicate = existing.find(
+    (memory) => memory.text.trim().toLocaleLowerCase() === normalized,
+  );
+  if (duplicate && duplicate.scope === memoryScope) return;
+  if (existing.length >= 500)
+    return fail("This orchestrator's memory is full. Review its saved memories.");
+  const fields = {
+    id: duplicate?.id ?? mintDomainId(Date.now()),
+    orchestratorId: claim.orchestrator.id,
+    ownerSubject: claim.orchestrator.ownerSubject,
+    text: action.text.trim(),
+    scope: memoryScope,
+    ...(memoryScope === "project"
+      ? {
+          sharedCompanyId: claim.orchestrator.companyId!,
+          sharedProjectId: claim.orchestrator.projectId!,
+        }
+      : {}),
+    source: `Message ${source.id}: ${action.sourceQuote.slice(0, 500)}`,
+    explicit: false,
+    forgotten: false,
+    sourceChatId: source.chatId,
+    sourceSequence: source.sequence,
+    updatedAt: Date.now(),
+  };
+  if (duplicate)
+    await ctx.db.patch(duplicate._id, {
+      ...fields,
+      sharedCompanyId: fields.sharedCompanyId,
+      sharedProjectId: fields.sharedProjectId,
+    });
+  else await ctx.db.insert("aiOrchestratorMemory", fields);
+}
+
+export const complete = mutation({
+  args: {
+    ...identityArgs,
+    result: v.any(),
+    allowanceExecution: v.optional(
+      v.object({
+        provider: v.string(),
+        accountKey: v.optional(v.string()),
+        revisions: v.array(v.object({ id: v.string(), revision: v.number() })),
+        snapshot: v.optional(v.any()),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const claim = await currentClaim(ctx, args);
+    if (!claim) return false;
+    const budgets = await budgetsForScopes(ctx, args.companyId, [
+      { kind: "chat", chatId: claim.chat.id },
+    ]);
+    for (const budget of budgets) {
+      const proof = args.allowanceExecution;
+      const state =
+        proof &&
+        proof.revisions.some(
+          (revision) => revision.id === budget.id && revision.revision === budget.revision,
+        )
+          ? budgetAdmission(budget, proof, Date.now())
+          : {
+              canStart: false,
+              detail: "The allowance allocation changed before this decision could be applied.",
+            };
+      if (!state.canStart) {
+        await holdAllowanceClaim(ctx, claim, state.detail);
+        return false;
+      }
+    }
+    const result = decodeDecision(args.result);
+    if (
+      claim.job.mailMessageId &&
+      result.actions.some(
+        (action) =>
+          action.kind !== "delegate" ||
+          action.projectId !== null ||
+          action.companyId !== claim.job.companyId,
+      )
+    )
+      return fail(
+        "Private inbox work must stay in this owner's conversation and workspace. Delegate a project-free PA assignment under your standing responsibilities.",
+      );
+    if (
+      result.message.length > 16000 ||
+      result.summary.length > 8000 ||
+      result.actions.length > 12 ||
+      (!result.message.trim() &&
+        !result.actions.length &&
+        (result.attention !== "none" || claim.message.senderKind === "user"))
+    )
+      return fail("The coordinator returned an invalid or oversized decision.");
+    const results: Array<{ kind: string; detail: unknown }> = [];
+    const sentMessages: Array<{ id: string; text: string }> = [];
+    for (const action of result.actions) {
+      if (action.kind === "allocateAllowance") {
+        if (
+          claim.message.senderKind !== "user" ||
+          claim.message.senderId !== claim.chat.ownerSubject ||
+          !claim.orchestrator.capabilities.includes("environments.read")
+        )
+          return fail(
+            "Only a new instruction from this conversation's owner can allocate allowance.",
+          );
+        const budget = await allocateFromInstruction(ctx, {
+          companyId: args.companyId,
+          ownerSubject: claim.chat.ownerSubject,
+          scope: { kind: "chat", chatId: claim.chat.id },
+          messageId: claim.message.id,
+          text: claim.message.text,
+          quote: action.sourceQuote,
+          title: action.title,
+          snapshot: args.allowanceExecution?.snapshot,
+          windowKey: action.windowKey,
+          authorizedPercent: action.authorizedPercent,
+        });
+        results.push({ kind: action.kind, detail: budget });
+        continue;
+      }
+      if (action.kind === "remember") {
+        await remember(ctx, claim, action);
+        continue;
+      }
+      if (action.kind === "stopWork" || action.kind === "redirectWork") {
+        results.push({
+          kind: action.kind,
+          detail: await controlOrchestratorWork(ctx, claim.orchestrator, claim.chat, action),
+        });
+        continue;
+      }
+      if (action.kind === "delegate") {
+        const workId = await queueOrchestratorWork(ctx, claim.orchestrator, claim.chat, action);
+        results.push({ kind: action.kind, detail: { workId, status: "queued" } });
+        continue;
+      }
+      if (action.kind === "collaborate") {
+        const collaboration = await startCollaboration(ctx, {
+          source: claim.chat,
+          orchestrator: claim.orchestrator,
+          companyId: claim.job.companyId,
+          chainDepth: claim.job.chainDepth ?? 0,
+          ...action,
+        });
+        results.push({ kind: action.kind, detail: collaboration });
+        continue;
+      }
+      if (!claim.orchestrator.capabilities.includes("orchestrators.message"))
+        return fail("This orchestrator cannot contact other orchestrators.");
+      if (action.kind === "readConversation") {
+        const chat = await findChat(ctx, action.chatId);
+        if (!chat || !chat.orchestratorIds.includes(claim.orchestrator.id))
+          return fail("The orchestrator is not a member of that conversation.");
+        const fromSequence = await sharedHistoryBoundary(ctx, chat, claim.chat);
+        if (fromSequence === null)
+          return fail("Private conversation context cannot be shared with this audience.");
+        const messages = await ctx.db
+          .query("aiOrchestratorMessages")
+          .withIndex("by_chat_sequence", (q) =>
+            q.eq("chatId", chat.id).gte("sequence", fromSequence),
+          )
+          .order("desc")
+          .take(20);
+        results.push({
+          kind: action.kind,
+          detail: {
+            chatId: chat.id,
+            summary: fromSequence > 0 ? "" : chat.summary,
+            messages: boundedConversationMessages(messages, undefined, 12000),
+          },
+        });
+      } else if (action.kind === "message") {
+        if (
+          action.targetId === claim.orchestrator.id ||
+          !claim.chat.orchestratorIds.includes(action.targetId) ||
+          !action.text.trim() ||
+          action.text.length > 16000
+        )
+          return fail("Choose another orchestrator in this conversation and a short message.");
+        if ((claim.job.chainDepth ?? 0) >= 8)
+          return fail(
+            "The orchestrators need a new user instruction before continuing this exchange.",
+          );
+        const target = await findOrchestrator(ctx, action.targetId);
+        if (
+          !target ||
+          target.status === "deleted" ||
+          !canDirectOrchestrator(target, claim.chat.ownerSubject)
+        )
+          return fail("This conversation no longer has permission to direct that orchestrator.");
+        const messageId = mintDomainId(Date.now());
+        const chat = await findChat(ctx, claim.chat.id);
+        const queuedTarget = await ctx.db
+          .query("aiOrchestratorJobs")
+          .withIndex("by_orchestrator_chat_status", (q) =>
+            q.eq("orchestratorId", target.id).eq("chatId", claim.chat.id).eq("status", "queued"),
+          )
+          .first();
+        await appendChatMessage(
+          ctx,
+          chat!,
+          {
+            id: messageId,
+            senderKind: "orchestrator",
+            senderId: claim.orchestrator.id,
+            senderName: claim.orchestrator.name,
+            text: action.text,
+            status: queuedTarget ? "sent" : "queued",
+            replyToId: claim.message.id,
+          },
+          {
+            urgent: result.attention === "urgent",
+            enabled:
+              result.attention !== "none" &&
+              (result.attention !== "urgent" || claim.orchestrator.notifyUrgent),
+          },
+        );
+        sentMessages.push({ id: messageId, text: action.text.trim() });
+        if (queuedTarget) continue;
+        await ctx.db.insert("aiOrchestratorJobs", {
+          id: mintDomainId(Date.now()),
+          orchestratorId: target.id,
+          chatId: claim.chat.id,
+          messageId,
+          companyId: target.companyId ?? claim.job.companyId,
+          status: "queued",
+          environmentId: null,
+          generation: 0,
+          leaseExpiresAt: 0,
+          modelIndex: 0,
+          error: "",
+          chainDepth: (claim.job.chainDepth ?? 0) + 1,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
+    }
+    if (result.message.trim()) {
+      const chat = await findChat(ctx, claim.chat.id);
+      const sameMessage = sentMessages.find((message) => message.text === result.message.trim());
+      const replyId = sameMessage?.id ?? mintDomainId(Date.now());
+      if (!sameMessage)
+        await appendChatMessage(
+          ctx,
+          chat!,
+          {
+            id: replyId,
+            senderKind: "orchestrator",
+            senderId: claim.orchestrator.id,
+            senderName: claim.orchestrator.name,
+            text: result.message.trim(),
+            status: "sent",
+            replyToId: claim.message.id,
+          },
+          {
+            urgent: result.attention === "urgent",
+            enabled:
+              result.attention !== "none" &&
+              (result.attention !== "urgent" || claim.orchestrator.notifyUrgent),
+          },
+        );
+      if (
+        chat?.kind === "group" &&
+        chat.leadId !== claim.orchestrator.id &&
+        (claim.job.chainDepth ?? 0) < 8 &&
+        !result.actions.some(
+          (action) => action.kind === "message" && action.targetId === chat.leadId,
+        )
+      ) {
+        const lead = await findOrchestrator(ctx, chat.leadId);
+        const queued = await ctx.db
+          .query("aiOrchestratorJobs")
+          .withIndex("by_orchestrator_chat_status", (q) =>
+            q.eq("orchestratorId", chat.leadId).eq("chatId", chat.id).eq("status", "queued"),
+          )
+          .first();
+        if (
+          lead &&
+          lead.status === "active" &&
+          lead.proactive &&
+          canDirectOrchestrator(lead, chat.ownerSubject) &&
+          !queued
+        ) {
+          const now = Date.now();
+          await ctx.db.insert("aiOrchestratorJobs", {
+            id: mintDomainId(now),
+            orchestratorId: lead.id,
+            chatId: chat.id,
+            messageId: replyId,
+            companyId: lead.companyId ?? claim.job.companyId,
+            status: "queued",
+            environmentId: null,
+            generation: 0,
+            leaseExpiresAt: 0,
+            modelIndex: 0,
+            error: "",
+            chainDepth: (claim.job.chainDepth ?? 0) + 1,
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+      }
+    }
+    if (result.summary.trim())
+      await ctx.db.patch(claim.chat._id, {
+        summary: result.summary,
+        summaryThroughSequence: claim.job.contextThroughSequence ?? 0,
+      });
+    await refreshOrchestratorWork(ctx, claim.orchestrator);
+    const continueReasoning =
+      results.some((result) =>
+        [
+          "readConversation",
+          "collaborate",
+          "allocateAllowance",
+          "stopWork",
+          "redirectWork",
+        ].includes(result.kind),
+      ) && (claim.job.attempts ?? 0) < 12;
+    await ctx.db.patch(claim.job._id, {
+      status: continueReasoning ? "queued" : "completed",
+      contextResults: JSON.stringify(results),
+      leaseExpiresAt: 0,
+      updatedAt: Date.now(),
+    });
+    const recipients = await ctx.db
+      .query("aiOrchestratorJobs")
+      .withIndex("by_message", (q) => q.eq("messageId", claim.message.id))
+      .take(20);
+    await ctx.db.patch(claim.message._id, {
+      status: recipients.some((job) => job.status === "running")
+        ? "working"
+        : recipients.some((job) => job.status === "queued")
+          ? "queued"
+          : "sent",
+    });
+    return true;
+  },
+});
+
+export const failRun = mutation({
+  args: { ...identityArgs, error: v.string(), retryModel: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const claim = await currentClaim(ctx, args);
+    if (!claim) return false;
+    const failedEnvironmentIds = [
+      ...new Set([
+        ...(claim.job.failedEnvironmentIds ?? []),
+        claim.actor.registration.environmentId,
+      ]),
+    ];
+    const registrations = await ctx.db
+      .query("environmentRegistrations")
+      .withIndex("by_company_and_state", (q) =>
+        q.eq("companyId", claim.actor.company._id).eq("state", "active"),
+      )
+      .take(50);
+    let anotherEnvironment = false;
+    for (const registration of registrations)
+      if (
+        !failedEnvironmentIds.includes(registration.environmentId) &&
+        (registration.lastSeenAt ?? 0) > Date.now() - LEASE_MS &&
+        (await eligibleOrchestratorEnvironment(ctx, claim.orchestrator, registration))
+      )
+        anotherEnvironment = true;
+    const nextModel = claim.job.modelIndex + 1;
+    const retry =
+      args.retryModel !== false &&
+      (anotherEnvironment || nextModel < claim.orchestrator.models.length);
+    await ctx.db.patch(claim.job._id, {
+      status: retry ? "queued" : "failed",
+      modelIndex: anotherEnvironment ? claim.job.modelIndex : nextModel,
+      failedEnvironmentIds: anotherEnvironment ? failedEnvironmentIds : [],
+      error: args.error.slice(0, 1000),
+      leaseExpiresAt: 0,
+      updatedAt: Date.now(),
+    });
+    await ctx.db.patch(claim.message._id, { status: retry ? "queued" : "failed" });
+    return true;
+  },
+});
+
+export const pendingWorkResults = query({
+  args: { companyId: v.string() },
+  handler: async (ctx, args) => {
+    const actor = await environmentActor(ctx, args.companyId);
+    const rows = await Promise.all(
+      [false, undefined].map((collected) =>
+        ctx.db
+          .query("aiOrchestratorWork")
+          .withIndex("by_environment_result", (q) =>
+            q
+              .eq("companyId", args.companyId)
+              .eq("environmentId", actor.registration.environmentId)
+              .eq("resultCollected", collected)
+              .eq("status", "completed"),
+          )
+          .take(32),
+      ),
+    );
+    const pending = [];
+    for (const work of rows.flat()) {
+      if (!work.threadId) continue;
+      const orchestrator = await findOrchestrator(ctx, work.orchestratorId);
+      if (
+        orchestrator &&
+        (await orchestratorCanReadWork(ctx, orchestrator, work, actor.registration))
+      )
+        pending.push({ workId: work.id, threadId: work.threadId });
+    }
+    return pending;
+  },
+});
+
+export const collectWorkResult = mutation({
+  args: {
+    companyId: v.string(),
+    workId: v.string(),
+    threadId: v.string(),
+    runId: v.string(),
+    text: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const actor = await environmentActor(ctx, args.companyId);
+    const work = await ctx.db
+      .query("aiOrchestratorWork")
+      .withIndex("by_domain_id", (q) => q.eq("id", args.workId))
+      .unique();
+    if (
+      !work ||
+      work.companyId !== args.companyId ||
+      work.environmentId !== actor.registration.environmentId ||
+      work.threadId !== args.threadId ||
+      work.status !== "completed" ||
+      work.resultCollected
+    )
+      return false;
+    const orchestrator = await findOrchestrator(ctx, work.orchestratorId);
+    if (
+      !orchestrator ||
+      !(await orchestratorCanReadWork(ctx, orchestrator, work, actor.registration))
+    )
+      return false;
+    const thread = await ctx.db
+      .query("agentThreads")
+      .withIndex("by_company_and_environment_and_thread", (q) =>
+        q
+          .eq("companyId", actor.company._id)
+          .eq("environmentId", work.environmentId)
+          .eq("threadId", args.threadId),
+      )
+      .unique();
+    if (!thread) return false;
+    const shell = decodeThreadShell(thread.shell);
+    if (
+      shell.activeRunId !== null ||
+      shell.latestRunId !== args.runId ||
+      shell.status !== "completed"
+    )
+      return false;
+    if (args.text.length > 16000) return fail("The worker result is too large.");
+    await ctx.db.patch(work._id, {
+      resultCollected: true,
+      resultText: args.text,
+      resultRunId: args.runId,
+      completionNotified: false,
+      updatedAt: Date.now(),
+    });
+    await notifyFinishedWork(ctx, orchestrator);
+    return true;
+  },
+});
+
+/** Worker credentials carry this origin across provider changes and descendant threads. */
+export const workerAccess = query({
+  args: {
+    companyId: v.string(),
+    orchestratorId: v.string(),
+    commandId: v.string(),
+    localProjectId: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await environmentActor(ctx, args.companyId);
+    const denied = { allowed: false, capabilities: [] as string[] };
+    const command = await ctx.db
+      .query("environmentCommands")
+      .withIndex("by_company_and_domain_id", (q) =>
+        q.eq("companyId", actor.company._id).eq("id", args.commandId),
+      )
+      .unique();
+    if (
+      !command ||
+      command.kind !== "startThread" ||
+      command.orchestratorId !== args.orchestratorId ||
+      command.targetEnvironmentId !== actor.registration.environmentId ||
+      !["claimed", "succeeded"].includes(command.state) ||
+      !(await orchestratorCommandAllowed(ctx, command))
+    )
+      return denied;
+    const binding = command.cloudProjectId
+      ? await ctx.db
+          .query("environmentBindings")
+          .withIndex("by_company_and_project", (q) =>
+            q.eq("companyId", actor.company._id).eq("cloudProjectId", command.cloudProjectId!),
+          )
+          .collect()
+      : [];
+    if (
+      command.cloudProjectId
+        ? !binding.some(
+            (b) =>
+              b.status === "active" &&
+              b.environmentId === actor.registration.environmentId &&
+              b.localProjectId === args.localProjectId,
+          )
+        : args.localProjectId !== null
+    )
+      return denied;
+    const work = await ctx.db
+      .query("aiOrchestratorWork")
+      .withIndex("by_command", (q) => q.eq("commandId", command.id))
+      .unique();
+    if (!work || work.stopRequested) return denied;
+    const orchestrator = await findOrchestrator(ctx, args.orchestratorId);
+    if (!orchestrator) return denied;
+    const scope = await orchestratorOwnerScope(ctx, orchestrator, args.companyId);
+    const project = command.cloudProjectId ? await ctx.db.get(command.cloudProjectId) : null;
+    if (!scope || (command.cloudProjectId && !project)) return denied;
+    return {
+      allowed: true,
+      capabilities: orchestrator.capabilities.filter((capability) => {
+        if (capability === "tasks.read")
+          return hasRecordPermission(scope.permissions, "issues.read", project?.teamIds ?? []);
+        if (capability === "tasks.manage")
+          return ["issues.create", "issues.update", "issues.delete", "comments.create"].every(
+            (permission) =>
+              hasRecordPermission(
+                scope.permissions,
+                permission as
+                  | "issues.create"
+                  | "issues.update"
+                  | "issues.delete"
+                  | "comments.create",
+                project?.teamIds ?? [],
+              ),
+          );
+        return true;
+      }),
+    };
+  },
+});
+
+/** Observations are host-owned and sampled only when reasoning work is actually claimed. */
+export const reportHostResources = mutation({
+  args: { companyId: v.string(), resources: v.any() },
+  handler: async (ctx, args) => {
+    const actor = await environmentActor(ctx, args.companyId);
+    const resources = decodeResources(args.resources);
+    const age = Date.now() - resources.sampledAt;
+    if (age < -5000 || age > 90000) return fail("A fresh host resource observation is required.");
+    await ctx.db.patch(actor.registration._id, { orchestratorResources: resources });
+  },
+});

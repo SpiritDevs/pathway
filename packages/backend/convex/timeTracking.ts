@@ -26,6 +26,8 @@ import {
   validateIntervals,
 } from "./lib/trackedTime.ts";
 
+import { delegatedBusinessOrigin, delegatedBusinessOwner } from "./lib/delegatedBusinessOwner.ts";
+
 function encode(row: Doc<"trackedSessions">) {
   const { id, description, projectKey, projectName, startedAt, stoppedAt, durationMs } = row;
   return {
@@ -54,7 +56,11 @@ function validate(value: { description: string; projectKey: string; projectName:
   return { ...value, description };
 }
 export const listMine = query({
-  args: { cursor: v.optional(v.union(v.string(), v.null())), since: v.optional(v.string()) },
+  args: {
+    delegatedOrigin: delegatedBusinessOrigin,
+    cursor: v.optional(v.union(v.string(), v.null())),
+    since: v.optional(v.string()),
+  },
   returns: v.object({
     active: v.union(sessionWire, v.null()),
     entries: v.array(sessionWire),
@@ -62,7 +68,9 @@ export const listMine = query({
     isDone: v.boolean(),
   }),
   handler: async (ctx, args) => {
-    const user = await requireUser(ctx);
+    const user = args.delegatedOrigin
+      ? (await delegatedBusinessOwner(ctx, args.delegatedOrigin, "time.read")).user
+      : await requireUser(ctx);
     if (args.since && !Number.isFinite(Date.parse(args.since)))
       throw backendError("invalid-arguments", "Choose a valid history period.");
     const active = await manualRunningSession(ctx, user._id);
@@ -87,7 +95,7 @@ export const listMine = query({
 
 /** Summary reads cover only the current local week, never lifetime history. */
 export const recentTotals = query({
-  args: { todayStart: v.string(), weekStart: v.string() },
+  args: { delegatedOrigin: delegatedBusinessOrigin, todayStart: v.string(), weekStart: v.string() },
   returns: v.object({
     todayMs: v.number(),
     weekMs: v.number(),
@@ -96,7 +104,9 @@ export const recentTotals = query({
     complete: v.boolean(),
   }),
   handler: async (ctx, args) => {
-    const user = await requireUser(ctx);
+    const user = args.delegatedOrigin
+      ? (await delegatedBusinessOwner(ctx, args.delegatedOrigin, "time.read")).user
+      : await requireUser(ctx);
     const today = Date.parse(args.todayStart),
       week = Date.parse(args.weekStart),
       now = Date.now();
@@ -140,10 +150,12 @@ export const recentTotals = query({
   },
 });
 export const start = mutation({
-  args: { id: v.string(), ...sessionFields },
+  args: { delegatedOrigin: delegatedBusinessOrigin, id: v.string(), ...sessionFields },
   returns: sessionWire,
   handler: async (ctx, args) => {
-    const user = await requireUser(ctx);
+    const user = args.delegatedOrigin
+      ? (await delegatedBusinessOwner(ctx, args.delegatedOrigin, "time.manage")).user
+      : await requireUser(ctx);
     if (!args.id.trim()) throw backendError("invalid-arguments", "A timer identity is required.");
     const existing = await ctx.db
       .query("trackedSessions")
@@ -182,10 +194,12 @@ export const start = mutation({
   },
 });
 export const stop = mutation({
-  args: { id: v.string() },
+  args: { delegatedOrigin: delegatedBusinessOrigin, id: v.string() },
   returns: sessionWire,
   handler: async (ctx, args) => {
-    const user = await requireUser(ctx);
+    const user = args.delegatedOrigin
+      ? (await delegatedBusinessOwner(ctx, args.delegatedOrigin, "time.manage")).user
+      : await requireUser(ctx);
     const row = await ctx.db
       .query("trackedSessions")
       .withIndex("by_user_and_id", (q) => q.eq("userId", user._id).eq("id", args.id))
@@ -208,10 +222,12 @@ export const stop = mutation({
   },
 });
 export const remove = mutation({
-  args: { id: v.string() },
+  args: { delegatedOrigin: delegatedBusinessOrigin, id: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const user = await requireUser(ctx);
+    const user = args.delegatedOrigin
+      ? (await delegatedBusinessOwner(ctx, args.delegatedOrigin, "time.manage")).user
+      : await requireUser(ctx);
     const row = await ctx.db
       .query("trackedSessions")
       .withIndex("by_user_and_id", (q) => q.eq("userId", user._id).eq("id", args.id))

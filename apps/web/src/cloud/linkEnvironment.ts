@@ -225,14 +225,6 @@ const environmentApiError = (message: string) => (cause: unknown) => {
   });
 };
 
-function endpointOrigin(httpBaseUrl: string) {
-  const url = new URL(httpBaseUrl);
-  return {
-    localHttpHost: "127.0.0.1",
-    localHttpPort: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
-  };
-}
-
 const MANAGED_ENDPOINT_PROVIDER_KIND =
   "cloudflare_tunnel" satisfies RelayManagedEndpointProviderKind;
 
@@ -515,6 +507,9 @@ export function linkPrimaryEnvironmentToCloud(input: {
           ),
         ),
       );
+    const localState = yield* environmentClient.connect
+      .linkState({ headers: {} })
+      .pipe(Effect.mapError(environmentApiError("Could not read the environment listener.")));
     const proof = yield* environmentClient.connect
       .linkProof({
         headers: {},
@@ -526,7 +521,15 @@ export function linkPrimaryEnvironmentToCloud(input: {
             wsBaseUrl: input.target.wsBaseUrl,
             providerKind,
           },
-          origin: endpointOrigin(input.target.httpBaseUrl),
+          origin: {
+            localHttpHost: "127.0.0.1",
+            localHttpPort:
+              localState.currentLocalHttpPort ??
+              Number(
+                new URL(input.target.httpBaseUrl).port ||
+                  (input.target.httpBaseUrl.startsWith("https:") ? 443 : 80),
+              ),
+          },
         },
       })
       .pipe(Effect.mapError(environmentApiError("Could not obtain environment link proof.")));
