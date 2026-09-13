@@ -177,16 +177,22 @@ export const collectOrchestratorResults = Effect.fn("cloud.orchestrator.collectR
     (item) =>
       Effect.gen(function* () {
         const projection = yield* read(ThreadId.make(item.threadId));
-        const run = projection.runs.at(-1);
+        const run = item.runId
+          ? projection.runs.find((run) => run.id === item.runId)
+          : projection.runs.at(-1);
         if (!run || run.status !== "completed") return;
         const message = projection.messages.findLast(
           (message) =>
-            message.runId === run.id && message.role === "assistant" && !message.streaming,
+            message.runId === run.id &&
+            message.role === "assistant" &&
+            !message.streaming &&
+            message.text.trim().length > 0,
         );
+        if (!message) return;
         yield* backend.collectResult({
           ...item,
           runId: run.id,
-          text: message?.text.slice(0, 16000) ?? "",
+          text: message.text.slice(0, 16000),
         });
       }).pipe(Effect.catch(() => Effect.void)),
     { concurrency: 4, discard: true },
@@ -576,10 +582,17 @@ export const orchestratorLayer = () =>
                     ),
                   ),
                 });
+                yield* collectOrchestratorResults(backend, threads.getThreadProjection).pipe(
+                  Effect.catch(() =>
+                    Effect.logDebug("Worker result collection will retry", { companyId }),
+                  ),
+                  Effect.andThen(Effect.sleep(Duration.seconds(10))),
+                  Effect.forever,
+                  Effect.forkScoped,
+                );
                 return yield* inference
                   .withPermits(1)(
                     Effect.gen(function* () {
-                      yield* collectOrchestratorResults(backend, threads.getThreadProjection);
                       const job = yield* backend.claim;
                       if (job)
                         yield* executeOrchestratorRun(

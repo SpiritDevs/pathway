@@ -115,7 +115,10 @@ describe("tool-free coordinator reasoning", () => {
       const test = backend();
       const captured: Array<unknown> = [];
       const projection = {
-        runs: [{ id: "latest-run", status: "completed" }],
+        runs: [
+          { id: "latest-run", status: "completed" },
+          { id: "later-run", status: "completed" },
+        ],
         messages: [
           { runId: "old-run", role: "assistant", streaming: false, text: "Old private output" },
           { runId: "latest-run", role: "user", streaming: false, text: "Read the file" },
@@ -126,12 +129,21 @@ describe("tool-free coordinator reasoning", () => {
             text: "Title: Check. Word: lighthouse.",
           },
           { runId: "latest-run", role: "assistant", streaming: true, text: "Unfinished text" },
+          { runId: "latest-run", role: "assistant", streaming: false, text: "   " },
+          {
+            runId: "later-run",
+            role: "assistant",
+            streaming: false,
+            text: "Unrelated later answer",
+          },
         ],
       } as unknown as OrchestrationV2ThreadProjection;
       yield* collectOrchestratorResults(
         {
           ...test.api,
-          pendingResults: Effect.succeed([{ workId: "work", threadId: "thread" }]),
+          pendingResults: Effect.succeed([
+            { workId: "work", threadId: "thread", runId: "latest-run" },
+          ]),
           collectResult: (result) =>
             Effect.sync(() => {
               captured.push(result);
@@ -147,6 +159,35 @@ describe("tool-free coordinator reasoning", () => {
           runId: "latest-run",
           text: "Title: Check. Word: lighthouse.",
         },
+      ]);
+    }),
+  );
+  it.effect("retries an absent final answer instead of acknowledging an empty result", () =>
+    Effect.gen(function* () {
+      const captured: Array<unknown> = [];
+      const projection = {
+        runs: [{ id: "run", status: "completed" }],
+        messages: [{ runId: "run", role: "assistant", streaming: true, text: "Findings" }],
+      } as unknown as OrchestrationV2ThreadProjection;
+      const api = {
+        ...backend().api,
+        pendingResults: Effect.succeed([{ workId: "work", threadId: "thread" }]),
+        collectResult: (result: unknown) =>
+          Effect.sync(() => {
+            captured.push(result);
+            return true;
+          }),
+      };
+      yield* collectOrchestratorResults(api, () => Effect.succeed(projection));
+      expect(captured).toEqual([]);
+      yield* collectOrchestratorResults(api, () =>
+        Effect.succeed({
+          ...projection,
+          messages: projection.messages.map((message) => ({ ...message, streaming: false })),
+        }),
+      );
+      expect(captured).toEqual([
+        { workId: "work", threadId: "thread", runId: "run", text: "Findings" },
       ]);
     }),
   );

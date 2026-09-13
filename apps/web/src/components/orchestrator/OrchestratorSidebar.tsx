@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { ArchiveIcon, PlusIcon, SearchIcon, SquarePenIcon } from "lucide-react";
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
-import { SidebarContent } from "../ui/sidebar";
 import { Button } from "../ui/button";
 import { useOrchestrators } from "./OrchestratorContext";
 import { ConversationAvatar, OrchestratorAvatar } from "./OrchestratorAvatar";
@@ -125,7 +124,7 @@ export function ConversationList({ onSelect }: { onSelect?: () => void }) {
           </div>
         )}
       </div>
-      <div className="border-t p-2">
+      <div className="shrink-0 border-t p-2">
         <Button
           variant="ghost"
           className="w-full justify-start text-muted-foreground"
@@ -143,9 +142,9 @@ export function OrchestratorSidebar() {
   const state = useOrchestrators();
   return (
     <>
-      <ContextualSidebarHeader title="Conversations" />
+      <ContextualSidebarHeader title="Orchestrators" />
       <div className="flex items-center justify-between px-4 pb-3">
-        <span className="text-xs text-muted-foreground">Orchestrators</span>
+        <span className="text-xs text-muted-foreground">Conversations</span>
         <Button
           variant="ghost"
           size="icon"
@@ -155,9 +154,7 @@ export function OrchestratorSidebar() {
           <SquarePenIcon className="size-4" />
         </Button>
       </div>
-      <SidebarContent>
-        <ConversationList />
-      </SidebarContent>
+      <ConversationList />
     </>
   );
 }

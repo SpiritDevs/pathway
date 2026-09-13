@@ -542,6 +542,31 @@ export const messages = query({
   },
 });
 
+export const activity = query({
+  args: { chatId: v.string() },
+  handler: async (ctx, args) => {
+    const { member, chat } = await readableChat(ctx, args.chatId);
+    const running = await ctx.db
+      .query("aiOrchestratorJobs")
+      .withIndex("by_chat_status", (q) => q.eq("chatId", args.chatId).eq("status", "running"))
+      .take(20);
+    const activity = new Map<string, number>();
+    for (const job of running) {
+      if (!chat.orchestratorIds.includes(job.orchestratorId)) continue;
+      const trigger = await ctx.db
+        .query("aiOrchestratorMessages")
+        .withIndex("by_domain_id", (q) => q.eq("id", job.messageId))
+        .unique();
+      if (trigger && trigger.sequence >= member.fromSequence)
+        activity.set(
+          job.orchestratorId,
+          Math.max(activity.get(job.orchestratorId) ?? 0, job.leaseExpiresAt),
+        );
+    }
+    return [...activity].map(([id, expiresAt]) => ({ id, expiresAt }));
+  },
+});
+
 export const invite = mutation({
   args: {
     chatId: v.string(),

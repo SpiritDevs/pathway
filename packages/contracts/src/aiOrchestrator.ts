@@ -115,9 +115,23 @@ export const OrchestratorMessage = Schema.Struct({
   text: Schema.String,
   status: Schema.Literals(["queued", "working", "sent", "failed", "cancelled"]),
   createdAt: Schema.Number,
+  seenAt: Schema.optionalKey(Schema.Number),
   replyToId: Schema.NullOr(Schema.String),
 });
 export type OrchestratorMessage = typeof OrchestratorMessage.Type;
+export const OrchestratorMessagePage = Schema.Struct({
+  messages: Schema.Array(OrchestratorMessage),
+  nextBefore: Schema.NullOr(Schema.Number),
+});
+export type OrchestratorMessagePage = typeof OrchestratorMessagePage.Type;
+export const OrchestratorActivity = Schema.Array(
+  Schema.Struct({
+    id: Schema.String,
+    expiresAt: Schema.Number,
+  }),
+);
+export type OrchestratorActivity = typeof OrchestratorActivity.Type;
+
 export const OrchestratorMemory = Schema.Struct({
   id: Schema.String,
   orchestratorId: Schema.String,
@@ -234,6 +248,7 @@ export const OrchestratorRun = Schema.Struct({
 export type OrchestratorRun = typeof OrchestratorRun.Type;
 
 export const OrchestratorPendingWorkResult = Schema.Struct({
+  runId: Schema.optionalKey(Schema.String),
   workId: Schema.String,
   threadId: Schema.String,
 });

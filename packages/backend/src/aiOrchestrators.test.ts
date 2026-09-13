@@ -387,6 +387,57 @@ const decision = () => ({
 });
 
 describe("coordinator reasoning claims and action boundaries", () => {
+  it("publishes activity only while claimed and preserves seen receipts after completion", async () => {
+    const test = await coordinatorHarness();
+    const page = async () => ({
+      ...(await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })),
+      activity: await test.owner.query(api.aiOrchestrators.activity, { chatId: test.chatId }),
+    });
+    const queued = await page();
+    expect(queued.activity).toEqual([]);
+    expect(queued.messages.find((message) => message.id === "greeting")?.seenAt).toBeUndefined();
+    const run = (await test.claim())!;
+    const working = await page();
+    expect(working.activity).toEqual([{ id: test.id, expiresAt: expect.any(Number) }]);
+    const seenAt = working.messages.find((message) => message.id === "greeting")?.seenAt;
+    expect(seenAt).toEqual(expect.any(Number));
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+      result: decision(),
+    });
+    const completed = await page();
+    expect(completed.activity).toEqual([]);
+    expect(completed.messages.find((message) => message.id === "greeting")).toMatchObject({
+      status: "sent",
+      seenAt,
+    });
+  });
+
+  it("does not expose activity for messages outside a participant's shared history", async () => {
+    const test = await coordinatorHarness();
+    await test.t.run(async (ctx) => {
+      const chat = await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+        .unique();
+      await ctx.db.patch(chat!._id, { companyIds: ["workspace"] });
+    });
+    await test.claim();
+    await test.owner.mutation(api.aiOrchestrators.invite, {
+      chatId: test.chatId,
+      subject: "colleague",
+      history: "from-now",
+    });
+    const page = await human(test.t, "colleague").query(api.aiOrchestrators.messages, {
+      chatId: test.chatId,
+    });
+    expect(
+      await human(test.t, "colleague").query(api.aiOrchestrators.activity, { chatId: test.chatId }),
+    ).toEqual([]);
+    expect(page.messages.some((message) => message.id === "greeting")).toBe(false);
+  });
   it("wakes the owner's private coordinator once for priority mail and rechecks mailbox access", async () => {
     const test = await coordinatorHarness();
     const greeting = (await test.claim())!;
@@ -601,104 +652,133 @@ describe("coordinator reasoning claims and action boundaries", () => {
     ).toBeUndefined();
   });
 
-  it("collects one final result from the owning environment and rejects a stale run", async () => {
-    const test = await coordinatorHarness();
-    await seedCoordinatorProject(test.t);
-    await test.owner.mutation(api.aiOrchestrators.cancelMessage, {
-      chatId: test.chatId,
-      messageId: "greeting",
-    });
-    await test.t.run(async (ctx) => {
-      const company = await ctx.db.query("companies").first();
-      await ctx.db.insert("agentThreads", {
-        id: "thread-index",
-        companyId: company!._id,
-        environmentId: "studio",
-        cloudProjectId: null,
-        localProjectId: "project",
-        threadId: "worker",
-        updatedAt: Date.now(),
-        shell: {
-          id: "worker",
-          projectId: "project",
-          title: "Read README",
-          providerInstanceId: "codex",
-          modelSelection: { instanceId: "codex", model: "gpt-6-astra" },
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: null,
-          lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: "worker" },
-          locations: [],
-          forkedFrom: null,
-          activeProviderThreadId: null,
-          latestRunId: "run-done",
-          activeRunId: null,
-          status: "completed",
-          pendingRuntimeRequest: null,
-          latestVisibleMessage: null,
-          latestUserMessageAt: null,
-          hasActionableProposedPlan: false,
-          itemCount: 2,
-          visibleItemCount: 2,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          archivedAt: null,
-          deletedAt: null,
-          settledOverride: null,
-          settledAt: null,
-          createdBy: "agent",
-          creationSource: "mcp",
-        },
-      });
-      await ctx.db.insert("aiOrchestratorWork", {
-        id: "result-work",
+  it.each(["legacy", "observed"] as const)(
+    "returns delayed findings for %s assignments, bound to the completed run",
+    async (mode) => {
+      const test = await coordinatorHarness();
+      await seedCoordinatorProject(test.t);
+      await test.owner.mutation(api.aiOrchestrators.cancelMessage, {
         chatId: test.chatId,
-        orchestratorId: test.id,
-        title: "Read README",
-        companyId: "workspace",
-        environmentId: "studio",
-        projectId: "project",
-        threadId: "worker",
-        status: "completed",
-        detail: "Completed",
-        prompt: "Read README",
-        completionNotified: false,
-        resultRequired: true,
-        resultCollected: false,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        messageId: "greeting",
       });
-    });
-    expect(await test.claim()).toBeNull();
-    expect(
-      await test
-        .environment()
-        .query(api.aiOrchestratorJobs.pendingWorkResults, { companyId: "workspace" }),
-    ).toEqual([{ workId: "result-work", threadId: "worker" }]);
-    const args = {
-      companyId: "workspace",
-      workId: "result-work",
-      threadId: "worker",
-      runId: "run-done",
-      text: "The verification word is lighthouse.",
-    };
-    expect(
-      await test.environment("laptop").mutation(api.aiOrchestratorJobs.collectWorkResult, args),
-    ).toBe(false);
-    expect(
-      await test
-        .environment()
-        .mutation(api.aiOrchestratorJobs.collectWorkResult, { ...args, runId: "stale-run" }),
-    ).toBe(false);
-    expect(await test.environment().mutation(api.aiOrchestratorJobs.collectWorkResult, args)).toBe(
-      true,
-    );
-    expect(await test.environment().mutation(api.aiOrchestratorJobs.collectWorkResult, args)).toBe(
-      false,
-    );
-    expect((await test.claim())?.context).toContain("The verification word is lighthouse.");
-  });
+      await test.t.run(async (ctx) => {
+        const company = await ctx.db.query("companies").first();
+        await ctx.db.insert("agentThreads", {
+          id: "thread-index",
+          companyId: company!._id,
+          environmentId: "studio",
+          cloudProjectId: null,
+          localProjectId: "project",
+          threadId: "worker",
+          updatedAt: Date.now(),
+          shell: {
+            id: "worker",
+            projectId: "project",
+            title: "Read README",
+            providerInstanceId: "codex",
+            modelSelection: { instanceId: "codex", model: "gpt-6-astra" },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: "worker" },
+            locations: [],
+            forkedFrom: null,
+            activeProviderThreadId: null,
+            latestRunId: "run-done",
+            activeRunId: null,
+            status: "completed",
+            pendingRuntimeRequest: null,
+            latestVisibleMessage: null,
+            latestUserMessageAt: null,
+            hasActionableProposedPlan: false,
+            itemCount: 2,
+            visibleItemCount: 2,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            archivedAt: null,
+            deletedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            createdBy: "agent",
+            creationSource: "mcp",
+          },
+        });
+        await ctx.db.insert("aiOrchestratorWork", {
+          id: "result-work",
+          chatId: test.chatId,
+          orchestratorId: test.id,
+          title: "Read README",
+          companyId: "workspace",
+          environmentId: "studio",
+          projectId: "project",
+          threadId: "worker",
+          status: mode === "observed" ? "working" : "completed",
+          detail: "Completed",
+          prompt: "Read README",
+          completionNotified: false,
+          resultRequired: true,
+          resultCollected: false,
+          createdAt: Date.now(),
+          updatedAt: Date.now() - 300_000,
+        });
+      });
+      expect(await test.claim()).toBeNull();
+      expect(
+        await test
+          .environment()
+          .query(api.aiOrchestratorJobs.pendingWorkResults, { companyId: "workspace" }),
+      ).toEqual([
+        {
+          workId: "result-work",
+          threadId: "worker",
+          ...(mode === "observed" ? { runId: "run-done" } : {}),
+        },
+      ]);
+      if (mode === "observed") {
+        await test.t.run(async (ctx) => {
+          const thread = (await ctx.db.query("agentThreads").first())!;
+          const shell: unknown = thread.shell;
+          if (typeof shell !== "object" || shell === null) throw new Error("Missing shell");
+          await ctx.db.patch(thread._id, {
+            shell: {
+              ...shell,
+              latestRunId: "later-run",
+              activeRunId: "later-run",
+              status: "running",
+            },
+          });
+        });
+      }
+      const args = {
+        companyId: "workspace",
+        workId: "result-work",
+        threadId: "worker",
+        runId: "run-done",
+        text: "The verification word is lighthouse.",
+      };
+      expect(
+        await test.environment("laptop").mutation(api.aiOrchestratorJobs.collectWorkResult, args),
+      ).toBe(false);
+      expect(
+        await test
+          .environment()
+          .mutation(api.aiOrchestratorJobs.collectWorkResult, { ...args, runId: "stale-run" }),
+      ).toBe(false);
+      expect(
+        await test
+          .environment()
+          .mutation(api.aiOrchestratorJobs.collectWorkResult, { ...args, text: "   " }),
+      ).toBe(false);
+      expect(
+        await test.environment().mutation(api.aiOrchestratorJobs.collectWorkResult, args),
+      ).toBe(true);
+      expect(
+        await test.environment().mutation(api.aiOrchestratorJobs.collectWorkResult, args),
+      ).toBe(false);
+      expect((await test.claim())?.context).toContain("The verification word is lighthouse.");
+    },
+  );
   it("retries a failed request once using current permissions and a new claim generation", async () => {
     const test = await coordinatorHarness();
     const first = (await test.claim())!;
@@ -709,6 +789,14 @@ describe("coordinator reasoning claims and action boundaries", () => {
       error: "The model was unavailable",
       retryModel: false,
     });
+    const failedPage = await test.owner.query(api.aiOrchestrators.messages, {
+      chatId: test.chatId,
+    });
+    expect(await test.owner.query(api.aiOrchestrators.activity, { chatId: test.chatId })).toEqual(
+      [],
+    );
+    const seenAt = failedPage.messages.find((message) => message.id === "greeting")?.seenAt;
+    expect(seenAt).toEqual(expect.any(Number));
     await test.owner.mutation(api.aiOrchestrators.retryMessage, {
       chatId: test.chatId,
       messageId: "greeting",
@@ -721,6 +809,11 @@ describe("coordinator reasoning claims and action boundaries", () => {
     ).rejects.toThrow("Only a failed request");
     const retry = (await test.claim())!;
     expect(retry.generation).toBeGreaterThan(first.generation);
+    const retriedPage = await test.owner.query(api.aiOrchestrators.messages, {
+      chatId: test.chatId,
+    });
+    expect(retriedPage.messages.find((message) => message.id === "greeting")?.seenAt).toBe(seenAt);
+
     expect(
       await test.environment().mutation(api.aiOrchestratorJobs.complete, {
         companyId: "workspace",
@@ -932,6 +1025,8 @@ describe("coordinator reasoning claims and action boundaries", () => {
           threadId: `thread-${id}`,
           status: "completed",
           detail: "Completed by worker",
+          resultCollected: true,
+          resultText: `Findings from ${id}`,
           prompt: "Implement",
           completionNotified: false,
           createdAt: Date.now(),
