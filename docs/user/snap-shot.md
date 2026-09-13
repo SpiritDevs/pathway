@@ -140,6 +140,16 @@ window picker. Picker captures do not include accessibility data.
 
 Apps running through XWayland inside a Wayland session can still be captured.
 
+## Annotating captures
+
+The compact editor toolbar keeps more of your capture visible. Arrows use a bold shaft and filled
+head. With the Select tool, drag either endpoint dot to resize an arrow, or drag its middle dot to
+bend it. Drag the arrow to move it; undo and redo also apply to these adjustments.
+
+Text labels use white text on your selected color background, with a dark outline on light colors
+to keep the lettering readable. Double-click a label to edit it.
+These styles are included when you copy, download, or save the capture to chat.
+
 ## Remote environments and other clients
 
 Capture runs on the computer running the Pathway desktop app. When your thread uses a remote

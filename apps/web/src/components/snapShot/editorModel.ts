@@ -36,14 +36,40 @@ export function rectangleBetween(a: Point, b: Point): Rect {
   };
 }
 
-export function annotationBounds(annotation: Annotation): Rect {
+type TextMeasurer = Pick<CanvasRenderingContext2D, "font" | "measureText">;
+let textMeasurer: TextMeasurer | null = null;
+
+function getTextMeasurer(): TextMeasurer | null {
+  if (!textMeasurer && typeof document !== "undefined") {
+    textMeasurer = document.createElement("canvas").getContext("2d");
+  }
+  return textMeasurer;
+}
+
+/** Keep white lettering visible on light custom colors and the white palette swatch. */
+export function labelNeedsOutline(color: string): boolean {
+  const rgb = Number.parseInt(color.slice(1), 16);
+  return ((rgb >> 16) * 299 + ((rgb >> 8) & 255) * 587 + (rgb & 255) * 114) / 1000 > 180;
+}
+
+export function annotationBounds(annotation: Annotation, measurer?: TextMeasurer): Rect {
   const start = annotation.points[0]!;
   if (annotation.tool === "text") {
     const lines = (annotation.text || "Text").split("\n");
+    const context = measurer ?? getTextMeasurer();
+    if (context) context.font = `600 ${annotation.fontSize}px Arial, sans-serif`;
+    const widths = lines.map((line) => {
+      if (!context) return Array.from(line).length * annotation.fontSize;
+      const metrics = context.measureText(line);
+      return Math.max(
+        metrics.width,
+        (metrics.actualBoundingBoxLeft || 0) + (metrics.actualBoundingBoxRight || 0),
+      );
+    });
     return {
       ...start,
-      width: Math.max(...lines.map((line) => line.length), 1) * annotation.fontSize * 0.65,
-      height: lines.length * annotation.fontSize * 1.25,
+      width: Math.max(...widths, 1) + annotation.fontSize * 0.6,
+      height: lines.length * annotation.fontSize * 1.25 + annotation.fontSize * 0.6,
     };
   }
   if (annotation.tool === "number") {
@@ -61,6 +87,19 @@ export function annotationBounds(annotation: Annotation): Rect {
     bottom = Math.max(bottom, point.y);
   }
   return rectangleBetween({ x: left, y: top }, { x: right, y: bottom });
+}
+
+/** Include the visible arrowhead and thick shaft without changing resize geometry. */
+export function annotationHitBounds(annotation: Annotation): Rect {
+  const bounds = annotationBounds(annotation);
+  if (annotation.tool !== "arrow") return bounds;
+  const head = arrowHead(annotation);
+  const padding = annotation.width * 1.25;
+  const left = Math.min(bounds.x - padding, ...head.map((point) => point.x));
+  const top = Math.min(bounds.y - padding, ...head.map((point) => point.y));
+  const right = Math.max(bounds.x + bounds.width + padding, ...head.map((point) => point.x));
+  const bottom = Math.max(bounds.y + bounds.height + padding, ...head.map((point) => point.y));
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 export function containsPoint(bounds: Rect, point: Point, padding = 0): boolean {
@@ -144,11 +183,62 @@ export function sourceAfterCrop(
   };
 }
 
-export function arrowHead(annotation: Annotation): Point[] {
+/** The middle handle sits on the curve, rather than at its off-curve control point. */
+export function arrowHandles(annotation: Annotation): Point[] {
   const start = annotation.points[0]!;
   const end = annotation.points.at(-1)!;
+  const control =
+    annotation.points.length === 3
+      ? annotation.points[1]!
+      : {
+          x: (start.x + end.x) / 2,
+          y: (start.y + end.y) / 2,
+        };
+  return [
+    start,
+    { x: (start.x + 2 * control.x + end.x) / 4, y: (start.y + 2 * control.y + end.y) / 4 },
+    end,
+  ];
+}
+
+export function reshapeArrow(annotation: Annotation, handle: number, point: Point): Annotation {
+  const start = annotation.points[0]!;
+  const end = annotation.points.at(-1)!;
+  if (handle === 1)
+    return {
+      ...annotation,
+      points: [
+        start,
+        {
+          x: 2 * point.x - (start.x + end.x) / 2,
+          y: 2 * point.y - (start.y + end.y) / 2,
+        },
+        end,
+      ],
+    };
+  return {
+    ...annotation,
+    points: annotation.points.map((value, index) =>
+      index === (handle === 0 ? 0 : annotation.points.length - 1) ? point : value,
+    ),
+  };
+}
+
+export function arrowPath(annotation: Annotation): string {
+  const start = annotation.points[0]!;
+  const end = annotation.points.at(-1)!;
+  const control = annotation.points.length === 3 ? annotation.points[1]! : null;
+  return (
+    `M ${start.x} ${start.y} ` +
+    (control ? `Q ${control.x} ${control.y} ${end.x} ${end.y}` : `L ${end.x} ${end.y}`)
+  );
+}
+
+export function arrowHead(annotation: Annotation): Point[] {
+  const start = annotation.points.at(-2)!;
+  const end = annotation.points.at(-1)!;
   const angle = Math.atan2(end.y - start.y, end.x - start.x);
-  const length = Math.max(annotation.width * 4, 14);
+  const length = Math.max(annotation.width * 8, 28);
   return [
     {
       x: end.x - length * Math.cos(angle - Math.PI / 6),
@@ -164,8 +254,8 @@ export function arrowHead(annotation: Annotation): Point[] {
 
 export function drawAnnotation(context: CanvasRenderingContext2D, annotation: Annotation): void {
   const start = annotation.points[0]!;
-  const bounds = annotationBounds(annotation);
   context.save();
+  const bounds = annotationBounds(annotation, context);
   context.strokeStyle = annotation.color;
   context.fillStyle = annotation.color;
   context.lineWidth = annotation.width;
@@ -188,8 +278,24 @@ export function drawAnnotation(context: CanvasRenderingContext2D, annotation: An
   } else if (annotation.tool === "text") {
     context.font = `600 ${annotation.fontSize}px Arial, sans-serif`;
     context.textBaseline = "top";
+    context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
+    context.fillStyle = "#ffffff";
+    const padding = annotation.fontSize * 0.3;
+    const outlined = labelNeedsOutline(annotation.color);
+    context.strokeStyle = "#535353";
+    context.lineWidth = annotation.fontSize * 0.08;
     (annotation.text || "").split("\n").forEach((line, index) => {
-      context.fillText(line, start.x, start.y + index * annotation.fontSize * 1.25);
+      if (outlined)
+        context.strokeText(
+          line,
+          start.x + padding,
+          start.y + padding + index * annotation.fontSize * 1.25,
+        );
+      context.fillText(
+        line,
+        start.x + padding,
+        start.y + padding + index * annotation.fontSize * 1.25,
+      );
     });
   } else if (annotation.tool === "number") {
     context.arc(start.x, start.y, annotation.fontSize * 0.85, 0, Math.PI * 2);
@@ -206,7 +312,14 @@ export function drawAnnotation(context: CanvasRenderingContext2D, annotation: An
       context.lineCap = "square";
     }
     context.moveTo(start.x, start.y);
-    for (const point of annotation.points.slice(1)) context.lineTo(point.x, point.y);
+    if (annotation.tool === "arrow") {
+      context.lineWidth = annotation.width * 2.5;
+      const end = annotation.points.at(-1)!;
+      if (annotation.points.length === 3) {
+        const control = annotation.points[1]!;
+        context.quadraticCurveTo(control.x, control.y, end.x, end.y);
+      } else context.lineTo(end.x, end.y);
+    } else for (const point of annotation.points.slice(1)) context.lineTo(point.x, point.y);
     context.stroke();
     if (annotation.tool === "arrow") {
       const head = arrowHead(annotation);
@@ -214,7 +327,8 @@ export function drawAnnotation(context: CanvasRenderingContext2D, annotation: An
       context.moveTo(head[0]!.x, head[0]!.y);
       context.lineTo(head[1]!.x, head[1]!.y);
       context.lineTo(head[2]!.x, head[2]!.y);
-      context.stroke();
+      context.closePath();
+      context.fill();
     }
   }
   context.restore();
