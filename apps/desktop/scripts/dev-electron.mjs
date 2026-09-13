@@ -25,27 +25,22 @@ const requiredFiles = [
   "dist-electron/main.cjs",
   "dist-electron/electron/WindowsForegroundFocusWorker.cjs",
   "dist-electron/preload.cjs",
+  "dist-electron/dictation-preload.cjs",
+  "dist-electron/mac-permission-preload.cjs",
+  "dist-electron/preview-pick-preload.cjs",
+  "dist-electron/preview-pip-preload.cjs",
   "dist-electron/snapShot/GlobalShiftShortcutWorker.cjs",
   "dist-electron/snapShot/RegionSnapShotWorker.cjs",
   "dist-electron/snapShot/SnapShotAccessibilityWorker.cjs",
   "../server/dist/bin.mjs",
 ];
-const watchedDirectories = [
-  { directory: "dist-electron", files: new Set(["main.cjs", "preload.cjs"]) },
-  {
-    directory: "dist-electron/electron",
-    files: new Set(["WindowsForegroundFocusWorker.cjs"]),
-  },
-  {
-    directory: "dist-electron/snapShot",
-    files: new Set([
-      "GlobalShiftShortcutWorker.cjs",
-      "RegionSnapShotWorker.cjs",
-      "SnapShotAccessibilityWorker.cjs",
-    ]),
-  },
-  { directory: "../server/dist", files: new Set(["bin.mjs"]) },
-];
+const watchedDirectories = new Map();
+for (const file of requiredFiles) {
+  const directory = NodePath.dirname(file);
+  const files = watchedDirectories.get(directory) ?? new Set();
+  files.add(NodePath.basename(file));
+  watchedDirectories.set(directory, files);
+}
 const forcedShutdownTimeoutMs = 1_500;
 const restartDebounceMs = 120;
 const childTreeGracePeriodMs = 1_200;
@@ -185,7 +180,7 @@ function scheduleRestart() {
 }
 
 function startWatchers() {
-  for (const { directory, files } of watchedDirectories) {
+  for (const [directory, files] of watchedDirectories) {
     const watcher = NodeFS.watch(
       NodePath.join(desktopDir, directory),
       { persistent: true },

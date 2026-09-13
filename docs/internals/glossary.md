@@ -212,6 +212,30 @@ when the thread runs in a remote environment. Pending captures stay on that comp
 draft is saved or the user discards them. See [SnapShots](snap-shot.md) for delivery and provider
 boundaries and [the user guide](../user/snap-shot.md) for setup.
 
+## Dictation
+
+**Dictation**:
+The Pathway feature that turns the user's speech into text for insertion or copying. Its proposed behavior is recorded in [the dictation design](dictation-design.md).
+
+**Hold-to-talk**:
+Dictation recording that lasts while the user holds the activation shortcut. Releasing the shortcut finishes the recording.
+
+**Locked recording**:
+Dictation recording that continues without holding the activation shortcut, started by double-tapping the shortcut or selecting Record on the dictation bar. The user explicitly accepts or cancels the recording.
+_Avoid_: Pinned recording
+
+**Dictation bar**:
+The compact desktop control that shows dictation activity. Its optional idle state reveals Record, Settings, and History controls on hover.
+
+**Dictation history**:
+The user's saved original recognition and cleaned dictation text on one desktop, distinct from agent thread history. Dictation history does not retain audio recordings or sync across desktops.
+
+**Dictation dictionary**:
+The user's account-synced collection of preferred spellings and explicit corrections, organized into named lists that all apply to dictation. Each desktop can use its last synced copy offline.
+
+**Dictation cleanup**:
+The optional AI step that removes fillers, repetitions, and spoken self-corrections from recognized speech while preserving its meaning and language.
+
 ## Queued submission
 
 A cloud-saved user message and its attachment references, assigned to a thread and destination

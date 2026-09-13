@@ -58,6 +58,10 @@
     "./threadQueue": {
       "types": "./src/threadQueue.ts",
       "import": "./src/threadQueue.ts"
+    },
+    "./dictation": {
+      "types": "./src/dictation.ts",
+      "import": "./src/dictation.ts"
     }
   },
   "scripts": {

@@ -164,6 +164,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
     expect(SETTINGS_NAV_GROUPS.map((group) => group.label)).toEqual([
       "Workspace",
       "Account",
+      "Dictation",
       "Agents",
       "Tasks",
       "Email",

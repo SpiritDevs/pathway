@@ -106,6 +106,12 @@ export function SettingsBreadcrumb({ pathname }: { pathname: string }) {
           <WorkspaceBreadcrumbSeparator />
         </>
       ) : null}
+      {pathname.startsWith("/settings/dictation/") ? (
+        <>
+          <WorkspaceBreadcrumbItem>Dictation</WorkspaceBreadcrumbItem>
+          <WorkspaceBreadcrumbSeparator />
+        </>
+      ) : null}
       {subpageLabel ? (
         <>
           <WorkspaceBreadcrumbItem>{sectionLabel}</WorkspaceBreadcrumbItem>

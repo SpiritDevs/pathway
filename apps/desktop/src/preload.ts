@@ -8,6 +8,7 @@ import type {
 } from "@spiritdevs/contracts";
 import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer } from "electron";
+import { createDictationPreloadBridge } from "./dictation/preloadBridge.ts";
 
 import * as IpcChannels from "./ipc/channels.ts";
 import { createThreadAlertClickSubscription } from "./ipc/threadAlertClickQueue.ts";
@@ -58,6 +59,7 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  dictation: createDictationPreloadBridge(),
   threadAlerts: {
     getSupport: () => ipcRenderer.invoke(IpcChannels.THREAD_ALERT_SUPPORT_CHANNEL),
     show: (input) => ipcRenderer.invoke(IpcChannels.THREAD_ALERT_SHOW_CHANNEL, input),

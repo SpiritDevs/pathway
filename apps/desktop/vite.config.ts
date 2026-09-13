@@ -84,7 +84,11 @@ export default defineConfig({
       outDir: "dist-electron",
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
-      entry: ["src/preview-pip-preload.ts", "src/mac-permission-preload.ts"],
+      entry: [
+        "src/preview-pip-preload.ts",
+        "src/mac-permission-preload.ts",
+        "src/dictation-preload.ts",
+      ],
     },
   ],
 });
