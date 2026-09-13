@@ -24,6 +24,7 @@ import { Input } from "../ui/input";
 import { randomUUID } from "../../lib/utils";
 import { Progress } from "../ui/progress";
 import { useNowMinute } from "../../hooks/useNowMinute";
+import type { AllowanceProviderTarget } from "./ProviderAllowanceDialog";
 import { calendarInstantAt } from "../calendar/calendarGrid.logic";
 
 type WindowChoice = {
@@ -34,25 +35,26 @@ type WindowChoice = {
   label: string;
   authorizedPercent: number;
 };
-const field = "rounded-lg border bg-background px-3 py-2 text-sm";
+const field =
+  "h-9 min-w-0 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 /** The same account allocation controls serve conversations and ordinary agent threads. */
 export function AllowanceBudgets({
   companyId,
   scopes,
   title,
+  target,
 }: {
   companyId: string;
   scopes: readonly ProviderAllowanceScope[];
   title: string;
+  target: AllowanceProviderTarget;
 }) {
   const cloud = useBusinessToolsCloud();
   const now = Date.parse(useNowMinute());
   const { environments } = useEnvironments();
-  const [environmentId, setEnvironmentId] = useState("");
-  const environment =
-    environments.find((e) => e.environmentId === environmentId) ??
-    environments.find((e) => e.serverConfig);
+  const [environmentId, setEnvironmentId] = useState<string>(target.environmentId);
+  const environment = environments.find((e) => e.environmentId === environmentId);
   const usageTarget = useMemo(
     () =>
       environment
@@ -71,6 +73,7 @@ export function AllowanceBudgets({
     { companyId },
   );
   const keys = new Set(scopes.map(allowanceScopeKey));
+  // Every budget on this work participates in admission, even after an account changes.
   const budgets =
     rows.value?.filter((b) => b.scopes.some((s) => keys.has(allowanceScopeKey(s)))) ?? [];
   const [editing, setEditing] = useState<ProviderAllowanceBudget | "new" | null>(null);
@@ -107,7 +110,14 @@ export function AllowanceBudgets({
       key: JSON.stringify([snapshot.instanceId, allowanceWindowKey(limit)]),
     })),
   );
-  const selected = windows.find((w) => w.key === windowKey) ?? windows[0];
+  const selected = windowKey
+    ? windows.find((w) => w.key === windowKey)
+    : environmentId === target.environmentId
+      ? windows.find(
+          (w) =>
+            w.snapshot.instanceId === target.instanceId && w.snapshot.provider === target.provider,
+        )
+      : undefined;
   const preview = selected
     ? allocateProviderAllowance(
         selected.snapshot,
@@ -183,7 +193,7 @@ export function AllowanceBudgets({
     }
   };
   return (
-    <section className="space-y-4" aria-label="Provider allowance budgets">
+    <section className="space-y-4 border-t pt-5" aria-label="Provider allowance budgets">
       <div className="flex items-center justify-between gap-4">
         <h3 className="text-sm font-semibold">Provider allowance</h3>
         <Button
@@ -192,6 +202,9 @@ export function AllowanceBudgets({
           disabled={pending || !scopes.length}
           onClick={() => {
             setEditing("new");
+            setEnvironmentId(target.environmentId);
+            setWindowKey("");
+            setPercent("");
             setChoices([]);
             setResumeAt("");
             requestID.current = randomUUID();
@@ -203,6 +216,10 @@ export function AllowanceBudgets({
       <p className="text-sm text-muted-foreground">
         Allocate percentage points of a full account window. For example, 10 points takes 60%
         remaining to 50%. All activity on that account counts. Delayed readings can allow overshoot.
+      </p>
+      <p className="text-sm text-muted-foreground">
+        All allowances for this work are shown, including previous accounts. Start with{" "}
+        {target.displayName} and add windows for any fallback accounts to the same allocation.
       </p>
       {budgets.map((budget) => (
         <div key={budget.id} className="space-y-3 rounded-xl border p-4">
@@ -317,6 +334,9 @@ export function AllowanceBudgets({
               disabled={pending}
               onClick={() => {
                 setEditing(budget);
+                setEnvironmentId(target.environmentId);
+                setWindowKey("");
+                setPercent("");
                 setChoices([]);
                 setResumeAt("");
               }}
@@ -344,14 +364,20 @@ export function AllowanceBudgets({
         </div>
       ))}
       {editing && (
-        <div className="space-y-3 rounded-xl border p-4">
-          <p className="text-sm font-medium">
+        <div className="space-y-4 rounded-xl border bg-muted/20 p-4 sm:p-5">
+          <p className="text-sm font-semibold">
             {editing === "new" ? "New allocation" : "Resume with a new allocation"}
           </p>
           <p className="text-xs text-muted-foreground">
             This applies to the selected conversation or thread and its delegated work. Each
             fallback account needs its own allocation. A reset does not renew it.
           </p>
+          {editing !== "new" && (
+            <p className="rounded-lg border p-3 text-sm text-muted-foreground">
+              Renew every account you want to include; authorizing replaces the whole allocation.
+              Pause and remove actions also affect the whole allowance.
+            </p>
+          )}
           <label className="grid gap-1 text-xs">
             Environment
             <select
@@ -376,6 +402,7 @@ export function AllowanceBudgets({
               value={selected?.key ?? ""}
               onChange={(e) => setWindowKey(e.target.value)}
             >
+              <option value="">Choose an account window</option>
               {windows.map((w) => (
                 <option key={w.key} value={w.key}>
                   {environment?.serverConfig?.providers.find(
@@ -416,7 +443,7 @@ export function AllowanceBudgets({
           {preview?.error && percent && (
             <p className="text-xs text-amber-600 dark:text-amber-400">{preview.error}</p>
           )}
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               variant="outline"
@@ -509,7 +536,7 @@ export function AllowanceBudgets({
               </p>
             </div>
           )}
-          <div className="flex gap-2 border-t pt-3">
+          <div className="flex flex-wrap gap-2 border-t pt-4">
             <Button disabled={pending || !choices.length} onClick={() => void act(save)}>
               {pending
                 ? "Saving…"

@@ -44,7 +44,6 @@ import {
   supportsProviderUsage,
 } from "../usage/ProviderUsage";
 import { useClientSettings } from "../../hooks/useSettings";
-import { ThreadAllowanceDialog } from "../usage/ThreadAllowanceDialog";
 import { resolveActionPaletteSections, type ActionPaletteSectionId } from "./actionPaletteSections";
 
 export interface ThreadDetailsPanelProps {
@@ -318,7 +317,6 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 ? {}
                 : { showIconBadge: props.activeProviderIconBadge })}
             />
-            <ThreadAllowanceDialog environmentId={props.environmentId} threadId={props.threadId} />
           </div>
         ) : null;
       case "development-environments":

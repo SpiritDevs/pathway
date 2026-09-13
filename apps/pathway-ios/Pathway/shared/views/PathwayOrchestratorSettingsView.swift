@@ -275,9 +275,8 @@ struct PathwayOrchestratorSettingsView: View {
         "Additional assignments wait in the queue. Pausing stops new work; Stop work requests interruption and shows when a host has not confirmed it."
       ).font(.footnote).foregroundStyle(.secondary)
       Section {
-        NavigationLink("Provider allowance") {
-          PathwayAllowanceSettingsView(orchestratorID: selectedID)
-        }
+        Text("Manage conversation allowances in Settings → Providers, under the provider instance.")
+          .font(.footnote).foregroundStyle(.secondary)
       }
     }
   }

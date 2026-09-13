@@ -2,19 +2,20 @@ import SwiftUI
 
 /// Cloud account allocations use the same runtime guard as web and desktop.
 struct PathwayAllowanceSettingsView: View {
-  let orchestratorID: String?
-  let thread: PathwayAgentThread?
-  init(orchestratorID: String) {
-    self.orchestratorID = orchestratorID
-    thread = nil
+  let environmentID: String
+  let provider: PathwayAdministrationProvider
+  @State private var selectedWork = ""
+  private var thread: PathwayAgentThread? {
+    threadChoices.first { "thread:\($0.threadId)" == selectedWork }
   }
-  init(thread: PathwayAgentThread) {
-    self.thread = thread
-    orchestratorID = nil
+  private var threadChoices: [PathwayAgentThread] {
+    appModel.cloud.threads.filter { $0.environmentId == environmentID && $0.companyId == companyID }
   }
   @Environment(PathwayAppModel.self) private var appModel
   @State private var companyID = ""
-  @State private var chatID = ""
+  private var chatID: String {
+    selectedWork.hasPrefix("chat:") ? String(selectedWork.dropFirst(5)) : ""
+  }
   @State private var budgets: [PathwayOrchestratorRecord] = []
   @State private var editing = false
   @State private var renewal: PathwayOrchestratorRecord?
@@ -23,8 +24,8 @@ struct PathwayAllowanceSettingsView: View {
   private var model: PathwayOrchestratorsModel { appModel.cloud.orchestrators }
   private var chats: [PathwayOrchestratorRecord] {
     model.chats.filter {
-      !$0.flag("archived") && $0.string("ownerSubject") == appModel.accountID
-        && $0.strings("orchestratorIds").contains(orchestratorID ?? "")
+      $0.string("ownerSubject") == appModel.accountID
+        && ($0.strings("companyIds").isEmpty || $0.strings("companyIds").contains(companyID))
     }
   }
   private var scopes: [JSONValue] {
@@ -52,16 +53,22 @@ struct PathwayAllowanceSettingsView: View {
   var body: some View {
     Form {
       Section {
-        if let thread {
-          Text(thread.shell.title)
-        } else {
-          Picker("Workspace", selection: $companyID) {
-            ForEach(appModel.cloud.companies) { Text($0.name).tag($0.id) }
+        Picker("Workspace", selection: $companyID) {
+          ForEach(appModel.cloud.companies) { Text($0.name).tag($0.id) }
+        }
+        Picker("Thread or conversation", selection: $selectedWork) {
+          Text("Choose work to manage").tag("")
+          ForEach(threadChoices, id: \.threadId) { thread in
+            Text("Thread · \(thread.shell.title)").tag("thread:\(thread.threadId)")
           }
-          Picker("Conversation", selection: $chatID) {
-            ForEach(chats) { Text($0.string("title")).tag($0.id) }
+          ForEach(chats) { chat in
+            Text("Conversation · \(chat.string("title"))").tag("chat:\(chat.id)")
           }
         }
+        Text(
+          "All allowances for this work are shown, including previous accounts. Add fallback account windows to the same allocation."
+        )
+        .font(.footnote).foregroundStyle(.secondary)
         Text(
           "Percentage points refer to the full provider window: 10 points takes 60% remaining to 50%. All activity on the account counts. Delayed readings can allow overshoot."
         ).font(.footnote).foregroundStyle(.secondary)
@@ -111,24 +118,29 @@ struct PathwayAllowanceSettingsView: View {
         Button("Set allowance") {
           renewal = nil
           editing = true
-        }.disabled(companyID.isEmpty || (thread == nil && chatID.isEmpty))
+        }.disabled(
+          companyID.isEmpty || (thread == nil && !chats.contains(where: { $0.id == chatID })))
       }
     }
-    .navigationTitle("Provider allowance")
+    .navigationTitle("\(provider.name) allowance")
     .disabled(saving)
     .onChange(of: appModel.accountID) { _, _ in
       budgets = []
       editing = false
       renewal = nil
       companyID = ""
-      chatID = ""
+      selectedWork = ""
       error = nil
+    }
+    .onChange(of: companyID) { _, _ in
+      selectedWork = ""
+      editing = false
+      renewal = nil
     }
     .onAppear {
       if companyID.isEmpty {
         companyID = thread?.companyId ?? appModel.cloud.companies.first?.id ?? ""
       }
-      if chatID.isEmpty { chatID = chats.first?.id ?? "" }
     }
     .task(id: "\(appModel.accountID ?? ""):\(companyID)") {
       budgets = []
@@ -148,7 +160,9 @@ struct PathwayAllowanceSettingsView: View {
         PathwayAllowanceEditor(
           companyID: companyID, scopes: scopes,
           title: thread?.shell.title ?? chats.first(where: { $0.id == chatID })?.string("title")
-            ?? "Conversation allowance", renewal: renewal)
+            ?? "Conversation allowance", renewal: renewal,
+          initialEnvironmentID: environmentID,
+          provider: provider)
       }
     }
   }
@@ -201,6 +215,8 @@ private struct PathwayAllowanceEditor: View {
   let scopes: [JSONValue]
   let title: String
   let renewal: PathwayOrchestratorRecord?
+  let initialEnvironmentID: String
+  let provider: PathwayAdministrationProvider
   @Environment(PathwayAppModel.self) private var appModel
   @Environment(\.dismiss) private var dismiss
   @State private var environmentID = ""
@@ -250,16 +266,22 @@ private struct PathwayAllowanceEditor: View {
       }
     }
   }
-  private var window: Window? { windows.first { $0.id == selected } ?? windows.first }
+  private var window: Window? { windows.first { $0.id == selected } }
   var body: some View {
     Form {
       Section {
+        if renewal != nil {
+          Text(
+            "Renew every account you want included; authorizing replaces the whole allocation."
+          ).font(.footnote).foregroundStyle(.secondary)
+        }
         Picker("Environment", selection: $environmentID) {
           ForEach(appModel.cloud.environments) {
             Text($0.environment.label).tag($0.environment.environmentId)
           }
         }
         Picker("Account window", selection: $selected) {
+          Text("Choose an account window").tag("")
           ForEach(windows) { Text($0.label).tag($0.id) }
         }
         TextField("Allowance in percentage points", text: $percent).keyboardType(.decimalPad)
@@ -312,7 +334,7 @@ private struct PathwayAllowanceEditor: View {
     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
     .onAppear {
       if environmentID.isEmpty {
-        environmentID = appModel.cloud.environments.first?.environment.environmentId ?? ""
+        environmentID = initialEnvironmentID
       }
     }
     .task(id: "\(appModel.accountID ?? ""):\(environmentID)") { await load() }
@@ -347,7 +369,13 @@ private struct PathwayAllowanceEditor: View {
         environment.environment.environmentId == environmentID, !Task.isCancelled
       else { return }
       snapshots = next
-      selected = windows.first?.id ?? ""
+      selected =
+        environmentID == initialEnvironmentID
+        ? windows.first(where: {
+          $0.snapshot["instanceId"]?.stringValue == self.provider.instanceId
+            && $0.snapshot["provider"]?.stringValue == self.provider.driver
+        })?.id ?? ""
+        : ""
     } catch {
       if !Task.isCancelled && accountID == appModel.accountID && readingID == requestID {
         self.error = error.localizedDescription

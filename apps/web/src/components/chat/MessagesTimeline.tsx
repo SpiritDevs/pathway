@@ -2448,7 +2448,10 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
       <div role="status" className="space-y-1 py-2 text-xs text-muted-foreground">
         <p className="font-medium text-foreground">Waiting for allowance</p>
         <p>{ctx.allowanceHold}</p>
-        <p>Your request is retained. Use Manage allowance in thread details to resume.</p>
+        <p>
+          Your request is retained. Open Settings → Providers and manage the provider’s allowance to
+          resume.
+        </p>
       </div>
     );
   return (

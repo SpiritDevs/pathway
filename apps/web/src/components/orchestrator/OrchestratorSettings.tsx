@@ -42,7 +42,6 @@ import { SettingsPageContainer } from "../settings/settingsLayout";
 import { useOrchestrators, useOrchestratorQuery } from "./OrchestratorContext";
 import { OrchestratorAvatar, ORCHESTRATOR_COLORS } from "./OrchestratorAvatar";
 import { OrchestratorModels } from "./OrchestratorModels";
-import { AllowanceBudgets } from "../usage/AllowanceBudgets";
 
 export const ORCHESTRATOR_SETTINGS = {
   overview: "Overview",
@@ -60,47 +59,6 @@ const inputClass =
   "w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
 const errorMessage = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 const readConfig = Schema.decodeUnknownSync(OrchestratorConfig);
-function ConversationAllowances({ contact }: { contact: AiOrchestrator }) {
-  const state = useOrchestrators();
-  const [id, setId] = useState("");
-  const chats = state.chats.filter(
-    (chat) =>
-      !chat.archived &&
-      chat.ownerSubject === state.accountID &&
-      chat.orchestratorIds.includes(contact.id),
-  );
-  const chat = chats.find((chat) => chat.id === id) ?? chats[0];
-  return (
-    <div className="space-y-4 border-t pt-5">
-      <label className="grid gap-2 text-sm">
-        Conversation
-        <select
-          className={inputClass}
-          value={chat?.id ?? ""}
-          onChange={(e) => setId(e.target.value)}
-        >
-          {chats.map((chat) => (
-            <option key={chat.id} value={chat.id}>
-              {chat.title}
-            </option>
-          ))}
-        </select>
-      </label>
-      {chat && state.companyId ? (
-        <AllowanceBudgets
-          key={`${state.companyId}:${chat.id}`}
-          companyId={state.companyId}
-          scopes={[{ kind: "chat", chatId: chat.id }]}
-          title={chat.title}
-        />
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          Open a conversation and select a workspace to configure its allowance.
-        </p>
-      )}
-    </div>
-  );
-}
 export function orchestratorConfigValue(config: OrchestratorConfig): Record<string, Value> {
   return {
     ...config,
@@ -926,7 +884,9 @@ function SettingsEditor({
               onChange={(event) => patch({ maxAssignments: Number(event.target.value) })}
             />
           </Field>
-          <ConversationAllowances contact={contact} />
+          <p className="text-sm text-muted-foreground">
+            Manage conversation allowances in Settings → Providers, under the provider instance.
+          </p>
         </div>
       );
       break;

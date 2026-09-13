@@ -72,6 +72,8 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ProviderUsageSettingsSection } from "../usage/ProviderUsage";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
+import { ProviderAllowanceDialog } from "../usage/ProviderAllowanceDialog";
+import { isProviderUsageDriver } from "../usage/providerUsageAccounts";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
 import { searchableSetting } from "./settingsSearch";
@@ -361,10 +363,11 @@ export function EnvironmentProviderSettings({
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
   /**
-   * Render the full provider layout, greyed out and inert, when this session's
+   * Render provider configuration greyed out and inert when this session's
    * credential lacks `orchestration:operate` on the environment. Showing the
    * real configuration keeps the view honest; disabling interaction keeps
-   * every one of its writes from being offered and then rejected.
+   * every one of its writes from being offered and then rejected. Allowance
+   * controls stay interactive because their writes use workspace permissions.
    */
   readonly readOnly?: boolean;
 }) {
@@ -833,6 +836,16 @@ export function EnvironmentProviderSettings({
                 instance={row.instance}
                 driverOption={driverOption}
                 liveProvider={liveProvider}
+                allowanceAction={
+                  !readOnly && isProviderUsageDriver(row.driver) ? (
+                    <ProviderAllowanceDialog
+                      environmentId={environmentId}
+                      instanceId={row.instanceId}
+                      provider={row.driver}
+                      displayName={row.instance.displayName?.trim() || resetLabel}
+                    />
+                  ) : undefined
+                }
                 isExpanded={openInstanceDetails[row.instanceId] ?? false}
                 onExpandedChange={(open) =>
                   setOpenInstanceDetails((existing) => ({
@@ -888,6 +901,29 @@ export function EnvironmentProviderSettings({
             );
           })}
         </div>
+        {readOnly &&
+          rows.map((row) => {
+            if (!isProviderUsageDriver(row.driver)) return null;
+            const displayName =
+              row.instance.displayName?.trim() ||
+              getDriverOption(row.driver)?.label ||
+              String(row.driver);
+            return (
+              <SettingsRow
+                key={row.instanceId}
+                title={`${displayName} allowance`}
+                description="Manage work allowances with your workspace permissions."
+                control={
+                  <ProviderAllowanceDialog
+                    environmentId={environmentId}
+                    instanceId={row.instanceId}
+                    provider={row.driver}
+                    displayName={displayName}
+                  />
+                }
+              />
+            );
+          })}
       </SettingsSection>
 
       <ProviderUsageSettingsSection />
