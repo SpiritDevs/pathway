@@ -39,3 +39,9 @@ Thread rows show compact status labels so you can scan for Working, Preparing, Q
 The notification bell is hidden when there are no notifications. It appears when notifications arrive; read notifications remain accessible from the bell.
 
 Tap the compose button at the top of a conversation to start a new thread. The new-thread sheet preselects the current project, environment, provider, model and reasoning options, access mode, chat or plan mode, and temporary setting. You can change the defaults before sending. The existing conversation and its draft stay intact.
+
+The new-thread project picker displays each project's icon when available. Projects without an available icon use the folder symbol; conversations use the conversation symbol. Project icons share the thread list's cache.
+
+HEIC and HEIF photos are converted before upload so other clients and image-capable agents receive JPEG files, or PNG when transparency is present. The conversion preserves orientation and limits the longest edge to 4,096 pixels. Photo selection, pasting, file attachments, and imported shares use the same conversion. Already-sent HEIC files are unchanged and need to be resent to use the compatible format.
+
+The queued-message bubble counts both messages waiting on an environment and messages saved to the cloud for delivery. It sits beside the diff counter in a centered row, or in the center on its own. Tap it to open the queue sheet. Cloud messages retain Edit, Delete, and Retry when available; environment-queued messages retain drag ordering and Steer.

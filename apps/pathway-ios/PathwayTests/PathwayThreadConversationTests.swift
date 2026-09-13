@@ -4,6 +4,27 @@ import Testing
 
 @MainActor
 struct PathwayThreadConversationTests {
+    @Test func queueBubbleIncludesCloudMessagesWithoutDuplicatingDeliveredMessages() {
+        let model = makeModel { _, _ in .object([:]) }
+        model.installSnapshot(snapshot(status: "queued"), sequence: 1)
+        model.cloudQueueMessages = [.object([
+            "commandId": .string("cloud-command"), "messageId": .string("cloud-message"), "state": .string("queued"),
+            "submission": .object(["kind": .string("message"), "input": .object([
+                "messageId": .string("cloud-message"), "text": .string("Waiting for connection")
+            ])])
+        ])]
+        #expect(model.queuedMessageCount == 2)
+        #expect(model.cloudQueuedItems.count == 1)
+        #expect(!model.transcriptItems.contains { $0.messageID == "cloud-message" })
+        var fields = model.cloudQueueMessages[0].objectValue!
+        fields["state"] = .string("delivered")
+        model.cloudQueueMessages = [.object(fields)]
+        #expect(model.queuedMessageCount == 1)
+        fields["state"] = .string("canceled")
+        model.cloudQueueMessages = [.object(fields)]
+        #expect(model.cloudQueuedItems.isEmpty)
+    }
+
     @Test func queuedMessagesStayOutOfTranscriptUntilStarted() {
         let model = makeModel { _, _ in .object([:]) }
         model.installSnapshot(snapshot(status: "queued"), sequence: 1)
@@ -139,6 +160,27 @@ struct PathwayThreadConversationTests {
         let browser = PathwayRemoteBrowserModel(thread: thread)
         #expect(browser.canTakeControl == ["preparing", "starting", "running"].contains(status))
         if status == "waiting" { #expect(thread.activeRunID != nil) }
+    }
+
+    @Test func failedBrowserTabLoadOffersReconnectAndRetryCanRecover() async {
+        let thread = makeModel { _, _ in .object([:]) }
+        @MainActor final class BrowserResponseState { var failList = true }
+        let responseState = BrowserResponseState()
+        let browser = PathwayRemoteBrowserModel(thread: thread, request: { _, payload in
+            if payload.objectValue?["action"]?.stringValue == "list", responseState.failList {
+                throw PathwayRPCError.remote("Browser is unavailable")
+            }
+            return .object(["tabs": .array([]), "selectedTabId": .null])
+        })
+        await browser.start()
+        #expect(!browser.isHostReady)
+        #expect(browser.error == "Browser is unavailable")
+        #expect(!(await browser.command("open")))
+        responseState.failList = false
+        await browser.start()
+        #expect(browser.isHostReady)
+        #expect(browser.error == nil)
+        await browser.stop()
     }
 
     @Test func environmentBrowserWaitsForHostSelectionBeforeLoadingTabs() async throws {

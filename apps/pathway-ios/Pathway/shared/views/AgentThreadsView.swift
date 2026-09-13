@@ -966,6 +966,7 @@ struct AgentThreadConversationView: View {
     @State private var showsUnfinishedGit = false
     @State private var showsGitReview = false
     @State private var showsAlternateEnvironment = false
+    @State private var showsBrowser = false
     @State private var newThreadDefaults: PathwayNewThreadDefaults?
     @State private var showsQueueMove = false
     @State private var isComposerFocused = false
@@ -1104,9 +1105,10 @@ struct AgentThreadConversationView: View {
                         AgentThreadQueueControl(model: model, isComposerExpanded: $isComposerExpanded, isComposerFocused: $isComposerFocused)
                         AgentThreadSubagentPicker(model: model, openThread: openChild)
                     }
+                    .frame(maxWidth: .infinity, alignment: .center)
                     AgentThreadComposer(model: model, isExpanded: $isComposerExpanded,
                         isFocused: $isComposerFocused, modelName: model.currentModelSelection.model,
-                        usesCompactPresentation: true, isNavigationExpanded: false, onOpenThread: openChild, workspaceRoot: workspaceRoot)
+                        usesCompactPresentation: true, isNavigationExpanded: false, onOpenThread: openChild, workspaceRoot: workspaceRoot, onOpenBrowser: { showsBrowser = true })
                 }
             }
         }
@@ -1180,6 +1182,9 @@ struct AgentThreadConversationView: View {
                     projectRoot: root, connect: connect, storageDirectory: model.storageDirectory, initialSection: "changes")
             }
         }
+        .navigationDestination(isPresented: $showsBrowser) {
+            AgentThreadRemoteBrowser(model: model)
+        }
         .navigationDestination(item: $childDestination) { destination in
             AgentThreadConversationView(model: destination.model, workspaceRoot: destination.workspaceRoot)
         }
@@ -1221,7 +1226,7 @@ struct AgentThreadConversationView: View {
         }
         .onDisappear {
             compactThreadChrome?.leaveThreadDetail()
-            Task { await model.stop() }
+            if !showsBrowser { Task { await model.stop() } }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-thread-conversation")

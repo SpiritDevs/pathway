@@ -10,14 +10,22 @@ extension PathwayAgentThreadModel {
         return !message.isGeneratedQuestionReply && message.fields["createdBy"]?.stringValue != "agent"
     }
 
+    var cloudQueuedItems: [PathwayTimelineItem] {
+        conversationItems.filter { item in
+            guard let message = cloudQueueMessage(for: item) else { return false }
+            return !["canceled", "delivered"].contains(message["state"]?.stringValue ?? "")
+        }
+    }
+
+    var queuedMessageCount: Int { queuedRuns.count + cloudQueuedItems.count }
+
     /// Pending messages live in the queue sheet until they start, rather than filling the transcript.
     var transcriptItems: [PathwayTimelineItem] {
         let pending = runs.filter { $0.status == "queued" || $0.status == "cancelled" }
-        guard !pending.isEmpty else { return conversationItems }
         let runIDs = Set(pending.map(\.id))
         let messageIDs = Set(pending.compactMap(\.userMessageID))
         return conversationItems.filter { item in
-            !item.isUserMessage || !(item.runID.map(runIDs.contains) == true || item.messageID.map(messageIDs.contains) == true)
+            item.fields["queueCommandId"] == nil && (!item.isUserMessage || !(item.runID.map(runIDs.contains) == true || item.messageID.map(messageIDs.contains) == true))
         }
     }
 
@@ -29,6 +37,20 @@ extension PathwayAgentThreadModel {
         guard let run = queuedRuns.first(where: { $0.id == runID }), canRestoreQueuedMessage(run),
               let message = queuedMessage(for: run) else {
             throw PathwayThreadConversationError.message("This message is no longer available to edit.")
+        }
+        try await restoreQueueDraft(message) { try await self.cancelQueuedRun(runID) }
+    }
+
+    func restoreCloudQueuedMessage(_ message: PathwayTimelineItem) async throws {
+        guard canEditCloudQueueMessage(message), canCancelCloudQueueMessage(message) else {
+            throw PathwayThreadConversationError.message("This message is no longer available to edit.")
+        }
+        try await restoreQueueDraft(message) { try await self.mutateCloudQueueMessage(message, action: "cancel") }
+    }
+
+    private func restoreQueueDraft(_ message: PathwayTimelineItem, cancel: () async throws -> Void) async throws {
+        guard draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, draftAttachments.isEmpty, !isSending else {
+            throw PathwayThreadConversationError.message("Send or stash your current draft before editing a queued message.")
         }
         var restored: [(PathwayThreadAttachmentDraft, Data)] = []
         for attachment in message.attachments {
@@ -47,7 +69,7 @@ extension PathwayAgentThreadModel {
         guard draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, draftAttachments.isEmpty, !isSending else {
             throw PathwayThreadConversationError.message("Send or stash your current draft before editing a queued message.")
         }
-        try await cancelQueuedRun(runID)
+        try await cancel()
         // Keep content typed on another task while cancellation was in flight.
         draft = draft.isEmpty ? message.text ?? "" : (message.text ?? "") + "\n\n" + draft
         preparedSend = nil
