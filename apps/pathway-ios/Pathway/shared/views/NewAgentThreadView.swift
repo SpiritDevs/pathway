@@ -367,7 +367,7 @@ private struct NewAgentThreadComposer: View {
     let chooseProject: () -> Void
     let didLaunch: (String) -> Void
 
-    @FocusState private var promptFocused: Bool
+    @State private var promptFocused = false
     @State private var showsSettings = false
     @State private var showsBranches = false
 

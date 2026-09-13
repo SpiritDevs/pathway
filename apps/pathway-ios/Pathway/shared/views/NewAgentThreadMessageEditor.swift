@@ -5,8 +5,8 @@ import UniformTypeIdentifiers
 
 struct NewAgentThreadMessageEditor: View {
     @Bindable var model: PathwayAgentThreadCreationModel
-    @FocusState.Binding var isFocused: Bool
-    @State private var selection: TextSelection?
+    @Binding var isFocused: Bool
+    @State private var selection: NSRange?
     @State private var showsFiles = false
     @State private var showsPhotos = false
     #if os(iOS)
@@ -26,8 +26,15 @@ struct NewAgentThreadMessageEditor: View {
                 NewAgentThreadSuggestions(model: model, trigger: trigger, select: selectSuggestion)
             }
             if !model.attachments.drafts.isEmpty { attachmentStrip }
-            TextField("Ask anything…", text: $model.prompt, selection: $selection, axis: .vertical)
-                .lineLimit(3...8).focused($isFocused).textFieldStyle(.plain)
+            AgentComposerTextInput(text: $model.prompt, selection: $selection, isFocused: $isFocused,
+                placeholder: "Ask anything…", pasteImages: pasteImages)
+                .overlay(alignment: .topLeading) {
+                    if model.prompt.isEmpty {
+                        Text("Ask anything…").foregroundStyle(.tertiary)
+                            .allowsHitTesting(false).accessibilityHidden(true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
                 .accessibilityIdentifier("new-agent-thread-prompt")
             if model.prompt.count > 120_000 {
                 Text("Use 120,000 characters or fewer.").font(.caption).foregroundStyle(.red)
@@ -146,13 +153,8 @@ struct NewAgentThreadMessageEditor: View {
     private var trigger: AgentThreadComposerTrigger? {
         let cursor: Int
         if let selection {
-            switch selection.indices {
-            case let .selection(range):
-                guard range.isEmpty else { return nil }
-                cursor = range.lowerBound <= model.prompt.endIndex ? range.lowerBound.utf16Offset(in: model.prompt) : model.prompt.utf16.count
-            case .multiSelection: return nil
-            @unknown default: return nil
-            }
+            guard selection.length == 0 else { return nil }
+            cursor = min(selection.location, model.prompt.utf16.count)
         } else { cursor = model.prompt.utf16.count }
         return AgentThreadComposerTrigger.detect(in: model.prompt, cursor: cursor)
     }
@@ -167,10 +169,26 @@ struct NewAgentThreadMessageEditor: View {
         }
         guard let result = original.replacing(in: model.prompt, with: replacement) else { return }
         model.prompt = result.text
-        if let range = Range(NSRange(location: result.cursor, length: 0), in: result.text) {
-            selection = TextSelection(insertionPoint: range.lowerBound)
-        }
+        selection = NSRange(location: result.cursor, length: 0)
         isFocused = true
+    }
+
+    private func pasteImages(_ providers: [NSItemProvider]) {
+        guard model.attachments.supportsUploads else {
+            errorMessage = "This environment does not support uploading images."
+            return
+        }
+        let room = max(0, 8 - model.attachments.drafts.count)
+        guard room > 0 else { errorMessage = "You can attach up to 8 files."; return }
+        Task { @MainActor in
+            for provider in providers.filter(PathwayPastedImage.supports).prefix(room) {
+                do {
+                    let image = try await PathwayPastedImage.load(provider)
+                    await model.attachments.add(data: image.data, name: image.name, mimeType: image.mimeType)
+                } catch is CancellationError { return }
+                catch { errorMessage = error.localizedDescription }
+            }
+        }
     }
 
     private func loadStashCount() async { stashCount = (try? await stash?.entries().count) ?? 0 }
