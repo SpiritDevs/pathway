@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct PathwayConnectedMailSettings: View {
-  @Environment(\.dismiss) private var dismiss
   @Bindable var model: PathwayConnectedMailModel
   let companyID: String
   let environments: [PathwayCompanyEnvironment]
@@ -63,9 +62,9 @@ struct PathwayConnectedMailSettings: View {
         ).foregroundStyle(.secondary)
       }
       if let error { Text(error).foregroundStyle(.red) }
+      if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
     }
     .navigationTitle("Mail settings")
-    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
     .confirmationDialog(
       "Disconnect Gmail?",
       isPresented: Binding(get: { disconnect != nil }, set: { if !$0 { disconnect = nil } }),

@@ -90,7 +90,7 @@ final class PathwayCloudModel {
     @ObservationIgnored private let client: (any PathwayCloudSyncClient)?
     @ObservationIgnored lazy var connectedMail = makeConnectedMailModel()
 
-    private func makeConnectedMailModel() -> PathwayConnectedMailModel {
+    func makeConnectedMailModel() -> PathwayConnectedMailModel {
         PathwayConnectedMailModel(
         request: { [weak self] kind, name, arguments in
             guard let self else { throw CancellationError() }

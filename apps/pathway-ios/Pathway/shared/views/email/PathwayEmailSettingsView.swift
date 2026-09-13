@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct PathwayEmailSettingsView: View {
-    @Environment(\.dismiss) private var dismiss
     @Bindable var model: PathwayEmailModel
     let companyID: String
     let environments: [PathwayCompanyEnvironment]
@@ -47,7 +46,6 @@ struct PathwayEmailSettingsView: View {
             if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
         }
         .navigationTitle("Email settings")
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
     }
 }
 

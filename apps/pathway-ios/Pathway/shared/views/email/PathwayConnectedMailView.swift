@@ -35,7 +35,6 @@ struct PathwayConnectedMailView: View {
   @State private var companyID = ""
   @State private var accountID = ""
   @State private var bucket = "priority"
-  @State private var settings = false
   @State private var drafts = false
   private var listScope: String { "\(companyID):\(accountID):\(bucket):\(model.companyID)" }
   var body: some View {
@@ -97,7 +96,6 @@ struct PathwayConnectedMailView: View {
       ToolbarItemGroup(placement: .topBarTrailing) {
         Button("Drafts", systemImage: "square.and.pencil") { drafts = true }.disabled(
           model.accounts.isEmpty)
-        Button("Email settings", systemImage: "gearshape") { settings = true }
       }
     }
     .onChange(of: companies, initial: true) {
@@ -110,13 +108,6 @@ struct PathwayConnectedMailView: View {
     .task(id: listScope) {
       guard model.companyID == companyID else { return }
       await model.observeMessages(companyID: companyID, accountID: accountID, bucket: bucket)
-    }
-    .sheet(isPresented: $settings) {
-      NavigationStack {
-        PathwayConnectedMailSettings(
-          model: model, companyID: companyID,
-          environments: environments.filter { $0.companyId == companyID })
-      }.id(companyID)
     }
     .sheet(isPresented: $drafts) {
       NavigationStack {

@@ -1,6 +1,6 @@
 # Environment settings on Apple clients
 
-Open **Settings → Environments, projects & providers**, choose an environment, then open **Environment preferences**. Changes apply to the selected host and its connected clients. Choose **Save settings** before leaving.
+Open **Settings → Workspaces → Environments & providers**, choose an environment, then open **Environment preferences**. Changes apply to the selected host and its connected clients. Choose **Save settings** before leaving.
 
 You can choose the default workspace for new threads, whether new worktrees start from origin, the directory used when adding projects, provider update checks, and the models used for generated text and context compaction.
 

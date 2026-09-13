@@ -31,13 +31,6 @@ struct AgentThreadsView: View {
     @State private var focuses = PathwayFocusModel()
     @State private var creatingFocus = false
     @State private var showingNotifications = false
-    @State private var settingsPage: ThreadSettingsPage?
-
-    private enum ThreadSettingsPage: String, Identifiable {
-        case all, general, appearance, focusViews
-        var id: Self { self }
-    }
-
     init(newThreadAction: @escaping () -> Void, initialFilter: PathwayThreadListFilter = .all) {
         self.newThreadAction = newThreadAction
         _listFilter = State(initialValue: initialFilter)
@@ -89,7 +82,6 @@ struct AgentThreadsView: View {
         .task(id: appModel.localStorageDirectory) { await focuses.observe(cloud: appModel.cloud, storageDirectory: appModel.localStorageDirectory) }
         .sheet(isPresented: $creatingFocus) { PathwayFocusEditorView(model: focuses) }
         .sheet(isPresented: $showingNotifications) { PathwayFocusNotificationsView(model: focuses) }
-        .sheet(item: $settingsPage) { settingsView($0) }
         .accessibilityIdentifier("agent-threads-list")
         .sheet(item: $sleepingThread) { thread in
             sleepSheet(for: thread)
@@ -334,12 +326,6 @@ struct AgentThreadsView: View {
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                Menu {
-                    Button("General", systemImage: "gearshape") { settingsPage = .general }
-                    Button("Appearance", systemImage: "paintbrush") { settingsPage = .appearance }
-                    Button("Focus Views", systemImage: "target") { settingsPage = .focusViews }
-                    Button("All settings", systemImage: "slider.horizontal.3") { settingsPage = .all }
-                } label: { Label("Settings", systemImage: "gearshape") }
                 focusMenu
                 filtersMenu
             } label: { Image(systemName: "line.3.horizontal.decrease").frame(minWidth: 44, minHeight: 44) }
@@ -350,25 +336,6 @@ struct AgentThreadsView: View {
         }
     }
 
-    private func settingsView(_ page: ThreadSettingsPage) -> some View {
-        NavigationStack {
-            Group {
-                switch page {
-                case .all: PathwaySettingsView(focusModel: focuses)
-                case .general: PathwayGeneralSettingsView()
-                case .appearance: PathwayAppearanceSettingsView()
-                case .focusViews: PathwayFocusSettingsView(model: focuses)
-                }
-            }
-            .toolbar {
-                if page != .all {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { settingsPage = nil }
-                    }
-                }
-            }
-        }
-    }
 
     private var focusMenu: some View {
         Menu { focusMenuContents } label: {
@@ -1065,6 +1032,8 @@ struct AgentThreadConversationView: View {
                         .accessibilityIdentifier("agent-thread-jump-bottom")
                     }
             }
+            .contentShape(.rect)
+            .simultaneousGesture(TapGesture().onEnded { isComposerFocused = false })
             .safeAreaInset(edge: .bottom, spacing: 4) {
                 VStack(spacing: 8) {
                     if let connect = appModel.connect {
@@ -1072,6 +1041,7 @@ struct AgentThreadConversationView: View {
                             chooseEnvironment: { showsAlternateEnvironment = true },
                             onAvailabilityChanged: { model.storageAllowsSend = $0 })
                             .id(model.environment.id)
+                            .simultaneousGesture(TapGesture().onEnded { isComposerFocused = false })
                     }
                     HStack(spacing: 8) {
                     if let connectionStatus {
@@ -1111,6 +1081,8 @@ struct AgentThreadConversationView: View {
                         AgentThreadSubagentPicker(model: model, openThread: openChild)
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
+                    .contentShape(.rect)
+                    .simultaneousGesture(TapGesture().onEnded { isComposerFocused = false })
                     AgentThreadComposer(model: model, isExpanded: $isComposerExpanded,
                         isFocused: $isComposerFocused, modelName: model.currentModelSelection.model,
                         usesCompactPresentation: true, isNavigationExpanded: false, onOpenThread: openChild, workspaceRoot: workspaceRoot, onOpenBrowser: { showsBrowser = true })

@@ -24,9 +24,16 @@ describe("remote browser RPC authorization", () => {
       };
       const handlers = yield* Effect.gen(function* () {
         const hosted = yield* RemoteBrowser;
-        return remoteBrowserRpcHandlers([AuthOrchestrationReadScope, AuthOrchestrationOperateScope], hosted);
+        return remoteBrowserRpcHandlers(
+          [AuthOrchestrationReadScope, AuthOrchestrationOperateScope],
+          hosted,
+        );
       }).pipe(Effect.provideService(RemoteBrowser, browser));
-      yield* handlers[WS_METHODS.previewRemoteCommand]({ action: "selectHost", host: "environment", threadId });
+      yield* handlers[WS_METHODS.previewRemoteCommand]({
+        action: "selectHost",
+        host: "environment",
+        threadId,
+      });
       yield* Stream.runCollect(handlers[WS_METHODS.subscribePreviewRemoteFrames]({ threadId }));
       expect(browser.command).toHaveBeenCalledOnce();
       expect(browser.frames).toHaveBeenCalledOnce();
