@@ -72,6 +72,8 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ProviderUsageSettingsSection } from "../usage/ProviderUsage";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
+import { ProviderAllowanceDialog } from "../usage/ProviderAllowanceDialog";
+import { isProviderUsageDriver } from "../usage/providerUsageAccounts";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
 import { searchableSetting } from "./settingsSearch";
@@ -833,6 +835,16 @@ export function EnvironmentProviderSettings({
                 instance={row.instance}
                 driverOption={driverOption}
                 liveProvider={liveProvider}
+                allowanceAction={
+                  isProviderUsageDriver(row.driver) ? (
+                    <ProviderAllowanceDialog
+                      environmentId={environmentId}
+                      instanceId={row.instanceId}
+                      provider={row.driver}
+                      displayName={row.instance.displayName?.trim() || resetLabel}
+                    />
+                  ) : undefined
+                }
                 isExpanded={openInstanceDetails[row.instanceId] ?? false}
                 onExpandedChange={(open) =>
                   setOpenInstanceDetails((existing) => ({

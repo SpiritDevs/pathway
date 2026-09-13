@@ -2,19 +2,23 @@ import SwiftUI
 
 /// Cloud account allocations use the same runtime guard as web and desktop.
 struct PathwayAllowanceSettingsView: View {
-  let orchestratorID: String?
-  let thread: PathwayAgentThread?
-  init(orchestratorID: String) {
-    self.orchestratorID = orchestratorID
-    thread = nil
+  let environmentID: String
+  let provider: PathwayAdministrationProvider
+  @State private var selectedWork = ""
+  @State private var accountKey: String?
+  private var thread: PathwayAgentThread? {
+    appModel.cloud.threads.first {
+      $0.environmentId == environmentID && "thread:\($0.threadId)" == selectedWork
+    }
   }
-  init(thread: PathwayAgentThread) {
-    self.thread = thread
-    orchestratorID = nil
+  private var threadChoices: [PathwayAgentThread] {
+    appModel.cloud.threads.filter { $0.environmentId == environmentID }
   }
   @Environment(PathwayAppModel.self) private var appModel
   @State private var companyID = ""
-  @State private var chatID = ""
+  private var chatID: String {
+    selectedWork.hasPrefix("chat:") ? String(selectedWork.dropFirst(5)) : ""
+  }
   @State private var budgets: [PathwayOrchestratorRecord] = []
   @State private var editing = false
   @State private var renewal: PathwayOrchestratorRecord?
@@ -23,8 +27,7 @@ struct PathwayAllowanceSettingsView: View {
   private var model: PathwayOrchestratorsModel { appModel.cloud.orchestrators }
   private var chats: [PathwayOrchestratorRecord] {
     model.chats.filter {
-      !$0.flag("archived") && $0.string("ownerSubject") == appModel.accountID
-        && $0.strings("orchestratorIds").contains(orchestratorID ?? "")
+      $0.string("ownerSubject") == appModel.accountID
     }
   }
   private var scopes: [JSONValue] {
@@ -40,27 +43,38 @@ struct PathwayAllowanceSettingsView: View {
   }
   private var visibleBudgets: [PathwayOrchestratorRecord] {
     budgets.filter { budget in
-      (budget.fields["scopes"]?.arrayValue ?? []).contains { scope in
-        if let thread {
-          return scope.objectValue?["environmentId"]?.stringValue == thread.environmentId
-            && scope.objectValue?["threadId"]?.stringValue == thread.threadId
-        }
-        return scope.objectValue?["chatId"]?.stringValue == chatID
+      let matchesAccount = (budget.fields["allocations"]?.arrayValue ?? []).contains {
+        $0.objectValue?["provider"]?.stringValue == provider.driver
+          && $0.objectValue?["accountKey"]?.stringValue == accountKey && accountKey != nil
       }
+      return matchesAccount
+        && (budget.fields["scopes"]?.arrayValue ?? []).contains { scope in
+          if let thread {
+            return scope.objectValue?["environmentId"]?.stringValue == thread.environmentId
+              && scope.objectValue?["threadId"]?.stringValue == thread.threadId
+          }
+          return scope.objectValue?["chatId"]?.stringValue == chatID
+        }
     }
   }
   var body: some View {
     Form {
       Section {
-        if let thread {
-          Text(thread.shell.title)
-        } else {
-          Picker("Workspace", selection: $companyID) {
-            ForEach(appModel.cloud.companies) { Text($0.name).tag($0.id) }
+        Picker("Workspace", selection: $companyID) {
+          ForEach(appModel.cloud.companies) { Text($0.name).tag($0.id) }
+        }
+        Picker("Thread or conversation", selection: $selectedWork) {
+          Text("Choose work to manage").tag("")
+          ForEach(threadChoices, id: \.threadId) { thread in
+            Text("Thread · \(thread.shell.title)").tag("thread:\(thread.threadId)")
           }
-          Picker("Conversation", selection: $chatID) {
-            ForEach(chats) { Text($0.string("title")).tag($0.id) }
+          ForEach(chats) { chat in
+            Text("Conversation · \(chat.string("title"))").tag("chat:\(chat.id)")
           }
+        }
+        if accountKey == nil {
+          Text("Connect this provider account to load its allowance readings.")
+            .font(.footnote).foregroundStyle(.secondary)
         }
         Text(
           "Percentage points refer to the full provider window: 10 points takes 60% remaining to 50%. All activity on the account counts. Delayed readings can allow overshoot."
@@ -69,6 +83,14 @@ struct PathwayAllowanceSettingsView: View {
       if let error { Text(error).foregroundStyle(.red) }
       ForEach(visibleBudgets) { budget in
         Section(budget.string("title")) {
+          if (budget.fields["allocations"]?.arrayValue ?? []).contains(where: {
+            $0.objectValue?["provider"]?.stringValue != provider.driver
+              || $0.objectValue?["accountKey"]?.stringValue != accountKey
+          }) {
+            Text(
+              "This allowance also covers other accounts. Actions below apply to the whole allowance."
+            ).font(.footnote).foregroundStyle(.secondary)
+          }
           if let schedule = budget.fields["scheduledResume"]?.objectValue,
             let at = schedule["at"]?.numericValue
           {
@@ -111,24 +133,48 @@ struct PathwayAllowanceSettingsView: View {
         Button("Set allowance") {
           renewal = nil
           editing = true
-        }.disabled(companyID.isEmpty || (thread == nil && chatID.isEmpty))
+        }.disabled(
+          companyID.isEmpty || (thread == nil && !chats.contains(where: { $0.id == chatID }))
+            || accountKey == nil)
       }
     }
-    .navigationTitle("Provider allowance")
+    .navigationTitle("\(provider.name) allowance")
     .disabled(saving)
     .onChange(of: appModel.accountID) { _, _ in
       budgets = []
       editing = false
       renewal = nil
       companyID = ""
-      chatID = ""
+      selectedWork = ""
+      accountKey = nil
       error = nil
+    }
+    .onChange(of: companyID) { _, _ in
+      selectedWork = ""
+      editing = false
+      renewal = nil
     }
     .onAppear {
       if companyID.isEmpty {
         companyID = thread?.companyId ?? appModel.cloud.companies.first?.id ?? ""
       }
-      if chatID.isEmpty { chatID = chats.first?.id ?? "" }
+    }
+    .task(id: "\(appModel.accountID ?? ""):\(environmentID):\(provider.instanceId)") {
+      accountKey = nil
+      guard
+        let environment = appModel.cloud.environments.first(where: {
+          $0.environment.environmentId == environmentID
+        })
+      else { return }
+      do {
+        let snapshot = try await appModel.cloud.environmentRequest(
+          environment: environment, method: "server.getProviderUsage",
+          payload: .object([
+            "instanceId": .string(provider.instanceId), "provider": .string(provider.driver),
+          ]))
+        try Task.checkCancellation()
+        accountKey = snapshot.objectValue?["accountKey"]?.stringValue
+      } catch is CancellationError {} catch { self.error = error.localizedDescription }
     }
     .task(id: "\(appModel.accountID ?? ""):\(companyID)") {
       budgets = []
@@ -148,7 +194,10 @@ struct PathwayAllowanceSettingsView: View {
         PathwayAllowanceEditor(
           companyID: companyID, scopes: scopes,
           title: thread?.shell.title ?? chats.first(where: { $0.id == chatID })?.string("title")
-            ?? "Conversation allowance", renewal: renewal)
+            ?? "Conversation allowance", renewal: renewal,
+          initialEnvironmentID: environmentID,
+          provider: provider,
+          accountKey: accountKey)
       }
     }
   }
@@ -201,6 +250,15 @@ private struct PathwayAllowanceEditor: View {
   let scopes: [JSONValue]
   let title: String
   let renewal: PathwayOrchestratorRecord?
+  let initialEnvironmentID: String
+  let provider: PathwayAdministrationProvider
+  let accountKey: String?
+  private var multipleAccounts: Bool {
+    (renewal?.fields["allocations"]?.arrayValue ?? []).contains {
+      $0.objectValue?["provider"]?.stringValue != provider.driver
+        || $0.objectValue?["accountKey"]?.stringValue != accountKey
+    }
+  }
   @Environment(PathwayAppModel.self) private var appModel
   @Environment(\.dismiss) private var dismiss
   @State private var environmentID = ""
@@ -254,9 +312,14 @@ private struct PathwayAllowanceEditor: View {
   var body: some View {
     Form {
       Section {
-        Picker("Environment", selection: $environmentID) {
-          ForEach(appModel.cloud.environments) {
-            Text($0.environment.label).tag($0.environment.environmentId)
+        if multipleAccounts {
+          Text(
+            "This allowance covers multiple accounts. Renew every account you want included; authorizing replaces the whole allocation."
+          ).font(.footnote).foregroundStyle(.secondary)
+          Picker("Environment", selection: $environmentID) {
+            ForEach(appModel.cloud.environments) {
+              Text($0.environment.label).tag($0.environment.environmentId)
+            }
           }
         }
         Picker("Account window", selection: $selected) {
@@ -312,7 +375,7 @@ private struct PathwayAllowanceEditor: View {
     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
     .onAppear {
       if environmentID.isEmpty {
-        environmentID = appModel.cloud.environments.first?.environment.environmentId ?? ""
+        environmentID = initialEnvironmentID
       }
     }
     .task(id: "\(appModel.accountID ?? ""):\(environmentID)") { await load() }
@@ -336,6 +399,11 @@ private struct PathwayAllowanceEditor: View {
         guard let fields = provider.objectValue, let driver = fields["driver"]?.stringValue,
           ["codex", "claudeAgent", "cursor"].contains(driver), let id = fields["instanceId"]
         else { continue }
+        if !multipleAccounts
+          && (id.stringValue != self.provider.instanceId || driver != self.provider.driver)
+        {
+          continue
+        }
         next.append(
           try await appModel.cloud.environmentRequest(
             environment: environment, method: "server.getProviderUsage",
@@ -347,7 +415,9 @@ private struct PathwayAllowanceEditor: View {
         environment.environment.environmentId == environmentID, !Task.isCancelled
       else { return }
       snapshots = next
-      selected = windows.first?.id ?? ""
+      selected =
+        windows.first(where: { $0.snapshot["instanceId"]?.stringValue == self.provider.instanceId }
+        )?.id ?? windows.first?.id ?? ""
     } catch {
       if !Task.isCancelled && accountID == appModel.accountID && readingID == requestID {
         self.error = error.localizedDescription

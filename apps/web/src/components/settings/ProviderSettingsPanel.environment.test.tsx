@@ -178,6 +178,38 @@ describe("EnvironmentProviderSettings routing", () => {
     });
   });
 
+  it("attaches allowance management to each supported provider instance in its environment", () => {
+    settingsState.value = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [codexId]: { driver: ProviderDriverKind.make("codex"), displayName: "Personal" },
+        [customId]: { driver: ProviderDriverKind.make("codex"), displayName: "Work" },
+      },
+    };
+    const panel = renderPanel();
+    for (const [instanceId, displayName] of [
+      [codexId, "Personal"],
+      [customId, "Work"],
+    ] as const) {
+      const card = visitElements(
+        panel,
+        (element) => element.props.instanceId === instanceId && "allowanceAction" in element.props,
+      );
+      const action = card?.props.allowanceAction as ReactElement<Record<string, unknown>>;
+      expect(action.props).toMatchObject({
+        environmentId,
+        instanceId,
+        provider: "codex",
+        displayName,
+      });
+    }
+    const unsupported = visitElements(
+      panel,
+      (element) => element.props.instanceId === "grok" && "allowanceAction" in element.props,
+    );
+    expect(unsupported?.props.allowanceAction).toBeUndefined();
+  });
+
   it("renders the provider layout inert with a limited-permissions notice when read only", () => {
     atoms.providers = [provider()];
     const panel = renderPanel({ readOnly: true });

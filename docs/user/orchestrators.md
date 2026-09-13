@@ -36,7 +36,7 @@ Preferences stay with one orchestrator unless you choose a wider scope. Ask to a
 
 ## Provider allowance
 
-Set a conversation's provider allowance in **Orchestrators → Work limits**. Ordinary worker threads also have **Manage allowance** in their Usage panel. On iOS, open **Composer options → Work limits → Provider allowance**.
+Open **Settings → Providers**, choose the environment, expand the provider instance, and select **Manage allowance**. Choose a workspace and the thread or conversation to manage. New allowances use only that provider instance’s account windows. On iOS, open **Settings → Environments & providers**, select the environment and provider, then **Manage allowance**.
 
 Choose a provider account window and the number of percentage points to allocate. Ten points from 60% remaining targets 50% remaining. All observed activity on that account counts, including other work; the display is not an exact measurement of this assignment's consumption.
 

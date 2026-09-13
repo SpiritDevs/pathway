@@ -35,9 +35,6 @@ struct AgentThreadComposerSettings: View {
                         )
                     }
                 }
-                Section("Work limits") {
-                    NavigationLink("Provider allowance") { PathwayAllowanceSettingsView(thread: model.thread) }
-                }
                 Section("How it should work") {
                     if provider?.showsInteractionMode == true {
                         Picker("Mode", selection: Binding(get: { model.interactionMode }, set: { value in

@@ -78,6 +78,13 @@ struct PathwayAdministrationProviderView: View {
             } else if let command = provider.versionAdvisory?.updateCommand {
                 Section("Host setup") { Text(command).font(.caption.monospaced()).textSelection(.enabled) }
             }
+            if ["codex", "claudeAgent", "cursor"].contains(provider.driver) {
+                Section("Allowance") {
+                    NavigationLink("Manage allowance") {
+                        PathwayAllowanceSettingsView(environmentID: client.environment.environment.environmentId, provider: provider)
+                    }
+                }
+            }
             Section("Available models") { ForEach(provider.models) { Text($0.name) } }
         }.navigationTitle(provider.name).disabled(busy)
             .confirmationDialog("Update this provider on the environment?", isPresented: $confirmUpdate) {
