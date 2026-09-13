@@ -204,6 +204,7 @@ export async function refreshOrchestratorWork(
       !registration ||
       registration.state !== "active" ||
       (registration.lastSeenAt ?? 0) < Date.now() - 90_000;
+    let resultRunId = work.resultRunId;
     let status: Doc<"aiOrchestratorWork">["status"] = threadId ? "working" : "queued";
     let detail = threadId
       ? "Agent thread is working."
@@ -215,7 +216,8 @@ export async function refreshOrchestratorWork(
     ) {
       if (shell.value.status === "completed") {
         status = "completed";
-        detail = "The delegated thread completed its run.";
+        resultRunId = shell.value.latestRunId;
+        detail = "The delegated run finished. Waiting for its findings to return.";
       } else if (
         ["failed", "interrupted", "cancelled", "rolled_back"].includes(shell.value.status)
       ) {
@@ -242,8 +244,20 @@ export async function refreshOrchestratorWork(
         ? "Stop requested. The offline environment has not confirmed interruption."
         : "Stop requested. Waiting for the delegated thread to confirm it stopped.";
     }
-    if (status === work.status && detail === work.detail && threadId === work.threadId) {
-    } else await ctx.db.patch(work._id, { status, detail, threadId, updatedAt: Date.now() });
+    if (
+      status !== work.status ||
+      detail !== work.detail ||
+      threadId !== work.threadId ||
+      resultRunId !== work.resultRunId
+    ) {
+      await ctx.db.patch(work._id, {
+        status,
+        detail,
+        threadId,
+        ...(resultRunId ? { resultRunId } : {}),
+        updatedAt: Date.now(),
+      });
+    }
     if (["queued", "working", "unknown"].includes(status)) occupied++;
   }
   if (orchestrator.status !== "active" || !orchestrator.capabilities.includes("threads.delegate"))

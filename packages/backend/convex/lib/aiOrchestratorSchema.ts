@@ -123,6 +123,7 @@ export const aiOrchestratorTables = {
       v.literal("failed"),
       v.literal("cancelled"),
     ),
+    seenAt: v.optional(v.number()),
     replyToId: v.union(v.string(), v.null()),
     createdAt: v.number(),
   })
@@ -188,6 +189,7 @@ export const aiOrchestratorTables = {
     .index("by_company_ready", ["companyId", "status", "notBefore"])
     .index("by_orchestrator_status", ["orchestratorId", "status"])
     .index("by_orchestrator_chat_status", ["orchestratorId", "chatId", "status", "createdAt"])
+    .index("by_chat_status", ["chatId", "status"])
     .index("by_message", ["messageId"]),
   aiOrchestratorWork: defineTable({
     id: v.string(),

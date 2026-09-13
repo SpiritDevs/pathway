@@ -14,9 +14,11 @@ Instructions shape how the coordinator communicates and plans. Coding remains de
 
 ## Conversations and work
 
+While an orchestrator is thinking, its avatar and a dots indicator appear just above the message composer. Group conversations show each active orchestrator. A message is marked **Seen** when an environment picks it up for the orchestrator; queued messages have not yet been picked up. Seen receipts remain after the response finishes. The archive shortcut stays at the bottom of the conversation sidebar.
+
 Invite orchestrators into a group when projects need to coordinate. Choose the group lead for unaddressed messages. You can share existing group history with a new participant or start their access from joining. Membership does not grant access to separate direct messages or private memory.
 
-Delegated work appears in the conversation details with a link to its worker thread. An offline environment's accepted work may still be running; an uncertain status does not mean it stopped.
+Delegated work appears in the conversation details with a link to its worker thread. When a run finishes, its final answer returns to the orchestrator automatically so it can report the findings. A finished run whose answer has not arrived yet says it is waiting for findings; collection resumes when its environment is available, even if the thread has since continued. An offline environment's accepted work may still be running; an uncertain status does not mean it stopped.
 
 PA assignments that are unrelated to a project run in worker conversations. Project orchestrators continue to dispatch within their own project. An authorized PA worker can read connected mail, prepare drafts, submit mail for delivery, and manage your manual time tracker. These personal tools stay in your private conversation and use the orchestrator's current mail and time permissions. Queued email is checked again before sending; uncertain delivery remains visible for review.
 

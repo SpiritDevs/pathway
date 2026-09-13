@@ -4,33 +4,30 @@ import { ListTodoIcon } from "lucide-react";
 import type {
   OrchestratorChat,
   OrchestratorMessage,
+  OrchestratorMessagePage,
   OrchestratorWorkItem,
 } from "@spiritdevs/contracts/aiOrchestrator";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
-import { useOrchestrators, useOrchestratorQuery } from "./OrchestratorContext";
+import { useOrchestrators } from "./OrchestratorContext";
 import { ConversationAvatar, OrchestratorAvatar } from "./OrchestratorAvatar";
 import { WorkList } from "./ConversationMetadata";
 
-type MessagePage = { messages: OrchestratorMessage[]; nextBefore: number | null };
+type MessagePage = OrchestratorMessagePage;
 const errorMessage = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 const ChatMarkdown = lazy(() => import("../ChatMarkdown"));
 export function ConversationMessages({
   chat,
   work,
   search,
+  result,
 }: {
   chat: OrchestratorChat;
   work: readonly OrchestratorWorkItem[];
   search: string;
+  result: { value?: MessagePage; error?: string };
 }) {
   const state = useOrchestrators();
-  const result = useOrchestratorQuery<MessagePage>(
-    state.client,
-    state.accountID,
-    "aiOrchestrators:messages",
-    { chatId: chat.id },
-  );
   const [older, setOlder] = useState<OrchestratorMessage[]>([]);
   const [nextBefore, setNextBefore] = useState<number | null | undefined>();
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -206,6 +203,10 @@ export function ConversationMessages({
                         own && "justify-end",
                       )}
                     >
+                      {own &&
+                        message.seenAt !== undefined &&
+                        !["working", "sent"].includes(message.status) &&
+                        "Seen · "}
                       {message.status === "queued" ? (
                         <>
                           Queued{" "}
@@ -225,7 +226,11 @@ export function ConversationMessages({
                           </button>
                         </>
                       ) : message.status === "working" ? (
-                        "Coordinating…"
+                        own ? (
+                          "Seen"
+                        ) : (
+                          "Coordinating…"
+                        )
                       ) : message.status === "failed" ? (
                         <>
                           Could not complete this request{" "}
@@ -249,7 +254,11 @@ export function ConversationMessages({
                       ) : message.status === "cancelled" ? (
                         "Cancelled"
                       ) : own ? (
-                        "Delivered"
+                        message.seenAt !== undefined ? (
+                          "Seen"
+                        ) : (
+                          "Delivered"
+                        )
                       ) : (
                         ""
                       )}

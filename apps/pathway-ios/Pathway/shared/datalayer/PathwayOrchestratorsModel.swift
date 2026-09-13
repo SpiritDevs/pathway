@@ -33,6 +33,7 @@ final class PathwayOrchestratorsModel {
   private(set) var contacts: [PathwayOrchestratorRecord] = []
   private(set) var chats: [PathwayOrchestratorRecord] = []
   private(set) var messages: [String: [PathwayOrchestratorRecord]] = [:]
+  private(set) var activity: [String: [PathwayOrchestratorRecord]] = [:]
   private(set) var work: [String: [PathwayOrchestratorRecord]] = [:]
   private(set) var nextBefore: [String: Int] = [:]
   var selectedID: String?
@@ -117,6 +118,7 @@ final class PathwayOrchestratorsModel {
           if !chats.contains(where: { $0.id == selectedID }) { selectedID = nil }
           let allowed = Set(chats.map(\.id))
           messages = messages.filter { allowed.contains($0.key) }
+          activity = activity.filter { allowed.contains($0.key) }
           work = work.filter { allowed.contains($0.key) }
           drafts = drafts.filter { allowed.contains($0.key) }
           nextBefore = nextBefore.filter { allowed.contains($0.key) }
@@ -125,6 +127,7 @@ final class PathwayOrchestratorsModel {
       } catch {
         if generation == current && !Task.isCancelled {
           chats = []
+          activity = [:]
           messages = [:]
           work = [:]
           selectedID = nil
@@ -152,6 +155,7 @@ final class PathwayOrchestratorsModel {
       contacts = []
       contactScopes = [:]
       chats = []
+      activity = [:]
       messages = [:]
       work = [:]
       nextBefore = [:]
@@ -173,6 +177,7 @@ final class PathwayOrchestratorsModel {
     await withTaskGroup(of: Void.self) { group in
       for (key, name) in [
         ("messages", "aiOrchestrators:messages"), ("work", "aiOrchestrators:work"),
+        ("activity", "aiOrchestrators:activity"),
       ] {
         group.addTask { @MainActor [weak self] in
           guard let self else { return }
@@ -181,6 +186,8 @@ final class PathwayOrchestratorsModel {
               guard !Task.isCancelled, generation == current else { return }
               if key == "work" {
                 work[chatID] = PathwayOrchestratorRecord.records(value)
+              } else if key == "activity" {
+                activity[chatID] = PathwayOrchestratorRecord.records(value)
               } else {
                 let page = PathwayOrchestratorRecord.records(
                   value.objectValue?["messages"] ?? .array([]))
@@ -203,7 +210,9 @@ final class PathwayOrchestratorsModel {
           } catch {
             if generation == current && !Task.isCancelled {
               errorMessage = error.localizedDescription
-              if key == "messages" {
+              if key == "activity" {
+                activity[chatID] = []
+              } else if key == "messages" {
                 messages[chatID] = []
                 nextBefore[chatID] = nil
                 loadedHistory.remove(chatID)

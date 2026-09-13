@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
 import {
@@ -15,7 +15,12 @@ import {
   SearchIcon,
   XIcon,
 } from "lucide-react";
-import type { OrchestratorChat, OrchestratorWorkItem } from "@spiritdevs/contracts/aiOrchestrator";
+import type {
+  OrchestratorChat,
+  OrchestratorWorkItem,
+  OrchestratorMessagePage,
+  OrchestratorActivity,
+} from "@spiritdevs/contracts/aiOrchestrator";
 import { cn, randomUUID } from "../../lib/utils";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { Button } from "../ui/button";
@@ -24,14 +29,28 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { RightPanelSheet } from "../RightPanelSheet";
 import { SheetTitle } from "../ui/sheet";
 import { useOrchestrators, useOrchestratorQuery } from "./OrchestratorContext";
-import { ConversationAvatar } from "./OrchestratorAvatar";
+import { ConversationAvatar, OrchestratorAvatar } from "./OrchestratorAvatar";
 import { ConversationList } from "./OrchestratorSidebar";
 import { NewConversationDialog } from "./NewConversationDialog";
 import { ConversationMessages } from "./ConversationMessages";
 import { ConversationMetadata } from "./ConversationMetadata";
 
+const EMPTY_ACTIVITY: OrchestratorActivity = [];
 const errorMessage = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
-function Composer({ chat }: { chat: OrchestratorChat }) {
+function Composer({ chat, activity }: { chat: OrchestratorChat; activity: OrchestratorActivity }) {
+  const [now, setNow] = useState(Date.now);
+  const activeIds = new Set(
+    activity.filter((item) => item.expiresAt > Math.max(now, Date.now())).map((item) => item.id),
+  );
+  useEffect(() => {
+    const current = Date.now();
+    const nextExpiry = Math.min(
+      ...activity.map((item) => item.expiresAt).filter((time) => time > current),
+    );
+    if (!Number.isFinite(nextExpiry)) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, nextExpiry - current));
+    return () => clearTimeout(timer);
+  }, [activity, now]);
   const state = useOrchestrators();
   const [sending, setSending] = useState(false);
   const [target, setTarget] = useState(chat.leadId);
@@ -83,6 +102,26 @@ function Composer({ chat }: { chat: OrchestratorChat }) {
           send();
         }}
       >
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex min-h-10 flex-wrap items-center gap-3 px-2 pb-2"
+        >
+          {contacts
+            .filter((contact) => activeIds.has(contact.id))
+            .map((contact) => (
+              <div key={contact.id} className="flex items-center gap-2">
+                <OrchestratorAvatar contact={contact} className="size-6" />
+                <span
+                  aria-hidden="true"
+                  className="rounded-full bg-muted px-2.5 py-1 text-xs tracking-widest text-muted-foreground"
+                >
+                  •••
+                </span>
+                <span className="text-xs text-muted-foreground">{contact.name} is thinking…</span>
+              </div>
+            ))}
+        </div>
         {contacts.length > 1 && (
           <label className="mb-2 flex items-center gap-1 pl-2 text-[11px] text-muted-foreground">
             To
@@ -166,6 +205,18 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
     state.client,
     state.accountID,
     "aiOrchestrators:work",
+    chat ? { chatId: chat.id } : null,
+  );
+  const messages = useOrchestratorQuery<OrchestratorMessagePage>(
+    state.client,
+    state.accountID,
+    "aiOrchestrators:messages",
+    chat ? { chatId: chat.id } : null,
+  );
+  const activity = useOrchestratorQuery<OrchestratorActivity>(
+    state.client,
+    state.accountID,
+    "aiOrchestrators:activity",
     chat ? { chatId: chat.id } : null,
   );
   const sheet = details && (floatingDetails || floating || narrow);
@@ -312,8 +363,13 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
               chat={chat}
               work={work.value ?? []}
               search={search}
+              result={messages}
             />
-            <Composer key={`composer:${chat.id}`} chat={chat} />
+            <Composer
+              key={`composer:${chat.id}`}
+              chat={chat}
+              activity={activity.value ?? EMPTY_ACTIVITY}
+            />
           </>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 text-center">

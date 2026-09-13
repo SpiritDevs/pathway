@@ -36,10 +36,15 @@ struct AgentOrchestratorView: View {
                         }
                     }
                 }
-                Button(archived ? "Show conversations" : "Archived conversations") { archived.toggle() }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Conversations")
+            .navigationTitle("Orchestrators")
+            .safeAreaInset(edge: .bottom) {
+                Button { archived.toggle() } label: {
+                    Label(archived ? "Show conversations" : "Archived conversations", systemImage: "archivebox")
+                        .frame(maxWidth: .infinity, alignment: .leading).padding()
+                }.background(.regularMaterial)
+            }
             .searchable(text: $search, prompt: "Search conversations")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done", action: close) }
@@ -81,6 +86,19 @@ private struct PathwayOrchestratorConversation: View {
     private var model: PathwayOrchestratorsModel { appModel.cloud.orchestrators }
     private var current: PathwayOrchestratorRecord { model.chats.first { $0.id == chat.id } ?? chat }
     private var messages: [PathwayOrchestratorRecord] { model.messages[chat.id] ?? [] }
+    private var activityDeadlines: [Date] {
+        ([Date()] + (model.activity[chat.id] ?? []).map {
+            Date(timeIntervalSince1970: Double($0.number("expiresAt")) / 1000)
+        }).sorted()
+    }
+    private func activeContacts(at date: Date) -> [PathwayOrchestratorRecord] {
+        model.contacts.filter { contact in
+            current.strings("orchestratorIds").contains(contact.id) &&
+                (model.activity[chat.id] ?? []).contains {
+                    $0.id == contact.id && Double($0.number("expiresAt")) > date.timeIntervalSince1970 * 1000
+                }
+        }
+    }
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -110,6 +128,21 @@ private struct PathwayOrchestratorConversation: View {
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
                 if let error = model.errorMessage { Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal) }
+                if !current.flag("archived") {
+                    TimelineView(.explicit(activityDeadlines)) { timeline in
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(activeContacts(at: timeline.date)) { contact in
+                                HStack(spacing: 8) {
+                                    PathwayOrchestratorAvatar(name: contact.string("name"), color: contact.string("color"))
+                                        .scaleEffect(0.6).frame(width: 24, height: 24)
+                                    Text("•••").padding(.horizontal, 10).padding(.vertical, 4)
+                                        .background(.quaternary, in: Capsule()).accessibilityHidden(true)
+                                    Text("\(contact.string("name")) is thinking…").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal)
+                    }
+                }
                 if current.strings("orchestratorIds").count > 1 {
                     Picker("Address orchestrator", selection: $targetID) {
                         Text("Conversation lead").tag("")
@@ -131,6 +164,14 @@ private struct PathwayOrchestratorConversation: View {
         .sheet(isPresented: $details) { PathwayOrchestratorParticipants(chat: current) }
         .task(id: "\(chat.id):\(scenePhase == .active)") { if scenePhase == .active { await model.observeConversation(chat.id) } }
     }
+    private func receipt(_ message: PathwayOrchestratorRecord, own: Bool) -> String {
+        let status = message.string("status")
+        if own && (status == "working" || (status == "sent" && message.number("seenAt") > 0)) { return "Seen" }
+        if own && status == "sent" { return "Delivered" }
+        if status == "working" { return "Coordinating…" }
+        let prefix = own && message.number("seenAt") > 0 ? "Seen · " : ""
+        return status == "sent" ? "" : prefix + status.capitalized
+    }
     @ViewBuilder private func bubble(_ message: PathwayOrchestratorRecord) -> some View {
         let own = message.string("senderKind") == "user" && message.string("senderId") == appModel.accountID
         if message.string("senderKind") == "system" {
@@ -145,7 +186,7 @@ private struct PathwayOrchestratorConversation: View {
                         else { AgentTranscriptMarkdown(markdown: message.string("text")).equatable() }
                     }.textSelection(.enabled).padding(12).foregroundStyle(own ? Color.white : Color.primary).background(own ? Color.blue : Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 20))
                     HStack {
-                        Text(message.string("status") == "working" ? "Coordinating…" : message.string("status").capitalized).font(.caption2).foregroundStyle(.secondary)
+                        Text(receipt(message, own: own)).font(.caption2).foregroundStyle(.secondary)
                         if own && ["queued", "failed"].contains(message.string("status")) {
                             Button(message.string("status") == "queued" ? "Cancel" : "Retry") { Task { do { try await model.mutate(message.string("status") == "queued" ? "cancelMessage" : "retryMessage", ["chatId": .string(chat.id), "messageId": .string(message.id)]) } catch { model.errorMessage = error.localizedDescription } } }.font(.caption2)
                         }

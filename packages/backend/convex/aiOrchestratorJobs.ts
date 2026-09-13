@@ -509,13 +509,7 @@ async function notifyFinishedWork(ctx: MutationCtx, orchestrator: Doc<"aiOrchest
   );
   const groups = new Map<string, Array<Doc<"aiOrchestratorWork">>>();
   for (const work of batches.flat()) {
-    if (
-      work.status === "completed" &&
-      work.resultRequired &&
-      !work.resultCollected &&
-      Date.now() - work.updatedAt < LEASE_MS
-    )
-      continue;
+    if (work.status === "completed" && !work.resultCollected) continue;
     if (!orchestrator.proactive || work.stopRequested) {
       await ctx.db.patch(work._id, { completionNotified: true });
       continue;
@@ -770,7 +764,10 @@ export const claim = mutation({
           await ctx.db.patch(message._id, { status: "cancelled" });
         continue;
       }
-      await ctx.db.patch(claim.message._id, { status: "working" });
+      await ctx.db.patch(claim.message._id, {
+        status: "working",
+        seenAt: claim.message.seenAt ?? now,
+      });
       return {
         id: job.id,
         generation,
@@ -1316,7 +1313,11 @@ export const pendingWorkResults = query({
         orchestrator &&
         (await orchestratorCanReadWork(ctx, orchestrator, work, actor.registration))
       )
-        pending.push({ workId: work.id, threadId: work.threadId });
+        pending.push({
+          workId: work.id,
+          threadId: work.threadId,
+          ...(work.resultRunId ? { runId: work.resultRunId } : {}),
+        });
     }
     return pending;
   },
@@ -1362,17 +1363,22 @@ export const collectWorkResult = mutation({
       .unique();
     if (!thread) return false;
     const shell = decodeThreadShell(thread.shell);
-    if (
+    if (work.resultRunId) {
+      if (work.resultRunId !== args.runId) return false;
+    } else if (
       shell.activeRunId !== null ||
       shell.latestRunId !== args.runId ||
       shell.status !== "completed"
-    )
+    ) {
       return false;
+    }
+    if (!args.text.trim()) return false;
     if (args.text.length > 16000) return fail("The worker result is too large.");
     await ctx.db.patch(work._id, {
       resultCollected: true,
       resultText: args.text,
       resultRunId: args.runId,
+      detail: "The delegated run finished and returned its findings.",
       completionNotified: false,
       updatedAt: Date.now(),
     });
