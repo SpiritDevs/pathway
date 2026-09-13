@@ -175,6 +175,11 @@ extension PathwayAgentThreadModel {
 
     func addAttachment(data: Data, name: String, mimeType: String) async {
         let type = mimeType.hasPrefix("image/") ? "image" : "file"
+        let image: PathwayImageUpload
+        do { image = try await PathwayImageUpload.prepare(data: data, name: name, mimeType: mimeType) }
+        catch is CancellationError { return }
+        catch { actionError = error.localizedDescription; return }
+        let data = image.data, name = image.name, mimeType = image.mimeType
         guard supportsAttachmentUploads, type == "image" || maximumFileAttachmentBytes != nil else {
             actionError = "This environment does not support uploading this file type."; return
         }

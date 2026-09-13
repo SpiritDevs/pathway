@@ -565,11 +565,13 @@ final class PathwayAgentThreadCreationModel {
             guard combined.count <= 120_000 else { throw PathwayCaptureError.invalidInput }
             for file in draft.attachments {
                 try Task.checkCancellation()
-                let data = try await store.data(for: file, in: draft)
-                if !attachments.drafts.contains(where: { $0.name == file.name && $0.mimeType == file.mimeType && attachments.bytes[$0.id] == data }) {
-                    await attachments.add(data: data, name: file.name, mimeType: file.mimeType)
+                let original = try await store.data(for: file, in: draft)
+                let image = try await PathwayImageUpload.prepare(data: original, name: file.name, mimeType: file.mimeType)
+                let data = image.data
+                if !attachments.drafts.contains(where: { $0.name == image.name && $0.mimeType == image.mimeType && attachments.bytes[$0.id] == data }) {
+                    await attachments.add(data: data, name: image.name, mimeType: image.mimeType)
                 }
-                guard attachments.drafts.contains(where: { $0.name == file.name && $0.mimeType == file.mimeType && attachments.bytes[$0.id] == data }) else {
+                guard attachments.drafts.contains(where: { $0.name == image.name && $0.mimeType == image.mimeType && attachments.bytes[$0.id] == data }) else {
                     throw PathwayThreadConversationError.message(attachments.errorMessage ?? "The shared attachment could not be imported.")
                 }
             }

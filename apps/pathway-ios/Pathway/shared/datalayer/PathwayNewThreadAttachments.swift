@@ -111,6 +111,11 @@ final class PathwayNewThreadAttachments {
     }
 
     func add(data: Data, name: String, mimeType: String) async {
+        let image: PathwayImageUpload
+        do { image = try await PathwayImageUpload.prepare(data: data, name: name, mimeType: mimeType) }
+        catch is CancellationError { return }
+        catch { errorMessage = error.localizedDescription; return }
+        let data = image.data, name = image.name, mimeType = image.mimeType
         guard !discarded else { return }
         let type = mimeType.hasPrefix("image/") ? "image" : "file"
         guard drafts.count < 8 else { errorMessage = "You can attach up to 8 files."; return }
