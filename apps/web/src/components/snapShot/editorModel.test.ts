@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   annotationBounds,
+  annotationHitBounds,
+  containsPoint,
+  labelNeedsOutline,
   arrowHead,
   arrowHandles,
   arrowPath,
@@ -129,6 +132,7 @@ describe("PNG export", () => {
       beginPath: vi.fn(),
       strokeRect: vi.fn(),
       fillText: vi.fn(),
+      measureText: vi.fn((line: string) => ({ width: line.length * 26 * 0.65 })),
       fillRect: vi.fn(),
     };
     const canvas = {
@@ -301,14 +305,89 @@ describe("arrow handles and label export", () => {
       restore: vi.fn(),
       beginPath: vi.fn(),
       fillStyle: "",
+      font: "",
+      measureText: vi.fn((line: string) => ({ width: line.length * 26 * 0.65 }) as TextMetrics),
       fillRect: vi.fn(() => fills.push(context.fillStyle)),
       fillText: vi.fn(() => fills.push(context.fillStyle)),
     };
     const text: Annotation = { ...arrow, tool: "text", text: "Hello\nWorld" };
     drawAnnotation(context as unknown as CanvasRenderingContext2D, text);
     expect(fills).toEqual(["#ed3b32", "#ffffff", "#ffffff"]);
-    const bounds = annotationBounds(text);
+    const bounds = annotationBounds(text, context);
     expect(context.fillRect).toHaveBeenCalledWith(bounds.x, bounds.y, bounds.width, bounds.height);
     expect(context.fillText).toHaveBeenNthCalledWith(1, "Hello", 127.8, 87.8);
+  });
+});
+
+describe("annotation review regressions", () => {
+  it("measures the widest rendered line, including wide glyphs and ink overhang", () => {
+    const measureText = vi.fn(
+      (line: string) =>
+        ({
+          width: line === "WWW" ? 90 : 52,
+          actualBoundingBoxLeft: 2,
+          actualBoundingBoxRight: line === "WWW" ? 91 : 52,
+        }) as TextMetrics,
+    );
+    const measurer = { font: "", measureText };
+    const bounds = annotationBounds({ ...arrow, tool: "text", text: "WWW\n漢字" }, measurer);
+    expect(measurer.font).toBe("600 26px Arial, sans-serif");
+    expect(measureText.mock.calls).toEqual([["WWW"], ["漢字"]]);
+    expect(bounds.width).toBe(93 + 26 * 0.6);
+    expect(bounds.height).toBe(2 * 26 * 1.25 + 26 * 0.6);
+  });
+
+  it.each(["#ffffff", "#ffcc00", "#eeeeee"])("outlines white lettering on %s", (color) => {
+    expect(labelNeedsOutline(color)).toBe(true);
+    const paints: string[] = [];
+    const context = {
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      fillRect: vi.fn(),
+      measureText: vi.fn(() => ({ width: 90 }) as TextMetrics),
+      strokeText: vi.fn(() => paints.push("outline")),
+      fillText: vi.fn(() => paints.push("white")),
+      fillStyle: "",
+      strokeStyle: "",
+      lineWidth: 0,
+    };
+    drawAnnotation(context as unknown as CanvasRenderingContext2D, {
+      ...arrow,
+      tool: "text",
+      text: "WWW",
+      color,
+    });
+    expect(paints).toEqual(["outline", "white"]);
+    expect(context.fillStyle).toBe("#ffffff");
+    expect(context.strokeStyle).toBe("#535353");
+    expect(context.lineWidth).toBe(26 * 0.08);
+  });
+
+  it("keeps the requested red background and white text without an outline", () => {
+    expect(labelNeedsOutline("#ed3b32")).toBe(false);
+  });
+
+  it.each([10, 16])("includes every filled arrowhead corner at stroke %s", (width) => {
+    for (const points of [
+      [
+        { x: 0, y: 0 },
+        { x: 200, y: 0 },
+      ],
+      [
+        { x: 200, y: 0 },
+        { x: 0, y: 0 },
+      ],
+      [
+        { x: 0, y: 0 },
+        { x: 100, y: 200 },
+        { x: 200, y: 0 },
+      ],
+    ]) {
+      const annotation = { ...arrow, points, width };
+      const bounds = annotationHitBounds(annotation);
+      for (const point of arrowHead(annotation)) expect(containsPoint(bounds, point)).toBe(true);
+      expect(containsPoint(bounds, { x: 0, y: width * 1.25 })).toBe(true);
+    }
   });
 });

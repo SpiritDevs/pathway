@@ -36,15 +36,39 @@ export function rectangleBetween(a: Point, b: Point): Rect {
   };
 }
 
-export function annotationBounds(annotation: Annotation): Rect {
+type TextMeasurer = Pick<CanvasRenderingContext2D, "font" | "measureText">;
+let textMeasurer: TextMeasurer | null = null;
+
+function getTextMeasurer(): TextMeasurer | null {
+  if (!textMeasurer && typeof document !== "undefined") {
+    textMeasurer = document.createElement("canvas").getContext("2d");
+  }
+  return textMeasurer;
+}
+
+/** Keep white lettering visible on light custom colors and the white palette swatch. */
+export function labelNeedsOutline(color: string): boolean {
+  const rgb = Number.parseInt(color.slice(1), 16);
+  return ((rgb >> 16) * 299 + ((rgb >> 8) & 255) * 587 + (rgb & 255) * 114) / 1000 > 180;
+}
+
+export function annotationBounds(annotation: Annotation, measurer?: TextMeasurer): Rect {
   const start = annotation.points[0]!;
   if (annotation.tool === "text") {
     const lines = (annotation.text || "Text").split("\n");
+    const context = measurer ?? getTextMeasurer();
+    if (context) context.font = `600 ${annotation.fontSize}px Arial, sans-serif`;
+    const widths = lines.map((line) => {
+      if (!context) return Array.from(line).length * annotation.fontSize;
+      const metrics = context.measureText(line);
+      return Math.max(
+        metrics.width,
+        (metrics.actualBoundingBoxLeft || 0) + (metrics.actualBoundingBoxRight || 0),
+      );
+    });
     return {
       ...start,
-      width:
-        Math.max(...lines.map((line) => line.length), 1) * annotation.fontSize * 0.65 +
-        annotation.fontSize * 0.6,
+      width: Math.max(...widths, 1) + annotation.fontSize * 0.6,
       height: lines.length * annotation.fontSize * 1.25 + annotation.fontSize * 0.6,
     };
   }
@@ -63,6 +87,19 @@ export function annotationBounds(annotation: Annotation): Rect {
     bottom = Math.max(bottom, point.y);
   }
   return rectangleBetween({ x: left, y: top }, { x: right, y: bottom });
+}
+
+/** Include the visible arrowhead and thick shaft without changing resize geometry. */
+export function annotationHitBounds(annotation: Annotation): Rect {
+  const bounds = annotationBounds(annotation);
+  if (annotation.tool !== "arrow") return bounds;
+  const head = arrowHead(annotation);
+  const padding = annotation.width * 1.25;
+  const left = Math.min(bounds.x - padding, ...head.map((point) => point.x));
+  const top = Math.min(bounds.y - padding, ...head.map((point) => point.y));
+  const right = Math.max(bounds.x + bounds.width + padding, ...head.map((point) => point.x));
+  const bottom = Math.max(bounds.y + bounds.height + padding, ...head.map((point) => point.y));
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 export function containsPoint(bounds: Rect, point: Point, padding = 0): boolean {
@@ -217,8 +254,8 @@ export function arrowHead(annotation: Annotation): Point[] {
 
 export function drawAnnotation(context: CanvasRenderingContext2D, annotation: Annotation): void {
   const start = annotation.points[0]!;
-  const bounds = annotationBounds(annotation);
   context.save();
+  const bounds = annotationBounds(annotation, context);
   context.strokeStyle = annotation.color;
   context.fillStyle = annotation.color;
   context.lineWidth = annotation.width;
@@ -244,7 +281,16 @@ export function drawAnnotation(context: CanvasRenderingContext2D, annotation: An
     context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
     context.fillStyle = "#ffffff";
     const padding = annotation.fontSize * 0.3;
+    const outlined = labelNeedsOutline(annotation.color);
+    context.strokeStyle = "#535353";
+    context.lineWidth = annotation.fontSize * 0.08;
     (annotation.text || "").split("\n").forEach((line, index) => {
+      if (outlined)
+        context.strokeText(
+          line,
+          start.x + padding,
+          start.y + padding + index * annotation.fontSize * 1.25,
+        );
       context.fillText(
         line,
         start.x + padding,

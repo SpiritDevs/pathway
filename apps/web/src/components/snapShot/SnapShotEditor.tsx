@@ -36,6 +36,8 @@ import { randomUUID } from "../../lib/utils";
 
 import {
   annotationBounds,
+  annotationHitBounds,
+  labelNeedsOutline,
   arrowHead,
   arrowHandles,
   arrowPath,
@@ -165,6 +167,9 @@ function AnnotationShape({ annotation }: { annotation: Annotation }) {
             x={start.x + annotation.fontSize * 0.3}
             y={start.y + annotation.fontSize * 0.3}
             fill="white"
+            stroke={labelNeedsOutline(annotation.color) ? "#535353" : "none"}
+            strokeWidth={annotation.fontSize * 0.08}
+            paintOrder="stroke"
             fontFamily="Arial, sans-serif"
             fontSize={annotation.fontSize}
             fontWeight="600"
@@ -505,7 +510,7 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
       }
       const hit = original.annotations
         .toReversed()
-        .find((annotation) => containsPoint(annotationBounds(annotation), point, 7 / scale));
+        .find((annotation) => containsPoint(annotationHitBounds(annotation), point, 7 / scale));
       setSelectedId(hit?.id ?? null);
       if (hit) {
         setColor(hit.color);
@@ -1066,6 +1071,10 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
                         left: (editing.points[0]!.x - document.crop.x) * scale,
                         top: (editing.points[0]!.y - document.crop.y) * scale,
                         color: "#ffffff",
+                        WebkitTextStroke: labelNeedsOutline(editing.color)
+                          ? `${editing.fontSize * 0.08 * scale}px #535353`
+                          : undefined,
+                        paintOrder: "stroke",
                         background: editing.color,
                         padding: editing.fontSize * 0.3 * scale,
                         fontSize: editing.fontSize * scale,
