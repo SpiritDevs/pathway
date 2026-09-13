@@ -21,43 +21,96 @@ extension PathwayAgentThreadModel {
         }
     }
 
-    /// Load attachments before cancelling so a failed download leaves the queued message intact.
+    /// Call only after the user acknowledges that the original message may still run.
+    func keepQueuedEditAsNewDraft() async throws {
+        guard !isRestoringQueuedMessage, let pending = pendingQueuedEditRunID, let store = draftStore else { return }
+        isRestoringQueuedMessage = true
+        defer { isRestoringQueuedMessage = false }
+        pendingQueuedEditRunID = nil
+        do { try await store.save(draftSnapshot()) }
+        catch { pendingQueuedEditRunID = pending; throw error }
+        for attachment in draftAttachments where attachment.state != .ready {
+            await retryAttachment(id: attachment.id)
+        }
+    }
+
+    /// A saved edit remains fenced until cancellation is acknowledged or observed in the snapshot.
+    func reconcileQueuedEdit() async {
+        guard !isRestoringQueuedMessage, let runID = pendingQueuedEditRunID,
+              runs.first(where: { $0.id == runID })?.status == "cancelled" else { return }
+        pendingQueuedEditRunID = nil
+        await persistDraftNow()
+        for attachment in draftAttachments where attachment.state != .ready {
+            await retryAttachment(id: attachment.id)
+        }
+    }
+
+    /// Download to disk and commit the recovery draft before sending the destructive cancellation.
     func restoreQueuedMessage(_ runID: String) async throws {
-        guard draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, draftAttachments.isEmpty, !isSending else {
+        guard !isRestoringQueuedMessage else { return }
+        isRestoringQueuedMessage = true
+        defer {
+            isRestoringQueuedMessage = false
+            Task { await reconcileQueuedEdit() }
+        }
+        if pendingQueuedEditRunID == runID {
+            try await cancelQueuedRun(runID)
+            pendingQueuedEditRunID = nil
+            await persistDraftNow()
+            for attachment in draftAttachments { await retryAttachment(id: attachment.id) }
+            return
+        }
+        guard pendingQueuedEditRunID == nil,
+              draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, draftAttachments.isEmpty, !isSending else {
             throw PathwayThreadConversationError.message("Send or stash your current draft before editing a queued message.")
         }
-        guard let run = queuedRuns.first(where: { $0.id == runID }), canRestoreQueuedMessage(run),
+        guard let store = draftStore,
+              let run = queuedRuns.first(where: { $0.id == runID }), canRestoreQueuedMessage(run),
               let message = queuedMessage(for: run) else {
-            throw PathwayThreadConversationError.message("This message is no longer available to edit.")
+            throw PathwayThreadConversationError.message("This message is no longer available to edit or cannot be saved on this device.")
         }
-        var restored: [(PathwayThreadAttachmentDraft, Data)] = []
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var restored: [PathwayThreadAttachmentDraft] = []
         for attachment in message.attachments {
             let url = try await attachmentURL(attachment)
-            let (data, response) = try await URLSession.shared.data(from: url)
+            let (temporary, response) = try await URLSession.shared.download(from: url)
+            defer { try? FileManager.default.removeItem(at: temporary) }
+            let size = try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize
             guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode),
-                  data.count == attachment.sizeBytes else {
+                  size == attachment.sizeBytes else {
                 throw PathwayThreadConversationError.message("Could not load \(attachment.name). The message is still queued.")
             }
-            var draft = PathwayThreadAttachmentDraft(id: UUID().uuidString, name: attachment.name,
-                mimeType: attachment.mimeType, type: attachment.type, sizeBytes: data.count,
-                state: .uploading, previewData: attachment.type == "image" ? data : nil)
-            draft.source = attachment.source
-            restored.append((draft, data))
+            let id = UUID().uuidString
+            let local = directory.appending(path: id)
+            try FileManager.default.moveItem(at: temporary, to: local)
+            var attachmentDraft = PathwayThreadAttachmentDraft(id: id, name: attachment.name,
+                mimeType: attachment.mimeType, type: attachment.type, sizeBytes: attachment.sizeBytes,
+                state: .uploading, previewData: nil)
+            attachmentDraft.source = attachment.source
+            attachmentDraft.localFileURL = local
+            restored.append(attachmentDraft)
         }
         guard draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, draftAttachments.isEmpty, !isSending else {
             throw PathwayThreadConversationError.message("Send or stash your current draft before editing a queued message.")
         }
-        try await cancelQueuedRun(runID)
-        // Keep content typed on another task while cancellation was in flight.
-        draft = draft.isEmpty ? message.text ?? "" : (message.text ?? "") + "\n\n" + draft
+        // This throwing write is the cancellation prerequisite, unlike best-effort draft autosave.
+        let saved = try await store.saveQueuedEdit(PathwayConversationDraftSnapshot(text: message.text ?? "", attachments: restored,
+            data: [:], preparedSend: nil, preparedNewSend: nil, revision: DispatchTime.now().uptimeNanoseconds,
+            pendingQueuedEditRunID: runID))
+        pendingQueuedEditRunID = runID
+        draft = draft.isEmpty ? saved.text : saved.text + "\n\n" + draft
+        draftAttachments.append(contentsOf: saved.attachments)
         preparedSend = nil
-        for (attachment, bytes) in restored {
-            attachmentData[attachment.id] = bytes
-            draftAttachments.append(attachment)
+        try await store.save(draftSnapshot())
+        do { try await cancelQueuedRun(runID) }
+        catch {
+            actionError = "Your edit is saved. Waiting to confirm cancellation before it can be sent again."
+            throw error
         }
+        pendingQueuedEditRunID = nil
         await persistDraftNow()
-        Task {
-            for (attachment, _) in restored { await retryAttachment(id: attachment.id) }
-        }
+        for attachment in restored { await retryAttachment(id: attachment.id) }
     }
 }

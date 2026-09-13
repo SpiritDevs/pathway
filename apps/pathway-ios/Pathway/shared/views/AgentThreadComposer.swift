@@ -31,6 +31,7 @@ struct AgentThreadComposer: View {
     @State private var isChangingModel = false
     @State private var isInterrupting = false
     @State private var showsQuestions = false
+    @State private var showsQueuedEditRecovery = false
     @State private var showsStash = false
     @State private var stashCount = 0
     @State private var stash: AgentThreadPromptStash?
@@ -42,6 +43,29 @@ struct AgentThreadComposer: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            if model.pendingQueuedEditRunID != nil {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Edit saved. Waiting to confirm cancellation.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Keep as new draft") { showsQueuedEditRecovery = true }
+                        .font(.subheadline)
+                        .disabled(model.isRestoringQueuedMessage)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .confirmationDialog("Keep this edit as a separate draft?", isPresented: $showsQueuedEditRecovery, titleVisibility: .visible) {
+                    Button("Keep as new draft") {
+                        Task {
+                            do { try await model.keepQueuedEditAsNewDraft() }
+                            catch { errorMessage = error.localizedDescription }
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("The original queued message may still run. Keeping this edit lets you send it as a separate message.")
+                }
+                .accessibilityIdentifier("agent-thread-queued-edit-recovery")
+            }
             if !model.pendingAsyncQuestions.isEmpty {
                 HStack {
                     Button {
@@ -348,7 +372,7 @@ struct AgentThreadComposer: View {
             .background(Color.primary, in: Circle())
         }
         .buttonStyle(.plain)
-        .disabled(isInterrupting || !model.isSubscriptionReady)
+        .disabled(isInterrupting || !model.canInterrupt)
         .accessibilityLabel("Stop response")
         .accessibilityIdentifier("agent-thread-stop")
     }
@@ -378,7 +402,7 @@ struct AgentThreadComposer: View {
             .background(prominent ? Color.primary : Color(.tertiarySystemFill), in: Circle())
         }
         .buttonStyle(.plain)
-        .disabled(isInterrupting || isStartingNewThread || isStashing || (stopsResponse ? !model.isSubscriptionReady : !model.canSend))
+        .disabled(isInterrupting || isStartingNewThread || isStashing || (stopsResponse ? !model.canInterrupt : !model.canSend))
         .contextMenu {
             if model.activeRunID != nil && model.canSend {
                 Button("Queue message", systemImage: "text.line.last.and.arrowtriangle.forward") { send(mode: "queue") }
@@ -398,7 +422,7 @@ struct AgentThreadComposer: View {
     }
 
     private func interrupt() {
-        guard !isInterrupting, model.isSubscriptionReady else { return }
+        guard !isInterrupting, model.canInterrupt else { return }
         isInterrupting = true
         Task {
             defer { isInterrupting = false }

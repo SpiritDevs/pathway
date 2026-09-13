@@ -280,6 +280,11 @@ final class PathwayAgentThreadModel {
             ?? runs.first { $0.status == "queued" }
         return PathwayThreadActivity(isSynchronized: isSubscriptionReady && connectionState == .live, isSending: isSending, runStatus: run?.status)
     }
+    var canInterrupt: Bool {
+        guard isSubscriptionReady, connectionState == .live,
+              let run = runs.first(where: { $0.id == activeRunID }) else { return false }
+        return ["preparing", "starting", "running"].contains(run.status)
+    }
     var actionError: String?
     var isProviderNativeChild = false
     var isParentRosterLoading = false
@@ -295,16 +300,18 @@ final class PathwayAgentThreadModel {
     var supportsConversations: Bool {
         serverConfig["environment"]?.objectValue?["capabilities"]?.objectValue?["threadConversations"]?.boolValue == true
     }
+    var isRestoringQueuedMessage = false
+    var pendingQueuedEditRunID: String? { didSet { saveDraft() } }
     var storageAllowsSend = true
     var canSend: Bool {
         (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftAttachments.isEmpty)
             && draft.count <= 120_000 && !isSending && draftAttachments.allSatisfy { $0.state == .ready }
-            && isSubscriptionReady && storageAllowsSend && (rpc != nil || injectedRequest != nil)
+            && !isRestoringQueuedMessage && pendingQueuedEditRunID == nil && isSubscriptionReady && storageAllowsSend && (rpc != nil || injectedRequest != nil)
     }
 
     private(set) var isSubscriptionReady = false
     @ObservationIgnored let storageDirectory: URL?
-    @ObservationIgnored private let draftStore: PathwayConversationDraftStore?
+    @ObservationIgnored let draftStore: PathwayConversationDraftStore?
     @ObservationIgnored private var draftWriteTask: Task<Void, Never>?
     @ObservationIgnored private var pendingDraftWrite: PathwayConversationDraftSnapshot?
     @ObservationIgnored private var didRestoreDraft = false
@@ -525,7 +532,7 @@ final class PathwayAgentThreadModel {
         return target
     }
     func interrupt() async throws {
-        guard let activeRunID else { return }
+        guard canInterrupt, let activeRunID else { return }
         try await dispatch("run.interrupt", fields: ["runId": .string(activeRunID)])
     }
     func changeModelSelection(_ selection: PathwayModelSelection) async throws {
@@ -708,6 +715,7 @@ final class PathwayAgentThreadModel {
         projectionCollections = object.compactMapValues(\.arrayValue)
         items = (object["visibleTurnItems"]?.arrayValue ?? []).compactMap { $0.objectValue?["item"].flatMap(PathwayTimelineItem.init(json:)) }.sorted(by: Self.order)
         runs = (object["runs"]?.arrayValue ?? []).compactMap(PathwayThreadRun.init)
+        Task { await reconcileQueuedEdit() }
         subagents = (object["subagents"]?.arrayValue ?? []).compactMap(PathwayThreadSubagent.init)
         runtimeRequests = object["runtimeRequests"]?.arrayValue ?? []
         checkpoints = object["checkpoints"]?.arrayValue ?? []; plans = object["plans"]?.arrayValue ?? []
@@ -747,6 +755,7 @@ final class PathwayAgentThreadModel {
             } else if type == "run.created" || type == "run.updated", let run = PathwayThreadRun(payload) {
                 if let index = runs.firstIndex(where: { $0.id == run.id }) { runs[index] = run } else { runs.append(run) }
                 deriveActiveRun()
+                Task { await reconcileQueuedEdit() }
                 if run.status == "rolled_back" { items.removeAll { $0.runID == run.id }; persist() }
             } else if type == "subagent.updated" || type == "subagent.created", let agent = PathwayThreadSubagent(payload) {
                 if let index = subagents.firstIndex(where: { $0.id == agent.id }) { subagents[index] = agent } else { subagents.append(agent) }
@@ -827,6 +836,8 @@ final class PathwayAgentThreadModel {
         draftAttachments = restored.attachments
         preparedSend = restored.preparedSend
         preparedNewSend = restored.preparedNewSend
+        pendingQueuedEditRunID = restored.pendingQueuedEditRunID
+        await reconcileQueuedEdit()
     }
 
     private func saveDraft() {
@@ -839,9 +850,9 @@ final class PathwayAgentThreadModel {
         }
     }
 
-    private func draftSnapshot() -> PathwayConversationDraftSnapshot {
+    func draftSnapshot() -> PathwayConversationDraftSnapshot {
         PathwayConversationDraftSnapshot(text: draft, attachments: draftAttachments, data: attachmentData,
-            preparedSend: preparedSend, preparedNewSend: preparedNewSend, revision: DispatchTime.now().uptimeNanoseconds)
+            preparedSend: preparedSend, preparedNewSend: preparedNewSend, revision: DispatchTime.now().uptimeNanoseconds, pendingQueuedEditRunID: pendingQueuedEditRunID)
     }
 
     func persistDraftNow() async {

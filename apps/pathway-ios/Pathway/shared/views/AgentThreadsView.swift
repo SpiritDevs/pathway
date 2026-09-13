@@ -865,6 +865,7 @@ struct AgentThreadConversationView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.compactThreadChrome) private var compactThreadChrome
     @State private var model: PathwayAgentThreadModel
+    @State private var subscriptionLifetime: PathwayThreadSubscriptionLifetime
     @State private var isComposerExpanded = false
     @State private var isNearBottom = true
     @State private var followsLatest = true
@@ -891,13 +892,16 @@ struct AgentThreadConversationView: View {
 
     init(thread: PathwayAgentThread, environment: PathwayCompanyEnvironment, connect: PathwayConnectClient, workspaceRoot: String? = nil, storageDirectory: URL? = nil, initiallyReviewChanges: Bool = false) {
         self.workspaceRoot = workspaceRoot
-        _model = State(initialValue: PathwayAgentThreadModel(thread: thread, environment: environment, connect: connect, storageDirectory: storageDirectory))
+        let model = PathwayAgentThreadModel(thread: thread, environment: environment, connect: connect, storageDirectory: storageDirectory)
+        _model = State(initialValue: model)
+        _subscriptionLifetime = State(initialValue: PathwayThreadSubscriptionLifetime(start: { model.start() }, stop: { await model.stop() }))
         _showsGitReview = State(initialValue: initiallyReviewChanges)
     }
 
     init(model: PathwayAgentThreadModel, workspaceRoot: String? = nil) {
         self.workspaceRoot = workspaceRoot
         _model = State(initialValue: model)
+        _subscriptionLifetime = State(initialValue: PathwayThreadSubscriptionLifetime(start: { model.start() }, stop: { await model.stop() }))
     }
 
     private func collapseComposer() {
@@ -1005,7 +1009,7 @@ struct AgentThreadConversationView: View {
                     .simultaneousGesture(TapGesture().onEnded { collapseComposer() })
                     AgentThreadComposer(model: model, isExpanded: $isComposerExpanded,
                         isFocused: $isComposerFocused, modelName: model.currentModelSelection.model,
-                        usesCompactPresentation: compactThreadChrome != nil, isNavigationExpanded: compactThreadChrome?.isNavigationExpanded == true, onOpenThread: openChild, workspaceRoot: workspaceRoot, onOpenBrowser: { showsBrowser = true })
+                        usesCompactPresentation: compactThreadChrome != nil, isNavigationExpanded: compactThreadChrome?.isNavigationExpanded == true, onOpenThread: openChild, workspaceRoot: workspaceRoot, onOpenBrowser: { subscriptionLifetime.retain(.browser); showsBrowser = true })
                 }
             }
         }
@@ -1077,6 +1081,8 @@ struct AgentThreadConversationView: View {
         }
         .navigationDestination(isPresented: $showsBrowser) {
             AgentThreadRemoteBrowser(model: model)
+                .onAppear { subscriptionLifetime.retain(.browser) }
+                .onDisappear { subscriptionLifetime.release(.browser) }
         }
         .navigationDestination(item: $childDestination) { destination in
             AgentThreadConversationView(model: destination.model, workspaceRoot: destination.workspaceRoot)
@@ -1084,15 +1090,20 @@ struct AgentThreadConversationView: View {
         .alert("Couldn’t update thread", isPresented: Binding(get: { navigationError != nil }, set: { if !$0 { navigationError = nil } })) {
             Button("OK") { navigationError = nil }
         } message: { Text(navigationError ?? "") }
-        .onAppear { compactThreadChrome?.enterThreadDetail() }
+        .onAppear {
+            compactThreadChrome?.enterThreadDetail()
+            subscriptionLifetime.retain(.conversation)
+        }
+        .onChange(of: showsBrowser) { _, presented in
+            if !presented { subscriptionLifetime.release(.browser) }
+        }
         .onChange(of: isComposerExpanded, initial: true) { _, expanded in compactThreadChrome?.setComposerExpanded(expanded) }
         .onChange(of: model.thread.shell.deletedAt) { _, deletedAt in
             if deletedAt != nil { dismiss() }
         }
-        .task { model.start() }
         .onDisappear {
             compactThreadChrome?.leaveThreadDetail()
-            if !showsBrowser { Task { await model.stop() } }
+            subscriptionLifetime.release(.conversation)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-thread-conversation")

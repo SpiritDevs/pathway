@@ -16,12 +16,15 @@ struct PathwayThreadConversationTests {
     }
 
     @Test func editingQueuedMessageCancelsThenRestoresTheComposer() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
         var commands: [[String: JSONValue]] = []
-        let model = makeModel { method, payload in
+        let model = makeModel(storageDirectory: directory) { method, payload in
             #expect(method == "orchestration.dispatchCommand")
             commands.append(try #require(payload.objectValue))
             return .object([:])
         }
+        await model.restoreDraft()
         model.installSnapshot(snapshot(status: "queued"), sequence: 1)
         try await model.restoreQueuedMessage("run-1")
         #expect(commands.count == 1)
@@ -36,20 +39,28 @@ struct PathwayThreadConversationTests {
         #expect(model.draft.isEmpty)
     }
 
-    @Test func rejectedQueueCancellationLeavesTheDraftAndQueueAlone() async {
-        let model = makeModel { _, _ in throw PathwayRPCError.remote("The run has already started.") }
+    @Test func rejectedQueueCancellationPreservesTheSavedEditAndBlocksSending() async {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = makeModel(storageDirectory: directory) { _, _ in throw PathwayRPCError.remote("The run has already started.") }
+        await model.restoreDraft()
         model.installSnapshot(snapshot(status: "queued"), sequence: 1)
         do {
             try await model.restoreQueuedMessage("run-1")
             Issue.record("A rejected cancellation must not restore a second copy to send.")
         } catch {}
-        #expect(model.draft.isEmpty)
+        #expect(model.draft == "Original\n<issue_context>Keep this</issue_context>")
+        #expect(model.pendingQueuedEditRunID == "run-1")
+        #expect(!model.canSend)
         #expect(model.queuedRuns.count == 1)
     }
 
     @Test func queueEditingDoesNotReplaceAnExistingDraft() async {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
         var calls = 0
-        let model = makeModel { _, _ in calls += 1; return .object([:]) }
+        let model = makeModel(storageDirectory: directory) { _, _ in calls += 1; return .object([:]) }
+        await model.restoreDraft()
         model.installSnapshot(snapshot(status: "queued"), sequence: 1)
         model.draft = "Keep my unsent draft"
         do {
@@ -61,12 +72,15 @@ struct PathwayThreadConversationTests {
     }
 
     @Test func queueEditingPreservesDraftChangesDuringCancellation() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
         var updateDraft: (() -> Void)?
-        let model = makeModel { _, _ in updateDraft?(); return .object([:]) }
+        let model = makeModel(storageDirectory: directory) { _, _ in updateDraft?(); return .object([:]) }
+        await model.restoreDraft()
         model.installSnapshot(snapshot(status: "queued"), sequence: 1)
         updateDraft = { model.draft = "New text" }
         try await model.restoreQueuedMessage("run-1")
-        #expect(model.draft == "Original\n<issue_context>Keep this</issue_context>\n\nNew text")
+        #expect(model.draft == "New text")
     }
 
     @Test func reorderUsesTheMovedRunAndItsNewSuccessor() async throws {
@@ -79,6 +93,38 @@ struct PathwayThreadConversationTests {
         #expect(command["beforeRunId"]?.stringValue == "run-2")
         try await model.reorderQueuedRun("run-1", beforeRunID: nil)
         #expect(command["beforeRunId"] == .null)
+    }
+
+    @Test(arguments: ["preparing", "starting", "running", "waiting", "queued", "completed", "failed", "interrupted", "cancelled"])
+    func interruptionMatchesActiveRunStatus(status: String) async throws {
+        var commands: [[String: JSONValue]] = []
+        let model = makeModel { _, payload in
+            commands.append(try #require(payload.objectValue))
+            return .object([:])
+        }
+        model.installSnapshot(snapshot(status: status), sequence: 1)
+        let expected = ["preparing", "starting", "running"].contains(status)
+        #expect(model.canInterrupt == expected)
+        try await model.interrupt()
+        #expect(commands.count == (expected ? 1 : 0))
+        if expected {
+            #expect(commands.first?["type"]?.stringValue == "run.interrupt")
+            #expect(commands.first?["runId"]?.stringValue == "run-1")
+        }
+    }
+
+    @Test func interruptionWaitsForResynchronization() async throws {
+        var calls = 0
+        let model = makeModel { _, _ in calls += 1; return .object([:]) }
+        model.installSnapshot(snapshot(status: "running"), sequence: 1)
+        #expect(model.canInterrupt)
+        model.applySubscriptionValue(.object(["_pathwayTransport": .string("disconnected")]))
+        #expect(!model.canInterrupt)
+        try await model.interrupt()
+        #expect(calls == 0)
+        model.installSnapshot(snapshot(status: "waiting"), sequence: 2)
+        model.applySubscriptionValue(.object(["kind": .string("synchronized")]))
+        #expect(!model.canInterrupt)
     }
 
     @Test func activityFollowsLiveRunEventsAndReconnects() {
@@ -534,11 +580,11 @@ struct PathwayThreadConversationTests {
         #expect(!model.canRecoverWorkspacePreparation(item))
     }
 
-    private func makeModel(request: @escaping PathwayAgentThreadModel.Request) -> PathwayAgentThreadModel {
+    private func makeModel(storageDirectory: URL? = nil, request: @escaping PathwayAgentThreadModel.Request) -> PathwayAgentThreadModel {
         let thread = makeAgentThread()
         let environment = PathwayCompanyEnvironment(companyId: thread.companyId, environment: PathwayEnvironment(id: "environment", environmentId: thread.environmentId,
             descriptor: PathwayEnvironmentDescriptor(environmentId: thread.environmentId, label: "Mac", serverVersion: "test"), relayLinkState: "connected", managedEndpointAvailable: true, lastSeenAt: nil, state: "active"))
-        return PathwayAgentThreadModel(thread: thread, environment: environment, request: request)
+        return PathwayAgentThreadModel(thread: thread, environment: environment, request: request, storageDirectory: storageDirectory)
     }
     private func snapshot(status: String) -> JSONValue {
         .object(["thread": .object(["id": .string("thread-1")]), "runs": .array([run(status: status)]), "visibleTurnItems": .array([.object(["item": .object([

@@ -148,3 +148,31 @@ it("limits repeated reports from one installation", async () => {
   await t.finishAllScheduledFunctions(vi.runAllTimers);
   expect(send).toHaveBeenCalledTimes(5);
 });
+
+it("retains reports after the global email budget is exhausted", async () => {
+  const t = convexTest(schema, modules);
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 100; i++) {
+      await ctx.db.insert("loginErrorReports", {
+        ...report,
+        reportId: `seed-${i}`,
+        installationId: `other-${i}`,
+        createdAt: Date.now(),
+        attempts: 1,
+        sentAt: Date.now(),
+      });
+    }
+  });
+  await expect(t.mutation(api.loginErrorReports.submit, report)).resolves.toBeNull();
+  await t.mutation(api.loginErrorReports.submit, report);
+  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  const rows = await t.run((ctx) =>
+    ctx.db
+      .query("loginErrorReports")
+      .withIndex("by_reportId", (q) => q.eq("reportId", report.reportId))
+      .collect(),
+  );
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ emailSuppressed: true, attempts: 0, sentAt: null });
+  expect(send).not.toHaveBeenCalled();
+});

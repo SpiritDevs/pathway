@@ -75,6 +75,7 @@ struct PathwayThreadAttachmentDraft: Codable, Identifiable, Equatable, Sendable 
     var attachment: PathwayMessageAttachment?
     var previewData: Data?
     var source: JSONValue? = nil
+    var localFileURL: URL? = nil
 }
 
 extension PathwayMessageAttachment {
@@ -201,7 +202,9 @@ extension PathwayAgentThreadModel {
 
     func retryAttachment(id: String) async {
         preparedSend = nil
-        guard let index = draftAttachments.firstIndex(where: { $0.id == id }), let data = attachmentData[id] else { return }
+        guard let index = draftAttachments.firstIndex(where: { $0.id == id }) else { return }
+        let data = attachmentData[id]
+        guard data != nil || draftAttachments[index].localFileURL != nil else { return }
         draftAttachments[index].state = .uploading
         let draft = draftAttachments[index]
         var uploadedID: String?
@@ -214,14 +217,19 @@ extension PathwayAgentThreadModel {
             guard let connect else { throw PathwayRPCError.disconnected }
             var request = try await connect.authenticatedRequest(environment: environment, method: "PUT", path: relative)
             request.setValue(draft.mimeType, forHTTPHeaderField: "Content-Type")
-            let (_, response) = try await URLSession.shared.upload(for: request, from: data)
+            let response: URLResponse
+            if let file = draft.localFileURL {
+                (_, response) = try await URLSession.shared.upload(for: request, fromFile: file)
+            } else if let data {
+                (_, response) = try await URLSession.shared.upload(for: request, from: data)
+            } else { return }
             guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
                 throw PathwayThreadConversationError.message("The file could not be uploaded. Try again.")
             }
             guard let index = draftAttachments.firstIndex(where: { $0.id == id }) else {
                 _ = try? await self.request("attachments.delete", payload: .object(["attachmentId": .string(attachmentID)])); return
             }
-            draftAttachments[index].attachment = PathwayMessageAttachment(id: attachmentID, type: draft.type, name: draft.name, mimeType: draft.mimeType, sizeBytes: data.count, source: draft.source)
+            draftAttachments[index].attachment = PathwayMessageAttachment(id: attachmentID, type: draft.type, name: draft.name, mimeType: draft.mimeType, sizeBytes: draft.sizeBytes, source: draft.source)
             draftAttachments[index].state = .ready
         } catch {
             if let uploadedID { _ = try? await request("attachments.delete", payload: .object(["attachmentId": .string(uploadedID)])) }
