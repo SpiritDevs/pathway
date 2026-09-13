@@ -3,6 +3,10 @@ import SwiftUI
 enum CompactAppShellMetrics {
     static let tabBarHeight: CGFloat = 58
     static let tabBarBottomPadding: CGFloat = 8
+    static let outerPadding: CGFloat = 16
+    static let controlSpacing: CGFloat = 12
+    static let maxBarWidth: CGFloat = 520
+    static let composerSideInset = outerPadding + tabBarHeight + controlSpacing
     static let scrollContentClearance: CGFloat = tabBarHeight + tabBarBottomPadding + 12
     /// Shared by the tab bar surface and the thread composer so both halves of the
     /// bottom chrome interpolate on exactly the same curve. The composer's pill-to-card
@@ -52,15 +56,15 @@ enum CompactAppShellMetrics {
                     .accessibilityLabel("Dismiss navigation menu")
                 }
 
-                if !threadChrome.isComposerExpanded && !threadChrome.isThreadDetailActive && !isIssueDetailActive {
+                if !threadChrome.isComposerExpanded && !isIssueDetailActive {
                     PathwayTabBar(
                         selectedDestination: $selectedDestination,
                         isMoreMenuPresented: $isMoreMenuPresented,
                         threadChrome: threadChrome,
                         showAgentOrchestrator: presentAgentOrchestrator
                     )
-                    .frame(maxWidth: 520)
-                    .padding(.horizontal, 16)
+                    .frame(maxWidth: CompactAppShellMetrics.maxBarWidth)
+                    .padding(.horizontal, CompactAppShellMetrics.outerPadding)
                     .padding(.bottom, CompactAppShellMetrics.tabBarBottomPadding)
                     .transition(
                         reduceMotion
@@ -115,7 +119,7 @@ enum CompactAppShellMetrics {
         }
     }
 
-    private struct PathwayTabBar: View {
+    struct PathwayTabBar: View {
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Binding var selectedDestination: AppDestination?
         @Binding var isMoreMenuPresented: Bool

@@ -1113,7 +1113,7 @@ struct AgentThreadConversationView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     AgentThreadComposer(model: model, isExpanded: $isComposerExpanded,
                         isFocused: $isComposerFocused, modelName: model.currentModelSelection.model,
-                        usesCompactPresentation: true, isNavigationExpanded: false, onOpenThread: openChild, workspaceRoot: workspaceRoot, onOpenBrowser: { showsBrowser = true })
+                        usesCompactPresentation: compactThreadChrome != nil, isNavigationExpanded: compactThreadChrome?.isNavigationExpanded ?? false, onOpenThread: openChild, workspaceRoot: workspaceRoot, onOpenBrowser: { showsBrowser = true })
                 }
             }
         }

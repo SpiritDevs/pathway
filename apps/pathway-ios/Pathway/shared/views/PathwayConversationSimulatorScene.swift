@@ -5,6 +5,8 @@ import SwiftUI
 struct PathwayConversationSimulatorScene: View {
     @State private var workspace = ConversationSimulatorWorkspace()
     @State private var chrome = CompactThreadChromeState()
+    @State private var selectedDestination: AppDestination? = .agentThreads
+    @State private var more = false
     @State private var path = [ConversationSimulatorRoute.thread]
     var body: some View {
         NavigationStack(path: $path) {
@@ -12,6 +14,15 @@ struct PathwayConversationSimulatorScene: View {
                 .navigationTitle("Threads")
                 .navigationDestination(for: ConversationSimulatorRoute.self) { _ in AgentThreadConversationView(model: workspace.model) }
         }
+        .overlay(alignment: .bottom) {
+            if !chrome.isComposerExpanded {
+                PathwayTabBar(selectedDestination: $selectedDestination, isMoreMenuPresented: $more, threadChrome: chrome, showAgentOrchestrator: {})
+                    .frame(maxWidth: CompactAppShellMetrics.maxBarWidth)
+                    .padding(.horizontal, CompactAppShellMetrics.outerPadding)
+                    .padding(.bottom, CompactAppShellMetrics.tabBarBottomPadding)
+            }
+        }
+        .onChange(of: selectedDestination) { _, _ in chrome.collapseNavigation() }
         .environment(\.compactThreadChrome, chrome)
         .environment(workspace.appModel)
         .preferredColorScheme(.light)

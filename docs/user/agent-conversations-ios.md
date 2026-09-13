@@ -45,3 +45,5 @@ The new-thread project picker displays each project's icon when available. Proje
 HEIC and HEIF photos are converted before upload so other clients and image-capable agents receive JPEG files, or PNG when transparency is present. The conversion preserves orientation and limits the longest edge to 4,096 pixels. Photo selection, pasting, file attachments, and imported shares use the same conversion. Already-sent HEIC files are unchanged and need to be resent to use the compatible format.
 
 The queued-message bubble counts both messages waiting on an environment and messages saved to the cloud for delivery. It sits beside the diff counter in a centered row, or in the center on its own. Tap it to open the queue sheet. Both cloud-saved follow-ups and environment-queued messages offer Edit, Delete, drag ordering, and Steer when available.
+
+On compact screens, the collapsed composer sits between the main-navigation button on the left and the orchestrator button on the right. Tap the navigation button to expand the tabs. Expanding the composer hides those side controls until the editor collapses again.

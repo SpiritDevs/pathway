@@ -198,7 +198,8 @@ struct AgentThreadComposer: View {
                 .overlay { Capsule().strokeBorder(.primary.opacity(0.10), lineWidth: 0.5) }
                 .matchedGeometryEffect(id: Self.surfaceID, in: surfaceNamespace, isSource: !isExpanded)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, usesCompactPresentation ? CompactAppShellMetrics.composerSideInset : 20)
+        .frame(maxWidth: usesCompactPresentation ? CompactAppShellMetrics.maxBarWidth + 2 * CompactAppShellMetrics.outerPadding : .infinity)
         .padding(.vertical, CompactAppShellMetrics.tabBarBottomPadding)
         .opacity(isNavigationExpanded ? 0 : 1)
         .allowsHitTesting(!isNavigationExpanded)
