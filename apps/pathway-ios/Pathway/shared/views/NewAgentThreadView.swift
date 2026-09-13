@@ -3,6 +3,7 @@ import SwiftUI
 struct NewAgentThreadView: View {
     var onClose: (() -> Void)? = nil
     var initialPrompt: String = ""
+    var threadDefaults: PathwayNewThreadDefaults? = nil
     var capturedDraft: PathwayCapturedDraft? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(PathwayAppModel.self) private var appModel
@@ -11,6 +12,8 @@ struct NewAgentThreadView: View {
     @State private var selectedBindingID = ""
     @State private var model: PathwayAgentThreadCreationModel?
     @State private var appliedInitialPrompt = false
+    @State private var appliedThreadSelection = false
+    @State private var appliedThreadSettings = false
     @State private var appliedCapture = false
     @State private var selectionError: String?
     @State private var placementPreferences = PathwayEnvironmentPlacementPreferences.shared
@@ -92,6 +95,19 @@ struct NewAgentThreadView: View {
         }
         .interactiveDismissDisabled(isChangingBinding)
         .task(id: "\(selectedBindingID):\(isResolvingPlacement)") {
+            if !appliedThreadSelection, let defaults = threadDefaults {
+                appliedThreadSelection = true
+                if let option = bindingOptions.first(where: {
+                    $0.environment.companyId == defaults.companyID
+                        && $0.environment.environment.environmentId == defaults.environmentID
+                        && $0.binding?.binding.localProjectId == defaults.projectID
+                }), let project = projectOptions.first(where: { $0.bindings.contains { $0.id == option.id } }) {
+                    selectedProjectID = project.id
+                    selectedBindingID = option.id
+                    return
+                }
+                selectionError = "This thread's project or environment is unavailable. Choose where to start the new thread."
+            }
             await configureSelection()
         }
         .task(id: placementRequestID) {
@@ -104,7 +120,7 @@ struct NewAgentThreadView: View {
             let departing = model
             Task { await departing?.stop() }
         }
-        .alert("Couldn't change project", isPresented: Binding(get: { selectionError != nil }, set: { if !$0 { selectionError = nil } })) {
+        .alert("Couldn't configure new thread", isPresented: Binding(get: { selectionError != nil }, set: { if !$0 { selectionError = nil } })) {
             Button("OK", role: .cancel) { selectionError = nil }
         } message: { Text(selectionError ?? "") }
     }
@@ -307,6 +323,13 @@ struct NewAgentThreadView: View {
         guard !Task.isCancelled, !isResolvingPlacement else { return }
         await model.attachments.prepareTransferredAttachments()
         guard !Task.isCancelled else { return }
+        if !appliedThreadSettings, let defaults = threadDefaults {
+            appliedThreadSettings = true
+            do {
+                try model.applyThreadDefaults(defaults)
+                await model.persistDraftNow()
+            } catch { selectionError = error.localizedDescription }
+        }
         if !appliedInitialPrompt, !initialPrompt.isEmpty {
             let combined = [model.prompt, initialPrompt].filter { !$0.isEmpty }.joined(separator: "\n\n")
             if combined.count <= 120_000 {
