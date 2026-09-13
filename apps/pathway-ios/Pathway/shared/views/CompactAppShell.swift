@@ -20,6 +20,7 @@ enum CompactAppShellMetrics {
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Binding var selectedDestination: AppDestination?
         @Binding var presentedSheet: MainTabSheet?
+        @Binding var showsSettings: Bool
         @State private var isMoreMenuPresented = false
         @State private var isIssueDetailActive = false
         @State private var threadChrome = CompactThreadChromeState()
@@ -31,12 +32,8 @@ enum CompactAppShellMetrics {
                         destination: activeDestination,
                         newThreadAction: presentNewAgentThread
                     )
-                    .toolbar {
-                        if activeDestination != .issues && (activeDestination != .agentThreads || threadChrome.isThreadDetailActive) {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button("Settings", systemImage: "gearshape", action: presentSettings)
-                            }
-                        }
+                    .navigationDestination(isPresented: $showsSettings) {
+                        PathwaySettingsView()
                     }
                 }
                 .id(activeDestination)
@@ -52,12 +49,13 @@ enum CompactAppShellMetrics {
                     .accessibilityLabel("Dismiss navigation menu")
                 }
 
-                if !threadChrome.isComposerExpanded && !threadChrome.isThreadDetailActive && !isIssueDetailActive {
+                if !showsSettings && !threadChrome.isComposerExpanded && !threadChrome.isThreadDetailActive && !isIssueDetailActive {
                     PathwayTabBar(
                         selectedDestination: $selectedDestination,
                         isMoreMenuPresented: $isMoreMenuPresented,
                         threadChrome: threadChrome,
-                        showAgentOrchestrator: presentAgentOrchestrator
+                        showAgentOrchestrator: presentAgentOrchestrator,
+                        showSettings: presentSettings
                     )
                     .frame(maxWidth: 520)
                     .padding(.horizontal, 16)
@@ -68,6 +66,9 @@ enum CompactAppShellMetrics {
                             : .scale(scale: 0.94, anchor: .bottomTrailing).combined(with: .opacity)
                     )
                 }
+            }
+            .onChange(of: showsSettings) { _, isPresented in
+                if isPresented { dismissMoreMenu() }
             }
             .animation(
                 reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation,
@@ -96,7 +97,7 @@ enum CompactAppShellMetrics {
 
         private func presentSettings() {
             dismissMoreMenu()
-            presentedSheet = .settings
+            showsSettings = true
         }
 
         private func dismissMoreMenu() {
@@ -121,6 +122,7 @@ enum CompactAppShellMetrics {
         @Binding var isMoreMenuPresented: Bool
         let threadChrome: CompactThreadChromeState
         let showAgentOrchestrator: () -> Void
+        let showSettings: () -> Void
 
         @Namespace private var glassNamespace
         @Namespace private var selectionNamespace
@@ -250,11 +252,23 @@ enum CompactAppShellMetrics {
 
         private var destinationList: some View {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Pathway")
-                    .font(.headline)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 14)
-                    .padding(.bottom, 8)
+                HStack {
+                    Text("Pathway")
+                        .font(.headline)
+                    Spacer()
+                    Button(action: showSettings) {
+                        Image(systemName: "gearshape")
+                            .font(.title3)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Settings")
+                    .accessibilityIdentifier("navigation-settings-button")
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 2)
 
                 Divider()
                     .padding(.horizontal, 14)
