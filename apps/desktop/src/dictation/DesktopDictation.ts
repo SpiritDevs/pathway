@@ -133,7 +133,7 @@ const make = Effect.gen(function* () {
     const safeHeight = Math.min(area.height, Math.max(24, Math.round(height)));
     overlay.setBounds({
       x: Math.round(area.x + (area.width - safeWidth) / 2),
-      y: area.y + area.height - safeHeight - 18,
+      y: area.y + area.height - safeHeight,
       width: safeWidth,
       height: safeHeight,
     });
