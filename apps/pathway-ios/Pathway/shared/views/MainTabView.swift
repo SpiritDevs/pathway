@@ -1,13 +1,11 @@
 import SwiftUI
 
-// The adaptive shell keeps its rail, context sidebar, destination routing, and settings
-// together because they share navigation state across iPadOS and visionOS.
+// The adaptive shell shares navigation state across iPadOS and visionOS.
 // swiftlint:disable file_length
 
 enum MainTabSheet: String, Identifiable {
     case agentOrchestrator
     case newAgentThread
-    case settings
     case systemRequest
     case sharedDrafts
     case storage
@@ -20,6 +18,7 @@ struct MainTabView: View {
     @Environment(PathwayAppModel.self) private var appModel
     @State private var selectedDestination: AppDestination? = .agentThreads
     @State private var presentedSheet: MainTabSheet?
+    @State private var showsSettings = false
     @State private var systemRequest: PathwaySystemRequest?
 
     init(initialDestination: AppDestination = .agentThreads) {
@@ -49,18 +48,21 @@ struct MainTabView: View {
                     FloatingAppShell(
                         selectedDestination: $selectedDestination,
                         presentedSheet: $presentedSheet,
+                        showsSettings: $showsSettings,
                         layout: .spatial
                     )
                 #else
                     CompactAppShell(
                         selectedDestination: $selectedDestination,
-                        presentedSheet: $presentedSheet
+                        presentedSheet: $presentedSheet,
+                        showsSettings: $showsSettings
                     )
                 #endif
             case .sidebar, .spatial:
                 FloatingAppShell(
                     selectedDestination: $selectedDestination,
                     presentedSheet: $presentedSheet,
+                    showsSettings: $showsSettings,
                     layout: layout
                 )
             }
@@ -107,10 +109,6 @@ struct MainTabView: View {
                             Button("Close") { presentedSheet = nil }
                         } }
                 }
-            case .settings:
-                NavigationStack {
-                    PathwaySettingsView()
-                }
             }
         }
         .onChange(of: PathwayGeneralPreferences.shared.autoSettleDays) { _, _ in appModel.cloud.refreshThreadPartition() }
@@ -123,7 +121,9 @@ struct MainTabView: View {
                 systemRequest = .init(destination: request.action == .running ? .running : .attention, prompt: "")
                 presentedSheet = .systemRequest
             case .sharedDrafts: presentedSheet = .sharedDrafts
-            case .settings: presentedSheet = .settings
+            case .settings:
+                presentedSheet = nil
+                showsSettings = true
             }
         }
         .onChange(of: PathwaySystemEntry.shared.request, initial: true) { _, request in
@@ -141,10 +141,11 @@ struct MainTabView: View {
         .onChange(of: appModel.pendingThreadRoute) { _, route in
             guard route != nil else { return }
             presentedSheet = nil
+            showsSettings = false
             selectedDestination = .agentThreads
         }
         .onChange(of: appModel.pendingProductLink) { _, link in
-            if link != nil { presentedSheet = nil; selectedDestination = .agentThreads }
+            if link != nil { showsSettings = false; presentedSheet = nil; selectedDestination = .agentThreads }
         }
     }
 }
@@ -154,6 +155,7 @@ private struct FloatingAppShell: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Binding var selectedDestination: AppDestination?
     @Binding var presentedSheet: MainTabSheet?
+    @Binding var showsSettings: Bool
     let layout: AppShellLayout
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -193,12 +195,10 @@ private struct FloatingAppShell: View {
                                     systemImage: "bubble.left.and.bubble.right",
                                     action: presentNewAgentThread
                                 )
-                                if activeDestination != .agentThreads {
-                                    Button("Settings", systemImage: "gearshape", action: presentSettings)
-                                }
                             }
                         }
                     }
+                    .navigationDestination(isPresented: $showsSettings) { PathwaySettingsView() }
                 }
                 .id(activeDestination)
             }
@@ -206,6 +206,7 @@ private struct FloatingAppShell: View {
         }
         .padding(12)
         .onChange(of: activeDestination) { _, destination in
+            showsSettings = false
             selectedContextDestination = destination.defaultContextDestination
         }
     }
@@ -239,7 +240,7 @@ private struct FloatingAppShell: View {
         if layout == .spatial {
             openWindow(id: PathwayWindow.settings.rawValue)
         } else {
-            presentedSheet = .settings
+            showsSettings = true
         }
     }
 }
@@ -466,95 +467,6 @@ struct PathwayFeatureDestinationView: View {
         } else {
             PathwayFeaturePlaceholder(destination: destination)
         }
-    }
-}
-
-struct PathwaySettingsView: View {
-    var isSeparateWindow = false
-    var focusModel: PathwayFocusModel? = nil
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.dismissWindow) private var dismissWindow
-    @Environment(PathwayAppModel.self) private var appModel
-
-    var body: some View {
-        Form {
-            Section("Workspaces") {
-                NavigationLink("Connect a server") { PathwayConnectionsDestination() }
-                NavigationLink("Companies, people & roles") {
-                    PathwayCompanyAdministrationView(companies: appModel.cloud.companies,
-                        request: { kind, name, arguments in try await appModel.cloud.request(kind: kind, name: name, arguments: .object(arguments)) },
-                        entities: { kind, companyID in appModel.cloud.entities(kind: kind, companyID: companyID) })
-                }
-                NavigationLink("Environments, projects & providers") {
-                    PathwayAdministrationView(
-                        environments: appModel.cloud.environments,
-                        request: { environment, method, payload in
-                            try await appModel.cloud.environmentRequest(environment: environment, method: method, payload: payload)
-                        },
-                        http: { environment, method, path, payload in
-                            guard let connect = appModel.connect else { throw URLError(.notConnectedToInternet) }
-                            return try await PathwayEnvironmentHTTP.request(environment: environment, connect: connect, method: method, path: path, payload: payload)
-                        },
-                        cloudMutation: { name, arguments in
-                            try await appModel.cloud.request(kind: "mutation", name: name, arguments: .object(arguments))
-                        }
-                    )
-                }
-            }
-            Section("Capture") {
-                NavigationLink("Shared Drafts") { PathwaySharedDraftsDestination() }
-            }
-            Section("Agent Threads") {
-                NavigationLink { PathwayFocusSettingsView(model: focusModel) } label: {
-                    Label("Focus Views", systemImage: "target")
-                }
-            }
-            Section("Models") {
-                NavigationLink("Favourite models") {
-                    PathwayModelFavouritesEnvironments()
-                }
-            }
-            Section("Notifications") {
-                NavigationLink("Agent notifications") { PathwayNotificationsSettingsView() }
-            }
-            Section("Appearance") {
-                NavigationLink("General") { PathwayGeneralSettingsView() }
-                NavigationLink("Appearance") { PathwayAppearanceSettingsView() }
-                NavigationLink("Storage & cleanup") { PathwayEnvironmentStorageView() }
-                NavigationLink("Keyboard Shortcuts") { PathwayKeyboardSettingsView() }
-            }
-            Section("Account") {
-                Button("Sign out", role: .destructive) {
-                    Task {
-                        await appModel.signOut()
-                    }
-                }
-
-                if let issue = appModel.authenticationIssue {
-                    PathwayAuthenticationIssueView(issue: issue)
-                }
-            }
-
-            Section {
-                Text("Manage your Pathway account and native app preferences.")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .navigationTitle("Settings")
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Done", action: close)
-            }
-        }
-        .frame(minWidth: 320, minHeight: 360)
-    }
-
-    private func close() {
-        #if os(visionOS)
-            if isSeparateWindow { dismissWindow(id: PathwayWindow.settings.rawValue) } else { dismiss() }
-        #else
-            dismiss()
-        #endif
     }
 }
 

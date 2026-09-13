@@ -15,9 +15,30 @@ struct PathwayThreadQueueTests {
         let restored = try await PathwayThreadQueueStore(directory: directory).load()
         #expect(restored.count == 1)
         #expect(restored.first?.submission == entry.submission)
-        #expect(restored.first?.files.first?.data == Data("context".utf8))
+        #expect(restored.first?.files.first?.data.isEmpty == true)
+        #expect(try Data(contentsOf: #require(restored.first?.files.first?.sourceFileURL)) == Data("context".utf8))
         #expect(restored.first?.files.first?.cloudID == "uploaded")
         #expect(restored.first?.commandID == "command")
+    }
+
+    @Test func recoveredDraftFilesAreCopiedIntoTheOutboxWithoutLoadingBytes() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appending(path: "recovered.txt")
+        try Data("context".utf8).write(to: source)
+        var draft = PathwayThreadAttachmentDraft(id: "file", name: "context.txt", mimeType: "text/plain",
+            type: "file", sizeBytes: 7, state: .ready)
+        draft.localFileURL = source
+        let file = try PathwayQueueFile.capture(draft, bytes: nil)
+        #expect(file.data.isEmpty)
+        let store = PathwayThreadQueueStore(directory: directory)
+        try await store.save([PathwayLocalQueueEntry(companyID: "company", environmentID: "environment", threadID: "thread",
+            commandID: "command", submission: .object([:]), files: [file])])
+        try FileManager.default.removeItem(at: source)
+        let restored = try await store.load()
+        #expect(restored.first?.files.first?.data.isEmpty == true)
+        #expect(try Data(contentsOf: #require(restored.first?.files.first?.sourceFileURL)) == Data("context".utf8))
     }
 
     @Test func accountChangeClearsVisiblePendingWork() async throws {
@@ -250,7 +271,8 @@ extension PathwayThreadQueueTests {
         #expect(model.draft.isEmpty)
         let entries = try await PathwayThreadQueueStore(directory: directory).load()
         #expect(entries.count == 1)
-        #expect(entries.first?.files.first?.data == Data("context".utf8))
+        #expect(entries.first?.files.first?.data.isEmpty == true)
+        #expect(try Data(contentsOf: #require(entries.first?.files.first?.sourceFileURL)) == Data("context".utf8))
         let queued = try #require(queue.threads.first)
         let cached = queue.cachedDetail(queued)
         #expect(cached.objectValue?["messages"]?.arrayValue?.first?.objectValue?["submission"]?.objectValue?["input"]?.objectValue?["text"] == .string("An ordinary offline message"))

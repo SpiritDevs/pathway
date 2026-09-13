@@ -5,15 +5,21 @@ struct AgentThreadTranscript: View {
     let model: PathwayAgentThreadModel
     let onOpenChild: (String) -> Void
     @State private var editingItem: PathwayTimelineItem?
-    @State private var queuedEditingRunID: String?
     @State private var errorMessage: String?
     @State private var forkingID: String?
     @State private var preparingEditID: String?
     @State private var layoutCache = AgentThreadTranscriptLayoutCache()
 
+    private var transcriptItems: [PathwayTimelineItem] {
+        let visibleEnvironmentIDs = Set(model.transcriptItems.map(\.id))
+        return model.conversationItems.filter {
+            $0.fields["queueCommandId"]?.stringValue != nil || visibleEnvironmentIDs.contains($0.id)
+        }
+    }
+
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 22) {
-            ForEach(layoutCache.rows(model.conversationItems, activeRunID: model.activeRunID)) { row in
+            ForEach(layoutCache.rows(transcriptItems, activeRunID: model.activeRunID)) { row in
                 switch row.content {
                 case .item(let item):
                     itemView(item)
@@ -21,10 +27,11 @@ struct AgentThreadTranscript: View {
                     AgentTranscriptWorkGroup(label: label, items: items, settled: settled, model: model, onOpenChild: onOpenChild)
                 }
             }
+            AgentTranscriptActivity(model: model)
             Color.clear.frame(height: 1).id("agent-transcript-bottom")
         }
         .sheet(item: $editingItem) { item in
-            AgentTranscriptMessageEditor(item: item, model: model, queuedRunID: queuedEditingRunID)
+            AgentTranscriptMessageEditor(item: item, model: model)
         }
         .alert("Couldn’t complete action", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK") { errorMessage = nil }
@@ -35,11 +42,10 @@ struct AgentThreadTranscript: View {
 
     @ViewBuilder
     private func itemView(_ item: PathwayTimelineItem) -> some View {
-        let queued = queuedRun(for: item)
         if item.isConversation {
             AgentTranscriptMessage(item: item, model: model) {
-                if item.isUserMessage && !item.isGeneratedQuestionReply && (model.canPrepareEdit(item) || queued != nil || model.canEditCloudQueueMessage(item)) {
-                    Button(queued == nil && model.cloudQueueMessage(for: item) == nil ? "Edit and restart" : "Edit queued message", systemImage: "pencil") { beginEditing(item, queuedRunID: queued?.id) }
+                if item.isUserMessage && !item.isGeneratedQuestionReply && (model.canPrepareEdit(item) || model.canEditCloudQueueMessage(item)) {
+                    Button(model.cloudQueueMessage(for: item) == nil ? "Edit and restart" : "Edit queued message", systemImage: "pencil") { beginEditing(item) }
                         .accessibilityIdentifier("thread-message-edit-\(item.id)")
                         .disabled(preparingEditID != nil)
                 }
@@ -62,7 +68,7 @@ struct AgentThreadTranscript: View {
                         Button("Retry", systemImage: "arrow.clockwise") { mutateCloudMessage(item, action: "retry") }
                     }
                     if model.canEditCloudQueueMessage(item) {
-                        Button("Edit", systemImage: "pencil") { beginEditing(item, queuedRunID: nil) }
+                        Button("Edit", systemImage: "pencil") { beginEditing(item) }
                     }
                     if model.canCancelCloudQueueMessage(item) {
                         Button("Cancel", systemImage: "xmark") { mutateCloudMessage(item, action: "cancel") }
@@ -70,8 +76,6 @@ struct AgentThreadTranscript: View {
                 }
                 .font(.caption).buttonStyle(.plain)
                 if let error = message["error"]?.stringValue { Text(error).font(.footnote).foregroundStyle(.red) }
-            } else if let run = queued {
-                AgentTranscriptQueueActions(run: run, model: model, canEdit: !item.isGeneratedQuestionReply) { beginEditing(item, queuedRunID: run.id) }
             }
         } else if item.type == "approval_request" {
             AgentTranscriptApproval(item: item, model: model)
@@ -87,10 +91,9 @@ struct AgentThreadTranscript: View {
         }
     }
 
-    private func beginEditing(_ item: PathwayTimelineItem, queuedRunID: String?) {
+    private func beginEditing(_ item: PathwayTimelineItem) {
         guard preparingEditID == nil, !item.isGeneratedQuestionReply else { return }
-        if model.canEditCloudQueueMessage(item) || queuedRunID != nil || model.activeRunID == nil {
-            queuedEditingRunID = queuedRunID
+        if model.canEditCloudQueueMessage(item) || model.activeRunID == nil {
             editingItem = item
             return
         }
@@ -100,7 +103,6 @@ struct AgentThreadTranscript: View {
             defer { preparingEditID = nil }
             do {
                 try await model.interrupt()
-                queuedEditingRunID = nil
                 editingItem = item
             } catch { errorMessage = error.localizedDescription }
         }
@@ -124,11 +126,6 @@ struct AgentThreadTranscript: View {
         }
     }
 
-    private func queuedRun(for item: PathwayTimelineItem) -> PathwayThreadRun? {
-        guard item.isUserMessage else { return nil }
-        return model.queuedRuns.first { $0.id == item.runID || (item.messageID != nil && $0.userMessageID == item.messageID) }
-    }
-
     private func fork(_ item: PathwayTimelineItem) {
         guard forkingID == nil else { return }
         forkingID = item.id
@@ -136,6 +133,26 @@ struct AgentThreadTranscript: View {
             defer { forkingID = nil }
             do { onOpenChild(try await model.fork(from: item)) }
             catch { errorMessage = error.localizedDescription }
+        }
+    }
+}
+
+private struct AgentTranscriptActivity: View {
+    let model: PathwayAgentThreadModel
+
+    var body: some View {
+        if let activity = model.activity {
+            Label {
+                Text(activity.rawValue)
+            } icon: {
+                Image(systemName: activity == .waiting ? "pause.circle" : "ellipsis")
+                    .accessibilityHidden(true)
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 4)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("agent-thread-activity")
         }
     }
 }
@@ -648,17 +665,16 @@ private struct AgentTranscriptCodeBlock: View {
 private struct AgentTranscriptMessageEditor: View {
     let item: PathwayTimelineItem
     let model: PathwayAgentThreadModel
-    let queuedRunID: String?
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
     @State private var busy = false
     @State private var error: String?
     @FocusState private var focused: Bool
     private var isCloudQueued: Bool { item.fields["queueCommandId"]?.stringValue != nil }
-    private var isQueued: Bool { isCloudQueued || queuedRunID != nil }
+    private var isQueued: Bool { isCloudQueued }
     private var queuedMessageDeparted: Bool {
         if isCloudQueued { return !model.canEditCloudQueueMessage(item) }
-        return queuedRunID.map { id in !model.queuedRuns.contains { $0.id == id } } ?? false
+        return false
     }
 
     var body: some View {
@@ -687,9 +703,6 @@ private struct AgentTranscriptMessageEditor: View {
                                 if isCloudQueued {
                                     guard !queuedMessageDeparted else { throw PathwayThreadConversationError.message("This message is no longer editable. Your draft has been kept.") }
                                     try await model.mutateCloudQueueMessage(item, action: "edit", text: PathwayAgentThreadModel.preservingMessageContext(original: item.text ?? "", edited: text))
-                                } else if let queuedRunID {
-                                    guard !queuedMessageDeparted else { throw PathwayThreadConversationError.message("This message is no longer queued. Your draft has been kept.") }
-                                    try await model.editQueuedRun(queuedRunID, text: PathwayAgentThreadModel.preservingMessageContext(original: item.text ?? "", edited: text))
                                 } else { try await model.editLatestUserMessage(item, text: text) }
                                 dismiss()
                             }

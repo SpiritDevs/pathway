@@ -12,8 +12,7 @@ struct PathwayIssuesDestinationView: View {
             companies: appModel.cloud.companies,
             projects: appModel.cloud.projects,
             initialScope: initialTab == "assigned" ? .mine : initialTab == "triage" ? .triage : .all,
-            onOpenPlanning: { destination = IssueDestination(companyID: $0, planning: true) },
-            onOpenSettings: { destination = IssueDestination(companyID: $0, planning: false) }
+            onOpenPlanning: { destination = IssueDestination(companyID: $0) }
         )
         .safeAreaPadding(.bottom, horizontalSizeClass == .compact ? CompactAppShellMetrics.scrollContentClearance : 0)
         .overlay {
@@ -33,13 +32,7 @@ struct PathwayIssuesDestinationView: View {
             }
         }
         .navigationDestination(item: $destination) { destination in
-            Group {
-                if destination.planning {
-                    PathwayIssuePlanningView(model: appModel.cloud.issues, companyID: destination.companyID)
-                } else {
-                    PathwayIssueSettingsView(model: appModel.cloud.issues, companyID: destination.companyID)
-                }
-            }
+            PathwayIssuePlanningView(model: appModel.cloud.issues, companyID: destination.companyID)
             .toolbarVisibility(.visible, for: .navigationBar)
             .preference(key: IssueDetailNavigationActiveKey.self, value: true)
         }
@@ -48,8 +41,7 @@ struct PathwayIssuesDestinationView: View {
 
 private struct IssueDestination: Hashable {
     let companyID: String
-    let planning: Bool
-    var id: String { "\(companyID):\(planning)" }
+
 }
 
 /// A pushed issue owns the compact screen; the app dock returns when navigation pops.

@@ -14,7 +14,6 @@ struct PathwayEmailView: View {
     @State private var selection: Set<String> = []
     @State private var selecting = false
     @State private var deleting = false
-    @State private var settings = false
     private var visible: [PathwayEmailRecord] {
         model.messages.filter { message in
             message.companyID == companyID && (environmentID.isEmpty || message.environmentID == environmentID) &&
@@ -79,12 +78,10 @@ struct PathwayEmailView: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button(selecting ? "Done" : "Select") { selecting.toggle(); selection = [] }
-                Button("Email settings", systemImage: "gearshape") { settings = true }
             }
         }
         .onChange(of: companies, initial: true) { if !companies.contains(where: { $0.id == companyID }) { companyID = companies.first?.id ?? "" } }
         .onChange(of: companyID) { selection = []; environmentID = ""; inbox = ""; tagID = "" }
-        .sheet(isPresented: $settings) { NavigationStack { PathwayEmailSettingsView(model: model, companyID: companyID, environments: environments.filter { $0.companyId == companyID }) } }
         .confirmationDialog("Delete \(selected.count) captured messages?", isPresented: $deleting, titleVisibility: .visible) {
             Button("Delete messages", role: .destructive) { run { try await model.remove(selected); selection = [] } }
         }
