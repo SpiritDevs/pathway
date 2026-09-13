@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDate:off - This script runs in the isolated overlay without an Effect runtime.
+// @effect-diagnostics globalDate:off globalTimers:off - This script runs in the isolated overlay without an Effect runtime.
 import type {
   DictationBridge,
   DictationCommand,
@@ -30,6 +30,41 @@ function mountDictationOverlay() {
   let revision = 0;
   let active = true;
   let preferredSize = "";
+  let resultHovered = false;
+  let resultFocused = false;
+  let dismissTimer: ReturnType<typeof setInterval> | undefined;
+  let dismissRemaining = 0;
+  let dismissDuration = 5000;
+  let dismissTick = 0;
+  let dismissAfterCopy = false;
+  function stopDismissTimer() {
+    clearInterval(dismissTimer);
+    dismissTimer = undefined;
+  }
+  function updateDismissRing() {
+    const ring = document.getElementById("dismiss-ring");
+    ring?.setAttribute("stroke-dashoffset", String(100 * (1 - dismissRemaining / dismissDuration)));
+  }
+  function startDismissTimer(duration: number, afterCopy = false) {
+    stopDismissTimer();
+    dismissDuration = duration;
+    dismissRemaining = duration;
+    dismissAfterCopy = afterCopy;
+    dismissTick = Date.now();
+    updateDismissRing();
+    dismissTimer = setInterval(() => {
+      const now = Date.now();
+      if (dismissAfterCopy || (!resultHovered && !resultFocused)) {
+        dismissRemaining = Math.max(0, dismissRemaining - (now - dismissTick));
+        updateDismissRing();
+      }
+      dismissTick = now;
+      if (dismissRemaining === 0) {
+        stopDismissTimer();
+        void execute({ type: "dismiss" });
+      }
+    }, 100);
+  }
   const icons: Record<string, string> = {
     mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/>',
     settings:
@@ -121,6 +156,8 @@ function mountDictationOverlay() {
   async function copy(text: string, id: string) {
     if (await execute({ type: "copy", text })) {
       copied = id;
+      if (state?.phase === "result" && state.result?.id === id && !recentOpen)
+        startDismissTimer(3000, true);
       render(true);
     }
   }
@@ -185,6 +222,20 @@ function mountDictationOverlay() {
     const panel = element("section", "panel result");
     panel.setAttribute("aria-label", "Dictation result");
     const header = element("div", "panel-header");
+    const dismiss = button(
+      "Dismiss result",
+      "close",
+      () => {
+        stopDismissTimer();
+        void execute({ type: "dismiss" });
+      },
+      "round dismiss",
+      true,
+    );
+    const countdown = element("span", "dismiss-countdown");
+    countdown.innerHTML =
+      '<svg viewBox="0 0 32 32" aria-hidden="true"><circle id="dismiss-ring" cx="16" cy="16" r="14" pathLength="100" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="100" transform="rotate(-90 16 16)"/></svg>';
+    dismiss.append(countdown);
     header.append(
       element(
         "h2",
@@ -197,7 +248,7 @@ function mountDictationOverlay() {
               ? "Microphone test"
               : "Your dictation",
       ),
-      button("Dismiss result", "close", () => void execute({ type: "dismiss" }), "round", true),
+      dismiss,
     );
     panel.append(header);
     if (result.delivery === "unconfirmed")
@@ -231,6 +282,7 @@ function mountDictationOverlay() {
     );
     panel.append(footer);
     root.append(panel);
+    updateDismissRing();
     size(424, Math.min(440, 224 + Math.ceil(result.text.length / 46) * 21));
   }
   function liveIndicators() {
@@ -257,6 +309,7 @@ function mountDictationOverlay() {
     const nextSignature = JSON.stringify([
       state.phase,
       state.mode,
+      state.durationMs >= 270_000,
       state.result,
       state.error,
       state.authenticated,
@@ -332,14 +385,17 @@ function mountDictationOverlay() {
             true,
           ),
         );
-      else pill.append(element("span", "record-dot"));
+
       const wave = element("div", "wave");
       wave.setAttribute("aria-label", "Recording audio");
       for (let i = 0; i < (locked ? 17 : 13); i++) wave.append(element("i", "wave-bar"));
       pill.append(wave);
-      const time = element("span", "duration", "0:00");
-      time.id = "duration";
-      pill.append(time);
+      const nearingLimit = state.durationMs >= 270_000;
+      if (nearingLimit) {
+        const time = element("span", "duration cutoff-reveal");
+        time.id = "duration";
+        pill.append(time);
+      }
       if (locked)
         pill.append(
           button(
@@ -350,19 +406,12 @@ function mountDictationOverlay() {
             true,
           ),
         );
-      root.append(
-        element(
-          "div",
-          "hint",
-          state.phase === "starting"
-            ? "Opening microphone…"
-            : locked
-              ? "Locked recording · Esc to cancel"
-              : "Release to finish · Esc to cancel",
-        ),
-        pill,
-      );
-      size(locked ? 330 : 264, 94);
+      if (nearingLimit)
+        root.append(
+          element("div", "hint cutoff-reveal", "Approaching the five-minute recording limit"),
+        );
+      root.append(pill);
+      size(nearingLimit ? 330 : locked ? 264 : 132, nearingLimit ? 94 : 72);
     } else if (state.phase === "processing") {
       const pill = element("div", "pill processing");
       pill.append(
@@ -420,7 +469,15 @@ function mountDictationOverlay() {
   }
   function receive(next: DictationState) {
     const accountChanged = state?.accountId !== next.accountId || !next.authenticated;
+    const resultChanged = state?.phase !== next.phase || state?.result?.id !== next.result?.id;
     state = next;
+    if (accountChanged || resultChanged) {
+      stopDismissTimer();
+      copied = null;
+      if (next.phase === "result" && next.result && next.authenticated && next.preferences.enabled)
+        startDismissTimer(5000);
+    }
+    if (!next.preferences.enabled) stopDismissTimer();
     revision++;
     if (accountChanged) {
       recent = [];
@@ -447,6 +504,7 @@ function mountDictationOverlay() {
       size(424, 150);
     });
   root.addEventListener("pointerenter", () => {
+    resultHovered = true;
     if (state?.phase !== "idle") return;
     if (!hovered) {
       hovered = true;
@@ -454,11 +512,16 @@ function mountDictationOverlay() {
     }
   });
   root.addEventListener("pointerleave", () => {
+    resultHovered = false;
     if (state?.phase !== "idle") return;
     hovered = false;
     render(true);
   });
+  root.addEventListener("focusout", () => {
+    resultFocused = false;
+  });
   root.addEventListener("focusin", () => {
+    resultFocused = true;
     if (state?.phase !== "idle") return;
     if (!hovered) {
       hovered = true;
@@ -482,6 +545,7 @@ function mountDictationOverlay() {
     "unload",
     () => {
       active = false;
+      stopDismissTimer();
       historyRequest++;
       unsubscribe();
     },
@@ -493,6 +557,6 @@ export function createDictationWidgetHtml(): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pathway dictation</title>
 <style>
-*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#f5f5f6;font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{display:flex;align-items:flex-end;justify-content:center;padding:12px}button{font:inherit;color:inherit;border:0;cursor:pointer;background:transparent;display:inline-flex;align-items:center;justify-content:center;gap:7px;border-radius:20px;padding:8px 10px;white-space:nowrap;-webkit-app-region:no-drag}button:hover{background:#29292d}button:focus-visible{outline:2px solid #c1b5fc;outline-offset:2px}button:disabled{opacity:.4;pointer-events:none}h2,p{margin:0}#widget{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:9px;max-width:100%;max-height:100%}.icon{display:inline-flex;width:16px;height:16px;flex-shrink:0}.icon svg{width:100%;height:100%}.pill{display:flex;align-items:center;justify-content:center;gap:10px;background:#101012;border:1px solid #323236;border-radius:99px;box-shadow:0 4px 12px #0005;flex-shrink:0;min-height:44px;padding:5px 8px}.idle{min-height:22px;height:22px;width:76px;padding:0;background:#080809;border-color:#29292d}.idle-handle{width:100%;height:100%;padding:3px}.idle-handle .icon{width:24px;height:12px}.idle-handle .icon svg{display:none}.idle-handle .icon:after{content:"";margin:auto;width:24px;height:3px;border-radius:4px;background:#96969e}.idle.expanded{height:44px;width:354px;padding:4px 6px;gap:1px}.expanded button{font-size:12px;padding:9px}.divider{height:18px;width:1px;background:#39393e;margin:0 3px}.round{height:29px;width:29px;padding:6px;flex-shrink:0}.recording{gap:14px;padding:7px 10px;height:48px}.record-dot{height:7px;width:7px;background:#fb646b;border-radius:50%;margin-left:6px}.accept{background:#eeedf1;color:#141416}.accept:hover{background:#fff}.wave{height:26px;display:flex;align-items:center;justify-content:center;gap:3px;width:auto}.wave-bar{display:block;width:3px;height:4px;border-radius:3px;background:#eeeeef}.duration{font-size:11px;font-variant-numeric:tabular-nums;color:#aaaab3;min-width:30px}.hint{font-size:10px;letter-spacing:.01em;background:#131315;color:#c5c5cc;border:1px solid #34343a;padding:5px 10px;border-radius:12px}.processing{padding-left:16px;gap:12px}.processing-label{font-size:12px;color:#d4d4db;padding-right:6px}.panel{width:380px;max-width:100%;max-height:100%;background:#111113;border:1px solid #35353b;box-shadow:0 4px 12px #0005;border-radius:18px;overflow:hidden;display:flex;flex-direction:column}.result,.failure{width:396px}.panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px 8px 18px;flex-shrink:0}.panel h2{font-size:13px;font-weight:600;letter-spacing:-.1px}.panel .round{color:#a3a3ad}.description{font-size:11px;line-height:1.55;color:#a8a8b2;padding:0 18px 10px}.transcript{white-space:pre-wrap;overflow-wrap:anywhere;overflow-y:auto;padding:5px 18px 14px;font-size:14px;line-height:1.6;user-select:text;min-height:44px;flex:1}.panel-footer{padding:10px 14px;border-top:1px solid #29292f;display:flex;justify-content:flex-end;gap:7px;flex-shrink:0}.primary{background:#eae9ef;color:#131315;border-radius:9px;font-size:12px;padding:8px 12px}.primary:hover{background:#fff}.subtle{color:#c8c8d1;font-size:11px;border-radius:8px}.recent-row{display:flex;gap:14px;align-items:center;padding:12px 16px;border-top:1px solid #26262c;min-height:70px}.recent-content{min-width:0;flex:1}.recent-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:12px;line-height:1.45;color:#dedee5;overflow-wrap:anywhere}.meta{display:block;margin-top:5px;color:#83838f;font-size:10px}.empty{font-size:12px;line-height:1.6;color:#9999a5;padding:22px 18px}.error{color:#ffb0b5;font-size:12px;line-height:1.55;padding:8px 18px 16px;overflow-y:auto}.recent{overflow-y:auto}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:#f5f5f6;font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}body{display:flex;align-items:flex-end;justify-content:center;padding:12px}button{font:inherit;color:inherit;border:0;cursor:pointer;background:transparent;display:inline-flex;align-items:center;justify-content:center;gap:7px;border-radius:20px;padding:8px 10px;white-space:nowrap;-webkit-app-region:no-drag}button:hover{background:#29292d}button:focus-visible{outline:2px solid #c1b5fc;outline-offset:2px}button:disabled{opacity:.4;pointer-events:none}h2,p{margin:0}#widget{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:9px;max-width:100%;max-height:100%}.icon{display:inline-flex;width:16px;height:16px;flex-shrink:0}.icon svg{width:100%;height:100%}.pill{display:flex;align-items:center;justify-content:center;gap:10px;background:#101012;border:1px solid #323236;border-radius:99px;box-shadow:0 4px 12px #0005;flex-shrink:0;min-height:44px;padding:5px 8px}.idle{min-height:22px;height:22px;width:76px;padding:0;background:#080809;border-color:#29292d}.idle-handle{width:100%;height:100%;padding:3px}.idle-handle .icon{width:24px;height:12px}.idle-handle .icon svg{display:none}.idle-handle .icon:after{content:"";margin:auto;width:24px;height:3px;border-radius:4px;background:#96969e}.idle.expanded{height:44px;width:354px;padding:4px 6px;gap:1px}.expanded button{font-size:12px;padding:9px}.divider{height:18px;width:1px;background:#39393e;margin:0 3px}.round{height:29px;width:29px;padding:6px;flex-shrink:0}.recording{gap:14px;padding:7px 10px;height:48px}.dismiss{position:relative}.dismiss-countdown{position:absolute;inset:0;pointer-events:none}.dismiss-countdown svg{width:100%;height:100%}.cutoff-reveal{animation:cutoff-reveal .25s ease-out}@keyframes cutoff-reveal{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}.accept{background:#eeedf1;color:#141416}.accept:hover{background:#fff}.wave{height:26px;display:flex;align-items:center;justify-content:center;gap:3px;width:auto}.wave-bar{display:block;width:3px;height:4px;border-radius:3px;background:#eeeeef}.duration{font-size:11px;font-variant-numeric:tabular-nums;color:#aaaab3;min-width:30px}.hint{font-size:10px;letter-spacing:.01em;background:#131315;color:#c5c5cc;border:1px solid #34343a;padding:5px 10px;border-radius:12px}.processing{padding-left:16px;gap:12px}.processing-label{font-size:12px;color:#d4d4db;padding-right:6px}.panel{width:380px;max-width:100%;max-height:100%;background:#111113;border:1px solid #35353b;box-shadow:0 4px 12px #0005;border-radius:18px;overflow:hidden;display:flex;flex-direction:column}.result,.failure{width:396px}.panel-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px 8px 18px;flex-shrink:0}.panel h2{font-size:13px;font-weight:600;letter-spacing:-.1px}.panel .round{color:#a3a3ad}.description{font-size:11px;line-height:1.55;color:#a8a8b2;padding:0 18px 10px}.transcript{white-space:pre-wrap;overflow-wrap:anywhere;overflow-y:auto;padding:5px 18px 14px;font-size:14px;line-height:1.6;user-select:text;min-height:44px;flex:1}.panel-footer{padding:10px 14px;border-top:1px solid #29292f;display:flex;justify-content:flex-end;gap:7px;flex-shrink:0}.primary{background:#eae9ef;color:#131315;border-radius:9px;font-size:12px;padding:8px 12px}.primary:hover{background:#fff}.subtle{color:#c8c8d1;font-size:11px;border-radius:8px}.recent-row{display:flex;gap:14px;align-items:center;padding:12px 16px;border-top:1px solid #26262c;min-height:70px}.recent-content{min-width:0;flex:1}.recent-text{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:12px;line-height:1.45;color:#dedee5;overflow-wrap:anywhere}.meta{display:block;margin-top:5px;color:#83838f;font-size:10px}.empty{font-size:12px;line-height:1.6;color:#9999a5;padding:22px 18px}.error{color:#ffb0b5;font-size:12px;line-height:1.55;padding:8px 18px 16px;overflow-y:auto}.recent{overflow-y:auto}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head><body><main id="widget" aria-label="Pathway dictation"></main><script>(${mountDictationOverlay.toString()})();</script></body></html>`;
 }

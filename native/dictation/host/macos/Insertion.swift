@@ -137,17 +137,9 @@ final class TextInsertion {
         }
         guard allowed(), let target = focus(), allowed() else { return result("manual", "No verified editable field is focused.") }
         guard !modifiersHeld else { return result("manual", "Release keyboard modifiers before inserting.") }
-        var settable = DarwinBoolean(false)
-        let access = AXUIElementIsAttributeSettable(target.element, kAXSelectedTextAttribute as CFString, &settable)
-        if access == .success, settable.boolValue {
-            guard matches(target), !modifiersHeld, allowed() else { return result("manual", "The focused field changed.") }
-            // Dispatch at most once, even if AX reports an error after the target consumed the write.
-            _ = AXUIElementSetAttributeValue(target.element, kAXSelectedTextAttribute as CFString, text as CFString)
-            return confirm(target, text: text, allowed: allowed) ? result("inserted") : result("unconfirmed", "The application did not confirm insertion.")
-        }
-        guard access == .success || access == .attributeUnsupported || access == .notImplemented else {
-            return result("manual", "Could not verify insertion access.")
-        }
+        // Use the editor's paste handler, including in Chromium/Electron contenteditable fields.
+        // AXSelectedText can claim to be writable without updating the editor. Never try a
+        // second delivery after an unconfirmed write, since it could duplicate the text.
         let board = NSPasteboard.general
         guard let backup = ClipboardSnapshot.capture(board), allowed(), matches(target), !modifiersHeld,
               board.changeCount == backup.revision else { return result("manual", "Focus or clipboard could not be preserved.") }

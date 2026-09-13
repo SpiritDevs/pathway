@@ -1,5 +1,5 @@
 import * as NodeVM from "node:vm";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { DictationCommand, DictationState } from "@spiritdevs/contracts/dictation";
 import { createDictationWidgetHtml } from "./widgetHtml.ts";
 import { defaultDictationPreferences } from "@spiritdevs/contracts/dictation";
@@ -125,6 +125,9 @@ async function mount(state: DictationState) {
   NodeVM.runInNewContext(script, {
     window: { dictationOverlay: bridge, addEventListener: vi.fn() },
     document,
+    setInterval,
+    clearInterval,
+    Date,
   });
   await bridge.getState();
   const click = (label: string) => {
@@ -145,6 +148,104 @@ async function mount(state: DictationState) {
 }
 
 describe("dictation overlay", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it("dismisses any untouched result after five seconds", async () => {
+    for (const delivery of ["manual", "unconfirmed", "inserted", "test"] as const) {
+      const state = makeDictationFixture("result");
+      const overlay = await mount({ ...state, result: { ...state.result!, delivery } });
+      await vi.advanceTimersByTimeAsync(4900);
+      expect(overlay.bridge.execute).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(overlay.bridge.execute).toHaveBeenCalledExactlyOnceWith({ type: "dismiss" });
+    }
+  });
+  it("pauses the countdown while hovered and resumes on leave", async () => {
+    const overlay = await mount(makeDictationFixture("result"));
+    await vi.advanceTimersByTimeAsync(2000);
+    overlay.root.trigger("pointerenter");
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(overlay.bridge.execute).not.toHaveBeenCalled();
+    overlay.root.trigger("pointerleave");
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(overlay.bridge.execute).toHaveBeenCalledExactlyOnceWith({ type: "dismiss" });
+  });
+  it("closes three seconds after a successful copy even while hovered", async () => {
+    const overlay = await mount(makeDictationFixture("result"));
+    overlay.root.trigger("pointerenter");
+    overlay.click("Copy text");
+    await vi.advanceTimersByTimeAsync(2900);
+    expect(overlay.bridge.execute).toHaveBeenCalledTimes(1);
+    expect(overlay.root.all().some((node) => node.textContent === "Copied")).toBe(true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(overlay.bridge.execute).toHaveBeenLastCalledWith({ type: "dismiss" });
+  });
+  it("does not start a copied countdown when copying fails", async () => {
+    const overlay = await mount(makeDictationFixture("result"));
+    overlay.root.trigger("pointerenter");
+    overlay.bridge.execute.mockRejectedValueOnce(new Error("Clipboard unavailable"));
+    overlay.click("Copy text");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(overlay.bridge.execute).toHaveBeenCalledTimes(1);
+    expect(
+      overlay.root.all().some((node) => node.textContent.includes("Clipboard unavailable")),
+    ).toBe(true);
+  });
+  it("dismisses immediately from the close button and cancels the countdown", async () => {
+    const overlay = await mount(makeDictationFixture("result"));
+    overlay.click("Dismiss result");
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(overlay.bridge.execute).toHaveBeenCalledExactlyOnceWith({ type: "dismiss" });
+  });
+  it("gives a new result its own countdown without resetting for state updates", async () => {
+    const state = makeDictationFixture("result");
+    const overlay = await mount(state);
+    await vi.advanceTimersByTimeAsync(4000);
+    const next = { ...state, result: dictationHistoryFixtures[1]! };
+    overlay.emit(next);
+    await vi.advanceTimersByTimeAsync(4000);
+    overlay.emit({ ...next, level: 0.5 });
+    expect(overlay.bridge.execute).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(overlay.bridge.execute).toHaveBeenCalledExactlyOnceWith({ type: "dismiss" });
+  });
+  it("pauses for keyboard focus within the popup", async () => {
+    const overlay = await mount(makeDictationFixture("result"));
+    overlay.root.trigger("focusin");
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(overlay.bridge.execute).not.toHaveBeenCalled();
+    overlay.root.trigger("focusout");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(overlay.bridge.execute).toHaveBeenCalledExactlyOnceWith({ type: "dismiss" });
+  });
+  it("clears old countdowns when recording starts or the account signs out", async () => {
+    for (const next of [{ phase: "recording" as const }, { authenticated: false }]) {
+      const state = makeDictationFixture("result");
+      const overlay = await mount(state);
+      await vi.advanceTimersByTimeAsync(4000);
+      overlay.emit({ ...state, ...next });
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(overlay.bridge.execute).not.toHaveBeenCalled();
+    }
+  });
+  it("keeps hold recording minimal until the last thirty seconds", async () => {
+    const state = { ...makeDictationFixture("recording-locked"), mode: "hold" as const };
+    const overlay = await mount(state);
+    expect(overlay.root.all().some((node) => node.id === "duration")).toBe(false);
+    expect(overlay.root.all().some((node) => node.className.includes("hint"))).toBe(false);
+    expect(overlay.root.all().some((node) => node.className === "record-dot")).toBe(false);
+    overlay.emit({ ...state, durationMs: 270000 });
+    expect(overlay.root.all().find((node) => node.id === "duration")?.textContent).toBe("30s left");
+    expect(
+      overlay.root
+        .all()
+        .some((node) => node.textContent === "Approaching the five-minute recording limit"),
+    ).toBe(true);
+    const replacements = overlay.root.replacements;
+    overlay.emit({ ...state, durationMs: 271000 });
+    expect(overlay.root.replacements).toBe(replacements);
+    expect(overlay.root.all().find((node) => node.id === "duration")?.textContent).toBe("29s left");
+  });
   it("offers quick hide on hover without disabling dictation or changing preferences", async () => {
     const state = makeDictationFixture();
     const overlay = await mount(state);
