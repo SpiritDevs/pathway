@@ -16,6 +16,7 @@ struct AgentThreadComposer: View {
     let isNavigationExpanded: Bool
     var onOpenThread: ((String) -> Void)? = nil
     var workspaceRoot: String? = nil
+    var onOpenBrowser: () -> Void = {}
 
     @Namespace private var surfaceNamespace
     @State private var showsFiles = false
@@ -29,7 +30,6 @@ struct AgentThreadComposer: View {
     @State private var errorMessage: String?
     @State private var isChangingModel = false
     @State private var isInterrupting = false
-    @State private var showsBrowser = false
     @State private var showsQuestions = false
     @State private var showsStash = false
     @State private var stashCount = 0
@@ -93,9 +93,6 @@ struct AgentThreadComposer: View {
                     } catch { errorMessage = error.localizedDescription }
                 }
             }
-        }
-        .sheet(isPresented: $showsBrowser) {
-            AgentThreadRemoteBrowser(model: model)
         }
         .sheet(isPresented: $showsQuestions) {
             NavigationStack {
@@ -251,7 +248,7 @@ struct AgentThreadComposer: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Composer options")
             .accessibilityIdentifier("agent-thread-composer-options")
-            Button { showsBrowser = true } label: {
+            Button { isFocused = false; onOpenBrowser() } label: {
                 Image(systemName: "globe")
                     .frame(width: controlDiameter, height: controlDiameter)
                     .contentShape(Circle())

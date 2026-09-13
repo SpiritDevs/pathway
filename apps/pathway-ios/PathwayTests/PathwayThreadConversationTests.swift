@@ -141,6 +141,27 @@ struct PathwayThreadConversationTests {
         #expect(model.activeRunID == nil)
     }
 
+    @Test func failedBrowserTabLoadOffersReconnectAndRetryCanRecover() async {
+        let thread = makeModel { _, _ in .object([:]) }
+        @MainActor final class BrowserResponseState { var failList = true }
+        let responseState = BrowserResponseState()
+        let browser = PathwayRemoteBrowserModel(thread: thread, request: { _, payload in
+            if payload.objectValue?["action"]?.stringValue == "list", responseState.failList {
+                throw PathwayRPCError.remote("Browser is unavailable")
+            }
+            return .object(["tabs": .array([]), "selectedTabId": .null])
+        })
+        await browser.start()
+        #expect(!browser.isHostReady)
+        #expect(browser.error == "Browser is unavailable")
+        #expect(!(await browser.command("open")))
+        responseState.failList = false
+        await browser.start()
+        #expect(browser.isHostReady)
+        #expect(browser.error == nil)
+        await browser.stop()
+    }
+
     @Test func editEligibilityAndHiddenContextArePreserved() async throws {
         var calls: [JSONValue] = []
         let model = makeModel { _, value in calls.append(value); return .object([:]) }

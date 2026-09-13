@@ -78,7 +78,7 @@ final class PathwayRemoteBrowserModel {
             }
             guard await command("selectHost", fields: ["host": .string("environment")]), !Task.isCancelled else { return }
             isHostReady = true
-            _ = await command("list")
+            if !(await command("list")) { isHostReady = false }
         } catch { self.error = error.localizedDescription }
     }
 
@@ -152,7 +152,6 @@ final class PathwayRemoteBrowserModel {
 }
 
 struct AgentThreadRemoteBrowser: View {
-    @Environment(\.dismiss) private var dismiss
     @State private var browser: PathwayRemoteBrowserModel
     @State private var address = ""
     @State private var typing = ""
@@ -162,14 +161,14 @@ struct AgentThreadRemoteBrowser: View {
     init(model: PathwayAgentThreadModel) { _browser = State(initialValue: PathwayRemoteBrowserModel(thread: model)) }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 8) {
+        VStack(spacing: 8) {
                 if !browser.isHostReady {
                     if let error = browser.error {
                         Text(error).font(.caption).foregroundStyle(.red)
                         Button("Retry browser connection") { Task { await browser.start() } }
                     } else {
-                        Text("Connecting to the environment browser…")
+                        ProgressView("Connecting to the environment browser…")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 } else {
                 HStack {
@@ -215,7 +214,8 @@ struct AgentThreadRemoteBrowser: View {
                         }
                     }
                 }
-                HStack {
+                ScrollView(.horizontal) {
+                HStack(spacing: 20) {
                     Button("Reload", systemImage: "arrow.clockwise") { Task { await browser.command("reload") } }
                     Button("Passwords", systemImage: "key") {
                         passwordTabID = browser.selected?.id
@@ -235,14 +235,22 @@ struct AgentThreadRemoteBrowser: View {
                             }
                         }
                     } else if let url = browser.artifactURL { ShareLink("Share capture", item: url) }
-                }.font(.caption).labelStyle(.iconOnly)
+                }.font(.subheadline).labelStyle(.iconOnly).frame(minHeight: 44)
+                }.scrollIndicators(.hidden)
                 }
             }
-            .padding()
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .disabled(browser.busy)
             .navigationTitle("Environment browser")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", role: .cancel) { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Reconnect browser", systemImage: "arrow.triangle.2.circlepath") {
+                        Task { await browser.stop(); await browser.start() }
+                    }.disabled(browser.busy)
+                }
+            }
             .sheet(isPresented: $showsPasswords) {
                 if let origin = passwordOrigin, let tabID = passwordTabID {
                     BrowserPasswordsView(origin: origin) { origin, username, password in
@@ -255,8 +263,7 @@ struct AgentThreadRemoteBrowser: View {
             .task { await browser.start() }
             .task(id: "\(browser.isHostReady):\(browser.selectedID ?? "")") { await browser.watchSelectedTab() }
             .onDisappear { Task { await browser.stop() } }
-            .onChange(of: browser.selected?.url) { _, url in address = url ?? "" }
-        }
+            .onChange(of: browser.selected?.url) { _, url in address = url == "about:blank" ? "" : url ?? "" }
     }
     private func navigate() {
         Task { await browser.command(browser.selected == nil ? "open" : "navigate", fields: ["url": .string(address)]) }
@@ -273,15 +280,25 @@ private struct RemoteBrowserImage: View {
                     .contentShape(Rectangle())
                     .accessibilityLabel("Remote browser page")
                     .gesture(DragGesture(minimumDistance: 10).onEnded { value in
-                        Task { await browser.command("scroll", fields: ["deltaX": .number(-value.translation.width), "deltaY": .number(-value.translation.height)]) }
+                        let scale = min(geometry.size.width / frame.width, geometry.size.height / frame.height)
+                        guard scale > 0 else { return }
+                        Task { await browser.command("scroll", fields: ["deltaX": .number(-value.translation.width / scale), "deltaY": .number(-value.translation.height / scale)]) }
                     })
                     .simultaneousGesture(SpatialTapGesture().onEnded { value in
                         guard let point = PathwayRemoteBrowserFrame.point(value.location, in: geometry.size, width: frame.width, height: frame.height) else { return }
                         Task { await browser.command("click", fields: ["x": .number(point.x), "y": .number(point.y)]) }
                     })
             } else {
-                ContentUnavailableView(browser.selected == nil ? "Open a browser tab" : "Connecting to browser", systemImage: "globe")
-                    .frame(width: geometry.size.width, height: geometry.size.height)
+                ContentUnavailableView {
+                    Label(browser.selected == nil ? "Open a website" : "Waiting for the browser page", systemImage: "globe")
+                } description: {
+                    Text(browser.selected == nil ? "Enter a website address above, or open a new tab. The page runs on your connected environment." : "If the page does not appear, use Reconnect browser in the toolbar.")
+                } actions: {
+                    if browser.selected == nil {
+                        Button("New tab", systemImage: "plus") { Task { await browser.command("open") } }
+                    }
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
             }
         }.frame(maxHeight: .infinity)
     }
