@@ -100,7 +100,8 @@ existing entries still follow retention and deletion settings.
 
 ## Bar, language, and memory settings
 
-The small idle bar appears at the bottom of your screen. Hover for Record, Settings, History, and
+The small idle bar sits close to the bottom edge of your screen and is slightly transparent so you
+can see the content behind it. Hover to expand the solid controls for Record, Settings, History, and
 **Hide bar**. Hiding it leaves your recording shortcut working and brings the bar back when you
 activate dictation. You can also show it again from the tray or menu-bar control.
 History opens the five latest dictations with Copy actions and a link to the full History page.
