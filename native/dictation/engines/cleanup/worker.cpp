@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -27,7 +28,7 @@ constexpr int contextSize = 8192;
 constexpr int maxOutputTokens = 2048;
 constexpr int batchSize = 512;
 constexpr auto inferenceLimit = std::chrono::seconds(60);
-constexpr auto engineVersion = "llama.cpp-b10516-b95502ba-pathway3";
+constexpr auto engineVersion = "llama.cpp-b10516-b95502ba-pathway4";
 
 void emit(const json &event) {
     std::cout << event.dump(-1, ' ', false, json::error_handler_t::replace) << '\n' << std::flush;
@@ -184,21 +185,37 @@ Generation generate(llama_context *context, const llama_vocab *vocab, Prompt &pr
     if (!decodeTokens(context, tokens.data() + prompt.prefixSize, tokens.size() - prompt.prefixSize, deadline)) {
         return {{}, "Local correction exceeded its time limit or could not decode. The original text is kept."};
     }
-    const auto sampler = std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)>(
-        llama_sampler_chain_init(llama_sampler_chain_default_params()), llama_sampler_free);
-    auto *grammar = llama_sampler_init_grammar(vocab, grammarText, "root");
-    if (!sampler || !grammar) {
-        if (grammar) llama_sampler_free(grammar);
+    const auto greedy = std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)>(
+        llama_sampler_init_greedy(), llama_sampler_free);
+    const auto grammar = std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)>(
+        llama_sampler_init_grammar(vocab, grammarText, "root"), llama_sampler_free);
+    if (!greedy || !grammar) {
         return {{}, "Could not initialize the cleanup output format."};
     }
-    llama_sampler_chain_add(sampler.get(), grammar);
-    llama_sampler_chain_add(sampler.get(), llama_sampler_init_greedy());
+    std::vector<llama_token_data> candidates(llama_vocab_n_tokens(vocab));
     std::string output;
     for (int generated = 0; generated < tokenLimit; ++generated) {
         if (Clock::now() >= deadline.value) {
             return {{}, "Local correction exceeded its time limit. The original text is kept."};
         }
-        llama_token token = llama_sampler_sample(sampler.get(), context, -1);
+        const auto *logits = llama_get_logits_ith(context, -1);
+        for (size_t i = 0; i < candidates.size(); ++i)
+            candidates[i] = {static_cast<llama_token>(i), logits[i], 0.0f};
+        llama_token_data_array choices{candidates.data(), candidates.size(), -1, false};
+        llama_sampler_apply(greedy.get(), &choices);
+        auto selected = choices.data[choices.selected];
+        llama_token_data_array single{&selected, 1, -1, false};
+        // As in llama.cpp's common sampler, validate the best token first. Most
+        // tokens already satisfy JSON grammar; scan the vocabulary only on rejection.
+        // With greedy decoding this selects the same highest-scoring valid token.
+        llama_sampler_apply(grammar.get(), &single);
+        if (selected.logit == -INFINITY) {
+            llama_sampler_apply(grammar.get(), &choices);
+            llama_sampler_apply(greedy.get(), &choices);
+        }
+        llama_token token = choices.data[choices.selected].id;
+        llama_sampler_accept(grammar.get(), token);
+        llama_sampler_accept(greedy.get(), token);
         if (llama_vocab_is_eog(vocab, token)) return {std::move(output), {}};
         std::vector<char> piece(256);
         int count = llama_token_to_piece(vocab, token, piece.data(), static_cast<int>(piece.size()), 0, false);

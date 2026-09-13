@@ -46,13 +46,18 @@ keyboard or another app uses the default.
 | Select Record on the bar          | Start locked recording. Record dictation is also in the tray or menu bar and command palette. |
 
 The waveform shows microphone activity. After you finish, the bar shows **Transcribing…**. Each
-recording can last five minutes. A countdown appears near the limit, then Pathway finishes normally.
+recording can last five minutes. The timer stays hidden until the final 30 seconds, when a countdown
+and a limit warning appear. At five minutes, Pathway finishes normally.
 
 Pathway inserts into the editable field focused when processing finishes. Automatic insertion
 preserves your previous clipboard and does not submit a message or form. If no usable field is
 focused, the result panel shows your text with **Copy text**. The clipboard changes only when you
 select Copy. If insertion could not be confirmed, check the destination before copying to avoid a
 duplicate.
+
+The result panel closes after five seconds, with a countdown ring around the close button. Hovering
+over the panel pauses the countdown. Copying starts a new three-second countdown, even while
+hovered; the close button dismisses it immediately. Saved dictations remain available in History.
 
 If your microphone disconnects, Pathway shows usable captured speech for review without inserting
 it. Screen lock, sleep, and explicit cancellation discard unfinished dictation. If no speech is

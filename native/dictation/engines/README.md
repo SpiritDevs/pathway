@@ -102,6 +102,12 @@ before the next request. Language classification replaces the cached prefix;
 the following edit rebuilds it. This avoids repeatedly evaluating the same
 instructions while preserving the existing correction prompt and examples.
 
+Cleanup checks the greedy candidate against its output grammar before filtering
+all vocabulary tokens. If the candidate is invalid, it applies the full grammar
+and selects again. This follows llama.cpp's common sampler rejection path and
+preserves the highest-scoring valid token while avoiding a full grammar scan for
+ordinary text tokens. The grammar is advanced exactly once per accepted token.
+
 Cleanup uses multilingual demonstrations and a trusted reminder after the
 quoted transcript. A llama.cpp grammar constrains the private model answer to a
 `language`/`text` JSON object. The worker validates it and returns only `text` in
@@ -194,6 +200,20 @@ recording. `--engine-directory` can compare preserved binaries, and
 `--cleanup-language auto` measures the older separate language-classification
 path. There are no downloads or latency pass/fail thresholds.
 
+To regression-test cleanup sampling against a preserved previous build:
+
+```sh
+node native/dictation/engines/tests/cleanup-sampling.mjs \
+  --model-directory /tmp/pathway-models \
+  --baseline-directory /tmp/pathway-baseline-engines \
+  --engine-directory native/dictation/build/engines
+```
+
+This optional GPU test uses installed Base/Qwen models, checks 14 synthetic cases
+in automatic and explicit languages over two rounds, and compares every result
+byte-for-byte with the baseline. It reports warm request medians separately from
+model preparation. The cases include JSON escaping, Unicode and a longer dictation.
+
 ### Current validation limits
 
 On 2026-09-12, the Apple Silicon Metal and CPU-only builds compiled, and the
@@ -243,6 +263,30 @@ small fixture sample on M2 Max, not an M1 result or an end-to-end latency promis
 Whisper's five-candidate beam decoding remains unchanged: a tested greedy
 alternative saved too little on this fixture to justify an unmeasured accuracy
 tradeoff.
+
+On 2026-09-14, candidate-first grammar validation was compared with the previous
+worker on the same M2 Max and pinned Qwen weights. All 56 quality checks passed
+and every output matched the baseline byte-for-byte, including automatic and
+explicit languages, reverse-order reuse, escaped text, and a longer dictation.
+Median cleanup time dropped from 736 ms to 393 ms with an explicit language,
+and from 1,744 ms to 1,361 ms with automatic language classification. The desktop
+normally supplies Whisper's detected language. Model preparation is excluded;
+these synthetic fixtures do not establish accuracy or latency for all recordings.
+The native build and 20 inference lifecycle/protocol tests also passed.
+
+With the same Whisper Turbo binary and 11-second JFK fixture, five pipeline
+requests per build produced these warm medians (four requests, excluding the
+first):
+
+| Native phase        | Previous worker | Candidate-first grammar |
+| ------------------- | --------------: | ----------------------: |
+| Transcription       |          824 ms |                  820 ms |
+| Cleanup             |        1,084 ms |                  539 ms |
+| Speech plus cleanup |        1,918 ms |                1,360 ms |
+
+This reduces measured warm model processing by about 29%. It excludes microphone
+finalization, insertion and desktop UI latency. Model-loading timings are not
+compared because filesystem and GPU caches can differ between sequential runs.
 
 Grammar-constrained output fixes the answer format; it does not prove semantic
 accuracy. The controller must still validate candidates and retain the original
