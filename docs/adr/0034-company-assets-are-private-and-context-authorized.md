@@ -1,0 +1,5 @@
+# Company assets are private and authorized through their attachments
+
+Accepted during the thread assets design interview. Uploaded assets belong to a company, while their attachments connect them to threads and other contexts, including conversations without a project. Access follows the attached context rather than company membership alone; externally accessible links require explicit sharing.
+
+Existing task attachments use public-read UploadThing URLs, while conversation files use other storage paths. Carrying public-read behavior into conversation assets would expose private conversation files to anyone with a copied URL. Keeping asset identity separate from its attachments supports a common Assets library and reuse without making every company upload visible to every member. Reuse that broadens access requires confirmation. Standalone uploads are initially visible to the uploader and company admins. Existing public assets are identified as legacy until migration, rather than being mislabeled private.

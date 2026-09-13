@@ -223,3 +223,18 @@ starting duplicate work. See [durable thread submission](durable-thread-queue.md
 The atomic point at which an environment takes permanent delivery ownership of a queued
 submission. Editing, cancellation, and reassignment are available before acceptance. Acceptance
 is separate from durable local delivery and from provider startup.
+
+## Conversation assets
+
+**Asset**:
+A company-owned uploaded file that people or agents can use in Pathway. Its visibility follows the contexts where it is attached, unless an explicit share link grants access.
+_Avoid_: Workspace file when referring to an uploaded asset.
+
+**Asset attachment**:
+A reference connecting an asset to a message, thread, task or other supported context. The asset and the place where it appears have separate identities.
+
+**Assets library**:
+The collection of uploaded assets a person can access within a company, with information about ownership and usage.
+
+**Asset share link**:
+An explicitly created link that grants access to an otherwise private asset outside its normal Pathway permissions.
