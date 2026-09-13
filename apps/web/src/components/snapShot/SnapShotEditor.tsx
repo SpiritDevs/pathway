@@ -37,6 +37,9 @@ import { randomUUID } from "../../lib/utils";
 import {
   annotationBounds,
   arrowHead,
+  arrowHandles,
+  arrowPath,
+  reshapeArrow,
   boundedCrop,
   containsPoint,
   exportSnapShot,
@@ -87,6 +90,7 @@ const EMPTY_DOCUMENT: EditorDocument = {
   crop: { x: 0, y: 0, width: 1, height: 1 },
 };
 type Gesture =
+  | { kind: "arrow-handle"; handle: number; original: EditorDocument; annotation: Annotation }
   | { kind: "draw"; start: Point; original: EditorDocument; annotation: Annotation }
   | { kind: "move"; start: Point; original: EditorDocument; annotation: Annotation }
   | {
@@ -155,21 +159,28 @@ function AnnotationShape({ annotation }: { annotation: Annotation }) {
       );
     case "text":
       return (
-        <text
-          x={start.x}
-          y={start.y}
-          fill={annotation.color}
-          fontFamily="Arial, sans-serif"
-          fontSize={annotation.fontSize}
-          fontWeight="600"
-          dominantBaseline="text-before-edge"
-        >
-          {Array.from((annotation.text || "").matchAll(/^.*$/gm)).map((line, index) => (
-            <tspan key={line.index} x={start.x} dy={index === 0 ? 0 : annotation.fontSize * 1.25}>
-              {line[0] || "\u00a0"}
-            </tspan>
-          ))}
-        </text>
+        <g>
+          <rect {...bounds} fill={annotation.color} />
+          <text
+            x={start.x + annotation.fontSize * 0.3}
+            y={start.y + annotation.fontSize * 0.3}
+            fill="white"
+            fontFamily="Arial, sans-serif"
+            fontSize={annotation.fontSize}
+            fontWeight="600"
+            dominantBaseline="text-before-edge"
+          >
+            {Array.from((annotation.text || "").matchAll(/^.*$/gm)).map((line, index) => (
+              <tspan
+                key={line.index}
+                x={start.x + annotation.fontSize * 0.3}
+                dy={index === 0 ? 0 : annotation.fontSize * 1.25}
+              >
+                {line[0] || "\u00a0"}
+              </tspan>
+            ))}
+          </text>
+        </g>
       );
     case "number":
       return (
@@ -197,8 +208,10 @@ function AnnotationShape({ annotation }: { annotation: Annotation }) {
     case "arrow":
       return (
         <g {...style}>
-          <polyline points={points} />
-          <polyline
+          <path d={arrowPath(annotation)} strokeWidth={annotation.width * 2.5} />
+          <polygon
+            fill={annotation.color}
+            stroke="none"
             points={arrowHead(annotation)
               .map((point) => `${point.x},${point.y}`)
               .join(" ")}
@@ -457,7 +470,16 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
       return;
     }
     if (tool === "select") {
-      if (selectionBounds && selected) {
+      if (selected?.tool === "arrow") {
+        const handle = arrowHandles(selected).findIndex(
+          (value) => Math.hypot(value.x - point.x, value.y - point.y) < 10 / scale,
+        );
+        if (handle !== -1) {
+          gestureRef.current = { kind: "arrow-handle", handle, original, annotation: selected };
+          return;
+        }
+      }
+      if (selectionBounds && selected && selected.tool !== "arrow") {
         const corners = [
           { x: selectionBounds.x, y: selectionBounds.y },
           { x: selectionBounds.x + selectionBounds.width, y: selectionBounds.y },
@@ -550,6 +572,8 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
         x: point.x - gesture.start.x,
         y: point.y - gesture.start.y,
       });
+    } else if (gesture.kind === "arrow-handle") {
+      annotation = reshapeArrow(gesture.annotation, gesture.handle, point);
     } else if (gesture.kind === "resize") {
       annotation = resizeAnnotation(gesture.annotation, rectangleBetween(gesture.anchor, point));
     } else {
@@ -723,7 +747,9 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
   const hint = cropSelection
     ? "Press Enter to crop · Escape to cancel"
     : tool === "select"
-      ? "Select to move · Drag a corner to resize · Double-click text to edit"
+      ? selected?.tool === "arrow"
+        ? "Drag endpoints to resize · Drag the middle dot to curve · Drag arrow to move"
+        : "Select to move · Drag a corner to resize · Double-click text to edit"
       : tool === "pan"
         ? "Drag to pan · + / − to zoom · 0 to fit"
         : tool === "text"
@@ -962,35 +988,55 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
                           <AnnotationShape key={annotation.id} annotation={annotation} />
                         ))}
                     </g>
-                    {selectionBounds && tool === "select" && !editing && (
+                    {selected?.tool === "arrow" && tool === "select" && !editing && (
                       <g pointerEvents="none">
-                        <rect
-                          {...selectionBounds}
-                          fill="none"
-                          stroke="#1687ff"
-                          strokeWidth={1 / scale}
-                          strokeDasharray={`${4 / scale} ${3 / scale}`}
-                        />
-                        {[0, 1, 2, 3].map((corner) => (
-                          <rect
-                            key={corner}
-                            x={
-                              selectionBounds.x + (corner % 2) * selectionBounds.width - 3.5 / scale
-                            }
-                            y={
-                              selectionBounds.y +
-                              Math.floor(corner / 2) * selectionBounds.height -
-                              3.5 / scale
-                            }
-                            width={7 / scale}
-                            height={7 / scale}
+                        {arrowHandles(selected).map((point, index) => (
+                          <circle
+                            key={["start", "curve", "end"][index]}
+                            cx={point.x}
+                            cy={point.y}
+                            r={5 / scale}
                             fill="white"
                             stroke="#1687ff"
-                            strokeWidth={1 / scale}
+                            strokeWidth={1.5 / scale}
                           />
                         ))}
                       </g>
                     )}
+                    {selectionBounds &&
+                      selected?.tool !== "arrow" &&
+                      tool === "select" &&
+                      !editing && (
+                        <g pointerEvents="none">
+                          <rect
+                            {...selectionBounds}
+                            fill="none"
+                            stroke="#1687ff"
+                            strokeWidth={1 / scale}
+                            strokeDasharray={`${4 / scale} ${3 / scale}`}
+                          />
+                          {[0, 1, 2, 3].map((corner) => (
+                            <rect
+                              key={corner}
+                              x={
+                                selectionBounds.x +
+                                (corner % 2) * selectionBounds.width -
+                                3.5 / scale
+                              }
+                              y={
+                                selectionBounds.y +
+                                Math.floor(corner / 2) * selectionBounds.height -
+                                3.5 / scale
+                              }
+                              width={7 / scale}
+                              height={7 / scale}
+                              fill="white"
+                              stroke="#1687ff"
+                              strokeWidth={1 / scale}
+                            />
+                          ))}
+                        </g>
+                      )}
                     {cropSelection && (
                       <g pointerEvents="none">
                         <path
@@ -1019,7 +1065,9 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
                       style={{
                         left: (editing.points[0]!.x - document.crop.x) * scale,
                         top: (editing.points[0]!.y - document.crop.y) * scale,
-                        color: editing.color,
+                        color: "#ffffff",
+                        background: editing.color,
+                        padding: editing.fontSize * 0.3 * scale,
                         fontSize: editing.fontSize * scale,
                         lineHeight: 1.25,
                         width: Math.max(

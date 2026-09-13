@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   annotationBounds,
   arrowHead,
+  arrowHandles,
+  arrowPath,
+  reshapeArrow,
+  drawAnnotation,
   boundedCrop,
   exportSnapShot,
   moveAnnotation,
@@ -125,6 +129,7 @@ describe("PNG export", () => {
       beginPath: vi.fn(),
       strokeRect: vi.fn(),
       fillText: vi.fn(),
+      fillRect: vi.fn(),
     };
     const canvas = {
       width: 0,
@@ -164,8 +169,8 @@ describe("PNG export", () => {
     expect(context.translate).toHaveBeenCalledExactlyOnceWith(-200, -100);
     expect(context.strokeRect).toHaveBeenCalledExactlyOnceWith(220, 130, 140, 60);
     expect(context.fillText.mock.calls).toEqual([
-      ["First", 300, 200],
-      ["Second", 300, 232.5],
+      ["First", 307.8, 207.8],
+      ["Second", 307.8, 240.3],
     ]);
     expect(canvas.toDataURL).toHaveBeenCalledExactlyOnceWith("image/png");
     expect(result).toEqual({
@@ -249,5 +254,61 @@ describe("PNG export", () => {
         crop: { x: 0, y: 0, width: 100, height: 100 },
       }),
     ).toThrow("could not create an image");
+  });
+});
+
+describe("arrow handles and label export", () => {
+  it("bends through the middle handle and retains the curve when moving endpoints", () => {
+    const bent = reshapeArrow(arrow, 1, { x: 60, y: 110 });
+    expect(arrowHandles(bent)).toEqual([arrow.points[0], { x: 60, y: 110 }, arrow.points[1]]);
+    expect(arrowPath(bent)).toBe("M 120 80 Q 50 160 20 40");
+    const resized = reshapeArrow(bent, 2, { x: 10, y: 20 });
+    expect(resized.points).toEqual([
+      { x: 120, y: 80 },
+      { x: 50, y: 160 },
+      { x: 10, y: 20 },
+    ]);
+    expect(arrowHandles(moveAnnotation(bent, { x: 10, y: -10 }))[1]).toEqual({ x: 70, y: 100 });
+    expect(arrow.points).toHaveLength(2);
+  });
+
+  it("exports curves with thick shafts and filled arrowheads", () => {
+    const context = {
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      quadraticCurveTo: vi.fn(),
+      stroke: vi.fn(),
+      fill: vi.fn(),
+      closePath: vi.fn(),
+      lineWidth: 0,
+    };
+    drawAnnotation(
+      context as unknown as CanvasRenderingContext2D,
+      reshapeArrow(arrow, 1, { x: 60, y: 110 }),
+    );
+    expect(context.quadraticCurveTo).toHaveBeenCalledWith(50, 160, 20, 40);
+    expect(context.lineWidth).toBe(10);
+    expect(context.fill).toHaveBeenCalledOnce();
+  });
+
+  it("exports white multiline text inside a padded colored background", () => {
+    const fills: string[] = [];
+    const context = {
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      fillStyle: "",
+      fillRect: vi.fn(() => fills.push(context.fillStyle)),
+      fillText: vi.fn(() => fills.push(context.fillStyle)),
+    };
+    const text: Annotation = { ...arrow, tool: "text", text: "Hello\nWorld" };
+    drawAnnotation(context as unknown as CanvasRenderingContext2D, text);
+    expect(fills).toEqual(["#ed3b32", "#ffffff", "#ffffff"]);
+    const bounds = annotationBounds(text);
+    expect(context.fillRect).toHaveBeenCalledWith(bounds.x, bounds.y, bounds.width, bounds.height);
+    expect(context.fillText).toHaveBeenNthCalledWith(1, "Hello", 127.8, 87.8);
   });
 });
