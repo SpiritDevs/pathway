@@ -412,6 +412,17 @@ describe("web cloud link environment client", () => {
             expiresAt: "2026-06-06T00:05:00.000Z",
           }),
         )
+        .mockResolvedValueOnce(
+          Response.json({
+            linked: false,
+            cloudUserId: null,
+            relayUrl: null,
+            relayIssuer: null,
+            managedTunnelActive: false,
+            publishAgentActivity: false,
+            currentLocalHttpPort: 13773,
+          }),
+        )
         .mockResolvedValueOnce(Response.json("signed-proof"))
         .mockResolvedValueOnce(
           Response.json({
@@ -441,19 +452,21 @@ describe("web cloud link environment client", () => {
         }),
       );
 
-      expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
+      expect(String(fetchMock.mock.calls[2]?.[0])).toBe(
         "http://127.0.0.1:3000/api/connect/link-proof",
       );
       // @effect-diagnostics-next-line preferSchemaOverJson:off
-      expect(JSON.parse(bodyText(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      expect(JSON.parse(bodyText(fetchMock.mock.calls[2]?.[1]?.body))).toMatchObject({
         challenge: "challenge",
         endpoint: {
           httpBaseUrl: TARGET.httpBaseUrl,
           wsBaseUrl: TARGET.wsBaseUrl,
         },
       });
+      // The server derives its listener; a browser-facing proxy may use a different port.
+      expect(bodyText(fetchMock.mock.calls[2]?.[1]?.body)).toContain('"localHttpPort":13773');
       // @effect-diagnostics-next-line preferSchemaOverJson:off
-      expect(JSON.parse(bodyText(fetchMock.mock.calls[2]?.[1]?.body))).toMatchObject({
+      expect(JSON.parse(bodyText(fetchMock.mock.calls[3]?.[1]?.body))).toMatchObject({
         deviceId: TARGET.environmentId,
         proof: "signed-proof",
       });
@@ -468,6 +481,17 @@ describe("web cloud link environment client", () => {
           Response.json({
             challenge: "challenge",
             expiresAt: "2026-06-06T00:05:00.000Z",
+          }),
+        )
+        .mockResolvedValueOnce(
+          Response.json({
+            linked: false,
+            cloudUserId: null,
+            relayUrl: null,
+            relayIssuer: null,
+            managedTunnelActive: false,
+            publishAgentActivity: false,
+            currentLocalHttpPort: 13773,
           }),
         )
         .mockResolvedValueOnce(Response.json("signed-proof"))
@@ -505,7 +529,7 @@ describe("web cloud link environment client", () => {
         managedTunnelsEnabled: false,
       });
       // @effect-diagnostics-next-line preferSchemaOverJson:off
-      expect(JSON.parse(bodyText(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      expect(JSON.parse(bodyText(fetchMock.mock.calls[2]?.[1]?.body))).toMatchObject({
         endpoint: { providerKind: "manual" },
       });
     }),
@@ -552,6 +576,17 @@ describe("web cloud link environment client", () => {
             expiresAt: "2026-06-06T00:05:00.000Z",
           }),
         )
+        .mockResolvedValueOnce(
+          Response.json({
+            linked: false,
+            cloudUserId: null,
+            relayUrl: null,
+            relayIssuer: null,
+            managedTunnelActive: false,
+            publishAgentActivity: false,
+            currentLocalHttpPort: 13773,
+          }),
+        )
         .mockResolvedValueOnce(Response.json("signed-proof"))
         .mockResolvedValueOnce(
           Response.json({
@@ -590,11 +625,11 @@ describe("web cloud link environment client", () => {
       ).pipe(Effect.flip);
 
       expect(error.message).toContain("already linked to a different cloud account");
-      expect(fetchMock).toHaveBeenCalledTimes(5);
-      expect(String(fetchMock.mock.calls[4]?.[0])).toContain(
+      expect(fetchMock).toHaveBeenCalledTimes(6);
+      expect(String(fetchMock.mock.calls[5]?.[0])).toContain(
         `/v1/client/environment-links/${TARGET.environmentId}`,
       );
-      expect(fetchMock.mock.calls[4]?.[1]?.method).toBe("DELETE");
+      expect(fetchMock.mock.calls[5]?.[1]?.method).toBe("DELETE");
     }),
   );
 
@@ -606,6 +641,17 @@ describe("web cloud link environment client", () => {
           Response.json({
             challenge: "challenge",
             expiresAt: "2026-06-06T00:05:00.000Z",
+          }),
+        )
+        .mockResolvedValueOnce(
+          Response.json({
+            linked: false,
+            cloudUserId: null,
+            relayUrl: null,
+            relayIssuer: null,
+            managedTunnelActive: false,
+            publishAgentActivity: false,
+            currentLocalHttpPort: 13773,
           }),
         )
         .mockResolvedValueOnce(Response.json("signed-proof"))
@@ -643,7 +689,7 @@ describe("web cloud link environment client", () => {
         }),
       ).pipe(Effect.flip);
 
-      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(fetchMock).toHaveBeenCalledTimes(5);
     }),
   );
 

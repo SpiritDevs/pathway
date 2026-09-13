@@ -30,7 +30,7 @@ import {
   ThreadId,
 } from "@spiritdevs/contracts";
 import type { SyncBootstrapResponse } from "@spiritdevs/contracts/cloudSync";
-import type { CompanyId } from "@spiritdevs/contracts/company";
+import { CompanyId } from "@spiritdevs/contracts/company";
 import { makeSqliteSyncStore } from "@spiritdevs/client-runtime/sync";
 import type { FunctionReturnType } from "convex/server";
 import * as Cause from "effect/Cause";
@@ -52,6 +52,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadLaunch from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import { forkParkedFiber } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { convexErrorCode, type ConvexServiceTokenProvider } from "./convexServiceToken.ts";
@@ -200,6 +201,7 @@ function statusResult(
 }
 
 export interface LocalEnvironmentCommandServices {
+  readonly companyId?: string;
   readonly launch: ThreadLaunch.ThreadLaunchService["Service"]["launch"];
   readonly dispatch: ThreadManagement.ThreadManagementService["Service"]["dispatch"];
   readonly getThreadProjection: ThreadManagement.ThreadManagementService["Service"]["getThreadProjection"];
@@ -207,7 +209,11 @@ export interface LocalEnvironmentCommandServices {
     command: ClaimedEnvironmentCommand,
     requestedModel: ModelSelection | null,
   ) => Effect.Effect<
-    { readonly projectId: ProjectId; readonly modelSelection: ModelSelection },
+    {
+      readonly projectId: ProjectId | null;
+      readonly modelSelection: ModelSelection;
+      readonly workspaceStrategy?: ThreadLaunch.ThreadLaunchWorkspaceStrategy;
+    },
     unknown
   >;
 }
@@ -228,19 +234,42 @@ export function makeLocalEnvironmentCommandExecutor(
         switch (args.kind) {
           case "startThread": {
             const target = yield* services.resolveStartTarget(command, args.modelSelection);
+            const orchestrated =
+              command.onBehalfOfActor?.kind === "agent" &&
+              command.onBehalfOfActor.provider.startsWith("orchestrator:");
+            if (orchestrated && !services.companyId)
+              return yield* Effect.fail(
+                "An orchestrated assignment requires its workspace authority.",
+              );
             // This is the crash-recovery identity: ThreadLaunchService persists its receipt under
             // the EnvironmentCommandId unchanged. A restarted claimant may receive a new claim
             // generation, but replaying this command id returns the same thread without launching
             // a second one.
             const launched = yield* services.launch({
               commandId,
+              ...(args.threadId === undefined ? {} : { threadId: args.threadId }),
+              ...(command.onBehalfOfActor?.kind === "agent" &&
+              command.onBehalfOfActor.provider.startsWith("orchestrator:")
+                ? {
+                    orchestratorOrigin: {
+                      orchestratorId: command.onBehalfOfActor.provider.slice(
+                        "orchestrator:".length,
+                      ),
+                      companyId: services.companyId!,
+                      commandId: command.id,
+                    },
+                  }
+                : {}),
               projectId: target.projectId,
+              ...(target.projectId === null && services.companyId
+                ? { conversationCompanyId: CompanyId.make(services.companyId) }
+                : {}),
               title: "New delegated task",
               generateTitle: true,
               modelSelection: target.modelSelection,
               runtimeMode: DEFAULT_RUNTIME_MODE,
               interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-              workspaceStrategy: { type: "root" },
+              workspaceStrategy: target.workspaceStrategy ?? { type: "root" },
               initialMessage: { text: args.prompt, attachments: [] },
               createdBy: "agent",
               creationSource: "mcp",
@@ -574,15 +603,27 @@ function makeLiveExecutor(input: {
   readonly threads: ThreadManagement.ThreadManagementService["Service"];
   readonly projects: ProjectService.ProjectService["Service"];
   readonly settings: ServerSettings.ServerSettingsService["Service"];
+  readonly git: GitWorkflow.GitWorkflowService["Service"];
 }): EnvironmentCommandExecutor {
   return makeLocalEnvironmentCommandExecutor({
+    companyId: input.companyId,
     launch: input.launcher.launch,
     dispatch: input.threads.dispatch,
     getThreadProjection: input.threads.getThreadProjection,
     resolveStartTarget: (command, requestedModel) =>
       Effect.gen(function* () {
         if (command.cloudProjectId === null) {
-          return yield* Effect.fail("A start-thread command needs a cloud project binding.");
+          if (
+            command.onBehalfOfActor.kind !== "agent" ||
+            !command.onBehalfOfActor.provider.startsWith("orchestrator:")
+          )
+            return yield* Effect.fail("A start-thread command needs a cloud project binding.");
+          const serverSettings = yield* input.settings.getSettings;
+          return {
+            projectId: null,
+            modelSelection: requestedModel ?? serverSettings.textGenerationModelSelection,
+            workspaceStrategy: { type: "root" } as const,
+          };
         }
         const bindings = (yield* readEnvironmentBindings(input.backend, input.companyId)).filter(
           (binding) =>
@@ -604,8 +645,18 @@ function makeLiveExecutor(input: {
           return yield* Effect.fail("The command's environment binding names a missing project.");
         }
         const serverSettings = yield* input.settings.getSettings;
+        const coordinator =
+          command.onBehalfOfActor.kind === "agent" &&
+          command.onBehalfOfActor.provider.startsWith("orchestrator:");
+        const workspaceStrategy: ThreadLaunch.ThreadLaunchWorkspaceStrategy =
+          coordinator &&
+          project.value.workspaceRoot !== null &&
+          (yield* input.git.localStatus({ cwd: project.value.workspaceRoot })).isRepo
+            ? { type: "worktree", baseRef: "HEAD" }
+            : { type: "root" };
         return {
           projectId,
+          workspaceStrategy,
           modelSelection:
             requestedModel ??
             project.value.defaultModelSelection ??
@@ -653,6 +704,7 @@ export const startEnvironmentCommandClaimant = Effect.fn(
   const threads = yield* ThreadManagement.ThreadManagementService;
   const projects = yield* ProjectService.ProjectService;
   const settings = yield* ServerSettings.ServerSettingsService;
+  const git = yield* GitWorkflow.GitWorkflowService;
 
   yield* Effect.logInfo("Environment command claimant supervisor started", {
     environmentId,
@@ -693,6 +745,7 @@ export const startEnvironmentCommandClaimant = Effect.fn(
             threads,
             projects,
             settings,
+            git,
           });
         const runtime = {
           companyId,
@@ -738,6 +791,7 @@ export const environmentCommandClaimantLayer = (
   | ThreadLaunch.ThreadLaunchService
   | ThreadManagement.ThreadManagementService
   | ProjectService.ProjectService
+  | GitWorkflow.GitWorkflowService
   | ServerSettings.ServerSettingsService
 > =>
   Layer.effectDiscard(

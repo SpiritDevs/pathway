@@ -78,6 +78,7 @@ import {
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
 import { RemoteDispatch } from "../cloud/remoteDispatch.ts";
+import { ProviderAllowanceRuntime } from "../providerUsage/AllowanceRuntime.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -700,6 +701,13 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const scheduledTasks = yield* ScheduledTaskService;
   const remoteDispatch = yield* Effect.serviceOption(RemoteDispatch);
+  const allowanceRuntime = yield* Effect.serviceOption(ProviderAllowanceRuntime);
+  const inheritAllowance = (parent: ThreadId, environment: EnvironmentId, child: ThreadId) =>
+    Option.isSome(allowanceRuntime)
+      ? allowanceRuntime.value
+          .inheritThread(parent, environment, child)
+          .pipe(Effect.mapError((error) => failure("orchestration_error", error.message)))
+      : Effect.void;
 
   const requireCapability = (scope: McpInvocationScope) =>
     scope.capabilities.has("orchestration")
@@ -1027,6 +1035,8 @@ const make = Effect.gen(function* () {
         operation: "delegate-task",
       }),
     );
+    const threadId = ThreadId.make(`thread:delegated:${id}`);
+    yield* inheritAllowance(scope.threadId, input.targetEnvironmentId, threadId);
     const dispatched = yield* remoteDispatch.value
       .dispatch({
         targetEnvironmentId: input.targetEnvironmentId,
@@ -1035,6 +1045,7 @@ const make = Effect.gen(function* () {
         kind: "startThread",
         args: {
           kind: "startThread",
+          threadId,
           prompt: taskPrompt(input),
           modelSelection,
         },
@@ -1092,6 +1103,7 @@ const make = Effect.gen(function* () {
           schedule: input.schedule,
           projectId: parent.thread.projectId,
           threadId: bindToCurrentThread ? scope.threadId : null,
+          allowanceParentThreadId: scope.threadId,
           workspaceStrategy: scheduledTaskWorkspaceStrategy(bindToCurrentThread),
           modelSelection: parent.thread.modelSelection,
           runtimeMode: parent.thread.runtimeMode,
@@ -1511,6 +1523,7 @@ const make = Effect.gen(function* () {
                 requestKey: key,
                 index,
               });
+              yield* inheritAllowance(scope.threadId, scope.environmentId, threadId);
               const title = threadTitle({
                 parentTitle: parent.thread.title,
                 prompt: request.prompt,
@@ -1531,6 +1544,7 @@ const make = Effect.gen(function* () {
                   threadId,
                   projectId: parent.thread.projectId,
                   conversationCompanyId: parent.thread.conversationCompanyId,
+                  orchestratorOrigin: parent.thread.orchestratorOrigin,
                   title,
                   modelSelection: target.modelSelection,
                   runtimeMode,
@@ -1716,6 +1730,14 @@ const make = Effect.gen(function* () {
     sendToThread: (scope, input) =>
       Effect.gen(function* () {
         const { parent, target } = yield* loadScopedThread(scope, input.threadId);
+        if (
+          scope.orchestratorOrigin &&
+          target.thread.orchestratorOrigin?.commandId !== scope.orchestratorOrigin.commandId
+        )
+          return yield* failure(
+            "invalid_request",
+            "Ask the coordinating orchestrator to direct work outside this assignment.",
+          );
         yield* resolveRuntimeMode(parent.thread.runtimeMode, target.thread.runtimeMode);
         yield* resolveInteractionMode(parent.thread.interactionMode, target.thread.interactionMode);
 

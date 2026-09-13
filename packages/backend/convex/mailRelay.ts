@@ -18,6 +18,7 @@ import {
 import { mailIntakeMessage } from "./lib/mailSchema.ts";
 import { backendError } from "./lib/errors.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
+import { activeDelegatedBusinessOwner } from "./lib/delegatedBusinessOwner.ts";
 const fence = { accountId: v.string(), leaseToken: v.string(), generation: v.number() };
 const continuation = v.object({
   mode: v.union(v.literal("backfill"), v.literal("history")),
@@ -564,6 +565,22 @@ export const claimOutbox = mutation({
       .withIndex("by_outbox", (q) => q.eq("accountId", account.id).eq("status", "queued"))
       .first();
     if (!draft) return null;
+    if (draft.delegatedOrigin) {
+      const owner = await activeDelegatedBusinessOwner(ctx, draft.delegatedOrigin, "mail.send");
+      if (
+        !owner ||
+        owner.membership._id !== draft.ownerMembershipId ||
+        owner.company._id !== draft.companyId
+      ) {
+        await ctx.db.patch(draft._id, {
+          status: "failed",
+          lastError:
+            "The orchestrator's permission to send this message changed. Review the draft before sending.",
+          updatedAt: Date.now(),
+        });
+        return null;
+      }
+    }
     const generation = draft.generation + 1;
     await ctx.db.patch(draft._id, {
       status: "sending",

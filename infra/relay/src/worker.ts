@@ -61,6 +61,7 @@ import { makeMailRpc } from "./mail/rpc.ts";
 import { ConnectedMail, mailRoutes } from "./mail/routes.ts";
 import * as RelayConfiguration from "./Config.ts";
 import * as AgentActivityPublisher from "./agentActivity/AgentActivityPublisher.ts";
+import { deliverOrchestratorNotifications } from "./agentActivity/OrchestratorNotifications.ts";
 import * as ApnsClient from "./agentActivity/ApnsClient.ts";
 import * as ApnsProviderTokens from "./agentActivity/ApnsProviderTokens.ts";
 import * as ApnsDeliveryQueue from "./agentActivity/ApnsDeliveryQueue.ts";
@@ -366,6 +367,10 @@ export const ApiLive = Api.make(
             catch: () => new MailQueueError({ message: "Mail reconciliation failed" }),
           })
         : Effect.void,
+    );
+
+    yield* Cloudflare.Workers.cron("* * * * *", () =>
+      deliverOrchestratorNotifications().pipe(Effect.provide(runtimeLayer)),
     );
 
     const MAX_PRUNE_BATCHES_PER_RUN = 10;

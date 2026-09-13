@@ -19,6 +19,10 @@ import { ThreadManagementService } from "../orchestration-v2/ThreadManagementSer
 import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
 import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
 import { RemoteDispatch } from "../cloud/remoteDispatch.ts";
+import {
+  ProviderAllowanceRuntime,
+  AllowanceInheritanceError,
+} from "../providerUsage/AllowanceRuntime.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 
@@ -30,6 +34,8 @@ describe("OrchestratorMcpService", () => {
       const targetProjectId = ProjectId.make("project:mcp-remote-target");
       const remoteCalls = yield* Ref.make<ReadonlyArray<unknown>>([]);
       const localCalls = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const boundThreads = new Set<string>();
+      let canInherit = true;
       const remoteProjection = {
         thread: {
           id: ThreadId.make("thread:mcp-remote-child"),
@@ -47,18 +53,37 @@ describe("OrchestratorMcpService", () => {
         }),
         Layer.mock(ProviderRegistry)({ getProviders: Effect.succeed([]) }),
         Layer.mock(ScheduledTaskService)({}),
+        Layer.mock(ProviderAllowanceRuntime)({
+          inheritThread: (parent, destination, child) =>
+            Effect.gen(function* () {
+              assert.equal(parent, parentThreadId);
+              assert.equal(destination, targetEnvironmentId);
+              if (!canInherit)
+                return yield* new AllowanceInheritanceError({
+                  message: "Allowance unavailable",
+                  cause: null,
+                });
+              boundThreads.add(child);
+            }),
+        }),
         Layer.succeed(
           RemoteDispatch,
           RemoteDispatch.of({
             dispatch: (input) =>
-              Ref.update(remoteCalls, (calls) => [...calls, input]).pipe(
-                Effect.as({
-                  delivery: "direct" as const,
-                  id: input.idempotencyId,
-                  result: { kind: "startThread" as const, threadId: remoteProjection.thread.id },
-                  projection: remoteProjection,
-                }),
-              ),
+              Effect.gen(function* () {
+                assert.equal(input.args.kind, "startThread");
+                assert.isTrue(
+                  input.args.kind === "startThread" && boundThreads.has(input.args.threadId!),
+                );
+                return yield* Ref.update(remoteCalls, (calls) => [...calls, input]).pipe(
+                  Effect.as({
+                    delivery: "direct" as const,
+                    id: input.idempotencyId,
+                    result: { kind: "startThread" as const, threadId: remoteProjection.thread.id },
+                    projection: remoteProjection,
+                  }),
+                );
+              }),
           }),
         ),
       );
@@ -95,6 +120,17 @@ describe("OrchestratorMcpService", () => {
         });
         assert.equal((yield* Ref.get(remoteCalls)).length, 1);
         assert.isEmpty(yield* Ref.get(localCalls));
+
+        canInherit = false;
+        const held = yield* service
+          .delegateTask(scope, {
+            task: "Do not launch without inheritance",
+            targetEnvironmentId,
+            targetProjectId,
+          })
+          .pipe(Effect.flip);
+        assert.include(held.message, "Allowance unavailable");
+        assert.equal((yield* Ref.get(remoteCalls)).length, 1);
 
         const malformed = yield* service
           .delegateTask(scope, {

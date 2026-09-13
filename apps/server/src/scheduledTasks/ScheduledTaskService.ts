@@ -21,6 +21,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
@@ -30,6 +31,8 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { ProviderAllowanceRuntime } from "../providerUsage/AllowanceRuntime.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { isMissedFixedTimeRun, isSameSchedule, nextScheduledRunAt } from "./Schedule.ts";
 
 const decodeTask = Schema.decodeUnknownEffect(ScheduledTask);
@@ -51,6 +54,7 @@ interface ScheduledTaskRow {
   readonly schedule_json: string;
   readonly project_id: string;
   readonly thread_id: string | null;
+  readonly allowance_parent_thread_id: string | null;
   readonly workspace_strategy_json: string;
   readonly model_selection_json: string;
   readonly runtime_mode: string;
@@ -135,6 +139,9 @@ const decodeRow = (row: ScheduledTaskRow) =>
       schedule,
       projectId: row.project_id,
       threadId: row.thread_id,
+      ...(row.allowance_parent_thread_id
+        ? { allowanceParentThreadId: row.allowance_parent_thread_id }
+        : {}),
       workspaceStrategy,
       modelSelection,
       runtimeMode: row.runtime_mode,
@@ -165,6 +172,8 @@ export const layer = Layer.effect(
     const crypto = yield* Crypto.Crypto;
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+    const allowance = yield* Effect.serviceOption(ProviderAllowanceRuntime);
+    const environment = yield* Effect.serviceOption(ServerEnvironment.ServerEnvironment);
     const activeRuns = yield* Ref.make<ReadonlySet<ScheduledTaskId>>(new Set());
     // Sliding(1) coalesces the dirty-signal: every notification triggers a
     // full list() re-emit anyway, so a slow subscriber only ever needs the
@@ -181,6 +190,7 @@ export const layer = Layer.effect(
         schedule_json,
         project_id,
         thread_id,
+        allowance_parent_thread_id,
         workspace_strategy_json,
         model_selection_json,
         runtime_mode,
@@ -232,6 +242,7 @@ export const layer = Layer.effect(
         schedule_json,
         project_id,
         thread_id,
+        allowance_parent_thread_id,
         workspace_strategy_json,
         model_selection_json,
         runtime_mode,
@@ -282,6 +293,7 @@ export const layer = Layer.effect(
           schedule_json,
           project_id,
           thread_id,
+          allowance_parent_thread_id,
           workspace_strategy_json,
           model_selection_json,
           runtime_mode,
@@ -304,6 +316,7 @@ export const layer = Layer.effect(
           ${JSON.stringify(task.schedule)},
           ${task.projectId},
           ${task.threadId},
+          ${task.allowanceParentThreadId ?? null},
           ${JSON.stringify(task.workspaceStrategy)},
           ${JSON.stringify(task.modelSelection)},
           ${task.runtimeMode},
@@ -326,6 +339,7 @@ export const layer = Layer.effect(
           schedule_json = excluded.schedule_json,
           project_id = excluded.project_id,
           thread_id = excluded.thread_id,
+          allowance_parent_thread_id = excluded.allowance_parent_thread_id,
           workspace_strategy_json = excluded.workspace_strategy_json,
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
@@ -469,6 +483,21 @@ export const layer = Layer.effect(
         const fireKey = `${active.id}:${DateTime.toEpochMillis(startedAt)}:${trigger}`;
         const commandId = CommandId.make(`scheduled-task:${fireKey}`);
         const messageId = MessageId.make(`scheduled-task-message:${fireKey}`);
+        const targetThreadId = active.threadId ?? ThreadId.make(`thread:scheduled:${fireKey}`);
+        const inheritAllowance = Effect.gen(function* () {
+          if (!active.allowanceParentThreadId || active.allowanceParentThreadId === targetThreadId)
+            return;
+          if (Option.isNone(allowance) || Option.isNone(environment))
+            return yield* taskError(
+              "This runtime cannot preserve the scheduled assignment's allowance.",
+              { taskId: active.id },
+            );
+          yield* allowance.value.inheritThread(
+            active.allowanceParentThreadId,
+            yield* environment.value.getEnvironmentId,
+            targetThreadId,
+          );
+        });
         // Dispatch from the fresh row so prompt/model/binding edits made
         // after the poll read are honoured.
         const prompt = automationPrompt(active);
@@ -479,36 +508,45 @@ export const layer = Layer.effect(
         const result =
           active.threadId === null
             ? yield* Effect.exit(
-                threadLaunch.launch({
-                  commandId,
-                  projectId: active.projectId,
-                  title: active.title,
-                  modelSelection: active.modelSelection,
-                  runtimeMode: active.runtimeMode,
-                  interactionMode: active.interactionMode,
-                  workspaceStrategy: active.workspaceStrategy,
-                  initialMessage: {
-                    messageId,
-                    text: prompt,
-                    attachments: [],
-                  },
-                  createdBy: active.createdBy,
-                  creationSource: active.creationSource,
-                }),
+                inheritAllowance.pipe(
+                  Effect.andThen(
+                    threadLaunch.launch({
+                      commandId,
+                      threadId: targetThreadId,
+                      projectId: active.projectId,
+                      title: active.title,
+                      modelSelection: active.modelSelection,
+                      runtimeMode: active.runtimeMode,
+                      interactionMode: active.interactionMode,
+                      workspaceStrategy: active.workspaceStrategy,
+                      initialMessage: {
+                        messageId,
+                        text: prompt,
+                        attachments: [],
+                      },
+                      createdBy: active.createdBy,
+                      creationSource: active.creationSource,
+                    }),
+                  ),
+                ),
               )
             : yield* Effect.exit(
-                threadManagement.sendToThread({
-                  projectId: active.projectId,
-                  commandId,
-                  threadId: ThreadId.make(active.threadId),
-                  messageId,
-                  text: prompt,
-                  attachments: [],
-                  modelSelection: active.modelSelection,
-                  mode: "auto",
-                  createdBy: active.createdBy,
-                  creationSource: active.creationSource,
-                }),
+                inheritAllowance.pipe(
+                  Effect.andThen(
+                    threadManagement.sendToThread({
+                      projectId: active.projectId,
+                      commandId,
+                      threadId: ThreadId.make(active.threadId),
+                      messageId,
+                      text: prompt,
+                      attachments: [],
+                      modelSelection: active.modelSelection,
+                      mode: "auto",
+                      createdBy: active.createdBy,
+                      creationSource: active.creationSource,
+                    }),
+                  ),
+                ),
               );
 
         const completedAt = yield* localNow;
@@ -723,6 +761,12 @@ export const layer = Layer.effect(
           schedule: input.schedule,
           projectId: input.projectId,
           threadId: input.threadId ?? null,
+          ...((existingTask?.allowanceParentThreadId ?? input.allowanceParentThreadId)
+            ? {
+                allowanceParentThreadId:
+                  existingTask?.allowanceParentThreadId ?? input.allowanceParentThreadId,
+              }
+            : {}),
           workspaceStrategy: input.workspaceStrategy,
           modelSelection: input.modelSelection,
           runtimeMode: input.runtimeMode,

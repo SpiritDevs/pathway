@@ -1,3 +1,4 @@
+import { OrchestratorAssignmentOrigin } from "./aiOrchestrator.ts";
 import { CompanyId } from "./company.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -396,6 +397,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   id: ThreadId,
   projectId: Schema.NullOr(ProjectId),
   conversationCompanyId: Schema.optional(Schema.NullOr(CompanyId)),
+  orchestratorOrigin: Schema.optional(OrchestratorAssignmentOrigin),
   conversationPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   ownedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   ownedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -519,6 +521,7 @@ export type OrchestrationV2DelegatedCompletionCohort =
   typeof OrchestrationV2DelegatedCompletionCohort.Type;
 
 export const OrchestrationV2Run = Schema.Struct({
+  allowanceHold: Schema.optional(Schema.NullOr(Schema.String)),
   id: RunId,
   threadId: ThreadId,
   ordinal: PositiveInt,
@@ -669,6 +672,7 @@ export const OrchestrationV2CheckpointScope = Schema.Struct({
   ordinalWithinParent: NonNegativeInt,
   advancesAppRunCount: Schema.Boolean,
   cwd: TrimmedNonEmptyString,
+  repositoryRootOnly: Schema.optional(Schema.Boolean),
   createdAt: Schema.DateTimeUtc,
 });
 export type OrchestrationV2CheckpointScope = typeof OrchestrationV2CheckpointScope.Type;
@@ -1499,10 +1503,12 @@ export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
 export const OrchestrationV2ThreadShell = Schema.Struct({
+  allowanceHold: Schema.optional(Schema.NullOr(Schema.String)),
   ...OrchestrationV2CreationFields,
   id: ThreadId,
   projectId: Schema.NullOr(ProjectId),
   conversationCompanyId: Schema.optional(Schema.NullOr(CompanyId)),
+  orchestratorOrigin: Schema.optional(OrchestratorAssignmentOrigin),
   conversationPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   ownedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   ownedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -2264,6 +2270,7 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     projectId: Schema.NullOr(ProjectId),
     conversationCompanyId: Schema.optional(Schema.NullOr(CompanyId)),
+    orchestratorOrigin: Schema.optional(OrchestratorAssignmentOrigin),
     temporary: Schema.optional(Schema.Boolean),
     temporaryWorkspace: Schema.optional(
       Schema.Struct({
@@ -2506,6 +2513,8 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     messageId: MessageId,
+    /** Runtime continuation after an explicit allowance renewal; stale candidates must not start. */
+    allowanceResumeOfRunId: Schema.optional(RunId),
     text: Schema.String,
     replyToRuntimeRequestId: Schema.optional(RuntimeRequestId),
     attachments: Schema.Array(ChatAttachment),
@@ -2816,6 +2825,7 @@ export const OrchestrationV2ThreadLaunchInput = Schema.Struct({
   reuseExistingThread: Schema.optional(Schema.Boolean),
   projectId: Schema.NullOr(ProjectId),
   conversationCompanyId: Schema.optional(Schema.NullOr(CompanyId)),
+  orchestratorOrigin: Schema.optional(OrchestratorAssignmentOrigin),
   temporary: Schema.optional(Schema.Boolean),
   title: TrimmedNonEmptyString,
   generateTitle: Schema.optional(Schema.Boolean),

@@ -1,4 +1,5 @@
 import { questionDismissal } from "./questionDismissal.ts";
+import { canResumeAllowance } from "../providerUsage/allowanceResumePolicy.ts";
 import { invalidateStorageInventory } from "../storage/pressureState.ts";
 import { useStorageWorkspace } from "../storage/workspaceLease.ts";
 import { ThreadWorkspaceService } from "./ThreadWorkspaceService.ts";
@@ -1665,6 +1666,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projectId: command.projectId,
       conversationPath,
       conversationCompanyId: command.conversationCompanyId ?? null,
+      ...(command.orchestratorOrigin
+        ? { orchestratorOrigin: command.orchestratorOrigin }
+        : sharedOwner?.orchestratorOrigin
+          ? { orchestratorOrigin: sharedOwner.orchestratorOrigin }
+          : {}),
       temporary: command.temporary ?? false,
       ownedWorktreePath: dedicatedWorkspace?.worktreePath ?? sharedOwner?.ownedWorktreePath ?? null,
       ownedBranch: dedicatedWorkspace?.branch ?? sharedOwner?.ownedBranch ?? null,
@@ -3880,6 +3886,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   ) =>
     Effect.gen(function* () {
       let projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      if (
+        command.allowanceResumeOfRunId !== undefined &&
+        !canResumeAllowance(projection, command.allowanceResumeOfRunId)
+      )
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "This allowance continuation was superseded by newer work or a user action.",
+        });
       if (
         (command.branch !== undefined && command.branch !== projection.thread.branch) ||
         (command.runtimeMode !== undefined &&

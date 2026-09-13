@@ -1,3 +1,4 @@
+import { internal } from "./_generated/api.js";
 // @effect-diagnostics globalDate:off -- Convex mutations are not Effect programs; the transaction clock is `Date.now()`.
 /**
  * The synchronization surface: `bootstrap`, `latestVersion`, `listChanges`, `applyOperations`, and
@@ -725,6 +726,23 @@ export const applyOperations = mutation({
         decidedAt: now,
       });
     }
+
+    const changedIssueIds = [
+      ...new Set(
+        applied
+          .filter((entry) => entry.operation.actor.kind === "member")
+          .flatMap((entry) =>
+            entry.changes
+              .filter((change) => change.entityKind === "issue" && change.changeKind === "upsert")
+              .map((change) => change.entityId),
+          ),
+      ),
+    ];
+    if (changedIssueIds.length)
+      await ctx.scheduler.runAfter(0, internal.aiOrchestratorEvents.issueChanges, {
+        companyId: actor.company._id,
+        issueIds: changedIssueIds,
+      });
 
     // Rejections are receipted too: the client's panel needs a durable reason, and a resend of a
     // rejected operation must not silently apply later.

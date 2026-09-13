@@ -192,6 +192,30 @@ describe("ApnsClient", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
+  it.effect("routes a cloud conversation notification without opening a worker thread", () =>
+    Effect.gen(function* () {
+      const apns = yield* ApnsClient.ApnsClient;
+      const request = apns.makePushNotificationRequest({
+        token: "push-token",
+        notification: {
+          title: "Chief",
+          body: "Review is ready",
+          environmentId: "cloud-orchestrator",
+          threadId: "chat",
+          deepLink: "pathway://orchestrator",
+          orchestrator: { accountID: "owner", chatID: "chat", sequence: 8 },
+        },
+      });
+      expect(request.payload).toMatchObject({
+        destination: "orchestrator",
+        accountID: "owner",
+        chatID: "chat",
+        sequence: 8,
+        aps: { "thread-id": "orchestrator:chat" },
+      });
+    }).pipe(Effect.provide(TestLayer)),
+  );
+
   it.effect("preserves JWT signing context and the crypto cause", () =>
     Effect.gen(function* () {
       const apns = yield* ApnsClient.ApnsClient;

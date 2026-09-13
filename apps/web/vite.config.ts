@@ -172,6 +172,7 @@ export default defineConfig(() => {
       include: [
         "@clerk/clerk-js",
         "@clerk/react/internal",
+        "@clerk/react/legacy",
         "@pierre/diffs",
         "@pierre/diffs/editor",
         "@pierre/diffs/react",

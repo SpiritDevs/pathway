@@ -145,6 +145,10 @@ export interface ProjectionStoreV2Shape {
     ReadonlyArray<ThreadId>,
     ProjectionStoreV2Error
   >;
+  readonly getAllowanceHeldThreadIds: () => Effect.Effect<
+    ReadonlyArray<ThreadId>,
+    ProjectionStoreV2Error
+  >;
   readonly getPendingSubagentCompletionThreads: () => Effect.Effect<
     ReadonlyArray<OrchestrationV2AppThread>,
     ProjectionStoreV2Error
@@ -483,6 +487,7 @@ type ShellThreadRow = {
   readonly forked_from_run_source_thread_id: string | null;
   readonly latest_run_id: string | null;
   readonly latest_run_status: string | null;
+  readonly allowance_hold: string | null;
   readonly latest_run_requested_at: string | null;
   readonly latest_run_started_at: string | null;
   readonly latest_run_completed_at: string | null;
@@ -916,6 +921,9 @@ export function threadShellFromProjection(
     id: projection.thread.id,
     projectId: projection.thread.projectId,
     conversationCompanyId: projection.thread.conversationCompanyId,
+    ...(projection.thread.orchestratorOrigin
+      ? { orchestratorOrigin: projection.thread.orchestratorOrigin }
+      : {}),
     conversationPath: projection.thread.conversationPath,
     ownedWorktreePath: projection.thread.ownedWorktreePath,
     ownedBranch: projection.thread.ownedBranch,
@@ -940,6 +948,7 @@ export function threadShellFromProjection(
     activeRunId: activeRun?.id ?? null,
     activityRunStatus: activityRun?.status ?? null,
     status: latestRun?.status ?? "idle",
+    ...(latestRun?.allowanceHold ? { allowanceHold: latestRun.allowanceHold } : {}),
     lastError: providerSession?.lastError ?? null,
     pendingRuntimeRequest:
       pendingRuntimeRequest === null
@@ -1002,6 +1011,7 @@ function isActivityRunForShell(
 }
 
 type ShellThreadState = {
+  readonly allowanceHold: string | null;
   readonly thread: OrchestrationV2ThreadProjection["thread"];
   readonly latestRunId: RunId | null;
   readonly latestRunStatus: OrchestrationV2ShellThreadStatus;
@@ -1118,6 +1128,9 @@ function shellFromState(input: {
     id: input.state.thread.id,
     projectId: input.state.thread.projectId,
     conversationCompanyId: input.state.thread.conversationCompanyId,
+    ...(input.state.thread.orchestratorOrigin
+      ? { orchestratorOrigin: input.state.thread.orchestratorOrigin }
+      : {}),
     conversationPath: input.state.thread.conversationPath,
     ownedWorktreePath: input.state.thread.ownedWorktreePath,
     ownedBranch: input.state.thread.ownedBranch,
@@ -1142,6 +1155,7 @@ function shellFromState(input: {
     activeRunId: input.state.activeRunId,
     activityRunStatus: input.state.activityRunStatus,
     status: input.state.latestRunStatus,
+    ...(input.state.allowanceHold ? { allowanceHold: input.state.allowanceHold } : {}),
     lastError: input.state.lastError,
     pendingRuntimeRequest:
       input.state.pendingRuntimeRequest === null
@@ -2337,6 +2351,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 LIMIT 1
               ) AS latest_run_status,
               (
+                SELECT json_extract(r.payload_json, '$.allowanceHold')
+                FROM orchestration_v2_projection_runs r
+                WHERE r.thread_id = t.thread_id
+                ORDER BY r.ordinal DESC, r.run_id DESC
+                LIMIT 1
+              ) AS allowance_hold,
+              (
                 SELECT r.requested_at
                 FROM orchestration_v2_projection_runs r
                 WHERE r.thread_id = t.thread_id
@@ -2653,6 +2674,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           thread,
           latestRunId,
           latestRunStatus,
+          allowanceHold: row.allowance_hold,
           latestRunRequestedAt:
             row.latest_run_requested_at === null
               ? null
@@ -2923,6 +2945,23 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       Effect.mapError((cause) => new ProjectionStoreRecoveryReadError({ cause })),
     );
 
+    const getAllowanceHeldThreadIds = Effect.fn("ProjectionStoreV2.getAllowanceHeldThreadIds")(
+      function* () {
+        const rows = yield* sql<{ readonly thread_id: string }>`
+          SELECT t.thread_id FROM orchestration_v2_projection_threads t
+          JOIN orchestration_v2_projection_runs r ON r.thread_id = t.thread_id
+          WHERE t.deleted_at IS NULL AND t.archived_at IS NULL
+            AND r.status IN ('interrupted', 'completed')
+            AND json_extract(r.payload_json, '$.allowanceHold') IS NOT NULL
+            AND json_extract(r.payload_json, '$.allowanceHold') != ''
+            AND NOT EXISTS (SELECT 1 FROM orchestration_v2_projection_runs newer WHERE newer.thread_id = t.thread_id AND newer.ordinal > r.ordinal)
+          ORDER BY t.updated_at ASC
+        `;
+        return rows.map((row) => ThreadId.make(row.thread_id));
+      },
+      Effect.mapError((cause) => new ProjectionStoreRecoveryReadError({ cause })),
+    );
+
     const getPendingSubagentCompletionThreads = Effect.fn(
       "ProjectionStoreV2.getPendingSubagentCompletionThreads",
     )(
@@ -2997,6 +3036,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getRecoveryThreadIds,
       getThreadMetadata,
       getQueuedRunThreadIds,
+      getAllowanceHeldThreadIds,
       getPendingSubagentCompletionThreads,
       getDelegatedCompletionRecoveryThreadIds,
       getThreadSnapshot,
@@ -3088,6 +3128,22 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             )
             .map((thread) => thread.id);
         }),
+      getAllowanceHeldThreadIds: () =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .filter((projection) => {
+                const latest = projection.runs.toSorted((a, b) => b.ordinal - a.ordinal)[0];
+                return (
+                  projection.thread.deletedAt === null &&
+                  projection.thread.archivedAt === null &&
+                  !!latest?.allowanceHold &&
+                  ["interrupted", "completed"].includes(latest.status)
+                );
+              })
+              .map((projection) => projection.thread.id),
+          ),
+        ),
       getPendingSubagentCompletionThreads: () =>
         Effect.gen(function* () {
           const state = yield* Ref.get(replayState);

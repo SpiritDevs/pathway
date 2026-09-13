@@ -65,6 +65,11 @@ struct MainTabView: View {
                 )
             }
         }
+        .task(id: "\(appModel.accountID ?? ""):\(appModel.cloud.isConnected):\(appModel.cloud.companies.map(\.id).sorted().joined(separator: ","))") {
+            if let accountID = appModel.accountID, appModel.cloud.isConnected {
+                appModel.cloud.orchestrators.start(accountID: accountID, companyIDs: appModel.cloud.companies.map(\.id))
+            }
+        }
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 PathwayWorkspaceCleanupNotice()
@@ -137,6 +142,13 @@ struct MainTabView: View {
             appModel.pendingStorageNotification = nil
             guard destination.account == appModel.localStorageDirectory?.lastPathComponent else { return }
             presentedSheet = .storage
+        }
+        .onChange(of: appModel.pendingOrchestratorNotification, initial: true) { _, destination in
+            guard let destination else { return }
+            appModel.pendingOrchestratorNotification = nil
+            guard destination.accountID == appModel.accountID else { return }
+            appModel.cloud.orchestrators.selectedID = destination.chatID
+            presentedSheet = .agentOrchestrator
         }
         .onChange(of: appModel.pendingThreadRoute) { _, route in
             guard route != nil else { return }
@@ -507,6 +519,11 @@ struct PathwaySettingsView: View {
             Section("Agent Threads") {
                 NavigationLink { PathwayFocusSettingsView(model: focusModel) } label: {
                     Label("Focus Views", systemImage: "target")
+                }
+            }
+            Section("Orchestrators") {
+                ForEach(PathwayOrchestratorSettingsPage.allCases) { page in
+                    NavigationLink(page.rawValue) { PathwayOrchestratorSettingsView(page: page) }
                 }
             }
             Section("Models") {

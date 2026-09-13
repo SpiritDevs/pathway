@@ -1,6 +1,7 @@
 // @effect-diagnostics globalDate:off -- Convex provides deterministic transaction time without an Effect runtime.
 /** Fenced, renewable analysis work on the mailbox owner's selected environments. */
 import { v } from "convex/values";
+import { notifyOrchestratorPriorityMail } from "./lib/aiOrchestratorSignals.ts";
 import { mutation } from "./_generated/server.js";
 import type { MutationCtx, QueryCtx } from "./_generated/server.js";
 import type { Doc } from "./_generated/dataModel.js";
@@ -296,6 +297,7 @@ export const complete = mutation({
         analysisStatus: "ready",
         updatedAt: now,
       });
+      if (bucket === "priority") await notifyOrchestratorPriorityMail(ctx, message);
     }
     if (args.result.senderSummary) {
       const sender = await ctx.db

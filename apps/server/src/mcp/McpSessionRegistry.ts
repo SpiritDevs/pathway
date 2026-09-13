@@ -1,3 +1,4 @@
+import type { OrchestratorAssignmentOrigin } from "@spiritdevs/contracts/aiOrchestrator";
 import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@spiritdevs/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -13,6 +14,7 @@ import * as McpProviderSession from "./McpProviderSession.ts";
 
 export interface McpCredentialRequest {
   readonly threadId: ThreadId;
+  readonly orchestratorOrigin?: OrchestratorAssignmentOrigin | undefined;
   /** Local project owning the thread. Cloud-backed tools fail closed when this is unavailable. */
   readonly projectId: ProjectId | null;
   readonly providerInstanceId: ProviderInstanceId;
@@ -136,6 +138,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const scope: McpInvocationContext.McpInvocationScope = {
         environmentId,
         threadId: ThreadId.make(request.threadId),
+        ...(request.orchestratorOrigin ? { orchestratorOrigin: request.orchestratorOrigin } : {}),
         ...(request.projectId === null ? {} : { projectId: ProjectId.make(request.projectId) }),
         providerSessionId,
         providerInstanceId,

@@ -4,6 +4,8 @@ import type {
   RelayDeliveryKind,
   RelayDeliveryResult,
 } from "@spiritdevs/contracts/relay";
+import { api } from "@spiritdevs/backend/convexApi";
+import { RelayConvexClient } from "../db.ts";
 import {
   RelayAgentActivityAggregateState as RelayAgentActivityAggregateStateSchema,
   RelayAgentAwarenessPreferences as RelayAgentAwarenessPreferencesSchema,
@@ -704,6 +706,7 @@ export const make = Effect.gen(function* () {
   const apnsCredentials = config.apns;
   const apns = yield* Apns.ApnsClient;
   const activityRows = yield* AgentActivityRows.AgentActivityRows;
+  const cloud = yield* Effect.serviceOption(RelayConvexClient);
 
   // Start jobs are decided at publish time, but consecutive publishes land in
   // the same queue batch: a start chosen from a running aggregate can be
@@ -796,6 +799,17 @@ export const make = Effect.gen(function* () {
     readonly userId: string;
     readonly notification: ApnsNotificationPayload;
   }) {
+    if (input.notification.orchestrator) {
+      const target = input.notification.orchestrator;
+      if (target.accountID !== input.userId || Option.isNone(cloud)) return false;
+      return yield* cloud.value
+        .query(api.aiOrchestratorPush.isCurrent, {
+          subject: input.userId,
+          chatId: target.chatID,
+          sequence: target.sequence,
+        })
+        .pipe(Effect.orElseSucceed(() => false));
+    }
     // Jobs from older relay versions do not carry a state identity. Preserve
     // backwards compatibility and only revalidate newly queued jobs.
     if (input.notification.phase === undefined || input.notification.updatedAt === undefined) {

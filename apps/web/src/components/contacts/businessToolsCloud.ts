@@ -2,12 +2,14 @@ import { useAuth } from "@clerk/react";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import type { Value } from "convex/values";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { resolveCloudSyncConvexUrl } from "../../cloud/publicConfig";
 import { makeClerkConvexTokenFetcher } from "../../cloud/syncTransportAuth";
 
 export function useBusinessToolsCloud() {
   const { getToken, isSignedIn, userId } = useAuth({ treatPendingAsSignedOut: false });
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
   const url = resolveCloudSyncConvexUrl();
   const [connection, setConnection] = useState<{
     client: ConvexClient;
@@ -20,12 +22,12 @@ export function useBusinessToolsCloud() {
       return;
     }
     const client = new ConvexClient(url);
-    client.setAuth(makeClerkConvexTokenFetcher(getToken));
+    client.setAuth(makeClerkConvexTokenFetcher((options) => getTokenRef.current(options)));
     setConnection({ client, accountID: userId, url });
     return () => {
       void client.close();
     };
-  }, [url, isSignedIn, userId, getToken]);
+  }, [url, isSignedIn, userId]);
   const client =
     isSignedIn && connection?.accountID === userId && connection.url === url
       ? connection.client

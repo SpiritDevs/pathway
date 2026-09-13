@@ -17,6 +17,7 @@ import { VcsUnsupportedOperationError, type CheckpointRef } from "@spiritdevs/co
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
 
 import type { CheckpointStoreError } from "./Errors.ts";
 import type { VcsCheckpointOps } from "../vcs/VcsDriver.ts";
@@ -51,7 +52,10 @@ export class CheckpointStore extends Context.Service<
   CheckpointStore,
   {
     /** Check whether cwd is inside a Git worktree. */
-    readonly isGitRepository: (cwd: string) => Effect.Effect<boolean, CheckpointStoreError>;
+    readonly isGitRepository: (
+      cwd: string,
+      repositoryRootOnly?: boolean,
+    ) => Effect.Effect<boolean, CheckpointStoreError>;
 
     /**
      * Capture a checkpoint commit and store it at the provided checkpoint ref.
@@ -98,6 +102,7 @@ export class CheckpointStore extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
+  const fs = yield* FileSystem.FileSystem;
 
   const resolveCheckpoints = Effect.fn("CheckpointStore.resolveCheckpoints")(function* (
     operation: string,
@@ -114,10 +119,19 @@ export const make = Effect.gen(function* () {
     return handle.driver.checkpoints satisfies VcsCheckpointOps;
   });
 
-  const isGitRepository: CheckpointStore["Service"]["isGitRepository"] = (cwd) =>
-    vcsRegistry
-      .detect({ cwd, requestedKind: "git" })
-      .pipe(Effect.map((repository) => repository !== null));
+  const isGitRepository: CheckpointStore["Service"]["isGitRepository"] = (
+    cwd,
+    repositoryRootOnly = false,
+  ) =>
+    vcsRegistry.detect({ cwd, requestedKind: "git" }).pipe(
+      Effect.flatMap((repository) => {
+        if (repository === null || !repositoryRootOnly) return Effect.succeed(repository !== null);
+        return Effect.all([fs.realPath(cwd), fs.realPath(repository.repository.rootPath)]).pipe(
+          Effect.map(([directory, root]) => directory === root),
+          Effect.orElseSucceed(() => false),
+        );
+      }),
+    );
 
   const captureCheckpoint: CheckpointStore["Service"]["captureCheckpoint"] = Effect.fn(
     "captureCheckpoint",

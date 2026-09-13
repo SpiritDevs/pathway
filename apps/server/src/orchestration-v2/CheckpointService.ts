@@ -276,8 +276,10 @@ export const layer: Layer.Layer<
     const withWorkspaceLock = <A, E, R>(cwd: string, effect: Effect.Effect<A, E, R>) =>
       Effect.flatMap(getWorkspaceSemaphore(cwd), (semaphore) => semaphore.withPermits(1)(effect));
 
-    const isGitCheckpointable = (cwd: string) =>
-      checkpointStore.isGitRepository(cwd).pipe(Effect.orElseSucceed(() => false));
+    const isGitCheckpointable = (scope: OrchestrationV2CheckpointScope) =>
+      checkpointStore
+        .isGitRepository(scope.cwd, scope.repositoryRootOnly)
+        .pipe(Effect.orElseSucceed(() => false));
 
     const ensureScope: CheckpointServiceV2Shape["ensureScope"] = (scope) => Effect.succeed(scope);
 
@@ -285,7 +287,7 @@ export const layer: Layer.Layer<
       withWorkspaceLock(
         input.scope.cwd,
         Effect.gen(function* () {
-          if (!(yield* isGitCheckpointable(input.scope.cwd))) {
+          if (!(yield* isGitCheckpointable(input.scope))) {
             return;
           }
 
@@ -330,7 +332,7 @@ export const layer: Layer.Layer<
               scopeId: input.scope.id,
               ordinalWithinScope: input.ordinalWithinScope,
             });
-            const checkpointable = yield* isGitCheckpointable(input.scope.cwd);
+            const checkpointable = yield* isGitCheckpointable(input.scope);
             const available = checkpointable
               ? yield* checkpointStore.hasCheckpointRef({
                   cwd: input.scope.cwd,
@@ -385,7 +387,7 @@ export const layer: Layer.Layer<
             ordinalWithinScope: Math.max(0, input.ordinalWithinScope - 1),
           });
 
-          if (!(yield* isGitCheckpointable(input.scope.cwd))) {
+          if (!(yield* isGitCheckpointable(input.scope))) {
             return makeCheckpoint({
               id: checkpointId,
               scope: input.scope,

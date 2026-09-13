@@ -94,6 +94,18 @@ function buildLargeText(lineCount = 5_000): string {
 
 it.layer(TestLayer)("CheckpointStore.layer", (it) => {
   describe("isGitRepository", () => {
+    it.effect("does not checkpoint an unrelated parent repository for a conversation folder", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const child = NodePath.join(tmp, "conversation");
+        yield* (yield* FileSystem.FileSystem).makeDirectory(child);
+        const store = yield* CheckpointStore.CheckpointStore;
+        expect(yield* store.isGitRepository(child)).toBe(true);
+        expect(yield* store.isGitRepository(child, true)).toBe(false);
+        expect(yield* store.isGitRepository(tmp, true)).toBe(true);
+      }),
+    );
     it.effect("returns false when no Git repository is detected", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

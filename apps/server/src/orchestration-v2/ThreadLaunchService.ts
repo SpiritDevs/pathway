@@ -1,3 +1,4 @@
+import type { OrchestratorAssignmentOrigin } from "@spiritdevs/contracts/aiOrchestrator";
 import type { CompanyId } from "@spiritdevs/contracts/company";
 import {
   CommandId,
@@ -66,6 +67,7 @@ export interface ThreadLaunchInitialMessage {
 
 export interface ThreadLaunchInput {
   readonly commandId: CommandId;
+  readonly orchestratorOrigin?: OrchestratorAssignmentOrigin | undefined;
   readonly threadId?: ThreadId;
   readonly reuseExistingThread?: boolean;
   readonly projectId: ProjectId | null;
@@ -869,6 +871,7 @@ export const make = Effect.gen(function* () {
                     }
                   : {}),
                 conversationCompanyId: input.conversationCompanyId,
+                orchestratorOrigin: input.orchestratorOrigin,
                 title: input.title,
                 modelSelection: input.modelSelection,
                 runtimeMode: input.runtimeMode,

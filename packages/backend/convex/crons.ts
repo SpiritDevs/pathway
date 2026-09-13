@@ -42,4 +42,18 @@ crons.hourly(
   internal.loginErrorReports.pruneSent,
 );
 
+crons.interval(
+  "review orchestrator responsibilities",
+  { minutes: 1 },
+  internal.aiOrchestratorReviews.wakeDue,
+  {},
+);
+
+crons.interval(
+  "observe orchestrator environment availability",
+  { minutes: 1 },
+  internal.aiOrchestratorEvents.checkOffline,
+  {},
+);
+
 export default crons;

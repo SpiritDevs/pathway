@@ -470,6 +470,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });
   const activeDestination = resolvePrimaryNavigationDestination(pathname);
+  const orchestrators = useOrchestrators();
   // Captured mail is the one destination that accumulates unread work while you are elsewhere.
   const emailUnreadCount = useEmailUnreadTotal();
   const preferredViewOrder = useClientSettings((settings) => settings.primaryNavigationViewOrder);
@@ -554,8 +555,8 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
     void navigate({ to: "/time-tracker" });
   }, [navigate]);
   const navigateToOrchestrator = useCallback(() => {
-    void navigate({ to: "/orchestrator" });
-  }, [navigate]);
+    orchestrators.setFloating((value) => !value);
+  }, [orchestrators.setFloating]);
   const navigateToSettings = useCallback(() => {
     void navigate({ to: "/settings" });
   }, [navigate]);
@@ -620,6 +621,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
         destination: "orchestrator",
         icon: BotIcon,
         label: "Orchestrator AI",
+        badgeCount: orchestrators.unreadCount,
         onNavigate: navigateToOrchestrator,
       },
       settings: {
@@ -631,6 +633,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
     }),
     [
       emailUnreadCount,
+      orchestrators.unreadCount,
       navigateToCalendar,
       navigateToContacts,
       navigateToDashboard,
@@ -815,3 +818,4 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
     </>
   );
 });
+import { useOrchestrators } from "../orchestrator/OrchestratorContext";

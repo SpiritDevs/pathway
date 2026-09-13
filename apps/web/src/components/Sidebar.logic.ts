@@ -554,6 +554,7 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   if (thread.hasPendingUserInput) {
     return "input";
   }
+  if (thread.runtime?.allowanceHold) return "waiting";
   if (
     thread.runtime !== null &&
     ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)

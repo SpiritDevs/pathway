@@ -185,10 +185,16 @@ function makePushNotificationRequest(input: {
           body: input.notification.body,
         },
         sound: "default",
+        ...(input.notification.orchestrator
+          ? { "thread-id": `orchestrator:${input.notification.orchestrator.chatID}` }
+          : {}),
       },
       environmentId: input.notification.environmentId,
       threadId: input.notification.threadId,
       deepLink: input.notification.deepLink,
+      ...(input.notification.orchestrator
+        ? { destination: "orchestrator", ...input.notification.orchestrator }
+        : {}),
     },
   };
 }

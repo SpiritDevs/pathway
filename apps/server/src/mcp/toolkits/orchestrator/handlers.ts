@@ -1,10 +1,21 @@
+import { readMail, writeMail, readTime, writeTime } from "../../../cloud/delegatedBusiness.ts";
 import { OrchestratorToolkit } from "./tools.ts";
 import * as Effect from "effect/Effect";
 
 import { McpInvocationContext } from "../../McpInvocationContext.ts";
 import { OrchestratorMcpService } from "../../OrchestratorMcpService.ts";
+import {
+  readAgentAllowance,
+  allocateAgentAllowance,
+} from "../../../providerUsage/agentAllowance.ts";
 
 const handlers = {
+  pathway_mail_read: readMail,
+  pathway_mail_write: writeMail,
+  pathway_time_read: readTime,
+  pathway_time_write: writeTime,
+  pathway_provider_allowance: readAgentAllowance,
+  pathway_allowance_allocate: allocateAgentAllowance,
   orchestrator_capabilities: () =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext;

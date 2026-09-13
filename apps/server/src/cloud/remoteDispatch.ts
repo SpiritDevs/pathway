@@ -345,6 +345,7 @@ const executeDirect = Effect.fn("cloud.remote_dispatch.execute_direct")(function
           // launch and the later Convex fallback converge on the same target-side receipt.
           const launched = yield* client[ORCHESTRATION_V2_WS_METHODS.launchThread]({
             commandId,
+            ...(input.args.threadId === undefined ? {} : { threadId: input.args.threadId }),
             creationSource: "mcp",
             projectId: input.targetProjectId!,
             title: "New delegated task",

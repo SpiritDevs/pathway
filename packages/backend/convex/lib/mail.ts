@@ -3,9 +3,24 @@ import type { MutationCtx, QueryCtx } from "../_generated/server.js";
 import type { Doc } from "../_generated/dataModel.js";
 import { requireCompanyActor } from "./identity.ts";
 import { backendError } from "./errors.ts";
+import type { OrchestratorAssignmentOrigin } from "@spiritdevs/contracts/aiOrchestrator";
+import { delegatedBusinessOwner } from "./delegatedBusinessOwner.ts";
 import { mintDomainId } from "./domainIds.ts";
 
-export async function mailOwner(ctx: QueryCtx, companyId: string) {
+export async function mailOwner(
+  ctx: QueryCtx,
+  companyId: string,
+  origin?: OrchestratorAssignmentOrigin,
+  capability: "mail.read" | "mail.send" = "mail.read",
+) {
+  if (origin) {
+    if (origin.companyId !== companyId)
+      throw backendError(
+        "permission-denied",
+        "The mailbox must belong to this assignment’s workspace.",
+      );
+    return delegatedBusinessOwner(ctx, origin, capability);
+  }
   const actor = await requireCompanyActor(ctx, companyId);
   if (actor.kind !== "member") throw backendError("permission-denied", "Mail requires its owner.");
   return actor;
@@ -18,20 +33,32 @@ export async function mailAccount(ctx: QueryCtx, accountId: string) {
   if (!account) throw backendError("mail-not-found", "Mailbox not found.");
   return account;
 }
-export async function ownedMailAccount(ctx: QueryCtx, companyId: string, accountId: string) {
-  const actor = await mailOwner(ctx, companyId);
+export async function ownedMailAccount(
+  ctx: QueryCtx,
+  companyId: string,
+  accountId: string,
+  origin?: OrchestratorAssignmentOrigin,
+  capability: "mail.read" | "mail.send" = "mail.read",
+) {
+  const actor = await mailOwner(ctx, companyId, origin, capability);
   const account = await mailAccount(ctx, accountId);
   if (account.companyId !== actor.company._id || account.ownerMembershipId !== actor.membership._id)
     throw backendError("permission-denied", "This mailbox belongs to another member.");
   return account;
 }
-export async function ownedMailMessage(ctx: QueryCtx, companyId: string, messageId: string) {
+export async function ownedMailMessage(
+  ctx: QueryCtx,
+  companyId: string,
+  messageId: string,
+  origin?: OrchestratorAssignmentOrigin,
+  capability: "mail.read" | "mail.send" = "mail.read",
+) {
   const message = await ctx.db
     .query("mailMessages")
     .withIndex("by_domain_id", (q) => q.eq("id", messageId))
     .unique();
   if (!message) throw backendError("mail-not-found", "Message not found.");
-  await ownedMailAccount(ctx, companyId, message.accountId);
+  await ownedMailAccount(ctx, companyId, message.accountId, origin, capability);
   return message;
 }
 export function mailScope(account: Doc<"mailAccounts">) {

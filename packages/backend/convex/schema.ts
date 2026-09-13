@@ -27,6 +27,8 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
 import { mailTables } from "./lib/mailSchema.ts";
+import { aiOrchestratorTables } from "./lib/aiOrchestratorSchema.ts";
+import { providerAllowanceTables } from "./lib/providerAllowanceSchema.ts";
 
 import { businessToolsTables } from "./lib/businessToolsSchema.ts";
 
@@ -197,6 +199,8 @@ export default defineSchema({
     .index("by_sentAt", ["sentAt"]),
   ...businessToolsTables,
   ...mailTables,
+  ...aiOrchestratorTables,
+  ...providerAllowanceTables,
   // ---------------------------------------------------------------------------
   // Identity, companies, and authorization
   // ---------------------------------------------------------------------------
@@ -709,6 +713,8 @@ export default defineSchema({
     publicKeyThumbprint: v.string(),
     /** `ExecutionEnvironmentDescriptor` from `contracts/environment`. */
     descriptor: v.any(),
+    orchestratorResources: v.optional(v.any()),
+    orchestratorPresence: v.optional(v.union(v.literal("online"), v.literal("offline"))),
     relayLinkState: v.union(
       v.literal("unlinked"),
       v.literal("linked"),
@@ -730,6 +736,7 @@ export default defineSchema({
     .index("by_company", ["companyId"])
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_environment", ["companyId", "environmentId"])
+    .index("by_orchestrator_presence", ["state", "orchestratorPresence", "lastSeenAt"])
     .index("by_company_and_state", ["companyId", "state"])
     .index("by_environment", ["environmentId"]),
 
@@ -815,6 +822,7 @@ export default defineSchema({
      */
     args: v.any(),
     issuedByMembershipId: v.id("memberships"),
+    orchestratorId: v.optional(v.string()),
     onBehalfOfActor: actor,
     state: v.union(
       v.literal("pending"),
@@ -1293,6 +1301,7 @@ export default defineSchema({
     version: v.optional(v.number()),
   })
     .index("by_company", ["companyId"])
+    .index("by_company_updated", ["companyId", "updatedAt"])
     .index("by_company_and_domain_id", ["companyId", "id"])
     .index("by_company_and_environment", ["companyId", "environmentId"])
     .index("by_company_and_environment_and_thread", ["companyId", "environmentId", "threadId"])

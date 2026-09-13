@@ -14,6 +14,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { EventSinkV2 } from "./EventSink.ts";
@@ -35,6 +36,10 @@ import {
   selectInheritedBackgroundTurnItems,
 } from "./RunExecutionService.ts";
 import { RuntimePolicyV2 } from "./RuntimePolicy.ts";
+import {
+  ProviderAllowanceRuntime,
+  awaitAllowanceAdmission,
+} from "../providerUsage/AllowanceRuntime.ts";
 
 export class ProviderTurnStartError extends Schema.TaggedErrorClass<ProviderTurnStartError>()(
   "ProviderTurnStartError",
@@ -82,6 +87,7 @@ export const layer: Layer.Layer<
     const runtimePolicy = yield* RuntimePolicyV2;
     const serverSettings = yield* ServerSettingsService;
     const textGeneration = yield* TextGeneration;
+    const allowance = yield* Effect.serviceOption(ProviderAllowanceRuntime);
 
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
@@ -168,6 +174,42 @@ export const layer: Layer.Layer<
           Effect.catchCause(() => Effect.succeed(false)),
         );
 
+      if (Option.isSome(allowance)) {
+        let lastHold = "";
+        const admitted = yield* awaitAllowanceAdmission(
+          allowance.value.checkThread(
+            projection.thread.id,
+            run.modelSelection.instanceId,
+            providerThread.driver,
+          ),
+          isCurrentAttemptInStatus("starting"),
+          (state) =>
+            Effect.gen(function* () {
+              if (state.detail === lastHold) return;
+              const now = yield* DateTime.now;
+              yield* eventSink
+                .writeIfRunCurrent({
+                  threadId: run.threadId,
+                  runId: run.id,
+                  activeAttemptId: attempt.id,
+                  expectedStatus: "starting",
+                  events: [
+                    {
+                      id: yield* idAllocator.allocate.event({ threadId: run.threadId }),
+                      type: "run.updated",
+                      threadId: run.threadId,
+                      runId: run.id,
+                      occurredAt: now,
+                      payload: { ...run, allowanceHold: state.detail },
+                    },
+                  ],
+                })
+                .pipe(Effect.orDie);
+              lastHold = state.detail;
+            }).pipe(Effect.orDie),
+        );
+        if (!admitted) return;
+      }
       const sourceRunOrdinals = new Map(projection.runs.map((entry) => [entry.id, entry.ordinal]));
       const pendingCompactions = targetHandoffs.filter(
         (handoff) => handoff.compaction?.generation === "pending",
@@ -516,6 +558,7 @@ export const layer: Layer.Layer<
       };
       const runningRun: OrchestrationV2Run = {
         ...run,
+        allowanceHold: null,
         status: "running",
         startedAt: now,
       };
@@ -675,7 +718,10 @@ export const layer: Layer.Layer<
         session,
         run: runningRun,
         rootNode: runningRootNode,
-        checkpointScope,
+        checkpointScope:
+          projection.thread.projectId === null
+            ? { ...checkpointScope, repositoryRootOnly: true }
+            : checkpointScope,
         providerThread: runningProviderThread,
         attempt: runningAttempt,
         attemptId: attempt.id,

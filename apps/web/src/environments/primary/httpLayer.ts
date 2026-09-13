@@ -34,22 +34,25 @@ export function makePrimaryEnvironmentHttpLayer() {
   return Layer.unwrap(
     Effect.sync(() => {
       const baseLayer = remoteHttpClientLayer(globalThis.fetch);
-      if (isSameOriginBrowserPrimary()) {
-        return Layer.merge(
-          baseLayer,
-          Layer.succeed(FetchHttpClient.RequestInit, { credentials: "include" }),
-        );
-      }
-
-      const bearerClientLayer = Layer.effect(
+      const cookieAuth = isSameOriginBrowserPrimary();
+      const primaryOrigin = cookieAuth ? window.location.origin : null;
+      return Layer.effect(
         HttpClient.HttpClient,
-        Effect.map(HttpClient.HttpClient, withPrimaryBearerToken),
+        Effect.map(HttpClient.HttpClient, (client) =>
+          (cookieAuth ? client : withPrimaryBearerToken(client)).pipe(
+            HttpClient.transform((response, request) =>
+              response.pipe(
+                Effect.provideService(FetchHttpClient.RequestInit, {
+                  credentials:
+                    cookieAuth && new URL(request.url).origin === primaryOrigin
+                      ? "include"
+                      : "omit",
+                }),
+              ),
+            ),
+          ),
+        ),
       ).pipe(Layer.provide(baseLayer));
-
-      return Layer.merge(
-        bearerClientLayer,
-        Layer.succeed(FetchHttpClient.RequestInit, { credentials: "omit" }),
-      );
     }),
   );
 }

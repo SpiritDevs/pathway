@@ -1,4 +1,13 @@
 export type SettingsPath =
+  | "/settings/orchestrators-overview"
+  | "/settings/orchestrators-instructions"
+  | "/settings/orchestrators-models"
+  | "/settings/orchestrators-environments"
+  | "/settings/orchestrators-responsibilities"
+  | "/settings/orchestrators-permissions"
+  | "/settings/orchestrators-memory"
+  | "/settings/orchestrators-notifications"
+  | "/settings/orchestrators-work-limits"
   | "/settings/notifications"
   | "/settings/general"
   | "/settings/appearance"
@@ -102,6 +111,15 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/source-control": "Source Control",
   "/settings/time-tracker": "Time Tracker",
   "/settings/usage": "Usage",
+  "/settings/orchestrators-overview": "Overview",
+  "/settings/orchestrators-instructions": "Instructions",
+  "/settings/orchestrators-models": "Models",
+  "/settings/orchestrators-environments": "Environments",
+  "/settings/orchestrators-responsibilities": "Responsibilities",
+  "/settings/orchestrators-permissions": "Permissions",
+  "/settings/orchestrators-memory": "Memory",
+  "/settings/orchestrators-notifications": "Notifications",
+  "/settings/orchestrators-work-limits": "Work limits",
   "/settings/issues-statuses": "Statuses",
   "/settings/issues-labels": "Labels",
   "/settings/issues-milestones": "Milestones",
@@ -156,6 +174,20 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     ],
   },
   {
+    label: "Orchestrators",
+    paths: [
+      "/settings/orchestrators-overview",
+      "/settings/orchestrators-instructions",
+      "/settings/orchestrators-models",
+      "/settings/orchestrators-environments",
+      "/settings/orchestrators-responsibilities",
+      "/settings/orchestrators-permissions",
+      "/settings/orchestrators-memory",
+      "/settings/orchestrators-notifications",
+      "/settings/orchestrators-work-limits",
+    ],
+  },
+  {
     label: "Tasks",
     paths: [
       "/settings/issues-statuses",
@@ -185,6 +217,52 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
  * here once instead of separately in the panel and the index.
  */
 export const SETTINGS_SEARCH_ITEMS = [
+  {
+    id: "orchestrators-overview",
+    title: "Orchestrator overview",
+    to: "/settings/orchestrators-overview",
+  },
+  {
+    id: "orchestrators-instructions",
+    title: "Orchestrator instructions",
+    to: "/settings/orchestrators-instructions",
+  },
+  {
+    id: "orchestrators-models",
+    title: "Orchestrator models",
+    to: "/settings/orchestrators-models",
+  },
+  {
+    id: "orchestrators-environments",
+    title: "Orchestrator environments",
+    to: "/settings/orchestrators-environments",
+  },
+  {
+    id: "orchestrators-responsibilities",
+    title: "Orchestrator responsibilities",
+    to: "/settings/orchestrators-responsibilities",
+  },
+  {
+    id: "orchestrators-permissions",
+    title: "Orchestrator permissions",
+    to: "/settings/orchestrators-permissions",
+  },
+  {
+    id: "orchestrators-memory",
+    title: "Orchestrator memory",
+    to: "/settings/orchestrators-memory",
+  },
+  {
+    id: "orchestrators-notifications",
+    title: "Orchestrator notifications",
+    to: "/settings/orchestrators-notifications",
+  },
+  {
+    id: "orchestrators-work-limits",
+    title: "Orchestrator work limits",
+    to: "/settings/orchestrators-work-limits",
+  },
+
   { id: "thread-alerts", title: "Thread alerts", to: "/settings/notifications" },
   {
     id: "alert-project-overrides",

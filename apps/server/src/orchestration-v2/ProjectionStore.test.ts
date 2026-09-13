@@ -4,6 +4,7 @@ import {
   MessageId,
   type ModelSelection,
   NodeId,
+  OrchestrationV2ThreadShellJson,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -41,6 +42,8 @@ const modelSelection = {
 const driver = ProviderDriverKind.make("codex");
 const providerInstanceId = modelSelection.instanceId;
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const encodeThreadShell = Schema.encodeEffect(OrchestrationV2ThreadShellJson);
+const decodeThreadShell = Schema.decodeUnknownEffect(OrchestrationV2ThreadShellJson);
 
 it("selects only run-bound history when selecting fork context through a run", () => {
   const firstRunId = RunId.make("run:projection-imported-fork:1");
@@ -74,6 +77,83 @@ it("selects only run-bound history when selecting fork context through a run", (
 });
 
 it.layer(TestLayer)("ProjectionStoreV2", (it) => {
+  it.effect("finds only the latest allowance-held runs for background resumption", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:allowance-candidate");
+      const thread = {
+        createdBy: "user" as const,
+        creationSource: "web" as const,
+        id: threadId,
+        projectId: null,
+        title: "Allowance candidate",
+        providerInstanceId,
+        modelSelection,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        branch: null,
+        worktreePath: null,
+        activeProviderThreadId: null,
+        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      };
+      const runId = RunId.make("run:allowance-candidate");
+      const run = {
+        id: runId,
+        threadId,
+        ordinal: 1,
+        providerInstanceId,
+        modelSelection,
+        providerThreadId: null,
+        userMessageId: MessageId.make("message:allowance-candidate"),
+        rootNodeId: null,
+        activeAttemptId: null,
+        status: "interrupted" as const,
+        allowanceHold: "Allowance reached",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: now,
+        checkpointId: null,
+        contextHandoffId: null,
+      };
+      yield* store.apply({
+        id: EventId.make("event:allowance-thread"),
+        type: "thread.created",
+        threadId,
+        occurredAt: now,
+        payload: thread,
+      });
+      yield* store.apply({
+        id: EventId.make("event:allowance-run"),
+        type: "run.updated",
+        threadId,
+        runId,
+        providerInstanceId,
+        occurredAt: now,
+        payload: run,
+      });
+      assert.deepEqual(yield* store.getAllowanceHeldThreadIds(), [threadId]);
+      const nextId = RunId.make("run:allowance-new-request");
+      yield* store.apply({
+        id: EventId.make("event:allowance-newer"),
+        type: "run.updated",
+        threadId,
+        runId: nextId,
+        providerInstanceId,
+        occurredAt: now,
+        payload: { ...run, id: nextId, ordinal: 2, status: "queued", allowanceHold: undefined },
+      });
+      assert.deepEqual(yield* store.getAllowanceHeldThreadIds(), []);
+    }),
+  );
   it.effect("truncates latest visible message text in thread shells", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStoreV2;
@@ -150,6 +230,9 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
       );
       assert.equal(snapshotShell?.latestVisibleMessage?.text, expectedPreview);
       assert.equal(threadShell?.latestVisibleMessage?.text, expectedPreview);
+      for (const shell of [threadShellFromProjection(projection), snapshotShell!, threadShell!]) {
+        assert.isFalse(Object.hasOwn(shell, "orchestratorOrigin"));
+      }
     }),
   );
 
@@ -170,6 +253,11 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
           creationSource: "web",
           id: threadId,
           projectId,
+          orchestratorOrigin: {
+            orchestratorId: "coordinator",
+            companyId: "workspace",
+            commandId: "assignment",
+          },
           title: "Manual PR attachment",
           providerInstanceId,
           modelSelection,
@@ -251,6 +339,17 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
         (thread) => thread.id === threadId,
       );
       const threadShell = yield* projectionStore.getThreadShell(threadId);
+      assert.deepEqual(threadShell?.orchestratorOrigin, {
+        orchestratorId: "coordinator",
+        companyId: "workspace",
+        commandId: "assignment",
+      });
+      const encodedShell = yield* encodeThreadShell(threadShell!);
+      assert.deepEqual(
+        (yield* decodeThreadShell(encodedShell)).orchestratorOrigin,
+        threadShell?.orchestratorOrigin,
+      );
+
       const expected = {
         number: 2,
         url: "https://github.com/SpiritDevs/pathway/pull/2",

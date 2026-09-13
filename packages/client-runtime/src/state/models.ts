@@ -44,6 +44,7 @@ export interface ThreadRunSummary {
 }
 
 export interface ThreadRuntimeSummary {
+  readonly allowanceHold?: string | null;
   readonly status: OrchestrationV2RunStatus | "idle";
   readonly activeRunId: RunId | null;
   readonly providerInstanceId: ProviderInstanceId;
@@ -156,6 +157,7 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
   const status = hasPendingBackgroundTasks ? "idle" : (thread.activityRunStatus ?? thread.status);
   return {
     status,
+    ...(thread.allowanceHold ? { allowanceHold: thread.allowanceHold } : {}),
     activeRunId: thread.activeRunId,
     providerInstanceId: thread.providerInstanceId,
     providerName: null,

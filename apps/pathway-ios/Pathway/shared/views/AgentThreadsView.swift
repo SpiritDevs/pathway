@@ -810,6 +810,10 @@ private struct AgentThreadRow: View {
             Image(systemName: "person.crop.circle.badge.exclamationmark")
                 .foregroundStyle(.orange)
                 .accessibilityLabel("Needs you")
+        } else if thread.shell.allowanceHold != nil {
+            Image(systemName: "pause.circle")
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Waiting for allowance")
         } else if thread.isRunning {
             Image(systemName: "sparkles")
                 .foregroundStyle(.blue)

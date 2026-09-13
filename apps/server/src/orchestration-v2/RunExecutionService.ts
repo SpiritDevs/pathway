@@ -27,12 +27,14 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { ProviderAllowanceRuntime } from "../providerUsage/AllowanceRuntime.ts";
 import { CheckpointServiceV2 } from "./CheckpointService.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import {
@@ -591,6 +593,7 @@ export const layer: Layer.Layer<
     const idAllocator = yield* IdAllocatorV2;
     const providerEventIngestor = yield* ProviderEventIngestorV2;
     const serverSettings = yield* ServerSettingsService;
+    const allowance = yield* Effect.serviceOption(ProviderAllowanceRuntime);
 
     const writeFinalRunEvents = (input: {
       readonly run: OrchestrationV2Run;
@@ -865,6 +868,10 @@ export const layer: Layer.Layer<
           });
           const latestTurnItemOrdinal = yield* Ref.make(input.providerTurnOrdinal * 100);
           const latestProviderThread = yield* Ref.make(input.providerThread);
+          const providerThreadsForAllowance = yield* Ref.make(
+            new Map([[input.providerThread.id, input.providerThread]]),
+          );
+          const allowanceHold = yield* Ref.make<string | null>(null);
           const routeIdentity: ProviderEventRouteIdentity = {
             threadId: input.run.threadId,
             runId: input.run.id,
@@ -907,7 +914,9 @@ export const layer: Layer.Layer<
           const rootTerminalSeen = yield* Ref.make(false);
           const rootRunFinalized = yield* Ref.make(false);
           const providerThreadOwnerLost = yield* Ref.make(false);
-          const activeChildProviderTurns = yield* Ref.make<ReadonlySet<ProviderTurnId>>(new Set());
+          const activeChildProviderTurns = yield* Ref.make<
+            ReadonlyMap<ProviderTurnId, ProviderThreadId>
+          >(new Map());
           const activeChildSubagents = yield* Ref.make<ReadonlySet<NodeId>>(new Set());
           const activeBackgroundTurnItems = yield* Ref.make<
             ReadonlySet<OrchestrationV2TurnItem["id"]>
@@ -921,7 +930,7 @@ export const layer: Layer.Layer<
               const providerThread = yield* Ref.get(latestProviderThread);
               const openSubagents = yield* Ref.get(openRunOwnedSubagents);
               yield* writeFinalRunEvents({
-                run: input.run,
+                run: { ...input.run, allowanceHold: yield* Ref.get(allowanceHold) },
                 rootNode: input.rootNode,
                 checkpointScope: input.checkpointScope,
                 providerThread,
@@ -961,11 +970,11 @@ export const layer: Layer.Layer<
                   event.providerTurn.id === routing.rootProviderTurnId;
                 if (!isRoot) {
                   yield* Ref.update(activeChildProviderTurns, (current) => {
-                    const next = new Set(current);
+                    const next = new Map(current);
                     if (isTerminalProviderTurnStatus(event.providerTurn.status)) {
                       next.delete(event.providerTurn.id);
                     } else {
-                      next.add(event.providerTurn.id);
+                      next.set(event.providerTurn.id, event.providerTurn.providerThreadId);
                     }
                     return next;
                   });
@@ -1186,6 +1195,9 @@ export const layer: Layer.Layer<
                   }
                 }
                 if (event.type === "provider_thread.updated") {
+                  yield* Ref.update(providerThreadsForAllowance, (threads) =>
+                    new Map(threads).set(event.providerThread.id, event.providerThread),
+                  );
                   if (event.providerThread.id === input.providerThread.id && storedEventCount > 0) {
                     yield* Ref.set(latestProviderThread, event.providerThread);
                   }
@@ -1309,6 +1321,62 @@ export const layer: Layer.Layer<
             return;
           }
 
+          if (Option.isSome(allowance)) {
+            const guard = allowance.value;
+            yield* Effect.gen(function* () {
+              while (true) {
+                const state = yield* guard.checkThread(
+                  input.run.threadId,
+                  input.modelSelection.instanceId,
+                  input.providerThread.driver,
+                );
+                if (state.shouldInterrupt) {
+                  yield* Ref.set(allowanceHold, state.detail);
+                  const routing = yield* Ref.get(eventRouting);
+                  if (routing.rootProviderTurnId !== null) {
+                    const now = yield* DateTime.now;
+                    yield* eventSink
+                      .writeIfRunCurrent({
+                        threadId: input.run.threadId,
+                        runId: input.run.id,
+                        activeAttemptId: input.attempt.id,
+                        expectedStatus: "running",
+                        events: [
+                          {
+                            id: yield* idAllocator.allocate.event({ threadId: input.run.threadId }),
+                            type: "run.updated",
+                            threadId: input.run.threadId,
+                            runId: input.run.id,
+                            occurredAt: now,
+                            payload: { ...input.run, allowanceHold: state.detail },
+                          },
+                        ],
+                      })
+                      .pipe(Effect.ignore);
+                    yield* input.session
+                      .interruptTurn({
+                        providerThread: yield* Ref.get(latestProviderThread),
+                        providerTurnId: routing.rootProviderTurnId,
+                      })
+                      .pipe(Effect.ignore);
+                  }
+                  // Provider-native children may continue after their parent's visible reply.
+                  const providerThreads = yield* Ref.get(providerThreadsForAllowance);
+                  for (const [providerTurnId, providerThreadId] of yield* Ref.get(
+                    activeChildProviderTurns,
+                  )) {
+                    const providerThread = providerThreads.get(providerThreadId);
+                    if (providerThread)
+                      yield* input.session
+                        .interruptTurn({ providerThread, providerTurnId })
+                        .pipe(Effect.ignore);
+                  }
+                }
+                yield* Effect.sleep("10 seconds");
+              }
+            }).pipe(Effect.raceFirst(Fiber.await(providerEventFiber)), Effect.forkDetach);
+          }
+
           // A provider turn is a sign that the session is still alive. Keep
           // its already-issued MCP credential valid even when the agent goes
           // a long time between browser-tool calls.
@@ -1415,6 +1483,6 @@ export function makeInterruptResultTurnItem(input: {
     completedAt: input.completedAt,
     updatedAt: input.completedAt,
     type: "run_interrupt_result",
-    message: "Run interrupted by user",
+    message: input.run.allowanceHold ?? "Run interrupted by user",
   };
 }

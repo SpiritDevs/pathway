@@ -228,6 +228,7 @@ it.effect(
             Effect.die("unused getDelegatedCompletionRecoveryThreadIds"),
           getThreadMetadata: () => Effect.die("unused getThreadMetadata"),
           getQueuedRunThreadIds: () => Effect.die("unused getQueuedRunThreadIds"),
+          getAllowanceHeldThreadIds: () => Effect.die("unused getAllowanceHeldThreadIds"),
           getPendingSubagentCompletionThreads: () =>
             Effect.die("unused getPendingSubagentCompletionThreads"),
           getThreadSnapshot: () => Effect.die("unused getThreadSnapshot"),

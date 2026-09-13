@@ -165,6 +165,7 @@ describe("SETTINGS_NAV_GROUPS", () => {
       "Workspace",
       "Account",
       "Agents",
+      "Orchestrators",
       "Tasks",
       "Email",
       "System",

@@ -35,6 +35,15 @@ import { Route as SettingsSnapShotRouteImport } from './routes/settings.snap-sho
 import { Route as SettingsScheduledTasksRouteImport } from './routes/settings.scheduled-tasks'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
 import { Route as SettingsProjectsRouteImport } from './routes/settings.projects'
+import { Route as SettingsOrchestratorsWorkLimitsRouteImport } from './routes/settings.orchestrators-work-limits'
+import { Route as SettingsOrchestratorsResponsibilitiesRouteImport } from './routes/settings.orchestrators-responsibilities'
+import { Route as SettingsOrchestratorsPermissionsRouteImport } from './routes/settings.orchestrators-permissions'
+import { Route as SettingsOrchestratorsOverviewRouteImport } from './routes/settings.orchestrators-overview'
+import { Route as SettingsOrchestratorsNotificationsRouteImport } from './routes/settings.orchestrators-notifications'
+import { Route as SettingsOrchestratorsModelsRouteImport } from './routes/settings.orchestrators-models'
+import { Route as SettingsOrchestratorsMemoryRouteImport } from './routes/settings.orchestrators-memory'
+import { Route as SettingsOrchestratorsInstructionsRouteImport } from './routes/settings.orchestrators-instructions'
+import { Route as SettingsOrchestratorsEnvironmentsRouteImport } from './routes/settings.orchestrators-environments'
 import { Route as SettingsNotificationsRouteImport } from './routes/settings.notifications'
 import { Route as SettingsMembersTeamsRouteImport } from './routes/settings.members-teams'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
@@ -199,6 +208,60 @@ const SettingsProjectsRoute = SettingsProjectsRouteImport.update({
   path: '/projects',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsOrchestratorsWorkLimitsRoute =
+  SettingsOrchestratorsWorkLimitsRouteImport.update({
+    id: '/orchestrators-work-limits',
+    path: '/orchestrators-work-limits',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsResponsibilitiesRoute =
+  SettingsOrchestratorsResponsibilitiesRouteImport.update({
+    id: '/orchestrators-responsibilities',
+    path: '/orchestrators-responsibilities',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsPermissionsRoute =
+  SettingsOrchestratorsPermissionsRouteImport.update({
+    id: '/orchestrators-permissions',
+    path: '/orchestrators-permissions',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsOverviewRoute =
+  SettingsOrchestratorsOverviewRouteImport.update({
+    id: '/orchestrators-overview',
+    path: '/orchestrators-overview',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsNotificationsRoute =
+  SettingsOrchestratorsNotificationsRouteImport.update({
+    id: '/orchestrators-notifications',
+    path: '/orchestrators-notifications',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsModelsRoute =
+  SettingsOrchestratorsModelsRouteImport.update({
+    id: '/orchestrators-models',
+    path: '/orchestrators-models',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsMemoryRoute =
+  SettingsOrchestratorsMemoryRouteImport.update({
+    id: '/orchestrators-memory',
+    path: '/orchestrators-memory',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsInstructionsRoute =
+  SettingsOrchestratorsInstructionsRouteImport.update({
+    id: '/orchestrators-instructions',
+    path: '/orchestrators-instructions',
+    getParentRoute: () => SettingsRoute,
+  } as any)
+const SettingsOrchestratorsEnvironmentsRoute =
+  SettingsOrchestratorsEnvironmentsRouteImport.update({
+    id: '/orchestrators-environments',
+    path: '/orchestrators-environments',
+    getParentRoute: () => SettingsRoute,
+  } as any)
 const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
   id: '/notifications',
   path: '/notifications',
@@ -421,6 +484,15 @@ export interface FileRoutesByFullPath {
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/members-teams': typeof SettingsMembersTeamsRoute
   '/settings/notifications': typeof SettingsNotificationsRoute
+  '/settings/orchestrators-environments': typeof SettingsOrchestratorsEnvironmentsRoute
+  '/settings/orchestrators-instructions': typeof SettingsOrchestratorsInstructionsRoute
+  '/settings/orchestrators-memory': typeof SettingsOrchestratorsMemoryRoute
+  '/settings/orchestrators-models': typeof SettingsOrchestratorsModelsRoute
+  '/settings/orchestrators-notifications': typeof SettingsOrchestratorsNotificationsRoute
+  '/settings/orchestrators-overview': typeof SettingsOrchestratorsOverviewRoute
+  '/settings/orchestrators-permissions': typeof SettingsOrchestratorsPermissionsRoute
+  '/settings/orchestrators-responsibilities': typeof SettingsOrchestratorsResponsibilitiesRoute
+  '/settings/orchestrators-work-limits': typeof SettingsOrchestratorsWorkLimitsRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
@@ -481,6 +553,15 @@ export interface FileRoutesByTo {
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/members-teams': typeof SettingsMembersTeamsRoute
   '/settings/notifications': typeof SettingsNotificationsRoute
+  '/settings/orchestrators-environments': typeof SettingsOrchestratorsEnvironmentsRoute
+  '/settings/orchestrators-instructions': typeof SettingsOrchestratorsInstructionsRoute
+  '/settings/orchestrators-memory': typeof SettingsOrchestratorsMemoryRoute
+  '/settings/orchestrators-models': typeof SettingsOrchestratorsModelsRoute
+  '/settings/orchestrators-notifications': typeof SettingsOrchestratorsNotificationsRoute
+  '/settings/orchestrators-overview': typeof SettingsOrchestratorsOverviewRoute
+  '/settings/orchestrators-permissions': typeof SettingsOrchestratorsPermissionsRoute
+  '/settings/orchestrators-responsibilities': typeof SettingsOrchestratorsResponsibilitiesRoute
+  '/settings/orchestrators-work-limits': typeof SettingsOrchestratorsWorkLimitsRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
@@ -544,6 +625,15 @@ export interface FileRoutesById {
   '/settings/keybindings': typeof SettingsKeybindingsRoute
   '/settings/members-teams': typeof SettingsMembersTeamsRoute
   '/settings/notifications': typeof SettingsNotificationsRoute
+  '/settings/orchestrators-environments': typeof SettingsOrchestratorsEnvironmentsRoute
+  '/settings/orchestrators-instructions': typeof SettingsOrchestratorsInstructionsRoute
+  '/settings/orchestrators-memory': typeof SettingsOrchestratorsMemoryRoute
+  '/settings/orchestrators-models': typeof SettingsOrchestratorsModelsRoute
+  '/settings/orchestrators-notifications': typeof SettingsOrchestratorsNotificationsRoute
+  '/settings/orchestrators-overview': typeof SettingsOrchestratorsOverviewRoute
+  '/settings/orchestrators-permissions': typeof SettingsOrchestratorsPermissionsRoute
+  '/settings/orchestrators-responsibilities': typeof SettingsOrchestratorsResponsibilitiesRoute
+  '/settings/orchestrators-work-limits': typeof SettingsOrchestratorsWorkLimitsRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/scheduled-tasks': typeof SettingsScheduledTasksRoute
@@ -607,6 +697,15 @@ export interface FileRouteTypes {
     | '/settings/keybindings'
     | '/settings/members-teams'
     | '/settings/notifications'
+    | '/settings/orchestrators-environments'
+    | '/settings/orchestrators-instructions'
+    | '/settings/orchestrators-memory'
+    | '/settings/orchestrators-models'
+    | '/settings/orchestrators-notifications'
+    | '/settings/orchestrators-overview'
+    | '/settings/orchestrators-permissions'
+    | '/settings/orchestrators-responsibilities'
+    | '/settings/orchestrators-work-limits'
     | '/settings/projects'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
@@ -667,6 +766,15 @@ export interface FileRouteTypes {
     | '/settings/keybindings'
     | '/settings/members-teams'
     | '/settings/notifications'
+    | '/settings/orchestrators-environments'
+    | '/settings/orchestrators-instructions'
+    | '/settings/orchestrators-memory'
+    | '/settings/orchestrators-models'
+    | '/settings/orchestrators-notifications'
+    | '/settings/orchestrators-overview'
+    | '/settings/orchestrators-permissions'
+    | '/settings/orchestrators-responsibilities'
+    | '/settings/orchestrators-work-limits'
     | '/settings/projects'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
@@ -729,6 +837,15 @@ export interface FileRouteTypes {
     | '/settings/keybindings'
     | '/settings/members-teams'
     | '/settings/notifications'
+    | '/settings/orchestrators-environments'
+    | '/settings/orchestrators-instructions'
+    | '/settings/orchestrators-memory'
+    | '/settings/orchestrators-models'
+    | '/settings/orchestrators-notifications'
+    | '/settings/orchestrators-overview'
+    | '/settings/orchestrators-permissions'
+    | '/settings/orchestrators-responsibilities'
+    | '/settings/orchestrators-work-limits'
     | '/settings/projects'
     | '/settings/providers'
     | '/settings/scheduled-tasks'
@@ -953,6 +1070,69 @@ declare module '@tanstack/react-router' {
       path: '/projects'
       fullPath: '/settings/projects'
       preLoaderRoute: typeof SettingsProjectsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-work-limits': {
+      id: '/settings/orchestrators-work-limits'
+      path: '/orchestrators-work-limits'
+      fullPath: '/settings/orchestrators-work-limits'
+      preLoaderRoute: typeof SettingsOrchestratorsWorkLimitsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-responsibilities': {
+      id: '/settings/orchestrators-responsibilities'
+      path: '/orchestrators-responsibilities'
+      fullPath: '/settings/orchestrators-responsibilities'
+      preLoaderRoute: typeof SettingsOrchestratorsResponsibilitiesRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-permissions': {
+      id: '/settings/orchestrators-permissions'
+      path: '/orchestrators-permissions'
+      fullPath: '/settings/orchestrators-permissions'
+      preLoaderRoute: typeof SettingsOrchestratorsPermissionsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-overview': {
+      id: '/settings/orchestrators-overview'
+      path: '/orchestrators-overview'
+      fullPath: '/settings/orchestrators-overview'
+      preLoaderRoute: typeof SettingsOrchestratorsOverviewRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-notifications': {
+      id: '/settings/orchestrators-notifications'
+      path: '/orchestrators-notifications'
+      fullPath: '/settings/orchestrators-notifications'
+      preLoaderRoute: typeof SettingsOrchestratorsNotificationsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-models': {
+      id: '/settings/orchestrators-models'
+      path: '/orchestrators-models'
+      fullPath: '/settings/orchestrators-models'
+      preLoaderRoute: typeof SettingsOrchestratorsModelsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-memory': {
+      id: '/settings/orchestrators-memory'
+      path: '/orchestrators-memory'
+      fullPath: '/settings/orchestrators-memory'
+      preLoaderRoute: typeof SettingsOrchestratorsMemoryRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-instructions': {
+      id: '/settings/orchestrators-instructions'
+      path: '/orchestrators-instructions'
+      fullPath: '/settings/orchestrators-instructions'
+      preLoaderRoute: typeof SettingsOrchestratorsInstructionsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/orchestrators-environments': {
+      id: '/settings/orchestrators-environments'
+      path: '/orchestrators-environments'
+      fullPath: '/settings/orchestrators-environments'
+      preLoaderRoute: typeof SettingsOrchestratorsEnvironmentsRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/notifications': {
@@ -1252,6 +1432,15 @@ interface SettingsRouteChildren {
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
   SettingsMembersTeamsRoute: typeof SettingsMembersTeamsRoute
   SettingsNotificationsRoute: typeof SettingsNotificationsRoute
+  SettingsOrchestratorsEnvironmentsRoute: typeof SettingsOrchestratorsEnvironmentsRoute
+  SettingsOrchestratorsInstructionsRoute: typeof SettingsOrchestratorsInstructionsRoute
+  SettingsOrchestratorsMemoryRoute: typeof SettingsOrchestratorsMemoryRoute
+  SettingsOrchestratorsModelsRoute: typeof SettingsOrchestratorsModelsRoute
+  SettingsOrchestratorsNotificationsRoute: typeof SettingsOrchestratorsNotificationsRoute
+  SettingsOrchestratorsOverviewRoute: typeof SettingsOrchestratorsOverviewRoute
+  SettingsOrchestratorsPermissionsRoute: typeof SettingsOrchestratorsPermissionsRoute
+  SettingsOrchestratorsResponsibilitiesRoute: typeof SettingsOrchestratorsResponsibilitiesRoute
+  SettingsOrchestratorsWorkLimitsRoute: typeof SettingsOrchestratorsWorkLimitsRoute
   SettingsProjectsRoute: typeof SettingsProjectsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
   SettingsScheduledTasksRoute: typeof SettingsScheduledTasksRoute
@@ -1287,6 +1476,19 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
   SettingsMembersTeamsRoute: SettingsMembersTeamsRoute,
   SettingsNotificationsRoute: SettingsNotificationsRoute,
+  SettingsOrchestratorsEnvironmentsRoute:
+    SettingsOrchestratorsEnvironmentsRoute,
+  SettingsOrchestratorsInstructionsRoute:
+    SettingsOrchestratorsInstructionsRoute,
+  SettingsOrchestratorsMemoryRoute: SettingsOrchestratorsMemoryRoute,
+  SettingsOrchestratorsModelsRoute: SettingsOrchestratorsModelsRoute,
+  SettingsOrchestratorsNotificationsRoute:
+    SettingsOrchestratorsNotificationsRoute,
+  SettingsOrchestratorsOverviewRoute: SettingsOrchestratorsOverviewRoute,
+  SettingsOrchestratorsPermissionsRoute: SettingsOrchestratorsPermissionsRoute,
+  SettingsOrchestratorsResponsibilitiesRoute:
+    SettingsOrchestratorsResponsibilitiesRoute,
+  SettingsOrchestratorsWorkLimitsRoute: SettingsOrchestratorsWorkLimitsRoute,
   SettingsProjectsRoute: SettingsProjectsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsScheduledTasksRoute: SettingsScheduledTasksRoute,

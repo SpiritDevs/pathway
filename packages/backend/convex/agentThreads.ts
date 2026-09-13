@@ -1,3 +1,4 @@
+import { notifyOrchestratorThreadUpdate } from "./lib/aiOrchestratorSignals.ts";
 // @effect-diagnostics globalDate:off -- Convex mutations use the transaction clock.
 /** Environment-published, cloud-safe Agent Thread discovery metadata. */
 import { v } from "convex/values";
@@ -25,6 +26,7 @@ export const AGENT_THREAD_SHELL_FIELDS = new Set([
   "projectId",
   "conversationPath",
   "conversationCompanyId",
+  "orchestratorOrigin",
   "temporary",
   "ownedWorktreePath",
   "ownedBranch",
@@ -49,6 +51,7 @@ export const AGENT_THREAD_SHELL_FIELDS = new Set([
   "activeRunId",
   "activityRunStatus",
   "status",
+  "allowanceHold",
   "lastError",
   "pendingRuntimeRequest",
   "latestVisibleMessage",
@@ -259,6 +262,7 @@ export const upsert = mutation({
         },
       ],
     });
+    await notifyOrchestratorThreadUpdate(ctx, row, existing?.shell);
     return { outcome: "published" as const };
   },
 });

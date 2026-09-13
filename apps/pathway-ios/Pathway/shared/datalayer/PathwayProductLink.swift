@@ -1,5 +1,18 @@
 import Foundation
 
+struct PathwayOrchestratorNotificationDestination: Equatable, Sendable {
+    let accountID: String
+    let chatID: String
+    init(accountID: String, chatID: String) { self.accountID = accountID; self.chatID = chatID }
+    init?(notification: [AnyHashable: Any]) {
+        guard notification["destination"] as? String == "orchestrator",
+              let accountID = notification["accountID"] as? String, !accountID.isEmpty,
+              let chatID = notification["chatID"] as? String, !chatID.isEmpty else { return nil }
+        self.init(accountID: accountID, chatID: chatID)
+    }
+    var userInfo: [AnyHashable: Any] { ["destination": "orchestrator", "accountID": accountID, "chatID": chatID] }
+}
+
 struct PathwayProductLink: Equatable, Sendable {
     let environmentID: String
     let threadID: String

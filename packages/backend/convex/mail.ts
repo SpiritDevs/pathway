@@ -20,12 +20,14 @@ import {
 } from "./lib/mail.ts";
 import { backendError } from "./lib/errors.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
+import { delegatedBusinessOrigin } from "./lib/delegatedBusinessOwner.ts";
+const delegatedArg = { companyId: v.string(), delegatedOrigin: delegatedBusinessOrigin };
 const companyArg = { companyId: v.string() };
 
 export const listAccounts = query({
-  args: companyArg,
+  args: delegatedArg,
   handler: async (ctx, args) => {
-    const actor = await mailOwner(ctx, args.companyId);
+    const actor = await mailOwner(ctx, args.companyId, args.delegatedOrigin);
     const active = await ctx.db
       .query("mailAccounts")
       .withIndex("by_owner_status", (q) =>
@@ -80,7 +82,7 @@ export const configureBrain = mutation({
   },
 });
 const pageArgs = {
-  ...companyArg,
+  ...delegatedArg,
   accountId: v.optional(v.string()),
   bucket: v.optional(mailBucket),
   cursor: v.optional(v.string()),
@@ -89,8 +91,9 @@ const pageArgs = {
 export const listMessages = query({
   args: pageArgs,
   handler: async (ctx, args) => {
-    const actor = await mailOwner(ctx, args.companyId);
-    if (args.accountId) await ownedMailAccount(ctx, args.companyId, args.accountId);
+    const actor = await mailOwner(ctx, args.companyId, args.delegatedOrigin);
+    if (args.accountId)
+      await ownedMailAccount(ctx, args.companyId, args.accountId, args.delegatedOrigin);
     const rows = args.accountId
       ? args.bucket
         ? ctx.db
@@ -127,14 +130,14 @@ export const listMessages = query({
 });
 export const getThread = query({
   args: {
-    ...companyArg,
+    ...delegatedArg,
     accountId: v.string(),
     providerThreadId: v.string(),
     cursor: v.optional(v.string()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await ownedMailAccount(ctx, args.companyId, args.accountId);
+    await ownedMailAccount(ctx, args.companyId, args.accountId, args.delegatedOrigin);
     const page = await ctx.db
       .query("mailMessages")
       .withIndex("by_thread", (q) =>
@@ -152,9 +155,14 @@ export const getThread = query({
   },
 });
 export const getMessage = query({
-  args: { ...companyArg, messageId: v.string() },
+  args: { ...delegatedArg, messageId: v.string() },
   handler: async (ctx, args) => {
-    const message = await ownedMailMessage(ctx, args.companyId, args.messageId);
+    const message = await ownedMailMessage(
+      ctx,
+      args.companyId,
+      args.messageId,
+      args.delegatedOrigin,
+    );
     const body = await ctx.db
       .query("mailBodies")
       .withIndex("by_message", (q) => q.eq("messageId", message.id))
@@ -247,9 +255,9 @@ export const setRead = mutation({
   },
 });
 export const getSender = query({
-  args: { ...companyArg, accountId: v.string(), email: v.string() },
+  args: { ...delegatedArg, accountId: v.string(), email: v.string() },
   handler: async (ctx, args) => {
-    await ownedMailAccount(ctx, args.companyId, args.accountId);
+    await ownedMailAccount(ctx, args.companyId, args.accountId, args.delegatedOrigin);
     const sender = await ctx.db
       .query("mailSenderKnowledge")
       .withIndex("by_sender", (q) =>
@@ -269,9 +277,9 @@ export const getSender = query({
   },
 });
 export const listDrafts = query({
-  args: { ...companyArg, accountId: v.string() },
+  args: { ...delegatedArg, accountId: v.string() },
   handler: async (ctx, args) => {
-    await ownedMailAccount(ctx, args.companyId, args.accountId);
+    await ownedMailAccount(ctx, args.companyId, args.accountId, args.delegatedOrigin);
     return (
       await ctx.db
         .query("mailDrafts")
@@ -340,7 +348,7 @@ export const retryDraftJob = mutation({
 });
 export const saveDraft = mutation({
   args: {
-    ...companyArg,
+    ...delegatedArg,
     accountId: v.string(),
     draftId: v.optional(v.string()),
     replyToMessageId: v.optional(v.string()),
@@ -349,13 +357,25 @@ export const saveDraft = mutation({
     text: v.string(),
   },
   handler: async (ctx, args) => {
-    const account = await ownedMailAccount(ctx, args.companyId, args.accountId);
+    const account = await ownedMailAccount(
+      ctx,
+      args.companyId,
+      args.accountId,
+      args.delegatedOrigin,
+      "mail.send",
+    );
     assertActive(account);
     const now = Date.now();
     if (args.to.length > 100 || args.subject.length > 2000 || args.text.length > 200000)
       throw backendError("mail-too-large", "Draft exceeds the message size limit.");
     if (args.replyToMessageId) {
-      const reply = await ownedMailMessage(ctx, args.companyId, args.replyToMessageId);
+      const reply = await ownedMailMessage(
+        ctx,
+        args.companyId,
+        args.replyToMessageId,
+        args.delegatedOrigin,
+        "mail.send",
+      );
       if (reply.accountId !== account.id)
         throw backendError("invalid-mail-reply", "Reply must use the same mailbox.");
     }
@@ -393,14 +413,14 @@ export const saveDraft = mutation({
 });
 /** Only editable unsent drafts can be discarded; uncertain deliveries remain visible. */
 export const discardDraft = mutation({
-  args: { ...companyArg, draftId: v.string() },
+  args: { ...delegatedArg, draftId: v.string() },
   handler: async (ctx, args) => {
     const draft = await ctx.db
       .query("mailDrafts")
       .withIndex("by_domain_id", (q) => q.eq("id", args.draftId))
       .unique();
     if (!draft) throw backendError("mail-not-found", "Draft not found.");
-    await ownedMailAccount(ctx, args.companyId, draft.accountId);
+    await ownedMailAccount(ctx, args.companyId, draft.accountId, args.delegatedOrigin, "mail.send");
     if (draft.status !== "draft" && draft.status !== "failed")
       throw backendError(
         "mail-send-locked",
@@ -422,14 +442,20 @@ export const requestDraft = mutation({
   },
 });
 export const requestSend = mutation({
-  args: { ...companyArg, draftId: v.string() },
+  args: { ...delegatedArg, draftId: v.string() },
   handler: async (ctx, args) => {
     const draft = await ctx.db
       .query("mailDrafts")
       .withIndex("by_domain_id", (q) => q.eq("id", args.draftId))
       .unique();
     if (!draft) throw backendError("mail-not-found", "Draft not found.");
-    const account = await ownedMailAccount(ctx, args.companyId, draft.accountId);
+    const account = await ownedMailAccount(
+      ctx,
+      args.companyId,
+      draft.accountId,
+      args.delegatedOrigin,
+      "mail.send",
+    );
     assertActive(account);
     if (draft.status !== "draft" && draft.status !== "failed")
       throw backendError(
@@ -447,6 +473,7 @@ export const requestSend = mutation({
       );
     await ctx.db.patch(draft._id, {
       status: "queued",
+      delegatedOrigin: args.delegatedOrigin,
       lastError: undefined,
       updatedAt: Date.now(),
     });

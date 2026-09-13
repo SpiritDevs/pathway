@@ -169,6 +169,12 @@ export function ThreadAlertRuntime() {
         return;
       }
       if ("kind" in target) {
+        if (target.kind === "orchestrator") {
+          window.dispatchEvent(
+            new CustomEvent("pathway:open-orchestrator-chat", { detail: target.chatId }),
+          );
+          return;
+        }
         await navigate({ to: "/settings/archived" });
         return;
       }
