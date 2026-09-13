@@ -43,9 +43,10 @@ const queuedRun = (id: string, text: string, createdBy: "user" | "agent" = "user
   createdBy,
 });
 
-const render = (optimisticMessages: ReadonlyArray<unknown> = []) =>
+const render = (optimisticMessages: ReadonlyArray<unknown> = [], cloudQueue?: unknown) =>
   renderToStaticMarkup(
     <QueuedRunsControl
+      cloudQueue={cloudQueue as never}
       attachmentUrlById={new Map()}
       environmentId={"environment:test" as never}
       optimisticMessages={optimisticMessages as never}
@@ -229,5 +230,45 @@ describe("QueuedRunsControl automatic completion delivery", () => {
     };
 
     expect(render()).toBe("");
+  });
+});
+
+describe("phone messages in the composer queue", () => {
+  const message = (id: string, state = "queued") => ({
+    commandId: id,
+    messageId: `message:${id}`,
+    state,
+    acceptedAt: null,
+    localKey: null,
+    submission: { kind: "message", input: { text: `Phone ${id}`, attachments: [] } },
+  });
+  const cloud = (messages: ReturnType<typeof message>[]) => ({
+    messages,
+    attachmentUrls: new Map(),
+    controls: new Map(
+      messages.map((message) => [message.messageId, { editable: true, cancelable: true }]),
+    ),
+  });
+  it("shows phone messages in the same stack with ordering and actions", () => {
+    setQueue({ queuedRuns: [queuedRun("desktop", "Desktop message")] });
+    const html = render(
+      [{ id: "message:one", inputIntent: "queued_turn", text: "Phone one" }],
+      cloud([message("one"), message("two")]),
+    );
+    expect(html).toContain("3 queued messages");
+    expect(html).toContain("Phone one");
+    expect(html).toContain("Reorder queued message: Phone two");
+    expect(html.match(/Edit queued message/g)).toHaveLength(3);
+    expect(html.match(/Remove queued message/g)).toHaveLength(3);
+  });
+  it("does not duplicate cloud input once the environment owns it or after cancellation", () => {
+    setQueue({ queuedRuns: [queuedRun("one", "Phone one")], projectedMessageIds: ["message:one"] });
+    const html = render(
+      [],
+      cloud([message("one"), message("canceled", "canceled"), message("sent", "delivered")]),
+    );
+    expect(html).toContain('aria-label="1 queued message"');
+    expect(html).not.toContain("Phone canceled");
+    expect(html).not.toContain("Phone sent");
   });
 });

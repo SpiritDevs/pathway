@@ -1,3 +1,9 @@
+import type { useThreadQueueChat } from "../../cloud/useThreadQueueChat";
+import {
+  isPendingQueuedChatMessage,
+  queueMessageContent,
+  queuedChatMessageLabel,
+} from "../../cloud/threadQueueChat";
 /**
  * The queued-message strip above the composer.
  *
@@ -106,6 +112,7 @@ function SortableQueuedRow(props: {
   readonly reducedMotion: boolean;
   readonly runId: RunId;
   readonly children: ReactNode;
+  readonly showHandle?: boolean;
 }) {
   const {
     attributes,
@@ -131,17 +138,19 @@ function SortableQueuedRow(props: {
         ...(props.reducedMotion ? {} : { transition }),
       }}
     >
-      <button
-        {...attributes}
-        {...listeners}
-        aria-label={props.label}
-        className="flex size-4 shrink-0 cursor-grab touch-none items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground focus-visible:text-foreground active:cursor-grabbing disabled:cursor-default disabled:text-muted-foreground/30"
-        disabled={props.disabled}
-        ref={setActivatorNodeRef}
-        type="button"
-      >
-        <GripVerticalIcon className="size-3.5" />
-      </button>
+      {props.showHandle !== false && (
+        <button
+          {...attributes}
+          {...listeners}
+          aria-label={props.label}
+          className="flex size-4 shrink-0 cursor-grab touch-none items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground focus-visible:text-foreground active:cursor-grabbing disabled:cursor-default disabled:text-muted-foreground/30"
+          disabled={props.disabled}
+          ref={setActivatorNodeRef}
+          type="button"
+        >
+          <GripVerticalIcon className="size-3.5" />
+        </button>
+      )}
       <QueuedRowPosition position={props.position} />
       {props.children}
     </li>
@@ -161,8 +170,9 @@ export function QueuedRunsControl(props: {
   readonly threadId: ThreadId;
   readonly optimisticMessages: ReadonlyArray<Pick<ChatMessage, "id" | "inputIntent" | "text">>;
   readonly attachmentUrlById: ReadonlyMap<string, string>;
+  readonly cloudQueue?: ReturnType<typeof useThreadQueueChat>;
   readonly onEditQueuedMessage: (input: {
-    readonly runId: RunId;
+    readonly runId: RunId | null;
     readonly messageId: MessageId;
     readonly text: string;
     readonly attachments: ReadonlyArray<{
@@ -229,13 +239,51 @@ export function QueuedRunsControl(props: {
     ...queued.map(({ run }) => run.userMessageId),
     ...(projection?.messages.map((message) => message.id) ?? []),
   ]);
+  const cloudMessageIds = new Set(props.cloudQueue?.messages.map((message) => message.messageId));
   const optimisticQueued = props.optimisticMessages.filter(
     (message) =>
       message.inputIntent === "queued_turn" &&
+      !cloudMessageIds.has(message.id) &&
       !acknowledgedQueuedMessageIds.has(message.id) &&
       !dismissedMessageIds.has(message.id),
   );
-  const total = ordered.length + optimisticQueued.length;
+  const cloudPending =
+    props.cloudQueue?.messages.filter(
+      (message) =>
+        isPendingQueuedChatMessage(message) &&
+        !acknowledgedQueuedMessageIds.has(message.messageId as MessageId),
+    ) ?? [];
+  const cloudSortable =
+    cloudPending.length > 1 &&
+    cloudPending.every(
+      (message) =>
+        !message.localKey &&
+        message.acceptedAt === null &&
+        message.submission.kind !== "launch" &&
+        props.cloudQueue?.controls.get(message.messageId)?.editable,
+    );
+  const cloudKey = (commandId: string) => `cloud:${commandId}` as RunId;
+  const moveCloud = async (event: DragEndEvent) => {
+    if (!event.over || event.active.id === event.over.id) return;
+    const plan = resolveQueuedRunReorder({
+      orderedRunIds: cloudPending.map((message) => cloudKey(message.commandId)),
+      activeRunId: String(event.active.id) as RunId,
+      overRunId: String(event.over.id) as RunId,
+    });
+    const message = cloudPending.find((message) => cloudKey(message.commandId) === plan?.runId);
+    if (!plan || !message) return;
+    setBusyRunId(plan.runId);
+    try {
+      await props.cloudQueue?.changeDelivery(message.messageId as MessageId, "reorder", {
+        beforeCommandId:
+          cloudPending.find((message) => cloudKey(message.commandId) === plan.beforeRunId)
+            ?.commandId ?? null,
+      });
+    } finally {
+      setBusyRunId(null);
+    }
+  };
+  const total = ordered.length + optimisticQueued.length + cloudPending.length;
   // One reorderable row cannot move, and a provider that cannot reorder its
   // queue must not advertise sorting at all.
   const sortable = workflow?.canReorder === true && ordered.length > 1;
@@ -513,6 +561,125 @@ export function QueuedRunsControl(props: {
           })}
         </li>
       ))}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
+        onDragEnd={(event) => {
+          void moveCloud(event);
+        }}
+      >
+        <SortableContext
+          items={cloudPending.map((message) => cloudKey(message.commandId))}
+          strategy={verticalListSortingStrategy}
+        >
+          {cloudPending.map((message, index) => {
+            const content = queueMessageContent(message);
+            if (!content) return null;
+            const id = message.messageId as MessageId;
+            const control = props.cloudQueue?.controls.get(message.messageId);
+            const attachments = content.attachments.flatMap((attachment) => {
+              const url = props.cloudQueue?.attachmentUrls.get(attachment.id);
+              return url ? [{ attachment, url }] : [];
+            });
+            return (
+              <SortableQueuedRow
+                key={message.commandId}
+                runId={cloudKey(message.commandId)}
+                showHandle={cloudSortable}
+                busy={busyRunId === cloudKey(message.commandId)}
+                disabled={!cloudSortable || busyRunId !== null}
+                reducedMotion={reducedMotion}
+                position={ordered.length + optimisticQueued.length + index + 1}
+                label={`Reorder queued message: ${content.text}`}
+              >
+                <span className="min-w-0 flex-1 truncate text-xs" title={content.text}>
+                  {content.text}
+                </span>
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {queuedChatMessageLabel(message)}
+                </span>
+                {content.attachments.length > 0 && (
+                  <span className="text-[10px] text-muted-foreground">
+                    <PaperclipIcon className="inline size-3" /> {content.attachments.length}
+                  </span>
+                )}
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="Edit queued message"
+                  disabled={
+                    busyRunId !== null ||
+                    !control?.editable ||
+                    !control.cancelable ||
+                    attachments.length !== content.attachments.length
+                  }
+                  onClick={() => {
+                    setBusyRunId(cloudKey(message.commandId));
+                    void props
+                      .onEditQueuedMessage({
+                        runId: null,
+                        messageId: id,
+                        text: content.text,
+                        attachments,
+                      })
+                      .finally(() => setBusyRunId(null));
+                  }}
+                >
+                  <PencilIcon className="size-3" />
+                </Button>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  disabled={
+                    busyRunId !== null ||
+                    !activeRun ||
+                    !workflow?.canPromoteToSteer ||
+                    !control?.editable ||
+                    message.localKey !== null ||
+                    message.submission.kind === "launch" ||
+                    message.state !== "queued"
+                  }
+                  onClick={() => {
+                    if (!activeRun) return;
+                    setBusyRunId(cloudKey(message.commandId));
+                    void props.cloudQueue
+                      ?.changeDelivery(id, "steer", { targetRunId: activeRun.id })
+                      .finally(() => setBusyRunId(null));
+                  }}
+                >
+                  <CornerUpRightIcon className="size-3" /> Steer
+                </Button>
+                {control?.retryable && (
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => {
+                      void props.cloudQueue?.mutateMessage(id, "retry");
+                    }}
+                  >
+                    Retry
+                  </Button>
+                )}
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="Remove queued message"
+                  disabled={busyRunId !== null || !control?.cancelable}
+                  onClick={() => {
+                    setBusyRunId(cloudKey(message.commandId));
+                    void props.cloudQueue
+                      ?.mutateMessage(id, "cancel")
+                      .finally(() => setBusyRunId(null));
+                  }}
+                >
+                  <XIcon className="size-3" />
+                </Button>
+              </SortableQueuedRow>
+            );
+          })}
+        </SortableContext>
+      </DndContext>
     </ol>
   );
 

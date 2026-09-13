@@ -75,6 +75,11 @@ export function canRetryQueuedChatMessage(message: QueuedChatMessage) {
   );
 }
 
+/** Cloud records remain in the composer queue until the environment owns their message. */
+export function isPendingQueuedChatMessage(message: QueuedChatMessage) {
+  return message.state !== "canceled" && message.state !== "delivered";
+}
+
 export function queuedChatMessages(
   messages: readonly QueuedChatMessage[],
   attachmentUrls: ReadonlyMap<string, string>,

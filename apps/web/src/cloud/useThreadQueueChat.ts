@@ -230,7 +230,43 @@ export function useThreadQueueChat(environmentId: string, threadId: string) {
     },
     [messageById, threadId, environmentId, row?.queueId, row?.companyId],
   );
+  const changeDelivery = useCallback(
+    async (
+      messageId: MessageId,
+      action: "reorder" | "steer",
+      fields: { beforeCommandId: string | null } | { targetRunId: string },
+    ) => {
+      const message = messageById.get(messageId);
+      if (!message || message.localKey || !canEditQueuedChatMessage(message)) return false;
+      try {
+        await mutateQueuedThread(action, {
+          threadId,
+          environmentId,
+          ...(row?.companyId ? { companyId: row.companyId } : {}),
+          ...(row?.queueId ? { queueId: row.queueId } : {}),
+          commandId: message.commandId,
+          revision: message.revision,
+          ...fields,
+        });
+        return true;
+      } catch (cause) {
+        setError(threadQueueErrorMessage(cause));
+        return false;
+      }
+    },
+    [messageById, threadId, environmentId, row?.companyId, row?.queueId],
+  );
   const loading =
     row?.cloudSaved === true && detail === null && chatMessages.length === 0 && !error;
-  return { row, messages, chatMessages, attachmentUrls, controls, mutateMessage, error, loading };
+  return {
+    row,
+    messages,
+    chatMessages,
+    attachmentUrls,
+    controls,
+    mutateMessage,
+    changeDelivery,
+    error,
+    loading,
+  };
 }

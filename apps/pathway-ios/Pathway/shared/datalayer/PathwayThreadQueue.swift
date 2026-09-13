@@ -14,7 +14,17 @@ extension PathwayAgentThreadModel {
         conversationItems.filter { item in
             guard let message = cloudQueueMessage(for: item) else { return false }
             return !["canceled", "delivered"].contains(message["state"]?.stringValue ?? "")
+        }.sorted { left, right in
+            let lhs = cloudQueueMessage(for: left)?["sequence"]?.intValue ?? Int.max
+            let rhs = cloudQueueMessage(for: right)?["sequence"]?.intValue ?? Int.max
+            return lhs == rhs ? left.id < right.id : lhs < rhs
         }
+    }
+
+    func canChangeCloudQueuedDelivery(_ item: PathwayTimelineItem) -> Bool {
+        guard let message = cloudQueueMessage(for: item) else { return false }
+        return canEditCloudQueueMessage(item) && message["submission"]?.objectValue?["kind"]?.stringValue == "message"
+            && message["sequence"]?.intValue != nil && ["queued", "blocked"].contains(message["state"]?.stringValue ?? "")
     }
 
     var queuedMessageCount: Int { queuedRuns.count + cloudQueuedItems.count }

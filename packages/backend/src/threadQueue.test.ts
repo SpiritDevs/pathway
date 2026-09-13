@@ -212,7 +212,10 @@ function followup(commandId = "followup-one") {
     },
   };
 }
-async function enqueue(t: Harness, submission = launch()) {
+async function enqueue(
+  t: Harness,
+  submission: ReturnType<typeof launch> | ReturnType<typeof followup> = launch(),
+) {
   return asMember(t, "manager").mutation(api.threadQueue.enqueue, {
     companyId: COMPANY_ID,
     environmentId: ENVIRONMENT_ONE,
@@ -1305,5 +1308,66 @@ describe("durable thread queue", () => {
       revision: 1,
     });
     expect(candidate?.issuedByMembershipId).toBe(DISPATCHER_MEMBERSHIP_ID);
+  });
+});
+
+describe("cloud queue controls", () => {
+  it("persists ordering without moving input before launch and fences stale claims", async () => {
+    const t = harness();
+    await seed(t);
+    await capabilities(t);
+    await enqueue(t);
+    await enqueue(t, followup("first"));
+    await enqueue(t, followup("second"));
+    const client = asMember(t, "manager");
+    await client.mutation(api.threadQueue.reorder, {
+      ...queueIdentity,
+      commandId: "second",
+      revision: 1,
+      beforeCommandId: "first",
+    });
+    const detail = await client.query(api.threadQueue.getThread, queueIdentity);
+    expect(detail?.messages.map((message) => message.commandId)).toEqual([
+      firstFence.commandId,
+      "second",
+      "first",
+    ]);
+    await expect(
+      client.mutation(api.threadQueue.reorder, {
+        ...queueIdentity,
+        commandId: "second",
+        revision: 1,
+        beforeCommandId: null,
+      }),
+    ).rejects.toThrow("stale-command-claim");
+    await expect(
+      client.mutation(api.threadQueue.reorder, {
+        ...firstFence,
+        beforeCommandId: "second",
+      }),
+    ).rejects.toThrow("invalid-arguments");
+  });
+
+  it("changes pending input to a steer and refuses accepted input", async () => {
+    const t = harness();
+    await seed(t);
+    await capabilities(t);
+    await enqueue(t);
+    await asEnvironment(t).mutation(api.threadQueue.accept, firstFence);
+    await asEnvironment(t).mutation(api.threadQueue.acknowledge, firstFence);
+    await enqueue(t, followup("steer-me"));
+    const client = asMember(t, "manager");
+    const fence = { ...queueIdentity, commandId: "steer-me", revision: 1 };
+    await client.mutation(api.threadQueue.steer, { ...fence, targetRunId: "run-active" });
+    const detail = await client.query(api.threadQueue.getThread, queueIdentity);
+    expect(
+      detail?.messages.find((message) => message.commandId === "steer-me")?.submission.input,
+    ).toMatchObject({
+      dispatchMode: { type: "steer_active", targetRunId: "run-active" },
+    });
+    await asEnvironment(t).mutation(api.threadQueue.accept, { ...fence, revision: 2 });
+    await expect(
+      client.mutation(api.threadQueue.steer, { ...fence, revision: 2, targetRunId: "other-run" }),
+    ).rejects.toThrow("already-accepted");
   });
 });

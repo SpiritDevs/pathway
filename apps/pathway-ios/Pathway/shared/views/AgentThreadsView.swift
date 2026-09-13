@@ -1075,7 +1075,12 @@ struct AgentThreadConversationView: View {
                     }
                     HStack(spacing: 8) {
                     if let connectionStatus {
-                        Label(connectionStatus, systemImage: "arrow.triangle.2.circlepath")
+                        Label {
+                            Text(connectionStatus)
+                        } icon: {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .symbolEffect(.rotate, options: .repeating, isActive: !reduceMotion && scenePhase == .active)
+                        }
                             .font(.caption)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)

@@ -71,7 +71,13 @@ private struct AgentThreadQueueSheet: View {
                                     .font(.caption2).foregroundStyle(.secondary)
                             }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        action("Delete", symbol: "trash", id: "delete", run: run) {
+                            perform { try await model.cancelQueuedRun(run.id) }
+                        }
+                        .tint(.red)
                         action("Edit", symbol: "pencil", id: "edit", run: run) {
                             editing = true
                             perform {
@@ -81,14 +87,14 @@ private struct AgentThreadQueueSheet: View {
                             }
                         }
                         .disabled(!model.canRestoreQueuedMessage(run))
+                        .tint(.blue)
+                    }
+                    .swipeActions(edge: .leading, allowsFullSwipe: false) {
                         action("Steer", symbol: "arrow.turn.up.right", id: "steer", run: run) {
                             perform { try await model.steerQueuedRun(run.id) }
                         }
                         .disabled(model.activeRunID == nil || !model.canRestoreQueuedMessage(run))
-                        action("Delete", symbol: "trash", id: "delete", run: run) {
-                            perform { try await model.cancelQueuedRun(run.id) }
-                        }
-                        .tint(.red)
+                        .tint(.orange)
                     }
                     .disabled(busy || !model.isSubscriptionReady)
                     .moveDisabled(busy || !model.isSubscriptionReady || queue.count < 2)
@@ -98,7 +104,6 @@ private struct AgentThreadQueueSheet: View {
                 .onMove(perform: move)
             }
             .listStyle(.plain)
-            .environment(\.editMode, .constant(.active))
             .disabled(busy)
             .navigationTitle("Queued messages")
             .navigationBarTitleDisplayMode(.inline)
@@ -135,7 +140,13 @@ private struct AgentThreadQueueSheet: View {
                     if !item.attachments.isEmpty {
                         Label("\(item.attachments.count) attachments", systemImage: "paperclip").font(.caption2)
                     }
-                }.frame(maxWidth: .infinity, alignment: .leading)
+                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button(role: .destructive) {
+                    perform { try await model.mutateCloudQueueMessage(item, action: "cancel") }
+                } label: { Label("Delete", systemImage: "trash") }
+                    .disabled(!model.canCancelCloudQueueMessage(item))
                 Button {
                     editing = true
                     perform {
@@ -143,30 +154,44 @@ private struct AgentThreadQueueSheet: View {
                         try await model.restoreCloudQueuedMessage(item)
                         onEdit()
                     }
-                } label: { Image(systemName: "pencil").frame(width: 44, height: 44) }
+                } label: { Label("Edit", systemImage: "pencil") }
+                    .tint(.blue)
                     .disabled(!model.canEditCloudQueueMessage(item) || !model.canCancelCloudQueueMessage(item))
                     .accessibilityLabel("Edit queued message")
+            }
+            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                Button("Steer", systemImage: "arrow.turn.up.right") {
+                    guard let activeRunID = model.activeRunID else { return }
+                    perform { try await model.mutateCloudQueueMessage(item, action: "steer", deliveryFields: ["targetRunId": .string(activeRunID)]) }
+                }
+                .tint(.orange)
+                .disabled(!model.canChangeCloudQueuedDelivery(item) || model.activeRunID == nil || model.cloudQueueMessage(for: item)?["state"]?.stringValue != "queued")
                 if model.cloudQueueMessage(for: item)?["state"]?.stringValue == "blocked" {
                     Button {
                         perform { try await model.mutateCloudQueueMessage(item, action: "retry") }
-                    } label: { Image(systemName: "arrow.clockwise").frame(width: 44, height: 44) }
+                    } label: { Label("Retry", systemImage: "arrow.clockwise") }
+                        .tint(.orange)
                         .accessibilityLabel("Retry queued message")
                 }
-                Button {
-                    perform { try await model.mutateCloudQueueMessage(item, action: "cancel") }
-                } label: { Image(systemName: "trash").frame(width: 44, height: 44) }
-                    .tint(.red).disabled(!model.canCancelCloudQueueMessage(item))
-                    .accessibilityLabel("Delete queued message")
             }
+            .moveDisabled(busy || model.cloudQueuedItems.count < 2 || !model.cloudQueuedItems.allSatisfy(model.canChangeCloudQueuedDelivery))
             .buttonStyle(.borderless)
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 8))
+        }
+        .onMove { source, destination in
+            var rows = model.cloudQueuedItems
+            guard source.count == 1, let index = source.first, rows.indices.contains(index), rows.allSatisfy(model.canChangeCloudQueuedDelivery) else { return }
+            let moved = rows[index]
+            rows.move(fromOffsets: source, toOffset: destination)
+            guard let newIndex = rows.firstIndex(where: { $0.id == moved.id }), newIndex != index else { return }
+            let before = newIndex + 1 < rows.count ? model.cloudQueueMessage(for: rows[newIndex + 1])?["commandId"] ?? .null : .null
+            perform { try await model.mutateCloudQueueMessage(moved, action: "reorder", deliveryFields: ["beforeCommandId": before]) }
         }
     }
 
     private func action(_ title: String, symbol: String, id: String, run: PathwayThreadRun, perform: @escaping () -> Void) -> some View {
         Button(action: perform) {
-            Label(title, systemImage: symbol).labelStyle(.iconOnly)
-                .font(.subheadline).frame(width: 44, height: 44)
+            Label(title, systemImage: symbol)
         }
         .buttonStyle(.borderless)
         .accessibilityLabel("\(title) queued message")

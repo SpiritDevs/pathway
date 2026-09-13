@@ -117,10 +117,11 @@ extension PathwayAgentThreadModel {
         modelCatalog = providers
     }
 
-    func mutateCloudQueueMessage(_ item: PathwayTimelineItem, action: String, text: String? = nil) async throws {
+    func mutateCloudQueueMessage(_ item: PathwayTimelineItem, action: String, text: String? = nil, deliveryFields: [String: JSONValue] = [:]) async throws {
         guard let threadQueue, let queued = cloudQueuedThread, let message = cloudQueueMessage(for: item),
               let command = message["commandId"] else { throw PathwayThreadConversationError.message("This message has changed. Refresh the conversation before trying again.") }
         var fields: [String: JSONValue] = ["commandId": command, "revision": message["revision"] ?? .number(0)]
+        fields.merge(deliveryFields) { _, new in new }
         if let text { fields["text"] = .string(text) }
         try await threadQueue.mutate(action, thread: queued, fields: fields)
         await updateCloudQueue(queued)

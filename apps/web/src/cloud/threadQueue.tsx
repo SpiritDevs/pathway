@@ -654,7 +654,7 @@ export function subscribeQueuedThread(
 }
 
 export async function mutateQueuedThread(
-  action: "edit" | "cancel" | "retry" | "reassign",
+  action: "edit" | "cancel" | "retry" | "reassign" | "reorder" | "steer",
   args: Record<string, string | number | null | object>,
 ) {
   const current = session;

@@ -1,3 +1,4 @@
+import { isPendingQueuedChatMessage } from "../cloud/threadQueueChat";
 import { useQuestionDismissal } from "./chat/useQuestionDismissal";
 import { ScrollToEndButton } from "./chat/ScrollToEndButton";
 import { threadQueueDestinationsAtom } from "../cloud/threadQueueState";
@@ -1713,15 +1714,21 @@ function ChatViewContent(props: ChatViewProps) {
       const message = buildPendingDraftMessage(pending);
       if (message) messages.set(message.id, message);
     }
+    const queueOnlyIds = new Set(
+      queuedChat.messages
+        .filter((message) => isPendingQueuedChatMessage(message) || message.state === "canceled")
+        .map((message) => message.messageId),
+    );
     return mergeQueuedChatTimelineMessages(
-      [...messages.values()],
-      queuedChat.chatMessages,
+      [...messages.values()].filter((message) => !queueOnlyIds.has(message.id)),
+      queuedChat.chatMessages.filter((message) => !queueOnlyIds.has(message.id)),
       committedServerMessageIds,
     );
   }, [
     draftThread?.pendingSend,
     localOptimisticUserMessages,
     queuedChat.chatMessages,
+    queuedChat.messages,
     committedServerMessageIds,
   ]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
@@ -3313,7 +3320,8 @@ function ChatViewContent(props: ChatViewProps) {
   ]);
   const onEditQueuedMessage = useCallback(
     async (input: {
-      readonly runId: RunId;
+      readonly runId: RunId | null;
+      readonly messageId?: MessageId;
       readonly text: string;
       readonly attachments: ReadonlyArray<{
         readonly attachment: ChatAttachment;
@@ -3363,12 +3371,19 @@ function ChatViewContent(props: ChatViewProps) {
         return false;
       }
 
-      let result: Awaited<ReturnType<typeof cancelQueuedRun>>;
+      let result: Awaited<ReturnType<typeof cancelQueuedRun>> | null = null;
       try {
-        result = await cancelQueuedRun({
-          environmentId,
-          input: { threadId, runId: input.runId },
-        });
+        if (input.runId === null) {
+          if (!input.messageId || !(await queuedChat.mutateMessage(input.messageId, "cancel"))) {
+            for (const image of images) revokeBlobPreviewUrl(image.previewUrl);
+            return false;
+          }
+        } else {
+          result = await cancelQueuedRun({
+            environmentId,
+            input: { threadId, runId: input.runId },
+          });
+        }
       } catch (error) {
         for (const image of images) revokeBlobPreviewUrl(image.previewUrl);
         toastManager.add(
@@ -3380,7 +3395,7 @@ function ChatViewContent(props: ChatViewProps) {
         );
         return false;
       }
-      if (result._tag === "Failure") {
+      if (result?._tag === "Failure") {
         for (const image of images) revokeBlobPreviewUrl(image.previewUrl);
         if (!isAtomCommandInterrupted(result)) {
           const error = squashAtomCommandFailure(result);
@@ -3429,6 +3444,7 @@ function ChatViewContent(props: ChatViewProps) {
     [
       addComposerDraftImages,
       cancelQueuedRun,
+      queuedChat.mutateMessage,
       composerDraftTarget,
       composerImagesRef,
       composerRef,
@@ -9773,11 +9789,12 @@ function ChatViewContent(props: ChatViewProps) {
                       behindContextStrip={showComposerContextStrip}
                     />
                   )}
-                  {isServerThread && activeThread ? (
+                  {activeThread ? (
                     <QueuedRunsControl
                       attachmentUrlById={serverAttachmentUrlById}
                       environmentId={activeThread.environmentId}
                       optimisticMessages={optimisticUserMessages}
+                      cloudQueue={queuedChat}
                       onEditQueuedMessage={onEditQueuedMessage}
                       threadId={activeThread.id}
                     />

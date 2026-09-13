@@ -884,6 +884,78 @@ function requireEditable(message: Doc<"threadQueueMessages">) {
   if (message.acceptedAt !== null || message.state === "delivered" || message.state === "accepted")
     throw backendError("already-accepted", "The environment has already accepted this message.");
 }
+/** Reordering never changes an accepted command or moves input ahead of its launch. */
+export const reorder = mutation({
+  args: { ...fenceArgs, beforeCommandId: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const { actor, thread, message } = await queuedMessage(ctx, args);
+    member(actor);
+    requirePermission(actor, "remoteAgents.control");
+    requireRevision(message, args.revision);
+    requireEditable(message);
+    const rows = (await threadMessageQuery(ctx, thread).collect()).filter(
+      (row) =>
+        row.acceptedAt === null &&
+        (row.state === "queued" || row.state === "blocked") &&
+        row.submission.kind !== "launch",
+    );
+    const from = rows.findIndex((row) => row._id === message._id);
+    if (from < 0) throw invalid("This message cannot be reordered.");
+    const reordered = rows.filter((row) => row._id !== message._id);
+    const to =
+      args.beforeCommandId === null
+        ? reordered.length
+        : reordered.findIndex((row) => row.commandId === args.beforeCommandId);
+    if (to < 0) throw invalid("The destination message has changed. Refresh the queue.");
+    reordered.splice(to, 0, message);
+    for (let index = 0; index < reordered.length; index++) {
+      const row = reordered[index]!;
+      const sequence = rows[index]!.sequence;
+      if (row.sequence !== sequence)
+        await ctx.db.patch(row._id, {
+          sequence,
+          revision: row.revision + 1,
+          updatedAt: Date.now(),
+        });
+    }
+    await refreshThread(ctx, thread);
+    return null;
+  },
+});
+
+export const steer = mutation({
+  args: { ...fenceArgs, targetRunId: v.string() },
+  handler: async (ctx, args) => {
+    const { actor, thread, message } = await queuedMessage(ctx, args);
+    member(actor);
+    requirePermission(actor, "remoteAgents.control");
+    requireRevision(message, args.revision);
+    requireEditable(message);
+    const original = message.submission as ThreadQueueSubmission;
+    if (original.kind === "launch" || message.state !== "queued")
+      throw invalid("This message cannot steer an active run.");
+    const submission = validate(() =>
+      decodeQueueSubmission(
+        {
+          ...original,
+          input: {
+            ...original.input,
+            dispatchMode: { type: "steer_active", targetRunId: args.targetRunId },
+          },
+        },
+        thread.threadId,
+      ),
+    );
+    await ctx.db.patch(message._id, {
+      submission,
+      revision: message.revision + 1,
+      updatedAt: Date.now(),
+    });
+    await refreshThread(ctx, thread);
+    return null;
+  },
+});
+
 export const edit = mutation({
   args: { ...fenceArgs, text: v.string() },
   handler: async (ctx, args) => {

@@ -10,7 +10,7 @@ The file count above the composer opens the changed files and available diffs. C
 
 Hold the latest message you sent and choose **Edit and restart** when the provider supports restoring that conversation point. Editing preserves attached context. Messages that have already changed workspace files may no longer be editable.
 
-Queued messages appear in a count button beside the changed-file counter. Tap it to open a compact list, drag a row's reorder handle to change its position, or use the row's Edit, Steer, and Delete buttons. Edit removes the message from the queue, closes the list, and restores its text and attachments to the composer. Send or stash an existing draft first. Agent-generated replies cannot be edited or steered.
+Queued messages appear in a count button beside the changed-file counter. Tap it to open a compact list, swipe left for Edit and Delete, or swipe right for Steer. Touch and hold an environment-queued row, then drag it up or down to change its position. Cloud-saved follow-ups can also be reordered before the environment accepts them, or sent as a steer when a run is active. Blocked messages offer Retry. A conversation’s first message stays ahead of its follow-ups. Edit removes the message from the queue, closes the list, and restores its text and attachments to the composer. Send or stash an existing draft first. Agent-generated replies cannot be edited or steered.
 
 The queue and question sheets close automatically when their last item is removed or resolved. The changed-files sheet also closes if its list becomes empty.
 
@@ -44,4 +44,4 @@ The new-thread project picker displays each project's icon when available. Proje
 
 HEIC and HEIF photos are converted before upload so other clients and image-capable agents receive JPEG files, or PNG when transparency is present. The conversion preserves orientation and limits the longest edge to 4,096 pixels. Photo selection, pasting, file attachments, and imported shares use the same conversion. Already-sent HEIC files are unchanged and need to be resent to use the compatible format.
 
-The queued-message bubble counts both messages waiting on an environment and messages saved to the cloud for delivery. It sits beside the diff counter in a centered row, or in the center on its own. Tap it to open the queue sheet. Cloud messages retain Edit, Delete, and Retry when available; environment-queued messages retain drag ordering and Steer.
+The queued-message bubble counts both messages waiting on an environment and messages saved to the cloud for delivery. It sits beside the diff counter in a centered row, or in the center on its own. Tap it to open the queue sheet. Both cloud-saved follow-ups and environment-queued messages offer Edit, Delete, drag ordering, and Steer when available.
