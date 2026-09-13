@@ -12,12 +12,19 @@ extension PathwayAgentThreadModel {
 
     /// Pending messages live in the queue sheet until they start, rather than filling the transcript.
     var transcriptItems: [PathwayTimelineItem] {
-        let pending = runs.filter { $0.status == "queued" || $0.status == "cancelled" }
-        guard !pending.isEmpty else { return items }
-        let runIDs = Set(pending.map(\.id))
-        let messageIDs = Set(pending.compactMap(\.userMessageID))
+        let queued = runs.filter { $0.status == "queued" }
+        let cancelled = runs.filter { $0.status == "cancelled" }
+        guard !queued.isEmpty || !cancelled.isEmpty else { return items }
+        let queuedRunIDs = Set(queued.map(\.id))
+        let queuedMessageIDs = Set(queued.compactMap(\.userMessageID))
+        let cancelledRunIDs = Set(cancelled.map(\.id))
+        let cancelledMessageIDs = Set(cancelled.compactMap(\.userMessageID))
         return items.filter { item in
-            !item.isUserMessage || !(item.runID.map(runIDs.contains) == true || item.messageID.map(messageIDs.contains) == true)
+            guard item.isUserMessage else { return true }
+            if item.runID.map(queuedRunIDs.contains) == true || item.messageID.map(queuedMessageIDs.contains) == true { return false }
+            let wasQueued = item.fields["inputIntent"]?.stringValue == "queued_turn"
+            let isCancelled = item.runID.map(cancelledRunIDs.contains) == true || item.messageID.map(cancelledMessageIDs.contains) == true
+            return !(wasQueued && isCancelled)
         }
     }
 

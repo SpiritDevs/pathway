@@ -20,11 +20,12 @@ struct AgentMarkdownImage: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.markdownImageWorkspaceRoot) private var workspaceRoot
     @State private var url: URL?
+    @State private var resolvedKey: LoadKey?
     @State private var failure: String?
     @State private var attempt = 0
     @State private var showPreview = false
 
-    private struct LoadKey: Equatable {
+    struct LoadKey: Equatable {
         let model: ObjectIdentifier
         let threadID: String
         let source: String
@@ -32,6 +33,11 @@ struct AgentMarkdownImage: View {
         let connected: Bool
         let active: Bool
         let attempt: Int
+
+        func identifiesSameImage(as other: Self) -> Bool {
+            model == other.model && threadID == other.threadID && source == other.source
+                && workspaceRoot == other.workspaceRoot && attempt == other.attempt
+        }
     }
     private var loadKey: LoadKey {
         LoadKey(model: ObjectIdentifier(context.model), threadID: context.threadID, source: source, workspaceRoot: imageWorkspaceRoot,
@@ -68,6 +74,9 @@ struct AgentMarkdownImage: View {
         .task(id: loadKey) {
             let key = loadKey
             guard key.active else { return }
+            // Scene and connection changes must not discard an already loaded image.
+            // Retry creates a fresh URL if the image request reports expired access.
+            if url != nil, let resolvedKey, key.identifiesSameImage(as: resolvedKey) { return }
             url = nil; failure = nil
             do {
                 let result: URL
@@ -80,6 +89,7 @@ struct AgentMarkdownImage: View {
                 }
                 try Task.checkCancellation()
                 guard key == loadKey else { return }
+                resolvedKey = key
                 url = result
             } catch {
                 guard !Task.isCancelled, key == loadKey else { return }

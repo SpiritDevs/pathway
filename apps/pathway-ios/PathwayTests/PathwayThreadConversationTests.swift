@@ -15,6 +15,21 @@ struct PathwayThreadConversationTests {
         #expect(model.transcriptItems.isEmpty)
     }
 
+    @Test(arguments: ["turn_start", "queued_turn", "steer", "legacy"])
+    func cancelledRunOnlyHidesQueuedInput(intent: String) {
+        let model = makeModel { _, _ in .object([:]) }
+        let item: JSONValue = .object([
+            "id": .string("user-item"), "type": .string("user_message"),
+            "messageId": .string("message-1"), "runId": .string("run-1"),
+            "inputIntent": .string(intent), "text": .string("Keep started input")
+        ])
+        model.installSnapshot(.object([
+            "runs": .array([run(status: "cancelled")]),
+            "visibleTurnItems": .array([.object(["item": item])])
+        ]))
+        #expect(model.transcriptItems.count == (intent == "queued_turn" ? 0 : 1))
+    }
+
     @Test func editingQueuedMessageCancelsThenRestoresTheComposer() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -618,7 +633,7 @@ struct PathwayThreadConversationTests {
     }
     private func snapshot(status: String) -> JSONValue {
         .object(["thread": .object(["id": .string("thread-1")]), "runs": .array([run(status: status)]), "visibleTurnItems": .array([.object(["item": .object([
-            "id": .string("item-1"), "type": .string("user_message"), "createdBy": .string("user"), "messageId": .string("message-1"), "runId": .string("run-1"), "text": .string("Original\n<issue_context>Keep this</issue_context>")])])])])
+            "id": .string("item-1"), "type": .string("user_message"), "createdBy": .string("user"), "messageId": .string("message-1"), "runId": .string("run-1"), "inputIntent": .string("queued_turn"), "text": .string("Original\n<issue_context>Keep this</issue_context>")])])])])
     }
     private func run(status: String) -> JSONValue {
         .object(["id": .string("run-1"), "ordinal": .number(1), "status": .string(status), "userMessageId": .string("message-1"), "modelSelection": .object(["instanceId": .string("codex-work"), "model": .string("gpt-5.6-sol")])])

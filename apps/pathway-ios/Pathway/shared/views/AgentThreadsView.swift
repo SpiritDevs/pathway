@@ -1307,7 +1307,7 @@ struct AgentThreadConversationView: View {
         Button("Fork thread", systemImage: "arrow.triangle.branch") { fork() }.disabled(isForking || model.thread.shell.isTemporary)
         if model.thread.shell.isTemporary { Text("Keep conversation before forking or starting a side chat.") }
         Button("Copy conversation", systemImage: "doc.on.doc") {
-            UIPasteboard.general.string = model.items.filter(\.isConversation).compactMap(\.text).joined(separator: "\n\n")
+            UIPasteboard.general.string = model.transcriptItems.filter(\.isConversation).compactMap(\.text).joined(separator: "\n\n")
         }
         if let path = model.thread.shell.worktreePath ?? currentWorkspaceRoot {
             Button("Copy path", systemImage: "doc.on.doc") { UIPasteboard.general.string = path }
