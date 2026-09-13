@@ -39,15 +39,11 @@ enum CompactAppShellMetrics {
                 .id(activeDestination)
                 .environment(\.compactThreadChrome, threadChrome)
                 .onPreferenceChange(IssueDetailNavigationActiveKey.self) { isIssueDetailActive = $0 }
-                if isNavigationBackdropPresented {
-                    Button(action: dismissMoreMenu) {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .ignoresSafeArea()
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Dismiss navigation menu")
-                }
+                .contentShape(.rect)
+                .simultaneousGesture(
+                    TapGesture().onEnded { dismissMoreMenu() },
+                    including: isNavigationExpanded ? .all : .subviews
+                )
 
                 if !showsSettings && !threadChrome.isComposerExpanded && !threadChrome.isThreadDetailActive && !isIssueDetailActive {
                     PathwayTabBar(
@@ -60,6 +56,7 @@ enum CompactAppShellMetrics {
                     .frame(maxWidth: 520)
                     .padding(.horizontal, 16)
                     .padding(.bottom, CompactAppShellMetrics.tabBarBottomPadding)
+                    .accessibilityAction(.escape, dismissMoreMenu)
                     .transition(
                         reduceMotion
                             ? .opacity
@@ -80,7 +77,7 @@ enum CompactAppShellMetrics {
             selectedDestination ?? .dashboard
         }
 
-        private var isNavigationBackdropPresented: Bool {
+        private var isNavigationExpanded: Bool {
             isMoreMenuPresented
                 || (threadChrome.isThreadDetailActive && threadChrome.isNavigationExpanded)
         }
