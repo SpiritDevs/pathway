@@ -37,18 +37,24 @@ export interface DictationNativePort {
   start(id: string, audioPath: string, deviceId: string): Promise<void>;
   stop(id: string): Promise<{ durationMs: number }>;
   cancel(id: string): Promise<void>;
-  insert(text: string): Promise<{ status: "inserted" | "manual" | "unconfirmed" }>;
+  insert(text: string): Promise<{ status: "inserted" | "manual" | "unconfirmed"; reason?: string }>;
   close(): void | Promise<void>;
 }
 export interface DictationInferencePort {
-  transcribe(input: {
+  prepare(input: {
+    modelId: DictationModelId;
+    cleanup: boolean;
+    signal: AbortSignal;
+  }): Promise<void>;
+  transcribeWithLanguage(input: {
     audioPath: string;
     modelId: DictationModelId;
     language: string;
     terms: readonly string[];
     signal: AbortSignal;
-  }): Promise<string>;
+  }): Promise<{ text: string; language?: string }>;
   cleanup(input: {
+    requireLoaded: boolean;
     text: string;
     terms: readonly string[];
     language: string;
@@ -393,6 +399,15 @@ export class DictationController {
     this.session = session;
     if (mode === "locked") this.shortcut = { ...emptyDictationShortcutState(), locked: true };
     this.publish({ phase: "starting", mode, durationMs: 0, level: 0, result: null, error: null });
+    // Load both workers during capture; a failed preparation is retried by processing.
+    void this.options.inference
+      .prepare({
+        modelId: session.preferences.speechModel,
+        cleanup:
+          session.preferences.cleanupEnabled && this.options.models.isInstalled("qwen-cleanup"),
+        signal: session.abort.signal,
+      })
+      .catch(() => {});
     try {
       await NodeFSP.mkdir(this.options.temporaryDirectory, { recursive: true, mode: 0o700 });
       await this.queueNative(async () => {
@@ -474,15 +489,14 @@ export class DictationController {
         return;
       }
       const terms = dictationModelHints(session.dictionary);
-      const originalText = cleanRecognizedText(
-        await this.options.inference.transcribe({
-          audioPath: session.audioPath,
-          modelId: session.preferences.speechModel,
-          language: session.preferences.language,
-          terms,
-          signal: session.abort.signal,
-        }),
-      );
+      const transcription = await this.options.inference.transcribeWithLanguage({
+        audioPath: session.audioPath,
+        modelId: session.preferences.speechModel,
+        language: session.preferences.language,
+        terms,
+        signal: session.abort.signal,
+      });
+      const originalText = cleanRecognizedText(transcription.text);
       if (!this.current(session)) return;
       if (!originalText) {
         this.publish({ phase: "error", error: "No speech detected. Try recording again." });
@@ -500,9 +514,13 @@ export class DictationController {
         try {
           const candidate = applyDictationDictionary(
             await this.options.inference.cleanup({
+              requireLoaded: true,
               text,
               terms,
-              language: session.preferences.language,
+              language:
+                session.preferences.language === "auto"
+                  ? (transcription.language ?? "auto")
+                  : session.preferences.language,
               signal: session.abort.signal,
             }),
             session.dictionary,
@@ -517,9 +535,12 @@ export class DictationController {
       }
       if (!this.current(session)) return;
       let delivery: DictationHistoryEntry["delivery"] = session.mode === "test" ? "test" : "manual";
+      let deliveryError: string | null = null;
       if (!interrupted && session.mode !== "test") {
         try {
-          delivery = (await this.options.native.insert(text)).status;
+          const insertion = await this.options.native.insert(text);
+          delivery = insertion.status;
+          if (delivery !== "inserted") deliveryError = insertion.reason ?? null;
         } catch {
           delivery = "unconfirmed";
         }
@@ -537,7 +558,8 @@ export class DictationController {
         delivery,
       };
       let error: string | null =
-        cleanup === "unavailable" ? "Cleanup unavailable. Your transcript is ready." : null;
+        deliveryError ??
+        (cleanup === "unavailable" ? "Cleanup unavailable. Your transcript is ready." : null);
       if (interrupted)
         error = "Microphone disconnected. Review the captured speech before copying.";
       if (session.preferences.saveHistory && session.mode !== "test") {

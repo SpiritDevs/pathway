@@ -71,7 +71,8 @@ async function setup(
       ...options.native,
     },
     inference: {
-      transcribe: async () => "Hello from path way.",
+      prepare: async () => {},
+      transcribeWithLanguage: async () => ({ text: "Hello from path way." }),
       cleanup: async () => "Hello from Pathway.",
       unload: async () => {},
       ...overrides,
@@ -95,6 +96,76 @@ async function setup(
 }
 
 describe("desktop dictation lifecycle", () => {
+  it("starts capture without waiting for model loading and cancels its preparation", async () => {
+    const prepared = deferred<void>();
+    const prepare = vi.fn<DictationInferencePort["prepare"]>(() => prepared.promise);
+    const { controller } = await setup({ prepare });
+    await controller.start("hold");
+    expect(controller.getState().phase).toBe("recording");
+    const input = prepare.mock.calls[0]?.[0];
+    expect(input).toMatchObject({ modelId: "whisper-turbo", cleanup: true });
+    await controller.cancel();
+    expect(input?.signal.aborted).toBe(true);
+    prepared.resolve();
+  });
+
+  it("prepares only speech when cleanup is disabled", async () => {
+    const prepare = vi.fn<DictationInferencePort["prepare"]>(async () => {});
+    const { controller } = await setup({ prepare });
+    await controller.execute({
+      type: "preferences",
+      preferences: { ...controller.getState().preferences, cleanupEnabled: false },
+    });
+    await controller.start("hold");
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ cleanup: false }));
+  });
+
+  it("still processes a recording when eager loading fails", async () => {
+    const { controller, insert } = await setup({
+      prepare: async () => {
+        throw new Error("Cold load failed");
+      },
+    });
+    await controller.start("hold");
+    await controller.stop();
+    expect(insert).toHaveBeenCalledWith("Hello from Pathway.");
+  });
+
+  it("shows why insertion was unavailable and retains the text for copying", async () => {
+    const { controller } = await setup(
+      {},
+      {
+        native: {
+          insert: async () => ({
+            status: "manual",
+            reason: "No verified editable field is focused.",
+          }),
+        },
+      },
+    );
+    await controller.start("hold");
+    await controller.stop();
+    expect(controller.getState()).toMatchObject({
+      phase: "result",
+      error: "No verified editable field is focused.",
+      result: { text: "Hello from Pathway.", delivery: "manual" },
+    });
+  });
+
+  it("uses the recognized language for cleanup instead of detecting it twice", async () => {
+    const cleanup = vi.fn<DictationInferencePort["cleanup"]>(async ({ text }) => text);
+    const { controller } = await setup({
+      transcribeWithLanguage: async () => ({ text: "Bonjour demain.", language: "fr" }),
+      cleanup,
+    });
+    await controller.start("hold");
+    await controller.stop();
+    expect(cleanup).toHaveBeenCalledWith(
+      expect.objectContaining({ language: "fr", requireLoaded: true }),
+    );
+    expect(controller.getState().result?.language).toBe("auto");
+  });
+
   it("clears a failed model download banner when retrying and after the retry succeeds", async () => {
     const retried = deferred<void>();
     const failed = deferred<void>();
@@ -204,12 +275,12 @@ describe("desktop dictation lifecycle", () => {
     const transcribing = deferred<void>();
     const transcript = deferred<string>();
     const stopCapture = vi.fn(async () => ({ durationMs: 1200 }));
-    const transcribe = vi.fn(() => {
+    const transcribeWithLanguage = vi.fn(async () => {
       transcribing.resolve();
-      return transcript.promise;
+      return { text: await transcript.promise };
     });
     const { controller, insert } = await setup(
-      { transcribe },
+      { transcribeWithLanguage },
       {
         native: {
           start: async () => {
@@ -233,7 +304,7 @@ describe("desktop dictation lifecycle", () => {
     await Promise.all([completion, repeatedStop]);
     expect(phaseWhileTranscribing).toBe("processing");
     expect(stopCapture).toHaveBeenCalledTimes(1);
-    expect(transcribe).toHaveBeenCalledTimes(1);
+    expect(transcribeWithLanguage).toHaveBeenCalledTimes(1);
     expect(insert).toHaveBeenCalledTimes(1);
     expect(await controller.listHistory()).toHaveLength(1);
   });
@@ -292,9 +363,9 @@ describe("desktop dictation lifecycle", () => {
     const entered = deferred<void>();
     const transcript = deferred<string>();
     const { controller, insert, directory } = await setup({
-      transcribe: () => {
+      transcribeWithLanguage: async () => {
         entered.resolve();
-        return transcript.promise;
+        return { text: await transcript.promise };
       },
     });
     await controller.start("locked");
@@ -313,9 +384,9 @@ describe("desktop dictation lifecycle", () => {
     const entered = deferred<void>();
     const transcript = deferred<string>();
     const { controller, insert, storage } = await setup({
-      transcribe: () => {
+      transcribeWithLanguage: async () => {
         entered.resolve();
-        return transcript.promise;
+        return { text: await transcript.promise };
       },
     });
     await controller.start("hold");
@@ -367,7 +438,7 @@ describe("desktop dictation lifecycle", () => {
       "Prepare six boxes. Sorry, I meant eight boxes. Then label the remaining boxes.";
     const text = "Prepare eight boxes. Then label the remaining boxes.";
     const { controller, insert } = await setup({
-      transcribe: async () => originalText,
+      transcribeWithLanguage: async () => ({ text: originalText }),
       cleanup: async () => text,
     });
     await controller.start("hold");

@@ -29,7 +29,14 @@ export interface DictationTranscriptionRequest {
   signal?: AbortSignal;
 }
 
+export interface DictationTranscriptionResult {
+  text: string;
+  language?: string;
+}
+
 export interface DictationCleanupRequest {
+  /** Desktop delivery must not wait for a worker still being prepared during capture. */
+  requireLoaded?: boolean;
   text: string;
   terms: readonly string[];
   /** Pass the selected speech language, or auto to infer it from the text. */
@@ -55,7 +62,9 @@ class EngineProcess {
   private readonly child: NodeChildProcess.ChildProcessWithoutNullStreams;
   private readonly ready = deferred<void>();
   private readonly closed = deferred<void>();
-  private pending: { id: string; result: ReturnType<typeof deferred<string>> } | undefined;
+  private pending:
+    | { id: string; result: ReturnType<typeof deferred<DictationTranscriptionResult>> }
+    | undefined;
   private buffer = Buffer.alloc(0);
   private loadTimer: ReturnType<typeof setTimeout>;
   private stopped = false;
@@ -67,6 +76,8 @@ class EngineProcess {
     timeoutMs: number,
     changed: (loaded: boolean) => void,
   ) {
+    // Loading may finish after an eager preparation was cancelled.
+    void this.ready.promise.catch(() => {});
     this.child = child;
     this.changed = changed;
     this.loadTimer = setTimeout(() => {
@@ -94,11 +105,28 @@ class EngineProcess {
     return this.loaded && !this.stopped;
   }
 
+  async prepare(signal?: AbortSignal): Promise<void> {
+    const onAbort = () => {
+      void this.stop(abortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      if (signal?.aborted) onAbort();
+      await this.ready.promise;
+      signal?.throwIfAborted();
+    } catch (error) {
+      if (this.stopped) await this.closed.promise;
+      throw error;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
   async request(
     payload: Record<string, unknown>,
     signal: AbortSignal | undefined,
     timeoutMs: number,
-  ): Promise<string> {
+  ): Promise<DictationTranscriptionResult> {
     const onAbort = () => {
       void this.stop(abortError());
     };
@@ -106,6 +134,10 @@ class EngineProcess {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       if (signal?.aborted) onAbort();
+      timer = setTimeout(() => {
+        void this.stop(new Error("Dictation processing exceeded its time limit."));
+      }, timeoutMs);
+      timer.unref();
       await this.ready.promise;
       signal?.throwIfAborted();
       if (this.stopped) throw new Error("The dictation engine has stopped.");
@@ -114,12 +146,8 @@ class EngineProcess {
       const line = JSON.stringify({ ...payload, id }) + "\n";
       if (Buffer.byteLength(line) > maxLineBytes)
         throw new Error("The dictation request exceeds 64 KB.");
-      const result = deferred<string>();
+      const result = deferred<DictationTranscriptionResult>();
       this.pending = { id, result };
-      timer = setTimeout(() => {
-        void this.stop(new Error("Dictation processing exceeded its time limit."));
-      }, timeoutMs);
-      timer.unref();
       this.child.stdin.write(line);
       return await result.promise;
     } catch (error) {
@@ -200,7 +228,14 @@ class EngineProcess {
         ) {
           const pending = this.pending;
           this.pending = undefined;
-          pending.result.resolve(event.text);
+          pending.result.resolve({
+            text: event.text,
+            ...("language" in event &&
+            typeof event.language === "string" &&
+            /^[a-z]{2,3}$/.test(event.language)
+              ? { language: event.language }
+              : {}),
+          });
         } else if (
           event.type === "error" &&
           "message" in event &&
@@ -224,10 +259,12 @@ class EngineProcess {
 export class DictationInference {
   private readonly options: DictationInferenceOptions;
   private readonly workers = new Map<DictationModelId, EngineProcess>();
+  private readonly closingWorkers = new Set<EngineProcess>();
   private disposed = false;
   private busy = false;
   private generation = 0;
   private unloading: Promise<void> | undefined;
+  private selecting: Promise<void> = Promise.resolve();
 
   constructor(options: DictationInferenceOptions) {
     this.options = options;
@@ -240,7 +277,37 @@ export class DictationInference {
     return [...this.workers].filter(([, worker]) => worker.isLoaded).map(([id]) => id);
   }
 
-  transcribe(request: DictationTranscriptionRequest): Promise<string> {
+  /** Load while the microphone is active, without delaying capture or running inference. */
+  async prepare(request: {
+    modelId: DictationModelId;
+    cleanup: boolean;
+    signal: AbortSignal;
+  }): Promise<void> {
+    if (this.disposed) throw new Error("Dictation inference has been disposed.");
+    if (this.busy || this.unloading) throw new Error("Dictation inference is busy.");
+    if (request.modelId === "qwen-cleanup")
+      throw new Error("Select a speech model to prepare audio.");
+    const ids: DictationModelId[] = request.cleanup
+      ? [request.modelId, "qwen-cleanup"]
+      : [request.modelId];
+    const results = await Promise.allSettled(
+      ids.map(async (id) => {
+        const worker = await this.selectWorker(id, request.signal);
+        await worker.prepare(request.signal);
+      }),
+    );
+    for (const result of results) {
+      if (result.status === "rejected") throw result.reason;
+    }
+  }
+
+  async transcribe(request: DictationTranscriptionRequest): Promise<string> {
+    return (await this.transcribeWithLanguage(request)).text;
+  }
+
+  transcribeWithLanguage(
+    request: DictationTranscriptionRequest,
+  ): Promise<DictationTranscriptionResult> {
     if (request.modelId === "qwen-cleanup")
       return Promise.reject(new Error("Select a speech model to transcribe audio."));
     const terms = this.preferredTerms(request.terms, 8192);
@@ -256,27 +323,31 @@ export class DictationInference {
     );
   }
 
-  cleanup(request: DictationCleanupRequest): Promise<string> {
+  async cleanup(request: DictationCleanupRequest): Promise<string> {
+    if (request.requireLoaded && !this.workers.get("qwen-cleanup")?.isLoaded)
+      throw new Error("The cleanup model is still loading. Your transcript is ready.");
     if (!request.text.trim() || Buffer.byteLength(request.text) > maxTextBytes)
       return Promise.reject(new Error("The transcript is empty or exceeds the cleanup limit."));
-    return this.run(
-      "qwen-cleanup",
-      {
-        type: "correct",
-        text: request.text,
-        terms: this.preferredTerms(request.terms, 16384),
-        language: request.language ?? "auto",
-      },
-      request.signal,
-    );
+    return (
+      await this.run(
+        "qwen-cleanup",
+        {
+          type: "correct",
+          text: request.text,
+          terms: this.preferredTerms(request.terms, 16384),
+          language: request.language ?? "auto",
+        },
+        request.signal,
+      )
+    ).text;
   }
 
   unload(): Promise<void> {
     if (this.unloading) return this.unloading;
     this.generation += 1;
-    const workers = [...this.workers.values()];
+    const workers = new Set([...this.workers.values(), ...this.closingWorkers]);
     this.workers.clear();
-    this.unloading = Promise.all(workers.map((worker) => worker.stop()))
+    this.unloading = Promise.all([this.selecting, ...[...workers].map((worker) => worker.stop())])
       .then(() => {})
       .finally(() => {
         this.unloading = undefined;
@@ -302,17 +373,11 @@ export class DictationInference {
     return result;
   }
 
-  private async run(
-    id: DictationModelId,
-    payload: Record<string, unknown>,
-    signal: AbortSignal | undefined,
-  ) {
-    if (this.disposed) throw new Error("Dictation inference has been disposed.");
-    if (this.busy || this.unloading) throw new Error("Dictation inference is busy.");
-    signal?.throwIfAborted();
-    this.busy = true;
+  private selectWorker(id: DictationModelId, signal?: AbortSignal): Promise<EngineProcess> {
     const generation = this.generation;
-    try {
+    const select = this.selecting.then(async () => {
+      signal?.throwIfAborted();
+      if (this.disposed || this.unloading || generation !== this.generation) throw abortError();
       if (id !== "qwen-cleanup") {
         for (const [otherId, worker] of this.workers) {
           if (otherId !== "qwen-cleanup" && otherId !== id) {
@@ -353,17 +418,43 @@ export class DictationInference {
               windowsHide: true,
             });
         const created = new EngineProcess(child, this.options.loadTimeoutMs ?? 120000, (loaded) => {
-          if (!loaded && this.workers.get(id) === created) this.workers.delete(id);
+          if (!loaded) {
+            if (this.workers.get(id) === created) this.workers.delete(id);
+            // Keep terminated children owned until their pipes have actually closed.
+            this.closingWorkers.add(created);
+            void created.stop().then(() => this.closingWorkers.delete(created));
+          }
           this.options.onLoadedChange?.(id, loaded);
           this.options.onChange?.();
         });
         worker = created;
         this.workers.set(id, worker);
       }
+      return worker;
+    });
+    this.selecting = select.then(
+      () => {},
+      () => {},
+    );
+    return select;
+  }
+
+  private async run(
+    id: DictationModelId,
+    payload: Record<string, unknown>,
+    signal: AbortSignal | undefined,
+  ) {
+    if (this.disposed) throw new Error("Dictation inference has been disposed.");
+    if (this.busy || this.unloading) throw new Error("Dictation inference is busy.");
+    signal?.throwIfAborted();
+    this.busy = true;
+    const generation = this.generation;
+    try {
+      const worker = await this.selectWorker(id, signal);
       const text = await worker.request(
         payload,
         signal,
-        this.options.inferenceTimeoutMs ?? (id === "qwen-cleanup" ? 65000 : 300000),
+        this.options.inferenceTimeoutMs ?? (id === "qwen-cleanup" ? 5000 : 300000),
       );
       signal?.throwIfAborted();
       if (generation !== this.generation) throw abortError();

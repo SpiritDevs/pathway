@@ -111,6 +111,7 @@ async function mount(state: DictationState) {
     resize: vi.fn((width: number, height: number) => {
       if (width === 408 && height > 190) recentReady();
     }),
+    hide: vi.fn(),
   };
   const document = {
     getElementById: (id: string) => root.all().find((node) => node.id === id),
@@ -144,6 +145,17 @@ async function mount(state: DictationState) {
 }
 
 describe("dictation overlay", () => {
+  it("offers quick hide on hover without disabling dictation or changing preferences", async () => {
+    const state = makeDictationFixture();
+    const overlay = await mount(state);
+    overlay.root.trigger("pointerenter");
+    overlay.click("Hide dictation bar");
+    expect(overlay.bridge.hide).toHaveBeenCalledOnce();
+    expect(overlay.bridge.execute).not.toHaveBeenCalled();
+    overlay.emit({ ...state, phase: "recording" });
+    overlay.click("Accept recording");
+    expect(overlay.bridge.execute).toHaveBeenCalledWith({ type: "stop" });
+  });
   it("uses locked recording for the idle Record button and canonical navigation commands", async () => {
     const overlay = await mount(makeDictationFixture());
     overlay.root.trigger("pointerenter");

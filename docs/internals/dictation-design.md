@@ -69,6 +69,13 @@ fixtures described below. Additional languages and longer real recordings still 
 Models unload after five idle minutes by default. Settings also offers immediate unloading,
 15 minutes, or keeping models loaded until quit. Downloaded files remain after unloading.
 
+Models begin loading when recording starts, without holding up microphone capture. Speech and
+cleanup workers are reused after preparation, with cancellation and unload invalidating pending
+loads. The detected speech language is forwarded to cleanup when automatic language selection is
+enabled, avoiding a second classification pass. If cleanup preparation is still running, desktop
+delivery immediately uses recognized text while the worker finishes loading for later recordings.
+Loaded cleanup has a five-second deadline; timeout falls back to recognized text.
+
 ## Capture and state transitions
 
 The default shortcut is Fn on Mac and Right Control on Windows. Both platforms offer Right Control,
@@ -101,14 +108,19 @@ of retaining audio for retry.
 
 ## Bar and text delivery
 
-The idle bar is static and visible by default. Hover reveals Record, Settings, and History. History
+The idle bar is static and visible by default. Hover reveals Record, Settings, History, and Hide.
+Quick hide is local to the overlay and resets when recording starts; it does not disable shortcuts
+or change the persistent idle-bar preference. The tray can also show it again. History
 opens five recent entries with Copy actions and View all history. Hiding the idle bar keeps active
 recording and processing feedback visible.
 
 The recording view shows microphone levels. Locked recording adds Cancel and Accept. Processing,
 result, and error views are distinct. Meter messages update the overlay separately from the main
 window; microphone tests receive meter updates in Settings. The overlay stays on the chosen display
-for the recording and processing cycle and does not take focus from a text field.
+for the recording and processing cycle and does not take focus from a text field. On macOS its
+all-workspaces configuration skips the process-type transformation, which would hide the entire
+application when the overlay is created. Main-window selection uses the registered main window
+and does not fall back to an auxiliary overlay.
 
 [Preload subscriptions](../../apps/desktop/src/dictation/preloadBridge.ts) fetch an initial state
 snapshot so a listener attached during recording can merge subsequent meter events. This also
@@ -124,13 +136,26 @@ On Mac, [insertion](../../native/dictation/host/macos/Insertion.swift) queries t
 application's Accessibility object. It requires the focused element to belong to that process and
 rechecks that the application remains frontmost. This avoids a system-wide focus query that returned
 `cannotComplete` for a valid native text editor. Unsupported `AXEnabled` attributes are accepted
-only alongside positive editability or settable-attribute evidence. Explicit disabled values and
+for a text-role element with a valid selection range; direct text setters are not required for paste. Explicit disabled values and
 communication failures still prevent insertion; field, caret, modifier, and protected-text checks
 remain in place.
+
+When capture starts, the Mac helper requests `AXManualAccessibility` from the frontmost app so
+Electron editors expose their focused DOM controls before delivery. A text field with a usable
+selection can accept paste even when its text attributes are not directly writable. Confirmation
+checks focus identity and selection rather than repeating the complete editability scan.
 
 Automatic insertion preserves the clipboard. Temporary paste restoration must not overwrite a newer
 user copy. Result and History Copy actions replace the clipboard. Insertion errors and history-save
 failures must not discard recognized text or trigger another insertion.
+
+The fixes apply to the desktop overlay and all recording entry points: global shortcut, bar, tray,
+command palette, and Settings microphone tests. The controller and cleanup worker are shared by
+Mac and Windows; workspace visibility and Accessibility changes are Mac-specific. Browser-only and
+mobile clients do not run dictation. The development web overlay preview includes the hide control.
+Remote environment, relay, tunnel, and provider routing are unchanged because capture and delivery
+remain owned by the speaking desktop. The hide action uses overlay IPC rather than server contracts;
+recording or the tray restores it. The user guide describes these behaviors.
 
 ## Dictionary, history, and accounts
 
@@ -182,6 +207,17 @@ self-test, protocol, and engine smoke checks. Adding this workflow does not esta
 Windows build or desktop interaction test.
 
 ## Validation status
+
+The startup, quick-hide, focused-field, and latency corrections have a new focused validation pass:
+116 tests across eight controller, inference, model, overlay, preload, and window files passed,
+as did desktop typechecking and targeted lint. The Swift host builds and passes native self-tests
+and protocol tests. The Metal engines build, native speech smoke checks pass, and all 48 multilingual
+cleanup checks pass with the retained prompt prefix. For the same 11-second JFK fixture on an
+M2 Max, warm Turbo-plus-cleanup medians were 3.58 seconds before and 1.91 seconds after. Initial
+model/Metal preparation remains substantially slower and is measured separately. See the
+[engine benchmark notes](../../native/dictation/engines/README.md) for commands and limits.
+This pass used no browser or desktop interaction; M1 timings, current live paste behavior,
+and Windows execution remain unverified. The live-client evidence below predates these corrections.
 
 Current evidence covers different layers and should be reported separately:
 

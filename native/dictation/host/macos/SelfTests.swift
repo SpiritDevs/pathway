@@ -51,6 +51,14 @@ func runSelfTests() {
     let queued = insertion.ticket()
     insertion.cancel()
     check(insertion.insert("must not write", token: queued)["status"] as? String == "manual", "queued insertion cannot outlive cancellation")
+    for role in [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole] {
+        check(TextFieldAccess(role: role).permitsPaste, "text editors need not expose writable AX text attributes to accept paste")
+        check(!TextFieldAccess(role: role, editable: false).permitsPaste, "explicit read-only editor is rejected")
+        check(!TextFieldAccess(role: role, protectedContent: true).permitsPaste, "protected editor is rejected")
+    }
+    check(!TextFieldAccess(role: kAXTextFieldRole, subrole: kAXSecureTextFieldSubrole).permitsPaste, "password fields are rejected")
+    check(!TextFieldAccess(role: kAXStaticTextRole).permitsPaste, "static text cannot receive dictation")
+    check(!TextFieldAccess(role: kAXButtonRole, editable: true).permitsPaste, "editable flag cannot turn a button into a text field")
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pathway-host-test-\(UUID())")
     try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -122,5 +130,5 @@ func runSelfTests() {
     monitor.receive(.flagsChanged, event)
     check(events.isEmpty, "modifier chord does not activate shortcut")
     monitor.stop()
-    print("PASS: permission routing, audio conversion, duration, levels, exclusive paths, cancellation, clipboard leases, shortcut edges")
+    print("PASS: permission routing, audio conversion, duration, levels, exclusive paths, cancellation, paste eligibility, clipboard leases, shortcut edges")
 }

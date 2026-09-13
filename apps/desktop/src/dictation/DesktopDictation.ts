@@ -61,6 +61,7 @@ const make = Effect.gen(function* () {
   let tray: Electron.Tray | undefined;
   let quitting = false;
   let widgetLoading = false;
+  let idleBarHidden = false;
   let display: Electron.Display | undefined;
   let controller: DictationController | undefined;
   const boundOwners = new Set<number>();
@@ -90,6 +91,19 @@ const make = Effect.gen(function* () {
       },
       { label: "Dictation settings", click: () => open("settings") },
       { label: "Dictation history", click: () => open("history") },
+      {
+        label: idleBarHidden ? "Show dictation bar" : "Hide dictation bar",
+        enabled: Boolean(
+          controller?.isBackgroundEnabled &&
+          controller.getState().phase === "idle" &&
+          controller.getState().preferences.showIdleBar,
+        ),
+        click: () => {
+          if (!controller || controller.getState().phase !== "idle") return;
+          idleBarHidden = !idleBarHidden;
+          present(controller.getState());
+        },
+      },
       { type: "separator" },
       {
         label: "Enable dictation",
@@ -151,7 +165,11 @@ const make = Effect.gen(function* () {
       },
     });
     overlay = panel;
-    panel.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    panel.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: true,
+      // Process transformation hides the entire macOS app when this panel opens.
+      skipTransformProcessType: true,
+    });
     panel.setAlwaysOnTop(true, "floating");
     panel.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     panel.webContents.on("will-navigate", (event) => event.preventDefault());
@@ -169,6 +187,8 @@ const make = Effect.gen(function* () {
   };
   const present = (state: DictationState) => {
     if (!Electron.app.isReady() || quitting) return;
+    if (!state.authenticated || state.phase === "disabled" || state.phase === "starting")
+      idleBarHidden = false;
     if ((!state.authenticated || state.phase === "disabled") && overlay && !overlay.isDestroyed()) {
       overlay.destroy();
       overlay = undefined;
@@ -177,7 +197,7 @@ const make = Effect.gen(function* () {
     const visible =
       state.authenticated &&
       state.phase !== "disabled" &&
-      (state.phase !== "idle" || state.preferences.showIdleBar) &&
+      (state.phase !== "idle" || (state.preferences.showIdleBar && !idleBarHidden)) &&
       state.mode !== "test";
     if (visible && !overlay) void createOverlay().catch(() => {});
     if (overlay && !overlay.isDestroyed()) {
@@ -365,11 +385,18 @@ const make = Effect.gen(function* () {
       return;
     position(value.width, value.height);
   };
+  const hide = (event: Electron.IpcMainEvent) => {
+    if (event.sender.id !== overlay?.webContents.id || ownedController.getState().phase !== "idle")
+      return;
+    idleBarHidden = true;
+    present(ownedController.getState());
+  };
   const initialize = dictationEffect(async () => {
     Electron.app.prependListener("before-quit", beforeQuit);
     Electron.powerMonitor.on("suspend", suspend);
     Electron.powerMonitor.on("lock-screen", suspend);
     Electron.ipcMain.on(channels.DICTATION_RESIZE, resize);
+    Electron.ipcMain.on(channels.DICTATION_HIDE, hide);
     // Hashing previously downloaded weights must not delay opening the main window.
     void ownedController
       .initialize()
@@ -386,6 +413,7 @@ const make = Effect.gen(function* () {
       Electron.powerMonitor.removeListener("suspend", suspend);
       Electron.powerMonitor.removeListener("lock-screen", suspend);
       Electron.ipcMain.removeListener(channels.DICTATION_RESIZE, resize);
+      Electron.ipcMain.removeListener(channels.DICTATION_HIDE, hide);
       overlay?.destroy();
       tray?.destroy();
       await ownedController.dispose();
