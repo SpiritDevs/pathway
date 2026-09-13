@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 struct NewAgentThreadMessageEditor: View {
     @Bindable var model: PathwayAgentThreadCreationModel
-    @FocusState.Binding var isFocused: Bool
+    @Binding var isFocused: Bool
     @Binding var showsOptions: Bool
     @State private var selection: NSRange?
     @State private var pendingTool: Tool?
@@ -30,7 +30,7 @@ struct NewAgentThreadMessageEditor: View {
             }
             if !model.attachments.drafts.isEmpty { attachmentStrip }
             AgentComposerTextInput(text: $model.prompt, selection: $selection,
-                isFocused: Binding(get: { isFocused }, set: { isFocused = $0 }),
+                isFocused: $isFocused,
                 placeholder: "Ask anything…", pasteImages: pasteImages,
                 accessibilityIdentifier: "new-agent-thread-prompt")
                 .overlay(alignment: .topLeading) {

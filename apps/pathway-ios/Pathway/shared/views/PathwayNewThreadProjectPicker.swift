@@ -88,10 +88,7 @@ struct PathwayNewThreadProjectPicker: View {
 
     private func projectLabel(_ project: PathwayNewThreadProjectOption) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: project.isConversation ? "bubble.left.and.bubble.right" : "folder")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .frame(width: 28)
+            PathwayNewThreadProjectIcon(project: project)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(project.name)
@@ -112,5 +109,42 @@ struct PathwayNewThreadProjectPicker: View {
         }
         .frame(minHeight: 58)
         .contentShape(Rectangle())
+    }
+}
+
+private struct PathwayNewThreadProjectIcon: View {
+    @Environment(PathwayAppModel.self) private var appModel
+    let project: PathwayNewThreadProjectOption
+
+    private var contexts: [PathwayProjectIconContext] {
+        guard !project.isConversation else { return [] }
+        return project.bindings.compactMap { option in
+            guard let binding = option.binding else { return nil }
+            return PathwayProjectIconContext(binding: binding, environment: option.environment)
+        }
+    }
+
+    var body: some View {
+        let candidates = contexts
+        let cachedImage = candidates.lazy.compactMap { appModel.projectIcons.images[$0.key] }.first
+        Group {
+            if let cachedImage {
+                Image(uiImage: cachedImage).resizable().scaledToFit()
+            } else {
+                Image(systemName: project.isConversation ? "bubble.left.and.bubble.right" : "folder")
+                    .font(.title3).foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 28, height: 28)
+        .clipShape(.rect(cornerRadius: 4))
+        .accessibilityHidden(true)
+        .task(id: candidates.map(\.key)) {
+            guard cachedImage == nil, let connect = appModel.connect else { return }
+            for context in candidates {
+                guard !Task.isCancelled else { return }
+                await appModel.projectIcons.load(context, using: connect)
+                if appModel.projectIcons.images[context.key] != nil { return }
+            }
+        }
     }
 }
