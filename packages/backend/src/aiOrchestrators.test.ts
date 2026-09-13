@@ -157,6 +157,76 @@ describe("persistent orchestrator identities and messages", () => {
       owner.mutation(api.aiOrchestrators.cancelMessage, { chatId, messageId: "second" }),
     ).rejects.toThrow("already started");
   });
+  it("keeps internal wakes out of history, previews and unread counts without deleting them", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, chatId } = await personalChat(t);
+    await owner.mutation(api.aiOrchestrators.send, { chatId, id: "hello", text: "Hello Jarvis" });
+    const before = (await owner.query(api.aiOrchestrators.listChats, {}))[0]!;
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 65; index++) {
+        const chat = (await ctx.db
+          .query("aiOrchestratorChats")
+          .withIndex("by_domain_id", (q) => q.eq("id", chatId))
+          .unique())!;
+        await appendChatMessage(ctx, chat, {
+          id: `wake-${index}`,
+          senderKind: "system",
+          senderId: [
+            "project-thread",
+            "responsibility-review",
+            "delegated-work",
+            "private-inbox",
+            "project-issue",
+            "environment-presence",
+          ][index % 6]!,
+          senderName: "Pathway",
+          text: "Internal review instructions",
+          status: "queued",
+          replyToId: null,
+        });
+      }
+    });
+    const page = await owner.query(api.aiOrchestrators.messages, { chatId });
+    expect(page.messages.map((message) => message.id)).toEqual(["hello"]);
+    expect(page.nextBefore).toBeNull();
+    expect((await owner.query(api.aiOrchestrators.listChats, {}))[0]).toMatchObject({
+      lastMessage: "Hello Jarvis",
+      lastSequence: before.lastSequence,
+      readSequence: before.readSequence,
+      updatedAt: before.updatedAt,
+    });
+    expect(await t.run((ctx) => ctx.db.query("aiOrchestratorMessages").collect())).toHaveLength(66);
+    // Existing previews may already contain an internal prompt; public reads recover the real message.
+    await t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", chatId))
+        .unique())!;
+      await ctx.db.patch(chat._id, { lastMessage: "Internal review instructions" });
+    });
+    expect((await owner.query(api.aiOrchestrators.listChats, {}))[0]?.lastMessage).toBe(
+      "Hello Jarvis",
+    );
+    await t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", chatId))
+        .unique())!;
+      await appendChatMessage(ctx, chat, {
+        id: "joined",
+        senderKind: "system",
+        senderId: "participants",
+        senderName: "Pathway",
+        text: "A participant joined.",
+        status: "sent",
+        replyToId: null,
+      });
+    });
+    expect((await owner.query(api.aiOrchestrators.messages, { chatId })).messages.at(-1)?.id).toBe(
+      "joined",
+    );
+  });
   it("paginates history without duplicates or missing messages", async () => {
     const t = harness();
     await seed(t);
@@ -1121,7 +1191,7 @@ describe("coordinator reasoning claims and action boundaries", () => {
     expect(await test.claim()).toBeNull();
     const messages = (await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId }))
       .messages;
-    expect(messages.filter((m) => m.senderKind === "system")).toHaveLength(1);
+    expect(messages.filter((m) => m.senderKind === "system")).toHaveLength(0);
     expect(messages.at(-1)?.text).toBe("Both assignments finished.");
   });
   it("uses Astra high and persists exactly one reply under the current generation", async () => {
@@ -2238,7 +2308,7 @@ describe("scheduled responsibility reviews", () => {
       (await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })).messages.at(
         -1,
       )?.senderId,
-    ).toBe("responsibility-review");
+    ).toBe(test.id);
     expect(await test.t.run((ctx) => ctx.db.query("aiOrchestratorPush").collect())).toHaveLength(1);
   });
   it("cancels an unclaimed review when proactive work is disabled", async () => {

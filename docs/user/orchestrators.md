@@ -14,6 +14,8 @@ Instructions shape how the coordinator communicates and plans. Coding remains de
 
 ## Conversations and work
 
+Background checks happen quietly. Internal activity triggers and review instructions do not appear as messages, change the conversation preview, or create unread badges. Your orchestrator replies when it has something useful to report. Participant changes remain visible.
+
 While an orchestrator is thinking, its avatar pulses beside a compact status just above the message composer (or stays still when reduced motion is enabled). Group conversations show each active orchestrator. A message is marked **Seen** when an environment picks it up for the orchestrator; queued messages have not yet been picked up. Seen receipts remain after the response finishes. The archive shortcut stays at the bottom of the conversation sidebar.
 
 Invite orchestrators into a group when projects need to coordinate. Choose the group lead for unaddressed messages. You can share existing group history with a new participant or start their access from joining. Membership does not grant access to separate direct messages or private memory.

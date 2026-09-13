@@ -372,7 +372,9 @@ export async function appendChatMessage(
   });
   await ctx.db.patch(chat._id, {
     lastSequence: sequence,
-    lastMessage: message.text.slice(0, 160),
+    ...(message.senderKind !== "system" || message.senderId === "participants"
+      ? { lastMessage: message.text.slice(0, 160), updatedAt: now }
+      : {}),
     ...(notification
       ? {
           notification: {
@@ -384,7 +386,6 @@ export async function appendChatMessage(
           },
         }
       : {}),
-    updatedAt: now,
   });
   for (const subject of chat.participantSubjects) {
     if (notification?.enabled) {
@@ -431,6 +432,17 @@ export const listChats = query({
           .withIndex("by_domain_id", (q) => q.eq("id", member.chatId))
           .unique();
         if (!chat || !(await hasChatAccess(ctx, chat, user))) return null;
+        // Internal wake messages remain available to reasoning, not the human conversation.
+        const latest = await ctx.db
+          .query("aiOrchestratorMessages")
+          .withIndex("by_chat_sequence", (q) =>
+            q.eq("chatId", chat.id).gte("sequence", member.fromSequence),
+          )
+          .filter((q) =>
+            q.or(q.neq(q.field("senderKind"), "system"), q.eq(q.field("senderId"), "participants")),
+          )
+          .order("desc")
+          .first();
         const {
           _id,
           _creationTime,
@@ -441,6 +453,8 @@ export const listChats = query({
         } = chat;
         return {
           ...record,
+          lastMessage: latest?.text.slice(0, 160) ?? "",
+          lastSequence: latest?.sequence ?? 0,
           readSequence: member.readSequence,
           ...(notification && notification.sequence >= member.fromSequence ? { notification } : {}),
         };
@@ -532,6 +546,9 @@ export const messages = query({
           .eq("chatId", args.chatId)
           .gte("sequence", member.fromSequence)
           .lt("sequence", args.before ?? Number.MAX_SAFE_INTEGER),
+      )
+      .filter((q) =>
+        q.or(q.neq(q.field("senderKind"), "system"), q.eq(q.field("senderId"), "participants")),
       )
       .order("desc")
       .take(60);
