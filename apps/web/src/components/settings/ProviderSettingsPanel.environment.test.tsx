@@ -218,6 +218,13 @@ describe("EnvironmentProviderSettings routing", () => {
     expect(inertWrapper).not.toBeNull();
     const providerCard = visitElements(panel, (element) => element.props.instanceId === codexId);
     expect(providerCard).not.toBeNull();
+    expect(providerCard?.props.allowanceAction).toBeUndefined();
+    const isAllowance = (element: ReactElement<Record<string, unknown>>) =>
+      element.props.environmentId === environmentId &&
+      element.props.instanceId === codexId &&
+      element.props.provider === "codex";
+    expect(visitElements(inertWrapper, isAllowance)).toBeNull();
+    expect(visitElements(panel, isAllowance)).not.toBeNull();
 
     const notice = visitElements(panel, (element) => element.props.title === "Limited permissions");
     expect(notice).not.toBeNull();

@@ -6,12 +6,10 @@ struct PathwayAllowanceSettingsView: View {
   let provider: PathwayAdministrationProvider
   @State private var selectedWork = ""
   private var thread: PathwayAgentThread? {
-    appModel.cloud.threads.first {
-      $0.environmentId == environmentID && "thread:\($0.threadId)" == selectedWork
-    }
+    threadChoices.first { "thread:\($0.threadId)" == selectedWork }
   }
   private var threadChoices: [PathwayAgentThread] {
-    appModel.cloud.threads.filter { $0.environmentId == environmentID }
+    appModel.cloud.threads.filter { $0.environmentId == environmentID && $0.companyId == companyID }
   }
   @Environment(PathwayAppModel.self) private var appModel
   @State private var companyID = ""

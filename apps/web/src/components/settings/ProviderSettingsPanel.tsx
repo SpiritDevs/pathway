@@ -363,10 +363,11 @@ export function EnvironmentProviderSettings({
   readonly environmentId: EnvironmentId;
   readonly environmentLabel: string;
   /**
-   * Render the full provider layout, greyed out and inert, when this session's
+   * Render provider configuration greyed out and inert when this session's
    * credential lacks `orchestration:operate` on the environment. Showing the
    * real configuration keeps the view honest; disabling interaction keeps
-   * every one of its writes from being offered and then rejected.
+   * every one of its writes from being offered and then rejected. Allowance
+   * controls stay interactive because their writes use workspace permissions.
    */
   readonly readOnly?: boolean;
 }) {
@@ -836,7 +837,7 @@ export function EnvironmentProviderSettings({
                 driverOption={driverOption}
                 liveProvider={liveProvider}
                 allowanceAction={
-                  isProviderUsageDriver(row.driver) ? (
+                  !readOnly && isProviderUsageDriver(row.driver) ? (
                     <ProviderAllowanceDialog
                       environmentId={environmentId}
                       instanceId={row.instanceId}
@@ -900,6 +901,29 @@ export function EnvironmentProviderSettings({
             );
           })}
         </div>
+        {readOnly &&
+          rows.map((row) => {
+            if (!isProviderUsageDriver(row.driver)) return null;
+            const displayName =
+              row.instance.displayName?.trim() ||
+              getDriverOption(row.driver)?.label ||
+              String(row.driver);
+            return (
+              <SettingsRow
+                key={row.instanceId}
+                title={`${displayName} allowance`}
+                description="Manage work allowances with your workspace permissions."
+                control={
+                  <ProviderAllowanceDialog
+                    environmentId={environmentId}
+                    instanceId={row.instanceId}
+                    provider={row.driver}
+                    displayName={displayName}
+                  />
+                }
+              />
+            );
+          })}
       </SettingsSection>
 
       <ProviderUsageSettingsSection />

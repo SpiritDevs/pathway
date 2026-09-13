@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ProviderInstanceId, ProviderUsageDriver } from "@spiritdevs/contracts";
 import {
@@ -6,7 +6,9 @@ import {
   type ProviderAllowanceScope,
 } from "@spiritdevs/contracts/providerAllowanceBudget";
 import { activeCompanyIdAtom, companyListAtom } from "../../cloud/activeCompany";
-import { useThreadShells } from "../../state/entities";
+import { AgentThreadEntity } from "@spiritdevs/client-runtime/sync";
+import * as Schema from "effect/Schema";
+import { companyRegistryReplicasAtom } from "../../cloud/companyRegistryReplica";
 import { useOrchestrators } from "../orchestrator/OrchestratorContext";
 import { Button } from "../ui/button";
 import {
@@ -19,6 +21,8 @@ import {
 } from "../ui/dialog";
 import { AllowanceBudgets } from "./AllowanceBudgets";
 
+const isAgentThread = Schema.is(AgentThreadEntity);
+
 export type AllowanceProviderTarget = {
   environmentId: EnvironmentId;
   instanceId: ProviderInstanceId;
@@ -29,27 +33,29 @@ export type AllowanceProviderTarget = {
 export function ProviderAllowanceContent({ target }: { target: AllowanceProviderTarget }) {
   const active = useAtomValue(activeCompanyIdAtom);
   const companies = useAtomValue(companyListAtom);
-  const threads = useThreadShells();
+  const replicas = useAtomValue(companyRegistryReplicasAtom);
   const orchestrators = useOrchestrators();
   const [selectedCompany, setSelectedCompany] = useState("");
   const [selectedScope, setSelectedScope] = useState("");
   const companyId =
     companies.find((company) => company.id === (selectedCompany || active))?.id ?? companies[0]?.id;
-  const work: { scope: ProviderAllowanceScope; title: string; label: string }[] = [
-    ...threads
+  const threads = useMemo(() => {
+    const replica = companyId ? replicas.get(companyId) : undefined;
+    if (!replica) return [];
+    return Array.from(replica.view.values())
+      .filter(isAgentThread)
       .filter(
         (thread) =>
-          thread.environmentId === target.environmentId && !thread.deletedAt && !thread.temporary,
+          thread.environmentId === target.environmentId && thread.shell.deletedAt === null,
       )
-      .map((thread) => ({
-        scope: {
-          kind: "thread" as const,
-          environmentId: thread.environmentId,
-          threadId: thread.id,
-        },
-        title: thread.title,
-        label: `Thread · ${thread.title}`,
-      })),
+      .map((thread) => thread.shell);
+  }, [companyId, replicas, target.environmentId]);
+  const work: { scope: ProviderAllowanceScope; title: string; label: string }[] = [
+    ...threads.map((thread) => ({
+      scope: { kind: "thread" as const, environmentId: target.environmentId, threadId: thread.id },
+      title: thread.title,
+      label: `Thread · ${thread.title}`,
+    })),
     ...orchestrators.chats
       .filter(
         (chat) =>
