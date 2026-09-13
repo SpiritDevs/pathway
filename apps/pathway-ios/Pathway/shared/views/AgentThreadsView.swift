@@ -949,6 +949,13 @@ struct AgentThreadConversationView: View {
         _model = State(initialValue: model)
     }
 
+    private func collapseComposer() {
+        isComposerFocused = false
+        withAnimation(reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation) {
+            isComposerExpanded = false
+        }
+    }
+
     private var conversationScrollView: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -1033,7 +1040,7 @@ struct AgentThreadConversationView: View {
                     }
             }
             .contentShape(.rect)
-            .simultaneousGesture(TapGesture().onEnded { isComposerFocused = false })
+            .simultaneousGesture(TapGesture().onEnded { collapseComposer() })
             .safeAreaInset(edge: .bottom, spacing: 4) {
                 VStack(spacing: 8) {
                     if let connect = appModel.connect {
@@ -1041,7 +1048,7 @@ struct AgentThreadConversationView: View {
                             chooseEnvironment: { showsAlternateEnvironment = true },
                             onAvailabilityChanged: { model.storageAllowsSend = $0 })
                             .id(model.environment.id)
-                            .simultaneousGesture(TapGesture().onEnded { isComposerFocused = false })
+                            .simultaneousGesture(TapGesture().onEnded { collapseComposer() })
                     }
                     HStack(spacing: 8) {
                     if let connectionStatus {
@@ -1082,10 +1089,10 @@ struct AgentThreadConversationView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
                     .contentShape(.rect)
-                    .simultaneousGesture(TapGesture().onEnded { isComposerFocused = false })
+                    .simultaneousGesture(TapGesture().onEnded { collapseComposer() })
                     AgentThreadComposer(model: model, isExpanded: $isComposerExpanded,
                         isFocused: $isComposerFocused, modelName: model.currentModelSelection.model,
-                        usesCompactPresentation: true, isNavigationExpanded: false, onOpenThread: openChild, workspaceRoot: workspaceRoot, onOpenBrowser: { showsBrowser = true })
+                        usesCompactPresentation: compactThreadChrome != nil, isNavigationExpanded: compactThreadChrome?.isNavigationExpanded == true, onOpenThread: openChild, workspaceRoot: workspaceRoot, onOpenBrowser: { showsBrowser = true })
                 }
             }
         }

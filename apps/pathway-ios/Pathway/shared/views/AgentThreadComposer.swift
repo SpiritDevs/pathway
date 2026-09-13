@@ -3,7 +3,7 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The floating composer shares expansion state with the compact thread screen.
+/// The collapsed composer reserves the shell's navigation and orchestrator controls on either side.
 struct AgentThreadComposer: View {
     private static let surfaceID = "agent-thread-composer-surface"
 
@@ -172,7 +172,7 @@ struct AgentThreadComposer: View {
             } label: {
                 HStack(spacing: 14) {
                     Image(systemName: "plus").font(.title3)
-                    Text(model.draft.isEmpty ? promptPlaceholder : model.draft)
+                    Text(model.draft.isEmpty ? "Message agent" : model.draft)
                         .foregroundStyle(model.draft.isEmpty ? Color.secondary : .primary)
                         .lineLimit(1)
                     Spacer(minLength: 0)
@@ -188,7 +188,6 @@ struct AgentThreadComposer: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Message agent")
             .accessibilityHint("Expands the message composer")
-            if model.activeRunID != nil && hasContent { stopButton }
             sendButton
         }
         .padding(.trailing, 8)
@@ -198,13 +197,16 @@ struct AgentThreadComposer: View {
                 .overlay { Capsule().strokeBorder(.primary.opacity(0.10), lineWidth: 0.5) }
                 .matchedGeometryEffect(id: Self.surfaceID, in: surfaceNamespace, isSource: !isExpanded)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, CompactAppShellMetrics.tabBarHeight + CompactAppShellMetrics.controlSpacing)
+        .frame(maxWidth: CompactAppShellMetrics.maximumWidth)
+        .padding(.horizontal, CompactAppShellMetrics.horizontalPadding)
         .padding(.vertical, CompactAppShellMetrics.tabBarBottomPadding)
         .opacity(isNavigationExpanded ? 0 : 1)
         .allowsHitTesting(!isNavigationExpanded)
         .accessibilityHidden(isNavigationExpanded)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-thread-composer-collapsed")
+        .animation(reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation, value: isNavigationExpanded)
     }
 
     private var expandedComposer: some View {

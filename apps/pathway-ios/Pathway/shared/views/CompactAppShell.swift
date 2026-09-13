@@ -2,6 +2,9 @@ import SwiftUI
 
 enum CompactAppShellMetrics {
     static let tabBarHeight: CGFloat = 58
+    static let horizontalPadding: CGFloat = 16
+    static let controlSpacing: CGFloat = 12
+    static let maximumWidth: CGFloat = 520
     static let tabBarBottomPadding: CGFloat = 8
     static let scrollContentClearance: CGFloat = tabBarHeight + tabBarBottomPadding + 12
     /// Shared by the tab bar surface and the thread composer so both halves of the
@@ -45,7 +48,7 @@ enum CompactAppShellMetrics {
                     including: isNavigationExpanded ? .all : .subviews
                 )
 
-                if !showsSettings && !threadChrome.isComposerExpanded && !threadChrome.isThreadDetailActive && !isIssueDetailActive {
+                if !showsSettings && !threadChrome.isComposerExpanded && !isIssueDetailActive {
                     PathwayTabBar(
                         selectedDestination: $selectedDestination,
                         isMoreMenuPresented: $isMoreMenuPresented,
@@ -53,8 +56,8 @@ enum CompactAppShellMetrics {
                         showAgentOrchestrator: presentAgentOrchestrator,
                         showSettings: presentSettings
                     )
-                    .frame(maxWidth: 520)
-                    .padding(.horizontal, 16)
+                    .frame(maxWidth: CompactAppShellMetrics.maximumWidth)
+                    .padding(.horizontal, CompactAppShellMetrics.horizontalPadding)
                     .padding(.bottom, CompactAppShellMetrics.tabBarBottomPadding)
                     .accessibilityAction(.escape, dismissMoreMenu)
                     .transition(
@@ -130,7 +133,7 @@ enum CompactAppShellMetrics {
 
         var body: some View {
             GlassEffectContainer(spacing: 12) {
-                HStack(alignment: .bottom, spacing: 12) {
+                HStack(alignment: .bottom, spacing: CompactAppShellMetrics.controlSpacing) {
                     mainSurface
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .onGeometryChange(for: CGFloat.self) { proxy in
