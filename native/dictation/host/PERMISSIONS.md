@@ -91,10 +91,16 @@ and `AXEditable`, despite providing settable text and a valid selection range.
 
 [Insertion.swift](macos/Insertion.swift) now queries `AXUIElementCreateApplication` using the
 frontmost process ID. The focused element must belong to that process, and the app must still be
-frontmost after validation. Unsupported or unimplemented `AXEnabled` is allowed with positive
-settable or editability evidence. Explicit disabled values, malformed values, and communication
-failures still reject the target. Existing role, protected-field, caret, and modifier checks remain.
-The two live insertion checks passed after these corrections.
+frontmost after validation. Unsupported or unimplemented `AXEnabled` is allowed for a text-role
+element with a valid selection range. A paste target need not support direct `AXSelectedText` or
+`AXValue` writes. Explicit disabled/read-only values, malformed enabled values, and communication
+failures still reject the target. Existing protected-field, caret, and modifier checks remain.
+
+Recording startup reads the frontmost app's accessibility role and focus, and requests
+`AXManualAccessibility` if no text control is exposed. This lets Electron initialize its DOM
+accessibility tree while recording. Confirmation rechecks app/element identity and selection
+without repeating the entire eligibility scan. Native self-tests and protocol tests cover these
+changes; the earlier live insertion evidence above predates this update.
 
 The separate cleanup correction and its focused regression coverage are recorded in the
 [design validation notes](../../../docs/internals/dictation-design.md#validation-status).

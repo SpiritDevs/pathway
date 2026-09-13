@@ -66,7 +66,10 @@ Downloads show progress and verification, with cancellation and retry controls.
 
 The Qwen cleanup model is about 2.50 GB. **Clean up dictation** is on by default to remove fillers,
 repetitions, and spoken self-corrections. You can turn it off. If cleanup is unavailable, Pathway
-keeps the recognized text and indicates that cleanup did not complete.
+keeps the recognized text and indicates that cleanup did not complete. If the cleanup model is
+still loading, your recognized text is delivered immediately while the model gets ready for later
+recordings. Once loaded, cleanup has a five-second limit so a slow pass does not leave your
+transcript waiting indefinitely.
 
 Removing the selected speech model turns dictation off. Select another downloaded speech model and
 enable it again. Removing models does not delete your dictionary or history.
@@ -92,19 +95,22 @@ existing entries still follow retention and deletion settings.
 
 ## Bar, language, and memory settings
 
-The small idle bar appears at the bottom of your screen. Hover for Record, Settings, and History.
+The small idle bar appears at the bottom of your screen. Hover for Record, Settings, History, and
+**Hide bar**. Hiding it leaves your recording shortcut working and brings the bar back when you
+activate dictation. You can also show it again from the tray or menu-bar control.
 History opens the five latest dictations with Copy actions and a link to the full History page.
-Turn off **Show idle bar** to hide it between recordings. Recording and processing feedback still
-appears.
+Turn off **Show idle bar** in Settings to hide it between every recording. Recording and processing
+feedback still appears.
 
 In **Settings**, choose a spoken language or **Detect automatically**, change the microphone and
 shortcut, and set how long models remain in memory. The default is five idle minutes. Other choices
 are after every dictation, 15 minutes, or until Pathway quits. Unloading frees memory and keeps the
-downloaded files.
+downloaded files. Models start loading while you record, so loading can overlap your speech.
 
 ## Closing Pathway and turning dictation off
 
-While dictation is enabled, closing the main window keeps Pathway running. Use its tray or menu-bar
+Starting Pathway keeps its main window open when dictation is enabled. Closing the main window
+keeps Pathway running. Use its tray or menu-bar
 control to reopen it, record, open settings or history, turn dictation off, or quit. **Quit Pathway**
 stops dictation. Enabling dictation does not change your launch-at-login preference.
 

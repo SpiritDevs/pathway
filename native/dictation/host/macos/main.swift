@@ -115,7 +115,9 @@ DispatchQueue(label: "pathway.dictation.stdin").async {
                     let path = try required(command, "path")
                     let gate = try capture.reserveStart(id: id)
                     capture.queue.async { respond(command) {
-                        try capture.start(id: id, path: path, deviceID: command["deviceId"] as? String ?? "default", request: gate)
+                        let result = try capture.start(id: id, path: path, deviceID: command["deviceId"] as? String ?? "default", request: gate)
+                        insertionQueue.async { if gate.acceptsAudio { insertion.prepare() } }
+                        return result
                     } }
                 } catch { respond(command) { throw error } }
             case "stopCapture", "cancelCapture":

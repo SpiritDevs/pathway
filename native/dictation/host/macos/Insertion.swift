@@ -30,7 +30,21 @@ struct ClipboardSnapshot {
     }
 }
 
+struct TextFieldAccess {
+    let role: String
+    var subrole: String? = nil
+    var editable: Bool? = nil
+    var protectedContent: Bool? = nil
+
+    var permitsPaste: Bool {
+        // Browser editors can accept paste without supporting AXSelectedText/AXValue writes.
+        [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role) &&
+            subrole != kAXSecureTextFieldSubrole && editable != false && protectedContent != true
+    }
+}
+
 private struct FocusedField {
+    let application: AXUIElement
     let element: AXUIElement
     let pid: pid_t
     let selection: CFRange
@@ -45,6 +59,25 @@ final class TextInsertion {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
         return value
+    }
+    func prepare() {
+        guard AXIsProcessTrusted(), let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              pid > 0, pid != getpid() else { return }
+        let application = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(application, 0.2)
+        // Chromium enables native accessibility when assistive clients read the app role.
+        _ = attribute(application, kAXRoleAttribute)
+        if let raw = attribute(application, kAXFocusedUIElementAttribute), CFGetTypeID(raw) == AXUIElementGetTypeID() {
+            let element = unsafeBitCast(raw, to: AXUIElement.self)
+            AXUIElementSetMessagingTimeout(element, 0.2)
+            if let role = attribute(element, kAXRoleAttribute) as? String,
+               TextFieldAccess(role: role).permitsPaste, selection(element) != nil { return }
+        }
+        // Electron can need its full DOM tree. Its manual activation is asynchronous, so
+        // request it during recording, without putting AX work on the capture queue.
+        if (attribute(application, "AXManualAccessibility") as? Bool) != true {
+            _ = AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        }
     }
     private func selection(_ element: AXUIElement) -> CFRange? {
         guard let raw = attribute(element, kAXSelectedTextRangeAttribute), CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
@@ -68,24 +101,25 @@ final class TextInsertion {
         let enabledStatus = AXUIElementCopyAttributeValue(element, kAXEnabledAttribute as CFString, &enabled)
         guard AXUIElementGetPid(element, &pid) == .success, pid == frontmostPID,
               let role = attribute(element, kAXRoleAttribute) as? String,
-              [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role),
               enabledStatus == .attributeUnsupported || enabledStatus == .notImplemented ||
                   (enabledStatus == .success && (enabled as? Bool) == true),
-              (attribute(element, kAXSubroleAttribute) as? String) != kAXSecureTextFieldSubrole,
-              (attribute(element, "AXProtectedContent") as? Bool) != true,
-              (attribute(element, "AXEditable") as? Bool) != false,
+              TextFieldAccess(role: role,
+                  subrole: attribute(element, kAXSubroleAttribute) as? String,
+                  editable: attribute(element, "AXEditable") as? Bool,
+                  protectedContent: attribute(element, "AXProtectedContent") as? Bool).permitsPaste,
               let selection = selection(element) else { return nil }
-        var selectedSettable = DarwinBoolean(false)
-        var valueSettable = DarwinBoolean(false)
-        _ = AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &selectedSettable)
-        _ = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &valueSettable)
-        guard selectedSettable.boolValue || valueSettable.boolValue || (attribute(element, "AXEditable") as? Bool) == true else { return nil }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == frontmostPID else { return nil }
-        return FocusedField(element: element, pid: pid, selection: selection)
+        return FocusedField(application: application, element: element, pid: pid, selection: selection)
     }
     private func matches(_ target: FocusedField, caret: Bool = true) -> Bool {
-        guard let current = focus(), current.pid == target.pid, CFEqual(current.element, target.element) else { return false }
-        return !caret || (current.selection.location == target.selection.location && current.selection.length == target.selection.length)
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid,
+              let raw = attribute(target.application, kAXFocusedUIElementAttribute),
+              CFGetTypeID(raw) == AXUIElementGetTypeID(), CFEqual(raw, target.element) else { return false }
+        if caret {
+            guard let current = selection(target.element), current.location == target.selection.location,
+                  current.length == target.selection.length else { return false }
+        }
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid
     }
     private var modifiersHeld: Bool {
         !CGEventSource.flagsState(.hidSystemState).intersection([.maskShift, .maskControl, .maskAlternate, .maskCommand, .maskSecondaryFn]).isEmpty
@@ -139,8 +173,10 @@ final class TextInsertion {
     private func confirm(_ target: FocusedField, text: String, allowed: () -> Bool) -> Bool {
         // Async application paste handlers need time to consume the clipboard lease. Only this worker waits.
         for attempt in 0..<8 {
+            guard allowed() else { return false }
             if attempt > 0 { Thread.sleep(forTimeInterval: 0.1) }
-            guard allowed(), matches(target, caret: false), let current = selection(target.element) else { continue }
+            guard allowed() else { return false }
+            guard matches(target, caret: false), let current = selection(target.element) else { continue }
             if current.length == 0, current.location == target.selection.location + text.utf16.count { return true }
         }
         return false

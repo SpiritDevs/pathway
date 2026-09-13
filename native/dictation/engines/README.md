@@ -76,18 +76,31 @@ owns one model directory; do not share it between running desktop instances.
 
 `DictationInference({ engineDirectory, modelDirectory, device?, onLoadedChange? })`
 provides `transcribe({ audioPath, modelId, language, terms, signal? })` and
-`cleanup({ text, terms, language?, signal? })`, both returning `Promise<string>`. `warmed`
-and `getLoadedModelIds()` report loaded workers. Loading starts only when a
-request arrives and never downloads anything. Matching models are reused.
+`cleanup({ text, terms, language?, signal? })`, both returning
+`Promise<string>`. `transcribeWithLanguage()` also returns Whisper's detected
+language. `prepare({ modelId, cleanup, signal })` starts the selected workers
+during recording so model loading can overlap capture. Preparation never
+downloads anything or processes microphone audio. `warmed` and
+`getLoadedModelIds()` report ready workers. Matching models are reused.
 Switching speech models closes the old process. `unload()` and `dispose()` wait
 for process termination. The controller owns idle timers and cleanup failure
 fallback, and must retain the original transcript.
 
-Pass the selected speech language to cleanup when available. The default `auto`
+Pass Whisper's detected language to cleanup when available. The default `auto`
 first classifies the quoted text's language in a separate generation limited to
 16 tokens, then edits using that code. Both generations reuse the same loaded
-weights, clear their KV state, and share one 60-second deadline. Explicit-language
-requests skip classification.
+weights and share one 60-second native deadline. Explicit-language requests skip
+classification. Desktop cleanup requires an already loaded worker (`requireLoaded: true`). If
+capture-time preparation is incomplete, delivery uses recognized text immediately and lets loading
+finish for subsequent recordings. Loaded cleanup has a five-second deadline and keeps the original
+transcript on expiry. Standalone cleanup calls can wait for loading within their configured deadline.
+
+The cleanup worker evaluates its fixed instruction/demo prefix before emitting
+`ready`, then retains only that prefix between requests. Every transcript,
+dictionary entry and generated token is removed from the model's attention
+before the next request. Language classification replaces the cached prefix;
+the following edit rebuilds it. This avoids repeatedly evaluating the same
+instructions while preserving the existing correction prompt and examples.
 
 Cleanup uses multilingual demonstrations and a trusted reminder after the
 quoted transcript. A llama.cpp grammar constrains the private model answer to a
@@ -163,6 +176,24 @@ reversing case order in the second iteration to check reuse across languages.
 The runner prints all results and fails if any assertion fails; it does not
 accept a fallback transcript as successful cleanup.
 
+To measure the complete native pipeline with installed models:
+
+```sh
+node scripts/benchmark-dictation-engines.mjs \
+  --speech-model /tmp/pathway-models/whisper-turbo/ggml-large-v3-turbo.bin \
+  --vad-model /tmp/pathway-models/whisper-turbo/ggml-silero-v6.2.0.bin \
+  --cleanup-model /tmp/pathway-models/qwen-cleanup/Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
+  --audio native/dictation/build/speech-gpu/_deps/whisper-src/samples/jfk.wav \
+  --device gpu --repeat 3
+```
+
+The benchmark reports model preparation, transcription, cleanup and total
+milliseconds without printing the transcript. It deliberately loads each model
+on its first use to expose startup costs; the desktop overlaps preparation with
+recording. `--engine-directory` can compare preserved binaries, and
+`--cleanup-language auto` measures the older separate language-classification
+path. There are no downloads or latency pass/fail thresholds.
+
 ### Current validation limits
 
 On 2026-09-12, the Apple Silicon Metal and CPU-only builds compiled, and the
@@ -182,6 +213,36 @@ The CPU-only cleanup build passed all 24 checks in one iteration with the same
 weights and assertions. The short CPU fixtures took roughly 8 to 13 seconds.
 The default packaged engine directory was restored
 to the Metal build after this run.
+
+On 2026-09-13, the revised Metal workers built on an Apple M2 Max with 32 GiB
+RAM. Native smoke again passed Base transcription/reuse, Unicode paths,
+five-minute silence and duration bounds. The unchanged cleanup assertions passed
+all 48 checks (12 cases, automatic and explicit languages, two rounds with the
+second in reverse order) with the static prefix cache enabled.
+
+The 11-second JFK recording was measured with Whisper large-v3-turbo and the
+pinned Qwen cleanup model, `--device gpu --repeat 3`. The baseline used preserved
+pre-change executables and `--cleanup-language auto`; the updated run used
+Whisper's detected language and the cached cleanup prefix. Warm medians exclude
+the first inference and therefore contain two observations per build:
+
+| Native phase                                    |  Baseline |   Updated |
+| ----------------------------------------------- | --------: | --------: |
+| Warm transcription                              |    918 ms |    825 ms |
+| Warm cleanup                                    |  2,659 ms |  1,089 ms |
+| Warm total                                      |  3,577 ms |  1,913 ms |
+| First speech model preparation                  |    708 ms |    860 ms |
+| First cleanup model preparation                 | 11,951 ms | 10,792 ms |
+| First total, including serial model preparation | 16,061 ms | 13,740 ms |
+
+Updated cleanup preparation includes evaluating its static prefix. Startup costs
+are shown separately because model loading and first-use Metal preparation can
+dominate; the desktop now starts that work during recording. The benchmark does
+not include microphone finalization, focus restoration or paste. These are a
+small fixture sample on M2 Max, not an M1 result or an end-to-end latency promise.
+Whisper's five-candidate beam decoding remains unchanged: a tested greedy
+alternative saved too little on this fixture to justify an unmeasured accuracy
+tradeoff.
 
 Grammar-constrained output fixes the answer format; it does not prove semantic
 accuracy. The controller must still validate candidates and retain the original

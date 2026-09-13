@@ -283,9 +283,12 @@ function makeTestLayer(input: {
 // currentMainOrFirst mirrors the real fallback to the first live window (the
 // splash, before any main is registered). Reveal targets are recorded so tests
 // can assert what activation actually surfaced.
-const makeSplashScenario = (createOutcomes: readonly (Electron.BrowserWindow | null)[]) =>
+const makeSplashScenario = (
+  createOutcomes: readonly (Electron.BrowserWindow | null)[],
+  existingWindows: Electron.BrowserWindow[] = [],
+) =>
   Effect.gen(function* () {
-    const createdWindows = yield* Ref.make<Electron.BrowserWindow[]>([]);
+    const createdWindows = yield* Ref.make(existingWindows);
     const createCalls = yield* Ref.make(0);
     const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
     const revealedWindows = yield* Ref.make<Electron.BrowserWindow[]>([]);
@@ -1086,6 +1089,28 @@ describe("DesktopWindow", () => {
         assert.isTrue(prevented);
         assert.deepEqual(openedExternalUrls, ["https://accounts.microsoft.com/oauth"]);
       }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("opens and activates the app when a dictation overlay already exists", () =>
+    Effect.gen(function* () {
+      const overlay = makeFakeBrowserWindow();
+      const splash = makeFakeBrowserWindow();
+      const main = makeFakeBrowserWindow();
+      const scenario = yield* makeSplashScenario([splash.window, main.window], [overlay.window]);
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.showConnectingSplash();
+        assert.equal(yield* Ref.get(scenario.createCalls), 1);
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        assert.equal(yield* Ref.get(scenario.createCalls), 2);
+        assert.equal(Option.getOrThrow(yield* Ref.get(scenario.mainWindow)), main.window);
+        yield* desktopWindow.activate;
+        assert.deepEqual(yield* Ref.get(scenario.revealedWindows), [main.window]);
+        expect(main.window.close).not.toHaveBeenCalled();
+        assert.equal(overlay.send.mock.calls.length, 0);
+      }).pipe(Effect.provide(scenario.layer));
     }),
   );
 
