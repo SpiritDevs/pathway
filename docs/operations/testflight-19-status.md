@@ -9,3 +9,11 @@ Validation: 48 focused web/backend tests passed; scoped web/backend type checks 
 Artifacts: `~/GitHub/pathway-ios-reconnect-spinner/.pathway/releases/1.0.13`. Native release commit bypassed the Git hook after focused checks.
 
 Next: archive, verify actual archive and exported plists, signatures, entitlements and production configuration, then upload. Upload, processing and tester availability are unconfirmed.
+
+## Signed package validation
+
+Archive and App Store export succeeded. Actual archived and exported app Info.plist values contain ITSAppUsesNonExemptEncryption as boolean false. App and both extensions are 1.0.13 (19). Strict signatures pass, entitlements match build 18 and embedded profiles, exported debug access is disabled, and APNs/public runtime configuration remains production.
+
+IPA SHA-256: `ad4a05542fc5f18e63ba89242f47b96a560a649a8b60df594fb2ed32dcde23a3`.
+
+Next: upload the verified archive using saved Xcode account. Processing and tester availability remain unconfirmed.
