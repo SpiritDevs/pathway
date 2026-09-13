@@ -750,7 +750,7 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
             action closes the editor.
           </DialogPrimitive.Description>
           <header className="shot-editor-toolbar" aria-label="Image editor tools">
-            <div className="shot-editor-brand">
+            <div className="shot-editor-window-controls">
               <button
                 type="button"
                 className="shot-editor-close"
@@ -761,7 +761,6 @@ export function SnapShotEditor({ image, onAction, onClose }: SnapShotEditorProps
               >
                 <XIcon size={11} strokeWidth={2.5} />
               </button>
-              <span>Pathway</span>
             </div>
             <div className="shot-editor-group" role="group" aria-label="Save image">
               <ToolButton
