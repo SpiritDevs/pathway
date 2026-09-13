@@ -1845,7 +1845,14 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         <ChatMarkdown
           text={messageText}
           cwd={ctx.markdownCwd}
-          threadRef={ctx.threadRef ?? undefined}
+          threadRef={
+            ctx.threadRef
+              ? {
+                  ...ctx.threadRef,
+                  threadId: row.projectedItem?.sourceThreadId ?? ctx.threadRef.threadId,
+                }
+              : undefined
+          }
           onOpenFilePreview={ctx.onOpenFilePreview}
           onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
           isStreaming={Boolean(row.message.streaming)}
@@ -2166,7 +2173,9 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
               <ChatMarkdown
                 text={presentation.detail}
                 cwd={ctx.markdownCwd}
-                threadRef={ctx.threadRef ?? undefined}
+                threadRef={
+                  ctx.threadRef ? { ...ctx.threadRef, threadId: sourceThreadId } : undefined
+                }
                 onOpenFilePreview={ctx.onOpenFilePreview}
                 onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
                 skills={ctx.skills}
@@ -2274,7 +2283,9 @@ function V2EventTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "event"
               <ChatMarkdown
                 text={presentation.detail}
                 cwd={ctx.markdownCwd}
-                threadRef={ctx.threadRef ?? undefined}
+                threadRef={
+                  ctx.threadRef ? { ...ctx.threadRef, threadId: sourceThreadId } : undefined
+                }
                 onOpenFilePreview={ctx.onOpenFilePreview}
                 onPanelSurfaceOpen={ctx.onPanelSurfaceOpen}
                 skills={ctx.skills}

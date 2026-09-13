@@ -237,6 +237,13 @@ extension PathwayAgentThreadModel {
         ])]), reportsErrors: false)
         guard let relative = value.objectValue?["relativeUrl"]?.stringValue else { throw PathwayThreadConversationError.message("The attachment URL was unavailable.") }
         return try await resolveAssetURL(relative)
+    func markdownImageURL(_ path: String, threadID: String) async throws -> URL {
+        guard let connect else { throw PathwayThreadConversationError.message("Connect to the environment to access images.") }
+        return try await PathwayEnvironmentHTTP.assetURL(path, threadID: threadID, environment: environment, connect: connect) { [self] method, payload in
+            try await request(method, payload: payload, reportsErrors: false)
+        }
+    }
+
     }
     private func resolveAssetURL(_ relative: String) async throws -> URL {
         guard let connect else { throw PathwayThreadConversationError.message("Connect to the environment to access files.") }

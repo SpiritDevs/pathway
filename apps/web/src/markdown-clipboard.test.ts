@@ -22,6 +22,7 @@ class FakeElement {
   constructor(
     readonly tagName: string,
     private readonly classNames: ReadonlyArray<string> = [],
+    private readonly attributes: Readonly<Record<string, string>> = {},
   ) {}
 
   get localName(): string {
@@ -37,8 +38,8 @@ class FakeElement {
     return this;
   }
 
-  getAttribute(): string | null {
-    return null;
+  getAttribute(name: string): string | null {
+    return this.attributes[name] ?? null;
   }
 
   hasAttribute(): boolean {
@@ -56,6 +57,16 @@ function shikiCodeLine(text: string): FakeElement {
 }
 
 describe("serializeRenderedMarkdownFragment", () => {
+  it("copies an image's durable source instead of its signed capability", () => {
+    const image = new FakeElement("IMG", [], {
+      alt: "Screenshot",
+      src: "https://environment.example/api/assets/temporary/image.png",
+      "data-markdown-src": "./screens/你好%20world.png",
+    });
+    expect(serializeRenderedMarkdownFragment(asNode(new FakeElement("DIV").append(image)))).toBe(
+      "![Screenshot](<./screens/你好%20world.png>)",
+    );
+  });
   beforeEach(() => {
     vi.stubGlobal("Node", { TEXT_NODE, ELEMENT_NODE });
   });

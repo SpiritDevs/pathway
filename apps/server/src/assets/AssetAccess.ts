@@ -218,7 +218,9 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
               }),
           ),
         );
-      if (!isWorkspacePreviewEntryPath(resolved.relativePath)) {
+      // This is a filesystem name. Encode URL delimiters before the preview helper strips URL suffixes.
+      const previewPath = encodeURIComponent(resolved.relativePath);
+      if (!isWorkspacePreviewEntryPath(previewPath)) {
         return yield* new AssetPreviewTypeValidationError({
           resource: input.resource,
         });
@@ -249,7 +251,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
             }),
         ),
       );
-      claims = isWorkspaceImagePreviewPath(resolved.relativePath)
+      claims = isWorkspaceImagePreviewPath(previewPath)
         ? {
             version: 1,
             kind: "workspace-file-exact",
