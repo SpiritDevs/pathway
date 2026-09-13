@@ -18,6 +18,7 @@
     "ios:configure": "node scripts/configure-pathway-ios.ts",
     "build": "vp run --filter './apps/*' --filter './packages/*' --filter './oxlint-plugin-pathway' --filter './scripts' build",
     "build:desktop": "vp run --filter @spiritdevs/desktop --filter @spiritdevs/pathway build",
+    "build:dictation": "node scripts/build-dictation-host.mjs && node scripts/build-dictation-engines.mjs",
     "build:resource-monitor": "cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml",
     "typecheck": "vp run -r --concurrency-limit 2 typecheck",
     "tc": "vp run -r --concurrency-limit 2 typecheck",

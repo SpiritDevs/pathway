@@ -24,6 +24,7 @@
  * @module schema
  */
 import { defineSchema, defineTable } from "convex/server";
+import { dictationDictionaryLists } from "./lib/dictationDictionary.ts";
 import { v } from "convex/values";
 
 import { mailTables } from "./lib/mailSchema.ts";
@@ -192,11 +193,18 @@ export default defineSchema({
     kind: v.union(v.literal("cancelled"), v.literal("connection"), v.literal("unknown")),
     createdAt: v.number(),
     attempts: v.number(),
+    emailSuppressed: v.optional(v.boolean()),
     sentAt: v.union(v.number(), v.null()),
   })
     .index("by_reportId", ["reportId"])
+    .index("by_installation_and_createdAt", ["installationId", "createdAt"])
     .index("by_createdAt", ["createdAt"])
     .index("by_sentAt", ["sentAt"]),
+  dictationDictionaries: defineTable({
+    userId: v.string(),
+    revision: v.number(),
+    lists: dictationDictionaryLists,
+  }).index("by_user", ["userId"]),
   ...businessToolsTables,
   ...mailTables,
   ...aiOrchestratorTables,

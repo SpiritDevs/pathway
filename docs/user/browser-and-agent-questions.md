@@ -18,6 +18,8 @@ The environment browser runs beside your agent. You can view it from the web app
 
 On desktop, the browser panel lets you choose between This desktop and Environment browser. They have separate website sessions. A task keeps its browser host while it works. Wait for an action to finish before switching hosts.
 
+On iOS, Environment browser opens as a full navigation screen. Use Back to return to the conversation. Enter a website address or choose New tab to begin. Reconnect browser retries the connection if loading fails.
+
 Use the tab bar to open, select, and close pages. Websites can open additional tabs for links and sign-in flows. Closing the final environment-browser tab stops its browser process. Opening the browser later reuses the task's saved website profile.
 
 Take browser control before interacting while the agent is working. Resume the agent when you are finished.

@@ -177,6 +177,97 @@ struct PathwayConversationDraftRecoveryTests {
         await restored.stop()
     }
 
+    @Test func lostCancellationResponsePreservesDraftBeforeRPCAndBlocksDuplicateSend() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = conversationStore(directory)
+        let editing = model(directory: directory) { method, _ in
+            #expect(method == "orchestration.dispatchCommand")
+            let saved = try #require(await store.load())
+            #expect(saved.text == "Original queued prompt")
+            #expect(saved.pendingQueuedEditRunID == "run-1")
+            throw PathwayRPCError.timedOut
+        }
+        await editing.restoreDraft()
+        editing.installSnapshot(.object([
+            "runs": .array([.object(["id": .string("run-1"), "ordinal": .number(1), "status": .string("queued"), "userMessageId": .string("message-1")])]),
+            "visibleTurnItems": .array([.object(["item": .object([
+                "id": .string("item-1"), "type": .string("user_message"), "createdBy": .string("user"),
+                "messageId": .string("message-1"), "runId": .string("run-1"), "text": .string("Original queued prompt")
+            ])])])
+        ]))
+        do { try await editing.restoreQueuedMessage("run-1"); Issue.record("Expected lost cancellation response") }
+        catch {}
+        #expect(editing.draft == "Original queued prompt")
+        #expect(editing.pendingQueuedEditRunID == "run-1")
+        #expect(!editing.canSend)
+        let reopened = model(directory: directory)
+        await reopened.restoreDraft()
+        #expect(reopened.draft == "Original queued prompt")
+        #expect(reopened.pendingQueuedEditRunID == "run-1")
+        #expect(!reopened.canSend)
+        await editing.stop(); await reopened.stop()
+    }
+
+    @Test func queuedEditKeepsFilesOnDiskAndCancellationFenceAcrossRelaunch() async throws {
+        let directory = temporaryDirectory()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = directory.appending(path: "download")
+        try Data("context".utf8).write(to: original)
+        var file = attachment
+        file.localFileURL = original
+        file.state = .uploading
+        let store = conversationStore(directory)
+        let saved = try await store.saveQueuedEdit(PathwayConversationDraftSnapshot(text: "Recover me", attachments: [file],
+            data: [:], preparedSend: nil, preparedNewSend: nil, revision: 1, pendingQueuedEditRunID: "run-1"))
+        try FileManager.default.removeItem(at: original)
+        #expect(saved.data.isEmpty)
+        #expect(saved.attachments.first?.previewData == nil)
+        let retained = try #require(saved.attachments.first?.localFileURL)
+        #expect(try Data(contentsOf: retained) == Data("context".utf8))
+        let reopened = model(directory: directory)
+        await reopened.restoreDraft()
+        #expect(reopened.draft == "Recover me")
+        #expect(reopened.pendingQueuedEditRunID == "run-1")
+        #expect(!reopened.canSend)
+        #expect(reopened.attachmentData.isEmpty)
+        await reopened.stop()
+    }
+
+    @Test func explicitRecoveryKeepsContentAndClearsTheCancellationFence() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = conversationStore(directory)
+        _ = try await store.saveQueuedEdit(PathwayConversationDraftSnapshot(text: "Keep my edits", attachments: [],
+            data: [:], preparedSend: nil, preparedNewSend: nil, revision: 1, pendingQueuedEditRunID: "run-1"))
+        let reopened = model(directory: directory)
+        await reopened.restoreDraft()
+        try await reopened.keepQueuedEditAsNewDraft()
+        #expect(reopened.draft == "Keep my edits")
+        #expect(reopened.pendingQueuedEditRunID == nil)
+        #expect(await store.load()?.pendingQueuedEditRunID == nil)
+        await reopened.stop()
+    }
+
+    @Test func acknowledgedCancellationUnlocksSavedTextAfterRelaunch() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = conversationStore(directory)
+        _ = try await store.saveQueuedEdit(PathwayConversationDraftSnapshot(text: "Recover me", attachments: [],
+            data: [:], preparedSend: nil, preparedNewSend: nil, revision: 1, pendingQueuedEditRunID: "run-1"))
+        let reopened = model(directory: directory)
+        await reopened.restoreDraft()
+        reopened.installSnapshot(.object(["runs": .array([.object([
+            "id": .string("run-1"), "status": .string("cancelled"), "ordinal": .number(1)
+        ])])]))
+        await reopened.reconcileQueuedEdit()
+        #expect(reopened.pendingQueuedEditRunID == nil)
+        #expect(reopened.draft == "Recover me")
+        #expect(await store.load()?.pendingQueuedEditRunID == nil)
+        await reopened.stop()
+    }
+
     private func snapshot(text: String = "Draft", attachments: [PathwayThreadAttachmentDraft] = [],
                           prepared: PathwayThreadPreparedSend? = nil, revision: UInt64 = 1) -> PathwayConversationDraftSnapshot {
         PathwayConversationDraftSnapshot(text: text, attachments: attachments,

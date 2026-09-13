@@ -53,6 +53,47 @@ struct PathwayMarkdownImageTests {
         }
     }
 
+    @Test func malformedDelimiterFloodStaysLiteralAndStillFindsTheTrailingImage() throws {
+        // Large malformed provider output used to rescan the entire suffix for every opening.
+        // Exercise both label and destination failures without relying on wall-clock thresholds.
+        for prefix in [String(repeating: "![", count: 20_000), String(repeating: "![x](", count: 20_000)] {
+            let literal = PathwayMarkdownInlinePart.parse(prefix)
+            #expect(literal.count == 1)
+            guard case let .text(value) = literal[0].content else { Issue.record("Expected malformed text"); continue }
+            #expect(value == prefix)
+            let parts = PathwayMarkdownInlinePart.parse(prefix + "![Valid](./last.png)")
+            #expect(parts.count == 2)
+            guard case let .image(source, alt, _) = parts.last?.content else { Issue.record("Expected trailing image"); continue }
+            #expect(source == "./last.png")
+            #expect(alt == "Valid")
+        }
+    }
+
+    @Test func rejectedNestedDestinationsHaveALinearFoundationBudget() {
+        let markdown = String(repeating: "![x](", count: 4_000) + "bad destination" + String(repeating: ")", count: 4_000)
+        var work = PathwayMarkdownInlinePart.ParseWork()
+        let parts = PathwayMarkdownInlinePart.parse(markdown, work: &work)
+        #expect(work.foundationCharacters <= markdown.count * 4)
+        #expect(work.exhausted)
+        #expect(parts.count == 1)
+        guard case let .text(literal) = parts.first?.content else { Issue.record("Expected original malformed source"); return }
+        #expect(literal == markdown)
+    }
+
+    @Test func malformedOuterDestinationsDoNotHideIndependentImages() throws {
+        for prefix in ["![broken](<never closes ", "![broken](url \"never closes ", "![broken](url 'never closes "] {
+            let parts = PathwayMarkdownInlinePart.parse(prefix + "![Valid](./last.png)")
+            guard case let .image(source, _, _) = parts.last?.content else { Issue.record("Expected independent image"); continue }
+            #expect(source == "./last.png")
+        }
+        for markdown in [#"![Alt](./a(b(c)).png)"#, #"![Alt](./a.png "Title with ) and ( punctuation")"#,
+                         #"![Alt](<./a(b).png>)"#, #"![Nested [label]](./a.png)"#] {
+            let parts = PathwayMarkdownInlinePart.parse(markdown)
+            guard case .image = parts.first?.content else { Issue.record("Expected image for \(markdown)"); continue }
+            #expect(parts.count == 1)
+        }
+    }
+
     @Test func signedURLsUseTheirPreparedEnvironmentAndRejectExpiredCapabilities() throws {
         let response: JSONValue = .object(["relativeUrl": .string("/api/assets/token/a.png"), "expiresAt": .number(Date().timeIntervalSince1970 * 1000 + 3_600_000)])
         for host in ["direct.example", "connect.example", "tunnel.example"] {

@@ -58,15 +58,21 @@ struct AgentThreadComposerAttachmentChip: View {
         .accessibilityIdentifier("agent-thread-draft-attachment-\(attachment.id)")
         .alert("Upload failed", isPresented: $showsFailure) {
             Button("Retry", action: retry)
-            Button("Cancel", role: .cancel, action: remove)
+            Button("Remove", role: .destructive, action: remove)
+            Button("Cancel", role: .cancel) {}
         } message: {
             Text(failureReason)
         }
         .task(id: attachment.id) {
-            guard let data = attachment.previewData else { return }
+            let data = attachment.previewData
+            let file = attachment.localFileURL
+            guard data != nil || file != nil else { return }
             let thumbnailData = await Task.detached(priority: .utility) {
-                guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                      let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                let source: CGImageSource?
+                if let file { source = CGImageSourceCreateWithURL(file as CFURL, nil) }
+                else if let data { source = CGImageSourceCreateWithData(data as CFData, nil) }
+                else { source = nil }
+                guard let source, let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                         kCGImageSourceCreateThumbnailFromImageAlways: true,
                         kCGImageSourceCreateThumbnailWithTransform: true,
                         kCGImageSourceThumbnailMaxPixelSize: 228
@@ -103,7 +109,7 @@ struct AgentThreadComposerAttachmentChip: View {
                 .contentShape(Rectangle())
         }
         .accessibilityLabel("\(failed ? "Retry" : "Remove") \(attachment.name)")
-        .accessibilityHint(failed ? "Shows why the upload failed and lets you retry or cancel" : "")
+        .accessibilityHint(failed ? "Shows why the upload failed and lets you retry or remove the attachment" : "")
     }
 
     private var failureReason: String {

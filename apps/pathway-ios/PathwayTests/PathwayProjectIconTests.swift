@@ -32,8 +32,10 @@ struct PathwayProjectIconTests {
         #expect(requests.value == 2)
     }
 
-    @Test func resolvesOnlyTheThreadsOwnEnvironmentAndProject() {
+    @Test func resolvesOnlyTheThreadsOwnEnvironmentAndProject() throws {
         let thread = makeAgentThread()
+        let cloudProjectID = try #require(thread.cloudProjectId)
+        let projectID = try #require(thread.shell.projectId)
         let environment = PathwayCompanyEnvironment(
             companyId: thread.companyId,
             environment: PathwayEnvironment(
@@ -46,17 +48,17 @@ struct PathwayProjectIconTests {
             PathwayCompanyEnvironmentBinding(
                 companyId: thread.companyId,
                 binding: PathwayEnvironmentBinding(
-                    id: "binding", cloudProjectId: thread.cloudProjectId,
+                    id: "binding", cloudProjectId: cloudProjectID,
                     environmentId: environmentID, localProjectId: projectID,
                     localWorkspaceRoot: "/project", status: status, lastSeenAt: nil
                 )
             )
         }
-        let wrongEnvironment = binding(environmentID: "other-environment", projectID: thread.shell.projectId)
+        let wrongEnvironment = binding(environmentID: "other-environment", projectID: projectID)
         let wrongProject = binding(environmentID: thread.environmentId, projectID: "other-project")
-        let revoked = binding(environmentID: thread.environmentId, projectID: thread.shell.projectId, status: "revoked")
+        let revoked = binding(environmentID: thread.environmentId, projectID: projectID, status: "revoked")
         #expect(PathwayProjectIconContext(thread: thread, environments: [environment], bindings: [wrongEnvironment, wrongProject, revoked]) == nil)
-        let correct = binding(environmentID: thread.environmentId, projectID: thread.shell.projectId)
+        let correct = binding(environmentID: thread.environmentId, projectID: projectID)
         let context = PathwayProjectIconContext(thread: thread, environments: [environment], bindings: [wrongEnvironment, wrongProject, correct])
         #expect(context?.key.workspaceRoot == "/project")
         #expect(context?.key.environmentID == thread.environmentId)

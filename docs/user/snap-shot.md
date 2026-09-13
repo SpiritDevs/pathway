@@ -37,7 +37,9 @@ or press its shortcut from any app:
 - **Capture active window** captures the window you are working in. Its default shortcut on macOS
   and Windows is both Shift keys together.
 - **Capture current screen** captures everything visible on the display containing your pointer.
-- **Capture region** lets you drag a rectangle around part of the screen. Press Escape to cancel.
+- **Capture region** shows crosshairs over the live screen, with display-local pixel coordinates
+  and selection dimensions. Drag a rectangle and release to capture that area and open the editor.
+  Press Escape to cancel without taking a screenshot.
 
 Screen and region capture are available on macOS and Windows. Linux desktops currently support
 window capture only. Screen and region shortcuts start unassigned; choose your own in Settings.
@@ -137,6 +139,16 @@ active window. Otherwise Settings shows **Manual capture only** and the shortcut
 window picker. Picker captures do not include accessibility data.
 
 Apps running through XWayland inside a Wayland session can still be captured.
+
+## Annotating captures
+
+The compact editor toolbar keeps more of your capture visible. Arrows use a bold shaft and filled
+head. With the Select tool, drag either endpoint dot to resize an arrow, or drag its middle dot to
+bend it. Drag the arrow to move it; undo and redo also apply to these adjustments.
+
+Text labels use white text on your selected color background, with a dark outline on light colors
+to keep the lettering readable. Double-click a label to edit it.
+These styles are included when you copy, download, or save the capture to chat.
 
 ## Remote environments and other clients
 

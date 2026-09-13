@@ -42,6 +42,8 @@ Agent notifications are opt-in. Configure the event kinds you want and open a no
 
 The same work screens adapt to iPhone and iPad. Wider iPad windows use a sidebar and detail view; narrow windows use compact navigation. Apple Vision Pro uses resizable spatial windows with separate agent and Settings windows.
 
+In compact navigation, tap outside the expanded tab bar or view menu to collapse it. Tap its navigation button to expand it again.
+
 Camera and document scanning, the share extension, and Live Activities are iOS/iPadOS features. visionOS retains files/photos, App Intents and ordinary notifications. Android is not supported in this version.
 
 Saved discovery and visited conversations help you browse during a connection loss. Cached content displays its saved time; executing work still needs a connected environment. Account changes isolate drafts and cached content from other signed-in accounts.

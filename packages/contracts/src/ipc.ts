@@ -1,3 +1,4 @@
+import type { DictationBridge } from "./dictation.ts";
 import type {
   VcsCreateRefInput,
   VcsCreateRefResult,
@@ -1223,6 +1224,7 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
 });
 
 export interface DesktopBridge {
+  readonly dictation?: DictationBridge;
   threadAlerts?: import("./threadAlerts.ts").DesktopThreadAlertsBridge;
   getAppBranding: () => DesktopAppBranding | null;
   // One bootstrap per pool instance currently registered with bootstrap

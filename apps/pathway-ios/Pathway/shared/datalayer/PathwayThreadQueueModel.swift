@@ -46,6 +46,7 @@ struct PathwayQueueFile: Codable, Sendable {
     var data: Data
     var cloudID: String?
     var localDataFile: String?
+    var sourceFileURL: URL? = nil
 
     static func captureUpload(_ value: JSONValue) throws -> Self {
         guard var fields = value.objectValue, let dataURL = fields.removeValue(forKey: "dataUrl")?.stringValue,
@@ -59,9 +60,9 @@ struct PathwayQueueFile: Codable, Sendable {
     }
 
     static func capture(_ draft: PathwayThreadAttachmentDraft, bytes: Data?) throws -> Self {
-        guard let bytes else { throw PathwayThreadConversationError.message("Attachment bytes are unavailable. Add the file again before sending.") }
+        guard bytes != nil || draft.localFileURL != nil else { throw PathwayThreadConversationError.message("Attachment bytes are unavailable. Add the file again before sending.") }
         return Self(metadata: .object(["id": .string(draft.id), "name": .string(draft.name),
-                                       "mimeType": .string(draft.mimeType), "type": .string(draft.type), "sizeBytes": .number(Double(bytes.count))]), data: bytes)
+                                       "mimeType": .string(draft.mimeType), "type": .string(draft.type), "sizeBytes": .number(Double(draft.sizeBytes))]), data: bytes ?? Data(), sourceFileURL: draft.localFileURL)
     }
 }
 
@@ -102,7 +103,10 @@ actor PathwayThreadQueueStore {
             for fileIndex in entries[entryIndex].files.indices {
                 guard let name = entries[entryIndex].files[fileIndex].localDataFile else { continue }
                 guard name.count == 64, name.allSatisfy(\.isHexDigit) else { throw CocoaError(.fileReadCorruptFile) }
-                entries[entryIndex].files[fileIndex].data = try Data(contentsOf: filesDirectory.appending(path: name))
+                let fileURL = filesDirectory.appending(path: name)
+                guard FileManager.default.fileExists(atPath: fileURL.path) else { throw CocoaError(.fileReadNoSuchFile) }
+                entries[entryIndex].files[fileIndex].sourceFileURL = fileURL
+                entries[entryIndex].files[fileIndex].data = Data()
             }
         }
         return entries
@@ -122,11 +126,16 @@ actor PathwayThreadQueueStore {
                 let name = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
                 let fileURL = filesDirectory.appending(path: name)
                 if !manager.fileExists(atPath: fileURL.path) {
-                    try file.data.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                    if let source = file.sourceFileURL {
+                        try manager.copyItem(at: source, to: fileURL)
+                    } else {
+                        try file.data.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                    }
                 }
                 retainedFiles.insert(name)
                 manifest[entryIndex].files[fileIndex].localDataFile = name
                 manifest[entryIndex].files[fileIndex].data = Data()
+                manifest[entryIndex].files[fileIndex].sourceFileURL = nil
             }
         }
         try JSONEncoder().encode(manifest).write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
@@ -550,7 +559,9 @@ final class PathwayThreadQueueModel {
                         guard let url = uploadURL.stringValue.flatMap(URL.init(string:)) else { throw URLError(.badServerResponse) }
                         var upload = URLRequest(url: url); upload.httpMethod = "POST"
                         upload.setValue(entry.files[index].metadata.objectValue?["mimeType"]?.stringValue ?? "application/octet-stream", forHTTPHeaderField: "Content-Type")
-                        let (data, response) = try await URLSession.shared.upload(for: upload, from: entry.files[index].data)
+                        let attachmentID = entry.files[index].metadata.objectValue?["id"]?.stringValue ?? String(index)
+                        let localFile = queueStore.attachmentURL(entryID: entry.id, attachmentID: attachmentID, persistedName: entry.files[index].localDataFile)
+                        let (data, response) = try await URLSession.shared.upload(for: upload, fromFile: localFile)
                         try check(entry.companyID)
                         guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode),
                               let storageID = try JSONDecoder().decode(JSONValue.self, from: data).objectValue?["storageId"] else { throw URLError(.badServerResponse) }

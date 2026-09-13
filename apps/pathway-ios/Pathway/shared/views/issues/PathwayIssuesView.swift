@@ -6,7 +6,6 @@ struct PathwayIssuesView: View {
     let companies: [PathwayCompany]
     let projects: [PathwayCompanyProject]
     let onOpenPlanning: (String) -> Void
-    let onOpenSettings: (String) -> Void
 
     @State private var selectedCompanyID: String?
     @State private var scope: PathwayIssueListScope = .all
@@ -34,13 +33,12 @@ struct PathwayIssuesView: View {
     init(
         model: PathwayIssuesModel, companies: [PathwayCompany], projects: [PathwayCompanyProject],
         initialScope: PathwayIssueListScope = .all,
-        onOpenPlanning: @escaping (String) -> Void, onOpenSettings: @escaping (String) -> Void
+        onOpenPlanning: @escaping (String) -> Void
     ) {
         self.model = model
         self.companies = companies
         self.projects = projects
         self.onOpenPlanning = onOpenPlanning
-        self.onOpenSettings = onOpenSettings
         _scope = State(initialValue: initialScope)
     }
 
@@ -263,7 +261,6 @@ struct PathwayIssuesView: View {
             Divider()
             if let companyID {
                 Button("Projects, milestones and cycles", systemImage: "calendar") { onOpenPlanning(companyID) }
-                Button("Task settings", systemImage: "gearshape") { onOpenSettings(companyID) }
                 Button("Recently deleted", systemImage: "trash") { showingDeleted = true; showsSavedViews = true }
             }
         } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }

@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct PathwayCalendarSettingsView: View {
-    @Environment(\.dismiss) private var dismiss
     @Bindable var model: PathwayCalendarModel
     let companyID: String
     @State private var name = ""
@@ -31,7 +30,6 @@ struct PathwayCalendarSettingsView: View {
             if let error = model.errorMessage { Text(error).foregroundStyle(.red) }
         }
         .navigationTitle("Calendar settings")
-        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
     }
 }
 

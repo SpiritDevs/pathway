@@ -1,0 +1,56 @@
+name: Native dictation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "native/dictation/**"
+      - "apps/desktop/src/dictation/**"
+      - "scripts/build-dictation-*.mjs"
+      - "scripts/smoke-dictation-engines.mjs"
+      - ".github/workflows/dictation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, windows-2022]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@v1
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        with:
+          node-version-file: package.json
+          cache: true
+      - name: Configure Windows C++ tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installation = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installation) { throw 'Visual Studio C++ tools are required' }
+          cmd /c "`"$installation\VC\Auxiliary\Build\vcvars64.bat`" >nul && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { "$($matches[1])=$($matches[2])" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
+          }
+      - name: Build and test capture host
+        run: node scripts/build-dictation-host.mjs --test
+      - name: Build speech and cleanup engines
+        run: node scripts/build-dictation-engines.mjs
+      - name: Verify native engine protocol without weights
+        run: node scripts/smoke-dictation-engines.mjs
+      - name: Test model transfers and engine cancellation
+        run: vp test run native/dictation/engines/tests/DictationModels.test.ts native/dictation/engines/tests/DictationInference.test.ts native/dictation/host/tests/NativeDictationHost.test.ts native/dictation/host/tests/native-protocol.test.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dictation-${{ runner.os }}
+          path: |
+            native/dictation/build/host/pathway-dictation-host*
+            native/dictation/build/engines/pathway-*-engine*
+            native/dictation/build/engines/notices/
+          if-no-files-found: error

@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import { getDictationState, executeDictation, listDictationHistory } from "./methods/dictation.ts";
 
 import * as DesktopIpc from "./DesktopIpc.ts";
 import * as ThreadAlerts from "./methods/threadAlerts.ts";
@@ -64,6 +65,9 @@ import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./m
 
 export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers")(function* () {
   const ipc = yield* DesktopIpc.DesktopIpc;
+  yield* ipc.handle(getDictationState);
+  yield* ipc.handle(executeDictation);
+  yield* ipc.handle(listDictationHistory);
   yield* ipc.handle(ThreadAlerts.getThreadAlertSupport);
   yield* ipc.handle(ThreadAlerts.showThreadAlert);
   yield* ipc.handle(ThreadAlerts.closeThreadAlert);

@@ -14,6 +14,16 @@ struct PathwayProjectIconContext: Sendable {
     let key: Key
     let environment: PathwayCompanyEnvironment
 
+    init?(binding: PathwayCompanyEnvironmentBinding, environment: PathwayCompanyEnvironment) {
+        guard binding.companyId == environment.companyId,
+              binding.binding.environmentId == environment.environment.environmentId,
+              binding.binding.status == "active",
+              !binding.binding.localWorkspaceRoot.isEmpty else { return nil }
+        self.environment = environment
+        key = Key(companyID: binding.companyId, environmentID: binding.binding.environmentId,
+            projectID: binding.binding.localProjectId, workspaceRoot: binding.binding.localWorkspaceRoot)
+    }
+
     init?(
         thread: PathwayAgentThread,
         environments: [PathwayCompanyEnvironment],

@@ -741,6 +741,13 @@ export const DESKTOP_EXTRA_RESOURCES = [
   },
 ] as const;
 
+export const DICTATION_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/dictation",
+    to: "dictation",
+  },
+] as const;
+
 export const LINUX_CAPTURE_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/hyprland-capture",
@@ -966,6 +973,8 @@ export function renderMacPasskeyEntitlements(
     <array>
 ${associatedDomains}
     </array>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
     <key>com.apple.security.cs.allow-jit</key>
     <true/>
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
@@ -1347,6 +1356,61 @@ export const stageLinuxCaptureHelper = Effect.fn("stageLinuxCaptureHelper")(func
   }
 });
 
+/** Packages executable engines and attribution; model weights are downloaded only after setup. */
+export const stageDictation = Effect.fn("stageDictation")(function* (input: {
+  readonly repoRoot: string;
+  readonly stageResourcesDir: string;
+  readonly platform: typeof BuildPlatform.Type;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  if (input.platform === "linux") return;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const destination = path.join(input.stageResourcesDir, "dictation");
+  yield* fs.makeDirectory(destination, { recursive: true });
+  yield* fs.copyFile(
+    path.join(input.repoRoot, "native/dictation/NOTICE.md"),
+    path.join(destination, "NOTICE.md"),
+  );
+  if (
+    (input.platform === "mac" && input.arch === "x64") ||
+    (input.platform === "win" && input.arch !== "x64")
+  )
+    return;
+  for (const script of ["build-dictation-host.mjs", "build-dictation-engines.mjs"]) {
+    yield* runCommand(
+      ChildProcess.make("node", [path.join(input.repoRoot, "scripts", script)], {
+        cwd: input.repoRoot,
+      }),
+      {
+        label: `Build dictation (${script})`,
+        verbose: input.verbose,
+      },
+    );
+  }
+  const extension = input.platform === "win" ? ".exe" : "";
+  for (const [folder, executables] of [
+    ["host", ["pathway-dictation-host"]],
+    ["engines", ["pathway-speech-engine", "pathway-cleanup-engine"]],
+  ] as const) {
+    const target = path.join(destination, folder);
+    yield* fs.makeDirectory(target, { recursive: true });
+    for (const executable of executables) {
+      const filename = executable + extension;
+      yield* fs.copyFile(
+        path.join(input.repoRoot, "native/dictation/build", folder, filename),
+        path.join(target, filename),
+      );
+      if (input.platform !== "win") yield* fs.chmod(path.join(target, filename), 0o755);
+    }
+  }
+  yield* fs.copy(
+    path.join(input.repoRoot, "native/dictation/build/engines/notices"),
+    path.join(destination, "engines/notices"),
+  );
+});
+
 const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input: {
   readonly repoRoot: string;
   readonly stageResourcesDir: string;
@@ -1719,7 +1783,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     ...(platform === "win" ? { asarUnpack: [...WINDOWS_ASAR_UNPACK] } : {}),
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
-      ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
+      ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : DICTATION_EXTRA_RESOURCES),
     ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
@@ -1744,6 +1808,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // fails dev servers on private IPs with ERR_ADDRESS_UNREACHABLE instead
       // of prompting. The webview and the agent browser both need the grant.
       extendInfo: {
+        NSMicrophoneUsageDescription:
+          "Pathway records your voice when you start dictation. Audio is processed on this computer.",
         NSScreenCaptureUsageDescription:
           "Pathway captures the active window when you use the SnapShots shortcut.",
         NSLocalNetworkUsageDescription:
@@ -2104,6 +2170,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       );
     }
   }
+
+  yield* stageDictation({
+    repoRoot,
+    stageResourcesDir,
+    platform: options.platform,
+    arch: options.arch,
+    verbose: options.verbose,
+  });
 
   yield* stageResourceMonitor({
     repoRoot,

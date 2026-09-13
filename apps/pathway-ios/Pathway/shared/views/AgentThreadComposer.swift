@@ -3,7 +3,7 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The floating composer shares expansion state with the compact thread screen.
+/// The collapsed composer reserves the shell's navigation and orchestrator controls on either side.
 struct AgentThreadComposer: View {
     private static let surfaceID = "agent-thread-composer-surface"
 
@@ -16,6 +16,7 @@ struct AgentThreadComposer: View {
     let isNavigationExpanded: Bool
     var onOpenThread: ((String) -> Void)? = nil
     var workspaceRoot: String? = nil
+    var onOpenBrowser: () -> Void = {}
 
     @Namespace private var surfaceNamespace
     @State private var showsFiles = false
@@ -29,8 +30,8 @@ struct AgentThreadComposer: View {
     @State private var errorMessage: String?
     @State private var isChangingModel = false
     @State private var isInterrupting = false
-    @State private var showsBrowser = false
     @State private var showsQuestions = false
+    @State private var showsQueuedEditRecovery = false
     @State private var showsStash = false
     @State private var stashCount = 0
     @State private var stash: AgentThreadPromptStash?
@@ -42,6 +43,29 @@ struct AgentThreadComposer: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            if model.pendingQueuedEditRunID != nil {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Edit saved. Waiting to confirm cancellation.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Keep as new draft") { showsQueuedEditRecovery = true }
+                        .font(.subheadline)
+                        .disabled(model.isRestoringQueuedMessage)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .confirmationDialog("Keep this edit as a separate draft?", isPresented: $showsQueuedEditRecovery, titleVisibility: .visible) {
+                    Button("Keep as new draft") {
+                        Task {
+                            do { try await model.keepQueuedEditAsNewDraft() }
+                            catch { errorMessage = error.localizedDescription }
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("The original queued message may still run. Keeping this edit lets you send it as a separate message.")
+                }
+                .accessibilityIdentifier("agent-thread-queued-edit-recovery")
+            }
             if !model.pendingAsyncQuestions.isEmpty {
                 HStack {
                     Button {
@@ -94,9 +118,6 @@ struct AgentThreadComposer: View {
                 }
             }
         }
-        .sheet(isPresented: $showsBrowser) {
-            AgentThreadRemoteBrowser(model: model)
-        }
         .sheet(isPresented: $showsQuestions) {
             NavigationStack {
                 ScrollView {
@@ -119,6 +140,9 @@ struct AgentThreadComposer: View {
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        .onChange(of: model.pendingAsyncQuestions.isEmpty) { _, empty in
+            if empty { showsQuestions = false }
         }
         #if os(iOS)
         .sheet(item: $capture) { kind in
@@ -166,39 +190,47 @@ struct AgentThreadComposer: View {
     #endif
 
     private var collapsedComposer: some View {
-        Button {
-            withAnimation(reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation) { isExpanded = true }
-        } label: {
-            HStack(spacing: 14) {
-                Image(systemName: "plus").font(.title3)
-                Text(model.draft.isEmpty ? promptPlaceholder : model.draft)
-                    .foregroundStyle(model.draft.isEmpty ? Color.secondary : .primary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                if !model.draftAttachments.isEmpty {
-                    Label("\(model.draftAttachments.count)", systemImage: "paperclip")
-                        .font(.subheadline)
+        HStack(spacing: 6) {
+            Button {
+                withAnimation(reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation) { isExpanded = true }
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "plus").font(.title3)
+                    Text(model.draft.isEmpty ? "Message agent" : model.draft)
+                        .foregroundStyle(model.draft.isEmpty ? Color.secondary : .primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if !model.draftAttachments.isEmpty {
+                        Label("\(model.draftAttachments.count)", systemImage: "paperclip")
+                            .font(.subheadline)
+                    }
                 }
+                .padding(.leading, 18)
+                .frame(maxWidth: .infinity, minHeight: CompactAppShellMetrics.tabBarHeight)
+                .contentShape(Capsule())
             }
-            .padding(.horizontal, 18)
-            .frame(maxWidth: .infinity, minHeight: CompactAppShellMetrics.tabBarHeight)
-            .contentShape(Capsule())
+            .buttonStyle(.plain)
+            .accessibilityLabel("Message agent")
+            .accessibilityHint("Expands the message composer")
+            sendButton
         }
-        .buttonStyle(.plain)
+        .padding(.trailing, 8)
         .foregroundStyle(.primary)
         .background {
             Capsule().fill(.regularMaterial)
                 .overlay { Capsule().strokeBorder(.primary.opacity(0.10), lineWidth: 0.5) }
                 .matchedGeometryEffect(id: Self.surfaceID, in: surfaceNamespace, isSource: !isExpanded)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, CompactAppShellMetrics.tabBarHeight + CompactAppShellMetrics.controlSpacing)
+        .frame(maxWidth: CompactAppShellMetrics.maximumWidth)
+        .padding(.horizontal, CompactAppShellMetrics.horizontalPadding)
         .padding(.vertical, CompactAppShellMetrics.tabBarBottomPadding)
         .opacity(isNavigationExpanded ? 0 : 1)
         .allowsHitTesting(!isNavigationExpanded)
         .accessibilityHidden(isNavigationExpanded)
-        .accessibilityLabel("Message agent")
-        .accessibilityHint("Expands the message composer")
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-thread-composer-collapsed")
+        .animation(reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation, value: isNavigationExpanded)
     }
 
     private var expandedComposer: some View {
@@ -251,7 +283,7 @@ struct AgentThreadComposer: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Composer options")
             .accessibilityIdentifier("agent-thread-composer-options")
-            Button { showsBrowser = true } label: {
+            Button { isFocused = false; onOpenBrowser() } label: {
                 Image(systemName: "globe")
                     .frame(width: controlDiameter, height: controlDiameter)
                     .contentShape(Circle())
@@ -260,8 +292,8 @@ struct AgentThreadComposer: View {
             .accessibilityLabel("Environment browser")
             .accessibilityIdentifier("agent-thread-browser")
             Spacer(minLength: 0)
-            if model.activeRunID != nil { stopButton }
-            if model.activeRunID == nil || hasContent { sendButton }
+            if model.activeRunID != nil && hasContent { stopButton }
+            sendButton
         }
         .foregroundStyle(.primary)
     }
@@ -330,14 +362,7 @@ struct AgentThreadComposer: View {
     }
 
     private var stopButton: some View {
-        Button {
-            isInterrupting = true
-            Task {
-                defer { isInterrupting = false }
-                do { try await model.interrupt() }
-                catch { errorMessage = error.localizedDescription }
-            }
-        } label: {
+        Button(action: interrupt) {
             Group {
                 if isInterrupting { ProgressView().tint(Color(.systemBackground)) }
                 else { Image(systemName: "stop.fill").font(.subheadline) }
@@ -347,29 +372,43 @@ struct AgentThreadComposer: View {
             .background(Color.primary, in: Circle())
         }
         .buttonStyle(.plain)
-        .disabled(isInterrupting)
+        .disabled(isInterrupting || !model.canInterrupt)
         .accessibilityLabel("Stop response")
         .accessibilityIdentifier("agent-thread-stop")
     }
 
     private var sendButton: some View {
-        Button(action: send) {
+        let stopsResponse = model.activeRunID != nil && !hasContent
+        let showsProgress = !hasContent && (model.isSending || isStartingNewThread || isInterrupting
+            || model.activity == .preparing || model.activity == .starting || model.activity == .working)
+        let prominent = model.canSend || showsProgress || stopsResponse
+        let foreground = prominent ? Color(.systemBackground) : Color.secondary
+        return Button {
+            if stopsResponse { interrupt() } else { send() }
+        } label: {
             Group {
-                if model.isSending || isStartingNewThread { ProgressView().tint(Color(.systemBackground)) }
+                if showsProgress {
+                    if reduceMotion {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    } else {
+                        ProgressView().tint(foreground)
+                    }
+                }
+                else if stopsResponse { Image(systemName: "stop.fill").font(.subheadline) }
                 else { Image(systemName: model.activeRunID == nil ? "arrow.up" : PathwayGeneralPreferences.shared.activeTurnSendMode == "steer" ? "arrow.turn.up.right" : "text.line.last.and.arrowtriangle.forward").font(.body.weight(.bold)) }
             }
             .frame(width: controlDiameter, height: controlDiameter)
-            .foregroundStyle(model.canSend ? Color(.systemBackground) : Color.secondary)
-            .background(model.canSend ? Color.primary : Color(.tertiarySystemFill), in: Circle())
+            .foregroundStyle(foreground)
+            .background(prominent ? Color.primary : Color(.tertiarySystemFill), in: Circle())
         }
         .buttonStyle(.plain)
-        .disabled(!model.canSend || isStartingNewThread || isStashing)
+        .disabled(isInterrupting || isStartingNewThread || isStashing || (stopsResponse ? !model.canInterrupt : !model.canSend))
         .contextMenu {
-            if model.activeRunID != nil {
+            if model.activeRunID != nil && model.canSend {
                 Button("Queue message", systemImage: "text.line.last.and.arrowtriangle.forward") { send(mode: "queue") }
                 Button("Steer now", systemImage: "arrow.turn.up.right") { send(mode: "steer") }
             }
-            if onOpenThread != nil {
+            if onOpenThread != nil && model.canSend {
                 Button("Start in new chat", systemImage: "square.and.pencil") { startNewThread(sideChat: false) }
                     .disabled(model.thread.shell.isTemporary)
                 Button("Start in side chat", systemImage: "rectangle.split.2x1") { startNewThread(sideChat: true) }
@@ -377,8 +416,19 @@ struct AgentThreadComposer: View {
                 if model.thread.shell.isTemporary { Text("Keep conversation before starting another chat from this workspace.") }
             }
         }
-        .accessibilityLabel(model.activeRunID == nil ? "Send message" : PathwayGeneralPreferences.shared.activeTurnSendMode == "steer" ? "Steer now" : "Queue message")
-        .accessibilityIdentifier("agent-thread-send")
+        .accessibilityLabel(stopsResponse ? "Stop response" : model.activeRunID == nil ? "Send message" : PathwayGeneralPreferences.shared.activeTurnSendMode == "steer" ? "Steer now" : "Queue message")
+        .accessibilityValue(isInterrupting ? "Stopping…" : model.activity?.rawValue ?? "")
+        .accessibilityIdentifier(stopsResponse ? "agent-thread-stop" : "agent-thread-send")
+    }
+
+    private func interrupt() {
+        guard !isInterrupting, model.canInterrupt else { return }
+        isInterrupting = true
+        Task {
+            defer { isInterrupting = false }
+            do { try await model.interrupt() }
+            catch { errorMessage = error.localizedDescription }
+        }
     }
 
     private var hasContent: Bool { !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.draftAttachments.isEmpty }

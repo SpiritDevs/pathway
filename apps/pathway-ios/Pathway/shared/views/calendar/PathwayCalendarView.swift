@@ -13,7 +13,6 @@ struct PathwayCalendarView: View {
     @State private var hidden: Set<String> = []
     @State private var editor: CalendarEditorDestination?
     @State private var workEditor: PathwayCalendarRecord?
-    @State private var showSettings = false
 
     private var modePicker: some View {
         Picker("View", selection: $mode) {
@@ -116,7 +115,6 @@ struct PathwayCalendarView: View {
                     ForEach(["issue", "issueMilestone", "issueCycle"], id: \.self) { kind in
                         Toggle(kind == "issue" ? "Task due dates" : kind == "issueMilestone" ? "Milestones" : "Cycles", isOn: Binding(get: { !hidden.contains(kind) }, set: { if $0 { hidden.remove(kind) } else { hidden.insert(kind) } }))
                     }
-                    Button("Calendar settings") { showSettings = true }
                 }
                 Button("New event", systemImage: "plus") { editor = .init(event: nil) }
                     .disabled(!model.calendars.contains { $0.companyID == companyID && model.canEdit($0) })
@@ -133,7 +131,6 @@ struct PathwayCalendarView: View {
         }
         .sheet(item: $workEditor) { item in PathwayCalendarWorkEditor(model: model, item: item) }
         .sheet(item: $editor) { destination in PathwayCalendarEventEditor(model: model, companyID: companyID, event: destination.event, start: destination.start) }
-        .sheet(isPresented: $showSettings) { NavigationStack { PathwayCalendarSettingsView(model: model, companyID: companyID) } }
     }
 }
 

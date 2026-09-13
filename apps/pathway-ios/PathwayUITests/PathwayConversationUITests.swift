@@ -1,6 +1,72 @@
 import XCTest
 
 final class PathwayConversationUITests: XCTestCase {
+    @MainActor
+    func testCompactComposerAndNavigationDismissOutside() {
+        let app = launchFixture()
+        if app.alerts["Couldn’t update thread"].waitForExistence(timeout: 2) {
+            app.alerts.buttons["OK"].tap()
+        }
+        let composer = app.buttons["Message agent"]
+        let navigation = app.buttons["Show main navigation"]
+        let orchestrator = app.buttons["agent-orchestrator-button"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertTrue(navigation.isHittable)
+        XCTAssertTrue(orchestrator.isHittable)
+        XCTAssertLessThan(navigation.frame.maxX, composer.frame.minX)
+        XCTAssertLessThan(composer.frame.maxX, orchestrator.frame.minX)
+        capture(app, "Restored compact conversation row")
+
+        composer.tap()
+        let field = app.textViews["agent-thread-composer-field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText("Keep this draft")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        capture(app, "Expanded composer with keyboard")
+        let answer = app.staticTexts["The conversation now keeps the answer easy to read."]
+        answer.tap()
+        XCTAssertTrue(field.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(composer.isHittable)
+        capture(app, "Outside tap restores compact row")
+        composer.tap()
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, "Keep this draft")
+        answer.tap()
+        XCTAssertTrue(field.waitForNonExistence(timeout: 5))
+
+        navigation.tap()
+        let views = app.buttons["Choose another view"]
+        XCTAssertTrue(views.waitForExistence(timeout: 5))
+        XCTAssertTrue(views.isHittable)
+        XCTAssertFalse(composer.isHittable)
+        capture(app, "Expanded main navigation")
+        answer.tap()
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertTrue(composer.isHittable)
+        XCTAssertTrue(navigation.isHittable)
+
+        navigation.tap()
+        views.tap()
+        XCTAssertTrue(app.buttons["navigation-settings-button"].waitForExistence(timeout: 5))
+        capture(app, "Expanded view menu")
+        app.staticTexts["Bring the mobile conversation in line with desktop."].tap()
+        XCTAssertTrue(app.buttons["navigation-settings-button"].waitForNonExistence(timeout: 5))
+        XCTAssertTrue(composer.isHittable)
+        XCTAssertTrue(navigation.isHittable)
+
+        orchestrator.tap()
+        XCTAssertTrue(app.buttons["Cancel"].waitForExistence(timeout: 5))
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.tap()
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, "Keep this draft")
+        answer.tap()
+        capture(app, "Draft preserved after navigation and orchestrator")
+    }
+
     override func setUp() {
         super.setUp()
         continueAfterFailure = false

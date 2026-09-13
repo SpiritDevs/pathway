@@ -21,6 +21,8 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
+  DICTATION_EXTRA_RESOURCES,
+  stageDictation,
   LINUX_CAPTURE_EXTRA_RESOURCES,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
@@ -93,6 +95,53 @@ function iconResizeSpawnerLayer(
 }
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it.effect("packages dictation executables and notices without downloaded weights", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repoRoot = yield* fs.makeTempDirectoryScoped();
+      const build = path.join(repoRoot, "native/dictation/build");
+      yield* fs.makeDirectory(path.join(build, "host"), { recursive: true });
+      yield* fs.makeDirectory(path.join(build, "engines/notices"), { recursive: true });
+      yield* fs.makeDirectory(path.join(build, "models"));
+      yield* fs.writeFileString(path.join(repoRoot, "native/dictation/NOTICE.md"), "Sotto MIT");
+      yield* fs.writeFileString(path.join(build, "host/pathway-dictation-host"), "capture helper");
+      yield* fs.writeFileString(path.join(build, "engines/pathway-speech-engine"), "speech engine");
+      yield* fs.writeFileString(
+        path.join(build, "engines/pathway-cleanup-engine"),
+        "cleanup engine",
+      );
+      yield* fs.writeFileString(
+        path.join(build, "engines/notices/llama-LICENSE.txt"),
+        "MIT notice",
+      );
+      yield* fs.writeFileString(path.join(build, "models/weights.gguf"), "must not ship");
+      const stageResourcesDir = path.join(repoRoot, "staged");
+      const commands: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+      yield* stageDictation({
+        repoRoot,
+        stageResourcesDir,
+        platform: "mac",
+        arch: "arm64",
+        verbose: false,
+      }).pipe(Effect.provide(iconResizeSpawnerLayer(commands, [0, 0])));
+      const staged = path.join(stageResourcesDir, "dictation");
+      assert.equal(
+        yield* fs.readFileString(path.join(staged, "host/pathway-dictation-host")),
+        "capture helper",
+      );
+      assert.equal(
+        yield* fs.readFileString(path.join(staged, "engines/notices/llama-LICENSE.txt")),
+        "MIT notice",
+      );
+      assert.isFalse(yield* fs.exists(path.join(staged, "models")));
+      assert.deepStrictEqual(
+        commands.map((command) => path.basename(command.args[0]!)),
+        ["build-dictation-host.mjs", "build-dictation-engines.mjs"],
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("stages the selected Linux capture binary and its protocol notices", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -403,8 +452,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.notProperty(mac, "asarUnpack");
       assert.notProperty(linux, "asarUnpack");
       assert.deepStrictEqual(win.asarUnpack, WINDOWS_ASAR_UNPACK);
-      assert.deepStrictEqual(mac.extraResources, DESKTOP_EXTRA_RESOURCES);
-      assert.deepStrictEqual(win.extraResources, DESKTOP_EXTRA_RESOURCES);
+      assert.deepStrictEqual(mac.extraResources, [
+        ...DESKTOP_EXTRA_RESOURCES,
+        ...DICTATION_EXTRA_RESOURCES,
+      ]);
+      assert.deepStrictEqual(win.extraResources, [
+        ...DESKTOP_EXTRA_RESOURCES,
+        ...DICTATION_EXTRA_RESOURCES,
+      ]);
       assert.deepStrictEqual(linux.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
         ...LINUX_CAPTURE_EXTRA_RESOURCES,
@@ -602,6 +657,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         { name: "Pathway", schemes: ["pathway", "pathway-dev"] },
       ]);
       assert.deepStrictEqual(mac.extendInfo, {
+        NSMicrophoneUsageDescription:
+          "Pathway records your voice when you start dictation. Audio is processed on this computer.",
         NSScreenCaptureUsageDescription:
           "Pathway captures the active window when you use the SnapShots shortcut.",
         NSLocalNetworkUsageDescription:

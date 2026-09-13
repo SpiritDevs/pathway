@@ -43,23 +43,30 @@ export const submit = mutation({
       .unique();
     if (existing) return null;
     const now = Date.now();
+    const installationReports = await ctx.db
+      .query("loginErrorReports")
+      .withIndex("by_installation_and_createdAt", (q) =>
+        q.eq("installationId", report.installationId).gte("createdAt", now - HOUR),
+      )
+      .take(5);
+    if (installationReports.length >= 5) {
+      throw new Error("Support report limit reached; retry later");
+    }
     const recent = await ctx.db
       .query("loginErrorReports")
       .withIndex("by_createdAt", (q) => q.gte("createdAt", now - HOUR))
       .take(100);
-    if (
-      recent.length >= 100 ||
-      recent.filter((row) => row.installationId === report.installationId).length >= 5
-    ) {
-      throw new Error("Support report limit reached; retry later");
-    }
+    const emailSuppressed = recent.length >= 100;
     const id = await ctx.db.insert("loginErrorReports", {
       ...report,
       createdAt: now,
       attempts: 0,
+      emailSuppressed,
       sentAt: null,
     });
-    await ctx.scheduler.runAfter(0, internal.loginErrorReports.deliver, { id });
+    if (!emailSuppressed) {
+      await ctx.scheduler.runAfter(0, internal.loginErrorReports.deliver, { id });
+    }
     return null;
   },
 });
@@ -90,7 +97,13 @@ export const deliver = internalAction({
   args: { id: v.id("loginErrorReports") },
   handler: async (ctx, { id }) => {
     const report = await ctx.runQuery(internal.loginErrorReports.read, { id });
-    if (!report || report.sentAt !== null || report.attempts >= MAX_ATTEMPTS) return;
+    if (
+      !report ||
+      report.emailSuppressed ||
+      report.sentAt !== null ||
+      report.attempts >= MAX_ATTEMPTS
+    )
+      return;
     const apiKey = process.env.RESEND_API_KEY?.trim();
     if (!apiKey) {
       // @effect-diagnostics-next-line globalConsole:off -- Convex captures console output in its function logs.

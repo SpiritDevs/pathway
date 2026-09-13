@@ -13,40 +13,6 @@ const Selection = Schema.Struct({
 });
 const decodeSelection = Schema.decodeUnknownSync(Selection);
 
-/** Converts a display-local selection to image pixels without including adjacent displays. */
-export function displaySelectionPixels(
-  selection: Electron.Rectangle,
-  displaySize: Electron.Size,
-  imageSize: Electron.Size,
-): Electron.Rectangle {
-  const left = Math.max(
-    0,
-    Math.min(imageSize.width - 1, Math.floor((selection.x * imageSize.width) / displaySize.width)),
-  );
-  const top = Math.max(
-    0,
-    Math.min(
-      imageSize.height - 1,
-      Math.floor((selection.y * imageSize.height) / displaySize.height),
-    ),
-  );
-  const right = Math.max(
-    left + 1,
-    Math.min(
-      imageSize.width,
-      Math.ceil(((selection.x + selection.width) * imageSize.width) / displaySize.width),
-    ),
-  );
-  const bottom = Math.max(
-    top + 1,
-    Math.min(
-      imageSize.height,
-      Math.ceil(((selection.y + selection.height) * imageSize.height) / displaySize.height),
-    ),
-  );
-  return { x: left, y: top, width: right - left, height: bottom - top };
-}
-
 export class SnapShotRegionCancelled extends Error {
   constructor() {
     super("Region capture cancelled.");
@@ -65,12 +31,14 @@ export class SnapShotRegionPicker {
     this.cancelCurrent?.();
   }
 
-  /** Uses a frozen screen so moving the pointer cannot change the captured image. */
-  async select(bounds: Electron.Rectangle, dataUrl: string): Promise<Electron.Rectangle> {
+  /** Select over the live desktop; acquisition starts only after this window closes. */
+  async select(bounds: Electron.Rectangle, scaleFactor = 1): Promise<Electron.Rectangle> {
     this.close();
     const window = new Electron.BrowserWindow({
       ...bounds,
       frame: false,
+      transparent: true,
+      backgroundColor: "#00000000",
       show: false,
       resizable: false,
       movable: false,
@@ -135,24 +103,20 @@ export class SnapShotRegionPicker {
         finish();
       }
     });
-    const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'"><style>
-      *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;cursor:crosshair;user-select:none}body{font:13px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#111}img{position:absolute;width:100%;height:100%;pointer-events:none}#shade{position:absolute;inset:0;background:#0005}#selection{position:absolute;border:1px solid white;box-shadow:0 0 0 100000px #0005;display:none}#size{position:absolute;top:-27px;left:0;background:#222d;color:white;padding:4px 7px;border-radius:4px;white-space:nowrap}#help{position:absolute;left:50%;bottom:30px;transform:translateX(-50%);padding:10px 16px;background:#222e;color:white;border-radius:7px;box-shadow:0 2px 12px #0004;pointer-events:none}
-      </style></head><body><img id="snapshot" alt=""><div id="shade"></div><div id="selection"><div id="size"></div></div><div id="help">Drag to capture a region · Esc to cancel</div><script>
-      window.setRegionSnapshot=async(source)=>{const screenshot=document.getElementById('snapshot');screenshot.src=source;await screenshot.decode()};
-      let start,rect;const box=document.getElementById('selection'),shade=document.getElementById('shade');const clamp=(v,max)=>Math.max(0,Math.min(v,max));
-      document.addEventListener('pointerdown',event=>{if(event.button!==0)return;start={x:clamp(event.clientX,innerWidth),y:clamp(event.clientY,innerHeight)};document.body.setPointerCapture(event.pointerId)});
-      document.addEventListener('pointermove',event=>{if(!start)return;const x=clamp(event.clientX,innerWidth),y=clamp(event.clientY,innerHeight);rect={x:Math.min(start.x,x),y:Math.min(start.y,y),width:Math.abs(x-start.x),height:Math.abs(y-start.y)};shade.style.display='none';Object.assign(box.style,{display:'block',left:rect.x+'px',top:rect.y+'px',width:rect.width+'px',height:rect.height+'px'});document.getElementById('size').textContent=Math.round(rect.width)+' × '+Math.round(rect.height)});
-      document.addEventListener('pointerup',()=>{if(!start)return;start=undefined;if(rect&&rect.width>=2&&rect.height>=2)location.href='pathway-snapshot-region://select?'+new URLSearchParams(rect)});
+    const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"><style>
+      *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;cursor:crosshair;user-select:none;background:transparent}body{font:13px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}#selection{position:absolute;border:1px solid white;outline:1px solid #0008;box-shadow:0 0 0 100000px #0003;display:none;pointer-events:none}#coordinates{position:absolute;background:#222e;color:white;padding:4px 7px;border-radius:4px;white-space:nowrap;pointer-events:none;font-variant-numeric:tabular-nums}#help{position:absolute;left:50%;bottom:30px;transform:translateX(-50%);padding:10px 16px;background:#222e;color:white;border-radius:7px;pointer-events:none}
+      </style></head><body><div id="selection"></div><div id="coordinates"></div><div id="help">Drag to capture a region · Esc to cancel</div><script>
+      let start,rect;const scaleFactor=${JSON.stringify(scaleFactor)},box=document.getElementById('selection'),coordinates=document.getElementById('coordinates');const clamp=(v,max)=>Math.max(0,Math.min(v,max));
+      const update=event=>{const x=clamp(event.clientX,innerWidth),y=clamp(event.clientY,innerHeight);if(start){rect={x:Math.min(start.x,x),y:Math.min(start.y,y),width:Math.abs(x-start.x),height:Math.abs(y-start.y)};Object.assign(box.style,{display:'block',left:rect.x+'px',top:rect.y+'px',width:rect.width+'px',height:rect.height+'px'})}coordinates.textContent='X '+Math.round(x*scaleFactor)+'  Y '+Math.round(y*scaleFactor)+(start?' · '+Math.round(rect.width*scaleFactor)+' × '+Math.round(rect.height*scaleFactor)+' px':' px');coordinates.style.left=clamp(x+16,innerWidth-coordinates.offsetWidth-8)+'px';coordinates.style.top=clamp(y+20,innerHeight-coordinates.offsetHeight-8)+'px'};
+      document.addEventListener('pointerdown',event=>{if(event.button!==0)return;rect=undefined;start={x:clamp(event.clientX,innerWidth),y:clamp(event.clientY,innerHeight)};document.body.setPointerCapture(event.pointerId);update(event)});
+      document.addEventListener('pointermove',update);
+      document.addEventListener('pointerup',event=>{if(!start)return;update(event);start=undefined;if(rect&&rect.width>=2&&rect.height>=2)location.href='pathway-snapshot-region://select?'+new URLSearchParams(rect);else{rect=undefined;box.style.display='none'}});
       document.addEventListener('keydown',event=>{if(event.key==='Escape')location.href='pathway-snapshot-region://cancel'});document.addEventListener('contextmenu',event=>{event.preventDefault();location.href='pathway-snapshot-region://cancel'});
       </script></body></html>`;
     // Attach the rejection handler before loading, so closing while loading is safe.
     void result.promise.catch(() => undefined);
     try {
       await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
-      if (!settled && !window.isDestroyed())
-        await window.webContents.executeJavaScript(
-          `window.setRegionSnapshot(${JSON.stringify(dataUrl)})`,
-        );
       if (!settled && !window.isDestroyed()) {
         window.setBounds(bounds);
         window.show();
@@ -178,18 +142,11 @@ export async function captureDisplaySnapshot(options: {
     throw new Error("Screen and region capture are not available in this desktop session.");
   }
   const display = Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint());
-  const captured =
-    options.platform === "darwin"
-      ? await captureMacScreenSnapshot(display.bounds, options.imageTempPath)
-      : (await options.pool.capture(display.bounds)).png;
-  const capturedAt = DateTime.formatIso(DateTime.nowUnsafe());
   if (!options.isCurrentAccount()) throw new SnapShotRegionCancelled();
-  let image = Electron.nativeImage.createFromBuffer(captured);
-  if (image.isEmpty()) throw new Error("The display returned an empty image.");
   let captureBounds = display.bounds;
   if (options.type === "region") {
-    const selection = await options.picker.select(display.bounds, image.toDataURL());
-    image = image.crop(displaySelectionPixels(selection, display.bounds, image.getSize()));
+    const selection = await options.picker.select(display.bounds, display.scaleFactor);
+    if (!options.isCurrentAccount()) throw new SnapShotRegionCancelled();
     captureBounds = {
       x: display.bounds.x + selection.x,
       y: display.bounds.y + selection.y,
@@ -197,6 +154,14 @@ export async function captureDisplaySnapshot(options: {
       height: Math.round(selection.height),
     };
   }
+  const captured =
+    options.platform === "darwin"
+      ? await captureMacScreenSnapshot(captureBounds, options.imageTempPath)
+      : (await options.pool.capture(captureBounds)).png;
+  const capturedAt = DateTime.formatIso(DateTime.nowUnsafe());
+  if (!options.isCurrentAccount()) throw new SnapShotRegionCancelled();
+  let image = Electron.nativeImage.createFromBuffer(captured);
+  if (image.isEmpty()) throw new Error("The display returned an empty image.");
   const size = image.getSize();
   const scale = Math.min(
     options.maxSize.width / size.width,

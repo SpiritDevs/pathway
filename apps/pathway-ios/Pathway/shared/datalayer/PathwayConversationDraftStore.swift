@@ -8,6 +8,7 @@ struct PathwayConversationDraftSnapshot: Sendable {
     let preparedSend: PathwayThreadPreparedSend?
     let preparedNewSend: PathwayThreadPreparedNewSend?
     let revision: UInt64
+    var pendingQueuedEditRunID: String? = nil
     var composerModelSelection: PathwayModelSelection? = nil
     var composerRuntimeMode: String? = nil
     var composerInteractionMode: String? = nil
@@ -20,6 +21,7 @@ actor PathwayConversationDraftStore {
         let attachments: [PathwayThreadAttachmentDraft]
         let preparedSend: PathwayThreadPreparedSend?
         let preparedNewSend: PathwayThreadPreparedNewSend?
+        var pendingQueuedEditRunID: String? = nil
         /// First observed successful upload, keyed by the remote upload ID, not draft edits.
         var uploadedAt: [String: Date]? = nil
         var composerModelSelection: PathwayModelSelection? = nil
@@ -51,7 +53,9 @@ actor PathwayConversationDraftStore {
         } else { preparedIDs = [] }
         let attachments = manifest.attachments.map { attachment in
             var draft = attachment
-            if let bytes = try? Data(contentsOf: attachmentURL(draft.id)) {
+            if draft.localFileURL != nil, FileManager.default.fileExists(atPath: attachmentURL(draft.id).path) {
+                draft.localFileURL = attachmentURL(draft.id)
+            } else if let bytes = try? Data(contentsOf: attachmentURL(draft.id)) {
                 data[draft.id] = bytes
                 draft.previewData = draft.type == "image" ? bytes : nil
             }
@@ -68,7 +72,7 @@ actor PathwayConversationDraftStore {
             return draft
         }
         return PathwayConversationDraftSnapshot(text: manifest.text, attachments: attachments, data: data,
-            preparedSend: manifest.preparedSend, preparedNewSend: manifest.preparedNewSend, revision: 0,
+            preparedSend: manifest.preparedSend, preparedNewSend: manifest.preparedNewSend, revision: 0, pendingQueuedEditRunID: manifest.pendingQueuedEditRunID,
             composerModelSelection: manifest.composerModelSelection, composerRuntimeMode: manifest.composerRuntimeMode,
             composerInteractionMode: manifest.composerInteractionMode)
     }
@@ -112,6 +116,9 @@ actor PathwayConversationDraftStore {
         for draft in snapshot.attachments {
             let url = attachmentURL(draft.id)
             retained.insert(url.lastPathComponent)
+            if let source = draft.localFileURL, !FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.copyItem(at: source, to: url)
+            }
             if let data = snapshot.data[draft.id], !FileManager.default.fileExists(atPath: url.path) {
                 try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             }
@@ -122,7 +129,7 @@ actor PathwayConversationDraftStore {
             return result
         }
         let manifest = Manifest(text: snapshot.text, attachments: metadata,
-            preparedSend: snapshot.preparedSend, preparedNewSend: snapshot.preparedNewSend, uploadedAt: uploadDates,
+            preparedSend: snapshot.preparedSend, preparedNewSend: snapshot.preparedNewSend, pendingQueuedEditRunID: snapshot.pendingQueuedEditRunID, uploadedAt: uploadDates,
             composerModelSelection: snapshot.composerModelSelection, composerRuntimeMode: snapshot.composerRuntimeMode,
             composerInteractionMode: snapshot.composerInteractionMode)
         try JSONEncoder().encode(manifest).write(to: directory.appending(path: "draft.json"),
@@ -132,6 +139,12 @@ actor PathwayConversationDraftStore {
             where !retained.contains(url.lastPathComponent) {
             try FileManager.default.removeItem(at: url)
         }
+    }
+
+    func saveQueuedEdit(_ snapshot: PathwayConversationDraftSnapshot) throws -> PathwayConversationDraftSnapshot {
+        try save(snapshot)
+        guard let restored = load() else { throw CocoaError(.fileReadCorruptFile) }
+        return restored
     }
 
     /// Retire the draft without loading its attachment bytes into memory.

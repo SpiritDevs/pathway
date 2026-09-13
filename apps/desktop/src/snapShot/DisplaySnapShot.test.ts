@@ -55,7 +55,6 @@ vi.mock("./MacSnapShot.ts", () => ({ captureMacScreenSnapshot: macCaptureMock })
 
 import {
   captureDisplaySnapshot,
-  displaySelectionPixels,
   SnapShotRegionCancelled,
   SnapShotRegionPicker,
 } from "./DisplaySnapShot.ts";
@@ -65,38 +64,26 @@ beforeEach(() => {
   windows.length = 0;
   imageMock.mockReset();
   macCaptureMock.mockReset();
-  nearestDisplayMock.mockReset().mockReturnValue({ bounds, label: "Studio Display" });
+  nearestDisplayMock
+    .mockReset()
+    .mockReturnValue({ bounds, label: "Studio Display", scaleFactor: 2 });
 });
 
-it("maps a region from logical display coordinates to Retina pixels and clamps edges", () => {
-  expect(
-    displaySelectionPixels({ x: 20, y: 30, width: 100, height: 80 }, bounds, {
-      width: 2880,
-      height: 1800,
-    }),
-  ).toEqual({ x: 40, y: 60, width: 200, height: 160 });
-  expect(
-    displaySelectionPixels({ x: 1400, y: 850, width: 100, height: 100 }, bounds, {
-      width: 2880,
-      height: 1800,
-    }),
-  ).toEqual({ x: 2800, y: 1700, width: 80, height: 100 });
-});
-
-it("captures the pointer display once, then crops its frozen image without querying app context", async () => {
+it("selects a live region before capturing only its bounds without querying app context", async () => {
   const order: string[] = [];
   const png = Buffer.from("display");
   const croppedPng = Buffer.from("cropped");
   const cropped = { getSize: () => ({ width: 200, height: 160 }), toPNG: () => croppedPng };
   const image = {
     isEmpty: () => false,
-    getSize: () => ({ width: 2880, height: 1800 }),
+    getSize: () => ({ width: 200, height: 160 }),
+    toPNG: () => croppedPng,
     toDataURL: () => "data:image/png;base64,AAAA",
     crop: vi.fn(() => cropped),
   };
   imageMock.mockReturnValue(image);
   macCaptureMock.mockImplementation(async () => {
-    order.push("freeze");
+    order.push("capture");
     return png;
   });
   const picker = new SnapShotRegionPicker("darwin");
@@ -114,11 +101,14 @@ it("captures the pointer display once, then crops its frozen image without query
     maxSize: { width: 2560, height: 1600 },
     isCurrentAccount: () => true,
   });
-  expect(order).toEqual(["freeze", "select"]);
+  expect(order).toEqual(["select", "capture"]);
   expect(nearestDisplayMock).toHaveBeenCalledWith({ x: -1200, y: 300 });
-  expect(macCaptureMock).toHaveBeenCalledWith(bounds, "/tmp/screen.png");
+  expect(macCaptureMock).toHaveBeenCalledWith(
+    { x: -1420, y: -70, width: 100, height: 80 },
+    "/tmp/screen.png",
+  );
   expect(pool.capture).not.toHaveBeenCalled();
-  expect(image.crop).toHaveBeenCalledWith({ x: 40, y: 60, width: 200, height: 160 });
+  expect(image.crop).not.toHaveBeenCalled();
   expect(captured.captureBounds).toEqual({ x: -1420, y: -70, width: 100, height: 80 });
   expect(captured.png).toBe(croppedPng);
   expect(captured.source).toEqual({ name: "Screen region" });
@@ -174,7 +164,7 @@ it("does not show captured pixels after the account changes", async () => {
 
 it("closes the region overlay on selection, escape, and account cancellation", async () => {
   const picker = new SnapShotRegionPicker("darwin");
-  const selected = picker.select(bounds, "data:image/png;base64,AAAA");
+  const selected = picker.select(bounds, 2);
   const selectedWindow = windows[0]!;
   const preventDefault = vi.fn();
   selectedWindow.webContents.emit(
@@ -190,7 +180,7 @@ it("closes the region overlay on selection, escape, and account cancellation", a
     nodeIntegration: false,
   });
   for (const action of ["escape", "account"] as const) {
-    const pending = picker.select(bounds, "data:image/png;base64,AAAA");
+    const pending = picker.select(bounds, 2);
     const window = windows.at(-1)!;
     if (action === "escape")
       window.webContents.emit(
@@ -202,4 +192,23 @@ it("closes the region overlay on selection, escape, and account cancellation", a
     await expect(pending).rejects.toBeInstanceOf(SnapShotRegionCancelled);
     expect(window.destroyed).toBe(true);
   }
+});
+
+it("does not acquire any pixels when region selection is cancelled", async () => {
+  const picker = new SnapShotRegionPicker("darwin");
+  vi.spyOn(picker, "select").mockRejectedValue(new SnapShotRegionCancelled());
+  const pool = { capture: vi.fn() };
+  await expect(
+    captureDisplaySnapshot({
+      type: "region",
+      platform: "darwin",
+      imageTempPath: "/tmp/screen.png",
+      pool,
+      picker,
+      maxSize: bounds,
+      isCurrentAccount: () => true,
+    }),
+  ).rejects.toBeInstanceOf(SnapShotRegionCancelled);
+  expect(macCaptureMock).not.toHaveBeenCalled();
+  expect(pool.capture).not.toHaveBeenCalled();
 });

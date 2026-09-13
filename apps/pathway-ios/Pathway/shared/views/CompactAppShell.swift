@@ -2,6 +2,9 @@ import SwiftUI
 
 enum CompactAppShellMetrics {
     static let tabBarHeight: CGFloat = 58
+    static let horizontalPadding: CGFloat = 16
+    static let controlSpacing: CGFloat = 12
+    static let maximumWidth: CGFloat = 520
     static let tabBarBottomPadding: CGFloat = 8
     static let scrollContentClearance: CGFloat = tabBarHeight + tabBarBottomPadding + 12
     /// Shared by the tab bar surface and the thread composer so both halves of the
@@ -16,10 +19,12 @@ enum CompactAppShellMetrics {
     private let tabBarSpring = Animation.spring(duration: 0.48, bounce: 0.22)
     private let tabSelectionSpring = Animation.spring(duration: 0.36, bounce: 0.14)
 
-    struct CompactAppShell: View {
+    struct CompactAppShell<Content: View>: View {
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Binding var selectedDestination: AppDestination?
         @Binding var presentedSheet: MainTabSheet?
+        @Binding var showsSettings: Bool
+        @ViewBuilder var content: (AppDestination, @escaping () -> Void) -> Content
         @State private var isMoreMenuPresented = false
         @State private var isIssueDetailActive = false
         @State private var threadChrome = CompactThreadChromeState()
@@ -27,47 +32,41 @@ enum CompactAppShellMetrics {
         var body: some View {
             ZStack(alignment: .bottom) {
                 NavigationStack {
-                    PathwayFeatureDestinationView(
-                        destination: activeDestination,
-                        newThreadAction: presentNewAgentThread
-                    )
-                    .toolbar {
-                        if activeDestination != .issues && (activeDestination != .agentThreads || threadChrome.isThreadDetailActive) {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button("Settings", systemImage: "gearshape", action: presentSettings)
-                            }
-                        }
+                    content(activeDestination, presentNewAgentThread)
+                    .navigationDestination(isPresented: $showsSettings) {
+                        PathwaySettingsView()
                     }
                 }
                 .id(activeDestination)
                 .environment(\.compactThreadChrome, threadChrome)
                 .onPreferenceChange(IssueDetailNavigationActiveKey.self) { isIssueDetailActive = $0 }
-                if isNavigationBackdropPresented {
-                    Button(action: dismissMoreMenu) {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .ignoresSafeArea()
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Dismiss navigation menu")
-                }
+                .contentShape(.rect)
+                .simultaneousGesture(
+                    TapGesture().onEnded { dismissMoreMenu() },
+                    including: isNavigationExpanded ? .all : .subviews
+                )
 
-                if !threadChrome.isComposerExpanded && !threadChrome.isThreadDetailActive && !isIssueDetailActive {
+                if !showsSettings && !threadChrome.isComposerExpanded && !isIssueDetailActive {
                     PathwayTabBar(
                         selectedDestination: $selectedDestination,
                         isMoreMenuPresented: $isMoreMenuPresented,
                         threadChrome: threadChrome,
-                        showAgentOrchestrator: presentAgentOrchestrator
+                        showAgentOrchestrator: presentAgentOrchestrator,
+                        showSettings: presentSettings
                     )
-                    .frame(maxWidth: 520)
-                    .padding(.horizontal, 16)
+                    .frame(maxWidth: CompactAppShellMetrics.maximumWidth)
+                    .padding(.horizontal, CompactAppShellMetrics.horizontalPadding)
                     .padding(.bottom, CompactAppShellMetrics.tabBarBottomPadding)
+                    .accessibilityAction(.escape, dismissMoreMenu)
                     .transition(
                         reduceMotion
                             ? .opacity
                             : .scale(scale: 0.94, anchor: .bottomTrailing).combined(with: .opacity)
                     )
                 }
+            }
+            .onChange(of: showsSettings) { _, isPresented in
+                if isPresented { dismissMoreMenu() }
             }
             .animation(
                 reduceMotion ? nil : CompactAppShellMetrics.navigationChromeAnimation,
@@ -79,7 +78,7 @@ enum CompactAppShellMetrics {
             selectedDestination ?? .dashboard
         }
 
-        private var isNavigationBackdropPresented: Bool {
+        private var isNavigationExpanded: Bool {
             isMoreMenuPresented
                 || (threadChrome.isThreadDetailActive && threadChrome.isNavigationExpanded)
         }
@@ -96,7 +95,7 @@ enum CompactAppShellMetrics {
 
         private func presentSettings() {
             dismissMoreMenu()
-            presentedSheet = .settings
+            showsSettings = true
         }
 
         private func dismissMoreMenu() {
@@ -115,12 +114,32 @@ enum CompactAppShellMetrics {
         }
     }
 
+    extension CompactAppShell where Content == PathwayFeatureDestinationView {
+        init(
+            selectedDestination: Binding<AppDestination?>,
+            presentedSheet: Binding<MainTabSheet?>,
+            showsSettings: Binding<Bool>
+        ) {
+            self.init(
+                selectedDestination: selectedDestination,
+                presentedSheet: presentedSheet,
+                showsSettings: showsSettings
+            ) { destination, newThreadAction in
+                PathwayFeatureDestinationView(
+                    destination: destination,
+                    newThreadAction: newThreadAction
+                )
+            }
+        }
+    }
+
     private struct PathwayTabBar: View {
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
         @Binding var selectedDestination: AppDestination?
         @Binding var isMoreMenuPresented: Bool
         let threadChrome: CompactThreadChromeState
         let showAgentOrchestrator: () -> Void
+        let showSettings: () -> Void
 
         @Namespace private var glassNamespace
         @Namespace private var selectionNamespace
@@ -131,7 +150,7 @@ enum CompactAppShellMetrics {
 
         var body: some View {
             GlassEffectContainer(spacing: 12) {
-                HStack(alignment: .bottom, spacing: 12) {
+                HStack(alignment: .bottom, spacing: CompactAppShellMetrics.controlSpacing) {
                     mainSurface
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -250,11 +269,23 @@ enum CompactAppShellMetrics {
 
         private var destinationList: some View {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Pathway")
-                    .font(.headline)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 14)
-                    .padding(.bottom, 8)
+                HStack {
+                    Text("Pathway")
+                        .font(.headline)
+                    Spacer()
+                    Button(action: showSettings) {
+                        Image(systemName: "gearshape")
+                            .font(.title3)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Settings")
+                    .accessibilityIdentifier("navigation-settings-button")
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 2)
 
                 Divider()
                     .padding(.horizontal, 14)
