@@ -1,6 +1,6 @@
 # Company assets implementation status
 
-Work is on `feat/company-assets`, based on TestFlight 19 source `3e42a644c` and the approved asset design. The existing compact composer layout changes are retained.
+Implementation commit: `b497583e8` on `feat/company-assets`, based on TestFlight 19 source `3e42a644c` and the approved asset design. The existing compact composer layout changes are retained separately in `53dab2d22`.
 
 ## Review evidence
 
@@ -27,6 +27,7 @@ Final focused verification passed:
 - Backend: 56 tests across asset lifecycle/permissions, private media delivery, migration and queue operations.
 - Web: 56 tests across asset upload, queue, media/gallery, legacy alias rendering and workspace publication; earlier settings checks also passed.
 - iOS: 16 final asset/markdown tests and 21 previously verified queue tests. The linked-image parser regression was fixed and rerun successfully.
+- Five attachment contract tests passed.
 - Scoped server, backend and web typechecks and targeted lint passed. Native signed simulator builds passed.
 
 No repository-wide test run was requested or performed.
