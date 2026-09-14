@@ -193,8 +193,7 @@ export function FloatingConversationSwitcher({
   useEffect(() => {
     const element = anchor.current;
     if (!element) return;
-    const measure = () =>
-      setLayout(conversationPanelLayout(element.getBoundingClientRect(), window.innerHeight));
+    const measure = () => setLayout(conversationPanelLayout(element.getBoundingClientRect()));
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);
@@ -204,10 +203,10 @@ export function FloatingConversationSwitcher({
       window.removeEventListener("resize", measure);
     };
   }, [anchor]);
-  const docked = layout !== null;
+  const docked = layout?.docked ?? false;
 
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen} modal={!docked}>
+    <Dialog.Root open={open} onOpenChange={setOpen} modal={false}>
       <Dialog.Trigger
         render={<Button variant="ghost" size="sm" />}
         className="shrink-0 gap-1.5 px-2"
@@ -224,13 +223,13 @@ export function FloatingConversationSwitcher({
         )}
       </Dialog.Trigger>
       <Dialog.Portal>
-        {!docked && (
-          <Dialog.Backdrop className="fixed inset-0 z-[129] bg-black/45 transition-opacity duration-200 data-starting-style:opacity-0 data-ending-style:opacity-0 motion-reduce:transition-none" />
-        )}
         <Dialog.Viewport
-          className="pointer-events-none fixed inset-0 z-[130] overflow-hidden"
+          className={cn(
+            "pointer-events-none fixed z-[130] overflow-hidden",
+            !docked && "rounded-[26px]",
+          )}
           style={
-            docked
+            layout
               ? {
                   left: layout.left,
                   top: layout.top,
@@ -239,16 +238,23 @@ export function FloatingConversationSwitcher({
                   right: "auto",
                   bottom: "auto",
                 }
-              : undefined
+              : { visibility: "hidden" }
           }
         >
+          {!docked && (
+            <Dialog.Backdrop
+              onClick={() => setOpen(false)}
+              className="pointer-events-auto absolute inset-0 bg-black/40 transition-opacity duration-200 data-starting-style:opacity-0 data-ending-style:opacity-0 motion-reduce:transition-none"
+            />
+          )}
           <Dialog.Popup
             aria-label="Conversations"
+            style={{ width: layout?.panelWidth }}
             className={cn(
-              "pointer-events-auto flex h-full min-h-0 flex-col border bg-popover text-popover-foreground shadow-xl outline-none transition-transform duration-250 ease-[cubic-bezier(0.25,1,0.5,1)] motion-reduce:transition-none",
+              "pointer-events-auto relative flex h-full min-h-0 flex-col border bg-popover text-popover-foreground shadow-xl outline-none transition-transform duration-250 ease-[cubic-bezier(0.25,1,0.5,1)] motion-reduce:transition-none",
               docked
                 ? "w-full rounded-l-2xl data-starting-style:translate-x-full data-ending-style:translate-x-full"
-                : "w-[min(320px,calc(100vw-40px))] data-starting-style:-translate-x-full data-ending-style:-translate-x-full",
+                : "rounded-l-[26px] data-starting-style:-translate-x-full data-ending-style:-translate-x-full",
             )}
           >
             <div className="flex h-14 shrink-0 items-center justify-between px-4">

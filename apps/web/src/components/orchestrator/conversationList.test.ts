@@ -36,13 +36,23 @@ describe("conversation list", () => {
   });
 });
 
-it("docks only when the full panel fits beside the chat, and stays within the viewport", () => {
-  expect(conversationPanelLayout({ left: 335, top: 80, height: 600 }, 800)).toBeNull();
-  expect(conversationPanelLayout({ left: 336, top: 80, height: 600 }, 800)).toEqual({
+it("keeps the slide-out attached and confines the overlay to the companion", () => {
+  const bounds = { left: 100, top: 80, height: 600, width: 500 };
+  expect(conversationPanelLayout(bounds)).toEqual({
+    docked: false,
+    left: 100,
+    top: 80,
+    width: 500,
+    height: 600,
+    panelWidth: 320,
+  });
+  expect(conversationPanelLayout({ ...bounds, left: 336 })).toEqual({
+    docked: true,
     left: 16,
     top: 80,
     width: 320,
     height: 600,
+    panelWidth: 320,
   });
-  expect(conversationPanelLayout({ left: 800, top: 80, height: 600 }, 500)?.height).toBe(404);
+  expect(conversationPanelLayout({ ...bounds, width: 280 }).panelWidth).toBe(240);
 });

@@ -25,19 +25,20 @@ export function conversationTime(timestamp: number, now = Date.now()) {
       }).format(sent);
 }
 
-/** Reserve a screen-edge gutter; use a modal drawer when the left side cannot fit. */
-export function conversationPanelLayout(
-  bounds: { left: number; top: number; height: number },
-  viewportHeight: number,
-) {
-  const width = 320;
-  const gutter = 16;
-  if (bounds.left < width + gutter) return null;
-  const top = Math.max(gutter, bounds.top);
+/** Both presentations share the companion's exact top and height. */
+export function conversationPanelLayout(bounds: {
+  left: number;
+  top: number;
+  height: number;
+  width: number;
+}) {
+  const docked = bounds.left >= 336;
   return {
-    left: bounds.left - width,
-    top,
-    width,
-    height: Math.max(0, Math.min(bounds.height, viewportHeight - top - gutter)),
+    docked,
+    left: docked ? bounds.left - 320 : bounds.left,
+    top: bounds.top,
+    width: docked ? 320 : bounds.width,
+    height: bounds.height,
+    panelWidth: docked ? 320 : Math.min(320, Math.max(0, bounds.width - 40)),
   };
 }

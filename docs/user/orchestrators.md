@@ -24,7 +24,7 @@ The face expresses the tone of a response. A separate status dot reports work su
 
 ## Switching conversations
 
-In the floating companion, select the sidebar button immediately to the left of the avatar. When there is enough space on the left, the conversation list slides out beside the chat at the same height. In a smaller window, it opens as an overlay drawer with a dimmed backdrop. Resize the window while it is open to move between these layouts. The list includes search, the latest message, its send time, and an unread count for each room. Select a conversation to switch and close the list; your draft stays with its conversation. Escape or the close button also closes the list.
+In the floating companion, select the sidebar button immediately to the left of the avatar. When there is enough space on the left, the conversation list slides out beside the chat at the same height. In a smaller window, it slides over the chat, including its header, with a backdrop confined to the companion. Both layouts match the companion’s height; the overlay never covers the rest of the app. Resize the window while it is open to move between these layouts. The list includes search, the latest message, its send time, and an unread count for each room. Select a conversation to switch and close the list; your draft stays with its conversation. Escape or the close button also closes the list.
 
 The number beside the sidebar icon counts unread messages across active conversations, excluding archived rooms and internal agent events. Counts above 99 appear as **99+**. Opening and reading a conversation updates its count. Older messages show a date; hover the timestamp for the full send time.
 
