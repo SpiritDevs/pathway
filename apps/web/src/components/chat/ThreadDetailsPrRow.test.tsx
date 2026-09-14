@@ -68,6 +68,7 @@ function render(
     pending?: boolean;
     checks?: PullRequestDetail["checks"];
     state?: PullRequestDetail["state"];
+    prState?: PullRequestDetail["state"];
     isDraft?: boolean;
     error?: string;
     mergeability?: PullRequestDetail["mergeability"];
@@ -80,7 +81,7 @@ function render(
     state: options.state ?? detail.state,
     isDraft: options.isDraft ?? false,
   };
-  const currentPr = { ...pr, state: currentDetail.state };
+  const currentPr = { ...pr, state: options.prState ?? currentDetail.state };
   return renderToStaticMarkup(
     <ThreadDetailsPrRow
       environmentId={EnvironmentId.make("test")}
@@ -165,4 +166,13 @@ it("removes the failure notice when checks pass or the PR merges", () => {
     expect(html).not.toContain(failedCheck.description);
     expect(html).not.toContain("text-red-600");
   }
+});
+
+it("uses an effective merged state when cached detail is still open", () => {
+  const html = render({ checks: [failedCheck], isDraft: true, prState: "merged" });
+  expect(html).toContain("lucide-git-merge");
+  expect(html).not.toContain("lucide-git-pull-request-draft");
+  expect(html).not.toContain("check failing");
+  expect(html).not.toContain(failedCheck.description);
+  expect(html).not.toContain("text-red-600");
 });

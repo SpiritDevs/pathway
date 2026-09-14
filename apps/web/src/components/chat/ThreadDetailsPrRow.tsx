@@ -139,10 +139,15 @@ export function ThreadDetailsPrRow({
   };
 
   // Once the host has answered, the glyph knows about drafts, which the vcs summary does not.
+  // The branch observation may know about a merge before cached detail does, so its effective
+  // state still owns the shape and whether old checks remain relevant.
   const statePresentation =
     detail === null
       ? null
-      : resolvePullRequestState({ state: detail.state, isDraft: detail.isDraft });
+      : resolvePullRequestState({
+          state: pr.state,
+          isDraft: pr.state === "open" && detail.isDraft,
+        });
   const icon = statePresentation ? (
     <statePresentation.Icon
       aria-hidden
@@ -153,11 +158,13 @@ export function ThreadDetailsPrRow({
   );
 
   const failedChecks =
-    detail?.state === "open"
+    pr.state === "open" && detail !== null
       ? detail.checks.filter((check) => check.status === "failure" || check.status === "cancelled")
       : [];
   const pendingChecks =
-    detail?.state === "open" ? detail.checks.filter((check) => check.status === "pending") : [];
+    pr.state === "open" && detail !== null
+      ? detail.checks.filter((check) => check.status === "pending")
+      : [];
   const visibleChecks = failedChecks.length > 0 ? failedChecks : pendingChecks;
   const checksLabel = `${visibleChecks.length} ${visibleChecks.length === 1 ? "check" : "checks"} ${failedChecks.length > 0 ? "failing" : "pending"}`;
 
