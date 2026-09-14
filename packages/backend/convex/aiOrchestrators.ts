@@ -119,6 +119,14 @@ async function validateConfig(ctx: QueryCtx, input: unknown, ownerSubject: strin
     return fail("This configuration contains too many entries.");
   if (unique(config.models.map((m) => m.id)).length !== config.models.length)
     return fail("Model choices must have distinct identities.");
+  if (
+    (config.workerModels ?? []).some(
+      (choice) => !choice.name.trim() || !choice.environmentId.trim(),
+    ) ||
+    unique((config.workerModels ?? []).map((choice) => choice.id)).length !==
+      (config.workerModels ?? []).length
+  )
+    return fail("Worker presets need a name, an environment and distinct identities.");
   if (config.kind === "project" && (!config.companyId || !config.projectId))
     return fail("Choose a workspace and project for a project orchestrator.");
   if (config.shared && !config.companyId)
@@ -161,8 +169,9 @@ async function validateConfig(ctx: QueryCtx, input: unknown, ownerSubject: strin
     }
   } else if (config.directorSubjects.length || config.managerSubjects.length)
     return fail("Personal orchestrators are managed and directed by their owner.");
+  const { workerModels, ...base } = config;
   return {
-    ...config,
+    ...base,
     name: config.name.trim(),
     capabilities: unique(config.capabilities),
     directorSubjects: unique(config.directorSubjects),
@@ -177,6 +186,20 @@ async function validateConfig(ctx: QueryCtx, input: unknown, ownerSubject: strin
           : {}),
       },
     })),
+    ...(workerModels
+      ? {
+          workerModels: workerModels.map((choice) => ({
+            ...choice,
+            selection: {
+              instanceId: choice.selection.instanceId,
+              model: choice.selection.model,
+              ...(choice.selection.options
+                ? { options: choice.selection.options.map((option) => ({ ...option })) }
+                : {}),
+            },
+          })),
+        }
+      : {}),
     environmentIds: unique(config.environmentIds),
   };
 }
@@ -225,6 +248,7 @@ export const ensurePersonal = mutation({
     await ctx.db.insert("aiOrchestrators", {
       ...defaultOrchestratorConfig(),
       models: [],
+      workerModels: [],
       capabilities: [...defaultOrchestratorConfig().capabilities],
       directorSubjects: [],
       managerSubjects: [],
@@ -863,6 +887,8 @@ export const work = query({
         threadId,
         status,
         detail,
+        selection,
+        selectionReason,
         createdAt,
       }) => ({
         id,
@@ -873,6 +899,8 @@ export const work = query({
         threadId,
         status,
         detail,
+        selection,
+        selectionReason,
         createdAt,
       }),
     );

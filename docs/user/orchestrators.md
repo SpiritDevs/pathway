@@ -51,3 +51,13 @@ Pause retains the allocation, queued requests, and partial results. **Authorize 
 You can give a numeric allocation in a message, such as “Use 10% of the weekly usage allowance for this assignment.” The coordinator records the quoted instruction and confirms the baseline and threshold. Agents can establish the same limit for their current human request. Adding a limit does not remove or increase any existing limit.
 
 When authorizing a new allocation, you can choose a one-time resume date and timezone. This pauses work immediately and takes a fresh baseline at the chosen time. Every selected account needs a fresh reading. If resumption is missed by more than one hour, work stays held for your instruction. Cancel the scheduled resume to retain the current hold. An interrupted worker can continue from retained progress when allowance is authorized; newer requests, archiving, and snoozing supersede that continuation.
+
+## Worker models
+
+In **Settings → Orchestrators → Models**, coordinator reasoning and delegated workers have separate choices. Coordinator models handle the conversation. Worker models carry out assignments.
+
+Add a worker preset on web or desktop to choose its environment, provider, model and reasoning. Give it a name and describe when to use it. For example, use a routine preset for focused edits and tests, and a more capable preset for difficult debugging. Relative cost is your estimate, not a live price.
+
+The coordinator sees available models and supported reasoning options from eligible environments. It uses your presets and the task's needs to choose. Explicit model requests take precedence. The first preset on each environment is its default worker; drag to reorder or remove a preset to undo that preference. With no preset, default delegation uses the project's saved model, then the environment's text-generation model. It does not inherit the coordinator's model.
+
+Assignment cards show the selected model and a short explanation when available. Unsupported or unavailable choices fail without silently switching models. Allowance limits still apply, and another account needs its own allocation. Offline or older environments may not provide a current catalog. Presets remain saved and apply to conversations opened on mobile; edit them from web or desktop.

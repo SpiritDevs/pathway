@@ -29,6 +29,13 @@ import {
   ProjectId,
   ThreadId,
 } from "@spiritdevs/contracts";
+import { delegationSelectionProblem } from "@spiritdevs/contracts/aiOrchestrator";
+import {
+  CommandReceiptStoreV2,
+  layer as commandReceiptStoreLayer,
+} from "../orchestration-v2/CommandReceiptStore.ts";
+import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
+import { orchestratorDelegationCatalog, resolveDelegatedModel } from "./orchestratorSelection.ts";
 import type { SyncBootstrapResponse } from "@spiritdevs/contracts/cloudSync";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { makeSqliteSyncStore } from "@spiritdevs/client-runtime/sync";
@@ -205,6 +212,8 @@ export interface LocalEnvironmentCommandServices {
   readonly launch: ThreadLaunch.ThreadLaunchService["Service"]["launch"];
   readonly dispatch: ThreadManagement.ThreadManagementService["Service"]["dispatch"];
   readonly getThreadProjection: ThreadManagement.ThreadManagementService["Service"]["getThreadProjection"];
+  readonly hasAcceptedLaunch?: (commandId: CommandId) => Effect.Effect<boolean, unknown>;
+  readonly validateSelection?: (selection: ModelSelection) => Effect.Effect<void, unknown>;
   readonly resolveStartTarget: (
     command: ClaimedEnvironmentCommand,
     requestedModel: ModelSelection | null,
@@ -241,6 +250,12 @@ export function makeLocalEnvironmentCommandExecutor(
               return yield* Effect.fail(
                 "An orchestrated assignment requires its workspace authority.",
               );
+            if (orchestrated && services.validateSelection) {
+              const accepted = services.hasAcceptedLaunch
+                ? yield* services.hasAcceptedLaunch(commandId)
+                : false;
+              if (!accepted) yield* services.validateSelection(target.modelSelection);
+            }
             // This is the crash-recovery identity: ThreadLaunchService persists its receipt under
             // the EnvironmentCommandId unchanged. A restarted claimant may receive a new claim
             // generation, but replaying this command id returns the same thread without launching
@@ -599,6 +614,8 @@ function makeLiveExecutor(input: {
   readonly companyId: CompanyId;
   readonly environmentId: EnvironmentId;
   readonly backend: EnvironmentCommandBackend;
+  readonly providers: ProviderInstanceRegistry["Service"];
+  readonly receipts: CommandReceiptStoreV2["Service"];
   readonly launcher: ThreadLaunch.ThreadLaunchService["Service"];
   readonly threads: ThreadManagement.ThreadManagementService["Service"];
   readonly projects: ProjectService.ProjectService["Service"];
@@ -608,6 +625,29 @@ function makeLiveExecutor(input: {
   return makeLocalEnvironmentCommandExecutor({
     companyId: input.companyId,
     launch: input.launcher.launch,
+    hasAcceptedLaunch: (commandId) =>
+      input.receipts
+        .getByCommandId(commandId)
+        .pipe(
+          Effect.map((receipt) => Option.isSome(receipt) && receipt.value.status === "accepted"),
+        ),
+    validateSelection: (selection) =>
+      Effect.gen(function* () {
+        const instance = yield* input.providers.getInstance(selection.instanceId);
+        if (!instance?.enabled)
+          return yield* Effect.fail(
+            "The selected worker provider is unavailable. No fallback was selected.",
+          );
+        const snapshot = yield* instance.snapshot.getSnapshot;
+        // Validate against this provider alone so a large environment catalog cannot hide the requested model.
+        const model = snapshot.models.find((model) => model.slug === selection.model);
+        const catalog = orchestratorDelegationCatalog(
+          [{ ...snapshot, models: model ? [model] : [] }],
+          selection,
+        );
+        const problem = delegationSelectionProblem(selection, catalog);
+        if (problem) return yield* Effect.fail(`${problem} No fallback was selected.`);
+      }),
     dispatch: input.threads.dispatch,
     getThreadProjection: input.threads.getThreadProjection,
     resolveStartTarget: (command, requestedModel) =>
@@ -621,7 +661,11 @@ function makeLiveExecutor(input: {
           const serverSettings = yield* input.settings.getSettings;
           return {
             projectId: null,
-            modelSelection: requestedModel ?? serverSettings.textGenerationModelSelection,
+            modelSelection: resolveDelegatedModel(
+              requestedModel,
+              null,
+              serverSettings.textGenerationModelSelection,
+            ),
             workspaceStrategy: { type: "root" } as const,
           };
         }
@@ -657,10 +701,11 @@ function makeLiveExecutor(input: {
         return {
           projectId,
           workspaceStrategy,
-          modelSelection:
-            requestedModel ??
-            project.value.defaultModelSelection ??
+          modelSelection: resolveDelegatedModel(
+            requestedModel,
+            project.value.defaultModelSelection,
             serverSettings.textGenerationModelSelection,
+          ),
         };
       }),
   });
@@ -705,6 +750,8 @@ export const startEnvironmentCommandClaimant = Effect.fn(
   const projects = yield* ProjectService.ProjectService;
   const settings = yield* ServerSettings.ServerSettingsService;
   const git = yield* GitWorkflow.GitWorkflowService;
+  const providers = yield* ProviderInstanceRegistry;
+  const receipts = yield* CommandReceiptStoreV2;
 
   yield* Effect.logInfo("Environment command claimant supervisor started", {
     environmentId,
@@ -738,6 +785,8 @@ export const startEnvironmentCommandClaimant = Effect.fn(
         const executor =
           options.executor ??
           makeLiveExecutor({
+            providers,
+            receipts,
             companyId,
             environmentId,
             backend,
@@ -793,6 +842,7 @@ export const environmentCommandClaimantLayer = (
   | ProjectService.ProjectService
   | GitWorkflow.GitWorkflowService
   | ServerSettings.ServerSettingsService
+  | ProviderInstanceRegistry
 > =>
   Layer.effectDiscard(
     startEnvironmentCommandClaimant(options).pipe(
@@ -803,4 +853,4 @@ export const environmentCommandClaimantLayer = (
         ),
       ),
     ),
-  );
+  ).pipe(Layer.provide(commandReceiptStoreLayer));

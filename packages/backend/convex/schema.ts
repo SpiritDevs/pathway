@@ -722,6 +722,8 @@ export default defineSchema({
     /** `ExecutionEnvironmentDescriptor` from `contracts/environment`. */
     descriptor: v.any(),
     orchestratorResources: v.optional(v.any()),
+    orchestratorDelegationCatalog: v.optional(v.any()),
+    orchestratorDelegationCatalogAt: v.optional(v.number()),
     orchestratorPresence: v.optional(v.union(v.literal("online"), v.literal("offline"))),
     relayLinkState: v.union(
       v.literal("unlinked"),
