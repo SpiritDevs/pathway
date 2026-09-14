@@ -36,7 +36,11 @@ Open a thread's Workspace for current changes, branches, commit/push/pull, pull 
 
 Use Settings to connect an environment, manage projects and scripts, configure supported providers, manage companies/people/teams/roles, review scheduled tasks and usage, and choose appearance, keyboard shortcuts, active-turn send behavior, auto-settle timing, exact timestamps or favorite models. Storage settings can clear this account’s downloaded history while keeping drafts. Available actions depend on your permissions and environment capabilities. [Connect a server](mobile-server-connections.md) explains LAN pairing and managed connections.
 
-Agent notifications are opt-in. Configure the event kinds you want and open a notification to return to its thread. iOS Live Activities are a separate preference. Shared Drafts accepts content saved by the share extension; select a project and review it before sending. Shortcuts can draft a prompt or open running agents and requests needing attention. Add a small or medium work-summary widget for saved running/attention counts and quick links. Its saved time tells you how old the snapshot is; open Pathway to refresh it.
+Agent notifications are opt-in. In Notifications settings, enable Agent notifications, choose the event kinds you want, then tap Save preferences and allow notifications. Open a notification to return to its thread. iOS Live Activities are a separate preference on the same screen.
+
+Both require your server to be linked to Pathway Cloud with Publish agent activity enabled. Connection setup includes this option for new links. For an existing link, open Connections, select the paired server, and enable Publish agent activity. Changing this server setting requires an administrator pairing link and affects all your devices. Keep the server online so it can send completion alerts and Live Activity updates while the app is closed. Direct connections can publish activity too; a managed tunnel is not required.
+
+Shared Drafts accepts content saved by the share extension; select a project and review it before sending. Shortcuts can draft a prompt or open running agents and requests needing attention. Add a small or medium work-summary widget for saved running/attention counts and quick links. Its saved time tells you how old the snapshot is; open Pathway to refresh it.
 
 ## Apple platform differences
 

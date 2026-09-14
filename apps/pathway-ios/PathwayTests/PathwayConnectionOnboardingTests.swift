@@ -42,6 +42,8 @@ import Testing
         #expect(await spy.paths.contains("/api/connect/link-proof"))
         #expect(await spy.paths.contains("/api/connect/relay-config"))
         #expect(await spy.preferred == false)
+        #expect(await spy.publishActivity)
+        #expect(model.publishesActivity)
         #expect(await spy.linkProofPayload?.objectValue?["origin"]?.objectValue?["localHttpPort"] == .number(3800))
     }
 
@@ -63,6 +65,76 @@ import Testing
         #expect(model.errorMessage != nil)
         #expect(model.completionMessage == nil)
         #expect(calls.contains("DELETE /v1/client/environment-links/server"))
+    }
+
+    @Test func activityPublishingCanBeEnabledAndDisabledForAnExistingLink() async {
+        let spy = OnboardingSourceSpy()
+        await spy.setLinked()
+        let model = makeModel(spy: spy, relay: { _, _, _ in listing(true) }, cloud: { _, _, _ in .null })
+        await model.load(accountKey: "issuer\nuser")
+        await model.pair(address: "http://server.local#token=pair", token: "")
+        #expect(!model.publishesActivity)
+        await model.setActivityPublishing(true)
+        #expect(model.publishesActivity)
+        #expect(await spy.publishActivity)
+        await model.setActivityPublishing(false)
+        #expect(!model.publishesActivity)
+        #expect(await !spy.publishActivity)
+    }
+
+    @Test func registrationPreservesExistingPublicationPreference() async {
+        let spy = OnboardingSourceSpy()
+        await spy.setLinked()
+        let model = makeModel(spy: spy, relay: { _, _, _ in listing(true) }, cloud: { _, _, _ in .null })
+        await model.load(accountKey: "issuer\nuser")
+        await model.pair(address: "http://server.local#token=pair", token: "")
+        await model.finish(companyID: "company", projectIDs: [], roles: [role("service")], registrations: [], managed: false)
+        #expect(model.errorMessage == nil)
+        #expect(await !spy.paths.contains("/api/connect/preferences"))
+        #expect(!model.publishesActivity)
+    }
+
+    @Test func publicationRequiresAdministratorPairing() async {
+        let spy = OnboardingSourceSpy(admin: false)
+        await spy.setLinked()
+        let model = makeModel(spy: spy, relay: { _, _, _ in listing(true) }, cloud: { _, _, _ in .null })
+        await model.load(accountKey: "issuer\nuser")
+        await model.pair(address: "http://server.local#token=pair", token: "")
+        await model.setActivityPublishing(true)
+        #expect(await !spy.paths.contains("/api/connect/preferences"))
+        #expect(!model.publishesActivity)
+    }
+
+    @Test func directLinkCanOptOutOfActivityPublishing() async {
+        let spy = OnboardingSourceSpy()
+        var linked = false
+        let model = makeModel(spy: spy, relay: { _, path, _ in
+            if path == "/v1/environments" { return listing(linked) }
+            if path.hasSuffix("challenges") { return .object(["challenge": .string("challenge")]) }
+            linked = true
+            var result = linkResult().objectValue!
+            result["endpoint"] = .object(["providerKind": .string("manual")])
+            return .object(result)
+        }, cloud: { _, _, _ in .null })
+        await model.load(accountKey: "issuer\nuser")
+        await model.pair(address: "http://server.local#token=pair", token: "")
+        await model.finish(companyID: "company", projectIDs: [], roles: [role("service")], registrations: [], managed: false, publishActivity: false)
+        #expect(model.errorMessage == nil)
+        #expect(await spy.paths.contains("/api/connect/preferences"))
+        #expect(await !spy.publishActivity)
+        #expect(await !spy.installed)
+    }
+
+    @Test func publicationFailureKeepsLastConfirmedState() async {
+        let spy = OnboardingSourceSpy()
+        await spy.setLinked()
+        let model = makeModel(spy: spy, relay: { _, _, _ in listing(true) }, cloud: { _, _, _ in .null })
+        await model.load(accountKey: "issuer\nuser")
+        await model.pair(address: "http://server.local#token=pair", token: "")
+        await spy.setConflict()
+        await model.setActivityPublishing(true)
+        #expect(model.errorMessage != nil)
+        #expect(!model.publishesActivity)
     }
 
     @Test func alreadyLinkedServerOutsideAccountIsNotRegistered() async {
@@ -152,6 +224,7 @@ private actor OnboardingSourceSpy {
     var linkProofPayload: JSONValue?
     var preferred = true
     var linked = false
+    var publishActivity = false
     var conflict = false
     let admin: Bool
     init(admin: Bool = true) { self.admin = admin }
@@ -166,7 +239,11 @@ private actor OnboardingSourceSpy {
     func request(_ path: String, payload: JSONValue?) throws -> JSONValue {
         paths.append(path)
         switch path {
-        case "/api/connect/link-state": return .object(["linked": .bool(linked), "cloudUserId": .string("user"), "currentLocalHttpPort": .number(3800)])
+        case "/api/connect/link-state": return linkState
+        case "/api/connect/preferences":
+            if conflict { throw URLError(.notConnectedToInternet) }
+            publishActivity = payload?.objectValue?["publishAgentActivity"]?.boolValue == true
+            return linkState
         case "/api/orchestration/shell": return .object(["projects": .array(["project-a", "project-b"].map {
             .object(["id": .string($0), "title": .string($0), "workspaceRoot": .string("/workspace/" + $0)])
         })])
@@ -183,6 +260,10 @@ private actor OnboardingSourceSpy {
         ])
         default: throw URLError(.badURL)
         }
+    }
+
+    private var linkState: JSONValue {
+        .object(["linked": .bool(linked), "cloudUserId": .string("user"), "currentLocalHttpPort": .number(3800), "publishAgentActivity": .bool(publishActivity)])
     }
 }
 
