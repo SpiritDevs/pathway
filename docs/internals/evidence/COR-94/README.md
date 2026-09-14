@@ -1,7 +1,7 @@
 # COR-94: orchestrator attachments review evidence
 
 Branch: `fix/orchestrator-attachments`. Base: `a26f42e0ed026f60fd816a729a8279ab21f70845`.
-Captured 14 September 2026. Local development only; no merge, production deployment, or PR.
+Captured 14 September 2026. Local development only; no merge or production deployment. PR preparation includes the before screenshot and interaction recording below.
 
 ## Implemented
 
@@ -36,8 +36,10 @@ Backend tests additionally exercise revoked membership, history boundaries, inva
 
 ## Screenshots for Corey
 
-All screenshots are the implemented UI in the local fixture. Queued status is intentional: no live provider worker ran.
+Screenshots use the local fixture. The before image captures the unmodified composer from main; the other images show the implementation. Queued status is intentional: no live provider worker ran.
 
+- [Original main composer before attachment support](before-compose.png)
+- [Recorded paste, upload, floating/full-view switch, send and download](attachment-flow.webm)
 - [Image and file selected in the compose bar](compose-image-file.png)
 - [Floating companion retains the selected attachments](floating-image-file.png)
 - [Sent message renders the image and downloadable file](sent-image-file.png)
