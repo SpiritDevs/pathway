@@ -61,3 +61,13 @@ Add a worker preset on web or desktop to choose its environment, provider, model
 The coordinator sees available models and supported reasoning options from eligible environments. It uses your presets and the task's needs to choose. Explicit model requests take precedence. The first preset on each environment is its default worker; drag to reorder or remove a preset to undo that preference. With no preset, default delegation uses the project's saved model, then the environment's text-generation model. It does not inherit the coordinator's model.
 
 Assignment cards show the selected model and a short explanation when available. Unsupported or unavailable choices fail without silently switching models. Allowance limits still apply, and another account needs its own allocation. Offline or older environments may not provide a current catalog. Presets remain saved and apply to conversations opened on mobile; edit them from web or desktop.
+
+## Images and files
+
+Use the paperclip in a conversation to attach images and files, or paste an image into the compose box. On the web and desktop you can also drop files onto the compose bar. On iOS, use Photos, Choose files, or Paste in the attachment menu.
+
+Attach up to eight files per message: images up to 10 MB each, other files up to 50 MB. You can send attachments without text. Preview images and remove unwanted files before sending. Wait for uploads to finish; if an upload fails, retry it or remove it. Selected files stay with the draft when you switch between the full conversation and floating companion. Unsent drafts are not retained after closing or reloading the app.
+
+Sent images and file downloads remain in conversation history. Access follows the conversation's participants and history-sharing choices. Files do not grant permission to another conversation, project, or worker. A download requires a signed-in account with access; copying its endpoint does not share the file.
+
+The orchestrator can read bounded text from text files and can inspect up to four PNG, JPEG, WebP or GIF images per turn when its reasoning provider is Codex. SVG and HEIC remain downloadable but are not sent as image inputs. Other reasoning providers do not currently receive image contents. Binary formats such as PDFs and archives can be attached and downloaded, but the orchestrator cannot currently inspect their contents; provide an image or text export for review. Up to eight recent attachments remain available for follow-up reasoning. Raw files are not automatically copied into delegated worker threads.

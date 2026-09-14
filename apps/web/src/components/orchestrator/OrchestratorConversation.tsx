@@ -1,3 +1,5 @@
+import { ConversationAttachmentDrafts } from "./ConversationAttachments";
+import { shouldHandleComposerAttachmentPaste } from "../chat/composerAttachmentFiles";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
@@ -12,6 +14,7 @@ import {
   MinusIcon,
   PanelRightIcon,
   PlusIcon,
+  PaperclipIcon,
   SearchIcon,
   XIcon,
 } from "lucide-react";
@@ -52,28 +55,47 @@ function Composer({ chat, activity }: { chat: OrchestratorChat; activity: Orches
     return () => clearTimeout(timer);
   }, [activity, now]);
   const state = useOrchestrators();
-  const [sending, setSending] = useState(false);
+  const sending = state.sendingChats.includes(chat.id);
+  const setSending = (value: boolean) => state.setSendingChat(chat.id, value);
   const [target, setTarget] = useState(chat.leadId);
-  const pending = useRef<{ id: string; text: string; targetId: string } | null>(null);
+  const pending = state.pendingMessages.current;
+  const fileInput = useRef<HTMLInputElement>(null);
+  const drafts = state.attachments.drafts[chat.id] ?? [];
+  const blocked = drafts.some((draft) => draft.status !== "ready");
+  const addFiles = (files: File[]) => {
+    if (sending || !lead?.canDirect) return;
+    try {
+      state.attachments.add(chat.id, lead.id, files);
+      state.setError(undefined);
+    } catch (cause) {
+      state.setError(errorMessage(cause));
+    }
+  };
   const text = state.drafts[chat.id] ?? "";
   const contacts = state.contacts.filter((contact) => chat.orchestratorIds.includes(contact.id));
   const lead =
     contacts.find((contact) => contact.id === target) ??
     contacts.find((contact) => contact.id === chat.leadId);
   const send = () => {
-    if (sending || !text.trim() || chat.archived || !lead?.canDirect) return;
+    if (sending || blocked || (!text.trim() && !drafts.length) || chat.archived || !lead?.canDirect)
+      return;
+    const attachmentIds = drafts.map((draft) => draft.attachment.id);
+    const previous = pending.get(chat.id);
     const message =
-      pending.current?.text === text && pending.current.targetId === lead.id
-        ? pending.current
-        : { id: randomUUID(), text, targetId: lead.id };
-    pending.current = message;
+      previous?.text === text &&
+      previous.targetId === lead.id &&
+      JSON.stringify(previous.attachmentIds) === JSON.stringify(attachmentIds)
+        ? previous
+        : { id: randomUUID(), text, targetId: lead.id, attachmentIds };
+    pending.set(chat.id, message);
     setSending(true);
     state.setError(undefined);
     void state
       .request("aiOrchestrators:send", { chatId: chat.id, ...message })
       .then(() => {
         state.setDraft(chat.id, "");
-        pending.current = null;
+        state.attachments.sent(chat.id, message.attachmentIds);
+        pending.delete(chat.id);
       })
       .catch((cause) => state.setError(errorMessage(cause)))
       .finally(() => setSending(false));
@@ -139,43 +161,103 @@ function Composer({ chat, activity }: { chat: OrchestratorChat; activity: Orches
             </select>
           </label>
         )}
-        <div className="flex items-end gap-2 rounded-[26px] border bg-background p-2 shadow-sm">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="mb-0.5 rounded-full"
-            aria-label="New conversation"
-            onClick={() => state.setNewChatOpen(true)}
-          >
-            <PlusIcon className="size-5" />
-          </Button>
-          <textarea
-            aria-label={`Message ${chat.title}`}
-            placeholder={`Message ${chat.title}`}
-            className="field-sizing-content max-h-40 min-h-9 min-w-0 flex-1 resize-none bg-transparent py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground"
-            rows={1}
-            value={text}
-            onChange={(event) => state.setDraft(chat.id, event.target.value)}
-            maxLength={32000}
-            disabled={sending}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                send();
-              }
-            }}
-          />
-          <Button
-            type="submit"
-            size="icon"
-            className="size-9 shrink-0 rounded-full bg-blue-500 text-white hover:bg-blue-600"
-            aria-label="Send message"
-            disabled={sending || !text.trim() || !lead?.canDirect}
-          >
-            <ArrowUpIcon className="size-5" />
-          </Button>
+        <input
+          ref={fileInput}
+          type="file"
+          multiple
+          className="sr-only"
+          tabIndex={-1}
+          aria-label="Attach images and files"
+          disabled={sending || !lead?.canDirect}
+          onChange={(event) => {
+            addFiles(Array.from(event.target.files ?? []));
+            event.target.value = "";
+          }}
+        />
+        <div
+          className="rounded-[26px] border bg-background shadow-sm"
+          onDragOver={(event) => {
+            if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+          }}
+          onDrop={(event) => {
+            if (event.dataTransfer.files.length) {
+              event.preventDefault();
+              addFiles(Array.from(event.dataTransfer.files));
+            }
+          }}
+        >
+          {drafts.length > 0 && (
+            <ConversationAttachmentDrafts
+              drafts={drafts}
+              disabled={sending}
+              remove={(id) => state.attachments.remove(chat.id, id)}
+              retry={(id) => {
+                if (lead) state.attachments.retry(chat.id, lead.id, id);
+              }}
+            />
+          )}
+          <div className="flex items-end gap-2 p-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="mb-0.5 rounded-full"
+              aria-label="Attach images and files"
+              disabled={sending || !lead?.canDirect}
+              onClick={() => fileInput.current?.click()}
+            >
+              <PaperclipIcon className="size-5" />
+            </Button>
+            <textarea
+              aria-label={`Message ${chat.title}`}
+              placeholder={`Message ${chat.title}`}
+              className="field-sizing-content max-h-40 min-h-9 min-w-0 flex-1 resize-none bg-transparent py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground"
+              rows={1}
+              value={text}
+              onChange={(event) => state.setDraft(chat.id, event.target.value)}
+              maxLength={32000}
+              disabled={sending}
+              onPaste={(event) => {
+                const files = Array.from(event.clipboardData.files);
+                const plainText = event.clipboardData.getData("text/plain");
+                const hasImageFile = files.some((file) =>
+                  file.type.toLowerCase().startsWith("image/"),
+                );
+                if (
+                  shouldHandleComposerAttachmentPaste({
+                    files,
+                    plainText,
+                  })
+                ) {
+                  if (!plainText.length || hasImageFile) event.preventDefault();
+                  addFiles(files);
+                }
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  send();
+                }
+              }}
+            />
+            <Button
+              type="submit"
+              size="icon"
+              className="size-9 shrink-0 rounded-full bg-blue-500 text-white hover:bg-blue-600"
+              aria-label="Send message"
+              disabled={sending || blocked || (!text.trim() && !drafts.length) || !lead?.canDirect}
+            >
+              <ArrowUpIcon className="size-5" />
+            </Button>
+          </div>
         </div>
+        {blocked && (
+          <p role="status" className="mt-2 px-3 text-[11px] text-muted-foreground">
+            {drafts.some((draft) => draft.status === "failed")
+              ? "Retry or remove the failed attachment before sending."
+              : "Attachments still uploading…"}
+          </p>
+        )}
         {lead?.status === "paused" && (
           <p className="mt-2 px-3 text-[11px] text-muted-foreground">
             {lead.name} is paused. Your message will wait in the queue.

@@ -3,6 +3,14 @@ import { defineTable } from "convex/server";
 import { v } from "convex/values";
 import { mailSelection } from "./mailSchema.ts";
 
+export const orchestratorAttachment = v.object({
+  id: v.string(),
+  type: v.union(v.literal("image"), v.literal("file")),
+  name: v.string(),
+  mimeType: v.string(),
+  sizeBytes: v.number(),
+});
+
 export const orchestratorConfig = {
   name: v.string(),
   color: v.string(),
@@ -125,7 +133,21 @@ export const aiOrchestratorTables = {
   })
     .index("by_subject", ["subject", "updatedAt"])
     .index("by_chat_subject", ["chatId", "subject"]),
+  aiOrchestratorAttachments: defineTable({
+    id: v.string(),
+    chatId: v.string(),
+    ownerSubject: v.string(),
+    attachment: orchestratorAttachment,
+    storageId: v.optional(v.id("_storage")),
+    messageId: v.optional(v.string()),
+    sequence: v.optional(v.number()),
+    expiresAt: v.number(),
+  })
+    .index("by_domain_id", ["id"])
+    .index("by_storage", ["storageId"])
+    .index("by_expiry", ["expiresAt"]),
   aiOrchestratorMessages: defineTable({
+    attachments: v.optional(v.array(orchestratorAttachment)),
     id: v.string(),
     chatId: v.string(),
     sequence: v.number(),

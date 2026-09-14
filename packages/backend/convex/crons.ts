@@ -56,4 +56,11 @@ crons.interval(
   {},
 );
 
+crons.interval(
+  "prune unused orchestrator attachments",
+  { hours: 1 },
+  internal.aiOrchestratorAttachments.prune,
+  {},
+);
+
 export default crons;

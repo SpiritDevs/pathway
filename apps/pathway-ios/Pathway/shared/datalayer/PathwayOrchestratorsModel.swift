@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UniformTypeIdentifiers
 
 struct PathwayOrchestratorRecord: Identifiable, Equatable {
   let id: String
@@ -38,6 +39,11 @@ final class PathwayOrchestratorsModel {
   private(set) var nextBefore: [String: Int] = [:]
   var selectedID: String?
   var drafts: [String: String] = [:]
+  var attachmentDrafts: [String: [PathwayThreadAttachmentDraft]] = [:]
+  @ObservationIgnored private var attachmentBytes: [String: Data] = [:]
+  @ObservationIgnored private var uploadingAttachmentIDs: Set<String> = []
+  @ObservationIgnored private var attachmentStorage: [String: String] = [:]
+  @ObservationIgnored private var pendingSends: [String: (id: String, text: String, target: String?, attachments: [String])] = [:]
   var errorMessage: String?
   private(set) var loading = true
   @ObservationIgnored private var accountID: String?
@@ -163,6 +169,10 @@ final class PathwayOrchestratorsModel {
       notificationSequences = [:]
       startedAt = Date().timeIntervalSince1970 * 1000
       drafts = [:]
+      attachmentDrafts = [:]
+      attachmentBytes = [:]
+      attachmentStorage = [:]
+      pendingSends = [:]
       selectedID = nil
       errorMessage = nil
       loading = true
@@ -238,18 +248,95 @@ final class PathwayOrchestratorsModel {
     messages[chatID] = page.filter { !known.contains($0.id) } + existing
     nextBefore[chatID] = value.objectValue?["nextBefore"]?.intValue
   }
+  func addAttachment(chatID: String, targetID: String, data: Data, name: String, mimeType: String) async {
+    let type = mimeType.lowercased().hasPrefix("image/") ? "image" : "file"
+    guard (attachmentDrafts[chatID] ?? []).count < 8, data.count <= (type == "image" ? 10 : 50) * 1024 * 1024, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 255 else {
+      errorMessage = "Attach up to 8 files, with images up to 10 MB and files up to 50 MB."
+      return
+    }
+    let id = UUID().uuidString.lowercased()
+    let draft = PathwayThreadAttachmentDraft(id: id, name: name, mimeType: mimeType.isEmpty ? "application/octet-stream" : mimeType, type: type, sizeBytes: data.count, state: .uploading, previewData: type == "image" ? data : nil)
+    attachmentBytes[id] = data
+    attachmentDrafts[chatID, default: []].append(draft)
+    await retryAttachment(chatID: chatID, targetID: targetID, id: id)
+  }
+  func addAttachment(chatID: String, targetID: String, fileURL: URL) async {
+    let access = fileURL.startAccessingSecurityScopedResource()
+    defer { if access { fileURL.stopAccessingSecurityScopedResource() } }
+    do {
+      let values = try fileURL.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
+      guard (values.fileSize ?? 0) <= 50 * 1024 * 1024 else { throw PathwayThreadConversationError.message("Files must be at most 50 MB.") }
+      let data = try Data(contentsOf: fileURL)
+      await addAttachment(chatID: chatID, targetID: targetID, data: data, name: fileURL.lastPathComponent, mimeType: values.contentType?.preferredMIMEType ?? "application/octet-stream")
+    } catch { errorMessage = error.localizedDescription }
+  }
+  func retryAttachment(chatID: String, targetID: String, id: String) async {
+    guard let draft = attachmentDrafts[chatID]?.first(where: { $0.id == id }), let data = attachmentBytes[id] else { return }
+    let current = generation
+    uploadingAttachmentIDs.insert(id)
+    defer { uploadingAttachmentIDs.remove(id) }
+    setAttachmentState(chatID: chatID, id: id, state: .uploading)
+    do {
+      let metadata: JSONValue = .object(["id": .string(id), "name": .string(draft.name), "type": .string(draft.type), "mimeType": .string(draft.mimeType), "sizeBytes": .number(Double(draft.sizeBytes))])
+      let prepared = try await request("mutation", "aiOrchestratorAttachments:prepare", .object(["chatId": .string(chatID), "targetId": .string(targetID), "attachment": metadata]))
+      if prepared.objectValue?["ready"]?.boolValue != true {
+        var storageID = attachmentStorage[id]
+        if storageID == nil {
+          guard let address = prepared.objectValue?["uploadUrl"]?.stringValue, let url = URL(string: address) else { throw URLError(.badURL) }
+          var upload = URLRequest(url: url); upload.httpMethod = "POST"; upload.setValue(draft.mimeType, forHTTPHeaderField: "Content-Type")
+          let (responseData, response) = try await URLSession.shared.upload(for: upload, from: data)
+          guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else { throw URLError(.badServerResponse) }
+          storageID = try JSONDecoder().decode(JSONValue.self, from: responseData).objectValue?["storageId"]?.stringValue
+          guard generation == current else { throw CancellationError() }
+          attachmentStorage[id] = storageID
+        }
+        guard let storageID else { throw URLError(.cannotParseResponse) }
+        if attachmentDrafts[chatID]?.contains(where: { $0.id == id }) != true {
+          await removeAttachment(chatID: chatID, id: id, completedUpload: true)
+          return
+        }
+        _ = try await request("mutation", "aiOrchestratorAttachments:finalize", .object(["chatId": .string(chatID), "id": .string(id), "storageId": .string(storageID)]))
+      }
+      guard generation == current else { return }
+      if attachmentDrafts[chatID]?.contains(where: { $0.id == id }) != true {
+        await removeAttachment(chatID: chatID, id: id, completedUpload: true)
+      } else { setAttachmentState(chatID: chatID, id: id, state: .ready) }
+    } catch {
+      if generation == current {
+        if attachmentDrafts[chatID]?.contains(where: { $0.id == id }) != true { await removeAttachment(chatID: chatID, id: id, completedUpload: true) }
+        else { setAttachmentState(chatID: chatID, id: id, state: .failed(error.localizedDescription)) }
+      }
+    }
+  }
+  private func setAttachmentState(chatID: String, id: String, state: PathwayThreadAttachmentDraft.State) {
+    guard let index = attachmentDrafts[chatID]?.firstIndex(where: { $0.id == id }) else { return }
+    attachmentDrafts[chatID]?[index].state = state
+  }
+  func removeAttachment(chatID: String, id: String, completedUpload: Bool = false) async {
+    attachmentDrafts[chatID]?.removeAll { $0.id == id }
+    // Await a running upload's response so cleanup can include its storage ID.
+    if uploadingAttachmentIDs.contains(id) && !completedUpload { return }
+    var fields: [String: JSONValue] = ["chatId": .string(chatID), "id": .string(id)]
+    if let storageID = attachmentStorage[id] { fields["storageId"] = .string(storageID) }
+    attachmentBytes.removeValue(forKey: id); attachmentStorage.removeValue(forKey: id)
+    _ = try? await request("mutation", "aiOrchestratorAttachments:discard", .object(fields))
+  }
   func send(chatID: String, targetID: String?) async throws {
     let text = (drafts[chatID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !text.isEmpty else { return }
-    var fields: [String: JSONValue] = [
-      "chatId": .string(chatID), "id": .string(UUID().uuidString.lowercased()),
-      "text": .string(text),
-    ]
+    let attachments = attachmentDrafts[chatID] ?? []
+    guard !text.isEmpty || !attachments.isEmpty else { return }
+    guard attachments.allSatisfy({ $0.state == .ready }) else { throw PathwayThreadConversationError.message("Retry or remove unfinished attachments before sending.") }
+    let ids = attachments.map(\.id)
+    let previous = pendingSends[chatID]
+    let id = previous?.text == text && previous?.target == targetID && previous?.attachments == ids ? previous!.id : UUID().uuidString.lowercased()
+    pendingSends[chatID] = (id, text, targetID, ids)
+    var fields: [String: JSONValue] = ["chatId": .string(chatID), "id": .string(id), "text": .string(text), "attachmentIds": .array(ids.map(JSONValue.string))]
     if let targetID { fields["targetId"] = .string(targetID) }
     _ = try await mutate("send", fields)
-    if drafts[chatID]?.trimmingCharacters(in: .whitespacesAndNewlines) == text {
-      drafts[chatID] = ""
-    }
+    if drafts[chatID]?.trimmingCharacters(in: .whitespacesAndNewlines) == text { drafts[chatID] = "" }
+    attachmentDrafts[chatID]?.removeAll { ids.contains($0.id) }
+    for id in ids { attachmentBytes.removeValue(forKey: id); attachmentStorage.removeValue(forKey: id) }
+    pendingSends.removeValue(forKey: chatID)
   }
   func conversation(title: String, orchestratorIDs: [String], companyIDs: [String]) async throws
     -> String

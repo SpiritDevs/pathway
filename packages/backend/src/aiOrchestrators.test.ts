@@ -15,6 +15,8 @@ import {
 process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
 process.env.PATHWAY_RELAY_JWKS_URL = "https://relay.example.test/.well-known/jwks.json";
 const modules = {
+  "../convex/aiOrchestratorAttachments.ts": () => import("../convex/aiOrchestratorAttachments.ts"),
+  "../convex/http.ts": () => import("../convex/http.ts"),
   "../convex/aiOrchestratorPush.ts": () => import("../convex/aiOrchestratorPush.ts"),
   "../convex/aiOrchestratorEvents.ts": () => import("../convex/aiOrchestratorEvents.ts"),
   "../convex/aiOrchestratorReviews.ts": () => import("../convex/aiOrchestratorReviews.ts"),
@@ -3109,5 +3111,374 @@ describe("task-aware worker selections", () => {
     const updated = (await test.owner.query(api.aiOrchestrators.list, {}))[0]!;
     expect(updated.workerModels?.[0]?.name).toBe("Routine");
     expect(updated.name).toBe("Renamed");
+  });
+});
+
+describe("conversation attachments", () => {
+  const metadata = (id = "attachment-file") => ({
+    id,
+    name: "notes.txt",
+    type: "file" as const,
+    mimeType: "text/plain",
+    sizeBytes: 5,
+  });
+  async function upload(
+    test: Awaited<ReturnType<typeof coordinatorHarness>>,
+    id = "attachment-file",
+  ) {
+    const attachment = metadata(id);
+    await test.owner.mutation(api.aiOrchestratorAttachments.prepare, {
+      chatId: test.chatId,
+      targetId: test.id,
+      attachment,
+    });
+    const storageId = await test.t.run((ctx) =>
+      ctx.storage.store(new Blob(["hello"], { type: "text/plain" })),
+    );
+    await test.owner.mutation(api.aiOrchestratorAttachments.finalize, {
+      chatId: test.chatId,
+      id,
+      storageId,
+    });
+    return attachment;
+  }
+  it("binds ready files atomically, preserves metadata through history, and retries a send once", async () => {
+    const test = await coordinatorHarness();
+    const attachment = await upload(test);
+    expect(
+      await test.owner.mutation(api.aiOrchestratorAttachments.prepare, {
+        chatId: test.chatId,
+        targetId: test.id,
+        attachment,
+      }),
+    ).toEqual({ ready: true, uploadUrl: null });
+    const args = { chatId: test.chatId, id: "with-file", text: "", attachmentIds: [attachment.id] };
+    const sequence = await test.owner.mutation(api.aiOrchestrators.send, args);
+    expect(await test.owner.mutation(api.aiOrchestrators.send, args)).toBe(sequence);
+    expect(
+      (await test.owner.query(api.aiOrchestrators.listChats, {})).find(
+        (chat) => chat.id === test.chatId,
+      )?.lastMessage,
+    ).toBe("notes.txt");
+    expect(
+      await test.t.run(
+        async (ctx) =>
+          (
+            await ctx.db
+              .query("aiOrchestratorChats")
+              .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+              .unique()
+          )?.lastMessage,
+      ),
+    ).toBe("notes.txt");
+    expect(
+      (await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })).messages.at(
+        -1,
+      )?.attachments,
+    ).toEqual([attachment]);
+    await expect(
+      test.owner.mutation(api.aiOrchestrators.send, { ...args, attachmentIds: [] }),
+    ).rejects.toThrow();
+    await test.owner.mutation(api.aiOrchestratorAttachments.discard, {
+      chatId: test.chatId,
+      id: attachment.id,
+    });
+    expect(
+      await test.owner.query(internal.aiOrchestratorAttachments.read, { id: attachment.id }),
+    ).toMatchObject({ attachment });
+    await expect(
+      test.owner.mutation(api.aiOrchestrators.send, { ...args, id: "reuse" }),
+    ).rejects.toThrow("unavailable");
+  });
+  it("rejects unfinished, mismatched, duplicate, oversized and foreign attachments", async () => {
+    const test = await coordinatorHarness();
+    const args = { chatId: test.chatId, targetId: test.id, attachment: metadata() };
+    await test.owner.mutation(api.aiOrchestratorAttachments.prepare, args);
+    await expect(
+      test.owner.mutation(api.aiOrchestrators.send, {
+        chatId: test.chatId,
+        id: "unfinished",
+        text: "Read",
+        attachmentIds: [args.attachment.id],
+      }),
+    ).rejects.toThrow("unavailable");
+    const storageId = await test.t.run((ctx) =>
+      ctx.storage.store(new Blob(["wrong size"], { type: "text/plain" })),
+    );
+    await expect(
+      test.owner.mutation(api.aiOrchestratorAttachments.finalize, {
+        chatId: test.chatId,
+        id: args.attachment.id,
+        storageId,
+      }),
+    ).rejects.toThrow("unavailable");
+    await expect(
+      test.owner.mutation(api.aiOrchestratorAttachments.prepare, {
+        ...args,
+        attachment: { ...metadata("huge"), sizeBytes: 51 * 1024 * 1024 },
+      }),
+    ).rejects.toThrow();
+    await upload(test, "ready");
+    await expect(
+      test.owner.mutation(api.aiOrchestrators.send, {
+        chatId: test.chatId,
+        id: "duplicate",
+        text: "Read",
+        attachmentIds: ["ready", "ready"],
+      }),
+    ).rejects.toThrow();
+    await expect(
+      human(test.t, "colleague").query(internal.aiOrchestratorAttachments.read, { id: "ready" }),
+    ).rejects.toThrow();
+    await expect(
+      human(test.t, "colleague").mutation(api.aiOrchestratorAttachments.finalize, {
+        chatId: test.chatId,
+        id: "ready",
+        storageId,
+      }),
+    ).rejects.toThrow();
+  });
+  it("checks live history boundaries and revocation for humans", async () => {
+    const test = await coordinatorHarness();
+    await upload(test);
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "with-file",
+      text: "Read",
+      attachmentIds: ["attachment-file"],
+    });
+    await test.t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+        .unique())!;
+      await ctx.db.patch(chat._id, { participantSubjects: ["owner", "colleague"] });
+      await ctx.db.insert("aiOrchestratorChatMembers", {
+        chatId: test.chatId,
+        subject: "colleague",
+        fromSequence: 3,
+        readSequence: 3,
+        updatedAt: Date.now(),
+      });
+    });
+    const colleague = human(test.t, "colleague");
+    await expect(
+      colleague.query(internal.aiOrchestratorAttachments.read, { id: "attachment-file" }),
+    ).rejects.toThrow();
+    await test.t.run(async (ctx) => {
+      const member = (await ctx.db
+        .query("aiOrchestratorChatMembers")
+        .withIndex("by_chat_subject", (q) => q.eq("chatId", test.chatId).eq("subject", "colleague"))
+        .unique())!;
+      await ctx.db.patch(member._id, { fromSequence: 0 });
+    });
+    expect(
+      await colleague.query(internal.aiOrchestratorAttachments.read, { id: "attachment-file" }),
+    ).toMatchObject({ attachment: metadata() });
+    await test.owner.mutation(api.aiOrchestrators.removeParticipant, {
+      chatId: test.chatId,
+      subject: "colleague",
+    });
+    await expect(
+      colleague.query(internal.aiOrchestratorAttachments.read, { id: "attachment-file" }),
+    ).rejects.toThrow();
+  });
+  it("checks current runtime lease, assigned host, generation and conversation", async () => {
+    const test = await coordinatorHarness();
+    const greeting = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: greeting.id,
+      generation: greeting.generation,
+      result: decision(),
+    });
+    await upload(test);
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "with-file",
+      text: "Read",
+      attachmentIds: ["attachment-file"],
+    });
+    const job = (await test.claim())!;
+    expect(job.attachments).toEqual([metadata()]);
+    const args = {
+      id: "attachment-file",
+      companyId: "workspace",
+      jobId: job.id,
+      generation: job.generation,
+    };
+    expect(
+      await test.environment().query(internal.aiOrchestratorAttachments.read, args),
+    ).toMatchObject({ attachment: metadata() });
+    const endpoint = `/orchestrator-attachments?id=attachment-file&companyId=workspace&jobId=${job.id}&generation=${job.generation}`;
+    const runtimeDownload = await test.environment().fetch(endpoint);
+    expect(runtimeDownload.status).toBe(200);
+    expect(await runtimeDownload.text()).toBe("hello");
+    expect((await test.environment("laptop").fetch(endpoint)).status).toBe(403);
+    await expect(
+      test.environment("laptop").query(internal.aiOrchestratorAttachments.read, args),
+    ).rejects.toThrow();
+    await expect(
+      test.environment().query(internal.aiOrchestratorAttachments.read, {
+        ...args,
+        generation: job.generation + 1,
+      }),
+    ).rejects.toThrow();
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: job.id,
+      generation: job.generation,
+      result: decision(),
+    });
+    await expect(
+      test.environment().query(internal.aiOrchestratorAttachments.read, args),
+    ).rejects.toThrow();
+  });
+  it("retains recent attachments for follow-up reasoning without widening history", async () => {
+    const test = await coordinatorHarness();
+    const first = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: first.id,
+      generation: first.generation,
+      result: decision(),
+    });
+    await upload(test);
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "file-turn",
+      text: "Read",
+      attachmentIds: ["attachment-file"],
+    });
+    const attached = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: attached.id,
+      generation: attached.generation,
+      result: decision(),
+    });
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "followup",
+      text: "What did that file say?",
+    });
+    expect((await test.claim())?.attachments).toEqual([metadata()]);
+  });
+  it("expires abandoned uploads without deleting sent files", async () => {
+    const test = await coordinatorHarness();
+    await upload(test, "sent");
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "bound",
+      text: "Read",
+      attachmentIds: ["sent"],
+    });
+    await upload(test, "abandoned");
+    await test.t.run(async (ctx) => {
+      const row = (await ctx.db
+        .query("aiOrchestratorAttachments")
+        .withIndex("by_domain_id", (q) => q.eq("id", "abandoned"))
+        .unique())!;
+      await ctx.db.patch(row._id, { expiresAt: Date.now() - 1 });
+    });
+    await test.t.mutation(internal.aiOrchestratorAttachments.prune, {});
+    await expect(
+      test.owner.query(internal.aiOrchestratorAttachments.read, { id: "abandoned" }),
+    ).rejects.toThrow();
+    expect(
+      await test.owner.query(internal.aiOrchestratorAttachments.read, { id: "sent" }),
+    ).toMatchObject({ attachment: metadata("sent") });
+  });
+  it("discards a client-known unfinalized blob without touching bound or foreign storage", async () => {
+    const test = await coordinatorHarness();
+    await test.owner.mutation(api.aiOrchestratorAttachments.prepare, {
+      chatId: test.chatId,
+      targetId: test.id,
+      attachment: metadata("pending"),
+    });
+    const storageId = await test.t.run((ctx) =>
+      ctx.storage.store(new Blob(["hello"], { type: "text/plain" })),
+    );
+    await expect(
+      human(test.t, "colleague").mutation(api.aiOrchestratorAttachments.discard, {
+        chatId: test.chatId,
+        id: "pending",
+        storageId,
+      }),
+    ).rejects.toThrow();
+    const threadStorage = await test.t.run(async (ctx) => {
+      const storageId = await ctx.storage.store(new Blob(["hello"], { type: "text/plain" }));
+      const company = (await ctx.db.query("companies").first())!;
+      const membership = (await ctx.db.query("memberships").first())!;
+      await ctx.db.insert("threadQueueAttachments", {
+        companyId: company._id,
+        issuedByMembershipId: membership._id,
+        storageId,
+        attachment: metadata(),
+        createdAt: Date.now(),
+      });
+      return storageId;
+    });
+    await expect(
+      test.owner.mutation(api.aiOrchestratorAttachments.discard, {
+        chatId: test.chatId,
+        id: "pending",
+        storageId: threadStorage,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      test.owner.mutation(api.aiOrchestratorAttachments.finalize, {
+        chatId: test.chatId,
+        id: "pending",
+        storageId: threadStorage,
+      }),
+    ).rejects.toThrow();
+    expect(await test.t.run(async (ctx) => (await ctx.storage.get(threadStorage))?.size)).toBe(5);
+    await upload(test, "bound");
+    const bound = await test.owner.query(internal.aiOrchestratorAttachments.read, { id: "bound" });
+    await expect(
+      test.owner.mutation(api.aiOrchestratorAttachments.discard, {
+        chatId: test.chatId,
+        id: "pending",
+        storageId: bound.storageId,
+      }),
+    ).rejects.toThrow();
+    expect(await test.t.run(async (ctx) => (await ctx.storage.get(bound.storageId))?.size)).toBe(5);
+    await test.owner.mutation(api.aiOrchestratorAttachments.discard, {
+      chatId: test.chatId,
+      id: "pending",
+      storageId,
+    });
+    expect(await test.t.run(async (ctx) => (await ctx.storage.get(storageId)) === null)).toBe(true);
+    expect(await test.t.run(async (ctx) => (await ctx.storage.get(bound.storageId))?.size)).toBe(5);
+  });
+  it("serves bounded prefixes only after the same download authorization", async () => {
+    const test = await coordinatorHarness();
+    await upload(test);
+    const endpoint = "/orchestrator-attachments?id=attachment-file";
+    const response = await test.owner.fetch(endpoint, { headers: { Range: "bytes=0-2" } });
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe("bytes 0-2/5");
+    expect(response.headers.get("Content-Length")).toBe("3");
+    expect(await response.text()).toBe("hel");
+    expect((await test.t.fetch(endpoint, { headers: { Range: "bytes=0-2" } })).status).toBe(403);
+    for (const range of ["bytes=2-4", "bytes=0-99", "bytes=0-2,3-4"])
+      expect((await test.owner.fetch(endpoint, { headers: { Range: range } })).status).toBe(416);
+  });
+  it("serves real bytes through authenticated HTTP and refuses unauthenticated requests", async () => {
+    const test = await coordinatorHarness();
+    await upload(test);
+    const response = await test.owner.fetch("/orchestrator-attachments?id=attachment-file");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("hello");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect((await test.t.fetch("/orchestrator-attachments?id=attachment-file")).status).toBe(403);
+    await test.owner.mutation(api.aiOrchestratorAttachments.discard, {
+      chatId: test.chatId,
+      id: "attachment-file",
+    });
+    expect((await test.owner.fetch("/orchestrator-attachments?id=attachment-file")).status).toBe(
+      403,
+    );
   });
 });

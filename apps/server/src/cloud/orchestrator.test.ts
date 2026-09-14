@@ -1,3 +1,5 @@
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import { describe, expect, it } from "@effect/vitest";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { CompanyId } from "@spiritdevs/contracts/company";
@@ -404,3 +406,56 @@ describe("tool-free coordinator reasoning", () => {
     }),
   );
 });
+
+it.effect("requests only the authorized prefix and rejects ignored or oversized ranges", () =>
+  Effect.gen(function* () {
+    let status = 206;
+    let body = "abc";
+    const client: ConvexClientLike = {
+      setAuth: () => {},
+      query: (() =>
+        Promise.resolve("https://attachments.example.test/file")) as ConvexClientLike["query"],
+      mutation: () => Promise.reject(new Error("Unexpected mutation")),
+    };
+    const http = HttpClient.make((request) =>
+      Effect.sync(() => {
+        expect(request.headers.authorization).toBe("Bearer test-token");
+        expect(request.headers.range).toBe("bytes=0-2");
+        return HttpClientResponse.fromWeb(request, new Response(body, { status }));
+      }),
+    );
+    const service = yield* makeOrchestratorBackend({
+      companyId: CompanyId.make("company"),
+      convexUrl: "https://cloud.example.test",
+      client,
+      tokens: { token: Effect.succeed("test-token"), invalidate: () => Effect.void },
+      providers: Effect.succeed([]),
+    }).pipe(Effect.provideService(HttpClient.HttpClient, http));
+    const input = {
+      ...job,
+      attachments: [
+        {
+          id: "text",
+          type: "file" as const,
+          name: "large.txt",
+          mimeType: "text/plain",
+          sizeBytes: 50 * 1024 * 1024,
+        },
+      ],
+    };
+    expect(new TextDecoder().decode(yield* service.readAttachment(input, "text", 3))).toBe("abc");
+    status = 200;
+    expect((yield* service.readAttachment(input, "text", 3).pipe(Effect.result))._tag).toBe(
+      "Failure",
+    );
+    status = 206;
+    body = "abcd";
+    expect((yield* service.readAttachment(input, "text", 3).pipe(Effect.result))._tag).toBe(
+      "Failure",
+    );
+    body = "ab";
+    expect((yield* service.readAttachment(input, "text", 3).pipe(Effect.result))._tag).toBe(
+      "Failure",
+    );
+  }),
+);

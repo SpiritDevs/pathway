@@ -165,7 +165,8 @@ export function boundedConversationMessages(
   }
   return [...selected.values()]
     .sort((a, b) => a.sequence - b.sequence)
-    .map(({ id, senderId, senderKind, senderName, text, status, sequence }) => ({
+    .map(({ id, senderId, senderKind, senderName, text, status, sequence, attachments }) => ({
+      ...(attachments?.length ? { attachments } : {}),
       id,
       senderId,
       senderKind,
@@ -249,4 +250,31 @@ export function memoryVisibilityForConversation(ctx: QueryCtx, chat: Doc<"aiOrch
     if (!chat.companyIds.includes(memory.sharedCompanyId)) return false;
     return (await sharedHistoryBoundary(ctx, chat, chat)) !== null;
   };
+}
+
+/** Keep recent attachment context available on follow-up turns, bounded like normal compose. */
+export async function conversationReasoningAttachments(
+  ctx: QueryCtx,
+  chat: Doc<"aiOrchestratorChats">,
+  trigger: Doc<"aiOrchestratorMessages">,
+) {
+  const boundary = await sharedHistoryBoundary(ctx, chat, chat);
+  if (boundary === null) return [];
+  const recent = await ctx.db
+    .query("aiOrchestratorMessages")
+    .withIndex("by_chat_sequence", (q) => q.eq("chatId", chat.id).gte("sequence", boundary))
+    .order("desc")
+    .take(40);
+  const attachments = new Map<
+    string,
+    NonNullable<Doc<"aiOrchestratorMessages">["attachments"]>[number]
+  >();
+  for (const message of [trigger, ...recent]) {
+    if (message.sequence < boundary) continue;
+    for (const attachment of message.attachments ?? []) {
+      if (attachments.size >= 8) break;
+      attachments.set(attachment.id, attachment);
+    }
+  }
+  return [...attachments.values()];
 }

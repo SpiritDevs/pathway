@@ -1,4 +1,7 @@
 import SwiftUI
+import PhotosUI
+import UniformTypeIdentifiers
+import ImageIO
 
 struct AgentOrchestratorView: View {
     var isSeparateWindow = false
@@ -104,6 +107,12 @@ private struct PathwayOrchestratorConversation: View {
     @State private var sending = false
     @State private var targetID = ""
     @State private var followsLatest = true
+    @State private var showsFiles = false
+    @State private var showsPhotos = false
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+    private var attachmentDrafts: [PathwayThreadAttachmentDraft] { model.attachmentDrafts[chat.id] ?? [] }
+    private var destinationID: String { targetID.isEmpty ? current.string("leadId") : targetID }
+    private var canDirect: Bool { model.contacts.first { $0.id == destinationID }?.flag("canDirect") == true }
     private var model: PathwayOrchestratorsModel { appModel.cloud.orchestrators }
     private var current: PathwayOrchestratorRecord { model.chats.first { $0.id == chat.id } ?? chat }
     private var messages: [PathwayOrchestratorRecord] { model.messages[chat.id] ?? [] }
@@ -176,15 +185,53 @@ private struct PathwayOrchestratorConversation: View {
                         ForEach(model.contacts.filter { current.strings("orchestratorIds").contains($0.id) }) { Text($0.string("name")).tag($0.id) }
                     }.pickerStyle(.menu).font(.caption)
                 }
+                if !attachmentDrafts.isEmpty {
+                    ScrollView(.horizontal) { HStack(spacing: 8) {
+                        ForEach(attachmentDrafts) { attachment in
+                            AgentThreadComposerAttachmentChip(attachment: attachment,
+                                remove: { Task { await model.removeAttachment(chatID: chat.id, id: attachment.id) } },
+                                retry: { Task { await model.retryAttachment(chatID: chat.id, targetID: destinationID, id: attachment.id) } })
+                        }
+                    }.padding(.horizontal) }.scrollIndicators(.hidden).disabled(sending)
+                }
                 HStack(alignment: .bottom, spacing: 10) {
-                    TextField("Message \(current.string("title"))", text: Binding(get: { model.drafts[chat.id] ?? "" }, set: { model.drafts[chat.id] = $0 }), axis: .vertical).lineLimit(1...6).padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 24))
+                    Menu {
+                        Button("Photos", systemImage: "photo.on.rectangle") { showsPhotos = true }
+                        Button("Choose files", systemImage: "folder") { showsFiles = true }
+                        PasteButton(supportedContentTypes: [.image]) { providers in
+                            Task { for provider in providers.filter(PathwayPastedImage.supports) {
+                                do { let image = try await PathwayPastedImage.load(provider); await model.addAttachment(chatID: chat.id, targetID: destinationID, data: image.data, name: image.name, mimeType: image.mimeType) }
+                                catch { model.errorMessage = error.localizedDescription }
+                            } }
+                        }
+                    } label: { Image(systemName: "paperclip").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Attach images and files").disabled(sending || current.flag("archived") || !canDirect || attachmentDrafts.count >= 8)
+                    TextField("Message \(current.string("title"))", text: Binding(get: { model.drafts[chat.id] ?? "" }, set: { model.drafts[chat.id] = $0 }), axis: .vertical).lineLimit(1...6).disabled(sending || current.flag("archived")).padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 24))
                     Button {
                         sending = true
                         Task { defer { sending = false }; do { try await model.send(chatID: chat.id, targetID: targetID.isEmpty ? nil : targetID) } catch { model.errorMessage = error.localizedDescription } }
                     } label: { Image(systemName: "arrow.up").font(.headline).foregroundStyle(.white).frame(width: 40, height: 40).background(.blue, in: Circle()) }
-                    .accessibilityLabel("Send message").disabled(sending || (model.drafts[chat.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || current.flag("archived"))
+                    .accessibilityLabel("Send message").disabled(sending || !canDirect || !attachmentDrafts.allSatisfy { $0.state == .ready } || ((model.drafts[chat.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachmentDrafts.isEmpty) || current.flag("archived"))
                 }.padding(.horizontal).padding(.bottom, 8)
             }.background(.regularMaterial)
+        }
+        .fileImporter(isPresented: $showsFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls): Task { for url in urls { await model.addAttachment(chatID: chat.id, targetID: destinationID, fileURL: url) } }
+            case .failure(let error): model.errorMessage = error.localizedDescription
+            }
+        }
+        .photosPicker(isPresented: $showsPhotos, selection: $selectedPhotos, maxSelectionCount: max(1, 8 - attachmentDrafts.count), matching: .images, preferredItemEncoding: .compatible)
+        .onChange(of: selectedPhotos) { _, photos in
+            selectedPhotos = []
+            Task { for (index, photo) in photos.enumerated() {
+                do {
+                    guard let data = try await photo.loadTransferable(type: Data.self) else { continue }
+                    let source = CGImageSourceCreateWithData(data as CFData, nil)
+                    let type = source.flatMap { CGImageSourceGetType($0) }.flatMap { UTType($0 as String) } ?? .jpeg
+                    await model.addAttachment(chatID: chat.id, targetID: destinationID, data: data, name: "Photo \(index + 1).\(type.preferredFilenameExtension ?? "jpg")", mimeType: type.preferredMIMEType ?? "image/jpeg")
+                } catch { model.errorMessage = error.localizedDescription }
+            } }
         }
         .navigationTitle(current.string("title"))
         .toolbar { ToolbarItem(placement: .primaryAction) { Button("Conversation details", systemImage: "info.circle") { details = true } } }
@@ -228,6 +275,9 @@ private struct PathwayOrchestratorConversation: View {
                 if own { Spacer(minLength: 36) }
                 VStack(alignment: own ? .trailing : .leading, spacing: 5) {
                     Text(own ? "You" : message.string("senderName")).font(.caption2).foregroundStyle(.secondary)
+                    ForEach(PathwayOrchestratorRecord.records(message.fields["attachments"] ?? .array([]))) { attachment in
+                        PathwayOrchestratorAttachmentView(attachment: attachment)
+                    }
                     Group {
                         if own { Text(message.string("text")) }
                         else { AgentTranscriptMarkdown(markdown: message.string("text")).equatable() }
@@ -271,5 +321,64 @@ private struct PathwayNewOrchestratorConversation: View {
                 }.disabled(saving || selected.isEmpty) }
             }
         }
+    }
+}
+
+
+private struct PathwayOrchestratorAttachmentView: View {
+    let attachment: PathwayOrchestratorRecord
+    @Environment(PathwayAppModel.self) private var appModel
+    @State private var image: UIImage?
+    @State private var fileURL: URL?
+    @State private var loading = false
+    @State private var error: String?
+    @State private var preview = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let image { Button { preview = true } label: { Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: 240, maxHeight: 200) }.accessibilityLabel("Preview \(attachment.string("name"))") }
+            else { Button { Task { await load() } } label: { Label(attachment.string("name"), systemImage: "doc") }.disabled(loading) }
+            if loading { ProgressView("Loading attachment…") }
+            if let fileURL { ShareLink(item: fileURL) { Label("Save or share \(attachment.string("name"))", systemImage: "square.and.arrow.up") } }
+            if let error { Text(error).font(.caption).foregroundStyle(.red); Button("Retry") { Task { await load() } } }
+        }.padding(8).background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        .task(id: attachment.id) { if attachment.string("type") == "image" { await load() } }
+        .sheet(isPresented: $preview) {
+            if let image {
+                NavigationStack {
+                    Image(uiImage: image).resizable().scaledToFit()
+                        .navigationTitle(attachment.string("name"))
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { preview = false } } }
+                }
+            }
+        }
+        .onDisappear { if let fileURL { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }; fileURL = nil; image = nil }
+    }
+    private func load() async {
+        guard !loading else { return }
+        loading = true; error = nil
+        defer { loading = false }
+        do {
+            let data = try await appModel.downloadOrchestratorAttachment(id: attachment.id)
+            try Task.checkCancellation()
+            if attachment.string("type") == "image" {
+                let thumbnail = await Task.detached(priority: .utility) {
+                    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                          let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                            kCGImageSourceCreateThumbnailFromImageAlways: true,
+                            kCGImageSourceCreateThumbnailWithTransform: true,
+                            kCGImageSourceThumbnailMaxPixelSize: 1600,
+                            kCGImageSourceShouldCacheImmediately: true
+                          ] as CFDictionary) else { return Data?.none }
+                    return UIImage(cgImage: image).pngData()
+                }.value
+                try Task.checkCancellation()
+                if let thumbnail { image = UIImage(data: thumbnail) }
+            }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let name = URL(fileURLWithPath: attachment.string("name")).lastPathComponent
+            let url = directory.appendingPathComponent(name.isEmpty ? "attachment" : name)
+            try data.write(to: url); fileURL = url
+        } catch { self.error = error.localizedDescription }
     }
 }

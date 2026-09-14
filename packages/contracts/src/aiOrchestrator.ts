@@ -1,3 +1,4 @@
+import { ChatImageAttachment, ChatFileAttachment } from "./chatAttachment.ts";
 /** Persistent AI contacts, cloud conversations, and coordinator configuration. */
 import * as Schema from "effect/Schema";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
@@ -176,6 +177,9 @@ export const OrchestratorWorkItem = Schema.Struct({
   selection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
 });
 export type OrchestratorWorkItem = typeof OrchestratorWorkItem.Type;
+export const OrchestratorAttachment = Schema.Union([ChatImageAttachment, ChatFileAttachment]);
+export type OrchestratorAttachment = typeof OrchestratorAttachment.Type;
+
 export const OrchestratorMessage = Schema.Struct({
   id: Schema.String,
   chatId: Schema.String,
@@ -188,6 +192,7 @@ export const OrchestratorMessage = Schema.Struct({
   createdAt: Schema.Number,
   seenAt: Schema.optionalKey(Schema.Number),
   replyToId: Schema.NullOr(Schema.String),
+  attachments: Schema.optionalKey(Schema.Array(OrchestratorAttachment)),
 });
 export type OrchestratorMessage = typeof OrchestratorMessage.Type;
 export const OrchestratorMessagePage = Schema.Struct({
@@ -314,6 +319,7 @@ export const OrchestratorDecision = Schema.Struct({
 });
 export type OrchestratorDecision = typeof OrchestratorDecision.Type;
 export const OrchestratorRun = Schema.Struct({
+  attachments: Schema.optionalKey(Schema.Array(OrchestratorAttachment)),
   hostResources: Schema.optionalKey(HostResourcesSnapshot),
   id: Schema.String,
   generation: Schema.Number,
