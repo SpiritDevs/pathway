@@ -18,3 +18,5 @@ Choose **Un-settle thread** to return it to the active list. Cancelled work does
 un-settled. They skip inactivity settlement. Uncommitted changes or unpushed commits block automatic
 settlement; manual settlement offers Review changes, Cancel, and Discard and delete. Settle after
 completion keeps a temporary thread for review when a run fails or Git work remains unfinished.
+
+The sidebar PR link, thread hover card, and action palette use the same check-status colours: red for failing or cancelled checks, amber for pending checks, and green for an open PR with no reported check problems. The hover card and action palette list failing checks and their messages, or pending checks when none are failing.

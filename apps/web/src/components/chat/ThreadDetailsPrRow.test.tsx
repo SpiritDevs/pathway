@@ -66,21 +66,32 @@ const detail: PullRequestDetail = {
 function render(
   options: {
     pending?: boolean;
+    checks?: PullRequestDetail["checks"];
+    state?: PullRequestDetail["state"];
+    isDraft?: boolean;
     error?: string;
     mergeability?: PullRequestDetail["mergeability"];
   } = {},
 ) {
+  const currentDetail = {
+    ...detail,
+    mergeability: options.mergeability ?? detail.mergeability,
+    checks: options.checks ?? [],
+    state: options.state ?? detail.state,
+    isDraft: options.isDraft ?? false,
+  };
+  const currentPr = { ...pr, state: currentDetail.state };
   return renderToStaticMarkup(
     <ThreadDetailsPrRow
       environmentId={EnvironmentId.make("test")}
       project={{ id: ProjectId.make("project") } as EnvironmentProject}
-      pr={pr}
-      status={prStatusIndicator(pr, undefined)!}
+      pr={currentPr}
+      status={prStatusIndicator(currentPr, undefined, currentDetail)!}
       label="PR #149"
       openAriaLabel="Open PR"
       onOpen={() => {}}
       detailQuery={{
-        data: { ...detail, mergeability: options.mergeability ?? detail.mergeability },
+        data: currentDetail,
         isPending: options.pending ?? false,
         error: options.error ?? null,
         refresh: vi.fn(),
@@ -112,4 +123,46 @@ it("keeps unknown mergeability checking and enables merge after recovery", () =>
   expect(recovered).toContain(">Merge<");
   expect(recovered).not.toContain("Checking merge status…");
   expect(recovered).not.toContain("Couldn’t refresh status");
+});
+
+const failedCheck = {
+  name: "Vercel – quotecloud-v2",
+  status: "failure" as const,
+  description: "Cannot deploy from a private GitHub organization repository on the Hobby plan",
+  url: null,
+};
+
+it("uses the sidebar failure colour and visibly explains the failing check", () => {
+  const html = render({ mergeability: "mergeable", checks: [failedCheck] });
+  expect(html).toMatch(/<svg[^>]*class="[^"]*text-red-600/);
+  expect(html).not.toContain("text-emerald");
+  expect(html).toContain(">1 check failing</span>");
+  expect(html).toContain(failedCheck.name);
+  expect(html).toContain(failedCheck.description);
+});
+
+it("shows pending checks and preserves draft glyphs with check-aware colour", () => {
+  const html = render({ isDraft: true, checks: [{ ...failedCheck, status: "pending" }] });
+  expect(html).toContain("1 check pending");
+  expect(html).toMatch(/<svg[^>]*class="[^"]*text-amber-600/);
+  expect(html).toContain("lucide-git-pull-request-draft");
+});
+
+it("counts cancelled checks as failing consistently with the sidebar", () => {
+  const html = render({
+    checks: [failedCheck, { ...failedCheck, name: "Tests", status: "cancelled" }],
+  });
+  expect(html).toContain("2 checks failing");
+  expect(html).toContain(">Tests</span>");
+});
+
+it("removes the failure notice when checks pass or the PR merges", () => {
+  for (const html of [
+    render({ checks: [{ ...failedCheck, status: "success" }] }),
+    render({ checks: [failedCheck], state: "merged" }),
+  ]) {
+    expect(html).not.toContain("check failing");
+    expect(html).not.toContain(failedCheck.description);
+    expect(html).not.toContain("text-red-600");
+  }
 });
