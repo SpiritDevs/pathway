@@ -1,4 +1,12 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { makeFunctionReference } from "convex/server";
 import { ListTodoIcon } from "lucide-react";
 import type {
@@ -18,6 +26,8 @@ import {
 } from "./conversationTimeline";
 import { WorkList } from "./ConversationMetadata";
 
+import { animateSentMessage, type ComposerSendMotion } from "./messageSendMotion";
+
 type MessagePage = OrchestratorMessagePage;
 const errorMessage = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 const ChatMarkdown = lazy(() => import("../ChatMarkdown"));
@@ -26,11 +36,13 @@ export function ConversationMessages({
   work,
   search,
   result,
+  sendMotion,
 }: {
   chat: OrchestratorChat;
   work: readonly OrchestratorWorkItem[];
   search: string;
   result: { value?: MessagePage; error?: string };
+  sendMotion?: RefObject<ComposerSendMotion | null>;
 }) {
   const state = useOrchestrators();
   const [older, setOlder] = useState<OrchestratorMessage[]>([]);
@@ -39,6 +51,8 @@ export function ConversationMessages({
   const container = useRef<HTMLDivElement>(null);
   const pinned = useRef(!state.scrollPositions.current.has(chat.id));
   const initialized = useRef(false);
+  const stopFlight = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => stopFlight.current?.(), []);
   const messages = [
     ...new Map(
       [...older, ...(result.value?.messages ?? [])].map((message) => [message.id, message]),
@@ -59,6 +73,28 @@ export function ConversationMessages({
       pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
     } else if (pinned.current) element.scrollTop = element.scrollHeight;
   }, [result.value, work, chat.id, state.scrollPositions]);
+  useLayoutEffect(() => {
+    const pending = sendMotion?.current;
+    const element = container.current;
+    if (
+      !sendMotion ||
+      !pending?.ready ||
+      pending.chatId !== chat.id ||
+      !element ||
+      !messages.some((message) => message.id === pending.messageId)
+    )
+      return;
+    sendMotion.current = null;
+    stopFlight.current?.();
+    if (search) return;
+    const bubble = element.querySelector<HTMLElement>(
+      `[data-message-id="${CSS.escape(pending.messageId)}"]`,
+    );
+    if (!bubble) return;
+    element.scrollTop = element.scrollHeight;
+    pinned.current = true;
+    stopFlight.current = animateSentMessage(bubble, element, pending.origin);
+  });
   const lastSequence = result.value?.messages.at(-1)?.sequence;
   useEffect(() => {
     const client = state.client;
@@ -185,6 +221,12 @@ export function ConversationMessages({
                       </p>
                     )}
                     <div
+                      data-message-id={message.id}
+                      style={
+                        sendMotion?.current?.messageId === message.id && !sendMotion.current.ready
+                          ? { opacity: 0 }
+                          : undefined
+                      }
                       className={cn(
                         "rounded-[22px] px-4 py-2.5 text-left text-sm leading-relaxed break-words",
                         own

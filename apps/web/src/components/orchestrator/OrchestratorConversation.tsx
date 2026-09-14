@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
 import {
@@ -35,9 +35,20 @@ import { ConversationMessages } from "./ConversationMessages";
 import { FloatingDetailsPanel } from "./FloatingDetailsPanel";
 import { ConversationMetadata } from "./ConversationMetadata";
 
+import type { ComposerSendMotion } from "./messageSendMotion";
+
 const EMPTY_ACTIVITY: OrchestratorActivity = [];
 const errorMessage = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
-function Composer({ chat, activity }: { chat: OrchestratorChat; activity: OrchestratorActivity }) {
+export function Composer({
+  chat,
+  activity,
+  sendMotion,
+}: {
+  chat: OrchestratorChat;
+  activity: OrchestratorActivity;
+  sendMotion: RefObject<ComposerSendMotion | null>;
+}) {
+  const input = useRef<HTMLTextAreaElement>(null);
   const [now, setNow] = useState(Date.now);
   const activeIds = new Set(
     activity.filter((item) => item.expiresAt > Math.max(now, Date.now())).map((item) => item.id),
@@ -67,15 +78,26 @@ function Composer({ chat, activity }: { chat: OrchestratorChat; activity: Orches
         ? pending.current
         : { id: randomUUID(), text, targetId: lead.id };
     pending.current = message;
+    if (input.current)
+      sendMotion.current = {
+        chatId: chat.id,
+        messageId: message.id,
+        origin: input.current.getBoundingClientRect(),
+        ready: false,
+      };
     setSending(true);
     state.setError(undefined);
     void state
       .request("aiOrchestrators:send", { chatId: chat.id, ...message })
       .then(() => {
+        if (sendMotion.current?.messageId === message.id) sendMotion.current.ready = true;
         state.setDraft(chat.id, "");
         pending.current = null;
       })
-      .catch((cause) => state.setError(errorMessage(cause)))
+      .catch((cause) => {
+        if (sendMotion.current?.messageId === message.id) sendMotion.current = null;
+        state.setError(errorMessage(cause));
+      })
       .finally(() => setSending(false));
   };
   if (chat.archived)
@@ -148,6 +170,7 @@ function Composer({ chat, activity }: { chat: OrchestratorChat; activity: Orches
             <PlusIcon className="size-5" />
           </Button>
           <textarea
+            ref={input}
             aria-label={`Message ${chat.title}`}
             placeholder={`Message ${chat.title}`}
             className="field-sizing-content max-h-40 min-h-9 min-w-0 flex-1 resize-none bg-transparent py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground"
@@ -187,6 +210,7 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
   const navigate = useNavigate();
   const [switcher, setSwitcher] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const sendMotion = useRef<ComposerSendMotion | null>(null);
   const [details, setDetails] = useState(
     () => !floating && window.matchMedia("(min-width: 1280px)").matches,
   );
@@ -195,6 +219,9 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
   const [search, setSearch] = useState("");
   const narrow = useMediaQuery("(max-width: 1279px)");
   const chat = state.selected;
+  useEffect(() => {
+    sendMotion.current = null;
+  }, [chat?.id]);
   const contacts = state.contacts.filter((contact) => chat?.orchestratorIds.includes(contact.id));
   const work = useOrchestratorQuery<OrchestratorWorkItem[]>(
     state.client,
@@ -218,8 +245,9 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
   return (
     <div
       ref={panelRef}
+      data-conversation-surface
       className={cn(
-        "flex h-full min-h-0 min-w-0 flex-1 bg-background",
+        "relative flex h-full min-h-0 min-w-0 flex-1 bg-background",
         floating && "dark:bg-popover",
       )}
     >
@@ -376,11 +404,13 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
               work={work.value ?? []}
               search={search}
               result={messages}
+              sendMotion={sendMotion}
             />
             <Composer
               key={`composer:${chat.id}`}
               chat={chat}
               activity={activity.value ?? EMPTY_ACTIVITY}
+              sendMotion={sendMotion}
             />
           </>
         ) : (

@@ -73,3 +73,5 @@ The floating companion’s conversation details use the same behavior on the rig
 Attached panels slide smoothly out from the companion’s edge and share its outline. Closing a panel slides it back before restoring the companion’s rounded corners. Reduced motion preferences disable the slide.
 
 In the conversation area, consecutive messages from the same sender within five minutes form a group, with their name above and a small time and delivery footer below. Messages with queued, failed, or cancelled status retain their individual status and available actions. Centered day-and-time markers separate gaps longer than two hours and the start of each new day. Avatars remain in the conversation header and lists.
+
+After a message is accepted, it lifts from the composer into its place in the conversation. This animation only follows messages you send from that view; incoming messages and loaded history remain still. Reduced motion preferences disable the flight.
