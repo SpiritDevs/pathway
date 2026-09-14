@@ -55,3 +55,17 @@ Screenshots use the local fixture. The before image captures the unmodified comp
 - Live model reasoning, delegated execution, remote/relay/tunnel networking and production storage/CORS were not exercised. Downloads use authenticated cloud endpoints, without hard-coded local origins.
 - Normal agent thread regression tests passed; no additional signed-in normal-thread browser session was run.
 - PDFs, archives and other binary formats are stored and downloadable but are not parsed by the content-only reasoning path. Only Codex currently supports its image-input path. Browser clipboard availability follows existing platform support.
+
+## PR review follow-up
+
+Addressed the six code findings in PR #172:
+
+- Skip unusable formats before download; bound text reads to a combined 128,000-byte prefix budget and image retrieval to four supported PNG/JPEG/WebP/GIF inputs. Authenticated HTTP prefix ranges preserve the same access checks; runtime rejects ignored ranges and incomplete/oversized responses.
+- Store and derive filename previews for attachment-only sidebar rows.
+- Preserve native text insertion for clipboard events containing a non-image file and accompanying text.
+- Carry client-known storage IDs through web/native draft cleanup, let a removed in-flight POST finish so its blob can be deleted, and reject deletion/rebinding of storage used by orchestrator messages, normal-thread queues, calendar events or issue attachments.
+- Downsample native image data to 1,600 pixels in a detached utility task before publishing image state. Save/share keeps original bytes.
+
+Validation: 135 focused tests across the original eight files passed. Scoped web/backend/server typechecks and targeted lint passed; modified Swift files passed syntax parsing. A real local browser pass verified mixed text/file paste handling, removal while the successful storage POST response was delayed (including deletion of the blob), and exact seven-byte authenticated range retrieval, with no page errors.
+
+Residual upload limitation: an abrupt process/tab close or transport failure before the storage POST response reaches the client can still orphan a blob whose storage ID was never learned. This is a limitation of the existing direct-upload protocol, also used by calendar uploads. The cleanup change covers known IDs and live removal races; it does not claim to solve unknown-ID process interruption. A blanket storage sweep cannot safely infer ownership or whether another feature is still finalizing its upload. Eliminating that window requires a server-owned upload lifecycle. Native device/build verification remains blocked by the Xcode license.

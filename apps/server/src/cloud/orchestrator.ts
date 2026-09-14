@@ -150,6 +150,7 @@ export interface OrchestratorBackend {
   readonly readAttachment?: (
     job: OrchestratorRun,
     id: string,
+    maxBytes: number,
   ) => Effect.Effect<Uint8Array, OrchestratorError>;
   readonly pendingResults: Effect.Effect<
     readonly OrchestratorPendingWorkResult[],
@@ -422,7 +423,7 @@ export const makeOrchestratorBackend = Effect.fn("cloud.orchestrator.backend")(f
     generation: job.generation,
   });
   return {
-    readAttachment: (job: OrchestratorRun, id: string) =>
+    readAttachment: (job: OrchestratorRun, id: string, maxBytes: number) =>
       Effect.gen(function* () {
         const url = yield* call(() =>
           client.query(
@@ -437,13 +438,18 @@ export const makeOrchestratorBackend = Effect.fn("cloud.orchestrator.backend")(f
         const token = yield* options.tokens.token;
         if (http._tag === "None")
           return yield* new OrchestratorError({ reason: "Attachment transport unavailable." });
-        const expected = job.attachments?.find((attachment) => attachment.id === id)?.sizeBytes;
-        if (expected === undefined)
+        const savedSize = job.attachments?.find((attachment) => attachment.id === id)?.sizeBytes;
+        if (savedSize === undefined || !Number.isSafeInteger(maxBytes) || maxBytes <= 0)
           return yield* new OrchestratorError({ reason: "Unknown attachment." });
+        const expected = Math.min(savedSize, maxBytes);
+        const partial = expected < savedSize;
         const response = yield* http.value.get(url, {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(partial ? { Range: `bytes=0-${expected - 1}` } : {}),
+          },
         });
-        if (response.status !== 200)
+        if (response.status !== (partial ? 206 : 200))
           return yield* new OrchestratorError({ reason: "Attachment unavailable." });
         const bytes = new Uint8Array(expected);
         let size = 0;
@@ -656,9 +662,9 @@ export const orchestratorLayer = () =>
               });
               const attachments = yield* prepareOrchestratorAttachments(
                 job.attachments ?? [],
-                (id) =>
+                (id, maxBytes) =>
                   (backend.readAttachment
-                    ? backend.readAttachment(job, id)
+                    ? backend.readAttachment(job, id, maxBytes)
                     : Effect.fail(
                         new OrchestratorError({ reason: "Attachment retrieval is unavailable." }),
                       )

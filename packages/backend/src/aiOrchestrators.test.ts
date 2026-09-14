@@ -3156,6 +3156,22 @@ describe("conversation attachments", () => {
     const sequence = await test.owner.mutation(api.aiOrchestrators.send, args);
     expect(await test.owner.mutation(api.aiOrchestrators.send, args)).toBe(sequence);
     expect(
+      (await test.owner.query(api.aiOrchestrators.listChats, {})).find(
+        (chat) => chat.id === test.chatId,
+      )?.lastMessage,
+    ).toBe("notes.txt");
+    expect(
+      await test.t.run(
+        async (ctx) =>
+          (
+            await ctx.db
+              .query("aiOrchestratorChats")
+              .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+              .unique()
+          )?.lastMessage,
+      ),
+    ).toBe("notes.txt");
+    expect(
       (await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })).messages.at(
         -1,
       )?.attachments,
@@ -3372,6 +3388,82 @@ describe("conversation attachments", () => {
     expect(
       await test.owner.query(internal.aiOrchestratorAttachments.read, { id: "sent" }),
     ).toMatchObject({ attachment: metadata("sent") });
+  });
+  it("discards a client-known unfinalized blob without touching bound or foreign storage", async () => {
+    const test = await coordinatorHarness();
+    await test.owner.mutation(api.aiOrchestratorAttachments.prepare, {
+      chatId: test.chatId,
+      targetId: test.id,
+      attachment: metadata("pending"),
+    });
+    const storageId = await test.t.run((ctx) =>
+      ctx.storage.store(new Blob(["hello"], { type: "text/plain" })),
+    );
+    await expect(
+      human(test.t, "colleague").mutation(api.aiOrchestratorAttachments.discard, {
+        chatId: test.chatId,
+        id: "pending",
+        storageId,
+      }),
+    ).rejects.toThrow();
+    const threadStorage = await test.t.run(async (ctx) => {
+      const storageId = await ctx.storage.store(new Blob(["hello"], { type: "text/plain" }));
+      const company = (await ctx.db.query("companies").first())!;
+      const membership = (await ctx.db.query("memberships").first())!;
+      await ctx.db.insert("threadQueueAttachments", {
+        companyId: company._id,
+        issuedByMembershipId: membership._id,
+        storageId,
+        attachment: metadata(),
+        createdAt: Date.now(),
+      });
+      return storageId;
+    });
+    await expect(
+      test.owner.mutation(api.aiOrchestratorAttachments.discard, {
+        chatId: test.chatId,
+        id: "pending",
+        storageId: threadStorage,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      test.owner.mutation(api.aiOrchestratorAttachments.finalize, {
+        chatId: test.chatId,
+        id: "pending",
+        storageId: threadStorage,
+      }),
+    ).rejects.toThrow();
+    expect(await test.t.run(async (ctx) => (await ctx.storage.get(threadStorage))?.size)).toBe(5);
+    await upload(test, "bound");
+    const bound = await test.owner.query(internal.aiOrchestratorAttachments.read, { id: "bound" });
+    await expect(
+      test.owner.mutation(api.aiOrchestratorAttachments.discard, {
+        chatId: test.chatId,
+        id: "pending",
+        storageId: bound.storageId,
+      }),
+    ).rejects.toThrow();
+    expect(await test.t.run(async (ctx) => (await ctx.storage.get(bound.storageId))?.size)).toBe(5);
+    await test.owner.mutation(api.aiOrchestratorAttachments.discard, {
+      chatId: test.chatId,
+      id: "pending",
+      storageId,
+    });
+    expect(await test.t.run(async (ctx) => (await ctx.storage.get(storageId)) === null)).toBe(true);
+    expect(await test.t.run(async (ctx) => (await ctx.storage.get(bound.storageId))?.size)).toBe(5);
+  });
+  it("serves bounded prefixes only after the same download authorization", async () => {
+    const test = await coordinatorHarness();
+    await upload(test);
+    const endpoint = "/orchestrator-attachments?id=attachment-file";
+    const response = await test.owner.fetch(endpoint, { headers: { Range: "bytes=0-2" } });
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe("bytes 0-2/5");
+    expect(response.headers.get("Content-Length")).toBe("3");
+    expect(await response.text()).toBe("hel");
+    expect((await test.t.fetch(endpoint, { headers: { Range: "bytes=0-2" } })).status).toBe(403);
+    for (const range of ["bytes=2-4", "bytes=0-99", "bytes=0-2,3-4"])
+      expect((await test.owner.fetch(endpoint, { headers: { Range: range } })).status).toBe(416);
   });
   it("serves real bytes through authenticated HTTP and refuses unauthenticated requests", async () => {
     const test = await coordinatorHarness();

@@ -41,6 +41,7 @@ final class PathwayOrchestratorsModel {
   var drafts: [String: String] = [:]
   var attachmentDrafts: [String: [PathwayThreadAttachmentDraft]] = [:]
   @ObservationIgnored private var attachmentBytes: [String: Data] = [:]
+  @ObservationIgnored private var uploadingAttachmentIDs: Set<String> = []
   @ObservationIgnored private var attachmentStorage: [String: String] = [:]
   @ObservationIgnored private var pendingSends: [String: (id: String, text: String, target: String?, attachments: [String])] = [:]
   var errorMessage: String?
@@ -272,6 +273,8 @@ final class PathwayOrchestratorsModel {
   func retryAttachment(chatID: String, targetID: String, id: String) async {
     guard let draft = attachmentDrafts[chatID]?.first(where: { $0.id == id }), let data = attachmentBytes[id] else { return }
     let current = generation
+    uploadingAttachmentIDs.insert(id)
+    defer { uploadingAttachmentIDs.remove(id) }
     setAttachmentState(chatID: chatID, id: id, state: .uploading)
     do {
       let metadata: JSONValue = .object(["id": .string(id), "name": .string(draft.name), "type": .string(draft.type), "mimeType": .string(draft.mimeType), "sizeBytes": .number(Double(draft.sizeBytes))])
@@ -288,22 +291,35 @@ final class PathwayOrchestratorsModel {
           attachmentStorage[id] = storageID
         }
         guard let storageID else { throw URLError(.cannotParseResponse) }
+        if attachmentDrafts[chatID]?.contains(where: { $0.id == id }) != true {
+          await removeAttachment(chatID: chatID, id: id, completedUpload: true)
+          return
+        }
         _ = try await request("mutation", "aiOrchestratorAttachments:finalize", .object(["chatId": .string(chatID), "id": .string(id), "storageId": .string(storageID)]))
       }
       guard generation == current else { return }
       if attachmentDrafts[chatID]?.contains(where: { $0.id == id }) != true {
-        _ = try? await request("mutation", "aiOrchestratorAttachments:discard", .object(["chatId": .string(chatID), "id": .string(id)]))
+        await removeAttachment(chatID: chatID, id: id, completedUpload: true)
       } else { setAttachmentState(chatID: chatID, id: id, state: .ready) }
-    } catch { if generation == current { setAttachmentState(chatID: chatID, id: id, state: .failed(error.localizedDescription)) } }
+    } catch {
+      if generation == current {
+        if attachmentDrafts[chatID]?.contains(where: { $0.id == id }) != true { await removeAttachment(chatID: chatID, id: id, completedUpload: true) }
+        else { setAttachmentState(chatID: chatID, id: id, state: .failed(error.localizedDescription)) }
+      }
+    }
   }
   private func setAttachmentState(chatID: String, id: String, state: PathwayThreadAttachmentDraft.State) {
     guard let index = attachmentDrafts[chatID]?.firstIndex(where: { $0.id == id }) else { return }
     attachmentDrafts[chatID]?[index].state = state
   }
-  func removeAttachment(chatID: String, id: String) async {
+  func removeAttachment(chatID: String, id: String, completedUpload: Bool = false) async {
     attachmentDrafts[chatID]?.removeAll { $0.id == id }
+    // Await a running upload's response so cleanup can include its storage ID.
+    if uploadingAttachmentIDs.contains(id) && !completedUpload { return }
+    var fields: [String: JSONValue] = ["chatId": .string(chatID), "id": .string(id)]
+    if let storageID = attachmentStorage[id] { fields["storageId"] = .string(storageID) }
     attachmentBytes.removeValue(forKey: id); attachmentStorage.removeValue(forKey: id)
-    _ = try? await request("mutation", "aiOrchestratorAttachments:discard", .object(["chatId": .string(chatID), "id": .string(id)]))
+    _ = try? await request("mutation", "aiOrchestratorAttachments:discard", .object(fields))
   }
   func send(chatID: String, targetID: String?) async throws {
     let text = (drafts[chatID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

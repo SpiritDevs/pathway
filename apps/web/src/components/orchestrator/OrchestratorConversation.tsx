@@ -219,13 +219,17 @@ function Composer({ chat, activity }: { chat: OrchestratorChat; activity: Orches
               disabled={sending}
               onPaste={(event) => {
                 const files = Array.from(event.clipboardData.files);
+                const plainText = event.clipboardData.getData("text/plain");
+                const hasImageFile = files.some((file) =>
+                  file.type.toLowerCase().startsWith("image/"),
+                );
                 if (
                   shouldHandleComposerAttachmentPaste({
                     files,
-                    plainText: event.clipboardData.getData("text/plain"),
+                    plainText,
                   })
                 ) {
-                  event.preventDefault();
+                  if (!plainText.length || hasImageFile) event.preventDefault();
                   addFiles(files);
                 }
               }}

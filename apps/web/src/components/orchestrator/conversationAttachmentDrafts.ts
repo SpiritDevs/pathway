@@ -112,24 +112,35 @@ export function useConversationAttachmentDrafts(client: ConvexClient | null, acc
   }
   useEffect(() => {
     generation.current++;
-    for (const job of jobs.current.values()) job.abort();
     jobs.current.clear();
     queue.current = [];
-    for (const row of Object.values(current.current).flat())
-      if (row.previewUrl) URL.revokeObjectURL(row.previewUrl);
     current.current = {};
     setDrafts({});
     return () => {
       generation.current++;
-      for (const job of jobs.current.values()) job.abort();
-      for (const row of Object.values(current.current).flat())
-        if (row.previewUrl) URL.revokeObjectURL(row.previewUrl);
+      // Let in-flight POSTs report their storage IDs to their cleanup blocks.
+      // Closing the process before the response remains a direct-upload protocol limitation.
+      for (const [chatId, rows] of Object.entries(current.current)) {
+        for (const row of rows) {
+          if (row.previewUrl) URL.revokeObjectURL(row.previewUrl);
+          if (row.storageId || !jobs.current.has(row.attachment.id))
+            void client
+              ?.mutation(ref("mutation", "discard"), {
+                chatId,
+                id: row.attachment.id,
+                ...(row.storageId ? { storageId: row.storageId } : {}),
+              })
+              .catch(() => {});
+        }
+      }
     };
   }, [client, accountID]);
-  const discard = (chatId: string, id: string) =>
-    void client?.mutation(ref("mutation", "discard"), { chatId, id }).catch(() => {
-      /* Pending uploads expire server-side. */
-    });
+  const discard = (chatId: string, id: string, storageId?: string) =>
+    void client
+      ?.mutation(ref("mutation", "discard"), { chatId, id, ...(storageId ? { storageId } : {}) })
+      .catch(() => {
+        /* Pending uploads expire server-side. */
+      });
   function pump() {
     while (active.current < 3 && queue.current.length) {
       active.current++;
@@ -156,6 +167,7 @@ export function useConversationAttachmentDrafts(client: ConvexClient | null, acc
     };
     patch({ status: "uploading", progress: 0, error: undefined });
     queue.current.push(async () => {
+      let storageId = draft.storageId;
       try {
         if (!client || !exists()) return;
         const prepared = (await client.mutation(ref("mutation", "prepare"), {
@@ -163,14 +175,11 @@ export function useConversationAttachmentDrafts(client: ConvexClient | null, acc
           targetId,
           attachment: draft.attachment,
         })) as { ready: boolean; uploadUrl: string | null };
-        if (!exists()) {
-          discard(chatId, id);
-          return;
-        }
+        if (!exists()) return;
         if (!prepared.ready) {
           if (!prepared.uploadUrl) throw new Error("No upload URL was returned.");
-          const storageId =
-            draft.storageId ??
+          storageId =
+            storageId ??
             (await uploadConversationFile(
               prepared.uploadUrl,
               draft.file,
@@ -179,12 +188,10 @@ export function useConversationAttachmentDrafts(client: ConvexClient | null, acc
               (progress) => patch({ progress: Math.floor(progress * 20) / 20 }),
             ));
           patch({ storageId });
+          if (!exists()) return;
           await client.mutation(ref("mutation", "finalize"), { chatId, id, storageId });
         }
-        if (!exists()) {
-          discard(chatId, id);
-          return;
-        }
+        if (!exists()) return;
         patch({ status: "ready", progress: 1 });
       } catch (error) {
         patch({
@@ -192,6 +199,7 @@ export function useConversationAttachmentDrafts(client: ConvexClient | null, acc
           error: error instanceof Error ? error.message : "Upload failed. Retry the attachment.",
         });
       } finally {
+        if (!exists()) discard(chatId, id, storageId);
         jobs.current.delete(id);
       }
     });
@@ -219,10 +227,11 @@ export function useConversationAttachmentDrafts(client: ConvexClient | null, acc
     },
     remove(chatId: string, id: string) {
       const row = current.current[chatId]?.find((row) => row.attachment.id === id);
-      jobs.current.get(id)?.abort();
+      const uploading = jobs.current.has(id);
       update(chatId, (rows) => rows.filter((row) => row.attachment.id !== id));
       if (row?.previewUrl) URL.revokeObjectURL(row.previewUrl);
-      discard(chatId, id);
+      // Let an in-flight POST return its storage ID so its finally block can remove the blob.
+      if (!uploading) discard(chatId, id, row?.storageId);
     },
     retry(chatId: string, targetId: string, id: string) {
       const row = current.current[chatId]?.find((row) => row.attachment.id === id);

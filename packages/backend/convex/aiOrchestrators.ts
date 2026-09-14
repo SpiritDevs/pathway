@@ -374,6 +374,16 @@ export async function readableChat(ctx: QueryCtx, id: string) {
     return fail("You do not have access to this conversation.");
   return { chat, member, user };
 }
+function conversationMessagePreview(message: {
+  text: string;
+  attachments?: OrchestratorAttachment[];
+}) {
+  return (
+    message.text.trim() ||
+    message.attachments?.map((attachment) => attachment.name).join(", ") ||
+    ""
+  ).slice(0, 160);
+}
 export async function appendChatMessage(
   ctx: MutationCtx,
   chat: Doc<"aiOrchestratorChats">,
@@ -400,7 +410,7 @@ export async function appendChatMessage(
   await ctx.db.patch(chat._id, {
     lastSequence: sequence,
     ...(message.senderKind !== "system" || message.senderId === "participants"
-      ? { lastMessage: message.text.slice(0, 160), updatedAt: now }
+      ? { lastMessage: conversationMessagePreview(message), updatedAt: now }
       : {}),
     ...(notification
       ? {
@@ -408,7 +418,7 @@ export async function appendChatMessage(
             ...notification,
             sequence,
             senderName: message.senderName,
-            text: message.text.slice(0, 160),
+            text: conversationMessagePreview(message),
             createdAt: now,
           },
         }
@@ -480,7 +490,7 @@ export const listChats = query({
         } = chat;
         return {
           ...record,
-          lastMessage: latest?.text.slice(0, 160) ?? "",
+          lastMessage: latest ? conversationMessagePreview(latest) : "",
           lastSequence: latest?.sequence ?? 0,
           readSequence: member.readSequence,
           ...(notification && notification.sequence >= member.fromSequence ? { notification } : {}),

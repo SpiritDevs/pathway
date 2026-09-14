@@ -6,7 +6,7 @@ import type { OrchestratorAttachment } from "@spiritdevs/contracts/aiOrchestrato
 const http = httpRouter();
 const headers = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Authorization, Content-Type",
+  "Access-Control-Allow-Headers": "Authorization, Content-Type, Range",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
   "Cache-Control": "no-store",
   "X-Content-Type-Options": "nosniff",
@@ -42,9 +42,23 @@ http.route({
       );
       const blob = await ctx.storage.get(row.storageId);
       if (!blob) return new Response("Attachment unavailable", { status: 404, headers });
-      return new Response(blob, {
+      const range = request.headers.get("Range");
+      let body = blob;
+      let partialHeaders = {};
+      if (range !== null) {
+        const match = /^bytes=0-(\d+)$/.exec(range);
+        const end = Number(match?.[1]);
+        if (!match || !Number.isSafeInteger(end) || end < 0 || end >= blob.size)
+          return new Response("Invalid range", { status: 416, headers });
+        body = blob.slice(0, end + 1);
+        partialHeaders = { "Content-Range": `bytes 0-${end}/${blob.size}` };
+      }
+      return new Response(body, {
+        status: range === null ? 200 : 206,
         headers: {
           ...headers,
+          ...partialHeaders,
+          "Content-Length": String(body.size),
           "Content-Type": "application/octet-stream",
           "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(row.attachment.name)}`,
         },

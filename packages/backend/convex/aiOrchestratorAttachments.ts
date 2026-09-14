@@ -11,7 +11,7 @@ import {
   type QueryCtx,
   type MutationCtx,
 } from "./_generated/server.js";
-import type { Doc } from "./_generated/dataModel.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
 import { readableChat, canDirectOrchestrator, readableOrchestrator } from "./aiOrchestrators.ts";
 import { currentClaim } from "./aiOrchestratorJobs.ts";
 import { sharedHistoryBoundary } from "./lib/aiOrchestratorContext.ts";
@@ -90,11 +90,7 @@ export const finalize = mutation({
       return unavailable();
     if (row.storageId === args.storageId) return null;
     if (row.storageId || row.messageId) return unavailable();
-    const owned = await ctx.db
-      .query("aiOrchestratorAttachments")
-      .withIndex("by_storage", (q) => q.eq("storageId", args.storageId))
-      .unique();
-    if (owned) return unavailable();
+    if (await storageIsBound(ctx, args.storageId)) return unavailable();
     const metadata = await ctx.db.system.get(args.storageId);
     if (
       !metadata ||
@@ -139,8 +135,29 @@ export async function bindConversationAttachments(
   return attachments;
 }
 
+async function storageIsBound(ctx: QueryCtx, storageId: Id<"_storage">) {
+  return Boolean(
+    (await ctx.db
+      .query("aiOrchestratorAttachments")
+      .withIndex("by_storage", (q) => q.eq("storageId", storageId))
+      .first()) ||
+    (await ctx.db
+      .query("threadQueueAttachments")
+      .withIndex("by_storage", (q) => q.eq("storageId", storageId))
+      .first()) ||
+    (await ctx.db
+      .query("calendarEventAttachments")
+      .withIndex("by_storage_id", (q) => q.eq("storageId", storageId))
+      .first()) ||
+    (await ctx.db
+      .query("issueAttachments")
+      .withIndex("by_storage_id", (q) => q.eq("storageId", storageId))
+      .first()),
+  );
+}
+
 export const discard = mutation({
-  args: { chatId: v.string(), id: v.string() },
+  args: { chatId: v.string(), id: v.string(), storageId: v.optional(v.id("_storage")) },
   handler: async (ctx, args) => {
     const { user } = await readableChat(ctx, args.chatId);
     const row = await find(ctx, args.id);
@@ -148,7 +165,22 @@ export const discard = mutation({
     if (row.chatId !== args.chatId || row.ownerSubject !== user.clerkSubject) return unavailable();
     // An unconfirmed send may already have bound the file. Removal never deletes sent evidence.
     if (row.messageId) return null;
+    if (args.storageId && row.storageId && args.storageId !== row.storageId) return unavailable();
     if (row.storageId) await ctx.storage.delete(row.storageId);
+    else if (args.storageId) {
+      // Like calendar draft cleanup, accept a client-known upload only while unbound.
+      if (await storageIsBound(ctx, args.storageId)) return unavailable();
+      const metadata = await ctx.db.system.get(args.storageId);
+      if (
+        metadata &&
+        (metadata._creationTime < row._creationTime ||
+          metadata.size !== row.attachment.sizeBytes ||
+          (metadata.contentType &&
+            metadata.contentType.toLowerCase() !== row.attachment.mimeType.toLowerCase()))
+      )
+        return unavailable();
+      if (metadata) await ctx.storage.delete(args.storageId);
+    }
     await ctx.db.delete(row._id);
     return null;
   },

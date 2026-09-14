@@ -360,7 +360,20 @@ private struct PathwayOrchestratorAttachmentView: View {
         do {
             let data = try await appModel.downloadOrchestratorAttachment(id: attachment.id)
             try Task.checkCancellation()
-            if attachment.string("type") == "image" { image = UIImage(data: data) }
+            if attachment.string("type") == "image" {
+                let thumbnail = await Task.detached(priority: .utility) {
+                    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                          let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                            kCGImageSourceCreateThumbnailFromImageAlways: true,
+                            kCGImageSourceCreateThumbnailWithTransform: true,
+                            kCGImageSourceThumbnailMaxPixelSize: 1600,
+                            kCGImageSourceShouldCacheImmediately: true
+                          ] as CFDictionary) else { return Data?.none }
+                    return UIImage(cgImage: image).pngData()
+                }.value
+                try Task.checkCancellation()
+                if let thumbnail { image = UIImage(data: thumbnail) }
+            }
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let name = URL(fileURLWithPath: attachment.string("name")).lastPathComponent

@@ -78,3 +78,66 @@ it.effect("rejects incomplete attachment retrieval", () =>
     expect(result._tag).toBe("Failure");
   }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it.effect("bounds large text downloads and never retrieves unsupported formats", () =>
+  Effect.gen(function* () {
+    const reads: Array<{ id: string; limit: number }> = [];
+    const result = yield* prepareOrchestratorAttachments(
+      [
+        ...["image/svg+xml", "image/heic", "application/pdf"].map((mimeType, index) => ({
+          id: `unsupported-${index}`,
+          type: index < 2 ? ("image" as const) : ("file" as const),
+          name: "unsupported",
+          mimeType,
+          sizeBytes: 10 * 1024 * 1024,
+        })),
+        ...Array.from({ length: 8 }, (_, index) => ({
+          id: `text-${index}`,
+          type: "file" as const,
+          name: "large.txt",
+          mimeType: "text/plain",
+          sizeBytes: 50 * 1024 * 1024,
+        })),
+      ],
+      (id, limit) =>
+        Effect.sync(() => {
+          reads.push({ id, limit });
+          return new Uint8Array(limit).fill(97);
+        }),
+      "/tmp",
+      ProviderDriverKind.make("codex"),
+    );
+    expect(reads).toEqual([{ id: "text-0", limit: 128000 }]);
+    expect(result.imagePaths).toEqual([]);
+    expect(result.prompt).toContain("Bytes were not downloaded");
+    expect(result.prompt).toContain("context budget is exhausted");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("caps image downloads at four supported provider inputs", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const cwd = yield* fs.makeTempDirectoryScoped();
+    const reads: string[] = [];
+    const result = yield* prepareOrchestratorAttachments(
+      ["image/png", "image/jpeg", "image/webp", "image/gif", "image/png"].map(
+        (mimeType, index) => ({
+          id: String(index),
+          type: "image" as const,
+          name: "image",
+          mimeType,
+          sizeBytes: 1,
+        }),
+      ),
+      (id) =>
+        Effect.sync(() => {
+          reads.push(id);
+          return new Uint8Array([1]);
+        }),
+      cwd,
+      ProviderDriverKind.make("codex"),
+    );
+    expect(reads).toEqual(["0", "1", "2", "3"]);
+    expect(result.imagePaths).toHaveLength(4);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
