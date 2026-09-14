@@ -1,5 +1,7 @@
 import type { ModelSelection, ServerProvider } from "@spiritdevs/contracts";
 import { isProviderAvailable } from "@spiritdevs/contracts";
+import { normalizeModelSlug } from "@spiritdevs/shared/model";
+import { delegationSelectionProblem } from "@spiritdevs/contracts/aiOrchestrator";
 import * as Schema from "effect/Schema";
 import { OrchestratorDelegationCatalog } from "@spiritdevs/contracts/aiOrchestrator";
 
@@ -52,4 +54,20 @@ export function orchestratorDelegationCatalog(
     catalog.truncated = true;
   }
   return catalog;
+}
+
+/** Match the runtime's legacy aliases before checking the provider's current discovery. */
+export function discoveredDelegationSelectionProblem(
+  selection: ModelSelection,
+  snapshot: ServerProvider,
+) {
+  const normalized = {
+    ...selection,
+    model: normalizeModelSlug(selection.model, snapshot.driver) ?? selection.model,
+  };
+  const model = snapshot.models.find((model) => model.slug === normalized.model);
+  return delegationSelectionProblem(
+    normalized,
+    orchestratorDelegationCatalog([{ ...snapshot, models: model ? [model] : [] }], normalized),
+  );
 }

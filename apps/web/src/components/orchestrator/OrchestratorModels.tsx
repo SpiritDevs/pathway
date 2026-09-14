@@ -139,15 +139,44 @@ function ModelRow({
         <select
           aria-label={`Environment for ${worker ? "worker preset" : "model choice"} ${index + 1}`}
           value={choice.environmentId}
-          onChange={(event) => onChange({ ...choice, environmentId: event.target.value })}
+          onChange={(event) => {
+            const environmentId = event.target.value;
+            const target = environments.find((item) => item.environmentId === environmentId);
+            const provider = target?.serverConfig?.providers.find(
+              (item) =>
+                item.enabled &&
+                item.models.length > 0 &&
+                (worker || supportsCoordinator(item.driver)),
+            );
+            const model = provider?.models[0];
+            if (provider && model)
+              onChange({
+                ...choice,
+                environmentId,
+                selection: createModelSelection(provider.instanceId, model.slug),
+              });
+          }}
           className="min-w-40 rounded-lg border bg-background px-3 py-2 text-sm"
         >
-          <option value="">Choose an environment</option>
+          <option value="" disabled>
+            Choose an environment
+          </option>
           {!environment && choice.environmentId && (
             <option value={choice.environmentId}>Unavailable environment</option>
           )}
           {environments.map((item) => (
-            <option key={item.environmentId} value={item.environmentId}>
+            <option
+              key={item.environmentId}
+              value={item.environmentId}
+              disabled={
+                !item.serverConfig?.providers.some(
+                  (provider) =>
+                    provider.enabled &&
+                    provider.models.length > 0 &&
+                    (worker || supportsCoordinator(provider.driver)),
+                )
+              }
+            >
               {item.label}
             </option>
           ))}

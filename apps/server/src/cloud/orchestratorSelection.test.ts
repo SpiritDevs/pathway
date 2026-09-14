@@ -5,7 +5,11 @@ import {
   OrchestratorAction,
   delegationSelectionProblem,
 } from "@spiritdevs/contracts/aiOrchestrator";
-import { orchestratorDelegationCatalog, resolveDelegatedModel } from "./orchestratorSelection.ts";
+import {
+  discoveredDelegationSelectionProblem,
+  orchestratorDelegationCatalog,
+  resolveDelegatedModel,
+} from "./orchestratorSelection.ts";
 
 const selection = (model: string) => ({ instanceId: ProviderInstanceId.make("custom"), model });
 const decodeAction = Schema.decodeUnknownSync(OrchestratorAction);
@@ -135,4 +139,16 @@ it("rejects malformed action options instead of silently dropping an explicit ov
     },
   };
   expect(() => decodeAction(action)).toThrow();
+});
+
+it("accepts runtime legacy aliases without relaxing model or option validation", () => {
+  const current = { ...snapshot, models: [{ ...snapshot.models[0]!, slug: "gpt-5.4" }] };
+  expect(discoveredDelegationSelectionProblem(selection("gpt-5-codex"), current)).toBeNull();
+  expect(discoveredDelegationSelectionProblem(selection("invented"), current)).not.toBeNull();
+  expect(
+    discoveredDelegationSelectionProblem(
+      { ...selection("gpt-5-codex"), options: [{ id: "effort", value: "ultra" }] },
+      current,
+    ),
+  ).not.toBeNull();
 });

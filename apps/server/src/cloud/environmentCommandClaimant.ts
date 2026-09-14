@@ -29,13 +29,15 @@ import {
   ProjectId,
   ThreadId,
 } from "@spiritdevs/contracts";
-import { delegationSelectionProblem } from "@spiritdevs/contracts/aiOrchestrator";
 import {
   CommandReceiptStoreV2,
   layer as commandReceiptStoreLayer,
 } from "../orchestration-v2/CommandReceiptStore.ts";
 import { ProviderInstanceRegistry } from "../provider/Services/ProviderInstanceRegistry.ts";
-import { orchestratorDelegationCatalog, resolveDelegatedModel } from "./orchestratorSelection.ts";
+import {
+  discoveredDelegationSelectionProblem,
+  resolveDelegatedModel,
+} from "./orchestratorSelection.ts";
 import type { SyncBootstrapResponse } from "@spiritdevs/contracts/cloudSync";
 import { CompanyId } from "@spiritdevs/contracts/company";
 import { makeSqliteSyncStore } from "@spiritdevs/client-runtime/sync";
@@ -639,13 +641,7 @@ function makeLiveExecutor(input: {
             "The selected worker provider is unavailable. No fallback was selected.",
           );
         const snapshot = yield* instance.snapshot.getSnapshot;
-        // Validate against this provider alone so a large environment catalog cannot hide the requested model.
-        const model = snapshot.models.find((model) => model.slug === selection.model);
-        const catalog = orchestratorDelegationCatalog(
-          [{ ...snapshot, models: model ? [model] : [] }],
-          selection,
-        );
-        const problem = delegationSelectionProblem(selection, catalog);
+        const problem = discoveredDelegationSelectionProblem(selection, snapshot);
         if (problem) return yield* Effect.fail(`${problem} No fallback was selected.`);
       }),
     dispatch: input.threads.dispatch,

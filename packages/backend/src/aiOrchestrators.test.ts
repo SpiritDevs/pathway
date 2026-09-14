@@ -3004,6 +3004,22 @@ describe("task-aware worker selections", () => {
       expect(await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId })).toEqual([]);
     },
   );
+  it.each([undefined, Date.now() - 120001])(
+    "defers expired or undated catalog validation to the target (%s)",
+    async (publishedAt) => {
+      const test = await workerSelectionHarness();
+      await test.t.run(async (ctx) => {
+        const registration = (await ctx.db.query("environmentRegistrations").collect()).find(
+          (row) => row.environmentId === "studio",
+        )!;
+        await ctx.db.patch(registration._id, { orchestratorDelegationCatalogAt: publishedAt });
+      });
+      const requested = { instanceId: "codex", model: "newly-discovered" };
+      await test.delegate(requested);
+      const rows = await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId });
+      expect(rows[0]?.selection).toEqual(requested);
+    },
+  );
   it("keeps worker presets when an older client updates unrelated settings", async () => {
     const test = await workerSelectionHarness();
     const current = (await test.owner.query(api.aiOrchestrators.list, {}))[0]!;

@@ -16,3 +16,5 @@ The local preview and capture scripts are retained in this worktree's ignored `.
 117 focused tests passed across the coordinator backend, coordinator runtime, command claimant and selection discovery. Targeted server, backend and web typechecks passed. Targeted lint and whitespace checks passed.
 
 See [the investigation and research](../../docs/internals/orchestrator-selection.md) for selection precedence, sources, compatibility and remaining limitations.
+
+PR review follow-up: [switching a worker to another environment](worker-environment-switch.png) now replaces its provider/model and clears its old reasoning options. Browser checks covered switching back and disabling environments with no discovered models. The three affected backend/server suites passed 107 tests, including new expired-catalog and legacy-alias regressions. Scoped server, web and backend typechecks and targeted lint passed. The native work card now displays the worker model and selection explanation; Swift syntax parsing passed, but a native build and simulator verification were not run for this follow-up.

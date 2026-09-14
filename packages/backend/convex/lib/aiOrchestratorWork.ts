@@ -92,7 +92,11 @@ export async function queueOrchestratorWork(
     (choice) => choice.environmentId === action.environmentId,
   );
   const selection = action.selection ?? preset?.selection ?? null;
-  if (selection && registration.orchestratorDelegationCatalog) {
+  if (
+    selection &&
+    registration.orchestratorDelegationCatalog &&
+    Date.now() - (registration.orchestratorDelegationCatalogAt ?? 0) <= 120000
+  ) {
     const catalog = decodeCatalog(registration.orchestratorDelegationCatalog);
     const problem = delegationSelectionProblem(decodeSelection(selection), catalog);
     if (problem) return fail(`${problem} No fallback was selected.`);
