@@ -42,3 +42,20 @@ export function conversationPanelLayout(bounds: {
     panelWidth: docked ? 320 : Math.min(320, Math.max(0, bounds.width - 40)),
   };
 }
+
+/** Details mirror the conversation drawer on the companion's right edge. */
+export function conversationDetailsLayout(
+  bounds: { left: number; top: number; width: number; height: number },
+  viewportWidth: number,
+) {
+  const right = bounds.left + bounds.width;
+  const docked = viewportWidth - right >= 356;
+  return {
+    docked,
+    left: docked ? right : bounds.left,
+    top: bounds.top,
+    width: docked ? 340 : bounds.width,
+    height: bounds.height,
+    panelWidth: docked ? 340 : Math.min(340, Math.max(0, bounds.width - 40)),
+  };
+}

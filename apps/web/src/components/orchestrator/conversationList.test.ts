@@ -4,6 +4,7 @@ import {
   unreadLabel,
   conversationTime,
   conversationPanelLayout,
+  conversationDetailsLayout,
 } from "./conversationList";
 
 describe("conversation list", () => {
@@ -55,4 +56,25 @@ it("keeps the slide-out attached and confines the overlay to the companion", () 
     panelWidth: 320,
   });
   expect(conversationPanelLayout({ ...bounds, width: 280 }).panelWidth).toBe(240);
+});
+
+it("attaches details to the right when there is room and otherwise contains them", () => {
+  const bounds = { left: 100, top: 80, width: 600, height: 500 };
+  expect(conversationDetailsLayout(bounds, 1056)).toEqual({
+    docked: true,
+    left: 700,
+    top: 80,
+    width: 340,
+    height: 500,
+    panelWidth: 340,
+  });
+  expect(conversationDetailsLayout(bounds, 1055)).toEqual({
+    docked: false,
+    left: 100,
+    top: 80,
+    width: 600,
+    height: 500,
+    panelWidth: 340,
+  });
+  expect(conversationDetailsLayout({ ...bounds, width: 280 }, 400).panelWidth).toBe(240);
 });

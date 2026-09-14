@@ -32,6 +32,7 @@ import { ConversationAvatar, OrchestratorAvatar } from "./OrchestratorAvatar";
 import { ConversationList, FloatingConversationSwitcher } from "./OrchestratorSidebar";
 import { NewConversationDialog } from "./NewConversationDialog";
 import { ConversationMessages } from "./ConversationMessages";
+import { FloatingDetailsPanel } from "./FloatingDetailsPanel";
 import { ConversationMetadata } from "./ConversationMetadata";
 
 const EMPTY_ACTIVITY: OrchestratorActivity = [];
@@ -425,7 +426,22 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
           />
         </aside>
       )}
-      {chat && (
+      {chat && floating && (
+        <FloatingDetailsPanel anchor={panelRef} open={details} onClose={() => setDetails(false)}>
+          <ConversationMetadata
+            chat={chat}
+            work={work.value ?? []}
+            onClose={() => setDetails(false)}
+            onFloat={() => {
+              setFloatingDetails(false);
+              state.setFloating(false);
+              void navigate({ to: "/orchestrator" });
+            }}
+            floating
+          />
+        </FloatingDetailsPanel>
+      )}
+      {chat && !floating && (
         <RightPanelSheet
           open={sheet}
           onClose={() => setDetails(false)}
