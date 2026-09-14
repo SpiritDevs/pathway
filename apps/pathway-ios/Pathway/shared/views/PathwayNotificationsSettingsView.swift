@@ -13,7 +13,9 @@ struct PathwayNotificationsSettingsView: View {
                 #if os(iOS)
                 Toggle("Live Activities", isOn: $notifications.preferences.liveActivitiesEnabled)
                 #endif
-            } footer: { Text("Notification preferences apply to this device and account.") }
+            } footer: {
+                Text("Choose your preferences, then tap Save preferences. These apply to this device and account. Your server must be linked to Pathway Cloud with Publish agent activity enabled in Connections. The server must stay online to send updates while this app is closed.")
+            }
             Section {
                 Button("Save preferences") { Task { await notifications.savePreferences() } }.disabled(notifications.registering)
                 if notifications.registering { ProgressView("Registering this device…") }

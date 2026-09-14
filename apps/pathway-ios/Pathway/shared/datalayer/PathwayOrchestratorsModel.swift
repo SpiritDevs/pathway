@@ -189,7 +189,7 @@ final class PathwayOrchestratorsModel {
         ("messages", "aiOrchestrators:messages"), ("work", "aiOrchestrators:work"),
         ("activity", "aiOrchestrators:activity"),
       ] {
-        group.addTask { @MainActor [weak self] in
+        group.addTask { @MainActor @Sendable [weak self] in
           guard let self else { return }
           do {
             for try await value in subscribe(name, .object(["chatId": .string(chatID)])) {
