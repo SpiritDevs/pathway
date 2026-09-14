@@ -22,6 +22,12 @@ Appearance and personality belong to the orchestrator. Its owner and authorized 
 
 The face expresses the tone of a response. A separate status dot reports work such as working, queued, completed, paused, or needing attention. Characters blink and make small glances, with rest between gestures. Their eyes and body move smoothly between expressions; clicks and new updates trigger brief reactions. Reactions are silent, respect reduced motion, and stop when hidden. Opening old messages does not replay their reactions.
 
+## Switching conversations
+
+In the floating companion, select the sidebar button immediately to the left of the avatar. The conversation list opens beside the chat, with search, the latest message, its send time, and an unread count for each room. Select a conversation to switch and close the list; your draft stays with its conversation. Escape or the close button also closes the list.
+
+The number beside the sidebar icon counts unread messages across active conversations, excluding archived rooms and internal agent events. Counts above 99 appear as **99+**. Opening and reading a conversation updates its count. Older messages show a date; hover the timestamp for the full send time.
+
 ## Conversations and work
 
 Background checks happen quietly. Internal activity triggers and review instructions do not appear as messages, change the conversation preview, or create unread badges. Your orchestrator replies when it has something useful to report. Participant changes remain visible.

@@ -444,6 +444,18 @@ export const listChats = query({
           )
           .order("desc")
           .first();
+        // Cap the projection at 100; the client displays 99+ without loading history.
+        const unread = await ctx.db
+          .query("aiOrchestratorMessages")
+          .withIndex("by_chat_sequence", (q) =>
+            q
+              .eq("chatId", chat.id)
+              .gte("sequence", Math.max(member.fromSequence, member.readSequence + 1)),
+          )
+          .filter((q) =>
+            q.or(q.neq(q.field("senderKind"), "system"), q.eq(q.field("senderId"), "participants")),
+          )
+          .take(100);
         const {
           _id,
           _creationTime,
@@ -457,6 +469,8 @@ export const listChats = query({
           lastMessage: latest?.text.slice(0, 160) ?? "",
           lastSequence: latest?.sequence ?? 0,
           readSequence: member.readSequence,
+          unreadCount: unread.length,
+          lastMessageAt: latest?.createdAt ?? chat.createdAt,
           ...(notification && notification.sequence >= member.fromSequence ? { notification } : {}),
         };
       }),

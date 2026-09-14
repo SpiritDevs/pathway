@@ -97,6 +97,8 @@ export const OrchestratorChat = Schema.Struct({
   archived: Schema.Boolean,
   lastSequence: Schema.Number,
   readSequence: Schema.Number,
+  unreadCount: Schema.optionalKey(Schema.Number),
+  lastMessageAt: Schema.optionalKey(Schema.Number),
   lastMessage: Schema.String,
   notification: Schema.optional(OrchestratorNotification),
   updatedAt: Schema.Number,

@@ -1,20 +1,31 @@
-import { useState } from "react";
-import { ArchiveIcon, PlusIcon, SearchIcon, SquarePenIcon } from "lucide-react";
+import { useState, type RefObject } from "react";
+import {
+  ArchiveIcon,
+  PlusIcon,
+  SearchIcon,
+  SquarePenIcon,
+  PanelLeftIcon,
+  XIcon,
+} from "lucide-react";
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
 import { Button } from "../ui/button";
 import { useOrchestrators } from "./OrchestratorContext";
 import { ConversationAvatar, OrchestratorAvatar } from "./OrchestratorAvatar";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { unreadMessageTotal, unreadLabel, conversationTime } from "./conversationList";
 import { cn } from "../../lib/utils";
 
 export function ConversationList({ onSelect }: { onSelect?: () => void }) {
   const state = useOrchestrators();
   const [search, setSearch] = useState("");
   const [archived, setArchived] = useState(false);
-  const chats = state.chats.filter(
-    (chat) =>
-      chat.archived === archived &&
-      (chat.title + " " + chat.lastMessage).toLowerCase().includes(search.toLowerCase()),
-  );
+  const chats = state.chats
+    .toSorted((a, b) => (b.lastMessageAt ?? b.updatedAt) - (a.lastMessageAt ?? a.updatedAt))
+    .filter(
+      (chat) =>
+        chat.archived === archived &&
+        (chat.title + " " + chat.lastMessage).toLowerCase().includes(search.toLowerCase()),
+    );
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="px-3 pb-3">
@@ -54,23 +65,29 @@ export function ConversationList({ onSelect }: { onSelect?: () => void }) {
                 <span className="truncate text-sm font-semibold">{chat.title}</span>
                 <time
                   className="ml-auto shrink-0 text-[10px] text-muted-foreground"
-                  dateTime={new Date(chat.updatedAt).toISOString()}
+                  dateTime={new Date(chat.lastMessageAt ?? chat.updatedAt).toISOString()}
+                  title={new Date(chat.lastMessageAt ?? chat.updatedAt).toLocaleString()}
                 >
-                  {new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
-                    chat.updatedAt,
-                  )}
+                  {conversationTime(chat.lastMessageAt ?? chat.updatedAt)}
                 </time>
               </span>
               <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
                 {chat.lastMessage || "Start a conversation"}
               </span>
             </span>
-            {chat.lastSequence > chat.readSequence && (
+            {(chat.unreadCount ?? 0) > 0 ? (
+              <span
+                className="inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground"
+                aria-label={`${unreadLabel(chat.unreadCount!)} unread messages`}
+              >
+                {unreadLabel(chat.unreadCount!)}
+              </span>
+            ) : chat.lastSequence > chat.readSequence ? (
               <span
                 className="size-2 shrink-0 rounded-full bg-blue-500"
                 aria-label="Unread messages"
               />
-            )}
+            ) : null}
           </button>
         ))}
         {state.loading && (
@@ -156,5 +173,71 @@ export function OrchestratorSidebar() {
       </div>
       <ConversationList />
     </>
+  );
+}
+
+export function FloatingConversationSwitcher({
+  anchor,
+}: {
+  anchor: RefObject<HTMLDivElement | null>;
+}) {
+  const state = useOrchestrators();
+  const [open, setOpen] = useState(false);
+  const unread = unreadMessageTotal(state.chats);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={<Button variant="ghost" size="sm" />}
+        className="shrink-0 gap-1.5 px-2"
+        aria-label={`Conversations${unread ? `, ${unreadLabel(unread)} unread messages` : ""}`}
+      >
+        <PanelLeftIcon className="size-4" />
+        {unread > 0 && (
+          <span
+            className="rounded-full bg-primary px-1.5 text-[10px] leading-5 font-semibold tabular-nums text-primary-foreground"
+            aria-hidden="true"
+          >
+            {unreadLabel(unread)}
+          </span>
+        )}
+      </PopoverTrigger>
+      <PopoverPopup
+        anchor={anchor}
+        aria-label="Conversations"
+        side="left"
+        align="start"
+        sideOffset={8}
+        className="w-80 max-w-[calc(100vw-2rem)] transition-[opacity,translate] duration-200 data-starting-style:translate-x-4 data-ending-style:translate-x-4 motion-reduce:transition-none"
+        viewportClassName="p-0"
+      >
+        <div className="flex h-[min(36rem,var(--anchor-height),var(--available-height))] min-h-0 flex-col">
+          <div className="flex h-14 shrink-0 items-center justify-between px-4">
+            <h2 className="text-sm font-semibold">Conversations</h2>
+            <div className="flex gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="New conversation"
+                onClick={() => {
+                  setOpen(false);
+                  state.setNewChatOpen(true);
+                }}
+              >
+                <SquarePenIcon className="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Close conversations"
+                onClick={() => setOpen(false)}
+              >
+                <XIcon className="size-4" />
+              </Button>
+            </div>
+          </div>
+          <ConversationList onSelect={() => setOpen(false)} />
+        </div>
+      </PopoverPopup>
+    </Popover>
   );
 }

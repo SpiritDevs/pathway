@@ -157,6 +157,42 @@ describe("persistent orchestrator identities and messages", () => {
       owner.mutation(api.aiOrchestrators.cancelMessage, { chatId, messageId: "second" }),
     ).rejects.toThrow("already started");
   });
+  it("counts only visible unread messages, respects joined history, and clears on read", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, chatId } = await personalChat(t);
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 105; i++) {
+        const chat = (await ctx.db
+          .query("aiOrchestratorChats")
+          .withIndex("by_domain_id", (q) => q.eq("id", chatId))
+          .unique())!;
+        await appendChatMessage(ctx, chat, {
+          id: `unread-${i}`,
+          senderKind: "orchestrator",
+          senderId: chat.leadId,
+          senderName: "Chief",
+          text: `Reply ${i}`,
+          status: "sent",
+          replyToId: null,
+        });
+      }
+    });
+    expect((await owner.query(api.aiOrchestrators.listChats, {}))[0]?.unreadCount).toBe(100);
+    await t.run(async (ctx) => {
+      const member = (await ctx.db
+        .query("aiOrchestratorChatMembers")
+        .withIndex("by_subject", (q) => q.eq("subject", "owner"))
+        .first())!;
+      await ctx.db.patch(member._id, { fromSequence: 104, readSequence: 0 });
+    });
+    const row = (await owner.query(api.aiOrchestrators.listChats, {}))[0]!;
+    expect(row.unreadCount).toBe(2);
+    const page = await owner.query(api.aiOrchestrators.messages, { chatId });
+    expect(row.lastMessageAt).toBe(page.messages.at(-1)?.createdAt);
+    await owner.mutation(api.aiOrchestrators.markRead, { chatId, sequence: row.lastSequence });
+    expect((await owner.query(api.aiOrchestrators.listChats, {}))[0]?.unreadCount).toBe(0);
+  });
   it("keeps internal wakes out of history, previews and unread counts without deleting them", async () => {
     const t = harness();
     await seed(t);
@@ -194,6 +230,7 @@ describe("persistent orchestrator identities and messages", () => {
       lastMessage: "Hello Jarvis",
       lastSequence: before.lastSequence,
       readSequence: before.readSequence,
+      unreadCount: 0,
       updatedAt: before.updatedAt,
     });
     expect(await t.run((ctx) => ctx.db.query("aiOrchestratorMessages").collect())).toHaveLength(66);

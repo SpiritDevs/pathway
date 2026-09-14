@@ -29,7 +29,7 @@ import { RightPanelSheet } from "../RightPanelSheet";
 import { SheetTitle } from "../ui/sheet";
 import { useOrchestrators, useOrchestratorQuery } from "./OrchestratorContext";
 import { ConversationAvatar, OrchestratorAvatar } from "./OrchestratorAvatar";
-import { ConversationList } from "./OrchestratorSidebar";
+import { ConversationList, FloatingConversationSwitcher } from "./OrchestratorSidebar";
 import { NewConversationDialog } from "./NewConversationDialog";
 import { ConversationMessages } from "./ConversationMessages";
 import { ConversationMetadata } from "./ConversationMetadata";
@@ -185,6 +185,7 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
   const state = useOrchestrators();
   const navigate = useNavigate();
   const [switcher, setSwitcher] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
   const [details, setDetails] = useState(
     () => !floating && window.matchMedia("(min-width: 1280px)").matches,
   );
@@ -215,6 +216,7 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
   const sheet = details && (floatingDetails || floating || narrow);
   return (
     <div
+      ref={panelRef}
       className={cn(
         "flex h-full min-h-0 min-w-0 flex-1 bg-background",
         floating && "dark:bg-popover",
@@ -227,6 +229,7 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
             floating ? "h-14" : "h-20 pl-12 sm:pl-6",
           )}
         >
+          {floating && <FloatingConversationSwitcher anchor={panelRef} />}
           <Popover open={switcher} onOpenChange={setSwitcher}>
             <PopoverTrigger className="flex min-w-0 flex-1 items-center gap-3 rounded-lg py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <ConversationAvatar
