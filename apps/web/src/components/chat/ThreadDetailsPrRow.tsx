@@ -139,18 +139,34 @@ export function ThreadDetailsPrRow({
   };
 
   // Once the host has answered, the glyph knows about drafts, which the vcs summary does not.
+  // The branch observation may know about a merge before cached detail does, so its effective
+  // state still owns the shape and whether old checks remain relevant.
   const statePresentation =
     detail === null
       ? null
-      : resolvePullRequestState({ state: detail.state, isDraft: detail.isDraft });
+      : resolvePullRequestState({
+          state: pr.state,
+          isDraft: pr.state === "open" && detail.isDraft,
+        });
   const icon = statePresentation ? (
     <statePresentation.Icon
       aria-hidden
-      className={cn("-mx-0.5 size-4 shrink-0", statePresentation.toneClassName)}
+      className={cn("-mx-0.5 size-4 shrink-0", status.colorClass)}
     />
   ) : (
     <ChangeRequestStatusIcon className={cn(THREAD_DETAILS_PANEL_ICON_CLASS, status.colorClass)} />
   );
+
+  const failedChecks =
+    pr.state === "open" && detail !== null
+      ? detail.checks.filter((check) => check.status === "failure" || check.status === "cancelled")
+      : [];
+  const pendingChecks =
+    pr.state === "open" && detail !== null
+      ? detail.checks.filter((check) => check.status === "pending")
+      : [];
+  const visibleChecks = failedChecks.length > 0 ? failedChecks : pendingChecks;
+  const checksLabel = `${visibleChecks.length} ${visibleChecks.length === 1 ? "check" : "checks"} ${failedChecks.length > 0 ? "failing" : "pending"}`;
 
   const trailingAction =
     primaryAction === "ready"
@@ -282,6 +298,28 @@ export function ThreadDetailsPrRow({
           </MenuPopup>
         </Menu>
       </div>
+      {visibleChecks.length > 0 ? (
+        <div className={cn("px-2.5 py-1.5 text-xs", status.colorClass)}>
+          <div className="flex items-center gap-1.5 font-medium">
+            {failedChecks.length > 0 ? (
+              <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0" />
+            ) : (
+              <ClockIcon aria-hidden className="size-3.5 shrink-0" />
+            )}
+            <span>{checksLabel}</span>
+          </div>
+          <ul className="mt-1 max-h-40 space-y-1.5 overflow-y-auto ps-5">
+            {visibleChecks.map((check) => (
+              <li key={`${check.name}:${check.url ?? ""}`} className="break-words">
+                <span>{check.name}</span>
+                {check.description ? (
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">{check.description}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {unavailable || checking ? (
         <div
           role="status"
