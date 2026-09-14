@@ -42,6 +42,13 @@ export const ACTION_PALETTE_SECTION_DEFINITIONS = [
     defaultPosition: 2.5,
   },
   {
+    id: "background-work",
+    label: "Background work",
+    description: "Running agent tasks and recovery controls.",
+    defaultVisible: true,
+    defaultPosition: 2.75,
+  },
+  {
     id: "development-environments",
     label: "Development environments",
     description: "Discovered local development servers.",

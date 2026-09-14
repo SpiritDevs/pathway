@@ -10,7 +10,7 @@ If the agent is still working, hold Control while hovering over **Settle** to re
 
 While this is scheduled, a blue timer appears beside the thread controls and beside the working status in the sidebar. Click the blue timer in the thread controls, or Control-click **Settle** again, to cancel it.
 
-If a thread is stuck showing work that has already finished, right-click it and choose **Force settle thread**. This cancels current and queued work, dismisses pending requests, stops its provider sessions and terminals, and moves it to Settled. You can also find it in the chat header action menu. It requires an environment that supports force settlement.
+If a thread is stuck showing work that has already finished, right-click it and choose **Force settle thread**. This cancels current and queued work, dismisses pending requests, stops its provider sessions and terminals, and moves it to Settled. When the agent has replied but the thread is still waiting on background work, open the action palette and find **Background work**. It lists the tracked tasks, including agent-started dev servers. **Stop work and settle** performs the same force settlement; it stops all thread work and cancels queued messages, rather than stopping just one listed task. Keep a temporary conversation before using this control. It requires an environment that supports force settlement.
 
 Choose **Un-settle thread** to return it to the active list. Cancelled work does not restart automatically.
 

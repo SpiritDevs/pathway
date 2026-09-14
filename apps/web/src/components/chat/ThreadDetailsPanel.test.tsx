@@ -205,63 +205,74 @@ describe("ThreadDetailsPanel", () => {
     expect(html).toContain("max-w-none flex-1 text-left");
   });
 
-  it("places the issues section between the runtime controls and version control", () => {
-    const environmentId = "environment:thread-details" as EnvironmentId;
-    testState.usePathwayProjectFileScripts.mockReturnValue([]);
+  it.each(["inline", "popover"] as const)(
+    "shows background recovery and ordered runtime sections in %s mode",
+    (mode) => {
+      const environmentId = "environment:thread-details" as EnvironmentId;
+      testState.usePathwayProjectFileScripts.mockReturnValue([]);
 
-    const props: ThreadDetailsPanelProps = {
-      mode: "popover",
-      environmentId,
-      environmentConnection: null,
-      threadId: "thread:thread-details" as ThreadId,
-      activeProjectName: undefined,
-      activeProjectScripts: undefined,
-      activeProvider: null,
-      resourcesEnabled: true,
-      preferredScriptId: null,
-      keybindings: [],
-      availableEditors: [],
-      showOpenInPicker: false,
-      gitCwd: "/tmp/thread-details-project",
-      isGitRepo: true,
-      envLocked: false,
-      availableEnvironments: [],
-      onEnvironmentChange: vi.fn(),
-      onEnvModeChange: vi.fn(),
-      startFromOrigin: false,
-      onStartFromOriginChange: vi.fn(),
-      onComposerFocusRequest: vi.fn(),
-      onReconnectEnvironment: vi.fn(),
-      onOpenConnectionSettings: vi.fn(),
-      onRunProjectScript: vi.fn(),
-      onAddProjectScript: vi.fn() as ThreadDetailsPanelProps["onAddProjectScript"],
-      onUpdateProjectScript: vi.fn() as ThreadDetailsPanelProps["onUpdateProjectScript"],
-      onDeleteProjectScript: vi.fn() as ThreadDetailsPanelProps["onDeleteProjectScript"],
-    };
+      const props: ThreadDetailsPanelProps = {
+        mode,
+        backgroundWork: {
+          tasks: [{ taskId: "codex-dev-server", description: "bun run dev --port 3456" }],
+          canStop: true,
+          stopping: false,
+          onStop: vi.fn(),
+        },
+        environmentId,
+        environmentConnection: null,
+        threadId: "thread:thread-details" as ThreadId,
+        activeProjectName: undefined,
+        activeProjectScripts: undefined,
+        activeProvider: null,
+        resourcesEnabled: true,
+        preferredScriptId: null,
+        keybindings: [],
+        availableEditors: [],
+        showOpenInPicker: false,
+        gitCwd: "/tmp/thread-details-project",
+        isGitRepo: true,
+        envLocked: false,
+        availableEnvironments: [],
+        onEnvironmentChange: vi.fn(),
+        onEnvModeChange: vi.fn(),
+        startFromOrigin: false,
+        onStartFromOriginChange: vi.fn(),
+        onComposerFocusRequest: vi.fn(),
+        onReconnectEnvironment: vi.fn(),
+        onOpenConnectionSettings: vi.fn(),
+        onRunProjectScript: vi.fn(),
+        onAddProjectScript: vi.fn() as ThreadDetailsPanelProps["onAddProjectScript"],
+        onUpdateProjectScript: vi.fn() as ThreadDetailsPanelProps["onUpdateProjectScript"],
+        onDeleteProjectScript: vi.fn() as ThreadDetailsPanelProps["onDeleteProjectScript"],
+      };
 
-    const html = renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
-    const runtimeIndex = html.indexOf("terminal-controls-sentinel");
-    const issuesIndex = html.indexOf("issues-panel-sentinel");
-    const versionControlIndex = html.indexOf("Version Control");
+      const html = renderToStaticMarkup(<ThreadDetailsPanel {...props} />);
+      const runtimeIndex = html.indexOf("terminal-controls-sentinel");
+      const issuesIndex = html.indexOf("issues-panel-sentinel");
+      const versionControlIndex = html.indexOf("Version Control");
 
-    expect(runtimeIndex).toBeGreaterThan(-1);
-    expect(versionControlIndex).toBeGreaterThan(-1);
-    expect(issuesIndex).toBeGreaterThan(runtimeIndex);
-    expect(issuesIndex).toBeLessThan(versionControlIndex);
+      expect(html).toContain("bun run dev --port 3456");
+      expect(html).toContain("Stop work and settle");
+      expect(runtimeIndex).toBeGreaterThan(-1);
+      expect(versionControlIndex).toBeGreaterThan(-1);
+      expect(issuesIndex).toBeGreaterThan(runtimeIndex);
+      expect(issuesIndex).toBeLessThan(versionControlIndex);
 
-    const internalWorkspaceHtml = renderToStaticMarkup(
-      <ThreadDetailsPanel
-        {...props}
-        activeProjectScripts={[]}
-        showOpenInPicker={true}
-        hasAttachedDirectory={false}
-      />,
-    );
-    expect(internalWorkspaceHtml).not.toContain("Version Control");
-    expect(internalWorkspaceHtml).not.toContain("Add project script");
-    expect(internalWorkspaceHtml).not.toContain("Open in");
-    expect(internalWorkspaceHtml).toContain("terminal-controls-sentinel");
-  });
+      const internalWorkspaceHtml = renderToStaticMarkup(
+        <ThreadDetailsPanel
+          {...props}
+          activeProjectScripts={[]}
+          showOpenInPicker={true}
+          hasAttachedDirectory={false}
+        />,
+      );
+      expect(internalWorkspaceHtml).not.toContain("Version Control");
+      expect(internalWorkspaceHtml).not.toContain("Add project script");
+      expect(internalWorkspaceHtml).not.toContain("Open in");
+      expect(internalWorkspaceHtml).toContain("terminal-controls-sentinel");
+    },
+  );
 
   it("restores provider usage for the active environment", () => {
     const environmentId = "environment:thread-details" as EnvironmentId;
