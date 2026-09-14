@@ -31,3 +31,7 @@ Select **Redeem** beside a credit, then confirm to use it on that account. Redee
 Credits belong to the provider account shown beside them. For a remote environment, Pathway sends the redemption to that environment. Viewing usage does not require permission to operate the environment, but redeeming a credit does. Providers that do not report reset credits do not show a redemption action.
 
 If the credit balance cannot be refreshed, Pathway keeps the last balance and disables redemption until a successful refresh. Usage meters can still update while credit information is unavailable.
+
+Custom allowance budgets apply only when one has been allocated to the assignment. Once Pathway
+has confirmed that no budget applies, a temporary cloud allowance lookup failure does not interrupt
+that assignment. Configured budgets still hold work when their authorization cannot be checked.
