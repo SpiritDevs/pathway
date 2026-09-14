@@ -52,7 +52,7 @@ The earlier implementation handoff separately recorded 92 passing tests, backend
 
 Signed-in Cloud/Electron verification remains unavailable: the documented development login file is absent and the isolated app's Cloud configuration was unavailable in the handoff. This review did not invent a signed-out product mode. Live provider execution, remote/relay/tunnel behavior, multi-device delivery races and native UI remain unverified.
 
-## Bounded native investigation
+## Earlier bounded native investigation
 
 Using XcodeBuildMCP after checking session defaults, target `Pathway`, Debug, iPhone 17 Pro simulator `933A9E3C-BB72-4B51-848A-7DC94445C351`, retained `.pathway/ios-derived`:
 
@@ -66,10 +66,28 @@ That task-group closure is already present at base `a26f42e0ed`; COR-96 adds met
 ## Surface and dependency review
 
 - Entry points: worker cards in conversation details/shared work; full-page/floating conversation uses shared web code. No independent worker controls exist in Settings, command palette or keybindings to update. Browser evidence targets the shared components, not the entire app shell.
-- Clients: web/desktop share controls; SwiftUI has separate implementation but failed native compilation. No separate Android orchestrator surface was found or verified.
+- Clients: web/desktop share controls; SwiftUI has separate implementation; the follow-up below resolves native compilation, while integrated controls remain unverified. No separate Android orchestrator surface was found or verified.
 - Contracts: original commit includes mailbox/action schemas and server/Cloud consumers. Nothing was deployed.
 - Reverse states: edits have cancel; pending items can be removed/reordered; acceptance freezes mutation; stop request stays distinct from terminal cancellation; a new follow-up can resume an existing worker thread.
 - Provider limits and COR-94/COR-95 integration points are detailed in [worker conversation internals](../../orchestrator-worker-conversations.md). No independent native child send/stop endpoint exists in COR-96, even when an adapter exposes child IDs or close capability.
 - Documentation: original user-facing semantics remain in `docs/user/orchestrator-worker-conversations.md`; this evidence and integration detail are contributor-facing.
 
 No merge, deployment, PR or push was performed by this continuation. Review performed with GPT-6 Astra through the Codex harness.
+
+## Native compiler follow-up — 14 September 2026
+
+Continued in the same worktree and branch, preserving `84177271a1` and `47a76d824f`. The earlier failure above is historical; this continuation resolves it. No web implementation, COR-94 attachments, or COR-95 selection code was changed.
+
+The failing task-group closure combined explicit `@MainActor` isolation with the full stream-consumption body. Extracted that body into a private method on the existing `@MainActor` model, with child tasks awaiting it, matching `PathwayFocusModel`'s existing observer pattern. The three concurrent streams, weak task capture, structured cancellation, generation checks, pagination, mark-read mutation and per-stream error handling are retained. No unchecked Sendable conformance, detached task, polling or relaxed compiler setting was introduced.
+
+XcodeBuildMCP `build_run_sim` **succeeded** with the retained derived data, Debug `Pathway`, iPhone 17 Pro / iOS 27.0, UDID `933A9E3C-BB72-4B51-848A-7DC94445C351`, Apple Swift 6.4. Tool-reported duration was **227.5 seconds**, including simulator startup/install/launch. The app launched as `com.spiritdevs.pathway`. No clean build, device/archive build, or base-only build is claimed.
+
+[Native launch screenshot](12-native-launch.jpg) proves launch to the production configuration gate, **not worker-control interaction**. The screen reports missing `PATHWAY_CLERK_PUBLISHABLE_KEY`, `PATHWAY_CLERK_JWT_TEMPLATE`, and `PATHWAY_CONVEX_URL`. The documented development login file is also absent. Next step: supply the development Cloud identifiers and dedicated test credentials, run `node scripts/configure-pathway-ios.ts` (whose configuration check also requires `PATHWAY_RELAY_URL`), rebuild, then verify an authenticated worker conversation against updated Cloud and executing-environment code. Do not use production test authentication or bypass the Cloud requirement.
+
+Accessibility `snapshot_ui` separately failed because its helper expects `/Applications/Xcode-beta.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework`, which does not exist in this Xcode installation. Screenshot capture worked. Semantic UI verification needs a compatible XcodeBuildMCP/AXe and Xcode pairing; no coordinate-based workaround or tooling install was attempted.
+
+Provider-native limitations remain unchanged: no independent native-child mailbox send/stop endpoint; resumable child answers require the original exposed Pathway request, matching assignment origin and project, and exclude approvals. Durable dispatch is not provider completion, and a root stop does not prove every opaque provider child stopped. COR-94/COR-95 combined-feature integration, live providers, Cloud/Electron controls, remote/relay/tunnel and multi-device races remain unverified. See the existing provider matrix and integration handoff in [worker conversation internals](../../orchestrator-worker-conversations.md).
+
+Focused native validation: `test_sim` selected only `PathwayTests/PathwayOrchestratorsObservationTests`, with parallel testing disabled, one simulator destination, and test timeouts enabled (30-second default / 60-second maximum). **2 test methods passed, 0 failed, 0 skipped**, including both parameterized cancellation/account-reset cases; tool duration **154.6 seconds**. Tests verify all three stream projections, message pagination/read acknowledgment, parent cancellation terminating child streams, and stale-generation values not restoring cleared state or issuing read mutations. This is an injected-stream model test, not live Cloud integration. `git diff --check` passed. No backend/web checks were repeated for this native-only extraction.
+
+The successful build/test excerpts and reproducible tool arguments are retained in [native follow-up validation](native-followup.txt). Earlier tests and browser results above remain historical. COR-96 remains in progress for integrated verification. No push, PR, merge or deployment was performed. Follow-up by GPT-6 Astra through Codex.

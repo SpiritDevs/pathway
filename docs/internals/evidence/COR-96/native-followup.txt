@@ -1,0 +1,48 @@
+COR-96 native compiler follow-up, 14 September 2026
+Apple Swift 6.4 (swiftlang-6.4.0.33.1), arm64
+Project: apps/pathway-ios/Pathway.xcodeproj; scheme: Pathway; configuration: Debug
+Simulator: iPhone 17 Pro / iOS 27.0 / 933A9E3C-BB72-4B51-848A-7DC94445C351
+Derived data: .pathway/ios-derived (retained incremental artifacts)
+
+XcodeBuildMCP build_run_sim({}): SUCCEEDED, durationMs=227500
+Build log: build_run_sim_2026-09-14T02-16-16-657Z_pid55663_c7b925d3.log
+** BUILD SUCCEEDED **
+Installed and launched com.spiritdevs.pathway, process ID 61536.
+Screenshot: 12-native-launch.jpg (missing public runtime configuration gate).
+No authenticated worker-control UI verification.
+
+snapshot_ui failed:
+Failed to load essential private frameworks: Attempting to load a file at path '/Applications/Xcode-beta.app/Contents/Developer/Library/PrivateFrameworks/SimulatorKit.framework', but it does not exist
+
+XcodeBuildMCP test_sim arguments:
+{"extraArgs":["-only-testing:PathwayTests/PathwayOrchestratorsObservationTests","-parallel-testing-enabled","NO","-maximum-concurrent-test-simulator-destinations","1","-test-timeouts-enabled","YES","-default-test-execution-time-allowance","30","-maximum-test-execution-time-allowance","60"],"progress":true}
+Result: SUCCEEDED, durationMs=154567; passed=2, failed=0, skipped=0.
+Log excerpt (Swift Testing executes after the empty XCTest compatibility suite):
+Test Suite 'Selected tests' started at 2026-09-14 12:23:05.995.
+Test Suite 'PathwayTests.xctest' started at 2026-09-14 12:23:05.999.
+Test Suite 'PathwayTests.xctest' passed at 2026-09-14 12:23:06.000.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+Test Suite 'Selected tests' passed at 2026-09-14 12:23:06.000.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.005) seconds
+◇ Test run started.
+↳ Testing Library Version: 2078
+↳ Target Platform: arm64-apple-ios17.0-simulator
+◇ Suite PathwayOrchestratorsObservationTests started.
+◇ Test conversationStreamsUpdateAndMarkMessagesRead() started.
+✔ Test conversationStreamsUpdateAndMarkMessagesRead() passed after 0.009 seconds.
+◇ Test cancellationAndAccountResetDiscardLateValues(resetAccount:) started.
+◇ Test case passing 1 argument resetAccount → false to cancellationAndAccountResetDiscardLateValues(resetAccount:) started.
+​◇ Test case passing 1 argument resetAccount → true to cancellationAndAccountResetDiscardLateValues(resetAccount:) started.
+​✔ Test cancellationAndAccountResetDiscardLateValues(resetAccount:) with 2 test cases passed after 0.011 seconds.
+✔ Suite PathwayOrchestratorsObservationTests passed after 0.037 seconds.
+✔ Test run with 2 tests in 1 suite passed after 0.037 seconds.
+2026-09-14 12:23:06.572 xcodebuild[65489:13279487] [MT] IDETestOperationsObserverDebug: 45.630 elapsed -- Testing started completed.
+2026-09-14 12:23:06.573 xcodebuild[65489:13279487] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-09-14 12:23:06.573 xcodebuild[65489:13279487] [MT] IDETestOperationsObserverDebug: 45.630 sec, +45.630 sec -- end
+
+Test session results, code coverage, and logs:
+	/Users/coreybaines/Library/Developer/XcodeBuildMCP/workspaces/pathway-6097c8fb-e507328c693d/result-bundles/test_sim_2026-09-14T02-20-33-436Z_pid55663_9fc989e8.xcresult
+
+** TEST EXECUTE SUCCEEDED **
+
+Testing started

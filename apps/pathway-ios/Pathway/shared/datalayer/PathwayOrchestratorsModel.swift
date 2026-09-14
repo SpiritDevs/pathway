@@ -179,48 +179,50 @@ final class PathwayOrchestratorsModel {
         ("messages", "aiOrchestrators:messages"), ("work", "aiOrchestrators:work"),
         ("activity", "aiOrchestrators:activity"),
       ] {
-        group.addTask { @MainActor [weak self] in
-          guard let self else { return }
-          do {
-            for try await value in subscribe(name, .object(["chatId": .string(chatID)])) {
-              guard !Task.isCancelled, generation == current else { return }
-              if key == "work" {
-                work[chatID] = PathwayOrchestratorRecord.records(value)
-              } else if key == "activity" {
-                activity[chatID] = PathwayOrchestratorRecord.records(value)
-              } else {
-                let page = PathwayOrchestratorRecord.records(
-                  value.objectValue?["messages"] ?? .array([]))
-                let first = page.first?.number("sequence") ?? Int.max
-                let older = (messages[chatID] ?? []).filter { $0.number("sequence") < first }
-                messages[chatID] = page.isEmpty ? [] : older + page
-                if loadedHistory.insert(chatID).inserted {
-                  nextBefore[chatID] = value.objectValue?["nextBefore"]?.intValue
-                }
-                if let last = page.last {
-                  _ = try await request(
-                    "mutation", "aiOrchestrators:markRead",
-                    .object([
-                      "chatId": .string(chatID),
-                      "sequence": .number(Double(last.number("sequence"))),
-                    ]))
-                }
-              }
-            }
-          } catch {
-            if generation == current && !Task.isCancelled {
-              errorMessage = error.localizedDescription
-              if key == "activity" {
-                activity[chatID] = []
-              } else if key == "messages" {
-                messages[chatID] = []
-                nextBefore[chatID] = nil
-                loadedHistory.remove(chatID)
-              } else {
-                work[chatID] = []
-              }
-            }
+        group.addTask { [weak self] in
+          await self?.observeConversationStream(chatID: chatID, key: key, name: name, generation: current)
+        }
+      }
+    }
+  }
+  private func observeConversationStream(chatID: String, key: String, name: String, generation current: Int) async {
+    do {
+      for try await value in subscribe(name, .object(["chatId": .string(chatID)])) {
+        guard !Task.isCancelled, generation == current else { return }
+        if key == "work" {
+          work[chatID] = PathwayOrchestratorRecord.records(value)
+        } else if key == "activity" {
+          activity[chatID] = PathwayOrchestratorRecord.records(value)
+        } else {
+          let page = PathwayOrchestratorRecord.records(
+            value.objectValue?["messages"] ?? .array([]))
+          let first = page.first?.number("sequence") ?? Int.max
+          let older = (messages[chatID] ?? []).filter { $0.number("sequence") < first }
+          messages[chatID] = page.isEmpty ? [] : older + page
+          if loadedHistory.insert(chatID).inserted {
+            nextBefore[chatID] = value.objectValue?["nextBefore"]?.intValue
           }
+          if let last = page.last {
+            _ = try await request(
+              "mutation", "aiOrchestrators:markRead",
+              .object([
+                "chatId": .string(chatID),
+                "sequence": .number(Double(last.number("sequence"))),
+              ]))
+          }
+        }
+      }
+    } catch {
+      if generation == current && !Task.isCancelled {
+        errorMessage = error.localizedDescription
+        if key == "activity" {
+          activity[chatID] = []
+        } else if key == "messages" {
+          messages[chatID] = []
+          nextBefore[chatID] = nil
+          loadedHistory.remove(chatID)
+        } else {
+          work[chatID] = []
         }
       }
     }
