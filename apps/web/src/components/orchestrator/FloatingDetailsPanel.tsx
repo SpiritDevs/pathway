@@ -66,7 +66,7 @@ export function FloatingDetailsPanel({
             aria-label="Conversation details"
             style={{ width: layout?.panelWidth }}
             className={cn(
-              "pointer-events-auto relative ml-auto flex h-full min-h-0 flex-col overflow-y-auto border bg-popover text-popover-foreground shadow-xl outline-none transition-transform duration-250 ease-[cubic-bezier(0.25,1,0.5,1)] motion-reduce:transition-none",
+              "pointer-events-auto relative ml-auto flex h-full min-h-0 flex-col overflow-hidden border bg-popover text-popover-foreground shadow-xl outline-none transition-transform duration-250 ease-[cubic-bezier(0.25,1,0.5,1)] motion-reduce:transition-none",
               layout?.docked
                 ? "rounded-r-2xl data-starting-style:-translate-x-full data-ending-style:-translate-x-full"
                 : "rounded-r-[26px] data-starting-style:translate-x-full data-ending-style:translate-x-full",

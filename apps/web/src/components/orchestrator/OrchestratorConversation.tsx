@@ -438,6 +438,7 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
               void navigate({ to: "/orchestrator" });
             }}
             floating
+            companion
           />
         </FloatingDetailsPanel>
       )}

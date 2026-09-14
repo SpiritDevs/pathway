@@ -71,12 +71,14 @@ export function ConversationMetadata({
   onClose,
   onFloat,
   floating,
+  companion = false,
 }: {
   chat: OrchestratorChat;
   work: readonly OrchestratorWorkItem[];
   onClose: () => void;
   onFloat: () => void;
   floating: boolean;
+  companion?: boolean;
 }) {
   const state = useOrchestrators();
   const navigate = useNavigate();
@@ -87,8 +89,13 @@ export function ConversationMetadata({
     ? environments
     : environments.filter((environment) => eligibleIds.has(environment.environmentId));
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-16 shrink-0 items-center gap-2 border-b px-5">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
+      <div
+        className={cn(
+          "flex shrink-0 items-center gap-2 border-b px-5",
+          companion ? "h-14" : "h-20",
+        )}
+      >
         <h2 className="flex-1 text-sm font-semibold">Conversation details</h2>
         <Button
           variant="ghost"

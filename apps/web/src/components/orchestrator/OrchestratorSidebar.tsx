@@ -257,7 +257,7 @@ export function FloatingConversationSwitcher({
                 : "rounded-l-[26px] data-starting-style:-translate-x-full data-ending-style:-translate-x-full",
             )}
           >
-            <div className="flex h-14 shrink-0 items-center justify-between px-4">
+            <div className="flex h-14 shrink-0 items-center justify-between border-b px-4">
               <Dialog.Title className="text-sm font-semibold">Conversations</Dialog.Title>
               <div className="flex gap-1">
                 <Button
