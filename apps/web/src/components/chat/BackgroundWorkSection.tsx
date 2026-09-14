@@ -22,11 +22,14 @@ export function BackgroundWorkSection({
         Background work
       </h3>
       <ul className="max-h-40 space-y-2 overflow-y-auto px-3.5 py-2 text-xs">
-        {tasks.map((task) => (
-          <li key={task.taskId} className="break-words" title={task.description}>
-            {task.description}
-          </li>
-        ))}
+        {tasks.map((task) => {
+          const label = task.description ?? "Background task";
+          return (
+            <li key={task.taskId} className="break-words" title={label}>
+              {label}
+            </li>
+          );
+        })}
       </ul>
       <div className="px-2 pb-2.5">
         <button

@@ -22,6 +22,13 @@ describe("background work recovery", () => {
     expect(renderToStaticMarkup(<BackgroundWorkSection {...props} tasks={[]} />)).toBe("");
   });
 
+  it("labels provider tasks that do not include a description", () => {
+    const html = renderToStaticMarkup(
+      <BackgroundWorkSection {...props} tasks={[{ taskId: "provider-task" }]} />,
+    );
+    expect(html).toContain("Background task");
+  });
+
   it("disables repeated requests while stopping", () => {
     const html = renderToStaticMarkup(<BackgroundWorkSection {...props} stopping />);
     expect(html).toContain('disabled=""');
