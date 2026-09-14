@@ -13,6 +13,7 @@ struct PathwayConnectionOnboardingView: View {
     @State private var companyID = ""
     @State private var selectedProjects: Set<String> = []
     @State private var managed = true
+    @State private var publishActivity = true
     @State private var removing: PathwayAccountEnvironment?
     @State private var unlinkServer = false
     @State private var confirmRegistration = false
@@ -65,7 +66,7 @@ struct PathwayConnectionOnboardingView: View {
         }
         .confirmationDialog("Register server with \(companyName)?", isPresented: $confirmRegistration) {
             Button("Register and add \(selectedProjects.count) projects") {
-                Task { await model.finish(companyID: companyID, projectIDs: selectedProjects, roles: roles[companyID] ?? [], registrations: registrations[companyID] ?? [], managed: managed) }
+                Task { await model.finish(companyID: companyID, projectIDs: selectedProjects, roles: roles[companyID] ?? [], registrations: registrations[companyID] ?? [], managed: managed, publishActivity: publishActivity) }
             }
         } message: {
             Text("Selected projects and their synced history become available to this workspace under its permissions. Projects with a matching repository join the existing workspace project.")
@@ -148,6 +149,17 @@ struct PathwayConnectionOnboardingView: View {
             LabeledContent("Server", value: connection.label)
             if model.linkState?.objectValue?["linked"]?.boolValue == true {
                 Label("Server linked to an account", systemImage: "link")
+                Toggle("Publish agent activity", isOn: Binding(
+                    get: { model.publishesActivity },
+                    set: { enabled in Task { await model.setActivityPublishing(enabled) } }
+                ))
+                .disabled(!connection.canManageLink)
+                Text("Required for completion notifications and Live Activities on your devices. Changes apply to every device connected to this server.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !connection.canManageLink {
+                    Text("Use an administrator pairing link to change activity publishing.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if model.linkState?.objectValue?["managedTunnelActive"]?.boolValue == true {
                     Button(connection.useForConnections ? "Use Pathway Connect on this device" : "Use direct access on this device") {
                         Task { await model.useDirect(!connection.useForConnections, connection: connection) }
@@ -158,6 +170,9 @@ struct PathwayConnectionOnboardingView: View {
                 }
             } else {
                 Toggle("Connect from anywhere", isOn: $managed)
+                Toggle("Publish agent activity", isOn: $publishActivity)
+                Text("Shares agent status with Pathway Cloud for notifications and Live Activities. Enable those separately in Notifications settings.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text(managed ? "Installs the server's verified tunnel client and enables Pathway Connect." : "Uses this device's saved direct address. Keep the server reachable on your network.")
                     .font(.caption).foregroundStyle(.secondary)
             }

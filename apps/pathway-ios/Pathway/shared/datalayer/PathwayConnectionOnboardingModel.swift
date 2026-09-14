@@ -163,7 +163,19 @@ final class PathwayConnectionOnboardingModel {
         }
     }
 
-    func finish(companyID: String, projectIDs: Set<String>, roles: [JSONValue], registrations: [JSONValue], managed: Bool) async {
+    var publishesActivity: Bool { linkState?.objectValue?["publishAgentActivity"]?.boolValue == true }
+
+    func setActivityPublishing(_ enabled: Bool) async {
+        guard let selected, selected.canManageLink, linkState?.objectValue?["linked"]?.boolValue == true else { return }
+        await perform("Updating activity publishing") { token in
+            let state = try await self.source.request(selected.id, self.accountKey, "POST", "/api/connect/preferences",
+                .object(["publishAgentActivity": .bool(enabled)]))
+            try self.check(token)
+            self.linkState = state
+        }
+    }
+
+    func finish(companyID: String, projectIDs: Set<String>, roles: [JSONValue], registrations: [JSONValue], managed: Bool, publishActivity: Bool = true) async {
         guard let selected, !companyID.isEmpty else { return }
         await perform("Linking server to your account") { token in
             let key = self.accountKey
@@ -197,6 +209,10 @@ final class PathwayConnectionOnboardingModel {
                     try self.check(token)
                 }
                 try await self.link(selected, accountKey: key, managed: managed, token: token)
+                let state = try await self.source.request(selected.id, key, "POST", "/api/connect/preferences",
+                    .object(["publishAgentActivity": .bool(publishActivity)]))
+                try self.check(token)
+                self.linkState = state
             }
             try self.check(token)
             self.progress = "Registering server with workspace"

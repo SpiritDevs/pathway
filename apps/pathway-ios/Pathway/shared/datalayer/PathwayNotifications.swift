@@ -217,7 +217,7 @@ struct PathwayNotificationPreferences: Codable, Equatable {
         guard appModel?.authenticationState == .signedIn else { return }
         if preferences.notificationsEnabled { UIApplication.shared.registerForRemoteNotifications() }
         #if os(iOS)
-        if preferences.liveActivitiesEnabled { await PathwayLiveActivities.shared.refresh() }
+        if preferences.liveActivitiesEnabled { await register() }
         #endif
     }
 
