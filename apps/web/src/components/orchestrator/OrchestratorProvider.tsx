@@ -1,4 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useAuth } from "@clerk/react";
+import { makeClerkConvexTokenFetcher } from "../../cloud/syncTransportAuth";
+import { fetchConversationAttachment } from "./conversationAttachmentDrafts";
+import { useConversationAttachmentDrafts } from "./conversationAttachmentDrafts";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { makeFunctionReference } from "convex/server";
@@ -12,6 +16,8 @@ import { OrchestratorContext } from "./OrchestratorContext";
 
 function useOrchestratorState() {
   const cloud = useBusinessToolsCloud();
+  const { getToken } = useAuth();
+  const attachments = useConversationAttachmentDrafts(cloud.client, cloud.accountID);
   const companyId = useAtomValue(activeCompanyIdAtom);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -32,6 +38,10 @@ function useOrchestratorState() {
   const [selectedId, selectChat] = useState<string | null>(null);
   const [settingsId, selectSettings] = useState<string | null>(null);
   const [newChatOpen, setNewChatOpen] = useState(false);
+  const pendingMessages = useRef(
+    new Map<string, { id: string; text: string; targetId: string; attachmentIds: string[] }>(),
+  );
+  const [sendingChats, setSendingChats] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const scrollPositions = useRef(new Map<string, number>());
   const [error, setError] = useState<string>();
@@ -68,6 +78,8 @@ function useOrchestratorState() {
     selectChat(null);
     selectSettings(null);
     setDrafts({});
+    pendingMessages.current.clear();
+    setSendingChats([]);
     scrollPositions.current.clear();
     setError(undefined);
   }, [cloud.accountID]);
@@ -110,8 +122,19 @@ function useOrchestratorState() {
   }, [chats]);
   const selected =
     chats.find((chat) => chat.id === selectedId) ?? chats.find((chat) => !chat.archived) ?? null;
+  const downloadAttachment = useCallback(
+    async (id: string, signal?: AbortSignal) => {
+      if (!cloud.client) throw new Error("Sign in to open this attachment.");
+      const token = await makeClerkConvexTokenFetcher(getToken)({ forceRefreshToken: false });
+      if (!token) throw new Error("Sign in to open this attachment.");
+      return fetchConversationAttachment(cloud.client, id, token, signal);
+    },
+    [cloud.client, getToken],
+  );
   return {
     ...cloud,
+    attachments,
+    downloadAttachment,
     companyId,
     floating,
     setFloating,
@@ -130,6 +153,12 @@ function useOrchestratorState() {
     error: error ?? ownedContacts.error ?? companyContacts.error ?? conversations.error,
     setError,
     drafts,
+    pendingMessages,
+    sendingChats,
+    setSendingChat: (id: string, sending: boolean) =>
+      setSendingChats((current) =>
+        sending ? [...new Set([...current, id])] : current.filter((chatId) => chatId !== id),
+      ),
     setDraft: (id: string, text: string) => setDrafts((current) => ({ ...current, [id]: text })),
     scrollPositions,
   };

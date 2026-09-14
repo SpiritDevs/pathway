@@ -1,3 +1,5 @@
+import { bindConversationAttachments } from "./aiOrchestratorAttachments.ts";
+import type { OrchestratorAttachment } from "@spiritdevs/contracts/aiOrchestrator";
 import { nextResponsibilityReview } from "./aiOrchestratorReviews.ts";
 // @effect-diagnostics globalDate:off -- Convex supplies deterministic transaction time.
 /** Authenticated orchestration contacts and continuing conversations. */
@@ -383,6 +385,7 @@ export async function appendChatMessage(
     text: string;
     status: "queued" | "sent";
     replyToId: string | null;
+    attachments?: OrchestratorAttachment[];
   },
   notification?: { urgent: boolean; enabled: boolean },
 ) {
@@ -746,6 +749,7 @@ export const removeParticipant = mutation({
 });
 export const send = mutation({
   args: {
+    attachmentIds: v.optional(v.array(v.string())),
     chatId: v.string(),
     id: v.string(),
     text: v.string(),
@@ -755,7 +759,7 @@ export const send = mutation({
   handler: async (ctx, args) => {
     const { chat, member, user } = await readableChat(ctx, args.chatId);
     if (chat.archived) return fail("Unarchive this conversation to send a message.");
-    if (!args.text.trim() || args.text.length > 32000)
+    if ((!args.text.trim() && !args.attachmentIds?.length) || args.text.length > 32000)
       return fail("Messages must contain between 1 and 32,000 characters.");
     const existing = await ctx.db
       .query("aiOrchestratorMessages")
@@ -770,6 +774,8 @@ export const send = mutation({
         existing.chatId !== chat.id ||
         existing.senderId !== user.clerkSubject ||
         existing.text !== args.text.trim() ||
+        JSON.stringify(existing.attachments?.map((a) => a.id) ?? []) !==
+          JSON.stringify(args.attachmentIds ?? []) ||
         existing.replyToId !== (args.replyToId ?? null) ||
         existingJob?.orchestratorId !== (args.targetId ?? chat.leadId)
       )
@@ -790,7 +796,14 @@ export const send = mutation({
       if (!reply || reply.chatId !== chat.id || reply.sequence < member.fromSequence)
         return fail("The replied-to message is unavailable.");
     }
+    const attachments = await bindConversationAttachments(ctx, {
+      chat,
+      subject: user.clerkSubject,
+      messageId: args.id,
+      ids: args.attachmentIds ?? [],
+    });
     const sequence = await appendChatMessage(ctx, chat, {
+      attachments,
       id: args.id,
       senderKind: "user",
       senderId: user.clerkSubject,

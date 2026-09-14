@@ -1,3 +1,4 @@
+import { ConversationMessageAttachment } from "./ConversationAttachments";
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { makeFunctionReference } from "convex/server";
 import { ListTodoIcon } from "lucide-react";
@@ -42,7 +43,13 @@ export function ConversationMessages({
   ].sort((a, b) => a.sequence - b.sequence);
   const visible = search
     ? messages.filter((message) =>
-        (message.text + message.senderName).toLowerCase().includes(search.toLowerCase()),
+        (
+          message.text +
+          message.senderName +
+          (message.attachments ?? []).map((a) => a.name).join(" ")
+        )
+          .toLowerCase()
+          .includes(search.toLowerCase()),
       )
     : messages;
   const timeline = buildConversationTimeline(visible, search ? [] : work);
@@ -203,6 +210,12 @@ export function ConversationMessages({
                         message.status === "cancelled" && "opacity-50",
                       )}
                     >
+                      {message.attachments?.map((attachment) => (
+                        <ConversationMessageAttachment
+                          key={attachment.id}
+                          attachment={attachment}
+                        />
+                      ))}
                       {own ? (
                         message.text
                       ) : (

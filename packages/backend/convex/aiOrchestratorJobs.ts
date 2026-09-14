@@ -48,6 +48,7 @@ import {
 } from "./lib/aiOrchestratorWork.ts";
 import {
   boundedConversationMessages,
+  conversationReasoningAttachments,
   memoryVisibilityForConversation,
   audienceProjectPermissions,
   workVisibilityForConversation,
@@ -80,7 +81,7 @@ async function findChat(ctx: QueryCtx, id: string) {
     .withIndex("by_domain_id", (q) => q.eq("id", id))
     .unique();
 }
-async function currentClaim(
+export async function currentClaim(
   ctx: QueryCtx,
   args: { companyId: string; jobId: string; generation: number },
 ) {
@@ -818,6 +819,7 @@ export const claim = mutation({
       return {
         id: job.id,
         generation,
+        attachments: await conversationReasoningAttachments(ctx, chat, claim.message),
         selection: decodeSelection(selection),
         name: orchestrator.name,
         persona: orchestrator.persona,

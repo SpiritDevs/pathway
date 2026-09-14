@@ -87,6 +87,18 @@ final class PathwayAppModel {
         configureWorkWidget()
     }
 
+    func downloadOrchestratorAttachment(id: String) async throws -> Data {
+        let generation = authenticationGeneration
+        let address = try await cloud.request(kind: "query", name: "aiOrchestratorAttachments:download", arguments: .object(["id": .string(id)]))
+        guard let value = address.stringValue, let url = URL(string: value) else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(try await authProvider.token(template: "convex"))", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let response = response as? HTTPURLResponse, response.statusCode == 200 else { throw URLError(.noPermissionsToReadFile) }
+        guard generation == authenticationGeneration else { throw CancellationError() }
+        return data
+    }
+
     func restoreSession() async {
         guard !hasRestoredSession else { return }
         hasRestoredSession = true

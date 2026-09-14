@@ -1,3 +1,10 @@
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as Stream from "effect/Stream";
+import * as Path from "effect/Path";
+import {
+  prepareOrchestratorAttachments,
+  OrchestratorAttachmentError,
+} from "./orchestratorAttachments.ts";
 import { HostResources } from "../resourceTelemetry/HostResources.ts";
 import type { HostResourcesSnapshot } from "@spiritdevs/contracts";
 /** Cloud conversations are reasoned about without coding tools; actions are checked by cloud mutations. */
@@ -140,6 +147,10 @@ export const decodeOrchestratorDecision = Effect.fn("cloud.orchestrator.decode")
 });
 
 export interface OrchestratorBackend {
+  readonly readAttachment?: (
+    job: OrchestratorRun,
+    id: string,
+  ) => Effect.Effect<Uint8Array, OrchestratorError>;
   readonly pendingResults: Effect.Effect<
     readonly OrchestratorPendingWorkResult[],
     OrchestratorError
@@ -375,6 +386,7 @@ export const makeOrchestratorBackend = Effect.fn("cloud.orchestrator.backend")(f
 }) {
   const client = options.client ?? convexHttpClientLike(options.convexUrl);
   const lock = yield* Semaphore.make(1);
+  const http = yield* Effect.serviceOption(HttpClient.HttpClient);
   const call = <A>(issue: () => Promise<A>) =>
     Effect.gen(function* () {
       const token = yield* options.tokens.token;
@@ -410,6 +422,50 @@ export const makeOrchestratorBackend = Effect.fn("cloud.orchestrator.backend")(f
     generation: job.generation,
   });
   return {
+    readAttachment: (job: OrchestratorRun, id: string) =>
+      Effect.gen(function* () {
+        const url = yield* call(() =>
+          client.query(
+            makeFunctionReference<
+              "query",
+              { id: string; companyId: string; jobId: string; generation: number },
+              string
+            >("aiOrchestratorAttachments:download"),
+            { ...identity(job), id },
+          ),
+        );
+        const token = yield* options.tokens.token;
+        if (http._tag === "None")
+          return yield* new OrchestratorError({ reason: "Attachment transport unavailable." });
+        const expected = job.attachments?.find((attachment) => attachment.id === id)?.sizeBytes;
+        if (expected === undefined)
+          return yield* new OrchestratorError({ reason: "Unknown attachment." });
+        const response = yield* http.value.get(url, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (response.status !== 200)
+          return yield* new OrchestratorError({ reason: "Attachment unavailable." });
+        const bytes = new Uint8Array(expected);
+        let size = 0;
+        yield* Stream.runForEach(response.stream, (chunk) =>
+          Effect.gen(function* () {
+            if (size + chunk.length > expected)
+              return yield* new OrchestratorError({ reason: "Attachment exceeds its saved size." });
+            bytes.set(chunk, size);
+            size += chunk.length;
+          }),
+        );
+        if (size !== expected)
+          return yield* new OrchestratorError({ reason: "Incomplete attachment." });
+        return bytes;
+      }).pipe(
+        Effect.mapError(
+          () =>
+            new OrchestratorError({
+              reason: "Attachment retrieval failed. Check access and retry.",
+            }),
+        ),
+      ),
     pendingResults: call(() =>
       client.query(pendingResultsRef, { companyId: options.companyId }),
     ).pipe(
@@ -479,6 +535,7 @@ export const orchestratorLayer = () =>
       const environmentId = yield* environment.getEnvironmentId;
       const generation = yield* TextGeneration;
       const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
       const registry = yield* ProviderInstanceRegistry;
       const threads = yield* ThreadManagementService;
       const serverSettings = yield* ServerSettingsService;
@@ -535,86 +592,108 @@ export const orchestratorLayer = () =>
                   }),
             ),
           );
-      const generate = (companyId: string) => (job: OrchestratorRun) =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-orchestrator-" });
-            const context = yield* decodeRuntimeContext(job.context);
-            const instance = (yield* registry.listInstances).find(
-              (instance) => instance.instanceId === job.selection.instanceId,
-            );
-            if (!instance)
-              return yield* new OrchestratorError({
-                reason: "The selected provider is unavailable.",
-              });
-            const guardCheck = allowanceRuntime.checkChat(
-              companyId,
-              context.chat.id,
-              instance.instanceId,
-              ProviderDriverKind.make(instance.driverKind),
-            );
-            const admission = yield* guardCheck;
-            if (!admission.canStart)
-              return yield* new OrchestratorError({ reason: "allowance:" + admission.detail });
-            let allowance: ProviderAllowanceReport | undefined;
-            if (context.capabilities.includes("environments.read") && instance) {
-              const provider =
-                instance.driverKind === "codex"
-                  ? "codex"
-                  : instance.driverKind === "claudeAgent"
-                    ? "claudeAgent"
-                    : instance.driverKind === "cursor"
-                      ? "cursor"
-                      : null;
-              const snapshot = provider
-                ? yield* getProviderUsage({ instanceId: instance.instanceId, provider }).pipe(
-                    Effect.provideService(ServerSettingsService, serverSettings),
-                    Effect.result,
-                  )
-                : null;
-              allowance =
-                snapshot?._tag === "Failure"
-                  ? {
-                      instanceId: instance.instanceId,
-                      provider: instance.driverKind,
-                      status: "error",
-                      freshness: "unknown",
-                      snapshot: null,
-                      detail: "Allowance telemetry is unavailable. Do not assume capacity.",
-                    }
-                  : allowanceReport(
-                      { instanceId: instance.instanceId, driver: instance.driverKind },
-                      snapshot?._tag === "Success" ? snapshot.success : null,
-                      yield* Clock.currentTimeMillis,
-                    );
-            }
-            const monitor = Effect.gen(function* () {
-              while (true) {
-                yield* Effect.sleep("10 seconds");
-                const state = yield* guardCheck;
-                if (state.shouldInterrupt)
-                  return yield* new OrchestratorError({ reason: "allowance:" + state.detail });
+      const generate =
+        (companyId: string, backend: OrchestratorBackend) => (job: OrchestratorRun) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "pathway-orchestrator-" });
+              const context = yield* decodeRuntimeContext(job.context);
+              const instance = (yield* registry.listInstances).find(
+                (instance) => instance.instanceId === job.selection.instanceId,
+              );
+              if (!instance)
+                return yield* new OrchestratorError({
+                  reason: "The selected provider is unavailable.",
+                });
+              const guardCheck = allowanceRuntime.checkChat(
+                companyId,
+                context.chat.id,
+                instance.instanceId,
+                ProviderDriverKind.make(instance.driverKind),
+              );
+              const admission = yield* guardCheck;
+              if (!admission.canStart)
+                return yield* new OrchestratorError({ reason: "allowance:" + admission.detail });
+              let allowance: ProviderAllowanceReport | undefined;
+              if (context.capabilities.includes("environments.read") && instance) {
+                const provider =
+                  instance.driverKind === "codex"
+                    ? "codex"
+                    : instance.driverKind === "claudeAgent"
+                      ? "claudeAgent"
+                      : instance.driverKind === "cursor"
+                        ? "cursor"
+                        : null;
+                const snapshot = provider
+                  ? yield* getProviderUsage({ instanceId: instance.instanceId, provider }).pipe(
+                      Effect.provideService(ServerSettingsService, serverSettings),
+                      Effect.result,
+                    )
+                  : null;
+                allowance =
+                  snapshot?._tag === "Failure"
+                    ? {
+                        instanceId: instance.instanceId,
+                        provider: instance.driverKind,
+                        status: "error",
+                        freshness: "unknown",
+                        snapshot: null,
+                        detail: "Allowance telemetry is unavailable. Do not assume capacity.",
+                      }
+                    : allowanceReport(
+                        { instanceId: instance.instanceId, driver: instance.driverKind },
+                        snapshot?._tag === "Success" ? snapshot.success : null,
+                        yield* Clock.currentTimeMillis,
+                      );
               }
-            });
-            const response = yield* generation
-              .investigate({
+              const monitor = Effect.gen(function* () {
+                while (true) {
+                  yield* Effect.sleep("10 seconds");
+                  const state = yield* guardCheck;
+                  if (state.shouldInterrupt)
+                    return yield* new OrchestratorError({ reason: "allowance:" + state.detail });
+                }
+              });
+              const attachments = yield* prepareOrchestratorAttachments(
+                job.attachments ?? [],
+                (id) =>
+                  (backend.readAttachment
+                    ? backend.readAttachment(job, id)
+                    : Effect.fail(
+                        new OrchestratorError({ reason: "Attachment retrieval is unavailable." }),
+                      )
+                  ).pipe(
+                    Effect.mapError(
+                      (error) => new OrchestratorAttachmentError({ message: error.reason }),
+                    ),
+                  ),
                 cwd,
-                contentOnly: true,
-                prompt: orchestratorPrompt(job, allowance, admission),
-                modelSelection: job.selection,
-              })
-              .pipe(Effect.raceFirst(monitor));
-            return yield* decodeOrchestratorDecision(response.text);
-          }).pipe(
-            Effect.mapError((error) =>
-              error instanceof OrchestratorError
-                ? error
-                : new OrchestratorError({
-                    reason: "Coordinator reasoning failed. Check the provider selection and retry.",
-                  }),
+                ProviderDriverKind.make(instance.driverKind),
+              ).pipe(
+                Effect.provideService(FileSystem.FileSystem, fs),
+                Effect.provideService(Path.Path, path),
+              );
+              const response = yield* generation
+                .investigate({
+                  cwd,
+                  contentOnly: true,
+                  prompt: orchestratorPrompt(job, allowance, admission) + attachments.prompt,
+                  imagePaths: attachments.imagePaths,
+                  modelSelection: job.selection,
+                })
+                .pipe(Effect.raceFirst(monitor));
+              return yield* decodeOrchestratorDecision(response.text);
+            }).pipe(
+              Effect.mapError((error) =>
+                error instanceof OrchestratorError
+                  ? error
+                  : new OrchestratorError({
+                      reason:
+                        "Coordinator reasoning failed. Check the provider selection and retry.",
+                    }),
+              ),
             ),
-          ),
-        );
+          );
       yield* forkParkedFiber(
         Effect.gen(function* () {
           const link = yield* awaitCloudSyncLink({
@@ -682,7 +761,7 @@ export const orchestratorLayer = () =>
                         yield* executeOrchestratorRun(
                           backend,
                           job,
-                          generate(companyId),
+                          generate(companyId, backend),
                           undefined,
                           commitAllowance(companyId),
                         );
