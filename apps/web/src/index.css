@@ -2908,6 +2908,15 @@ label:has(> select#reasoning-effort) select {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
 }
+/* Use a single visible divider at the seam in both attached and overlay layouts. */
+[data-floating-companion]:has([data-companion-panel="left"]),
+.companion-drawer[data-side="right"][data-docked="false"] {
+  border-left-color: color-mix(in srgb, var(--foreground) 22%, transparent);
+}
+[data-floating-companion]:has([data-companion-panel="right"]),
+.companion-drawer[data-side="left"][data-docked="false"] {
+  border-right-color: color-mix(in srgb, var(--foreground) 22%, transparent);
+}
 /* Focus must not scroll this viewport and cancel the drawer’s translation. */
 .companion-drawer-viewport {
   overflow: clip;
