@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -15,7 +16,12 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVerticalIcon, PlusIcon, Trash2Icon } from "lucide-react";
-import { EnvironmentId, ProviderInstanceId, type ModelSelection } from "@spiritdevs/contracts";
+import {
+  EnvironmentId,
+  ProviderInstanceId,
+  type ModelSelection,
+  type ServerProvider,
+} from "@spiritdevs/contracts";
 import {
   COORDINATOR_DRIVERS,
   DEFAULT_ORCHESTRATOR_MODEL,
@@ -40,6 +46,15 @@ import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { randomUUID } from "../../lib/utils";
 
+const usableProvider = (provider: ServerProvider) =>
+  provider.enabled &&
+  provider.installed &&
+  provider.availability !== "unavailable" &&
+  provider.status !== "error" &&
+  provider.status !== "disabled" &&
+  provider.auth.status !== "unauthenticated" &&
+  provider.models.length > 0;
+
 const supportsCoordinator = (driver: string) => COORDINATOR_DRIVERS.some((item) => item === driver);
 export function defaultCoordinatorSelection(instanceId = "codex"): ModelSelection {
   return {
@@ -53,11 +68,17 @@ function ModelRow({
   index,
   onChange,
   onRemove,
+  worker = false,
+  details,
+  workerDefault = false,
 }: {
   choice: OrchestratorModelChoice;
   index: number;
   onChange: (choice: OrchestratorModelChoice) => void;
   onRemove: () => void;
+  worker?: boolean;
+  details?: ReactNode;
+  workerDefault?: boolean;
 }) {
   const { environments } = useEnvironments();
   const environment = environments.find((item) => item.environmentId === choice.environmentId);
@@ -84,7 +105,7 @@ function ModelRow({
         ...choice.selection,
         options: [
           ...(choice.selection.options ?? []).filter((option) => option.id !== id),
-          { id, value },
+          ...(value === "" ? [] : [{ id, value }]),
         ],
       },
     });
@@ -104,36 +125,67 @@ function ModelRow({
           type="button"
           {...sortable.attributes}
           {...sortable.listeners}
-          aria-label={`Move model choice ${index + 1}`}
+          aria-label={`Move ${worker ? "worker preset" : "model choice"} ${index + 1}`}
           className="touch-none rounded p-1 text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
         >
           <GripVerticalIcon className="size-4" />
         </button>
         <span className="flex-1 text-xs font-medium text-muted-foreground">
-          {index === 0 ? "PRIMARY MODEL" : `FALLBACK ${index}`}
+          {worker
+            ? workerDefault
+              ? "DEFAULT WORKER"
+              : `WORKER PRESET ${index + 1}`
+            : index === 0
+              ? "PRIMARY MODEL"
+              : `FALLBACK ${index}`}
         </span>
         <Button
           size="icon"
           variant="ghost"
-          aria-label={`Remove model choice ${index + 1}`}
+          aria-label={`Remove ${worker ? "worker preset" : "model choice"} ${index + 1}`}
           onClick={onRemove}
         >
           <Trash2Icon className="size-3.5" />
         </Button>
       </div>
+      {details}
       <div className="flex flex-wrap items-center gap-3">
         <select
-          aria-label={`Environment for model choice ${index + 1}`}
+          aria-label={`Environment for ${worker ? "worker preset" : "model choice"} ${index + 1}`}
           value={choice.environmentId}
-          onChange={(event) => onChange({ ...choice, environmentId: event.target.value })}
+          onChange={(event) => {
+            const environmentId = event.target.value;
+            const target = environments.find((item) => item.environmentId === environmentId);
+            const provider = target?.serverConfig?.providers.find(
+              (item) => usableProvider(item) && (worker || supportsCoordinator(item.driver)),
+            );
+            const model = provider?.models[0];
+            if (provider && model)
+              onChange({
+                ...choice,
+                environmentId,
+                selection: createModelSelection(provider.instanceId, model.slug),
+              });
+          }}
           className="min-w-40 rounded-lg border bg-background px-3 py-2 text-sm"
         >
-          <option value="">Choose an environment</option>
+          <option value="" disabled>
+            Choose an environment
+          </option>
           {!environment && choice.environmentId && (
             <option value={choice.environmentId}>Unavailable environment</option>
           )}
           {environments.map((item) => (
-            <option key={item.environmentId} value={item.environmentId}>
+            <option
+              key={item.environmentId}
+              value={item.environmentId}
+              disabled={
+                !item.serverConfig?.providers.some(
+                  (provider) =>
+                    usableProvider(provider) && (worker || supportsCoordinator(provider.driver)),
+                )
+              }
+            >
               {item.label}
             </option>
           ))}
@@ -144,8 +196,8 @@ function ModelRow({
           lockedProvider={null}
           instanceEntries={sortProviderInstanceEntries(
             applyProviderInstanceSettings(
-              deriveProviderInstanceEntries(providers).filter((entry) =>
-                supportsCoordinator(entry.driverKind),
+              deriveProviderInstanceEntries(providers).filter(
+                (entry) => worker || supportsCoordinator(entry.driverKind),
               ),
               settings,
             ),
@@ -159,7 +211,7 @@ function ModelRow({
           onInstanceModelChange={(instanceId, model) =>
             onChange({ ...choice, selection: createModelSelection(instanceId, model) })
           }
-          triggerAriaLabel={`Model choice ${index + 1}`}
+          triggerAriaLabel={`${worker ? "Worker preset" : "Model choice"} ${index + 1}`}
           triggerVariant="outline"
         />
         {descriptors.map((descriptor) =>
@@ -171,12 +223,13 @@ function ModelRow({
               {descriptor.label}
               <select
                 className="rounded-lg border bg-background p-2 text-sm text-foreground"
-                value={String(getProviderOptionCurrentValue(descriptor) ?? "")}
+                value={String(
+                  choice.selection.options?.find((option) => option.id === descriptor.id)?.value ??
+                    "",
+                )}
                 onChange={(event) => optionChange(descriptor.id, event.target.value)}
               >
-                <option value="" disabled>
-                  Default
-                </option>
+                <option value="">Provider default</option>
                 {descriptor.options.map((option) => (
                   <option key={option.id} value={option.id}>
                     {option.label}
@@ -210,7 +263,11 @@ function ModelRow({
 export function OrchestratorModels({
   choices,
   onChange,
+  worker = false,
+  renderDetails,
 }: {
+  worker?: boolean;
+  renderDetails?: (choice: OrchestratorModelChoice) => ReactNode;
   choices: readonly OrchestratorModelChoice[];
   onChange: (choices: readonly OrchestratorModelChoice[]) => void;
 }) {
@@ -222,11 +279,11 @@ export function OrchestratorModels({
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        Drag choices into your preferred order. Each choice keeps its own model and performance
-        settings. Pathway tries the same model on an eligible environment before moving to the next
-        fallback.
+        {worker
+          ? "Give the coordinator useful choices for different tasks. The first preset on each environment is its worker default. Reorder to change that default. Explicit task choices take precedence; unavailable choices fail without switching models."
+          : "These models reason about your conversations. Drag to set the coordinator's primary model and ordered fallbacks. Worker choices are configured separately below."}
       </p>
-      {choices.length === 0 && (
+      {choices.length === 0 && !worker && (
         <div className="rounded-xl border bg-muted/25 p-5">
           <p className="font-medium">
             GPT-6 Astra{" "}
@@ -260,6 +317,11 @@ export function OrchestratorModels({
               <ModelRow
                 key={choice.id}
                 choice={choice}
+                worker={worker}
+                workerDefault={
+                  choices.findIndex((item) => item.environmentId === choice.environmentId) === index
+                }
+                details={renderDetails?.(choice)}
                 index={index}
                 onChange={(next) =>
                   onChange(choices.map((item) => (item.id === choice.id ? next : item)))
@@ -272,8 +334,33 @@ export function OrchestratorModels({
       </DndContext>
       <Button
         variant="outline"
-        disabled={choices.length >= 12}
+        disabled={
+          choices.length >= 12 ||
+          (worker &&
+            !environments.some((environment) =>
+              environment.serverConfig?.providers.some(usableProvider),
+            ))
+        }
         onClick={() => {
+          if (worker) {
+            for (const environment of environments) {
+              const provider = environment.serverConfig?.providers.find(usableProvider);
+              const model =
+                provider?.models.find((model) => model.isDefault) ?? provider?.models[0];
+              if (provider && model) {
+                onChange([
+                  ...choices,
+                  {
+                    id: randomUUID(),
+                    environmentId: environment.environmentId,
+                    selection: createModelSelection(provider.instanceId, model.slug),
+                  },
+                ]);
+                return;
+              }
+            }
+            return;
+          }
           const environment = environments.find((item) =>
             item.serverConfig?.providers.some((provider) => provider.driver === "codex"),
           );
@@ -291,11 +378,12 @@ export function OrchestratorModels({
         }}
       >
         <PlusIcon />
-        {choices.length ? "Add fallback" : "Choose primary model"}
+        {worker ? "Add worker preset" : choices.length ? "Add fallback" : "Choose primary model"}
       </Button>
       <p className="text-xs leading-relaxed text-muted-foreground">
-        Model fallback respects the same work allowance. An account with a separate allowance needs
-        its own allocation.
+        {worker
+          ? "Without a worker preset, default delegation uses the project's saved model, then the environment text-generation model. Connect an environment to add a preset. Reasoning options come from its model catalog."
+          : "Model fallback respects the same work allowance. An account with a separate allowance needs its own allocation."}
       </p>
     </div>
   );

@@ -1,3 +1,4 @@
+import { OrchestratorDelegationCatalog } from "@spiritdevs/contracts/aiOrchestrator";
 import {
   readableOrchestratorEnvironment,
   notifyOrchestratorEnvironmentChange,
@@ -59,6 +60,7 @@ const decodeDecision = Schema.decodeUnknownSync(OrchestratorDecision);
 const decodeSelection = Schema.decodeUnknownSync(ModelSelection);
 const inspectResources = Schema.decodeUnknownExit(HostResourcesSnapshot);
 const decodeResources = Schema.decodeUnknownSync(HostResourcesSnapshot);
+const decodeDelegationCatalog = Schema.decodeUnknownSync(OrchestratorDelegationCatalog);
 const decodeDescriptor = Schema.decodeUnknownExit(ExecutionEnvironmentDescriptor);
 const inspectThreadShell = Schema.decodeUnknownExit(CloudAgentThreadShell);
 const decodeThreadShell = Schema.decodeUnknownSync(CloudAgentThreadShell);
@@ -300,13 +302,28 @@ async function contextFor(
           .take(50)
       : [];
   const environments = [];
+  let catalogBudget = 64000;
   for (const registration of registrations) {
-    if (await eligibleOrchestratorEnvironment(ctx, orchestrator, registration))
+    const catalog =
+      Date.now() - (registration.orchestratorDelegationCatalogAt ?? 0) <= 120000
+        ? (registration.orchestratorDelegationCatalog ?? null)
+        : null;
+    const catalogSize = catalog ? JSON.stringify(catalog).length : 0;
+    const includeCatalog = catalogSize <= catalogBudget;
+    if (await eligibleOrchestratorEnvironment(ctx, orchestrator, registration)) {
+      if (includeCatalog) catalogBudget -= catalogSize;
       environments.push({
         descriptor: (() => {
           const parsed = decodeDescriptor(registration.descriptor);
           return parsed._tag === "Success" ? parsed.value : null;
         })(),
+        delegationCatalog: includeCatalog ? catalog : null,
+        catalogNote: includeCatalog
+          ? "Observed availability, rechecked at launch. No live pricing or tool inventory."
+          : "Catalog omitted to bound context size. Do not invent model selections.",
+        workerModels: (orchestrator.workerModels ?? []).filter(
+          (choice) => choice.environmentId === registration.environmentId,
+        ),
         id: registration.environmentId,
         online: (registration.lastSeenAt ?? 0) > Date.now() - LEASE_MS,
         lastSeenAt: registration.lastSeenAt,
@@ -319,6 +336,7 @@ async function contextFor(
         resourceNote:
           "Resources are sampled when a coordinator runs here; null means no fresh observation, not an idle host.",
       });
+    }
   }
   const contacts = [];
   for (const id of chat.orchestratorIds) {
@@ -484,6 +502,8 @@ async function contextFor(
           threadId,
           detail,
           resultText,
+          selection,
+          selectionReason,
           readResult,
         }) => {
           const result = resultText?.slice(0, workResultBudget);
@@ -498,6 +518,8 @@ async function contextFor(
             projectId,
             threadId,
             detail,
+            selection,
+            selectionReason,
             result,
             conversation,
           };
@@ -585,11 +607,21 @@ export const claim = mutation({
   args: {
     companyId: v.string(),
     providers: v.array(v.object({ instanceId: v.string(), driver: v.string() })),
+    delegationCatalog: v.optional(v.any()),
   },
   handler: async (ctx, args): Promise<OrchestratorRun | null> => {
     if (args.providers.length > 50) return fail("Too many provider instances.");
     const actor = await environmentActor(ctx, args.companyId);
     const now = Date.now();
+    if (args.delegationCatalog !== undefined) {
+      if (JSON.stringify(args.delegationCatalog).length > 100000)
+        return fail("Worker catalog is too large.");
+      const catalog = decodeDelegationCatalog(args.delegationCatalog);
+      await ctx.db.patch(actor.registration._id, {
+        orchestratorDelegationCatalog: catalog,
+        orchestratorDelegationCatalogAt: now,
+      });
+    }
     if (
       (actor.registration.lastSeenAt ?? 0) < now - 30_000 ||
       actor.registration.orchestratorPresence !== "online"
@@ -1098,8 +1130,8 @@ export const complete = mutation({
         continue;
       }
       if (action.kind === "delegate") {
-        const workId = await queueOrchestratorWork(ctx, claim.orchestrator, claim.chat, action);
-        results.push({ kind: action.kind, detail: { workId, status: "queued" } });
+        const work = await queueOrchestratorWork(ctx, claim.orchestrator, claim.chat, action);
+        results.push({ kind: action.kind, detail: work });
         continue;
       }
       if (action.kind === "collaborate") {

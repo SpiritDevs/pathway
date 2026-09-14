@@ -41,6 +41,7 @@ import {
 import { SettingsPageContainer } from "../settings/settingsLayout";
 import { useOrchestrators, useOrchestratorQuery } from "./OrchestratorContext";
 import { OrchestratorAvatar, ORCHESTRATOR_COLORS } from "./OrchestratorAvatar";
+import { OrchestratorWorkerModels } from "./OrchestratorWorkerModels";
 import { OrchestratorModels } from "./OrchestratorModels";
 
 export const ORCHESTRATOR_SETTINGS = {
@@ -60,8 +61,9 @@ const inputClass =
 const errorMessage = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 const readConfig = Schema.decodeUnknownSync(OrchestratorConfig);
 export function orchestratorConfigValue(config: OrchestratorConfig): Record<string, Value> {
+  const { workerModels, ...base } = config;
   return {
-    ...config,
+    ...base,
     models: config.models.map((choice) => ({
       ...choice,
       selection: {
@@ -72,6 +74,20 @@ export function orchestratorConfigValue(config: OrchestratorConfig): Record<stri
           : {}),
       },
     })),
+    ...(workerModels
+      ? {
+          workerModels: workerModels.map((choice) => ({
+            ...choice,
+            selection: {
+              instanceId: choice.selection.instanceId,
+              model: choice.selection.model,
+              ...(choice.selection.options
+                ? { options: choice.selection.options.map((option) => ({ ...option })) }
+                : {}),
+            },
+          })),
+        }
+      : {}),
     environmentIds: [...config.environmentIds],
     capabilities: [...config.capabilities],
     directorSubjects: [...config.directorSubjects],
@@ -632,7 +648,16 @@ function SettingsEditor({
       break;
     case "models":
       content = (
-        <OrchestratorModels choices={config.models} onChange={(models) => patch({ models })} />
+        <div className="space-y-8">
+          <section className="space-y-3">
+            <h3 className="text-base font-medium">Coordinator reasoning</h3>
+            <OrchestratorModels choices={config.models} onChange={(models) => patch({ models })} />
+          </section>
+          <OrchestratorWorkerModels
+            choices={config.workerModels ?? []}
+            onChange={(workerModels) => patch({ workerModels })}
+          />
+        </div>
       );
       break;
     case "environments":

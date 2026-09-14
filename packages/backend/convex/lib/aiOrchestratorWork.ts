@@ -3,6 +3,10 @@ import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import { ModelSelection } from "@spiritdevs/contracts";
 import { CloudAgentThreadShell } from "@spiritdevs/contracts/cloudProject";
+import {
+  OrchestratorDelegationCatalog,
+  delegationSelectionProblem,
+} from "@spiritdevs/contracts/aiOrchestrator";
 import type { OrchestratorAction } from "@spiritdevs/contracts/aiOrchestrator";
 import type { MutationCtx } from "../_generated/server.js";
 import type { Doc } from "../_generated/dataModel.js";
@@ -20,6 +24,7 @@ const fail = (message: string): never => {
   throw backendError("orchestrator-work", message);
 };
 const decodeSelection = Schema.decodeUnknownSync(ModelSelection);
+const decodeCatalog = Schema.decodeUnknownSync(OrchestratorDelegationCatalog);
 const decodeShell = Schema.decodeUnknownOption(CloudAgentThreadShell);
 export async function queueOrchestratorWork(
   ctx: MutationCtx,
@@ -83,6 +88,24 @@ export async function queueOrchestratorWork(
     !binding.some((item) => item.environmentId === action.environmentId && item.status === "active")
   )
     return fail("The project has no active checkout on that environment.");
+  const preset = (orchestrator.workerModels ?? []).find(
+    (choice) => choice.environmentId === action.environmentId,
+  );
+  const selection = action.selection ?? preset?.selection ?? null;
+  let selectionProblem: string | null = null;
+  if (
+    selection &&
+    registration.orchestratorDelegationCatalog &&
+    Date.now() - (registration.orchestratorDelegationCatalogAt ?? 0) <= 120000
+  ) {
+    const catalog = decodeCatalog(registration.orchestratorDelegationCatalog);
+    selectionProblem = delegationSelectionProblem(decodeSelection(selection), catalog, true);
+  }
+  const selectionReason = action.selection
+    ? action.selectionReason?.trim() || "Coordinator selected this model explicitly."
+    : preset
+      ? `Default worker preset: ${preset.name}.`
+      : "Using the target project's default, then the environment text-generation default. The coordinator did not choose a model.";
   const queued = await ctx.db
     .query("aiOrchestratorWork")
     .withIndex("by_orchestrator_status", (q) =>
@@ -92,6 +115,10 @@ export async function queueOrchestratorWork(
   if (queued.length >= 100)
     return fail("The assignment queue is full. Finish or cancel outstanding work first.");
   const id = mintDomainId(Date.now());
+  const status = selectionProblem ? ("failed" as const) : ("queued" as const);
+  const detail = selectionProblem
+    ? `${selectionProblem} No fallback was selected.`
+    : "Waiting for a work slot.";
   await ctx.db.insert("aiOrchestratorWork", {
     id,
     chatId: chat.id,
@@ -101,26 +128,28 @@ export async function queueOrchestratorWork(
     projectId: action.projectId,
     companyId: action.companyId,
     threadId: null,
-    status: "queued",
+    status,
     completionNotified: false,
     sourceSequence: chat.lastSequence,
-    resultRequired: true,
+    resultRequired: !selectionProblem,
     resultCollected: false,
-    detail: "Waiting for a work slot.",
+    detail,
     prompt: action.prompt,
-    selection: action.selection
+    selection: selection
       ? {
-          instanceId: action.selection.instanceId,
-          model: action.selection.model,
-          ...(action.selection.options
-            ? { options: action.selection.options.map((option) => ({ ...option })) }
+          instanceId: selection.instanceId,
+          model: selection.model,
+          ...(selection.options
+            ? { options: selection.options.map((option) => ({ ...option })) }
             : {}),
         }
       : null,
+    selectionReason,
+    selectionExplicit: action.selection !== null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   });
-  return id;
+  return { workId: id, status, detail };
 }
 
 /** Start acknowledgements identify a thread; only a published terminal run means its work finished. */
@@ -244,7 +273,9 @@ export async function refreshOrchestratorWork(
         ? "Stop requested. The offline environment has not confirmed interruption."
         : "Stop requested. Waiting for the delegated thread to confirm it stopped.";
     }
+    const resolvedSelection = Option.isSome(shell) ? shell.value.modelSelection : null;
     if (
+      (!work.selection && resolvedSelection !== null) ||
       status !== work.status ||
       detail !== work.detail ||
       threadId !== work.threadId ||
@@ -255,6 +286,17 @@ export async function refreshOrchestratorWork(
         detail,
         threadId,
         ...(resultRunId ? { resultRunId } : {}),
+        ...(!work.selection && resolvedSelection
+          ? {
+              selection: {
+                instanceId: resolvedSelection.instanceId,
+                model: resolvedSelection.model,
+                ...(resolvedSelection.options
+                  ? { options: resolvedSelection.options.map((option) => ({ ...option })) }
+                  : {}),
+              },
+            }
+          : {}),
         updatedAt: Date.now(),
       });
     }
@@ -524,15 +566,21 @@ export async function controlOrchestratorWork(
     projectId: work.projectId,
     environmentId: action.environmentId,
     prompt: work.prompt,
-    selection: work.selection ? decodeSelection(work.selection) : null,
+    selection:
+      work.selectionExplicit !== false && work.selection ? decodeSelection(work.selection) : null,
+    ...(work.selectionExplicit !== false && work.selectionReason
+      ? { selectionReason: work.selectionReason }
+      : {}),
   });
   await ctx.db.patch(work._id, {
     detail: "Cancelled before starting and redirected to another environment.",
   });
   return {
-    workId: replacement,
+    workId: replacement.workId,
     replacedWorkId: work.id,
     detail:
-      "The previous command was cancelled before acceptance. Replacement work is queued under the same conversation limits.",
+      replacement.status === "failed"
+        ? replacement.detail
+        : "The previous command was cancelled before acceptance. Replacement work is queued under the same conversation limits.",
   };
 }

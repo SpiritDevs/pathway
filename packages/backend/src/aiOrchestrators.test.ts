@@ -39,6 +39,7 @@ const human = (t: Harness, subject = "owner") =>
 const config = () => ({
   ...defaultOrchestratorConfig(),
   models: [],
+  workerModels: [],
   environmentIds: [],
   capabilities: [...defaultOrchestratorConfig().capabilities],
   directorSubjects: [],
@@ -2867,5 +2868,246 @@ describe("background orchestrator notifications", () => {
         sequence: job!.sequence,
       }),
     ).toBe(false);
+  });
+});
+
+const workerCatalog = {
+  defaultSelection: { instanceId: "codex", model: "routine" },
+  truncated: false,
+  providers: [
+    {
+      instanceId: "codex",
+      driver: "codex",
+      name: "Work",
+      available: true,
+      models: ["routine", "complex"].map((id) => ({
+        id,
+        name: id,
+        options: [
+          {
+            id: "effort",
+            label: "Reasoning",
+            type: "select" as const,
+            options: [
+              { id: "low", label: "Low" },
+              { id: "high", label: "High" },
+            ],
+          },
+        ],
+      })),
+    },
+  ],
+};
+
+async function workerSelectionHarness(withLaptopPreset = false) {
+  const test = await coordinatorHarness();
+  const record = (await test.owner.query(api.aiOrchestrators.list, {}))[0]!;
+  await test.owner.mutation(api.aiOrchestrators.configure, {
+    id: test.id,
+    revision: record.revision,
+    config: {
+      ...config(),
+      workerModels: [
+        {
+          id: "routine-worker",
+          name: "Routine",
+          environmentId: "studio",
+          guidance: "Focused edits and tests.",
+          cost: "lower",
+          selection: {
+            instanceId: "codex",
+            model: "routine",
+            options: [{ id: "effort", value: "low" }],
+          },
+        },
+        ...(withLaptopPreset
+          ? [
+              {
+                id: "laptop-worker",
+                name: "Laptop worker",
+                environmentId: "laptop",
+                guidance: "Routine laptop work",
+                cost: "lower" as const,
+                selection: { instanceId: "laptop-provider", model: "laptop-model" },
+              },
+            ]
+          : []),
+      ],
+    },
+  });
+  const run = (await test.environment().mutation(api.aiOrchestratorJobs.claim, {
+    companyId: "workspace",
+    providers: [{ instanceId: "codex", driver: "codex" }],
+    delegationCatalog: workerCatalog,
+  }))!;
+  const delegate = (
+    selection: {
+      instanceId: string;
+      model: string;
+      options?: { id: string; value: string }[];
+    } | null,
+  ) =>
+    test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+      result: {
+        ...decision(),
+        actions: [
+          {
+            kind: "delegate",
+            title: "Focused work",
+            companyId: "workspace",
+            projectId: null,
+            environmentId: "studio",
+            prompt: "Check the requested behavior.",
+            selection,
+            selectionReason: "Complex debugging needs stronger reasoning.",
+          },
+        ],
+      },
+    });
+  return { ...test, run, delegate };
+}
+
+describe("task-aware worker selections", () => {
+  it("provides the eligible environment's catalog and task presets in coordinator context", async () => {
+    const test = await workerSelectionHarness();
+    const context = JSON.parse(test.run.context);
+    const studio = context.environments.find((item: { id: string }) => item.id === "studio");
+    expect(studio.delegationCatalog).toEqual(workerCatalog);
+    expect(studio.workerModels[0]).toMatchObject({ name: "Routine", cost: "lower" });
+    expect(context.environments.some((item: { id: string }) => item.id === "other")).toBe(false);
+  });
+  it("resolves null to the environment's first configured worker preset with provenance", async () => {
+    const test = await workerSelectionHarness();
+    await test.delegate(null);
+    const rows = await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId });
+    expect(rows[0]).toMatchObject({
+      selection: { model: "routine", options: [{ id: "effort", value: "low" }] },
+      selectionReason: "Default worker preset: Routine.",
+    });
+    const command = await test.t.run((ctx) => ctx.db.query("environmentCommands").first());
+    expect(command?.args).toMatchObject({ modelSelection: { model: "routine" } });
+  });
+  it("preserves an explicit model and reasoning override over the preset", async () => {
+    const test = await workerSelectionHarness();
+    const requested = {
+      instanceId: "codex",
+      model: "complex",
+      options: [{ id: "effort", value: "high" }],
+    };
+    await test.delegate(requested);
+    const rows = await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId });
+    expect(rows[0]).toMatchObject({
+      selection: requested,
+      selectionReason: "Complex debugging needs stronger reasoning.",
+    });
+  });
+  it.each([
+    { instanceId: "missing", model: "routine" },
+    { instanceId: "codex", model: "invented" },
+    { instanceId: "codex", model: "routine", options: [{ id: "effort", value: "ultra" }] },
+  ])(
+    "shows unavailable or unsupported explicit selection %j without launching work",
+    async (selection) => {
+      const test = await workerSelectionHarness();
+      await test.delegate(selection);
+      const rows = await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId });
+      expect(rows[0]).toMatchObject({ status: "failed", selection });
+      expect(rows[0]?.detail).toContain("No fallback");
+      expect(await test.t.run((ctx) => ctx.db.query("environmentCommands").collect())).toEqual([]);
+      const job = await test.t.run((ctx) =>
+        ctx.db
+          .query("aiOrchestratorJobs")
+          .withIndex("by_domain_id", (q) => q.eq("id", test.run.id))
+          .unique(),
+      );
+      expect(job?.contextResults).toContain("No fallback");
+    },
+  );
+  it.each([undefined, Date.now() - 120001])(
+    "defers expired or undated catalog validation to the target (%s)",
+    async (publishedAt) => {
+      const test = await workerSelectionHarness();
+      await test.t.run(async (ctx) => {
+        const registration = (await ctx.db.query("environmentRegistrations").collect()).find(
+          (row) => row.environmentId === "studio",
+        )!;
+        await ctx.db.patch(registration._id, { orchestratorDelegationCatalogAt: publishedAt });
+      });
+      const requested = { instanceId: "codex", model: "newly-discovered" };
+      await test.delegate(requested);
+      const rows = await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId });
+      expect(rows[0]?.selection).toEqual(requested);
+    },
+  );
+  it.each(["missing-provider", "missing-model"])(
+    "defers %s in a truncated catalog",
+    async (missing) => {
+      const test = await workerSelectionHarness();
+      await test.t.run(async (ctx) => {
+        const registration = (await ctx.db.query("environmentRegistrations").collect()).find(
+          (row) => row.environmentId === "studio",
+        )!;
+        await ctx.db.patch(registration._id, {
+          orchestratorDelegationCatalog: { ...workerCatalog, truncated: true },
+        });
+      });
+      const requested = {
+        instanceId: missing === "missing-provider" ? "omitted" : "codex",
+        model: "omitted",
+      };
+      await test.delegate(requested);
+      expect(
+        (await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId }))[0],
+      ).toMatchObject({ status: "queued", selection: requested });
+    },
+  );
+  it.each([
+    [false, true],
+    [false, false],
+    [true, true],
+  ])("redirect preserves explicit=%s with destination preset=%s", async (explicit, withPreset) => {
+    const test = await workerSelectionHarness(withPreset);
+    const requested = explicit ? { instanceId: "codex", model: "complex" } : null;
+    await test.delegate(requested);
+    const original = (
+      await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId })
+    )[0]!;
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "move-worker",
+      text: "Move it to laptop",
+    });
+    const run = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+      result: {
+        ...decision(),
+        actions: [{ kind: "redirectWork", workId: original.id, environmentId: "laptop" }],
+      },
+    });
+    const work = await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId });
+    expect(work.find((row) => row.id !== original.id)).toMatchObject({
+      environmentId: "laptop",
+      selection:
+        requested ?? (withPreset ? { instanceId: "laptop-provider", model: "laptop-model" } : null),
+    });
+  });
+  it("keeps worker presets when an older client updates unrelated settings", async () => {
+    const test = await workerSelectionHarness();
+    const current = (await test.owner.query(api.aiOrchestrators.list, {}))[0]!;
+    const { workerModels: _omitted, ...olderConfig } = config();
+    await test.owner.mutation(api.aiOrchestrators.configure, {
+      id: test.id,
+      revision: current.revision,
+      config: { ...olderConfig, name: "Renamed" },
+    });
+    const updated = (await test.owner.query(api.aiOrchestrators.list, {}))[0]!;
+    expect(updated.workerModels?.[0]?.name).toBe("Routine");
+    expect(updated.name).toBe("Renamed");
   });
 });

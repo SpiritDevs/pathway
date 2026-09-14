@@ -606,3 +606,74 @@ describe("environment command claimant", () => {
     }),
   );
 });
+
+it.effect("refuses an invalid orchestrator selection before launching, without a fallback", () =>
+  Effect.gen(function* () {
+    let launched = false;
+    const executor = makeLocalEnvironmentCommandExecutor({
+      companyId: COMPANY_ID,
+      launch: () =>
+        Effect.sync(() => {
+          launched = true;
+          return { threadId: THREAD_ID, projection: projection(), resumed: false };
+        }),
+      dispatch: () => Effect.die("Unexpected dispatch"),
+      getThreadProjection: () => Effect.succeed(projection()),
+      resolveStartTarget: () => Effect.succeed({ projectId: null, modelSelection: MODEL }),
+      validateSelection: () =>
+        Effect.fail("The selected worker model is unavailable. No fallback was selected."),
+    });
+    const assignment = command(
+      "startThread",
+      { kind: "startThread", prompt: "Check", modelSelection: null },
+      {
+        cloudProjectId: null,
+        onBehalfOfActor: {
+          kind: "agent",
+          provider: "orchestrator:chief",
+          onBehalfOfMembershipId: "membership-command-issuer",
+        },
+      },
+    );
+    const outcome = yield* executor.execute(assignment).pipe(Effect.exit);
+    expect(outcome._tag).toBe("Failure");
+    expect(launched).toBe(false);
+  }),
+);
+
+it.effect(
+  "recovers an accepted launch receipt without revalidating a changed provider catalog",
+  () =>
+    Effect.gen(function* () {
+      let launched = false;
+      const executor = makeLocalEnvironmentCommandExecutor({
+        companyId: COMPANY_ID,
+        launch: () =>
+          Effect.sync(() => {
+            launched = true;
+            return { threadId: THREAD_ID, projection: projection(), resumed: false };
+          }),
+        dispatch: () => Effect.die("Unexpected dispatch"),
+        getThreadProjection: () => Effect.succeed(projection()),
+        resolveStartTarget: () => Effect.succeed({ projectId: null, modelSelection: MODEL }),
+        hasAcceptedLaunch: () => Effect.succeed(true),
+        validateSelection: () =>
+          Effect.fail("The selected worker model is unavailable. No fallback was selected."),
+      });
+      const assignment = command(
+        "startThread",
+        { kind: "startThread", prompt: "Check", modelSelection: null },
+        {
+          cloudProjectId: null,
+          onBehalfOfActor: {
+            kind: "agent",
+            provider: "orchestrator:chief",
+            onBehalfOfMembershipId: "membership-command-issuer",
+          },
+        },
+      );
+      const outcome = yield* executor.execute(assignment).pipe(Effect.exit);
+      expect(outcome._tag).toBe("Success");
+      expect(launched).toBe(true);
+    }),
+);

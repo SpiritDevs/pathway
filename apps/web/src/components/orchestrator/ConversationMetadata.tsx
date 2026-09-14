@@ -39,6 +39,17 @@ export function WorkList({ items }: { items: readonly OrchestratorWorkItem[] }) 
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium">{item.title}</p>
             <p className="mt-1 text-xs text-muted-foreground">{item.detail || item.status}</p>
+            {item.selection && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {item.selection.instanceId} / {item.selection.model}
+                {(item.selection.options ?? [])
+                  .map((option) => ` · ${option.id}: ${option.value}`)
+                  .join("")}
+              </p>
+            )}
+            {item.selectionReason && (
+              <p className="mt-1 text-xs text-muted-foreground">{item.selectionReason}</p>
+            )}
             {item.threadId && (
               <button
                 type="button"

@@ -2,6 +2,64 @@
 import * as Schema from "effect/Schema";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
+import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ProviderOptionSelection, ProviderOptionDescriptor } from "./model.ts";
+
+/** Bounded discovery data, never provider credentials or account identifiers. */
+export const OrchestratorDelegationCatalog = Schema.Struct({
+  defaultSelection: ModelSelection,
+  truncated: Schema.Boolean,
+  providers: Schema.Array(
+    Schema.Struct({
+      instanceId: Schema.String,
+      driver: Schema.String,
+      name: Schema.String,
+      available: Schema.Boolean,
+      models: Schema.Array(
+        Schema.Struct({
+          id: Schema.String,
+          name: Schema.String,
+          options: Schema.Array(ProviderOptionDescriptor),
+        }),
+      ).check(Schema.isMaxLength(100)),
+    }),
+  ).check(Schema.isMaxLength(50)),
+});
+export type OrchestratorDelegationCatalog = typeof OrchestratorDelegationCatalog.Type;
+
+/** Validate discovered choices. Cloud callers may defer omitted entries in bounded catalogs to the target. */
+export function delegationSelectionProblem(
+  selection: ModelSelection,
+  catalog: OrchestratorDelegationCatalog,
+  deferOmitted = false,
+): string | null {
+  const provider = catalog.providers.find((p) => p.instanceId === selection.instanceId);
+  if (!provider && deferOmitted && catalog.truncated) return null;
+  if (!provider?.available) return "The selected worker provider is unavailable.";
+  const model = provider.models.find((m) => m.id === selection.model);
+  if (!model && deferOmitted && catalog.truncated) return null;
+  if (!model) return "The selected worker model is not advertised by this environment.";
+  const seen = new Set<string>();
+  for (const option of selection.options ?? []) {
+    if (seen.has(option.id)) return `Worker option ${option.id} was specified twice.`;
+    seen.add(option.id);
+    const descriptor = model.options.find((d) => d.id === option.id);
+    if (!descriptor) return `Worker option ${option.id} is not advertised for this model.`;
+    if (
+      descriptor.type === "boolean"
+        ? typeof option.value !== "boolean"
+        : !descriptor.options.some((v) => v.id === option.value)
+    )
+      return `Worker option ${option.id} has an unsupported value.`;
+  }
+  return null;
+}
+
+export const ORCHESTRATOR_DELEGATION_GUIDANCE = `Choose workers deliberately from the selected environment's delegationCatalog. Copy exact provider instance, model and option IDs; never invent model IDs or reasoning levels. workerModels are user-configured presets with task guidance and relative cost estimates, not new tools or permission grants. Prefer a suitable preset; any advertised selection is available when the task needs it. An explicit user model or reasoning request takes precedence. If unavailable, report it rather than substituting another model.
+For bounded lookups, routine edits and focused tests, prefer a suitable lower-cost preset and modest advertised reasoning. Use more capable models or higher reasoning for ambiguous requirements, difficult debugging, architecture and consequential review. Match required tools and environment access first. Provider catalogs do not certify image input, external tools, skill availability, model quality or prices; those are unknown unless supplied separately. Do not infer cost or capability from model names alone. Relative preset cost is a user estimate, not live pricing.
+Use selectionReason for a short task-based explanation, including why escalation is needed. Escalate after concrete failure or unmet task needs, carry findings forward, and do not duplicate accepted work. Never switch accounts or models to evade allowance holds; a separate account needs its own allocation.
+selection:null explicitly uses the first worker preset for the chosen environment. If none exists, the target resolves its project default, then its environment text-generation default. It does not choose the cheapest model or inherit the coordinator. When the catalog is absent, do not guess selections. Explain default use and any uncertainty. A stale or invalid explicit choice fails without an automatic model fallback.`;
 
 export const ORCHESTRATOR_CAPABILITIES = [
   "projects.read",
@@ -27,7 +85,17 @@ export const OrchestratorModelChoice = Schema.Struct({
   selection: ModelSelection,
 });
 export type OrchestratorModelChoice = typeof OrchestratorModelChoice.Type;
+export const OrchestratorWorkerModel = Schema.Struct({
+  ...OrchestratorModelChoice.fields,
+  name: Schema.String.check(Schema.isMaxLength(80)),
+  guidance: Schema.String.check(Schema.isMaxLength(1000)),
+  cost: Schema.Literals(["unknown", "lower", "standard", "higher"]),
+});
+export type OrchestratorWorkerModel = typeof OrchestratorWorkerModel.Type;
 export const OrchestratorConfig = Schema.Struct({
+  workerModels: Schema.optionalKey(
+    Schema.Array(OrchestratorWorkerModel).check(Schema.isMaxLength(12)),
+  ),
   name: Schema.String,
   color: Schema.String,
   persona: Schema.String,
@@ -104,6 +172,8 @@ export const OrchestratorWorkItem = Schema.Struct({
   threadId: Schema.NullOr(Schema.String),
   status: Schema.Literals(["queued", "working", "completed", "failed", "cancelled", "unknown"]),
   detail: Schema.String,
+  selectionReason: Schema.optionalKey(Schema.String),
+  selection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
 });
 export type OrchestratorWorkItem = typeof OrchestratorWorkItem.Type;
 export const OrchestratorMessage = Schema.Struct({
@@ -189,6 +259,11 @@ export const DEFAULT_ORCHESTRATOR_MODEL = "gpt-6-astra";
 export const DEFAULT_ORCHESTRATOR_REASONING = "high";
 
 /** Coordinator reasoning returns intentions; only the runtime executes allowed actions. */
+const WorkerActionSelection = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  model: TrimmedNonEmptyString,
+  options: Schema.optionalKey(Schema.Array(ProviderOptionSelection)),
+});
 export const OrchestratorAction = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("readWork"), workId: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("stopWork"), workId: Schema.String }),
@@ -211,7 +286,8 @@ export const OrchestratorAction = Schema.Union([
     projectId: Schema.NullOr(Schema.String),
     environmentId: Schema.String,
     prompt: Schema.String,
-    selection: Schema.NullOr(ModelSelection),
+    selection: Schema.NullOr(WorkerActionSelection),
+    selectionReason: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(500))),
   }),
   Schema.Struct({ kind: Schema.Literal("message"), targetId: Schema.String, text: Schema.String }),
   Schema.Struct({

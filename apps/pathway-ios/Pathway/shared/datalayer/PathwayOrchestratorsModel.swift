@@ -21,7 +21,7 @@ struct PathwayOrchestratorRecord: Identifiable, Equatable {
   }
   static let configurationKeys: Set<String> = [
     "name", "color", "persona", "instructions", "responsibilities", "reviewIntervalMinutes", "kind",
-    "companyId", "projectId", "shared", "models", "environmentIds", "allEnvironments",
+    "companyId", "projectId", "shared", "models", "workerModels", "environmentIds", "allEnvironments",
     "capabilities", "directorSubjects", "managerSubjects", "maxAssignments", "proactive",
     "rememberAutomatically", "notifyUrgent", "batchCompletions",
   ]

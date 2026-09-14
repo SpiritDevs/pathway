@@ -17,6 +17,23 @@ export const orchestratorConfig = {
   models: v.array(
     v.object({ id: v.string(), environmentId: v.string(), selection: mailSelection }),
   ),
+  workerModels: v.optional(
+    v.array(
+      v.object({
+        id: v.string(),
+        environmentId: v.string(),
+        selection: mailSelection,
+        name: v.string(),
+        guidance: v.string(),
+        cost: v.union(
+          v.literal("unknown"),
+          v.literal("lower"),
+          v.literal("standard"),
+          v.literal("higher"),
+        ),
+      }),
+    ),
+  ),
   environmentIds: v.array(v.string()),
   allEnvironments: v.boolean(),
   capabilities: v.array(v.string()),
@@ -211,6 +228,8 @@ export const aiOrchestratorTables = {
     prompt: v.string(),
     commandId: v.optional(v.string()),
     selection: v.optional(v.union(mailSelection, v.null())),
+    selectionReason: v.optional(v.string()),
+    selectionExplicit: v.optional(v.boolean()),
     companyId: v.optional(v.string()),
     completionNotified: v.optional(v.boolean()),
     sourceSequence: v.optional(v.number()),
