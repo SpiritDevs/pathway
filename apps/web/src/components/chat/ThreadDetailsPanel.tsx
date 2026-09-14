@@ -1,3 +1,4 @@
+import { BackgroundWorkSection } from "./BackgroundWorkSection";
 import { PendingQuestionsSection } from "./PendingQuestionsSection";
 import type { AutoPlacementOption } from "../BranchToolbar.logic";
 import type {
@@ -47,6 +48,7 @@ import { useClientSettings } from "../../hooks/useSettings";
 import { resolveActionPaletteSections, type ActionPaletteSectionId } from "./actionPaletteSections";
 
 export interface ThreadDetailsPanelProps {
+  backgroundWork?: React.ComponentProps<typeof BackgroundWorkSection>;
   pendingQuestions?: React.ComponentProps<typeof PendingQuestionsSection>;
   workspaceContext?: BranchToolbarWorkspaceContext;
   mode: "inline" | "popover";
@@ -208,6 +210,10 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
       case "questions":
         return props.pendingQuestions ? (
           <PendingQuestionsSection key={sectionId} {...props.pendingQuestions} />
+        ) : null;
+      case "background-work":
+        return props.backgroundWork ? (
+          <BackgroundWorkSection key={sectionId} {...props.backgroundWork} />
         ) : null;
       case "workspace":
         return (

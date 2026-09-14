@@ -5723,6 +5723,40 @@ function ChatViewContent(props: ChatViewProps) {
       );
     }
   }, [activeThreadRef, settleAfterCompletionMutation]);
+  const forceSettleThreadMutation = useAtomCommand(threadEnvironment.settle, {
+    reportFailure: false,
+  });
+  const [stoppingBackgroundThreadKey, setStoppingBackgroundThreadKey] = useState<string | null>(
+    null,
+  );
+  const handleStopBackgroundWork = useCallback(async () => {
+    if (
+      !activeThreadRef ||
+      activeThreadShell?.temporary ||
+      serverConfig?.environment.capabilities.threadForceSettlement !== true
+    )
+      return;
+    const threadKey = scopedThreadKey(activeThreadRef);
+    setStoppingBackgroundThreadKey(threadKey);
+    try {
+      const result = await forceSettleThreadMutation({
+        environmentId: activeThreadRef.environmentId,
+        input: { threadId: activeThreadRef.threadId, force: true },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to stop background work",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      }
+    } finally {
+      setStoppingBackgroundThreadKey((current) => (current === threadKey ? null : current));
+    }
+  }, [activeThreadRef, activeThreadShell?.temporary, serverConfig, forceSettleThreadMutation]);
   const unsettleThreadMutation = useAtomCommand(threadEnvironment.unsettle, {
     reportFailure: false,
   });
@@ -9299,6 +9333,16 @@ function ChatViewContent(props: ChatViewProps) {
     ) : null
   ) : null;
   const threadDetailsPanelProps: Omit<ThreadDetailsPanelProps, "mode"> = {
+    backgroundWork: {
+      tasks: pendingBackgroundTasks,
+      canStop:
+        !activeThread.temporary &&
+        serverConfig?.environment.capabilities.threadForceSettlement === true,
+      temporary: activeThread.temporary ?? false,
+      stopping:
+        stoppingBackgroundThreadKey !== null && stoppingBackgroundThreadKey === activeThreadKey,
+      onStop: handleStopBackgroundWork,
+    },
     pendingQuestions: {
       prompts: allPendingUserInputs,
       respondingRequestIds: [
