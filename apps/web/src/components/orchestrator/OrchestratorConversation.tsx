@@ -4,7 +4,6 @@ import { createPortal } from "react-dom";
 import {
   ArrowUpIcon,
   ArrowUpRightIcon,
-  BotIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   Maximize2Icon,
@@ -111,10 +110,7 @@ function Composer({ chat, activity }: { chat: OrchestratorChat; activity: Orches
             .filter((contact) => activeIds.has(contact.id))
             .map((contact) => (
               <div key={contact.id} className="flex items-center gap-1.5">
-                <OrchestratorAvatar
-                  contact={contact}
-                  className="size-5 motion-safe:animate-status-pulse"
-                />
+                <OrchestratorAvatar contact={contact} className="size-5" status="working" />
                 <span className="text-xs text-muted-foreground">{contact.name} is thinking</span>
               </div>
             ))}
@@ -218,17 +214,32 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
   );
   const sheet = details && (floatingDetails || floating || narrow);
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 bg-background">
+    <div
+      className={cn(
+        "flex h-full min-h-0 min-w-0 flex-1 bg-background",
+        floating && "dark:bg-popover",
+      )}
+    >
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header
           className={cn(
-            "flex h-20 shrink-0 items-center gap-3 border-b px-5",
-            !floating && "pl-12 sm:pl-6",
+            "flex shrink-0 items-center gap-3 border-b px-5",
+            floating ? "h-14" : "h-20 pl-12 sm:pl-6",
           )}
         >
           <Popover open={switcher} onOpenChange={setSwitcher}>
             <PopoverTrigger className="flex min-w-0 flex-1 items-center gap-3 rounded-lg py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <ConversationAvatar contacts={contacts} />
+              <ConversationAvatar
+                key={chat?.id ?? "welcome"}
+                contacts={state.avatarContacts.filter((contact) =>
+                  chat?.orchestratorIds.includes(contact.id ?? ""),
+                )}
+                fallbackContact={state.personalAvatar}
+                messages={messages.value?.messages}
+                work={work.value}
+                activity={activity.value}
+                idle
+              />
               <span className="min-w-0">
                 <span className="flex items-center gap-2 text-sm font-semibold">
                   <span className="truncate">{chat?.title ?? "Your orchestrators"}</span>
@@ -370,9 +381,12 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
           </>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 text-center">
-            <span className="rounded-3xl bg-violet-500/10 p-5 text-violet-500">
-              <BotIcon className="size-10" strokeWidth={1.4} />
-            </span>
+            <OrchestratorAvatar
+              contact={state.personalAvatar}
+              className="size-24"
+              interactive
+              idle
+            />
             <h1 className="mt-6 text-2xl font-semibold tracking-tight">
               A colleague for every part of your day.
             </h1>
@@ -463,7 +477,7 @@ export function OrchestratorOverlay() {
         createPortal(
           <section
             aria-label="Floating orchestrator companion"
-            className="fixed right-4 bottom-4 z-[80] flex h-[min(760px,calc(100dvh-88px))] w-[min(650px,calc(100vw-32px))] flex-col overflow-hidden rounded-[26px] border border-border bg-background shadow-[0_18px_80px_-12px_rgb(0_0_0/0.28)] dark:shadow-[0_18px_80px_-12px_rgb(0_0_0/0.65)]"
+            className="fixed right-4 bottom-4 z-[80] flex h-[min(760px,calc(100dvh-88px))] w-[min(650px,calc(100vw-32px))] flex-col overflow-hidden rounded-[26px] border border-border bg-background shadow-[0_18px_80px_-12px_rgb(0_0_0/0.28)] dark:border-foreground/15 dark:bg-popover dark:shadow-[0_18px_80px_-12px_rgb(0_0_0/0.65)]"
           >
             <OrchestratorConversation floating />
           </section>,

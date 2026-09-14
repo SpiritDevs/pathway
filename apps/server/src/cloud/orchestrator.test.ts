@@ -1,3 +1,4 @@
+import { DEFAULT_PERSONALITY } from "@spiritdevs/contracts/orchestratorAvatar";
 import { describe, expect, it } from "@effect/vitest";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { CompanyId } from "@spiritdevs/contracts/company";
@@ -63,6 +64,26 @@ function backend() {
 }
 
 describe("tool-free coordinator reasoning", () => {
+  it("includes expression instructions and only configured reply personality", () => {
+    expect(orchestratorPrompt(job)).toContain('"expression"');
+    expect(orchestratorPrompt(job)).not.toContain("Conversational personality (0–100)");
+    const prompt = orchestratorPrompt({
+      ...job,
+      personality: { shared: DEFAULT_PERSONALITY, replies: { energy: 90 }, avatar: { energy: 5 } },
+    });
+    expect(prompt).toContain("Energy 90");
+    expect(prompt).not.toContain("Energy 5");
+    expect(prompt).toContain(job.persona);
+  });
+  it.effect("keeps decisions usable when expression metadata is unknown", () =>
+    Effect.gen(function* () {
+      const expressive = { ...result, expression: "curious" };
+      expect(yield* decodeOrchestratorDecision(encodeJson(expressive))).toEqual(expressive);
+      const unknown = { ...result, expression: "surprised" };
+      expect(yield* decodeOrchestratorDecision(encodeJson(unknown))).toEqual(unknown);
+    }),
+  );
+
   it.effect("accepts an explicit quiet background decision", () =>
     Effect.gen(function* () {
       const quiet = { ...result, message: "", attention: "none" };

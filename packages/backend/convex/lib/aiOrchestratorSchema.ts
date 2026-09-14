@@ -3,7 +3,28 @@ import { defineTable } from "convex/server";
 import { v } from "convex/values";
 import { mailSelection } from "./mailSchema.ts";
 
+const traitOverrides = {
+  warmth: v.optional(v.number()),
+  playfulness: v.optional(v.number()),
+  energy: v.optional(v.number()),
+  curiosity: v.optional(v.number()),
+  expressiveness: v.optional(v.number()),
+};
+const avatar = v.object({ shape: v.string(), eyes: v.string() });
+const personality = v.object({
+  shared: v.object({
+    warmth: v.number(),
+    playfulness: v.number(),
+    energy: v.number(),
+    curiosity: v.number(),
+    expressiveness: v.number(),
+  }),
+  replies: v.optional(v.object(traitOverrides)),
+  avatar: v.optional(v.object(traitOverrides)),
+});
 export const orchestratorConfig = {
+  avatar: v.optional(avatar),
+  personality: v.optional(personality),
   name: v.string(),
   color: v.string(),
   persona: v.string(),
@@ -109,6 +130,7 @@ export const aiOrchestratorTables = {
     .index("by_subject", ["subject", "updatedAt"])
     .index("by_chat_subject", ["chatId", "subject"]),
   aiOrchestratorMessages: defineTable({
+    expression: v.optional(v.string()),
     id: v.string(),
     chatId: v.string(),
     sequence: v.number(),

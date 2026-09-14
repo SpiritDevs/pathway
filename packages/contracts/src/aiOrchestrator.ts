@@ -1,4 +1,11 @@
 /** Persistent AI contacts, cloud conversations, and coordinator configuration. */
+import {
+  AvatarExpression,
+  DEFAULT_AVATAR,
+  DEFAULT_PERSONALITY,
+  OrchestratorAvatarConfig,
+  OrchestratorPersonality,
+} from "./orchestratorAvatar.ts";
 import * as Schema from "effect/Schema";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
 import { ModelSelection } from "./modelSelection.ts";
@@ -28,6 +35,8 @@ export const OrchestratorModelChoice = Schema.Struct({
 });
 export type OrchestratorModelChoice = typeof OrchestratorModelChoice.Type;
 export const OrchestratorConfig = Schema.Struct({
+  avatar: Schema.optionalKey(OrchestratorAvatarConfig),
+  personality: Schema.optionalKey(OrchestratorPersonality),
   name: Schema.String,
   color: Schema.String,
   persona: Schema.String,
@@ -95,6 +104,7 @@ export const OrchestratorChat = Schema.Struct({
 });
 export type OrchestratorChat = typeof OrchestratorChat.Type;
 export const OrchestratorWorkItem = Schema.Struct({
+  updatedAt: Schema.optionalKey(Schema.Number),
   id: Schema.String,
   createdAt: Schema.optionalKey(Schema.Number),
   title: Schema.String,
@@ -107,6 +117,7 @@ export const OrchestratorWorkItem = Schema.Struct({
 });
 export type OrchestratorWorkItem = typeof OrchestratorWorkItem.Type;
 export const OrchestratorMessage = Schema.Struct({
+  expression: Schema.optionalKey(AvatarExpression),
   id: Schema.String,
   chatId: Schema.String,
   sequence: Schema.Number,
@@ -160,6 +171,8 @@ export function defaultOrchestratorConfig(name = "Chief"): OrchestratorConfig {
   return {
     name,
     color: "violet",
+    avatar: DEFAULT_AVATAR,
+    personality: { shared: DEFAULT_PERSONALITY },
     persona: "A thoughtful, capable colleague. Be warm, direct, and concise.",
     instructions: DEFAULT_ORCHESTRATOR_INSTRUCTIONS,
     responsibilities:
@@ -231,6 +244,7 @@ export const OrchestratorAction = Schema.Union([
 ]);
 export type OrchestratorAction = typeof OrchestratorAction.Type;
 export const OrchestratorDecision = Schema.Struct({
+  expression: Schema.optionalKey(Schema.Unknown),
   message: Schema.String,
   attention: Schema.optional(Schema.Literals(["none", "routine", "urgent"])),
   actions: Schema.Array(OrchestratorAction),
@@ -238,6 +252,7 @@ export const OrchestratorDecision = Schema.Struct({
 });
 export type OrchestratorDecision = typeof OrchestratorDecision.Type;
 export const OrchestratorRun = Schema.Struct({
+  personality: Schema.optionalKey(OrchestratorPersonality),
   hostResources: Schema.optionalKey(HostResourcesSnapshot),
   id: Schema.String,
   generation: Schema.Number,

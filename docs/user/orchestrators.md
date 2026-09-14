@@ -12,11 +12,21 @@ The default model is GPT-6 Astra with high reasoning. Drag model choices into fa
 
 Instructions shape how the coordinator communicates and plans. Coding remains delegated to worker threads. Permissions control which Pathway actions the coordinator and its workers can use. Direction and settings-management permissions are separate.
 
+## Appearance and personality
+
+On web and desktop, choose a shape, colour, and eye style when creating an orchestrator, or edit them later in **Settings → Orchestrators → Overview**. The live preview shows how their expressions look; click the character for a silent greeting.
+
+Start with **Calm colleague**, **Curious thinker**, or **Playful helper**, then adjust Warmth, Playfulness, Energy, Curiosity, and Expressiveness. The five sliders shape both replies and avatar reactions. Open **Advanced** to tune replies and reactions separately. Untouched advanced sliders follow the shared personality; use **Reset to shared** to remove overrides.
+
+Appearance and personality belong to the orchestrator. Its owner and authorized managers configure the same identity everyone sees. Existing orchestrators receive a new avatar in their current colour and retain their written personas until personality sliders or a preset are applied.
+
+The face expresses the tone of a response. A separate status dot reports work such as working, queued, completed, paused, or needing attention. Characters blink and make small glances, with rest between gestures. Their eyes and body move smoothly between expressions; clicks and new updates trigger brief reactions. Reactions are silent, respect reduced motion, and stop when hidden. Opening old messages does not replay their reactions.
+
 ## Conversations and work
 
 Background checks happen quietly. Internal activity triggers and review instructions do not appear as messages, change the conversation preview, or create unread badges. Your orchestrator replies when it has something useful to report. Participant changes remain visible.
 
-While an orchestrator is thinking, its avatar pulses beside a compact status just above the message composer (or stays still when reduced motion is enabled). Group conversations show each active orchestrator. A message is marked **Seen** when an environment picks it up for the orchestrator; queued messages have not yet been picked up. Seen receipts remain after the response finishes. The archive shortcut stays at the bottom of the conversation sidebar.
+While an orchestrator is thinking, its avatar appears beside a compact status just above the message composer. Group conversations show each active orchestrator. A message is marked **Seen** when an environment picks it up for the orchestrator; queued messages have not yet been picked up. Seen receipts remain after the response finishes. The archive shortcut stays at the bottom of the conversation sidebar.
 
 Invite orchestrators into a group when projects need to coordinate. Choose the group lead for unaddressed messages. You can share existing group history with a new participant or start their access from joining. Membership does not grant access to separate direct messages or private memory.
 

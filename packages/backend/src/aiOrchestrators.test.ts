@@ -2869,3 +2869,168 @@ describe("background orchestrator notifications", () => {
     ).toBe(false);
   });
 });
+
+describe("shared orchestrator avatars", () => {
+  it("shares manager-controlled identity and preserves it when an older client saves", async () => {
+    const t = harness();
+    await seed(t);
+    const shared = {
+      ...config(),
+      kind: "custom" as const,
+      companyId: "workspace",
+      shared: true,
+      managerSubjects: ["director"],
+    };
+    const id = await human(t).mutation(api.aiOrchestrators.create, { config: shared });
+    await t.run(async (ctx) => {
+      const member = await ctx.db
+        .query("memberships")
+        .filter((q) => q.eq(q.field("id"), "member-director"))
+        .unique();
+      await ctx.db.insert("companyOwners", {
+        companyId: member!.companyId,
+        membershipId: member!._id,
+        grantedByMembershipId: null,
+        createdAt: Date.now(),
+      });
+    });
+    const avatar = { shape: "cloud", eyes: "soft" };
+    const personality = {
+      shared: { warmth: 70, playfulness: 40, energy: 20, curiosity: 85, expressiveness: 60 },
+      avatar: { energy: 10 },
+    };
+    await human(t, "director").mutation(api.aiOrchestrators.configure, {
+      id,
+      revision: 1,
+      config: { ...shared, avatar, personality },
+    });
+    const colleague = human(t, "colleague");
+    expect(
+      (await colleague.query(api.aiOrchestrators.list, { companyId: "workspace" }))[0],
+    ).toMatchObject({ avatar, personality, canManage: false });
+    await expect(
+      colleague.mutation(api.aiOrchestrators.configure, {
+        id,
+        revision: 2,
+        config: { ...shared, color: "pink" },
+      }),
+    ).rejects.toThrow("management permission");
+    const { avatar: _avatar, personality: _personality, ...legacy } = shared;
+    await human(t).mutation(api.aiOrchestrators.configure, {
+      id,
+      revision: 2,
+      config: { ...legacy, name: "Renamed" },
+    });
+    expect(
+      (await colleague.query(api.aiOrchestrators.list, { companyId: "workspace" }))[0],
+    ).toMatchObject({ name: "Renamed", avatar, personality });
+  });
+  it("rejects malformed appearance and out-of-range personality without modifying identity", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, id } = await personalChat(t);
+    for (const invalid of [
+      { avatar: { shape: "bad", eyes: "oval" } },
+      {
+        personality: {
+          shared: { warmth: 200, playfulness: 50, energy: 50, curiosity: 50, expressiveness: 50 },
+        },
+      },
+    ]) {
+      await expect(
+        owner.mutation(api.aiOrchestrators.configure, {
+          id,
+          revision: 1,
+          config: { ...config(), ...invalid },
+        }),
+      ).rejects.toThrow();
+    }
+    expect((await owner.query(api.aiOrchestrators.list, {}))[0]?.revision).toBe(1);
+  });
+  it("projects only the owner's personal identity and hides archived or deleted identities", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, id } = await personalChat(t);
+    const avatar = await owner.query(api.aiOrchestrators.personalAvatar, {});
+    expect(avatar).toMatchObject({ id, name: "Chief", color: "violet" });
+    expect(avatar).not.toHaveProperty("instructions");
+    expect(avatar).not.toHaveProperty("persona");
+    expect(await human(t, "colleague").query(api.aiOrchestrators.personalAvatar, {})).toBeNull();
+    await owner.mutation(api.aiOrchestrators.setStatus, { id, status: "archived" });
+    expect(await owner.query(api.aiOrchestrators.personalAvatar, {})).toBeNull();
+  });
+  it("shares only visual identity with conversation participants outside the contact directory", async () => {
+    const t = harness();
+    await seed(t);
+    const owner = human(t);
+    const id = await owner.mutation(api.aiOrchestrators.ensurePersonal, {});
+    const chatId = await owner.mutation(api.aiOrchestrators.createChat, {
+      title: "Team",
+      orchestratorIds: [id],
+      leadId: id,
+      companyIds: ["workspace"],
+    });
+    const colleague = human(t, "colleague");
+    expect(await colleague.query(api.aiOrchestrators.conversationAvatars, {})).toEqual([]);
+    await owner.mutation(api.aiOrchestrators.invite, {
+      chatId,
+      subject: "colleague",
+      history: "all",
+    });
+    expect(await colleague.query(api.aiOrchestrators.list, {})).toEqual([]);
+    const avatars = await colleague.query(api.aiOrchestrators.conversationAvatars, {});
+    expect(avatars).toHaveLength(1);
+    expect(avatars[0]).toMatchObject({
+      id,
+      avatar: config().avatar,
+      personality: config().personality,
+    });
+    expect(avatars[0]).not.toHaveProperty("instructions");
+    expect(avatars[0]).not.toHaveProperty("persona");
+    expect(await human(t, "director").query(api.aiOrchestrators.conversationAvatars, {})).toEqual(
+      [],
+    );
+  });
+  it("reports personal-avatar activity from leases and clears it on completion", async () => {
+    const test = await coordinatorHarness();
+    const run = (await test.claim())!;
+    const running = await test.owner.query(api.aiOrchestrators.personalAvatar, {});
+    expect(running?.activityExpiresAt).toBeGreaterThan(Date.now());
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+      result: decision(),
+    });
+    expect(
+      (await test.owner.query(api.aiOrchestrators.personalAvatar, {}))?.activityExpiresAt,
+    ).toBe(0);
+  });
+  it.each(["curious", "unsupported", undefined])(
+    "persists response expression %s without changing work status",
+    async (expression) => {
+      const test = await coordinatorHarness();
+      const run = (await test.claim())!;
+      expect(run.personality).toEqual(config().personality);
+      await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+        companyId: "workspace",
+        jobId: run.id,
+        generation: run.generation,
+        result: { ...decision(), ...(expression === undefined ? {} : { expression }) },
+      });
+      const messages = await test.owner.query(api.aiOrchestrators.messages, {
+        chatId: test.chatId,
+      });
+      expect(
+        messages.messages.find((message) => message.senderKind === "orchestrator"),
+      ).toMatchObject({
+        expression: expression === "curious" ? "curious" : "neutral",
+        status: "sent",
+        text: decision().message,
+      });
+      expect(await test.owner.query(api.aiOrchestrators.activity, { chatId: test.chatId })).toEqual(
+        [],
+      );
+    },
+  );
+});

@@ -128,8 +128,8 @@ export function ConversationMessages({
         {result.value && messages.length === 0 && (
           <div className="py-16 text-center">
             <ConversationAvatar
-              contacts={state.contacts.filter((contact) =>
-                chat.orchestratorIds.includes(contact.id),
+              contacts={state.avatarContacts.filter((contact) =>
+                chat.orchestratorIds.includes(contact.id ?? ""),
               )}
               className="mx-auto justify-center"
             />
@@ -154,7 +154,7 @@ export function ConversationMessages({
           }
           const { message, index } = entry;
           const own = message.senderKind === "user" && message.senderId === state.accountID;
-          const contact = state.contacts.find((item) => item.id === message.senderId);
+          const contact = state.avatarContacts.find((item) => item.id === message.senderId);
           const newDay =
             index === 0 ||
             new Date(visible[index - 1]!.createdAt).toDateString() !==
@@ -176,7 +176,14 @@ export function ConversationMessages({
                 </p>
               ) : (
                 <div className={cn("flex items-end gap-2.5", own && "justify-end")}>
-                  {!own && <OrchestratorAvatar contact={contact} className="mb-5 size-8" />}
+                  {!own && (
+                    <OrchestratorAvatar
+                      contact={contact}
+                      expression={message.expression}
+                      className="mb-5 size-8"
+                      interactive
+                    />
+                  )}
                   <div className={cn("max-w-[85%]", own && "text-right")}>
                     <div
                       className={cn("mb-1.5 flex items-baseline gap-2 px-1", own && "justify-end")}

@@ -359,6 +359,7 @@ export async function appendChatMessage(
     text: string;
     status: "queued" | "sent";
     replyToId: string | null;
+    expression?: string;
   },
   notification?: { urgent: boolean; enabled: boolean },
 ) {
@@ -864,6 +865,7 @@ export const work = query({
         status,
         detail,
         createdAt,
+        updatedAt,
       }) => ({
         id,
         title,
@@ -874,6 +876,7 @@ export const work = query({
         status,
         detail,
         createdAt,
+        updatedAt,
       }),
     );
   },
@@ -1110,5 +1113,96 @@ export const retryMessage = mutation({
     });
     await ctx.db.patch(message._id, { status: "queued" });
     return null;
+  },
+});
+
+/** Small identity projection for the always-visible navigation avatar. */
+export const personalAvatar = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await requireUser(ctx);
+    const rows = await ctx.db
+      .query("aiOrchestrators")
+      .withIndex("by_owner_kind", (q) =>
+        q.eq("ownerSubject", user.clerkSubject).eq("kind", "personal"),
+      )
+      .take(200);
+    const row = rows.find((item) => item.status === "active" || item.status === "paused");
+    if (!row || (row.companyId && !(await hasCompanyAccess(ctx, row.companyId, user)))) return null;
+    const [running, working, queued] = await Promise.all([
+      ctx.db
+        .query("aiOrchestratorJobs")
+        .withIndex("by_orchestrator_status", (q) =>
+          q.eq("orchestratorId", row.id).eq("status", "running"),
+        )
+        .take(20),
+      ctx.db
+        .query("aiOrchestratorWork")
+        .withIndex("by_orchestrator_status", (q) =>
+          q.eq("orchestratorId", row.id).eq("status", "working"),
+        )
+        .first(),
+      ctx.db
+        .query("aiOrchestratorWork")
+        .withIndex("by_orchestrator_status", (q) =>
+          q.eq("orchestratorId", row.id).eq("status", "queued"),
+        )
+        .first(),
+    ]);
+    const activityExpiresAt = Math.max(0, ...running.map((job) => job.leaseExpiresAt));
+    const config = decodeConfig(row);
+    return {
+      id: row.id,
+      name: row.name,
+      color: row.color,
+      status: row.status,
+      activityExpiresAt,
+      ...(working
+        ? { workStatus: "working" as const }
+        : queued
+          ? { workStatus: "queued" as const }
+          : {}),
+      ...(config.avatar ? { avatar: config.avatar } : {}),
+      ...(config.personality ? { personality: config.personality } : {}),
+    };
+  },
+});
+
+/** Deduplicated public identities for readable chats, including other workspaces. */
+export const conversationAvatars = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await requireUser(ctx);
+    const memberships = await ctx.db
+      .query("aiOrchestratorChatMembers")
+      .withIndex("by_subject", (q) => q.eq("subject", user.clerkSubject))
+      .order("desc")
+      .take(100);
+    const chats = await Promise.all(
+      memberships.map(async (member) => {
+        const chat = await ctx.db
+          .query("aiOrchestratorChats")
+          .withIndex("by_domain_id", (q) => q.eq("id", member.chatId))
+          .unique();
+        return chat && (await hasChatAccess(ctx, chat, user)) ? chat : null;
+      }),
+    );
+    const ids = new Set(chats.flatMap((chat) => chat?.orchestratorIds ?? []));
+    const avatars = await Promise.all(
+      [...ids].map(async (id) => {
+        const row = await findOrchestrator(ctx, id);
+        if (!row) return null;
+        const config = decodeConfig(row);
+        return {
+          id: row.id,
+          name: row.name,
+          color: row.color,
+          status: row.status,
+          ...(config.avatar ? { avatar: config.avatar } : {}),
+          ...(config.personality ? { personality: config.personality } : {}),
+        };
+      }),
+    );
+    return avatars.filter((avatar) => avatar !== null);
   },
 });

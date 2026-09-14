@@ -7,6 +7,10 @@
   ],
   "type": "module",
   "exports": {
+    "./orchestratorAvatar": {
+      "types": "./src/orchestratorAvatar.ts",
+      "import": "./src/orchestratorAvatar.ts"
+    },
     "./providerAllowanceBudget": {
       "types": "./src/providerAllowanceBudget.ts",
       "import": "./src/providerAllowanceBudget.ts"

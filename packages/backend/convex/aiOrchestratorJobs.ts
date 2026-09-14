@@ -1,3 +1,4 @@
+import { normalizeAvatarExpression } from "@spiritdevs/contracts/orchestratorAvatar";
 import {
   readableOrchestratorEnvironment,
   notifyOrchestratorEnvironmentChange,
@@ -789,6 +790,7 @@ export const claim = mutation({
         selection: decodeSelection(selection),
         name: orchestrator.name,
         persona: orchestrator.persona,
+        ...(orchestrator.personality ? { personality: orchestrator.personality } : {}),
         instructions: orchestrator.instructions,
         context: await contextFor(
           ctx,
@@ -1173,6 +1175,7 @@ export const complete = mutation({
             senderId: claim.orchestrator.id,
             senderName: claim.orchestrator.name,
             text: action.text,
+            expression: normalizeAvatarExpression(result.expression),
             status: queuedTarget ? "sent" : "queued",
             replyToId: claim.message.id,
           },
@@ -1217,6 +1220,7 @@ export const complete = mutation({
             senderId: claim.orchestrator.id,
             senderName: claim.orchestrator.name,
             text: result.message.trim(),
+            expression: normalizeAvatarExpression(result.expression),
             status: "sent",
             replyToId: claim.message.id,
           },

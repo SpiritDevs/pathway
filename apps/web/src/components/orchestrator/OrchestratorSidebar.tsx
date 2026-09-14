@@ -45,8 +45,8 @@ export function ConversationList({ onSelect }: { onSelect?: () => void }) {
             )}
           >
             <ConversationAvatar
-              contacts={state.contacts.filter((contact) =>
-                chat.orchestratorIds.includes(contact.id),
+              contacts={state.avatarContacts.filter((contact) =>
+                chat.orchestratorIds.includes(contact.id ?? ""),
               )}
             />
             <span className="min-w-0 flex-1">
