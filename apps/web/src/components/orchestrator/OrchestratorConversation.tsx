@@ -1,12 +1,11 @@
 import { ConversationAttachmentDrafts } from "./ConversationAttachments";
 import { shouldHandleComposerAttachmentPaste } from "../chat/composerAttachmentFiles";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { createPortal } from "react-dom";
 import {
   ArrowUpIcon,
   ArrowUpRightIcon,
-  BotIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   Maximize2Icon,
@@ -33,14 +32,26 @@ import { RightPanelSheet } from "../RightPanelSheet";
 import { SheetTitle } from "../ui/sheet";
 import { useOrchestrators, useOrchestratorQuery } from "./OrchestratorContext";
 import { ConversationAvatar, OrchestratorAvatar } from "./OrchestratorAvatar";
-import { ConversationList } from "./OrchestratorSidebar";
+import { ConversationList, FloatingConversationSwitcher } from "./OrchestratorSidebar";
 import { NewConversationDialog } from "./NewConversationDialog";
 import { ConversationMessages } from "./ConversationMessages";
+import { FloatingDetailsPanel } from "./FloatingDetailsPanel";
 import { ConversationMetadata } from "./ConversationMetadata";
+
+import type { ComposerSendMotion } from "./messageSendMotion";
 
 const EMPTY_ACTIVITY: OrchestratorActivity = [];
 const errorMessage = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
-function Composer({ chat, activity }: { chat: OrchestratorChat; activity: OrchestratorActivity }) {
+export function Composer({
+  chat,
+  activity,
+  sendMotion,
+}: {
+  chat: OrchestratorChat;
+  activity: OrchestratorActivity;
+  sendMotion: RefObject<ComposerSendMotion | null>;
+}) {
+  const input = useRef<HTMLTextAreaElement>(null);
   const [now, setNow] = useState(Date.now);
   const activeIds = new Set(
     activity.filter((item) => item.expiresAt > Math.max(now, Date.now())).map((item) => item.id),
@@ -88,16 +99,27 @@ function Composer({ chat, activity }: { chat: OrchestratorChat; activity: Orches
         ? previous
         : { id: randomUUID(), text, targetId: lead.id, attachmentIds };
     pending.set(chat.id, message);
+    if (input.current)
+      sendMotion.current = {
+        chatId: chat.id,
+        messageId: message.id,
+        origin: input.current.getBoundingClientRect(),
+        ready: false,
+      };
     setSending(true);
     state.setError(undefined);
     void state
       .request("aiOrchestrators:send", { chatId: chat.id, ...message })
       .then(() => {
+        if (sendMotion.current?.messageId === message.id) sendMotion.current.ready = true;
         state.setDraft(chat.id, "");
         state.attachments.sent(chat.id, message.attachmentIds);
         pending.delete(chat.id);
       })
-      .catch((cause) => state.setError(errorMessage(cause)))
+      .catch((cause) => {
+        if (sendMotion.current?.messageId === message.id) sendMotion.current = null;
+        state.setError(errorMessage(cause));
+      })
       .finally(() => setSending(false));
   };
   if (chat.archived)
@@ -133,10 +155,7 @@ function Composer({ chat, activity }: { chat: OrchestratorChat; activity: Orches
             .filter((contact) => activeIds.has(contact.id))
             .map((contact) => (
               <div key={contact.id} className="flex items-center gap-1.5">
-                <OrchestratorAvatar
-                  contact={contact}
-                  className="size-5 motion-safe:animate-status-pulse"
-                />
+                <OrchestratorAvatar contact={contact} className="size-5" status="working" />
                 <span className="text-xs text-muted-foreground">{contact.name} is thinking</span>
               </div>
             ))}
@@ -209,6 +228,7 @@ function Composer({ chat, activity }: { chat: OrchestratorChat; activity: Orches
               <PaperclipIcon className="size-5" />
             </Button>
             <textarea
+              ref={input}
               aria-label={`Message ${chat.title}`}
               placeholder={`Message ${chat.title}`}
               className="field-sizing-content max-h-40 min-h-9 min-w-0 flex-1 resize-none bg-transparent py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground"
@@ -271,6 +291,8 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
   const state = useOrchestrators();
   const navigate = useNavigate();
   const [switcher, setSwitcher] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const sendMotion = useRef<ComposerSendMotion | null>(null);
   const [details, setDetails] = useState(
     () => !floating && window.matchMedia("(min-width: 1280px)").matches,
   );
@@ -279,6 +301,9 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
   const [search, setSearch] = useState("");
   const narrow = useMediaQuery("(max-width: 1279px)");
   const chat = state.selected;
+  useEffect(() => {
+    sendMotion.current = null;
+  }, [chat?.id]);
   const contacts = state.contacts.filter((contact) => chat?.orchestratorIds.includes(contact.id));
   const work = useOrchestratorQuery<OrchestratorWorkItem[]>(
     state.client,
@@ -300,17 +325,35 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
   );
   const sheet = details && (floatingDetails || floating || narrow);
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 bg-background">
+    <div
+      ref={panelRef}
+      data-conversation-surface
+      className={cn(
+        "relative flex h-full min-h-0 min-w-0 flex-1 bg-background",
+        floating && "dark:bg-popover",
+      )}
+    >
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header
           className={cn(
-            "flex h-20 shrink-0 items-center gap-3 border-b px-5",
-            !floating && "pl-12 sm:pl-6",
+            "flex shrink-0 items-center gap-3 border-b px-5",
+            floating ? "h-14" : "h-20 pl-12 sm:pl-6",
           )}
         >
+          {floating && <FloatingConversationSwitcher anchor={panelRef} />}
           <Popover open={switcher} onOpenChange={setSwitcher}>
             <PopoverTrigger className="flex min-w-0 flex-1 items-center gap-3 rounded-lg py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <ConversationAvatar contacts={contacts} />
+              <ConversationAvatar
+                key={chat?.id ?? "welcome"}
+                contacts={state.avatarContacts.filter((contact) =>
+                  chat?.orchestratorIds.includes(contact.id ?? ""),
+                )}
+                fallbackContact={state.personalAvatar}
+                messages={messages.value?.messages}
+                work={work.value}
+                activity={activity.value}
+                idle="frequent"
+              />
               <span className="min-w-0">
                 <span className="flex items-center gap-2 text-sm font-semibold">
                   <span className="truncate">{chat?.title ?? "Your orchestrators"}</span>
@@ -443,18 +486,23 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
               work={work.value ?? []}
               search={search}
               result={messages}
+              sendMotion={sendMotion}
             />
             <Composer
               key={`composer:${chat.id}`}
               chat={chat}
               activity={activity.value ?? EMPTY_ACTIVITY}
+              sendMotion={sendMotion}
             />
           </>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 text-center">
-            <span className="rounded-3xl bg-violet-500/10 p-5 text-violet-500">
-              <BotIcon className="size-10" strokeWidth={1.4} />
-            </span>
+            <OrchestratorAvatar
+              contact={state.personalAvatar}
+              className="size-24"
+              interactive
+              idle
+            />
             <h1 className="mt-6 text-2xl font-semibold tracking-tight">
               A colleague for every part of your day.
             </h1>
@@ -490,7 +538,23 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
           />
         </aside>
       )}
-      {chat && (
+      {chat && floating && (
+        <FloatingDetailsPanel anchor={panelRef} open={details} onClose={() => setDetails(false)}>
+          <ConversationMetadata
+            chat={chat}
+            work={work.value ?? []}
+            onClose={() => setDetails(false)}
+            onFloat={() => {
+              setFloatingDetails(false);
+              state.setFloating(false);
+              void navigate({ to: "/orchestrator" });
+            }}
+            floating
+            companion
+          />
+        </FloatingDetailsPanel>
+      )}
+      {chat && !floating && (
         <RightPanelSheet
           open={sheet}
           onClose={() => setDetails(false)}
@@ -545,7 +609,8 @@ export function OrchestratorOverlay() {
         createPortal(
           <section
             aria-label="Floating orchestrator companion"
-            className="fixed right-4 bottom-4 z-[80] flex h-[min(760px,calc(100dvh-88px))] w-[min(650px,calc(100vw-32px))] flex-col overflow-hidden rounded-[26px] border border-border bg-background shadow-[0_18px_80px_-12px_rgb(0_0_0/0.28)] dark:shadow-[0_18px_80px_-12px_rgb(0_0_0/0.65)]"
+            data-floating-companion
+            className="fixed right-4 bottom-4 z-[80] flex h-[min(760px,calc(100dvh-88px))] w-[min(650px,calc(100vw-32px))] flex-col overflow-hidden rounded-[26px] border border-border bg-background shadow-[0_18px_80px_-12px_rgb(0_0_0/0.28)] dark:border-foreground/15 dark:bg-popover dark:shadow-[0_18px_80px_-12px_rgb(0_0_0/0.65)]"
           >
             <OrchestratorConversation floating />
           </section>,

@@ -1,5 +1,13 @@
 import { ConversationMessageAttachment } from "./ConversationAttachments";
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { makeFunctionReference } from "convex/server";
 import { ListTodoIcon } from "lucide-react";
 import type {
@@ -11,9 +19,15 @@ import type {
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { useOrchestrators } from "./OrchestratorContext";
-import { ConversationAvatar, OrchestratorAvatar } from "./OrchestratorAvatar";
-import { buildConversationTimeline } from "./conversationTimeline";
+import { ConversationAvatar } from "./OrchestratorAvatar";
+import {
+  buildConversationTimeline,
+  conversationMessageTime,
+  conversationTimeMarker,
+} from "./conversationTimeline";
 import { WorkList } from "./ConversationMetadata";
+
+import { animateSentMessage, type ComposerSendMotion } from "./messageSendMotion";
 
 type MessagePage = OrchestratorMessagePage;
 const errorMessage = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
@@ -23,11 +37,13 @@ export function ConversationMessages({
   work,
   search,
   result,
+  sendMotion,
 }: {
   chat: OrchestratorChat;
   work: readonly OrchestratorWorkItem[];
   search: string;
   result: { value?: MessagePage; error?: string };
+  sendMotion?: RefObject<ComposerSendMotion | null>;
 }) {
   const state = useOrchestrators();
   const [older, setOlder] = useState<OrchestratorMessage[]>([]);
@@ -36,6 +52,8 @@ export function ConversationMessages({
   const container = useRef<HTMLDivElement>(null);
   const pinned = useRef(!state.scrollPositions.current.has(chat.id));
   const initialized = useRef(false);
+  const stopFlight = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => stopFlight.current?.(), []);
   const messages = [
     ...new Map(
       [...older, ...(result.value?.messages ?? [])].map((message) => [message.id, message]),
@@ -62,6 +80,28 @@ export function ConversationMessages({
       pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
     } else if (pinned.current) element.scrollTop = element.scrollHeight;
   }, [result.value, work, chat.id, state.scrollPositions]);
+  useLayoutEffect(() => {
+    const pending = sendMotion?.current;
+    const element = container.current;
+    if (
+      !sendMotion ||
+      !pending?.ready ||
+      pending.chatId !== chat.id ||
+      !element ||
+      !messages.some((message) => message.id === pending.messageId)
+    )
+      return;
+    sendMotion.current = null;
+    stopFlight.current?.();
+    if (search) return;
+    const bubble = element.querySelector<HTMLElement>(
+      `[data-message-id="${CSS.escape(pending.messageId)}"]`,
+    );
+    if (!bubble) return;
+    element.scrollTop = element.scrollHeight;
+    pinned.current = true;
+    stopFlight.current = animateSentMessage(bubble, element, pending.origin);
+  });
   const lastSequence = result.value?.messages.at(-1)?.sequence;
   useEffect(() => {
     const client = state.client;
@@ -90,7 +130,7 @@ export function ConversationMessages({
         pinned.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80;
       }}
     >
-      <div className="mx-auto max-w-3xl space-y-6">
+      <div className="mx-auto max-w-3xl">
         {before && (
           <div className="text-center">
             <Button
@@ -135,8 +175,8 @@ export function ConversationMessages({
         {result.value && messages.length === 0 && (
           <div className="py-16 text-center">
             <ConversationAvatar
-              contacts={state.contacts.filter((contact) =>
-                chat.orchestratorIds.includes(contact.id),
+              contacts={state.avatarContacts.filter((contact) =>
+                chat.orchestratorIds.includes(contact.id ?? ""),
               )}
               className="mx-auto justify-center"
             />
@@ -150,7 +190,7 @@ export function ConversationMessages({
         {timeline.map((entry) => {
           if (entry.kind === "work") {
             return (
-              <div key={entry.id} className="ml-10 max-w-lg rounded-2xl border p-4">
+              <div key={entry.id} className="my-5 max-w-lg rounded-2xl border p-4">
                 <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
                   <ListTodoIcon className="size-4" />
                   Delegated work
@@ -159,23 +199,21 @@ export function ConversationMessages({
               </div>
             );
           }
-          const { message, index } = entry;
+          const { message, index, startsGroup, endsGroup, timeMarker } = entry;
           const own = message.senderKind === "user" && message.senderId === state.accountID;
-          const contact = state.contacts.find((item) => item.id === message.senderId);
-          const newDay =
-            index === 0 ||
-            new Date(visible[index - 1]!.createdAt).toDateString() !==
-              new Date(message.createdAt).toDateString();
           return (
-            <div key={message.id}>
-              {newDay && (
-                <p className="mb-6 text-center text-[11px] text-muted-foreground">
-                  {new Intl.DateTimeFormat(undefined, {
-                    weekday: "long",
-                    month: "short",
-                    day: "numeric",
-                  }).format(message.createdAt)}
-                </p>
+            <div key={message.id} className={startsGroup ? "mt-5 first:mt-0" : "mt-1.5"}>
+              {timeMarker && (
+                <div
+                  className={cn(
+                    "text-center text-xs text-muted-foreground",
+                    index === 0 ? "mb-6" : "my-7",
+                  )}
+                >
+                  <time dateTime={new Date(message.createdAt).toISOString()}>
+                    {conversationTimeMarker(message.createdAt)}
+                  </time>
+                </div>
               )}
               {message.senderKind === "system" ? (
                 <p className="text-center text-xs text-muted-foreground">
@@ -183,30 +221,24 @@ export function ConversationMessages({
                 </p>
               ) : (
                 <div className={cn("flex items-end gap-2.5", own && "justify-end")}>
-                  {!own && <OrchestratorAvatar contact={contact} className="mb-5 size-8" />}
-                  <div className={cn("max-w-[85%]", own && "text-right")}>
-                    <div
-                      className={cn("mb-1.5 flex items-baseline gap-2 px-1", own && "justify-end")}
-                    >
-                      <span className="text-[11px] font-medium">
+                  <div className={cn("min-w-0 max-w-[92%] sm:max-w-[88%]", own && "text-right")}>
+                    {startsGroup && (
+                      <p className="mb-1.5 px-1.5 text-xs leading-5 text-muted-foreground">
                         {own ? "You" : message.senderName}
-                      </span>
-                      <time
-                        className="text-[10px] text-muted-foreground"
-                        dateTime={new Date(message.createdAt).toISOString()}
-                      >
-                        {new Intl.DateTimeFormat(undefined, {
-                          hour: "numeric",
-                          minute: "2-digit",
-                        }).format(message.createdAt)}
-                      </time>
-                    </div>
+                      </p>
+                    )}
                     <div
+                      data-message-id={message.id}
+                      style={
+                        sendMotion?.current?.messageId === message.id && !sendMotion.current.ready
+                          ? { opacity: 0 }
+                          : undefined
+                      }
                       className={cn(
-                        "rounded-[20px] px-4 py-3 text-left text-sm leading-relaxed break-words",
+                        "rounded-[22px] px-4 py-2.5 text-left text-sm leading-relaxed break-words",
                         own
-                          ? "rounded-br-md bg-blue-500 text-white whitespace-pre-wrap"
-                          : "rounded-bl-md bg-muted/80 text-foreground",
+                          ? "bg-foreground text-background whitespace-pre-wrap"
+                          : "bg-foreground/5 text-foreground",
                         message.status === "cancelled" && "opacity-50",
                       )}
                     >
@@ -224,72 +256,76 @@ export function ConversationMessages({
                         </Suspense>
                       )}
                     </div>
-                    <div
-                      className={cn(
-                        "mt-1 flex min-h-3 items-center gap-2 px-1 text-[10px] text-muted-foreground",
-                        own && "justify-end",
-                      )}
-                    >
-                      {own &&
-                        message.seenAt !== undefined &&
-                        !["working", "sent"].includes(message.status) &&
-                        "Seen · "}
-                      {message.status === "queued" ? (
-                        <>
-                          Queued{" "}
-                          <button
-                            type="button"
-                            className="hover:text-foreground hover:underline"
-                            onClick={() => {
-                              void state
-                                .request("aiOrchestrators:cancelMessage", {
-                                  chatId: chat.id,
-                                  messageId: message.id,
-                                })
-                                .catch((cause) => state.setError(errorMessage(cause)));
-                            }}
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      ) : message.status === "working" ? (
-                        own ? (
-                          "Seen"
-                        ) : (
-                          "Coordinating…"
-                        )
-                      ) : message.status === "failed" ? (
-                        <>
-                          Could not complete this request{" "}
-                          {own && (
+                    {(endsGroup || message.status !== "sent") && (
+                      <div
+                        className={cn(
+                          "mt-1.5 flex min-h-4 flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[10px] text-muted-foreground",
+                          own && "justify-end",
+                        )}
+                      >
+                        <time
+                          dateTime={new Date(message.createdAt).toISOString()}
+                          title={new Date(message.createdAt).toLocaleString()}
+                        >
+                          {conversationMessageTime.format(message.createdAt)}
+                        </time>
+                        {message.status === "queued" ? (
+                          <>
+                            Queued{" "}
                             <button
                               type="button"
                               className="hover:text-foreground hover:underline"
                               onClick={() => {
                                 void state
-                                  .request("aiOrchestrators:retryMessage", {
+                                  .request("aiOrchestrators:cancelMessage", {
                                     chatId: chat.id,
                                     messageId: message.id,
                                   })
                                   .catch((cause) => state.setError(errorMessage(cause)));
                               }}
                             >
-                              Retry
+                              Cancel
                             </button>
-                          )}
-                        </>
-                      ) : message.status === "cancelled" ? (
-                        "Cancelled"
-                      ) : own ? (
-                        message.seenAt !== undefined ? (
-                          "Seen"
+                          </>
+                        ) : message.status === "working" ? (
+                          own ? (
+                            "Seen"
+                          ) : (
+                            "Coordinating…"
+                          )
+                        ) : message.status === "failed" ? (
+                          <>
+                            Could not complete this request{" "}
+                            {own && (
+                              <button
+                                type="button"
+                                className="hover:text-foreground hover:underline"
+                                onClick={() => {
+                                  void state
+                                    .request("aiOrchestrators:retryMessage", {
+                                      chatId: chat.id,
+                                      messageId: message.id,
+                                    })
+                                    .catch((cause) => state.setError(errorMessage(cause)));
+                                }}
+                              >
+                                Retry
+                              </button>
+                            )}
+                          </>
+                        ) : message.status === "cancelled" ? (
+                          "Cancelled"
+                        ) : own ? (
+                          message.seenAt !== undefined ? (
+                            "Seen"
+                          ) : (
+                            "Delivered"
+                          )
                         ) : (
-                          "Delivered"
-                        )
-                      ) : (
-                        ""
-                      )}
-                    </div>
+                          ""
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

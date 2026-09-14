@@ -255,7 +255,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")((
   const investigate: TextGeneration.TextGeneration["Service"]["investigate"] = Effect.fn(
     "CursorTextGeneration.investigate",
   )(function* (input) {
-    if (input.contentOnly) {
+    if (input.contentOnly || input.webSearchOnly) {
       return yield* new TextGenerationError({
         operation: "investigate",
         detail:

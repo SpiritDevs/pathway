@@ -13,6 +13,12 @@ _Avoid_: Thread as a synonym for the orchestrator's identity
 **Personal orchestrator**:
 A user's private assistant spanning their accessible companies, projects, and environments.
 
+**Orchestrator avatar**:
+The visual representation of an orchestrator's shared identity, configured by its owner or authorized managers and consistent across viewers. The [animated avatar design](../adr/0038-orchestrator-avatars.md) includes configurable appearance, work status, conversational expression, and silent click reactions. Viewer accessibility preferences can adapt presentation without changing the identity.
+
+**Orchestrator personality**:
+The orchestrator's shared settings for warmth, playfulness, energy, curiosity, and expressiveness. In the avatar design, these jointly shape conversational tone and avatar expression by default; advanced controls allow separate tuning for replies and animation.
+
 **Project orchestrator**:
 An orchestrator responsible for coordinating a project's work, which can be explicitly shared with other users. Its standing scope is its own project; participation in cross-project collaboration requires being brought into that collaboration.
 

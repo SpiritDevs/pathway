@@ -631,6 +631,11 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
   const investigate: TextGeneration.TextGeneration["Service"]["investigate"] = Effect.fn(
     "OpenCodeTextGeneration.investigate",
   )(function* (input) {
+    if (input.webSearchOnly)
+      return yield* new TextGenerationError({
+        operation: "investigate",
+        detail: "Public web search requires a Codex or Claude coordinator provider.",
+      });
     const text = yield* runOpenCodeText({
       operation: "investigate",
       cwd: input.cwd,

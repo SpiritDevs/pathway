@@ -1,3 +1,4 @@
+import { queueOrchestratorSignal } from "./aiOrchestratorRouting.ts";
 // @effect-diagnostics globalDate:off -- Presence transitions use the cloud transaction clock.
 import type { Doc } from "../_generated/dataModel.js";
 import type { MutationCtx, QueryCtx } from "../_generated/server.js";
@@ -5,8 +6,6 @@ import {
   orchestratorOwnerScope,
   eligibleOrchestratorEnvironment,
 } from "./aiOrchestratorAuthority.ts";
-import { appendChatMessage } from "../aiOrchestrators.ts";
-import { mintDomainId } from "./domainIds.ts";
 
 export async function readableOrchestratorEnvironment(
   ctx: QueryCtx,
@@ -79,6 +78,7 @@ export async function notifyOrchestratorEnvironmentChange(
         .first()
     : null;
   if (chief) ids.add(chief.id);
+  const candidates = [];
   for (const id of ids) {
     const contact = await ctx.db
       .query("aiOrchestrators")
@@ -106,44 +106,13 @@ export async function notifyOrchestratorEnvironmentChange(
       ))
     )
       continue;
-    const queued = await ctx.db
-      .query("aiOrchestratorJobs")
-      .withIndex("by_orchestrator_status", (q) =>
-        q.eq("orchestratorId", contact.id).eq("status", "queued"),
-      )
-      .take(100);
-    if (
-      queued.some(
-        (job) => job.environmentSignalId === registration.environmentId && job.chatId === chat.id,
-      )
-    )
-      continue;
-    const now = Date.now(),
-      messageId = mintDomainId(now);
-    await appendChatMessage(ctx, chat, {
-      id: messageId,
-      senderKind: "system",
-      senderId: "environment-presence",
-      senderName: "Pathway",
-      text: "Environment availability changed. Review its current state and affected assignments. Redirect only provably unaccepted work. Accepted work may still be running offline; do not duplicate it. Report what needs the user's attention.",
-      status: "queued",
-      replyToId: null,
-    });
-    await ctx.db.insert("aiOrchestratorJobs", {
-      id: mintDomainId(now),
-      orchestratorId: contact.id,
-      chatId: chat.id,
-      messageId,
-      environmentSignalId: registration.environmentId,
-      companyId: company.id,
-      status: "queued",
-      environmentId: null,
-      generation: 0,
-      leaseExpiresAt: 0,
-      modelIndex: 0,
-      error: "",
-      createdAt: now,
-      updatedAt: now,
-    });
+    candidates.push({ contact, chat });
   }
+  await queueOrchestratorSignal(ctx, candidates, {
+    key: `environment:${company.id}:${registration.environmentId}:${registration.orchestratorPresence}:${registration.lastSeenAt}`,
+    companyId: company.id,
+    environmentSignalId: registration.environmentId,
+    topic: `Environment ${registration.environmentId} is ${registration.orchestratorPresence}.`,
+    text: "Environment availability changed. You are the selected responder. Review affected assignments; accepted work may still be running offline. Never duplicate accepted work. Report only what needs attention and has not already been reported.",
+  });
 }

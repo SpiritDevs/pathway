@@ -1,8 +1,16 @@
 import { ChatImageAttachment, ChatFileAttachment } from "./chatAttachment.ts";
 /** Persistent AI contacts, cloud conversations, and coordinator configuration. */
+import {
+  AvatarExpression,
+  DEFAULT_AVATAR,
+  DEFAULT_PERSONALITY,
+  OrchestratorAvatarConfig,
+  OrchestratorPersonality,
+} from "./orchestratorAvatar.ts";
 import * as Schema from "effect/Schema";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { OrchestratorInspection } from "./orchestratorInspection.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderOptionSelection, ProviderOptionDescriptor } from "./model.ts";
@@ -97,6 +105,8 @@ export const OrchestratorConfig = Schema.Struct({
   workerModels: Schema.optionalKey(
     Schema.Array(OrchestratorWorkerModel).check(Schema.isMaxLength(12)),
   ),
+  avatar: Schema.optionalKey(OrchestratorAvatarConfig),
+  personality: Schema.optionalKey(OrchestratorPersonality),
   name: Schema.String,
   color: Schema.String,
   persona: Schema.String,
@@ -157,6 +167,8 @@ export const OrchestratorChat = Schema.Struct({
   archived: Schema.Boolean,
   lastSequence: Schema.Number,
   readSequence: Schema.Number,
+  unreadCount: Schema.optionalKey(Schema.Number),
+  lastMessageAt: Schema.optionalKey(Schema.Number),
   lastMessage: Schema.String,
   notification: Schema.optional(OrchestratorNotification),
   updatedAt: Schema.Number,
@@ -164,6 +176,7 @@ export const OrchestratorChat = Schema.Struct({
 });
 export type OrchestratorChat = typeof OrchestratorChat.Type;
 export const OrchestratorWorkItem = Schema.Struct({
+  updatedAt: Schema.optionalKey(Schema.Number),
   id: Schema.String,
   createdAt: Schema.optionalKey(Schema.Number),
   title: Schema.String,
@@ -181,6 +194,7 @@ export const OrchestratorAttachment = Schema.Union([ChatImageAttachment, ChatFil
 export type OrchestratorAttachment = typeof OrchestratorAttachment.Type;
 
 export const OrchestratorMessage = Schema.Struct({
+  expression: Schema.optionalKey(AvatarExpression),
   id: Schema.String,
   chatId: Schema.String,
   sequence: Schema.Number,
@@ -221,7 +235,8 @@ export const OrchestratorMemory = Schema.Struct({
 export type OrchestratorMemory = typeof OrchestratorMemory.Type;
 
 export const DEFAULT_ORCHESTRATOR_INSTRUCTIONS = `You are a Pathway orchestrator: a personal assistant and project coordinator.
-Coordinate work; delegate implementation to agent threads and their subagents. Do not write code or directly modify files, Git repositories, or run shell commands.
+Read relevant threads and project files and search the web yourself using inspection actions before delegating. Handle basic checks directly; delegate implementation, changes and substantial or long-running research to agent threads and their subagents. Do not directly modify files or Git repositories or run shell commands.
+Continue existing work in its original thread. Require a complete factual handoff with findings, changes, references, verification and remaining work from every worker.
 Understand the user's intent, plan useful next steps, and act autonomously within your assigned responsibilities, capabilities, and allowance limits.
 Track delegated work through completion. Resolve dependencies, ask other project orchestrators for relevant context, and consolidate useful updates for the user.
 Keep each project's dispatch under its coordinator. Cross-project collaboration shares authorized context, not unlimited authority.
@@ -235,6 +250,8 @@ export function defaultOrchestratorConfig(name = "Chief"): OrchestratorConfig {
   return {
     name,
     color: "violet",
+    avatar: DEFAULT_AVATAR,
+    personality: { shared: DEFAULT_PERSONALITY },
     persona: "A thoughtful, capable colleague. Be warm, direct, and concise.",
     instructions: DEFAULT_ORCHESTRATOR_INSTRUCTIONS,
     responsibilities:
@@ -270,6 +287,21 @@ const WorkerActionSelection = Schema.Struct({
   options: Schema.optionalKey(Schema.Array(ProviderOptionSelection)),
 });
 export const OrchestratorAction = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("inspect"),
+    companyId: Schema.String,
+    environmentId: Schema.String,
+    projectId: Schema.NullOr(Schema.String),
+    request: OrchestratorInspection,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("continueThread"),
+    companyId: Schema.String,
+    environmentId: Schema.String,
+    threadId: Schema.String,
+    title: Schema.String,
+    prompt: Schema.String,
+  }),
   Schema.Struct({ kind: Schema.Literal("readWork"), workId: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("stopWork"), workId: Schema.String }),
   Schema.Struct({
@@ -312,6 +344,8 @@ export const OrchestratorAction = Schema.Union([
 ]);
 export type OrchestratorAction = typeof OrchestratorAction.Type;
 export const OrchestratorDecision = Schema.Struct({
+  routeTo: Schema.optionalKey(Schema.String),
+  expression: Schema.optionalKey(Schema.Unknown),
   message: Schema.String,
   attention: Schema.optional(Schema.Literals(["none", "routine", "urgent"])),
   actions: Schema.Array(OrchestratorAction),
@@ -320,6 +354,16 @@ export const OrchestratorDecision = Schema.Struct({
 export type OrchestratorDecision = typeof OrchestratorDecision.Type;
 export const OrchestratorRun = Schema.Struct({
   attachments: Schema.optionalKey(Schema.Array(OrchestratorAttachment)),
+  environmentId: Schema.optionalKey(Schema.String),
+  routing: Schema.optionalKey(
+    Schema.Struct({
+      topic: Schema.String,
+      candidates: Schema.Array(
+        Schema.Struct({ id: Schema.String, name: Schema.String, responsibilities: Schema.String }),
+      ),
+    }),
+  ),
+  personality: Schema.optionalKey(OrchestratorPersonality),
   hostResources: Schema.optionalKey(HostResourcesSnapshot),
   id: Schema.String,
   generation: Schema.Number,
@@ -332,6 +376,7 @@ export const OrchestratorRun = Schema.Struct({
 export type OrchestratorRun = typeof OrchestratorRun.Type;
 
 export const OrchestratorPendingWorkResult = Schema.Struct({
+  messageId: Schema.optionalKey(Schema.String),
   readRequestId: Schema.optionalKey(Schema.String),
   runId: Schema.optionalKey(Schema.String),
   workId: Schema.String,
@@ -339,6 +384,8 @@ export const OrchestratorPendingWorkResult = Schema.Struct({
 });
 export type OrchestratorPendingWorkResult = typeof OrchestratorPendingWorkResult.Type;
 export const OrchestratorWorkResult = Schema.Struct({
+  messageId: Schema.optionalKey(Schema.String),
+  status: Schema.optionalKey(Schema.Literals(["completed", "failed", "cancelled"])),
   readRequestId: Schema.optionalKey(Schema.String),
   workId: Schema.String,
   threadId: Schema.String,

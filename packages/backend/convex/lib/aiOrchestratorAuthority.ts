@@ -2,6 +2,7 @@ import type { Doc } from "../_generated/dataModel.js";
 import type { QueryCtx } from "../_generated/server.js";
 import { membershipAuthorization } from "./identity.ts";
 import { hasCompanyPermission, hasRecordPermission } from "../../src/permissions.ts";
+import { orchestratorReadTarget } from "./aiOrchestratorTargets.ts";
 
 /** Action grants belong to the orchestrator; the directing human does not lend its own grants. */
 export async function orchestratorOwnerScope(
@@ -93,7 +94,10 @@ export async function orchestratorCommandAllowed(
   const company = await ctx.db.get(command.companyId);
   if (!orchestrator || !company || orchestrator.status === "deleted") return false;
   // A finished root can still have detached children. Resuming the contact never renews stopped assignments.
-  if (command.kind === "startThread" && command.createdAt <= (orchestrator.workStoppedBefore ?? -1))
+  if (
+    ["startThread", "sendMessage"].includes(command.kind) &&
+    command.createdAt <= (orchestrator.workStoppedBefore ?? -1)
+  )
     return false;
   const capability =
     command.kind === "startThread"
@@ -129,6 +133,40 @@ export async function orchestratorCommandAllowed(
     )
       return false;
   }
+  if (command.kind === "sendMessage") {
+    const work = await ctx.db
+      .query("aiOrchestratorWork")
+      .withIndex("by_command", (q) => q.eq("commandId", command.id))
+      .unique();
+    const chat = work
+      ? await ctx.db
+          .query("aiOrchestratorChats")
+          .withIndex("by_domain_id", (q) => q.eq("id", work.chatId))
+          .unique()
+      : null;
+    if (
+      !work?.continuation ||
+      !work.threadId ||
+      work.stopRequested ||
+      !chat ||
+      !orchestrator.capabilities.includes("threads.read")
+    )
+      return false;
+    try {
+      const target = await orchestratorReadTarget(ctx, orchestrator, chat, {
+        companyId: company.id,
+        environmentId: work.environmentId,
+        threadId: work.threadId,
+      });
+      if (
+        target.shell?.orchestratorOrigin &&
+        target.shell.orchestratorOrigin.orchestratorId !== orchestrator.id
+      )
+        return false;
+    } catch {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -136,7 +174,11 @@ export async function orchestratorCommandPaused(
   ctx: QueryCtx,
   command: Doc<"environmentCommands">,
 ) {
-  if (!command.orchestratorId || command.kind !== "startThread" || command.state !== "pending")
+  if (
+    !command.orchestratorId ||
+    !["startThread", "sendMessage"].includes(command.kind) ||
+    command.state !== "pending"
+  )
     return false;
   const orchestrator = await ctx.db
     .query("aiOrchestrators")

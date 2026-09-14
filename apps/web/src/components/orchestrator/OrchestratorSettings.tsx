@@ -1,3 +1,5 @@
+import { AvatarSettings } from "./AvatarSettings";
+import { DEFAULT_AVATAR, DEFAULT_PERSONALITY } from "@spiritdevs/contracts/orchestratorAvatar";
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
@@ -40,7 +42,7 @@ import {
 } from "../ui/dialog";
 import { SettingsPageContainer } from "../settings/settingsLayout";
 import { useOrchestrators, useOrchestratorQuery } from "./OrchestratorContext";
-import { OrchestratorAvatar, ORCHESTRATOR_COLORS } from "./OrchestratorAvatar";
+import { OrchestratorAvatar } from "./OrchestratorAvatar";
 import { OrchestratorWorkerModels } from "./OrchestratorWorkerModels";
 import { OrchestratorModels } from "./OrchestratorModels";
 
@@ -142,6 +144,14 @@ function NewOrchestratorDialog({ open, onClose }: { open: boolean; onClose: () =
   const state = useOrchestrators();
   const companies = useAtomValue(companyListAtom);
   const [name, setName] = useState("");
+  const [identity, setIdentity] = useState(
+    () =>
+      ({
+        ...defaultOrchestratorConfig(),
+        avatar: DEFAULT_AVATAR,
+        personality: { shared: DEFAULT_PERSONALITY },
+      }) as OrchestratorConfig,
+  );
   const [kind, setKind] = useState<OrchestratorConfig["kind"]>("custom");
   const [companyId, setCompanyId] = useState(state.companyId ?? "");
   const [projectId, setProjectId] = useState("");
@@ -163,7 +173,7 @@ function NewOrchestratorDialog({ open, onClose }: { open: boolean; onClose: () =
         if (!value) onClose();
       }}
     >
-      <DialogPopup>
+      <DialogPopup className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Create an orchestrator</DialogTitle>
           <DialogDescription>
@@ -178,7 +188,8 @@ function NewOrchestratorDialog({ open, onClose }: { open: boolean; onClose: () =
             void state
               .request("aiOrchestrators:create", {
                 config: orchestratorConfigValue({
-                  ...defaultOrchestratorConfig(name.trim()),
+                  ...identity,
+                  name: name.trim(),
                   kind,
                   companyId: companyId || null,
                   projectId: kind === "project" ? projectId : null,
@@ -188,6 +199,11 @@ function NewOrchestratorDialog({ open, onClose }: { open: boolean; onClose: () =
                 if (typeof id === "string") state.selectSettings(id);
                 onClose();
                 setName("");
+                setIdentity({
+                  ...defaultOrchestratorConfig(),
+                  avatar: DEFAULT_AVATAR,
+                  personality: { shared: DEFAULT_PERSONALITY },
+                });
               })
               .catch((cause) => setError(errorMessage(cause)))
               .finally(() => setSaving(false));
@@ -203,6 +219,10 @@ function NewOrchestratorDialog({ open, onClose }: { open: boolean; onClose: () =
                 maxLength={100}
               />
             </Field>
+            <AvatarSettings
+              config={{ ...identity, name }}
+              onChange={(patch) => setIdentity((current) => ({ ...current, ...patch }))}
+            />
             <Field label="Role">
               <select
                 className={inputClass}
@@ -547,22 +567,7 @@ function SettingsEditor({
               maxLength={100}
             />
           </Field>
-          <Field label="Avatar color">
-            <span className="flex gap-3">
-              {Object.entries(ORCHESTRATOR_COLORS).map(([name, className]) => (
-                <button
-                  type="button"
-                  key={name}
-                  aria-label={`${name} avatar`}
-                  aria-pressed={config.color === name}
-                  onClick={() => patch({ color: name })}
-                  className={`${className} flex size-8 items-center justify-center rounded-full text-white ring-offset-background focus-visible:ring-2 ${config.color === name ? "ring-2 ring-ring ring-offset-2" : ""}`}
-                >
-                  {config.color === name && <CheckIcon className="size-4" />}
-                </button>
-              ))}
-            </span>
-          </Field>
+          <AvatarSettings config={config} onChange={patch} />
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-xl border p-4">
               <p className="text-xs text-muted-foreground">Primary model</p>

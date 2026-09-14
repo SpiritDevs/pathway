@@ -1,3 +1,4 @@
+import { OrchestratorAvatar } from "../orchestrator/OrchestratorAvatar";
 import {
   DndContext,
   PointerSensor,
@@ -200,6 +201,7 @@ type NavigationRailButtonProps = {
   active?: boolean;
   expanded: boolean;
   icon: LucideIcon;
+  avatar?: React.ReactNode;
   label: string;
   reorderable?: boolean;
   /** Unread work behind this destination; zero renders nothing. */
@@ -209,6 +211,7 @@ type NavigationRailButtonProps = {
 };
 
 type MobileNavigationItem = {
+  avatar?: React.ReactNode;
   destination: PrimaryNavigationDestination;
   icon: LucideIcon;
   label: string;
@@ -227,6 +230,7 @@ function NavigationRailButton({
   active = false,
   expanded,
   icon: Icon,
+  avatar,
   label,
   reorderable = false,
   badgeCount = 0,
@@ -255,7 +259,7 @@ function NavigationRailButton({
             style={{ width: expanded ? "100%" : "2.25rem" }}
             variant="ghost"
           >
-            <Icon className="size-5" />
+            {avatar ?? <Icon className="size-5" />}
             {expanded ? (
               <span className="min-w-0 flex-1 truncate text-left text-sm">{label}</span>
             ) : null}
@@ -420,40 +424,42 @@ export function MobileNavigationToolbar({
         )}
       >
         <div className="flex min-w-0 max-w-full items-center justify-[safe_center] gap-0.5 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {items.map(({ destination, icon: Icon, label, badgeCount = 0, onNavigate }, index) => (
-            <div key={destination} className="contents">
-              {items.length > PRIMARY_NAVIGATION_FIXED_BOTTOM_ITEM_COUNT &&
-              index === items.length - PRIMARY_NAVIGATION_FIXED_BOTTOM_ITEM_COUNT ? (
-                <span aria-hidden="true" className="mx-1 h-6 w-px shrink-0 bg-border/80" />
-              ) : null}
-              <Button
-                type="button"
-                aria-current={activeDestination === destination ? "page" : undefined}
-                aria-label={badgeCount > 0 ? `${label}, ${badgeCount} unread` : label}
-                title={label}
-                data-mobile-navigation-item=""
-                className={cn(
-                  "relative size-11! shrink-0 rounded-full [-webkit-app-region:no-drag] [--control-icon-color:var(--muted-foreground)] hover:[--control-icon-color:var(--foreground)]",
-                  activeDestination === destination &&
-                    "bg-accent text-accent-foreground [--control-icon-color:var(--accent-foreground)]",
-                )}
-                onClick={() => {
-                  collapse();
-                  onNavigate();
-                }}
-                size="icon-lg"
-                tabIndex={expanded ? 0 : -1}
-                variant="ghost"
-              >
-                <Icon className="size-5" />
-                {badgeCount > 0 ? (
-                  <span className="absolute top-1.5 right-1.5 min-w-3.5 rounded-full bg-primary px-1 text-[9px] leading-[0.875rem] font-semibold text-primary-foreground tabular-nums">
-                    {formatNavigationBadgeCount(badgeCount)}
-                  </span>
+          {items.map(
+            ({ destination, icon: Icon, avatar, label, badgeCount = 0, onNavigate }, index) => (
+              <div key={destination} className="contents">
+                {items.length > PRIMARY_NAVIGATION_FIXED_BOTTOM_ITEM_COUNT &&
+                index === items.length - PRIMARY_NAVIGATION_FIXED_BOTTOM_ITEM_COUNT ? (
+                  <span aria-hidden="true" className="mx-1 h-6 w-px shrink-0 bg-border/80" />
                 ) : null}
-              </Button>
-            </div>
-          ))}
+                <Button
+                  type="button"
+                  aria-current={activeDestination === destination ? "page" : undefined}
+                  aria-label={badgeCount > 0 ? `${label}, ${badgeCount} unread` : label}
+                  title={label}
+                  data-mobile-navigation-item=""
+                  className={cn(
+                    "relative size-11! shrink-0 rounded-full [-webkit-app-region:no-drag] [--control-icon-color:var(--muted-foreground)] hover:[--control-icon-color:var(--foreground)]",
+                    activeDestination === destination &&
+                      "bg-accent text-accent-foreground [--control-icon-color:var(--accent-foreground)]",
+                  )}
+                  onClick={() => {
+                    collapse();
+                    onNavigate();
+                  }}
+                  size="icon-lg"
+                  tabIndex={expanded ? 0 : -1}
+                  variant="ghost"
+                >
+                  {avatar ?? <Icon className="size-5" />}
+                  {badgeCount > 0 ? (
+                    <span className="absolute top-1.5 right-1.5 min-w-3.5 rounded-full bg-primary px-1 text-[9px] leading-[0.875rem] font-semibold text-primary-foreground tabular-nums">
+                      {formatNavigationBadgeCount(badgeCount)}
+                    </span>
+                  ) : null}
+                </Button>
+              </div>
+            ),
+          )}
         </div>
       </nav>
     </div>
@@ -620,6 +626,13 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
       orchestrator: {
         destination: "orchestrator",
         icon: BotIcon,
+        avatar: (
+          <OrchestratorAvatar
+            contact={orchestrators.personalAvatar}
+            className="size-7"
+            idle="frequent"
+          />
+        ),
         label: "Orchestrator AI",
         badgeCount: orchestrators.unreadCount,
         onNavigate: navigateToOrchestrator,
@@ -634,6 +647,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
     [
       emailUnreadCount,
       orchestrators.unreadCount,
+      orchestrators.personalAvatar,
       navigateToCalendar,
       navigateToContacts,
       navigateToDashboard,
@@ -799,6 +813,15 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
                 badgeCount={badgeCount ?? 0}
                 expanded={expanded}
                 icon={icon}
+                avatar={
+                  destination === "orchestrator" ? (
+                    <OrchestratorAvatar
+                      contact={orchestrators.personalAvatar}
+                      className="size-7"
+                      idle="frequent"
+                    />
+                  ) : undefined
+                }
                 label={label}
                 onClick={onNavigate}
               />

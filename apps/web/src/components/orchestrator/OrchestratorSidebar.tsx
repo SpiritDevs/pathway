@@ -1,20 +1,36 @@
-import { useState } from "react";
-import { ArchiveIcon, PlusIcon, SearchIcon, SquarePenIcon } from "lucide-react";
+import { useState, useEffect, type RefObject } from "react";
+import {
+  ArchiveIcon,
+  PlusIcon,
+  SearchIcon,
+  SquarePenIcon,
+  PanelLeftIcon,
+  XIcon,
+} from "lucide-react";
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
 import { Button } from "../ui/button";
 import { useOrchestrators } from "./OrchestratorContext";
 import { ConversationAvatar, OrchestratorAvatar } from "./OrchestratorAvatar";
+import { Dialog } from "@base-ui/react/dialog";
+import {
+  unreadMessageTotal,
+  unreadLabel,
+  conversationTime,
+  conversationPanelLayout,
+} from "./conversationList";
 import { cn } from "../../lib/utils";
 
 export function ConversationList({ onSelect }: { onSelect?: () => void }) {
   const state = useOrchestrators();
   const [search, setSearch] = useState("");
   const [archived, setArchived] = useState(false);
-  const chats = state.chats.filter(
-    (chat) =>
-      chat.archived === archived &&
-      (chat.title + " " + chat.lastMessage).toLowerCase().includes(search.toLowerCase()),
-  );
+  const chats = state.chats
+    .toSorted((a, b) => (b.lastMessageAt ?? b.updatedAt) - (a.lastMessageAt ?? a.updatedAt))
+    .filter(
+      (chat) =>
+        chat.archived === archived &&
+        (chat.title + " " + chat.lastMessage).toLowerCase().includes(search.toLowerCase()),
+    );
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="px-3 pb-3">
@@ -45,8 +61,8 @@ export function ConversationList({ onSelect }: { onSelect?: () => void }) {
             )}
           >
             <ConversationAvatar
-              contacts={state.contacts.filter((contact) =>
-                chat.orchestratorIds.includes(contact.id),
+              contacts={state.avatarContacts.filter((contact) =>
+                chat.orchestratorIds.includes(contact.id ?? ""),
               )}
             />
             <span className="min-w-0 flex-1">
@@ -54,23 +70,29 @@ export function ConversationList({ onSelect }: { onSelect?: () => void }) {
                 <span className="truncate text-sm font-semibold">{chat.title}</span>
                 <time
                   className="ml-auto shrink-0 text-[10px] text-muted-foreground"
-                  dateTime={new Date(chat.updatedAt).toISOString()}
+                  dateTime={new Date(chat.lastMessageAt ?? chat.updatedAt).toISOString()}
+                  title={new Date(chat.lastMessageAt ?? chat.updatedAt).toLocaleString()}
                 >
-                  {new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
-                    chat.updatedAt,
-                  )}
+                  {conversationTime(chat.lastMessageAt ?? chat.updatedAt)}
                 </time>
               </span>
               <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
                 {chat.lastMessage || "Start a conversation"}
               </span>
             </span>
-            {chat.lastSequence > chat.readSequence && (
+            {(chat.unreadCount ?? 0) > 0 ? (
+              <span
+                className="inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground"
+                aria-label={`${unreadLabel(chat.unreadCount!)} unread messages`}
+              >
+                {unreadLabel(chat.unreadCount!)}
+              </span>
+            ) : chat.lastSequence > chat.readSequence ? (
               <span
                 className="size-2 shrink-0 rounded-full bg-blue-500"
                 aria-label="Unread messages"
               />
-            )}
+            ) : null}
           </button>
         ))}
         {state.loading && (
@@ -156,5 +178,118 @@ export function OrchestratorSidebar() {
       </div>
       <ConversationList />
     </>
+  );
+}
+
+export function FloatingConversationSwitcher({
+  anchor,
+}: {
+  anchor: RefObject<HTMLDivElement | null>;
+}) {
+  const state = useOrchestrators();
+  const [open, setOpen] = useState(false);
+  const [present, setPresent] = useState(false);
+  const unread = unreadMessageTotal(state.chats);
+  const [layout, setLayout] = useState<ReturnType<typeof conversationPanelLayout> | null>(null);
+  useEffect(() => {
+    const element = anchor.current?.closest("[data-floating-companion]") ?? anchor.current;
+    if (!element) return;
+    const measure = () => setLayout(conversationPanelLayout(element.getBoundingClientRect()));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [anchor]);
+  useEffect(() => {
+    if (open) setPresent(true);
+  }, [open]);
+  const docked = layout?.docked ?? false;
+
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen} onOpenChangeComplete={setPresent} modal={false}>
+      <span hidden data-companion-panel={docked && (open || present) ? "left" : undefined} />
+      <Dialog.Trigger
+        render={<Button variant="ghost" size="sm" />}
+        className="shrink-0 gap-1.5 px-2"
+        aria-label={`Conversations${unread ? `, ${unreadLabel(unread)} unread messages` : ""}`}
+      >
+        <PanelLeftIcon className="size-4" />
+        {unread > 0 && (
+          <span
+            className="rounded-full bg-primary px-1.5 text-[10px] leading-5 font-semibold tabular-nums text-primary-foreground"
+            aria-hidden="true"
+          >
+            {unreadLabel(unread)}
+          </span>
+        )}
+      </Dialog.Trigger>
+      <Dialog.Portal>
+        <Dialog.Viewport
+          className={cn(
+            "companion-drawer-viewport pointer-events-none fixed z-[130]",
+            !docked && "rounded-[26px]",
+          )}
+          style={
+            layout
+              ? {
+                  left: layout.left,
+                  top: layout.top,
+                  width: layout.width,
+                  height: layout.height,
+                  right: "auto",
+                  bottom: "auto",
+                }
+              : { visibility: "hidden" }
+          }
+        >
+          {!docked && (
+            <Dialog.Backdrop
+              onClick={() => setOpen(false)}
+              className="pointer-events-auto absolute inset-0 bg-black/40 transition-opacity duration-200 data-starting-style:opacity-0 data-ending-style:opacity-0 motion-reduce:transition-none"
+            />
+          )}
+          <Dialog.Popup
+            aria-label="Conversations"
+            data-side="left"
+            data-docked={docked}
+            style={{ width: layout?.panelWidth }}
+            className={cn(
+              "companion-drawer pointer-events-auto relative flex h-full min-h-0 flex-col border bg-popover text-popover-foreground outline-none",
+              docked ? "w-full rounded-l-[26px] border-r-0" : "rounded-l-[26px] shadow-xl",
+            )}
+          >
+            <div className="flex h-14 shrink-0 items-center justify-between border-b px-4">
+              <Dialog.Title className="text-sm font-semibold">Conversations</Dialog.Title>
+              <div className="flex gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="New conversation"
+                  onClick={() => {
+                    setOpen(false);
+                    state.setNewChatOpen(true);
+                  }}
+                >
+                  <SquarePenIcon className="size-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Close conversations"
+                  onClick={() => setOpen(false)}
+                >
+                  <XIcon className="size-4" />
+                </Button>
+              </div>
+            </div>
+            <ConversationList onSelect={() => setOpen(false)} />
+          </Dialog.Popup>
+        </Dialog.Viewport>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

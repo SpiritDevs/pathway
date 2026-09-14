@@ -1,5 +1,6 @@
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
+import { DEFAULT_PERSONALITY } from "@spiritdevs/contracts/orchestratorAvatar";
 import { describe, expect, it } from "@effect/vitest";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { CompanyId } from "@spiritdevs/contracts/company";
@@ -17,6 +18,7 @@ import {
   makeOrchestratorBackend,
   OrchestratorError,
   collectOrchestratorResults,
+  routingDecision,
   type OrchestratorBackend,
 } from "./orchestrator.ts";
 const job = Schema.decodeUnknownSync(OrchestratorRun)({
@@ -45,6 +47,8 @@ function backend() {
     completions,
     failures,
     api: {
+      pendingInspections: Effect.succeed([]),
+      collectInspection: () => Effect.succeed(true),
       pendingResults: Effect.succeed([]),
       collectResult: () => Effect.succeed(true),
       claim: Effect.succeed(job),
@@ -65,6 +69,139 @@ function backend() {
 }
 
 describe("tool-free coordinator reasoning", () => {
+  it.effect("returns a failed worker's partial findings with its failure status", () =>
+    Effect.gen(function* () {
+      const captured: unknown[] = [];
+      const api = {
+        ...backend().api,
+        pendingResults: Effect.succeed([{ workId: "failed", threadId: "thread", runId: "run" }]),
+        collectResult: (value: unknown) =>
+          Effect.sync(() => {
+            captured.push(value);
+            return true;
+          }),
+      };
+      const projection = {
+        runs: [{ id: "run", status: "failed" }],
+        messages: [
+          {
+            runId: "run",
+            role: "assistant",
+            streaming: false,
+            text: "The build fails in parser.ts. No files changed.",
+          },
+        ],
+      } as unknown as OrchestrationV2ThreadProjection;
+      yield* collectOrchestratorResults(api, () => Effect.succeed(projection));
+      expect(captured).toEqual([
+        {
+          workId: "failed",
+          threadId: "thread",
+          runId: "run",
+          status: "failed",
+          text: "The build fails in parser.ts. No files changed.",
+        },
+      ]);
+    }),
+  );
+  it("selects exactly one candidate and uses a stable fallback for an invalid router answer", () => {
+    const routed = {
+      ...job,
+      routing: {
+        topic: "Thread finished",
+        candidates: [
+          { id: "project", name: "Project", responsibilities: "Project work" },
+          { id: "chief", name: "Chief", responsibilities: "Overview" },
+        ],
+      },
+    };
+    expect(routingDecision(routed, '{"orchestratorId":"chief"}').routeTo).toBe("chief");
+    expect(routingDecision(routed, '{"orchestratorId":"unknown"}').routeTo).toBe("project");
+    expect(routingDecision(routed, "bad JSON")).toMatchObject({
+      routeTo: "project",
+      message: "",
+      actions: [],
+    });
+  });
+  it.effect("waits for the follow-up's own run and returns its complete report", () =>
+    Effect.gen(function* () {
+      const captured: unknown[] = [];
+      const api = {
+        ...backend().api,
+        pendingResults: Effect.succeed([
+          { workId: "followup", threadId: "thread", messageId: "command:message" },
+        ]),
+        collectResult: (value: unknown) =>
+          Effect.sync(() => {
+            captured.push(value);
+            return true;
+          }),
+      };
+      const report =
+        "Verified changes and evidence. ".repeat(700) + "PR: https://example.test/pr/42";
+      const projection = {
+        runs: [
+          { id: "old", status: "completed" },
+          { id: "new", status: "running" },
+        ],
+        messages: [
+          {
+            id: "old-answer",
+            runId: "old",
+            role: "assistant",
+            streaming: false,
+            text: "Old result",
+          },
+          {
+            id: "command:message",
+            runId: "new",
+            role: "user",
+            streaming: false,
+            text: "Push the PR",
+          },
+          { id: "new-answer", runId: "new", role: "assistant", streaming: false, text: report },
+        ],
+      } as unknown as OrchestrationV2ThreadProjection;
+      yield* collectOrchestratorResults(api, () => Effect.succeed(projection));
+      expect(captured).toHaveLength(0);
+      yield* collectOrchestratorResults(api, () =>
+        Effect.succeed({
+          ...projection,
+          runs: projection.runs.map((run) => ({ ...run, status: "completed" as const })),
+        }),
+      );
+      expect(captured).toEqual([
+        {
+          workId: "followup",
+          threadId: "thread",
+          messageId: "command:message",
+          runId: "new",
+          status: "completed",
+          text: report,
+        },
+      ]);
+    }),
+  );
+  it("includes expression instructions and only configured reply personality", () => {
+    expect(orchestratorPrompt(job)).toContain('"expression"');
+    expect(orchestratorPrompt(job)).not.toContain("Conversational personality (0–100)");
+    const prompt = orchestratorPrompt({
+      ...job,
+      personality: { shared: DEFAULT_PERSONALITY, replies: { energy: 90 }, avatar: { energy: 5 } },
+    });
+    expect(prompt).toContain("Energy 90");
+    expect(prompt).not.toContain("Energy 5");
+    expect(prompt).toContain(job.persona);
+  });
+  it.effect("keeps decisions usable when expression metadata is unknown", () =>
+    Effect.gen(function* () {
+      const expressive = { ...result, expression: "curious" };
+      expect(yield* decodeOrchestratorDecision(encodeJson(expressive))).toEqual(expressive);
+      const unknown = { ...result, expression: "surprised" };
+      expect(yield* decodeOrchestratorDecision(encodeJson(unknown))).toEqual(unknown);
+    }),
+  );
+
   it.effect("accepts an explicit quiet background decision", () =>
     Effect.gen(function* () {
       const quiet = { ...result, message: "", attention: "none" };
@@ -364,7 +501,9 @@ describe("tool-free coordinator reasoning", () => {
         ),
       );
       expect(rejected._tag).toBe("Failure");
-      expect(orchestratorPrompt(job)).toContain("no coding, filesystem, Git, shell");
+      expect(orchestratorPrompt(job)).toContain(
+        "use inspect yourself; do not create a worker for these",
+      );
     }),
   );
   it.effect("only publishes a decision after renewing its claim", () =>

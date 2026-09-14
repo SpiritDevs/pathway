@@ -11,7 +11,28 @@ export const orchestratorAttachment = v.object({
   sizeBytes: v.number(),
 });
 
+const traitOverrides = {
+  warmth: v.optional(v.number()),
+  playfulness: v.optional(v.number()),
+  energy: v.optional(v.number()),
+  curiosity: v.optional(v.number()),
+  expressiveness: v.optional(v.number()),
+};
+const avatar = v.object({ shape: v.string(), eyes: v.string() });
+const personality = v.object({
+  shared: v.object({
+    warmth: v.number(),
+    playfulness: v.number(),
+    energy: v.number(),
+    curiosity: v.number(),
+    expressiveness: v.number(),
+  }),
+  replies: v.optional(v.object(traitOverrides)),
+  avatar: v.optional(v.object(traitOverrides)),
+});
 export const orchestratorConfig = {
+  avatar: v.optional(avatar),
+  personality: v.optional(personality),
   name: v.string(),
   color: v.string(),
   persona: v.string(),
@@ -59,6 +80,10 @@ export const orchestratorMemoryScope = v.union(
   v.literal("project"),
 );
 export const aiOrchestratorTables = {
+  aiOrchestratorSignalDeliveries: defineTable({
+    id: v.string(),
+    createdAt: v.number(),
+  }).index("by_domain_id", ["id"]),
   aiOrchestratorPush: defineTable({
     chatId: v.string(),
     subject: v.string(),
@@ -148,6 +173,7 @@ export const aiOrchestratorTables = {
     .index("by_expiry", ["expiresAt"]),
   aiOrchestratorMessages: defineTable({
     attachments: v.optional(v.array(orchestratorAttachment)),
+    expression: v.optional(v.string()),
     id: v.string(),
     chatId: v.string(),
     sequence: v.number(),
@@ -189,6 +215,10 @@ export const aiOrchestratorTables = {
     .index("by_owner_scope", ["ownerSubject", "scope"])
     .index("by_owner_scope_forgotten", ["ownerSubject", "scope", "forgotten", "updatedAt"]),
   aiOrchestratorJobs: defineTable({
+    routingCandidateIds: v.optional(v.array(v.string())),
+    routingTopic: v.optional(v.string()),
+    inspectionIds: v.optional(v.array(v.string())),
+    selection: v.optional(mailSelection),
     id: v.string(),
     orchestratorId: v.string(),
     chatId: v.string(),
@@ -231,6 +261,7 @@ export const aiOrchestratorTables = {
     .index("by_chat_status", ["chatId", "status"])
     .index("by_message", ["messageId"]),
   aiOrchestratorWork: defineTable({
+    continuation: v.optional(v.boolean()),
     id: v.string(),
     chatId: v.string(),
     orchestratorId: v.string(),
@@ -271,10 +302,24 @@ export const aiOrchestratorTables = {
     .index("by_company_environment_status", ["companyId", "environmentId", "status"])
     .index("by_chat", ["chatId"])
     .index("by_command", ["commandId"])
+    .index("by_thread", ["companyId", "environmentId", "threadId"])
     .index("by_company_status", ["companyId", "status"])
     .index("by_environment_read", ["companyId", "environmentId", "readRequested"])
     .index("by_environment_result", ["companyId", "environmentId", "resultCollected", "status"])
     .index("by_company_notification", ["companyId", "completionNotified", "status"])
     .index("by_orchestrator_notification", ["orchestratorId", "completionNotified", "status"])
     .index("by_orchestrator_status", ["orchestratorId", "status"]),
+  aiOrchestratorInspections: defineTable({
+    id: v.string(),
+    jobId: v.string(),
+    companyId: v.string(),
+    environmentId: v.string(),
+    projectId: v.union(v.string(), v.null()),
+    request: v.any(),
+    status: v.union(v.literal("pending"), v.literal("completed")),
+    text: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_domain_id", ["id"])
+    .index("by_environment_status", ["companyId", "environmentId", "status", "createdAt"]),
 };

@@ -3,7 +3,11 @@ import type {
   OrchestratorMessage,
   OrchestratorWorkItem,
 } from "@spiritdevs/contracts/aiOrchestrator";
-import { buildConversationTimeline } from "./conversationTimeline";
+import {
+  buildConversationTimeline,
+  conversationTimeMarker,
+  conversationMessageTime,
+} from "./conversationTimeline";
 
 const message = (id: string, sequence: number, createdAt: number): OrchestratorMessage => ({
   id,
@@ -71,4 +75,86 @@ describe("conversation timeline", () => {
     expect(ids([message("new", 1, 100)], [work("legacy")])).toEqual(["legacy", "new"]);
     expect(ids([], [work("only", 200)])).toEqual(["only"]);
   });
+});
+
+const presentation = (messages: OrchestratorMessage[], items: OrchestratorWorkItem[] = []) =>
+  buildConversationTimeline(messages, items).flatMap((entry) =>
+    entry.kind === "message"
+      ? [
+          {
+            id: entry.message.id,
+            start: entry.startsGroup,
+            end: entry.endsGroup,
+            marker: entry.timeMarker,
+          },
+        ]
+      : [],
+  );
+const morning = new Date(2026, 8, 15, 9).getTime();
+const minute = 60_000;
+
+describe("message groups", () => {
+  it("groups consecutive messages from one sender within five minutes", () => {
+    expect(
+      presentation([
+        message("first", 1, morning),
+        message("second", 2, morning + 5 * minute),
+        message("later", 3, morning + 11 * minute),
+      ]),
+    ).toEqual([
+      { id: "first", start: true, end: false, marker: true },
+      { id: "second", start: false, end: true, marker: false },
+      { id: "later", start: true, end: true, marker: false },
+    ]);
+  });
+  it("breaks groups at sender changes, system messages, and hidden search results", () => {
+    const messages = [
+      message("first", 1, morning),
+      { ...message("other", 2, morning + minute), senderId: "someone-else" },
+      { ...message("notice", 3, morning + 2 * minute), senderKind: "system" as const },
+      message("reply", 4, morning + 3 * minute),
+      message("search-match", 6, morning + 4 * minute),
+    ];
+    expect(presentation(messages).every((entry) => entry.start && entry.end)).toBe(true);
+  });
+  it("keeps work cards between distinct groups and stable when earlier history loads", () => {
+    const messages = [message("first", 1, morning), message("follow-up", 2, morning + 2 * minute)];
+    const items = [work("task", morning + minute)];
+    expect(presentation(messages, items).map((entry) => [entry.start, entry.end])).toEqual([
+      [true, true],
+      [true, true],
+    ]);
+    const loaded = presentation([message("older", 0, morning - minute), ...messages], items);
+    expect(loaded.at(-1)).toEqual(presentation(messages, items).at(-1));
+  });
+  it("inserts time markers after gaps over two hours, not at exactly two hours", () => {
+    expect(
+      presentation([
+        message("first", 1, morning),
+        message("two-hours", 2, morning + 120 * minute),
+        message("more-than-two", 3, morning + 241 * minute),
+      ]).map((entry) => entry.marker),
+    ).toEqual([true, false, true]);
+  });
+  it("starts a new group and time marker across midnight even a minute apart", () => {
+    const midnight = new Date(2026, 8, 16).getTime();
+    expect(
+      presentation([message("before", 1, midnight - minute), message("after", 2, midnight)]),
+    ).toEqual([
+      { id: "before", start: true, end: true, marker: true },
+      { id: "after", start: true, end: true, marker: true },
+    ]);
+  });
+});
+
+it("labels time markers with a day and time, including the year for old history", () => {
+  const now = new Date(2026, 8, 15, 12).getTime();
+  expect(conversationTimeMarker(morning, now)).toBe(
+    `Today ${conversationMessageTime.format(morning)}`,
+  );
+  const yesterday = new Date(2026, 8, 14, 13, 30).getTime();
+  expect(conversationTimeMarker(yesterday, now)).toBe(
+    `Yesterday ${conversationMessageTime.format(yesterday)}`,
+  );
+  expect(conversationTimeMarker(new Date(2025, 8, 14).getTime(), now)).toContain("2025");
 });

@@ -225,6 +225,25 @@ function withFakeClaudeEnv<A, E, R>(
 }
 
 it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
+  it.effect("allows only public search and keeps connected tools isolated", () =>
+    withFakeClaudeEnv(
+      {
+        output: "Source: https://example.test",
+        argsMustContain:
+          '--tools WebSearch --strict-mcp-config --mcp-config {"mcpServers":{}} --setting-sources  --no-session-persistence --allowedTools WebSearch',
+      },
+      (generation) =>
+        generation.investigate({
+          cwd: process.cwd(),
+          prompt: "Find the public documentation",
+          webSearchOnly: true,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "claude-sonnet-4-6",
+          },
+        }),
+    ),
+  );
   it.effect("disables tools and configured MCP servers for private mail analysis", () =>
     withFakeClaudeEnv(
       {

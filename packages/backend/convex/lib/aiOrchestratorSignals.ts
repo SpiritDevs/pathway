@@ -12,6 +12,8 @@ import {
 } from "./aiOrchestratorAuthority.ts";
 import { mintDomainId } from "./domainIds.ts";
 
+import { queueOrchestratorSignal } from "./aiOrchestratorRouting.ts";
+
 const readThreadShell = Schema.decodeUnknownExit(CloudAgentThreadShell);
 const terminalThreadStatuses = new Set<string>(["completed", "failed", "interrupted", "cancelled"]);
 
@@ -242,6 +244,7 @@ export async function notifyOrchestratorThreadUpdate(
   const contacts = new Map(
     [...projectContacts, ...(personal ? [personal] : [])].map((c) => [c.id, c]),
   );
+  const candidates = [];
   for (const contact of contacts.values()) {
     if (contact.status !== "active") continue;
     const chat = await ctx.db
@@ -256,50 +259,28 @@ export async function notifyOrchestratorThreadUpdate(
       .first();
     if (!chat || !(await readableOrchestratorThread(ctx, contact, chat, company.id, row.id)))
       continue;
-    const queued = await ctx.db
-      .query("aiOrchestratorJobs")
-      .withIndex("by_orchestrator_status", (q) =>
-        q.eq("orchestratorId", contact.id).eq("status", "queued"),
-      )
-      .take(100);
-    const waiting = queued.find((job) => job.threadSignalId && job.chatId === chat.id);
-    if (waiting) {
-      await ctx.db.patch(waiting._id, { threadSignalId: row.id });
-      continue;
-    }
-    const id = `orchestrator-thread:${contact.id}:${row.id}:${current.value.latestRunId}:${current.value.status}`;
-    if (
-      await ctx.db
-        .query("aiOrchestratorMessages")
-        .withIndex("by_domain_id", (q) => q.eq("id", id))
-        .unique()
-    )
-      continue;
-    await appendChatMessage(ctx, chat, {
-      id,
-      senderKind: "system",
-      senderId: "project-thread",
-      senderName: "Pathway",
-      text: "Agent thread activity changed. Review the current authorized thread update and recent work, and let the user know what needs their attention. Follow your standing responsibilities; retained context does not grant new permissions or allowance.",
-      status: "queued",
-      replyToId: null,
-    });
-    const now = Date.now();
-    await ctx.db.insert("aiOrchestratorJobs", {
-      id: mintDomainId(now),
-      orchestratorId: contact.id,
-      chatId: chat.id,
-      messageId: id,
-      threadSignalId: row.id,
-      companyId: company.id,
-      status: "queued",
-      environmentId: null,
-      generation: 0,
-      leaseExpiresAt: 0,
-      modelIndex: 0,
-      error: "",
-      createdAt: now,
-      updatedAt: now,
-    });
+    candidates.push({ contact, chat });
   }
+  const tracked = await ctx.db
+    .query("aiOrchestratorWork")
+    .withIndex("by_thread", (q) =>
+      q
+        .eq("companyId", company.id)
+        .eq("environmentId", row.environmentId)
+        .eq("threadId", row.threadId),
+    )
+    .take(100);
+  if (
+    tracked.some(
+      (work) => work.continuation && ["queued", "working", "unknown"].includes(work.status),
+    )
+  )
+    return;
+  await queueOrchestratorSignal(ctx, candidates, {
+    key: `thread:${company.id}:${row.id}:${current.value.latestRunId}:${current.value.status}`,
+    companyId: company.id,
+    threadSignalId: row.id,
+    topic: `${project.name}: ${current.value.title} (${current.value.status})`,
+    text: "Agent thread activity changed. You are the selected responder for this update. Review the current authorized thread and report only useful findings or decisions. Do not repeat an update already present in the conversation.",
+  });
 }

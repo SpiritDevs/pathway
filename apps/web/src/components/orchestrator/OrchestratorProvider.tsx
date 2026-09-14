@@ -3,6 +3,7 @@ import { makeClerkConvexTokenFetcher } from "../../cloud/syncTransportAuth";
 import { fetchConversationAttachment } from "./conversationAttachmentDrafts";
 import { useConversationAttachmentDrafts } from "./conversationAttachmentDrafts";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import type { AvatarContact } from "./OrchestratorAvatar";
 import { useLocation } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { makeFunctionReference } from "convex/server";
@@ -47,6 +48,18 @@ function useOrchestratorState() {
   const [error, setError] = useState<string>();
   const enabled =
     floating || pathname === "/orchestrator" || pathname.includes("/settings/orchestrators");
+  const personalAvatar = useBusinessToolsQuery<AvatarContact | null>(
+    cloud.client,
+    cloud.accountID,
+    "aiOrchestrators:personalAvatar",
+    {},
+  );
+  const conversationAvatars = useBusinessToolsQuery<AvatarContact[]>(
+    cloud.client,
+    cloud.accountID,
+    "aiOrchestrators:conversationAvatars",
+    enabled ? {} : null,
+  );
   const ownedContacts = useBusinessToolsQuery<AiOrchestrator[]>(
     cloud.client,
     cloud.accountID,
@@ -65,6 +78,11 @@ function useOrchestratorState() {
         contact.id,
         contact,
       ]),
+    ).values(),
+  ];
+  const avatarContacts = [
+    ...new Map(
+      [...contacts, ...(conversationAvatars.value ?? [])].map((contact) => [contact.id, contact]),
     ).values(),
   ];
   const conversations = useBusinessToolsQuery<OrchestratorChat[]>(
@@ -146,6 +164,7 @@ function useOrchestratorState() {
     newChatOpen,
     setNewChatOpen,
     contacts,
+    avatarContacts,
     chats,
     unreadCount: chats.filter((chat) => !chat.archived && chat.lastSequence > chat.readSequence)
       .length,
@@ -161,6 +180,7 @@ function useOrchestratorState() {
       ),
     setDraft: (id: string, text: string) => setDrafts((current) => ({ ...current, [id]: text })),
     scrollPositions,
+    personalAvatar: personalAvatar.value ?? undefined,
   };
 }
 export type OrchestratorState = ReturnType<typeof useOrchestratorState>;
