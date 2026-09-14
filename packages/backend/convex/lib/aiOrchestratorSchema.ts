@@ -229,6 +229,7 @@ export const aiOrchestratorTables = {
     commandId: v.optional(v.string()),
     selection: v.optional(v.union(mailSelection, v.null())),
     selectionReason: v.optional(v.string()),
+    selectionExplicit: v.optional(v.boolean()),
     companyId: v.optional(v.string()),
     completionNotified: v.optional(v.boolean()),
     sourceSequence: v.optional(v.number()),

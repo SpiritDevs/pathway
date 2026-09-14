@@ -152,3 +152,23 @@ it("accepts runtime legacy aliases without relaxing model or option validation",
     ),
   ).not.toBeNull();
 });
+
+it("defers only omitted entries in partial cloud catalogs, retaining authoritative target checks", () => {
+  const partial = { ...catalog, truncated: true };
+  expect(delegationSelectionProblem(selection("omitted"), partial, true)).toBeNull();
+  expect(delegationSelectionProblem(selection("omitted"), partial)).not.toBeNull();
+  expect(
+    delegationSelectionProblem(
+      selection("discovered-model"),
+      { ...partial, providers: partial.providers.map((p) => ({ ...p, available: false })) },
+      true,
+    ),
+  ).toContain("unavailable");
+  expect(
+    delegationSelectionProblem(
+      { ...selection("discovered-model"), options: [{ id: "effort", value: "invalid" }] },
+      partial,
+      true,
+    ),
+  ).toContain("unsupported");
+});

@@ -16,7 +16,12 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVerticalIcon, PlusIcon, Trash2Icon } from "lucide-react";
-import { EnvironmentId, ProviderInstanceId, type ModelSelection } from "@spiritdevs/contracts";
+import {
+  EnvironmentId,
+  ProviderInstanceId,
+  type ModelSelection,
+  type ServerProvider,
+} from "@spiritdevs/contracts";
 import {
   COORDINATOR_DRIVERS,
   DEFAULT_ORCHESTRATOR_MODEL,
@@ -40,6 +45,15 @@ import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { randomUUID } from "../../lib/utils";
+
+const usableProvider = (provider: ServerProvider) =>
+  provider.enabled &&
+  provider.installed &&
+  provider.availability !== "unavailable" &&
+  provider.status !== "error" &&
+  provider.status !== "disabled" &&
+  provider.auth.status !== "unauthenticated" &&
+  provider.models.length > 0;
 
 const supportsCoordinator = (driver: string) => COORDINATOR_DRIVERS.some((item) => item === driver);
 export function defaultCoordinatorSelection(instanceId = "codex"): ModelSelection {
@@ -143,10 +157,7 @@ function ModelRow({
             const environmentId = event.target.value;
             const target = environments.find((item) => item.environmentId === environmentId);
             const provider = target?.serverConfig?.providers.find(
-              (item) =>
-                item.enabled &&
-                item.models.length > 0 &&
-                (worker || supportsCoordinator(item.driver)),
+              (item) => usableProvider(item) && (worker || supportsCoordinator(item.driver)),
             );
             const model = provider?.models[0];
             if (provider && model)
@@ -171,9 +182,7 @@ function ModelRow({
               disabled={
                 !item.serverConfig?.providers.some(
                   (provider) =>
-                    provider.enabled &&
-                    provider.models.length > 0 &&
-                    (worker || supportsCoordinator(provider.driver)),
+                    usableProvider(provider) && (worker || supportsCoordinator(provider.driver)),
                 )
               }
             >
@@ -329,31 +338,13 @@ export function OrchestratorModels({
           choices.length >= 12 ||
           (worker &&
             !environments.some((environment) =>
-              environment.serverConfig?.providers.some(
-                (p) =>
-                  p.enabled &&
-                  p.installed &&
-                  p.availability !== "unavailable" &&
-                  p.status !== "error" &&
-                  p.status !== "disabled" &&
-                  p.auth.status !== "unauthenticated" &&
-                  p.models.length > 0,
-              ),
+              environment.serverConfig?.providers.some(usableProvider),
             ))
         }
         onClick={() => {
           if (worker) {
             for (const environment of environments) {
-              const provider = environment.serverConfig?.providers.find(
-                (provider) =>
-                  provider.enabled &&
-                  provider.installed &&
-                  provider.availability !== "unavailable" &&
-                  provider.status !== "error" &&
-                  provider.status !== "disabled" &&
-                  provider.auth.status !== "unauthenticated" &&
-                  provider.models.length > 0,
-              );
+              const provider = environment.serverConfig?.providers.find(usableProvider);
               const model =
                 provider?.models.find((model) => model.isDefault) ?? provider?.models[0];
               if (provider && model) {

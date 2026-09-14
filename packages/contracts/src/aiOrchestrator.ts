@@ -28,14 +28,17 @@ export const OrchestratorDelegationCatalog = Schema.Struct({
 });
 export type OrchestratorDelegationCatalog = typeof OrchestratorDelegationCatalog.Type;
 
-/** Reject stale or invented selections without replacing them with another model. */
+/** Validate discovered choices. Cloud callers may defer omitted entries in bounded catalogs to the target. */
 export function delegationSelectionProblem(
   selection: ModelSelection,
   catalog: OrchestratorDelegationCatalog,
+  deferOmitted = false,
 ): string | null {
   const provider = catalog.providers.find((p) => p.instanceId === selection.instanceId);
+  if (!provider && deferOmitted && catalog.truncated) return null;
   if (!provider?.available) return "The selected worker provider is unavailable.";
   const model = provider.models.find((m) => m.id === selection.model);
+  if (!model && deferOmitted && catalog.truncated) return null;
   if (!model) return "The selected worker model is not advertised by this environment.";
   const seen = new Set<string>();
   for (const option of selection.options ?? []) {

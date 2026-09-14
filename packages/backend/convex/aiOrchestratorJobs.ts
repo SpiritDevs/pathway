@@ -1130,8 +1130,8 @@ export const complete = mutation({
         continue;
       }
       if (action.kind === "delegate") {
-        const workId = await queueOrchestratorWork(ctx, claim.orchestrator, claim.chat, action);
-        results.push({ kind: action.kind, detail: { workId, status: "queued" } });
+        const work = await queueOrchestratorWork(ctx, claim.orchestrator, claim.chat, action);
+        results.push({ kind: action.kind, detail: work });
         continue;
       }
       if (action.kind === "collaborate") {

@@ -2899,7 +2899,7 @@ const workerCatalog = {
   ],
 };
 
-async function workerSelectionHarness() {
+async function workerSelectionHarness(withLaptopPreset = false) {
   const test = await coordinatorHarness();
   const record = (await test.owner.query(api.aiOrchestrators.list, {}))[0]!;
   await test.owner.mutation(api.aiOrchestrators.configure, {
@@ -2920,6 +2920,18 @@ async function workerSelectionHarness() {
             options: [{ id: "effort", value: "low" }],
           },
         },
+        ...(withLaptopPreset
+          ? [
+              {
+                id: "laptop-worker",
+                name: "Laptop worker",
+                environmentId: "laptop",
+                guidance: "Routine laptop work",
+                cost: "lower" as const,
+                selection: { instanceId: "laptop-provider", model: "laptop-model" },
+              },
+            ]
+          : []),
       ],
     },
   });
@@ -2997,11 +3009,21 @@ describe("task-aware worker selections", () => {
     { instanceId: "codex", model: "invented" },
     { instanceId: "codex", model: "routine", options: [{ id: "effort", value: "ultra" }] },
   ])(
-    "rejects unavailable or unsupported explicit selection %j without queuing work",
+    "shows unavailable or unsupported explicit selection %j without launching work",
     async (selection) => {
       const test = await workerSelectionHarness();
-      await expect(test.delegate(selection)).rejects.toThrow("No fallback");
-      expect(await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId })).toEqual([]);
+      await test.delegate(selection);
+      const rows = await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId });
+      expect(rows[0]).toMatchObject({ status: "failed", selection });
+      expect(rows[0]?.detail).toContain("No fallback");
+      expect(await test.t.run((ctx) => ctx.db.query("environmentCommands").collect())).toEqual([]);
+      const job = await test.t.run((ctx) =>
+        ctx.db
+          .query("aiOrchestratorJobs")
+          .withIndex("by_domain_id", (q) => q.eq("id", test.run.id))
+          .unique(),
+      );
+      expect(job?.contextResults).toContain("No fallback");
     },
   );
   it.each([undefined, Date.now() - 120001])(
@@ -3020,6 +3042,61 @@ describe("task-aware worker selections", () => {
       expect(rows[0]?.selection).toEqual(requested);
     },
   );
+  it.each(["missing-provider", "missing-model"])(
+    "defers %s in a truncated catalog",
+    async (missing) => {
+      const test = await workerSelectionHarness();
+      await test.t.run(async (ctx) => {
+        const registration = (await ctx.db.query("environmentRegistrations").collect()).find(
+          (row) => row.environmentId === "studio",
+        )!;
+        await ctx.db.patch(registration._id, {
+          orchestratorDelegationCatalog: { ...workerCatalog, truncated: true },
+        });
+      });
+      const requested = {
+        instanceId: missing === "missing-provider" ? "omitted" : "codex",
+        model: "omitted",
+      };
+      await test.delegate(requested);
+      expect(
+        (await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId }))[0],
+      ).toMatchObject({ status: "queued", selection: requested });
+    },
+  );
+  it.each([
+    [false, true],
+    [false, false],
+    [true, true],
+  ])("redirect preserves explicit=%s with destination preset=%s", async (explicit, withPreset) => {
+    const test = await workerSelectionHarness(withPreset);
+    const requested = explicit ? { instanceId: "codex", model: "complex" } : null;
+    await test.delegate(requested);
+    const original = (
+      await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId })
+    )[0]!;
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "move-worker",
+      text: "Move it to laptop",
+    });
+    const run = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+      result: {
+        ...decision(),
+        actions: [{ kind: "redirectWork", workId: original.id, environmentId: "laptop" }],
+      },
+    });
+    const work = await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId });
+    expect(work.find((row) => row.id !== original.id)).toMatchObject({
+      environmentId: "laptop",
+      selection:
+        requested ?? (withPreset ? { instanceId: "laptop-provider", model: "laptop-model" } : null),
+    });
+  });
   it("keeps worker presets when an older client updates unrelated settings", async () => {
     const test = await workerSelectionHarness();
     const current = (await test.owner.query(api.aiOrchestrators.list, {}))[0]!;

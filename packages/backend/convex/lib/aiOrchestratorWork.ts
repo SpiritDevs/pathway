@@ -92,14 +92,14 @@ export async function queueOrchestratorWork(
     (choice) => choice.environmentId === action.environmentId,
   );
   const selection = action.selection ?? preset?.selection ?? null;
+  let selectionProblem: string | null = null;
   if (
     selection &&
     registration.orchestratorDelegationCatalog &&
     Date.now() - (registration.orchestratorDelegationCatalogAt ?? 0) <= 120000
   ) {
     const catalog = decodeCatalog(registration.orchestratorDelegationCatalog);
-    const problem = delegationSelectionProblem(decodeSelection(selection), catalog);
-    if (problem) return fail(`${problem} No fallback was selected.`);
+    selectionProblem = delegationSelectionProblem(decodeSelection(selection), catalog, true);
   }
   const selectionReason = action.selection
     ? action.selectionReason?.trim() || "Coordinator selected this model explicitly."
@@ -115,6 +115,10 @@ export async function queueOrchestratorWork(
   if (queued.length >= 100)
     return fail("The assignment queue is full. Finish or cancel outstanding work first.");
   const id = mintDomainId(Date.now());
+  const status = selectionProblem ? ("failed" as const) : ("queued" as const);
+  const detail = selectionProblem
+    ? `${selectionProblem} No fallback was selected.`
+    : "Waiting for a work slot.";
   await ctx.db.insert("aiOrchestratorWork", {
     id,
     chatId: chat.id,
@@ -124,12 +128,12 @@ export async function queueOrchestratorWork(
     projectId: action.projectId,
     companyId: action.companyId,
     threadId: null,
-    status: "queued",
+    status,
     completionNotified: false,
     sourceSequence: chat.lastSequence,
-    resultRequired: true,
+    resultRequired: !selectionProblem,
     resultCollected: false,
-    detail: "Waiting for a work slot.",
+    detail,
     prompt: action.prompt,
     selection: selection
       ? {
@@ -141,10 +145,11 @@ export async function queueOrchestratorWork(
         }
       : null,
     selectionReason,
+    selectionExplicit: action.selection !== null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   });
-  return id;
+  return { workId: id, status, detail };
 }
 
 /** Start acknowledgements identify a thread; only a published terminal run means its work finished. */
@@ -561,15 +566,21 @@ export async function controlOrchestratorWork(
     projectId: work.projectId,
     environmentId: action.environmentId,
     prompt: work.prompt,
-    selection: work.selection ? decodeSelection(work.selection) : null,
+    selection:
+      work.selectionExplicit !== false && work.selection ? decodeSelection(work.selection) : null,
+    ...(work.selectionExplicit !== false && work.selectionReason
+      ? { selectionReason: work.selectionReason }
+      : {}),
   });
   await ctx.db.patch(work._id, {
     detail: "Cancelled before starting and redirected to another environment.",
   });
   return {
-    workId: replacement,
+    workId: replacement.workId,
     replacedWorkId: work.id,
     detail:
-      "The previous command was cancelled before acceptance. Replacement work is queued under the same conversation limits.",
+      replacement.status === "failed"
+        ? replacement.detail
+        : "The previous command was cancelled before acceptance. Replacement work is queued under the same conversation limits.",
   };
 }
