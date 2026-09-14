@@ -7,6 +7,7 @@ These screenshots use the actual Pathway model settings, model picker and work l
 - [Actual provider/model picker](worker-model-picker.png)
 - [Narrow web layout](worker-model-settings-narrow.png)
 - [Selection explanations and an unavailable worker](worker-selection-reasons.png)
+- [Worker preset interaction recording](worker-model-interactions.webm)
 
 The browser pass verified editing the preset name and cost, selecting reasoning, clearing reasoning to provider default, adding a model from the discovered fixture catalog, removing that preset and opening the production model picker. No browser console errors occurred. The before image uses the original model editor from base commit a26f42e0e inside the same preview wrapper.
 
