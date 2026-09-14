@@ -1,3 +1,6 @@
+import { useAtomValue } from "@effect/atom-react";
+import { projectFaviconSourceAtom } from "../state/projectFavicons";
+import { projectFaviconSourceKey } from "../state/projectFaviconSources";
 import type { EnvironmentId } from "@spiritdevs/contracts";
 import {
   getProjectFaviconCacheKey,
@@ -29,7 +32,14 @@ export function ProjectFavicon(input: {
       <ProjectFaviconFallback className={input.className} icon={input.fallbackIcon ?? FolderIcon} />
     );
   }
-  return <RootedProjectFavicon {...input} cwd={input.cwd} />;
+  return <SharedProjectFavicon {...input} cwd={input.cwd} />;
+}
+
+function SharedProjectFavicon(input: Parameters<typeof RootedProjectFavicon>[0]) {
+  const source = useAtomValue(
+    projectFaviconSourceAtom(projectFaviconSourceKey(input.environmentId, input.cwd)),
+  );
+  return <RootedProjectFavicon {...input} {...(source ?? {})} />;
 }
 
 export function RootedProjectFavicon(input: {

@@ -16,6 +16,10 @@ creating a folder in your home directory. You can attach your own directory late
 A Pathway project can have connections on several computers. Pathway normally joins checkouts
 automatically when their Git repository matches.
 
+In web and desktop, threads belonging to the same project share an icon from an available
+connection. A configured custom icon takes priority, followed by the preferred connection.
+If that computer disconnects, Pathway uses another available connection.
+
 To choose an available machine automatically for new threads, enable [load balancing](load-balancing.md).
 
 If two project entries were created because their Git remotes disagreed, open the project you want

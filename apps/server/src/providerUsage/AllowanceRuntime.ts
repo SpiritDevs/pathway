@@ -1,5 +1,6 @@
 /** Shared account guards are checked by the runtime independently of open clients. */
 import { makeFunctionReference } from "convex/server";
+import { ConvexError } from "convex/values";
 import {
   ThreadId,
   type EnvironmentId,
@@ -57,6 +58,32 @@ const noGuard: AllowanceAdmission = {
   detail: "No allowance guard applies to this assignment.",
   budgets: [],
 };
+/** A transient lookup failure must not turn a confirmed unbudgeted assignment into a hold. */
+export function makeAllowanceAdmissionCheck(guarded = new Map<string, boolean>()) {
+  return <E, R>(
+    key: string,
+    evaluate: (
+      observeGuards: (hasGuards: boolean) => void,
+    ) => Effect.Effect<AllowanceAdmission, E, R>,
+  ): Effect.Effect<AllowanceAdmission, never, R> =>
+    Effect.suspend(() => evaluate((hasGuards) => guarded.set(key, hasGuards))).pipe(
+      Effect.timeout("15 seconds"),
+      Effect.catch((error) => {
+        let cause: unknown = error;
+        while (cause instanceof Error) {
+          // An explicit backend rejection is not a temporary connectivity failure.
+          if (cause instanceof ConvexError) {
+            guarded.delete(key);
+            break;
+          }
+          if (cause.cause === cause) break;
+          cause = cause.cause;
+        }
+        return Effect.succeed(guarded.get(key) === false ? noGuard : unavailable);
+      }),
+    );
+}
+
 type ScopeRequest = {
   companyId: string;
   scopes: ProviderAllowanceScope[];
@@ -223,8 +250,11 @@ export const layer = Layer.effect(
           }),
         );
       });
+    const guardedAssignments = new Map<string, boolean>();
+    const admissionCheck = makeAllowanceAdmissionCheck(guardedAssignments);
     const check = Effect.fn("allowance.checkScopes")(function* (
       requests: ScopeRequest[],
+      observeGuards: (hasGuards: boolean) => void,
       instanceId: ProviderInstanceId,
       driver: ProviderDriverKind,
     ) {
@@ -233,9 +263,14 @@ export const layer = Layer.effect(
         const budgets = yield* call((backend) => backend.client.query(forScopesRef, request)).pipe(
           Effect.flatMap(decodeBudgets),
         );
+        // Record positive evidence before another scope lookup or usage observation can fail.
+        if (budgets.length) observeGuards(true);
         for (const budget of budgets) held.push({ request, budget });
       }
-      if (!held.length) return noGuard;
+      if (!held.length) {
+        observeGuards(false);
+        return noGuard;
+      }
       const snapshot = yield* snapshotFor(instanceId, driver);
       const now = yield* Clock.currentTimeMillis;
       const scheduledProviders = new Set(
@@ -340,6 +375,8 @@ export const layer = Layer.effect(
           const snapshot = yield* snapshotFor(instanceId, driver);
           if (!snapshot)
             return yield* Effect.fail("The selected provider has no supported allowance reading.");
+          // Allocation may commit even if its response is lost. Stop using earlier no-budget evidence.
+          guardedAssignments.set(`thread:${threadId}`, true);
           return yield* call((backend) =>
             backend.client.mutation(allocateRef, {
               companyId,
@@ -390,15 +427,19 @@ export const layer = Layer.effect(
           ),
         ),
       checkChat: (companyId, chatId, instanceId, driver) =>
-        check([{ companyId, scopes: [{ kind: "chat", chatId }] }], instanceId, driver).pipe(
-          Effect.timeout("15 seconds"),
-          Effect.orElseSucceed(() => unavailable),
+        admissionCheck(`chat:${companyId.length}:${companyId}:${chatId}`, (observeGuards) =>
+          check(
+            [{ companyId, scopes: [{ kind: "chat", chatId }] }],
+            observeGuards,
+            instanceId,
+            driver,
+          ),
         ),
       checkThread: (threadId, instanceId, driver) =>
-        threadRequests(threadId).pipe(
-          Effect.flatMap((requests) => check(requests, instanceId, driver)),
-          Effect.timeout("15 seconds"),
-          Effect.orElseSucceed(() => unavailable),
+        admissionCheck(`thread:${threadId}`, (observeGuards) =>
+          threadRequests(threadId).pipe(
+            Effect.flatMap((requests) => check(requests, observeGuards, instanceId, driver)),
+          ),
         ),
     });
   }),

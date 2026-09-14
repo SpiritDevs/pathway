@@ -5,6 +5,7 @@ import type { EnvironmentId } from "@spiritdevs/contracts";
 const testState = vi.hoisted(() => ({
   faviconUrl: "https://environment.test/api/assets/token-a/v1-20-favicon.svg",
   lastResource: null as unknown,
+  sharedSource: null as { environmentId: EnvironmentId; cwd: string; faviconPath: string } | null,
 }));
 
 const hooks = vi.hoisted(() => {
@@ -42,6 +43,10 @@ const hooks = vi.hoisted(() => {
     },
   };
 });
+
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => testState.sharedSource }));
+
+vi.mock("../state/projectFavicons", () => ({ projectFaviconSourceAtom: () => null }));
 
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -105,6 +110,7 @@ function renderImage(
 
 describe("ProjectFavicon", () => {
   beforeEach(() => {
+    testState.sharedSource = null;
     hooks.reset();
   });
 
@@ -140,6 +146,29 @@ describe("ProjectFavicon", () => {
     expect(testState.lastResource).toEqual({
       _tag: "project-favicon",
       cwd: "/workspace-test",
+      path: "brand/icon.svg",
+    });
+  });
+
+  it("requests the shared project's icon from its own host and directory", () => {
+    testState.sharedSource = {
+      environmentId: "other-host" as EnvironmentId,
+      cwd: "/other/checkout",
+      faviconPath: "brand/icon.svg",
+    };
+    const element = ProjectFavicon({
+      environmentId: "thread-host" as EnvironmentId,
+      cwd: "/thread/checkout",
+    }) as ReactElement<Parameters<typeof RootedProjectFavicon>[0]>;
+    const Shared = element.type as (
+      props: typeof element.props,
+    ) => ReactElement<typeof element.props>;
+    const rooted = Shared(element.props);
+    expect(rooted.props).toMatchObject(testState.sharedSource);
+    RootedProjectFavicon(rooted.props);
+    expect(testState.lastResource).toEqual({
+      _tag: "project-favicon",
+      cwd: "/other/checkout",
       path: "brand/icon.svg",
     });
   });
