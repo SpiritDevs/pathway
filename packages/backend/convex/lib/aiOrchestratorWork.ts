@@ -15,6 +15,9 @@ import {
 } from "./aiOrchestratorAuthority.ts";
 import { hasCompanyPermission, hasRecordPermission } from "../../src/permissions.ts";
 import { appendCompanyChanges, encodeEnvironmentCommand } from "./companyApply.ts";
+import { ORCHESTRATOR_WORKER_REPORT_INSTRUCTIONS } from "@spiritdevs/contracts/orchestratorInspection";
+import { orchestratorReadTarget } from "./aiOrchestratorTargets.ts";
+import { inheritAllowanceScopes } from "../providerAllowanceBudgets.ts";
 
 const fail = (message: string): never => {
   throw backendError("orchestrator-work", message);
@@ -26,6 +29,7 @@ export async function queueOrchestratorWork(
   orchestrator: Doc<"aiOrchestrators">,
   chat: Doc<"aiOrchestratorChats">,
   action: Extract<OrchestratorAction, { kind: "delegate" }>,
+  continuationThreadId?: string,
 ) {
   if (!orchestrator.capabilities.includes("threads.delegate"))
     return fail("This orchestrator cannot delegate work.");
@@ -100,7 +104,8 @@ export async function queueOrchestratorWork(
     environmentId: action.environmentId,
     projectId: action.projectId,
     companyId: action.companyId,
-    threadId: null,
+    threadId: continuationThreadId ?? null,
+    ...(continuationThreadId ? { continuation: true } : {}),
     status: "queued",
     completionNotified: false,
     sourceSequence: chat.lastSequence,
@@ -121,6 +126,47 @@ export async function queueOrchestratorWork(
     updatedAt: Date.now(),
   });
   return id;
+}
+
+export async function continueOrchestratorThread(
+  ctx: MutationCtx,
+  orchestrator: Doc<"aiOrchestrators">,
+  chat: Doc<"aiOrchestratorChats">,
+  action: Extract<OrchestratorAction, { kind: "continueThread" }>,
+) {
+  if (
+    !orchestrator.capabilities.includes("threads.control") ||
+    !orchestrator.capabilities.includes("threads.read")
+  )
+    return fail("This orchestrator cannot continue existing threads.");
+  const target = await orchestratorReadTarget(ctx, orchestrator, chat, action);
+  if (!target.thread || !target.shell) return fail("The thread is unavailable.");
+  if (
+    target.shell.orchestratorOrigin &&
+    target.shell.orchestratorOrigin.orchestratorId !== orchestrator.id
+  )
+    return fail("Ask this thread's assigning orchestrator to continue its work.");
+  const workId = await queueOrchestratorWork(
+    ctx,
+    orchestrator,
+    chat,
+    {
+      kind: "delegate",
+      title: action.title,
+      prompt: action.prompt,
+      companyId: action.companyId,
+      environmentId: action.environmentId,
+      projectId: target.project?.id ?? null,
+      selection: null,
+    },
+    action.threadId,
+  );
+  await inheritAllowanceScopes(ctx, action.companyId, [{ kind: "chat", chatId: chat.id }], {
+    kind: "thread",
+    environmentId: action.environmentId,
+    threadId: action.threadId,
+  });
+  return { workId, threadId: action.threadId, status: "queued" };
 }
 
 /** Start acknowledgements identify a thread; only a published terminal run means its work finished. */
@@ -210,6 +256,7 @@ export async function refreshOrchestratorWork(
       ? "Agent thread is working."
       : "Waiting for the environment to accept this assignment.";
     if (
+      !work.continuation &&
       Option.isSome(shell) &&
       shell.value.activeRunId === null &&
       shell.value.latestRunId !== null
@@ -222,6 +269,7 @@ export async function refreshOrchestratorWork(
         ["failed", "interrupted", "cancelled", "rolled_back"].includes(shell.value.status)
       ) {
         status = shell.value.status === "failed" ? "failed" : "cancelled";
+        resultRunId = shell.value.latestRunId;
         detail = `The delegated run ${shell.value.status}.`;
       }
     }
@@ -286,8 +334,18 @@ export async function refreshOrchestratorWork(
       targetEnvironmentId: work.environmentId,
       cloudProjectId: project?._id ?? null,
       bindingId: null,
-      kind: "startThread" as const,
-      args: { kind: "startThread", prompt: work.prompt, modelSelection: work.selection ?? null },
+      kind: work.continuation ? ("sendMessage" as const) : ("startThread" as const),
+      args: work.continuation
+        ? {
+            kind: "sendMessage",
+            threadId: work.threadId!,
+            message: work.prompt + ORCHESTRATOR_WORKER_REPORT_INSTRUCTIONS,
+          }
+        : {
+            kind: "startThread",
+            prompt: work.prompt + ORCHESTRATOR_WORKER_REPORT_INSTRUCTIONS,
+            modelSelection: work.selection ?? null,
+          },
       issuedByMembershipId: scope.membership._id,
       orchestratorId: orchestrator.id,
       onBehalfOfActor: {
@@ -306,6 +364,7 @@ export async function refreshOrchestratorWork(
       updatedAt: now,
     };
     const commandDocId = await ctx.db.insert("environmentCommands", command);
+    await ctx.db.patch(work._id, { commandId });
     const inserted = (await ctx.db.get(commandDocId))!;
     if (!(await orchestratorCommandAllowed(ctx, inserted))) {
       await ctx.db.delete(commandDocId);
@@ -366,7 +425,11 @@ async function interruptWork(
     cloudProjectId: project?._id ?? null,
     bindingId: null,
     kind: "interrupt",
-    args: { kind: "interrupt", threadId },
+    args: {
+      kind: "interrupt",
+      threadId,
+      ...(work.continuation ? { messageId: `${work.commandId}:message` } : {}),
+    },
     issuedByMembershipId: scope.membership._id,
     onBehalfOfActor: { kind: "member", membershipId: scope.membership.id },
     state: "pending",
@@ -457,7 +520,7 @@ export async function requestOrchestratorStop(
         : "Stop requested. Waiting for the environment to confirm interruption.",
       updatedAt: now,
     });
-    if (work.threadId && !work.interruptCommandId)
+    if (!unstarted && work.threadId && !work.interruptCommandId)
       await interruptWork(ctx, orchestrator, work, work.threadId);
   }
 }

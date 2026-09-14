@@ -97,8 +97,8 @@ function makeFakeCodexBinary(
         'stdin_content="$(cat)"',
         ...(input.requireArg !== undefined
           ? [
-              `case " $original_args " in *" ${input.requireArg} "*) ;; *)`,
-              `  printf "%s\\n" "missing arg: ${input.requireArg}" >&2`,
+              `case " $original_args " in *' ${input.requireArg.replaceAll("'", "'\\''")} '*) ;; *)`,
+              `  printf "%s\\n" 'missing arg: ${input.requireArg.replaceAll("'", "'\\''")}' >&2`,
               `  exit 8`,
               "esac",
             ]
@@ -729,6 +729,22 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
           cwd: process.cwd(),
           prompt: "Classify this email.",
           contentOnly: true,
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
+  );
+  it.effect("enables public web search while retaining the coordinator tool restrictions", () =>
+    withFakeCodexEnv(
+      {
+        output: "Source: https://example.test",
+        requireArg: 'web_search="live"',
+        forbidArg: "features.shell_tool=true",
+      },
+      (generation) =>
+        generation.investigate({
+          cwd: process.cwd(),
+          prompt: "Find the public documentation",
+          webSearchOnly: true,
           modelSelection: DEFAULT_TEST_MODEL_SELECTION,
         }),
     ),

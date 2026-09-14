@@ -36,9 +36,12 @@ import type * as lib_aiOrchestratorAuthority from "../lib/aiOrchestratorAuthorit
 import type * as lib_aiOrchestratorCollaboration from "../lib/aiOrchestratorCollaboration.js";
 import type * as lib_aiOrchestratorContext from "../lib/aiOrchestratorContext.js";
 import type * as lib_aiOrchestratorEnvironmentSignals from "../lib/aiOrchestratorEnvironmentSignals.js";
+import type * as lib_aiOrchestratorInspections from "../lib/aiOrchestratorInspections.js";
 import type * as lib_aiOrchestratorIssueSignals from "../lib/aiOrchestratorIssueSignals.js";
+import type * as lib_aiOrchestratorRouting from "../lib/aiOrchestratorRouting.js";
 import type * as lib_aiOrchestratorSchema from "../lib/aiOrchestratorSchema.js";
 import type * as lib_aiOrchestratorSignals from "../lib/aiOrchestratorSignals.js";
+import type * as lib_aiOrchestratorTargets from "../lib/aiOrchestratorTargets.js";
 import type * as lib_aiOrchestratorWork from "../lib/aiOrchestratorWork.js";
 import type * as lib_automationJobs from "../lib/automationJobs.js";
 import type * as lib_businessToolsSchema from "../lib/businessToolsSchema.js";
@@ -108,9 +111,12 @@ declare const fullApi: ApiFromModules<{
   "lib/aiOrchestratorCollaboration": typeof lib_aiOrchestratorCollaboration;
   "lib/aiOrchestratorContext": typeof lib_aiOrchestratorContext;
   "lib/aiOrchestratorEnvironmentSignals": typeof lib_aiOrchestratorEnvironmentSignals;
+  "lib/aiOrchestratorInspections": typeof lib_aiOrchestratorInspections;
   "lib/aiOrchestratorIssueSignals": typeof lib_aiOrchestratorIssueSignals;
+  "lib/aiOrchestratorRouting": typeof lib_aiOrchestratorRouting;
   "lib/aiOrchestratorSchema": typeof lib_aiOrchestratorSchema;
   "lib/aiOrchestratorSignals": typeof lib_aiOrchestratorSignals;
+  "lib/aiOrchestratorTargets": typeof lib_aiOrchestratorTargets;
   "lib/aiOrchestratorWork": typeof lib_aiOrchestratorWork;
   "lib/automationJobs": typeof lib_automationJobs;
   "lib/businessToolsSchema": typeof lib_businessToolsSchema;

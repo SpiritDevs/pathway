@@ -45,7 +45,17 @@ import {
   queueOrchestratorWork,
   refreshOrchestratorWork,
   controlOrchestratorWork,
+  continueOrchestratorThread,
 } from "./lib/aiOrchestratorWork.ts";
+import { ORCHESTRATOR_REPORT_LIMIT } from "@spiritdevs/contracts/orchestratorInspection";
+import {
+  queueInspection,
+  inspectionTarget,
+  inspectionContext,
+  INSPECTION_TIMEOUT_MS,
+} from "./lib/aiOrchestratorInspections.ts";
+import { finishSignalRouting, signalCandidate } from "./lib/aiOrchestratorRouting.ts";
+import { DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER } from "@spiritdevs/contracts";
 import {
   boundedConversationMessages,
   memoryVisibilityForConversation,
@@ -416,7 +426,7 @@ async function contextFor(
       }
     }
   }
-  let workResultBudget = 32000;
+  let workResultBudget = 64000;
   return JSON.stringify({
     companyId,
     chat: { id: chat.id, title: chat.title, leadId: chat.leadId },
@@ -456,7 +466,7 @@ async function contextFor(
     environments,
     workspaceActivity: {
       scope:
-        "Up to 20 permitted results from the 100 most recently updated records; not a complete inventory. Delegate a scoped worker for detailed queries.",
+        "Up to 20 permitted results from the 100 most recently updated records; not a complete inventory. Use inspect for thread transcripts and project files; delegate only substantial investigations.",
       recentThreads,
       recentIssues,
     },
@@ -475,6 +485,7 @@ async function contextFor(
     })),
     work: work
       .filter((item) => (item.sourceSequence ?? 0) >= historyStart)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
       .map(
         ({
           id,
@@ -500,11 +511,12 @@ async function contextFor(
             threadId,
             detail,
             result,
+            resultTruncated: (result?.length ?? 0) < (resultText?.length ?? 0),
             conversation,
           };
         },
       ),
-    actionResults: results.slice(0, 16000),
+    actionResults: results.slice(0, 80000),
   });
 }
 
@@ -525,7 +537,11 @@ async function notifyFinishedWork(ctx: MutationCtx, orchestrator: Doc<"aiOrchest
   );
   const groups = new Map<string, Array<Doc<"aiOrchestratorWork">>>();
   for (const work of batches.flat()) {
-    if (work.status === "completed" && !work.resultCollected) continue;
+    if (
+      !work.resultCollected &&
+      (work.status === "completed" || (work.resultRequired && work.threadId))
+    )
+      continue;
     if (work.stopRequested) {
       await ctx.db.patch(work._id, { completionNotified: true });
       continue;
@@ -667,6 +683,8 @@ export const claim = mutation({
       )) {
       if ((job.notBefore ?? 0) > now) continue;
       if (job.status === "running" && job.leaseExpiresAt > now) continue;
+      const inspections = await inspectionContext(ctx, job);
+      if (inspections === null) continue;
       const orchestrator = await findOrchestrator(ctx, job.orchestratorId);
       if (
         !orchestrator ||
@@ -742,11 +760,33 @@ export const claim = mutation({
         )
           continue;
       }
-      const selection = choice?.selection ?? {
-        instanceId: provider.instanceId,
-        model: DEFAULT_ORCHESTRATOR_MODEL,
-        options: [{ id: "reasoningEffort", value: "high" }],
-      };
+      const routingCandidates = [];
+      for (const id of job.routingCandidateIds ?? []) {
+        const candidate = await signalCandidate(ctx, job, id);
+        if (candidate?.contact.ownerSubject === chat.ownerSubject)
+          routingCandidates.push({
+            id,
+            name: candidate.contact.name,
+            responsibilities: candidate.contact.responsibilities.slice(0, 800),
+          });
+      }
+      const selection =
+        job.routingCandidateIds?.length && ["codex", "claudeAgent"].includes(provider.driver)
+          ? {
+              instanceId: provider.instanceId,
+              model:
+                DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[
+                  provider.driver as keyof typeof DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER
+                ]!,
+              options: [
+                { id: provider.driver === "codex" ? "reasoningEffort" : "effort", value: "low" },
+              ],
+            }
+          : (choice?.selection ?? {
+              instanceId: provider.instanceId,
+              model: DEFAULT_ORCHESTRATOR_MODEL,
+              options: [{ id: "reasoningEffort", value: "high" }],
+            });
       const generation = job.generation + 1;
       await ctx.db.patch(job._id, {
         status: "running",
@@ -758,6 +798,7 @@ export const claim = mutation({
         leaseExpiresAt: now + LEASE_MS,
         attempts: (job.attempts ?? 0) + 1,
         contextThroughSequence: chat.lastSequence,
+        selection,
         updatedAt: now,
       });
       const claim = await currentClaim(ctx, {
@@ -785,6 +826,15 @@ export const claim = mutation({
         seenAt: claim.message.seenAt ?? now,
       });
       return {
+        ...(job.routingCandidateIds?.length
+          ? {
+              routing: {
+                topic: job.routingTopic ?? "Activity changed",
+                candidates: routingCandidates,
+              },
+            }
+          : {}),
+        environmentId: actor.registration.environmentId,
         id: job.id,
         generation,
         selection: decodeSelection(selection),
@@ -798,7 +848,7 @@ export const claim = mutation({
           chat,
           args.companyId,
           job.chatRevision === (chat.revision ?? 0) && job.configRevision === orchestrator.revision
-            ? (job.contextResults ?? "")
+            ? JSON.stringify({ actions: job.contextResults ?? "", inspections })
             : "",
           claim.message,
           job.mailMessageId,
@@ -994,6 +1044,12 @@ export const complete = mutation({
       }
     }
     const result = decodeDecision(args.result);
+    if (claim.job.routingCandidateIds?.length) {
+      // Routing never executes proposed actions or publishes model text, including from older hosts.
+      await finishSignalRouting(ctx, claim.job, claim.message, result.routeTo);
+      return true;
+    }
+    if (result.routeTo) return fail("This request does not require recipient routing.");
     if (
       claim.job.mailMessageId &&
       result.actions.some(
@@ -1016,8 +1072,19 @@ export const complete = mutation({
     )
       return fail("The coordinator returned an invalid or oversized decision.");
     const results: Array<{ kind: string; detail: unknown }> = [];
+    const inspectionIds = [...(claim.job.inspectionIds ?? [])];
+    let queuedInspection = false;
     const sentMessages: Array<{ id: string; text: string }> = [];
     for (const action of result.actions) {
+      if (action.kind === "inspect") {
+        if (inspectionIds.length >= 12)
+          return fail(
+            "This request has reached its inspection limit. Answer from the findings or delegate substantial remaining research.",
+          );
+        inspectionIds.push(await queueInspection(ctx, claim.job, action));
+        queuedInspection = true;
+        continue;
+      }
       if (action.kind === "allocateAllowance") {
         if (
           claim.message.senderKind !== "user" ||
@@ -1102,6 +1169,13 @@ export const complete = mutation({
       if (action.kind === "delegate") {
         const workId = await queueOrchestratorWork(ctx, claim.orchestrator, claim.chat, action);
         results.push({ kind: action.kind, detail: { workId, status: "queued" } });
+        continue;
+      }
+      if (action.kind === "continueThread") {
+        results.push({
+          kind: action.kind,
+          detail: await continueOrchestratorThread(ctx, claim.orchestrator, claim.chat, action),
+        });
         continue;
       }
       if (action.kind === "collaborate") {
@@ -1231,47 +1305,6 @@ export const complete = mutation({
               (result.attention !== "urgent" || claim.orchestrator.notifyUrgent),
           },
         );
-      if (
-        chat?.kind === "group" &&
-        chat.leadId !== claim.orchestrator.id &&
-        (claim.job.chainDepth ?? 0) < 8 &&
-        !result.actions.some(
-          (action) => action.kind === "message" && action.targetId === chat.leadId,
-        )
-      ) {
-        const lead = await findOrchestrator(ctx, chat.leadId);
-        const queued = await ctx.db
-          .query("aiOrchestratorJobs")
-          .withIndex("by_orchestrator_chat_status", (q) =>
-            q.eq("orchestratorId", chat.leadId).eq("chatId", chat.id).eq("status", "queued"),
-          )
-          .first();
-        if (
-          lead &&
-          lead.status === "active" &&
-          lead.proactive &&
-          canDirectOrchestrator(lead, chat.ownerSubject) &&
-          !queued
-        ) {
-          const now = Date.now();
-          await ctx.db.insert("aiOrchestratorJobs", {
-            id: mintDomainId(now),
-            orchestratorId: lead.id,
-            chatId: chat.id,
-            messageId: replyId,
-            companyId: lead.companyId ?? claim.job.companyId,
-            status: "queued",
-            environmentId: null,
-            generation: 0,
-            leaseExpiresAt: 0,
-            modelIndex: 0,
-            error: "",
-            chainDepth: (claim.job.chainDepth ?? 0) + 1,
-            createdAt: now,
-            updatedAt: now,
-          });
-        }
-      }
     }
     if (result.summary.trim())
       await ctx.db.patch(claim.chat._id, {
@@ -1280,18 +1313,22 @@ export const complete = mutation({
       });
     await refreshOrchestratorWork(ctx, claim.orchestrator);
     const continueReasoning =
-      results.some((result) =>
-        [
-          "readConversation",
-          "collaborate",
-          "allocateAllowance",
-          "stopWork",
-          "redirectWork",
-        ].includes(result.kind),
-      ) && (claim.job.attempts ?? 0) < 12;
+      (queuedInspection ||
+        results.some((result) =>
+          [
+            "readConversation",
+            "collaborate",
+            "allocateAllowance",
+            "stopWork",
+            "redirectWork",
+          ].includes(result.kind),
+        )) &&
+      (claim.job.attempts ?? 0) < 12;
     await ctx.db.patch(claim.job._id, {
       status: continueReasoning ? "queued" : "completed",
       contextResults: JSON.stringify(results),
+      inspectionIds,
+      ...(queuedInspection ? { notBefore: Date.now() + INSPECTION_TIMEOUT_MS } : {}),
       leaseExpiresAt: 0,
       updatedAt: Date.now(),
     });
@@ -1306,6 +1343,75 @@ export const complete = mutation({
           ? "queued"
           : "sent",
     });
+    return true;
+  },
+});
+
+export const pendingInspections = query({
+  args: { companyId: v.string() },
+  handler: async (ctx, args) => {
+    const actor = await environmentActor(ctx, args.companyId);
+    const rows = await ctx.db
+      .query("aiOrchestratorInspections")
+      .withIndex("by_environment_status", (q) =>
+        q
+          .eq("companyId", args.companyId)
+          .eq("environmentId", actor.registration.environmentId)
+          .eq("status", "pending")
+          .gt("createdAt", Date.now() - INSPECTION_TIMEOUT_MS),
+      )
+      .take(12);
+    const results = [];
+    for (const row of rows) {
+      if (row.createdAt + INSPECTION_TIMEOUT_MS <= Date.now()) continue;
+      const job = await ctx.db
+        .query("aiOrchestratorJobs")
+        .withIndex("by_domain_id", (q) => q.eq("id", row.jobId))
+        .unique();
+      if (!job || job.status !== "queued" || !job.selection) continue;
+      try {
+        const target = await inspectionTarget(ctx, job, row);
+        results.push({
+          id: row.id,
+          chatId: job.chatId,
+          localProjectId: target.localProjectId,
+          request: target.request,
+          selection: job.selection,
+        });
+      } catch {
+        continue;
+      }
+    }
+    return results;
+  },
+});
+
+export const collectInspection = mutation({
+  args: { companyId: v.string(), id: v.string(), text: v.string() },
+  handler: async (ctx, args) => {
+    const actor = await environmentActor(ctx, args.companyId);
+    const row = await ctx.db
+      .query("aiOrchestratorInspections")
+      .withIndex("by_domain_id", (q) => q.eq("id", args.id))
+      .unique();
+    if (
+      !row ||
+      row.companyId !== args.companyId ||
+      row.environmentId !== actor.registration.environmentId ||
+      row.status !== "pending"
+    )
+      return false;
+    const job = await ctx.db
+      .query("aiOrchestratorJobs")
+      .withIndex("by_domain_id", (q) => q.eq("id", row.jobId))
+      .unique();
+    if (!job || job.status !== "queued" || !job.inspectionIds?.includes(row.id)) return false;
+    await inspectionTarget(ctx, job, row);
+    if (!args.text.trim() || args.text.length > 16000)
+      return fail("The inspection result must contain at most 16,000 characters.");
+    await ctx.db.patch(row._id, { status: "completed", text: args.text });
+    if (await inspectionContext(ctx, job))
+      await ctx.db.patch(job._id, { notBefore: 0, updatedAt: Date.now() });
     return true;
   },
 });
@@ -1357,17 +1463,19 @@ export const pendingWorkResults = query({
   handler: async (ctx, args) => {
     const actor = await environmentActor(ctx, args.companyId);
     const rows = await Promise.all(
-      [false, undefined].map((collected) =>
-        ctx.db
-          .query("aiOrchestratorWork")
-          .withIndex("by_environment_result", (q) =>
-            q
-              .eq("companyId", args.companyId)
-              .eq("environmentId", actor.registration.environmentId)
-              .eq("resultCollected", collected)
-              .eq("status", "completed"),
-          )
-          .take(32),
+      [false, undefined].flatMap((collected) =>
+        terminalWorkStates.map((status) =>
+          ctx.db
+            .query("aiOrchestratorWork")
+            .withIndex("by_environment_result", (q) =>
+              q
+                .eq("companyId", args.companyId)
+                .eq("environmentId", actor.registration.environmentId)
+                .eq("resultCollected", collected)
+                .eq("status", status),
+            )
+            .take(32),
+        ),
       ),
     );
     const reads = await ctx.db
@@ -1379,8 +1487,25 @@ export const pendingWorkResults = query({
           .eq("readRequested", true),
       )
       .take(32);
+    const continuations = (
+      await Promise.all(
+        (["working", "unknown"] as const).map((status) =>
+          ctx.db
+            .query("aiOrchestratorWork")
+            .withIndex("by_company_environment_status", (q) =>
+              q
+                .eq("companyId", args.companyId)
+                .eq("environmentId", actor.registration.environmentId)
+                .eq("status", status),
+            )
+            .take(32),
+        ),
+      )
+    )
+      .flat()
+      .filter((work) => work.continuation && work.commandId);
     const pending = [];
-    for (const work of [...reads, ...rows.flat()]) {
+    for (const work of [...reads, ...rows.flat(), ...continuations]) {
       if (!work.threadId) continue;
       const orchestrator = await findOrchestrator(ctx, work.orchestratorId);
       if (
@@ -1394,6 +1519,9 @@ export const pendingWorkResults = query({
             ? { readRequestId: work.readRequestId }
             : {}),
           ...(work.resultRunId ? { runId: work.resultRunId } : {}),
+          ...(work.continuation && !reads.includes(work)
+            ? { messageId: `${work.commandId}:message` }
+            : {}),
         });
     }
     return pending;
@@ -1402,6 +1530,10 @@ export const pendingWorkResults = query({
 
 export const collectWorkResult = mutation({
   args: {
+    messageId: v.optional(v.string()),
+    status: v.optional(
+      v.union(v.literal("completed"), v.literal("failed"), v.literal("cancelled")),
+    ),
     readRequestId: v.optional(v.string()),
     companyId: v.string(),
     workId: v.string(),
@@ -1420,7 +1552,10 @@ export const collectWorkResult = mutation({
       work.companyId !== args.companyId ||
       work.environmentId !== actor.registration.environmentId ||
       work.threadId !== args.threadId ||
-      (!args.readRequestId && (work.status !== "completed" || work.resultCollected))
+      (!args.readRequestId &&
+        ((!["completed", "failed", "cancelled"].includes(work.status) &&
+          !(work.continuation && ["working", "unknown"].includes(work.status))) ||
+          work.resultCollected))
     )
       return false;
     const orchestrator = await findOrchestrator(ctx, work.orchestratorId);
@@ -1497,18 +1632,29 @@ export const collectWorkResult = mutation({
       .unique();
     if (!thread) return false;
     const shell = decodeThreadShell(thread.shell);
-    if (work.resultRunId) {
+    if (work.continuation) {
+      const command = await ctx.db
+        .query("environmentCommands")
+        .withIndex("by_company_and_domain_id", (q) =>
+          q.eq("companyId", actor.company._id).eq("id", work.commandId!),
+        )
+        .unique();
+      if (args.messageId !== `${work.commandId}:message` || command?.state !== "succeeded")
+        return false;
+    } else if (work.resultRunId) {
       if (work.resultRunId !== args.runId) return false;
     } else if (
       shell.activeRunId !== null ||
       shell.latestRunId !== args.runId ||
-      shell.status !== "completed"
+      !["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(shell.status)
     ) {
       return false;
     }
     if (!args.text.trim()) return false;
-    if (args.text.length > 16000) return fail("The worker result is too large.");
+    if (args.text.length > ORCHESTRATOR_REPORT_LIMIT)
+      return fail("The worker result is too large.");
     await ctx.db.patch(work._id, {
+      status: args.status ?? "completed",
       resultCollected: true,
       readResult: undefined,
       resultText: args.text,

@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 
 import {
   EnvironmentId,
+  MessageId,
   NonNegativeInt,
   ProjectId,
   ThreadId,
@@ -277,7 +278,11 @@ export const EnvironmentCommandArgs = Schema.Union([
     threadId: ThreadId,
     message: TrimmedNonEmptyString,
   }),
-  Schema.Struct({ kind: Schema.Literal("interrupt"), threadId: ThreadId }),
+  Schema.Struct({
+    kind: Schema.Literal("interrupt"),
+    threadId: ThreadId,
+    messageId: Schema.optionalKey(MessageId),
+  }),
   Schema.Struct({ kind: Schema.Literal("statusQuery"), threadId: ThreadId }),
 ]);
 export type EnvironmentCommandArgs = typeof EnvironmentCommandArgs.Type;

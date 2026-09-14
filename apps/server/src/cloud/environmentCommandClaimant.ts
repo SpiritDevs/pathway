@@ -298,8 +298,26 @@ export function makeLocalEnvironmentCommandExecutor(
           case "interrupt": {
             const threadId = ThreadId.make(args.threadId);
             const projection = yield* services.getThreadProjection(threadId);
-            const run = activeRun(projection);
-            if (run !== undefined) {
+            const message = args.messageId
+              ? projection.messages.find((message) => message.id === args.messageId)
+              : undefined;
+            const run = args.messageId
+              ? projection.runs.find((run) => run.id === message?.runId)
+              : activeRun(projection);
+            if (args.messageId && run?.status === "queued") {
+              yield* services.dispatch({
+                type: "queued-run.cancel",
+                commandId,
+                threadId,
+                runId: run.id,
+              });
+              return { kind: "interrupt", threadId };
+            }
+            if (
+              run !== undefined &&
+              (!args.messageId ||
+                ["preparing", "running", "starting", "waiting"].includes(run.status))
+            ) {
               yield* services.dispatch({
                 type: "run.interrupt",
                 commandId,

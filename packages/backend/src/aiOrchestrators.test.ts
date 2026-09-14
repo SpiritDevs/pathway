@@ -722,9 +722,16 @@ describe("coordinator reasoning claims and action boundaries", () => {
       result: { ...decision(), message: "The project group is ready." },
     });
 
+    expect(await test.claim()).toBeNull();
+    // A specialist can explicitly request a lead decision without echoing every answer.
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: group.id,
+      id: "lead-decision",
+      text: "Chief, consolidate the API decision.",
+      targetId: test.id,
+    });
     const lead = (await test.claim())!;
     expect(lead.name).toBe("Chief");
-    expect(JSON.parse(lead.context).chat.id).toBe(group.id);
     expect(lead.context).toContain("The API contract is ready.");
   });
 
@@ -3070,4 +3077,406 @@ describe("shared orchestrator avatars", () => {
       );
     },
   );
+});
+
+async function seedInspectionThread(t: Harness) {
+  await seedCoordinatorProject(t);
+  return t.run(async (ctx) => {
+    const project = (await ctx.db.query("cloudProjects").first())!;
+    const shell = {
+      id: "existing-thread",
+      projectId: "local-project",
+      title: "Existing PR work",
+      providerInstanceId: "codex",
+      modelSelection: { instanceId: "codex", model: "gpt-6-astra" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: "feature",
+      worktreePath: null,
+      lineage: {
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: "existing-thread",
+      },
+      locations: [],
+      forkedFrom: null,
+      activeProviderThreadId: null,
+      latestRunId: "old-run",
+      activeRunId: null,
+      status: "completed",
+      pendingRuntimeRequest: null,
+      latestVisibleMessage: null,
+      latestUserMessageAt: null,
+      hasActionableProposedPlan: false,
+      itemCount: 2,
+      visibleItemCount: 2,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      archivedAt: null,
+      deletedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      createdBy: "user",
+      creationSource: "web",
+    };
+    const rowId = await ctx.db.insert("agentThreads", {
+      id: "existing-index",
+      companyId: project.companyId,
+      environmentId: "studio",
+      cloudProjectId: project._id,
+      localProjectId: "local-project",
+      threadId: "existing-thread",
+      shell,
+      updatedAt: Date.now(),
+    });
+    return { rowId, shell };
+  });
+}
+
+async function projectContact(test: Awaited<ReturnType<typeof coordinatorHarness>>, name: string) {
+  const id = await test.owner.mutation(api.aiOrchestrators.create, {
+    config: { ...config(), name, kind: "project", companyId: "workspace", projectId: "project" },
+  });
+  const chatId = await test.owner.mutation(api.aiOrchestrators.createChat, {
+    title: name,
+    orchestratorIds: [id],
+    leadId: id,
+    companyIds: ["workspace"],
+  });
+  return { id, chatId };
+}
+
+const inspectAction = {
+  kind: "inspect",
+  companyId: "workspace",
+  environmentId: "studio",
+  projectId: "project",
+  request: { kind: "readFile", path: "README.md" },
+};
+
+describe("coordinator direct inspection and continuity", () => {
+  it("reads in the owning environment and resumes the same request without a worker", async () => {
+    const test = await coordinatorHarness();
+    await seedCoordinatorProject(test.t);
+    const run = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+      result: { ...decision(), message: "", actions: [inspectAction] },
+    });
+    expect(await test.t.run((ctx) => ctx.db.query("aiOrchestratorWork").collect())).toHaveLength(0);
+    expect(await test.t.run((ctx) => ctx.db.query("environmentCommands").collect())).toHaveLength(
+      0,
+    );
+    expect(await test.claim()).toBeNull();
+    expect(
+      await test
+        .environment("laptop")
+        .query(api.aiOrchestratorJobs.pendingInspections, { companyId: "workspace" }),
+    ).toEqual([]);
+    const [read] = await test
+      .environment()
+      .query(api.aiOrchestratorJobs.pendingInspections, { companyId: "workspace" });
+    expect(read).toMatchObject({ localProjectId: "local-project", request: inspectAction.request });
+    expect(
+      await test.environment("laptop").mutation(api.aiOrchestratorJobs.collectInspection, {
+        companyId: "workspace",
+        id: read!.id,
+        text: "Wrong environment",
+      }),
+    ).toBe(false);
+    expect(
+      await test.environment().mutation(api.aiOrchestratorJobs.collectInspection, {
+        companyId: "workspace",
+        id: read!.id,
+        text: "README.md: the service uses WebSockets.",
+      }),
+    ).toBe(true);
+    const next = (await test.claim())!;
+    expect(next.id).toBe(run.id);
+    expect(next.context).toContain("the service uses WebSockets");
+    expect(next.context).toContain("Call me Corey");
+  });
+
+  it("withdraws an inspection when access changes before delivery", async () => {
+    const test = await coordinatorHarness();
+    await seedCoordinatorProject(test.t);
+    const run = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+      result: { ...decision(), actions: [inspectAction] },
+    });
+    const [read] = await test
+      .environment()
+      .query(api.aiOrchestratorJobs.pendingInspections, { companyId: "workspace" });
+    await test.t.run(async (ctx) => {
+      const project = (await ctx.db.query("cloudProjects").first())!;
+      await ctx.db.patch(project._id, { archivedAt: Date.now() });
+    });
+    expect(
+      await test
+        .environment()
+        .query(api.aiOrchestratorJobs.pendingInspections, { companyId: "workspace" }),
+    ).toEqual([]);
+    await expect(
+      test.environment().mutation(api.aiOrchestratorJobs.collectInspection, {
+        companyId: "workspace",
+        id: read!.id,
+        text: "Must not enter context",
+      }),
+    ).rejects.toThrow("unavailable");
+  });
+
+  it("queues a PR follow-up in the original thread and waits for that message's result", async () => {
+    const test = await coordinatorHarness();
+    await seedInspectionThread(test.t);
+    const run = (await test.claim())!;
+    const input = {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+      result: {
+        ...decision(),
+        actions: [
+          {
+            kind: "continueThread",
+            companyId: "workspace",
+            environmentId: "studio",
+            threadId: "existing-thread",
+            title: "Push PR",
+            prompt: "Push the PR for this work.",
+          },
+        ],
+      },
+    };
+    expect(await test.environment().mutation(api.aiOrchestratorJobs.complete, input)).toBe(true);
+    expect(await test.environment().mutation(api.aiOrchestratorJobs.complete, input)).toBe(false);
+    const [command] = await test
+      .environment()
+      .mutation(api.environmentCommands.claim, { companyId: "workspace" });
+    expect(command).toMatchObject({
+      kind: "sendMessage",
+      args: { kind: "sendMessage", threadId: "existing-thread" },
+    });
+    expect(JSON.stringify(command!.args)).toContain("orchestrator_handoff");
+    expect(JSON.stringify(command!.args)).toContain("Verification");
+    await test.environment().mutation(api.environmentCommands.reportStatus, {
+      companyId: "workspace",
+      commandId: command!.id,
+      claimGeneration: command!.claimGeneration,
+      state: "succeeded",
+      result: { kind: "sendMessage", threadId: "existing-thread", turnId: null },
+      error: null,
+    });
+    expect(await test.claim()).toBeNull();
+    const [work] = await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId });
+    expect(work).toMatchObject({ threadId: "existing-thread", status: "working" });
+    const [pending] = await test
+      .environment()
+      .query(api.aiOrchestratorJobs.pendingWorkResults, { companyId: "workspace" });
+    expect(pending).toMatchObject({ workId: work!.id, messageId: `${command!.id}:message` });
+    const result = {
+      companyId: "workspace",
+      workId: work!.id,
+      threadId: "existing-thread",
+      runId: "new-run",
+      messageId: `${command!.id}:message`,
+      status: "completed" as const,
+      text: "Evidence. ".repeat(2000) + "PR pushed: https://example.test/pull/42",
+    };
+    expect(
+      await test.environment().mutation(api.aiOrchestratorJobs.collectWorkResult, {
+        ...result,
+        messageId: "wrong-message",
+      }),
+    ).toBe(false);
+    expect(
+      await test.environment().mutation(api.aiOrchestratorJobs.collectWorkResult, result),
+    ).toBe(true);
+    const update = (await test.claim())!;
+    expect(update.context).toContain("PR pushed: https://example.test/pull/42");
+    expect(await test.t.run((ctx) => ctx.db.query("environmentCommands").collect())).toHaveLength(
+      1,
+    );
+  });
+
+  it("rejects an unavailable thread instead of creating a replacement", async () => {
+    const test = await coordinatorHarness();
+    const run = (await test.claim())!;
+    await expect(
+      test.environment().mutation(api.aiOrchestratorJobs.complete, {
+        companyId: "workspace",
+        jobId: run.id,
+        generation: run.generation,
+        result: {
+          ...decision(),
+          actions: [
+            {
+              kind: "continueThread",
+              companyId: "workspace",
+              environmentId: "studio",
+              threadId: "missing",
+              title: "Follow-up",
+              prompt: "Continue",
+            },
+          ],
+        },
+      }),
+    ).rejects.toThrow("unavailable");
+    expect(await test.t.run((ctx) => ctx.db.query("aiOrchestratorWork").collect())).toHaveLength(0);
+  });
+});
+
+describe("one responder for activity", () => {
+  it("selects the project coordinator over Chief and deduplicates delivered events", async () => {
+    const test = await coordinatorHarness();
+    const { rowId, shell } = await seedInspectionThread(test.t);
+    const project = await projectContact(test, "Project lead");
+    const greeting = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: greeting.id,
+      generation: greeting.generation,
+      result: decision(),
+    });
+    const notify = () =>
+      test.t.run(async (ctx) => {
+        const row = (await ctx.db.get(rowId))!;
+        await notifyOrchestratorThreadUpdate(ctx, row, { ...shell, status: "running" });
+      });
+    await notify();
+    await notify();
+    const jobs = await test.t.run((ctx) => ctx.db.query("aiOrchestratorJobs").collect());
+    expect(jobs.filter((job) => job.threadSignalId)).toHaveLength(1);
+    expect(jobs.find((job) => job.threadSignalId)?.orchestratorId).toBe(project.id);
+    const update = (await test.claim())!;
+    expect(update.name).toBe("Project lead");
+    expect(update.routing).toBeUndefined();
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: update.id,
+      generation: update.generation,
+      result: decision(),
+    });
+    await notify();
+    expect(await test.claim()).toBeNull();
+  });
+
+  it("uses a lightweight election for overlapping roles and wakes only the winner", async () => {
+    const test = await coordinatorHarness();
+    const { rowId, shell } = await seedInspectionThread(test.t);
+    const first = await projectContact(test, "First coordinator");
+    const second = await projectContact(test, "Second coordinator");
+    const greeting = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: greeting.id,
+      generation: greeting.generation,
+      result: decision(),
+    });
+    await test.t.run(async (ctx) => {
+      const row = (await ctx.db.get(rowId))!;
+      await notifyOrchestratorThreadUpdate(ctx, row, { ...shell, status: "running" });
+    });
+    const route = (await test.claim())!;
+    expect(route.routing?.candidates.map((candidate) => candidate.id).sort()).toEqual(
+      [first.id, second.id].sort(),
+    );
+    expect(route.selection.model).toBe("gpt-5.6-luna");
+    const selected = route.routing!.candidates.find(
+      (candidate) => candidate.id !== (route.name === "First coordinator" ? first.id : second.id),
+    )!;
+    const election = {
+      companyId: "workspace",
+      jobId: route.id,
+      generation: route.generation,
+      result: { message: "", attention: "none", actions: [], summary: "", routeTo: selected.id },
+    };
+    expect(await test.environment().mutation(api.aiOrchestratorJobs.complete, election)).toBe(true);
+    expect(await test.environment().mutation(api.aiOrchestratorJobs.complete, election)).toBe(
+      false,
+    );
+    const winner = (await test.claim())!;
+    expect(winner.name).toBe(selected.name);
+    expect(winner.routing).toBeUndefined();
+    expect(winner.selection.model).toBe("gpt-6-astra");
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: winner.id,
+      generation: winner.generation,
+      result: decision(),
+    });
+    expect(await test.claim()).toBeNull();
+  });
+});
+
+it("retains a queued continuation while paused and rechecks project access before dispatch", async () => {
+  const test = await coordinatorHarness();
+  await seedInspectionThread(test.t);
+  const run = (await test.claim())!;
+  await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+    companyId: "workspace",
+    jobId: run.id,
+    generation: run.generation,
+    result: {
+      ...decision(),
+      actions: [
+        {
+          kind: "continueThread",
+          companyId: "workspace",
+          environmentId: "studio",
+          threadId: "existing-thread",
+          title: "Follow-up",
+          prompt: "Continue this work",
+        },
+      ],
+    },
+  });
+  await test.owner.mutation(api.aiOrchestrators.setStatus, { id: test.id, status: "paused" });
+  expect(
+    await test.environment().mutation(api.environmentCommands.claim, { companyId: "workspace" }),
+  ).toHaveLength(0);
+  expect((await test.t.run((ctx) => ctx.db.query("environmentCommands").first()))?.state).toBe(
+    "pending",
+  );
+  await test.owner.mutation(api.aiOrchestrators.setStatus, { id: test.id, status: "active" });
+  await test.t.run(async (ctx) => {
+    const project = (await ctx.db.query("cloudProjects").first())!;
+    await ctx.db.patch(project._id, { archivedAt: Date.now() });
+  });
+  expect(
+    await test.environment().mutation(api.environmentCommands.claim, { companyId: "workspace" }),
+  ).toHaveLength(0);
+});
+
+it("resumes an unanswered inspection with an explicit unavailable result at its deadline", async () => {
+  const test = await coordinatorHarness();
+  await seedCoordinatorProject(test.t);
+  const run = (await test.claim())!;
+  await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+    companyId: "workspace",
+    jobId: run.id,
+    generation: run.generation,
+    result: { ...decision(), actions: [inspectAction] },
+  });
+  await test.t.run(async (ctx) => {
+    const read = (await ctx.db.query("aiOrchestratorInspections").first())!;
+    const job = (await ctx.db
+      .query("aiOrchestratorJobs")
+      .withIndex("by_domain_id", (q) => q.eq("id", run.id))
+      .unique())!;
+    await ctx.db.patch(read._id, { createdAt: Date.now() - 200000 });
+    await ctx.db.patch(job._id, { notBefore: 0 });
+  });
+  const resumed = (await test.claim())!;
+  expect(resumed.id).toBe(run.id);
+  expect(resumed.context).toContain("did not return this inspection in time");
+  expect(
+    await test
+      .environment()
+      .query(api.aiOrchestratorJobs.pendingInspections, { companyId: "workspace" }),
+  ).toEqual([]);
 });

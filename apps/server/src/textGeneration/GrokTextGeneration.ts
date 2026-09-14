@@ -292,7 +292,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
   const investigate: TextGeneration.TextGeneration["Service"]["investigate"] = Effect.fn(
     "GrokTextGeneration.investigate",
   )(function* (input) {
-    if (input.contentOnly) {
+    if (input.contentOnly || input.webSearchOnly) {
       return yield* new TextGenerationError({
         operation: "investigate",
         detail:

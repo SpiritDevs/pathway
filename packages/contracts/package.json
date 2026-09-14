@@ -7,6 +7,10 @@
   ],
   "type": "module",
   "exports": {
+    "./orchestratorInspection": {
+      "types": "./src/orchestratorInspection.ts",
+      "import": "./src/orchestratorInspection.ts"
+    },
     "./orchestratorAvatar": {
       "types": "./src/orchestratorAvatar.ts",
       "import": "./src/orchestratorAvatar.ts"

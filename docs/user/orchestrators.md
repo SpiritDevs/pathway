@@ -1,6 +1,6 @@
 # Orchestrators
 
-Orchestrators are AI contacts that coordinate your work and delegate implementation to agent threads. Chief is your personal coordinator. You can create additional contacts for projects or other responsibilities, give them names and personas, and talk in continuing direct or group conversations.
+Orchestrators are AI contacts that inspect information, research questions, coordinate your work, and delegate implementation to agent threads. Chief is your personal coordinator. You can create additional contacts for projects or other responsibilities, give them names and personas, and talk in continuing direct or group conversations.
 
 Open Orchestrators from the navigation rail. The full view has conversations on the left, messages in the center, and conversation details on the right. The floating companion opens above any app view. Switching between floating and full views preserves the selected conversation and unsent message. Both support light and dark appearance.
 
@@ -29,6 +29,14 @@ In the floating companion, select the sidebar button immediately to the left of 
 The number beside the sidebar icon counts unread messages across active conversations, excluding archived rooms and internal agent events. Counts above 99 appear as **99+**. Opening and reading a conversation updates its count. Older messages show a date; hover the timestamp for the full send time.
 
 ## Conversations and work
+
+For basic checks, an orchestrator can read an existing thread, list project files, read a file, or search the public web itself. These inspections return to the same conversation without creating a worker. Thread and file reads respect project access and the conversation's participants. Focused public web search is available with Codex and Claude; an unavailable provider or environment is reported rather than treated as a successful check. Larger investigations and implementation still use workers.
+
+Follow-ups such as “push the PR for that work” go back to the original thread, preserving its conversation and working context. If it is busy, the follow-up waits behind its current work. The orchestrator tracks the follow-up's own result. Cancelling a queued follow-up does not interrupt the run ahead of it.
+
+Worker reports include the outcome, supporting findings, changed files and artifacts, branch/commit/PR references, checks performed, and remaining work. Reports return automatically. Long results are bounded and marked when shortened so the orchestrator knows when it needs more detail.
+
+Automatic activity updates have one responder for each owner's conversations. A project coordinator handles project updates when available; Chief handles environment-wide updates and provides a fallback for projects without a coordinator. When responsibilities overlap, a lightweight selector chooses one eligible contact. A specialist's completed group reply does not automatically make the lead repeat it; participants can explicitly request a lead decision or consolidation.
 
 Background checks happen quietly. Internal activity triggers and review instructions do not appear as messages, change the conversation preview, or create unread badges. Your orchestrator replies when it has something useful to report. Participant changes remain visible.
 

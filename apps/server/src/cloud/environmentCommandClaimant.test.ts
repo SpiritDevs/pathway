@@ -2,6 +2,7 @@
 import { assert, describe, expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   RunId,
@@ -316,6 +317,10 @@ describe("environment command claimant", () => {
         local.dispatches[0]?.type === "message.dispatch" ? local.dispatches[0].messageId : null,
         `${claimed.id}:message`,
       );
+      assert.deepEqual(
+        local.dispatches[0]?.type === "message.dispatch" ? local.dispatches[0].dispatchMode : null,
+        { type: "queue_after_active" },
+      );
       assert.deepEqual(convex.reports[0]?.result, {
         kind: "sendMessage",
         threadId: THREAD_ID,
@@ -332,6 +337,35 @@ describe("environment command claimant", () => {
       assert.equal(local.dispatches[0]?.type, "run.interrupt");
       assert.equal(local.dispatches[0]?.commandId, claimed.id);
       assert.deepEqual(convex.reports[0]?.result, { kind: "interrupt", threadId: THREAD_ID });
+    }),
+  );
+  it.effect("cancels a queued follow-up without interrupting the active run", () =>
+    Effect.gen(function* () {
+      const existing = projection(true);
+      const queued = {
+        ...existing.runs[0]!,
+        id: RunId.make("queued-followup"),
+        status: "queued" as const,
+      };
+      const updated = {
+        ...existing,
+        runs: [...existing.runs, queued],
+        messages: [{ id: MessageId.make("followup:message"), runId: queued.id }],
+      } as unknown as OrchestrationV2ThreadProjection;
+      const claimed = command("interrupt", {
+        kind: "interrupt",
+        threadId: THREAD_ID,
+        messageId: MessageId.make("followup:message"),
+      });
+      const { local } = yield* runHappy(claimed, updated);
+      assert.deepEqual(
+        local.dispatches.map((item) => item.type),
+        ["queued-run.cancel"],
+      );
+      assert.equal(
+        local.dispatches[0]?.type === "queued-run.cancel" ? local.dispatches[0].runId : null,
+        queued.id,
+      );
     }),
   );
 

@@ -372,6 +372,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
   const runCodexInvestigation = Effect.fn("runCodexInvestigation")(function* (input: {
     cwd: string;
     contentOnly?: boolean | undefined;
+    webSearchOnly?: boolean | undefined;
     prompt: string;
     onOutput: ((chunk: string) => Effect.Effect<void>) | undefined;
     imagePaths: ReadonlyArray<string>;
@@ -388,7 +389,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         DEFAULT_TEXT_GENERATION_REASONING_EFFORT;
       const serviceTier = getCodexServiceTierOptionValue(input.modelSelection);
       const contentConfig: string[] = [];
-      if (input.contentOnly) {
+      if (input.contentOnly || input.webSearchOnly) {
         // Enumerate names only in memory; config may contain credentials and is never logged.
         const listCommand = yield* resolveSpawnCommand(
           codexConfig.binaryPath || "codex",
@@ -480,7 +481,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           "features.code_mode_host=false",
           "features.view_image_tool=false",
           "include_apply_patch_tool=false",
-          'web_search="disabled"',
+          input.webSearchOnly ? 'web_search="live"' : 'web_search="disabled"',
           "project_doc_max_bytes=0",
         );
       }
@@ -693,6 +694,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     // process that wrote it and die with the call that reads it.
     const text = yield* runCodexInvestigation({
       contentOnly: input.contentOnly,
+      webSearchOnly: input.webSearchOnly,
       cwd: input.cwd,
       prompt: input.prompt,
       onOutput: input.onOutput,

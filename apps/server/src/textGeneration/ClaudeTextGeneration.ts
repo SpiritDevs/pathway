@@ -297,6 +297,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
   const runClaudeInvestigation = Effect.fn("runClaudeInvestigation")(function* (input: {
     cwd: string;
     contentOnly?: boolean | undefined;
+    webSearchOnly?: boolean | undefined;
     prompt: string;
     onOutput: ((chunk: string) => Effect.Effect<void>) | undefined;
     modelSelection: ModelSelection;
@@ -317,16 +318,17 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           "text",
           "--permission-mode",
           "plan",
-          ...(input.contentOnly
+          ...(input.contentOnly || input.webSearchOnly
             ? [
                 "--tools",
-                "",
+                input.webSearchOnly ? "WebSearch" : "",
                 "--strict-mcp-config",
                 "--mcp-config",
                 '{"mcpServers":{}}',
                 "--setting-sources",
                 "",
                 "--no-session-persistence",
+                ...(input.webSearchOnly ? ["--allowedTools", "WebSearch"] : []),
               ]
             : []),
           "--model",
@@ -499,6 +501,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
   )(function* (input) {
     const text = yield* runClaudeInvestigation({
       contentOnly: input.contentOnly,
+      webSearchOnly: input.webSearchOnly,
       cwd: input.cwd,
       prompt: input.prompt,
       onOutput: input.onOutput,
