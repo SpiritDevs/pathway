@@ -188,10 +188,11 @@ export function FloatingConversationSwitcher({
 }) {
   const state = useOrchestrators();
   const [open, setOpen] = useState(false);
+  const [present, setPresent] = useState(false);
   const unread = unreadMessageTotal(state.chats);
   const [layout, setLayout] = useState<ReturnType<typeof conversationPanelLayout> | null>(null);
   useEffect(() => {
-    const element = anchor.current;
+    const element = anchor.current?.closest("[data-floating-companion]") ?? anchor.current;
     if (!element) return;
     const measure = () => setLayout(conversationPanelLayout(element.getBoundingClientRect()));
     measure();
@@ -203,10 +204,14 @@ export function FloatingConversationSwitcher({
       window.removeEventListener("resize", measure);
     };
   }, [anchor]);
+  useEffect(() => {
+    if (open) setPresent(true);
+  }, [open]);
   const docked = layout?.docked ?? false;
 
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen} modal={false}>
+    <Dialog.Root open={open} onOpenChange={setOpen} onOpenChangeComplete={setPresent} modal={false}>
+      <span hidden data-companion-panel={docked && (open || present) ? "left" : undefined} />
       <Dialog.Trigger
         render={<Button variant="ghost" size="sm" />}
         className="shrink-0 gap-1.5 px-2"
@@ -225,7 +230,7 @@ export function FloatingConversationSwitcher({
       <Dialog.Portal>
         <Dialog.Viewport
           className={cn(
-            "pointer-events-none fixed z-[130] overflow-hidden",
+            "companion-drawer-viewport pointer-events-none fixed z-[130]",
             !docked && "rounded-[26px]",
           )}
           style={
@@ -249,12 +254,12 @@ export function FloatingConversationSwitcher({
           )}
           <Dialog.Popup
             aria-label="Conversations"
+            data-side="left"
+            data-docked={docked}
             style={{ width: layout?.panelWidth }}
             className={cn(
-              "pointer-events-auto relative flex h-full min-h-0 flex-col border bg-popover text-popover-foreground shadow-xl outline-none transition-transform duration-250 ease-[cubic-bezier(0.25,1,0.5,1)] motion-reduce:transition-none",
-              docked
-                ? "w-full rounded-l-2xl data-starting-style:translate-x-full data-ending-style:translate-x-full"
-                : "rounded-l-[26px] data-starting-style:-translate-x-full data-ending-style:-translate-x-full",
+              "companion-drawer pointer-events-auto relative flex h-full min-h-0 flex-col border bg-popover text-popover-foreground outline-none",
+              docked ? "w-full rounded-l-[26px] border-r-0" : "rounded-l-[26px] shadow-xl",
             )}
           >
             <div className="flex h-14 shrink-0 items-center justify-between border-b px-4">

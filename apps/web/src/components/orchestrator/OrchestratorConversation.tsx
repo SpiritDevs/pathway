@@ -497,6 +497,7 @@ export function OrchestratorOverlay() {
         createPortal(
           <section
             aria-label="Floating orchestrator companion"
+            data-floating-companion
             className="fixed right-4 bottom-4 z-[80] flex h-[min(760px,calc(100dvh-88px))] w-[min(650px,calc(100vw-32px))] flex-col overflow-hidden rounded-[26px] border border-border bg-background shadow-[0_18px_80px_-12px_rgb(0_0_0/0.28)] dark:border-foreground/15 dark:bg-popover dark:shadow-[0_18px_80px_-12px_rgb(0_0_0/0.65)]"
           >
             <OrchestratorConversation floating />

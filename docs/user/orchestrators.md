@@ -69,3 +69,5 @@ You can give a numeric allocation in a message, such as “Use 10% of the weekly
 When authorizing a new allocation, you can choose a one-time resume date and timezone. This pauses work immediately and takes a fresh baseline at the chosen time. Every selected account needs a fresh reading. If resumption is missed by more than one hour, work stays held for your instruction. Cancel the scheduled resume to retain the current hold. An interrupted worker can continue from retained progress when allowance is authorized; newer requests, archiving, and snoozing supersede that continuation.
 
 The floating companion’s conversation details use the same behavior on the right: they attach outside when there is room and otherwise slide over the chat within its bounds, including the header. Close the panel or press Escape to return to the chat.
+
+Attached panels slide smoothly out from the companion’s edge and share its outline. Closing a panel slides it back before restoring the companion’s rounded corners. Reduced motion preferences disable the slide.

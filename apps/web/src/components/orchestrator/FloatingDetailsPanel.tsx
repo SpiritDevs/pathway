@@ -14,9 +14,10 @@ export function FloatingDetailsPanel({
   onClose: () => void;
   children: ReactNode;
 }) {
+  const [present, setPresent] = useState(false);
   const [layout, setLayout] = useState<ReturnType<typeof conversationDetailsLayout> | null>(null);
   useEffect(() => {
-    const element = anchor.current;
+    const element = anchor.current?.closest("[data-floating-companion]") ?? anchor.current;
     if (!element) return;
     const measure = () =>
       setLayout(conversationDetailsLayout(element.getBoundingClientRect(), window.innerWidth));
@@ -29,18 +30,26 @@ export function FloatingDetailsPanel({
       window.removeEventListener("resize", measure);
     };
   }, [anchor]);
+  useEffect(() => {
+    if (open) setPresent(true);
+  }, [open]);
   return (
     <Dialog.Root
       open={open}
       onOpenChange={(value) => {
         if (!value) onClose();
       }}
+      onOpenChangeComplete={setPresent}
       modal={false}
     >
+      <span
+        hidden
+        data-companion-panel={layout?.docked && (open || present) ? "right" : undefined}
+      />
       <Dialog.Portal>
         <Dialog.Viewport
           className={cn(
-            "pointer-events-none fixed z-[130] overflow-hidden",
+            "companion-drawer-viewport pointer-events-none fixed z-[130]",
             !layout?.docked && "rounded-[26px]",
           )}
           style={
@@ -64,12 +73,12 @@ export function FloatingDetailsPanel({
           )}
           <Dialog.Popup
             aria-label="Conversation details"
+            data-side="right"
+            data-docked={layout?.docked ?? false}
             style={{ width: layout?.panelWidth }}
             className={cn(
-              "pointer-events-auto relative ml-auto flex h-full min-h-0 flex-col overflow-hidden border bg-popover text-popover-foreground shadow-xl outline-none transition-transform duration-250 ease-[cubic-bezier(0.25,1,0.5,1)] motion-reduce:transition-none",
-              layout?.docked
-                ? "rounded-r-2xl data-starting-style:-translate-x-full data-ending-style:-translate-x-full"
-                : "rounded-r-[26px] data-starting-style:translate-x-full data-ending-style:translate-x-full",
+              "companion-drawer pointer-events-auto relative ml-auto flex h-full min-h-0 flex-col overflow-hidden border bg-popover text-popover-foreground outline-none",
+              layout?.docked ? "rounded-r-[26px] border-l-0" : "rounded-r-[26px] shadow-xl",
             )}
           >
             {children}
