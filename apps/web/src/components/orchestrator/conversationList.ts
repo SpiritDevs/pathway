@@ -24,3 +24,20 @@ export function conversationTime(timestamp: number, now = Date.now()) {
         ...(sent.getFullYear() !== today.getFullYear() ? { year: "numeric" as const } : {}),
       }).format(sent);
 }
+
+/** Reserve a screen-edge gutter; use a modal drawer when the left side cannot fit. */
+export function conversationPanelLayout(
+  bounds: { left: number; top: number; height: number },
+  viewportHeight: number,
+) {
+  const width = 320;
+  const gutter = 16;
+  if (bounds.left < width + gutter) return null;
+  const top = Math.max(gutter, bounds.top);
+  return {
+    left: bounds.left - width,
+    top,
+    width,
+    height: Math.max(0, Math.min(bounds.height, viewportHeight - top - gutter)),
+  };
+}

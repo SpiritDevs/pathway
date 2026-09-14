@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
-import { unreadMessageTotal, unreadLabel, conversationTime } from "./conversationList";
+import {
+  unreadMessageTotal,
+  unreadLabel,
+  conversationTime,
+  conversationPanelLayout,
+} from "./conversationList";
 
 describe("conversation list", () => {
   it("counts messages rather than rooms, excludes archived rooms, and caps the badge", () => {
@@ -29,4 +34,15 @@ describe("conversation list", () => {
       }).format(old),
     );
   });
+});
+
+it("docks only when the full panel fits beside the chat, and stays within the viewport", () => {
+  expect(conversationPanelLayout({ left: 335, top: 80, height: 600 }, 800)).toBeNull();
+  expect(conversationPanelLayout({ left: 336, top: 80, height: 600 }, 800)).toEqual({
+    left: 16,
+    top: 80,
+    width: 320,
+    height: 600,
+  });
+  expect(conversationPanelLayout({ left: 800, top: 80, height: 600 }, 500)?.height).toBe(404);
 });

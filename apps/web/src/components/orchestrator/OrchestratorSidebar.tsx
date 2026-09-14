@@ -1,4 +1,4 @@
-import { useState, type RefObject } from "react";
+import { useState, useEffect, type RefObject } from "react";
 import {
   ArchiveIcon,
   PlusIcon,
@@ -11,8 +11,13 @@ import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
 import { Button } from "../ui/button";
 import { useOrchestrators } from "./OrchestratorContext";
 import { ConversationAvatar, OrchestratorAvatar } from "./OrchestratorAvatar";
-import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { unreadMessageTotal, unreadLabel, conversationTime } from "./conversationList";
+import { Dialog } from "@base-ui/react/dialog";
+import {
+  unreadMessageTotal,
+  unreadLabel,
+  conversationTime,
+  conversationPanelLayout,
+} from "./conversationList";
 import { cn } from "../../lib/utils";
 
 export function ConversationList({ onSelect }: { onSelect?: () => void }) {
@@ -184,9 +189,26 @@ export function FloatingConversationSwitcher({
   const state = useOrchestrators();
   const [open, setOpen] = useState(false);
   const unread = unreadMessageTotal(state.chats);
+  const [layout, setLayout] = useState<ReturnType<typeof conversationPanelLayout> | null>(null);
+  useEffect(() => {
+    const element = anchor.current;
+    if (!element) return;
+    const measure = () =>
+      setLayout(conversationPanelLayout(element.getBoundingClientRect(), window.innerHeight));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [anchor]);
+  const docked = layout !== null;
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
+    <Dialog.Root open={open} onOpenChange={setOpen} modal={!docked}>
+      <Dialog.Trigger
         render={<Button variant="ghost" size="sm" />}
         className="shrink-0 gap-1.5 px-2"
         aria-label={`Conversations${unread ? `, ${unreadLabel(unread)} unread messages` : ""}`}
@@ -200,44 +222,63 @@ export function FloatingConversationSwitcher({
             {unreadLabel(unread)}
           </span>
         )}
-      </PopoverTrigger>
-      <PopoverPopup
-        anchor={anchor}
-        aria-label="Conversations"
-        side="left"
-        align="start"
-        sideOffset={8}
-        className="w-80 max-w-[calc(100vw-2rem)] transition-[opacity,translate] duration-200 data-starting-style:translate-x-4 data-ending-style:translate-x-4 motion-reduce:transition-none"
-        viewportClassName="p-0"
-      >
-        <div className="flex h-[min(36rem,var(--anchor-height),var(--available-height))] min-h-0 flex-col">
-          <div className="flex h-14 shrink-0 items-center justify-between px-4">
-            <h2 className="text-sm font-semibold">Conversations</h2>
-            <div className="flex gap-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="New conversation"
-                onClick={() => {
-                  setOpen(false);
-                  state.setNewChatOpen(true);
-                }}
-              >
-                <SquarePenIcon className="size-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Close conversations"
-                onClick={() => setOpen(false)}
-              >
-                <XIcon className="size-4" />
-              </Button>
+      </Dialog.Trigger>
+      <Dialog.Portal>
+        {!docked && (
+          <Dialog.Backdrop className="fixed inset-0 z-[129] bg-black/45 transition-opacity duration-200 data-starting-style:opacity-0 data-ending-style:opacity-0 motion-reduce:transition-none" />
+        )}
+        <Dialog.Viewport
+          className="pointer-events-none fixed inset-0 z-[130] overflow-hidden"
+          style={
+            docked
+              ? {
+                  left: layout.left,
+                  top: layout.top,
+                  width: layout.width,
+                  height: layout.height,
+                  right: "auto",
+                  bottom: "auto",
+                }
+              : undefined
+          }
+        >
+          <Dialog.Popup
+            aria-label="Conversations"
+            className={cn(
+              "pointer-events-auto flex h-full min-h-0 flex-col border bg-popover text-popover-foreground shadow-xl outline-none transition-transform duration-250 ease-[cubic-bezier(0.25,1,0.5,1)] motion-reduce:transition-none",
+              docked
+                ? "w-full rounded-l-2xl data-starting-style:translate-x-full data-ending-style:translate-x-full"
+                : "w-[min(320px,calc(100vw-40px))] data-starting-style:-translate-x-full data-ending-style:-translate-x-full",
+            )}
+          >
+            <div className="flex h-14 shrink-0 items-center justify-between px-4">
+              <Dialog.Title className="text-sm font-semibold">Conversations</Dialog.Title>
+              <div className="flex gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="New conversation"
+                  onClick={() => {
+                    setOpen(false);
+                    state.setNewChatOpen(true);
+                  }}
+                >
+                  <SquarePenIcon className="size-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Close conversations"
+                  onClick={() => setOpen(false)}
+                >
+                  <XIcon className="size-4" />
+                </Button>
+              </div>
             </div>
-          </div>
-          <ConversationList onSelect={() => setOpen(false)} />
-        </div>
-      </PopoverPopup>
-    </Popover>
+            <ConversationList onSelect={() => setOpen(false)} />
+          </Dialog.Popup>
+        </Dialog.Viewport>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
