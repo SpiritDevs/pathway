@@ -75,3 +75,5 @@ Attached panels slide smoothly out from the companion’s edge and share its out
 In the conversation area, consecutive messages from the same sender within five minutes form a group, with their name above and a small time and delivery footer below. Messages with queued, failed, or cancelled status retain their individual status and available actions. Centered day-and-time markers separate gaps longer than two hours and the start of each new day. Avatars remain in the conversation header and lists.
 
 After a message is accepted, it lifts from the composer into its place in the conversation. This animation only follows messages you send from that view; incoming messages and loaded history remain still. Reduced motion preferences disable the flight.
+
+The conversation header and navigation avatar blink and glance more often, with short rests between movements. Their Energy setting still controls the pace. Hidden avatars and reduced-motion settings suspend this idle animation.

@@ -270,7 +270,7 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
                 messages={messages.value?.messages}
                 work={work.value}
                 activity={activity.value}
-                idle
+                idle="frequent"
               />
               <span className="min-w-0">
                 <span className="flex items-center gap-2 text-sm font-semibold">

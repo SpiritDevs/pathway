@@ -627,7 +627,11 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
         destination: "orchestrator",
         icon: BotIcon,
         avatar: (
-          <OrchestratorAvatar contact={orchestrators.personalAvatar} className="size-7" idle />
+          <OrchestratorAvatar
+            contact={orchestrators.personalAvatar}
+            className="size-7"
+            idle="frequent"
+          />
         ),
         label: "Orchestrator AI",
         badgeCount: orchestrators.unreadCount,
@@ -814,7 +818,7 @@ export const PrimaryNavigationRail = memo(function PrimaryNavigationRail({
                     <OrchestratorAvatar
                       contact={orchestrators.personalAvatar}
                       className="size-7"
-                      idle
+                      idle="frequent"
                     />
                   ) : undefined
                 }

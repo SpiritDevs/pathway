@@ -1,5 +1,7 @@
 import {
   createAvatarMotion,
+  avatarIdleDelay,
+  type AvatarIdle,
   createAvatarTransition,
   shouldReactToAvatarUpdate,
 } from "./avatarMotion";
@@ -98,7 +100,7 @@ export function OrchestratorAvatar({
   className?: string | undefined;
   expression?: AvatarExpression | undefined;
   status?: AvatarWorkStatus | undefined;
-  idle?: boolean;
+  idle?: AvatarIdle;
   interactive?: boolean;
   reactionKey?: string | undefined;
 }) {
@@ -158,8 +160,9 @@ export function OrchestratorAvatar({
       },
     });
     const motion = createAvatarMotion({
-      idle,
-      idleDelay: () => 3200 - motionTraits.current.energy * 10 + Math.random() * 2200,
+      idle: Boolean(idle),
+      idleDelay: () => avatarIdleDelay(motionTraits.current.energy, idle === "frequent"),
+      ...(idle === "frequent" ? { initialDelay: () => 600 + Math.random() * 700 } : {}),
       animate: (gesture) => {
         const traits = motionTraits.current;
         const strength = 0.4 + traits.expressiveness / 120;
@@ -195,7 +198,7 @@ export function OrchestratorAvatar({
               { transform: `translate(${look}px, -2px)`, offset: 0.7 },
               { transform: "translate(0px, 0px)" },
             ],
-            greeting ? 480 : 1600,
+            greeting ? 480 : idle === "frequent" ? 1000 : 1600,
           );
           const turn = direction * (greeting ? 4 + traits.playfulness / 18 : 1.5) * strength;
           play(
@@ -208,7 +211,7 @@ export function OrchestratorAvatar({
               },
               { transform: "translateY(0%) rotate(0deg) scale(1, 1)" },
             ],
-            greeting ? 480 : 1600,
+            greeting ? 480 : idle === "frequent" ? 1000 : 1600,
           );
         }
         return { cancel: () => animations.forEach((animation) => animation.cancel()) };
@@ -339,7 +342,7 @@ export function ConversationAvatar({
   messages?: readonly OrchestratorMessage[] | undefined;
   work?: readonly OrchestratorWorkItem[] | undefined;
   activity?: OrchestratorActivity | undefined;
-  idle?: boolean;
+  idle?: AvatarIdle;
 }) {
   const [activityTime, setActivityTime] = useState(() => Date.now());
   useEffect(() => {

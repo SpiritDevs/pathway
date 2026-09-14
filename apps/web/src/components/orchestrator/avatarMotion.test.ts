@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createAvatarMotion,
+  avatarIdleDelay,
   createAvatarTransition,
   shouldReactToAvatarUpdate,
 } from "./avatarMotion";
@@ -173,5 +174,33 @@ describe("avatar expression transitions", () => {
     expect(pending.size).toBe(0);
     transition.update(50);
     expect(pending.size).toBe(0);
+  });
+});
+
+describe("prominent avatar cadence", () => {
+  it("animates more frequently while retaining the energy preference and pauses", () => {
+    expect(avatarIdleDelay(50, true, 0.5)).toBeLessThan(avatarIdleDelay(50, false, 0.5));
+    expect(avatarIdleDelay(100, true, 0.5)).toBeLessThan(avatarIdleDelay(0, true, 0.5));
+    // Even the most energetic avatar rests after its one-second glance.
+    expect(avatarIdleDelay(100, true, 0)).toBeGreaterThan(1000);
+  });
+  it("keeps scheduling bounded and cancels the faster cadence when hidden", () => {
+    vi.useFakeTimers();
+    const animate = vi.fn(() => ({ cancel: vi.fn() }));
+    const motion = createAvatarMotion({
+      idle: true,
+      animate,
+      initialDelay: () => 600,
+      idleDelay: () => avatarIdleDelay(50, true, 0.5),
+    });
+    motion.setActive(true);
+    vi.advanceTimersByTime(10000);
+    expect(animate).toHaveBeenCalledTimes(5);
+    expect(vi.getTimerCount()).toBe(1);
+    motion.setActive(false);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(10000);
+    expect(animate).toHaveBeenCalledTimes(5);
+    motion.dispose();
   });
 });

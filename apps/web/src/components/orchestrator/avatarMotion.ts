@@ -1,3 +1,10 @@
+export type AvatarIdle = boolean | "frequent";
+
+/** Prominent avatars stay lively while energy still controls the pauses between gestures. */
+export function avatarIdleDelay(energy: number, frequent: boolean, random = Math.random()) {
+  return frequent ? 2000 - energy * 6 + random * 900 : 3200 - energy * 10 + random * 2200;
+}
+
 export type AvatarGesture = "blink" | "glance" | "greet";
 
 /** Runs brief gestures with real pauses and no active timer while suspended. */
