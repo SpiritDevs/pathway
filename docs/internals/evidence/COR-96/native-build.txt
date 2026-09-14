@@ -1,0 +1,13 @@
+XcodeBuildMCP build_run_sim: FAILED in 25759 ms
+Apple Swift version 6.4 (swiftlang-6.4.0.33.1 clang-2100.3.33.1)
+Target: Pathway, Debug, iPhone 17 Pro / iOS 27.0 Simulator
+
+/Users/coreybaines/.pathway/worktrees/pathway/pathway-bfd62da1/apps/pathway-ios/Pathway/shared/datalayer/PathwayOrchestratorsModel.swift:182:15: error: pattern that the region-based isolation checker does not understand how to check. Please file a bug
+180 |         ("activity", "aiOrchestrators:activity"),
+181 |       ] {
+182 |         group.addTask { @MainActor [weak self] in
+    |               `- error: pattern that the region-based isolation checker does not understand how to check. Please file a bug
+183 |           guard let self else { return }
+184 |           do {
+
+Explicit-capture experiment also FAILED in 19032 ms; reverted. No native launch.

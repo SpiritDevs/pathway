@@ -1,0 +1,3 @@
+PASS: steering, edit revision, complete-set reorder, removal revision, routed answer ID, stop request/terminal rendering, accepted-message freeze, narrow layout.
+Simulated backend; no live provider delivery or stop confirmed by this fixture.
+No browser page errors.

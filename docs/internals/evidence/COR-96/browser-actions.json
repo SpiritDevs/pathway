@@ -1,0 +1,73 @@
+[
+  {
+    "name": "aiOrchestratorControls:control",
+    "args": {
+      "chatId": "chat",
+      "action": {
+        "kind": "sendWork",
+        "workId": "worker",
+        "id": "209070b0-c664-4000-9402-c064543d9948",
+        "text": "Prioritize the failed deployment; pause release-note changes.",
+        "mode": "steer"
+      }
+    }
+  },
+  {
+    "name": "aiOrchestratorControls:control",
+    "args": {
+      "chatId": "chat",
+      "action": {
+        "kind": "editWorkMessage",
+        "workId": "worker",
+        "id": "first",
+        "revision": 0,
+        "text": "Inspect deployment logs before updating the release notes."
+      }
+    }
+  },
+  {
+    "name": "aiOrchestratorControls:control",
+    "args": {
+      "chatId": "chat",
+      "action": {
+        "kind": "reorderWorkMessages",
+        "workId": "worker",
+        "ids": ["second", "first", "209070b0-c664-4000-9402-c064543d9948"]
+      }
+    }
+  },
+  {
+    "name": "aiOrchestratorControls:control",
+    "args": {
+      "chatId": "chat",
+      "action": {
+        "kind": "removeWorkMessage",
+        "workId": "worker",
+        "id": "first",
+        "revision": 1
+      }
+    }
+  },
+  {
+    "name": "aiOrchestratorControls:control",
+    "args": {
+      "chatId": "chat",
+      "action": {
+        "kind": "answerWorkQuestion",
+        "workId": "worker",
+        "id": "76f39cba-e4a2-4bd5-b0d9-beea34f75294",
+        "questionId": "question",
+        "answers": {
+          "format": "Yes. Include customer-facing wording, but do not publish it."
+        }
+      }
+    }
+  },
+  {
+    "name": "aiOrchestratorControls:stop",
+    "args": {
+      "chatId": "chat",
+      "workId": "worker"
+    }
+  }
+]

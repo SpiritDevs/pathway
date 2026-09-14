@@ -277,8 +277,9 @@ function WorkerQuestion({
       {question.questions.map((q) => (
         <label key={q.id} className="block text-xs">
           {q.question}
-          <input
-            className="mt-1 w-full rounded border bg-background p-2"
+          <textarea
+            className="mt-1 min-h-20 w-full resize-y rounded border bg-background p-2"
+            rows={3}
             value={answers[q.id] ?? ""}
             onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
             disabled={disabled}
