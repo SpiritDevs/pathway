@@ -47,3 +47,23 @@ describe("background work recovery", () => {
     expect(html).toContain("Keep this conversation");
   });
 });
+
+it("keeps the task summary on one line with details collapsed", () => {
+  const html = renderToStaticMarkup(<BackgroundWorkSection {...props} />);
+  expect(html).toContain("truncate");
+  expect(html).toContain('aria-expanded="false"');
+  expect(html).toContain('hidden=""');
+  expect(html).toContain('aria-label="Show background work details"');
+});
+
+it("summarizes additional tasks without adding collapsed rows", () => {
+  const html = renderToStaticMarkup(
+    <BackgroundWorkSection
+      {...props}
+      tasks={[...props.tasks, { taskId: "another-task", description: "Check deployment" }]}
+    />,
+  );
+  expect(html).toContain(">+1</span>");
+  expect(html).toContain("Check deployment");
+  expect(html).toContain('hidden=""');
+});
