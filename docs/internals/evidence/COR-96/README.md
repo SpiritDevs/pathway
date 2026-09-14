@@ -1,5 +1,7 @@
 # COR-96 review evidence — 14 September 2026
 
+Current result: worker controls are ready for PR review. The later native follow-up below resolves the original compiler failure: simulator build/launch and two focused native tests passed. Authenticated worker interactions and live provider/network integration remain unverified.
+
 The original implementation is preserved in commit `84177271a1` on `orchestrator-worker-controls`, worktree `/Users/coreybaines/.pathway/worktrees/pathway/pathway-bfd62da1`. It was uncommitted when this review began and was committed during the review. This follow-up adds evidence and precise limitations without duplicating that implementation or merging other branches.
 
 Runtime allowance was force-refreshed before substantive work: fresh account readings, 63% weekly usage, `canStart=true`, `shouldInterrupt=false`, no applicable guard. No extra allowance allocation or provider worker was launched.
@@ -91,3 +93,11 @@ Provider-native limitations remain unchanged: no independent native-child mailbo
 Focused native validation: `test_sim` selected only `PathwayTests/PathwayOrchestratorsObservationTests`, with parallel testing disabled, one simulator destination, and test timeouts enabled (30-second default / 60-second maximum). **2 test methods passed, 0 failed, 0 skipped**, including both parameterized cancellation/account-reset cases; tool duration **154.6 seconds**. Tests verify all three stream projections, message pagination/read acknowledgment, parent cancellation terminating child streams, and stale-generation values not restoring cleared state or issuing read mutations. This is an injected-stream model test, not live Cloud integration. `git diff --check` passed. No backend/web checks were repeated for this native-only extraction.
 
 The successful build/test excerpts and reproducible tool arguments are retained in [native follow-up validation](native-followup.txt). Earlier tests and browser results above remain historical. COR-96 remains in progress for integrated verification. No push, PR, merge or deployment was performed. Follow-up by GPT-6 Astra through Codex.
+
+## PR evidence
+
+[Before controls](00-before.png) renders `ConversationMetadata.tsx` from base `a26f42e0ed` in the same fixture. Set `COR96_BASELINE=1` when starting its Vite config to reproduce on port 6274. [After controls](01-question-queue.png) uses the current implementation. Both use identical simulated worker data.
+
+[Interaction recording](worker-controls.webm) captures the production component fixture steering, editing, reordering, removing, answering and rendering requested/confirmed stop states. Backend receipt and confirmation updates are simulated. The browser assertion script passed during capture. The recorder used the existing Playwright ffmpeg binary; no system package was installed.
+
+PR preparation fetched and rebased onto current `origin/main`; Git reported the branch already up to date. The native follow-up `c2842945f7` from the “Fix Native Worker Controls Build” thread is already on this same branch. No duplicate implementation or cherry-pick was required.

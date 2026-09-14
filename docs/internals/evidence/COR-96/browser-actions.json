@@ -6,7 +6,7 @@
       "action": {
         "kind": "sendWork",
         "workId": "worker",
-        "id": "209070b0-c664-4000-9402-c064543d9948",
+        "id": "ddadf827-6a66-4176-b9dd-d44d3c920901",
         "text": "Prioritize the failed deployment; pause release-note changes.",
         "mode": "steer"
       }
@@ -32,7 +32,7 @@
       "action": {
         "kind": "reorderWorkMessages",
         "workId": "worker",
-        "ids": ["second", "first", "209070b0-c664-4000-9402-c064543d9948"]
+        "ids": ["second", "first", "ddadf827-6a66-4176-b9dd-d44d3c920901"]
       }
     }
   },
@@ -55,7 +55,7 @@
       "action": {
         "kind": "answerWorkQuestion",
         "workId": "worker",
-        "id": "76f39cba-e4a2-4bd5-b0d9-beea34f75294",
+        "id": "b180519d-2da5-4a57-9149-36bc21babff3",
         "questionId": "question",
         "answers": {
           "format": "Yes. Include customer-facing wording, but do not publish it."
