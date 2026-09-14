@@ -34,6 +34,44 @@ export const orchestratorMemoryScope = v.union(
   v.literal("project"),
 );
 export const aiOrchestratorTables = {
+  aiOrchestratorWorkerMessages: defineTable({
+    id: v.string(),
+    workId: v.string(),
+    threadId: v.string(),
+    revision: v.number(),
+    position: v.number(),
+    text: v.string(),
+    mode: v.union(v.literal("queue"), v.literal("steer"), v.literal("answer")),
+    questionId: v.optional(v.string()),
+    answers: v.optional(v.record(v.string(), v.string())),
+    state: v.union(
+      v.literal("pending"),
+      v.literal("accepted"),
+      v.literal("delivered"),
+      v.literal("failed"),
+      v.literal("removed"),
+    ),
+    detail: v.string(),
+    fingerprint: v.string(),
+  })
+    .index("by_work", ["workId"])
+    .index("by_work_id", ["workId", "id"]),
+  aiOrchestratorWorkerQuestions: defineTable({
+    id: v.string(),
+    workId: v.string(),
+    threadId: v.string(),
+    requestId: v.string(),
+    questions: v.array(v.object({ id: v.string(), question: v.string() })),
+    state: v.union(
+      v.literal("open"),
+      v.literal("escalated"),
+      v.literal("answering"),
+      v.literal("resolved"),
+      v.literal("unavailable"),
+    ),
+  })
+    .index("by_work", ["workId"])
+    .index("by_work_id", ["workId", "id"]),
   aiOrchestratorPush: defineTable({
     chatId: v.string(),
     subject: v.string(),
@@ -221,6 +259,7 @@ export const aiOrchestratorTables = {
     resultCollected: v.optional(v.boolean()),
     resultText: v.optional(v.string()),
     resultRunId: v.optional(v.string()),
+    followedRunId: v.optional(v.string()),
     stopRequested: v.optional(v.boolean()),
     interruptCommandId: v.optional(v.string()),
     createdAt: v.number(),
@@ -228,6 +267,7 @@ export const aiOrchestratorTables = {
   })
     .index("by_domain_id", ["id"])
     .index("by_company_environment_status", ["companyId", "environmentId", "status"])
+    .index("by_company_environment_updated", ["companyId", "environmentId", "updatedAt"])
     .index("by_chat", ["chatId"])
     .index("by_command", ["commandId"])
     .index("by_company_status", ["companyId", "status"])

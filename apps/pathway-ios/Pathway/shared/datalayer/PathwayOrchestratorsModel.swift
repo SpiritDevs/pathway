@@ -279,6 +279,15 @@ final class PathwayOrchestratorsModel {
     guard generation == current, !Task.isCancelled else { throw CancellationError() }
     return value
   }
+  func workerUpdates(chatID: String, workID: String) -> AsyncThrowingStream<JSONValue, Error> {
+    subscribe("aiOrchestratorControls:conversation", .object(["chatId": .string(chatID), "workId": .string(workID)]))
+  }
+  @discardableResult func controlWorker(_ operation: String, _ fields: [String: JSONValue]) async throws -> JSONValue {
+    let current = generation
+    let value = try await request("mutation", "aiOrchestratorControls:\(operation)", .object(fields))
+    guard generation == current, !Task.isCancelled else { throw CancellationError() }
+    return value
+  }
   func allowanceUpdates(companyID: String) -> AsyncThrowingStream<JSONValue, Error> {
     subscribe("providerAllowanceBudgets:list", .object(["companyId": .string(companyID)]))
   }

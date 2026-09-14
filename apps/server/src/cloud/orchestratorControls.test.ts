@@ -1,0 +1,215 @@
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
+import {
+  ThreadId,
+  ProviderInstanceId,
+  RuntimeRequestId,
+  NodeId,
+  ProviderThreadId,
+  CommandId,
+  NonNegativeInt,
+  type OrchestrationV2ThreadProjection,
+  type OrchestrationV2Command,
+} from "@spiritdevs/contracts";
+import {
+  executeAcceptedWorkerMessage,
+  belongsToWorker,
+  workerMessageCommandId,
+} from "./orchestratorControls.ts";
+const assignment = { workId: "work", commandId: "origin", orchestratorId: "coordinator" };
+const now = DateTime.makeUnsafe("2026-09-14T00:00:00Z");
+function projection(id = "root"): OrchestrationV2ThreadProjection {
+  const threadId = ThreadId.make(id),
+    instanceId = ProviderInstanceId.make("codex");
+  return {
+    thread: {
+      id: threadId,
+      projectId: null,
+      title: "Worker",
+      providerInstanceId: instanceId,
+      modelSelection: { instanceId, model: "test" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      activeProviderThreadId: null,
+      lineage: {
+        rootThreadId: ThreadId.make("root"),
+        parentThreadId: id === "root" ? null : ThreadId.make("root"),
+        relationshipToParent: id === "root" ? null : "subagent",
+      },
+      forkedFrom: null,
+      createdBy: "agent",
+      creationSource: "mcp",
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      lastVisitedAt: null,
+      deletedAt: null,
+      orchestratorOrigin: { ...assignment, companyId: "company", commandId: assignment.commandId },
+    },
+    runs: [],
+    attempts: [],
+    nodes: [],
+    subagents: [],
+    providerSessions: [],
+    providerThreads: [],
+    providerTurns: [],
+    runtimeRequests: [],
+    messages: [],
+    plans: [],
+    turnItems: [],
+    checkpointScopes: [],
+    checkpoints: [],
+    contextHandoffs: [],
+    contextTransfers: [],
+    visibleTurnItems: [],
+    updatedAt: now,
+  };
+}
+function harness(problem: "normal" | "foreign" | "approval" | "stale" = "normal") {
+  const root = projection();
+  const base = projection("child");
+  const child: OrchestrationV2ThreadProjection = {
+    ...base,
+    thread: {
+      ...base.thread,
+      orchestratorOrigin: {
+        ...base.thread.orchestratorOrigin!,
+        commandId: problem === "foreign" ? "foreign" : assignment.commandId,
+      },
+    },
+    runtimeRequests:
+      problem === "stale"
+        ? []
+        : [
+            {
+              id: RuntimeRequestId.make("question"),
+              nodeId: NodeId.make("node"),
+              providerTurnId: null,
+              nativeRequestRef: null,
+              kind: problem === "approval" ? "command" : "user_input",
+              status: "pending",
+              responseCapability: {
+                type: "message",
+                providerThreadId: ProviderThreadId.make("provider-thread"),
+              },
+              createdAt: now,
+              resolvedAt: null,
+            },
+          ],
+  };
+  const commands: OrchestrationV2Command[] = [];
+  let recorded = false,
+    allow = true;
+  const message = {
+    id: "answer",
+    threadId: "child",
+    mode: "answer" as const,
+    text: "",
+    requestId: "question",
+    answers: { format: "JSON" },
+  };
+  const input = {
+    message,
+    assignment,
+    root,
+    companyId: "company",
+    admit: () => Effect.sync(() => allow),
+    receipts: {
+      getByCommandId: (commandId: CommandId) =>
+        Effect.sync(() =>
+          recorded
+            ? Option.some({
+                commandId,
+                threadId: child.thread.id,
+                commandType: "runtime-request.respond",
+                acceptedAt: now,
+                resultSequence: NonNegativeInt.make(1),
+                status: "accepted" as const,
+                error: null,
+              })
+            : Option.none(),
+        ),
+    },
+    threads: {
+      getThreadProjection: () => Effect.succeed(child),
+      dispatch: (command: OrchestrationV2Command) =>
+        Effect.sync(() => {
+          commands.push(command);
+          recorded = true;
+          return { sequence: 1, storedEvents: [] };
+        }),
+      sendToThread: () => Effect.die("Unexpected new turn"),
+    },
+  };
+  return {
+    input,
+    commands,
+    child,
+    hold: () => {
+      allow = false;
+    },
+  };
+}
+describe("worker control local delivery", () => {
+  it.effect(
+    "routes an answer to the original child and reuses its receipt after a lost acknowledgment",
+    () =>
+      Effect.gen(function* () {
+        const test = harness();
+        expect((yield* executeAcceptedWorkerMessage(test.input)).failed).toBe(false);
+        expect(test.commands).toHaveLength(1);
+        expect(test.commands[0]).toMatchObject({
+          type: "runtime-request.respond",
+          threadId: "child",
+          requestId: "question",
+          answeredBy: "agent",
+          answers: { format: "JSON" },
+        });
+        expect((yield* executeAcceptedWorkerMessage(test.input)).failed).toBe(false);
+        expect(test.commands).toHaveLength(1);
+      }),
+  );
+  it.effect("refuses foreign descendants and approval requests", () =>
+    Effect.gen(function* () {
+      const foreign = harness("foreign");
+      expect((yield* executeAcceptedWorkerMessage(foreign.input)).failed).toBe(true);
+      expect(foreign.commands).toHaveLength(0);
+      const approval = harness("approval");
+      expect((yield* executeAcceptedWorkerMessage(approval.input)).failed).toBe(true);
+      expect(approval.commands).toHaveLength(0);
+    }),
+  );
+  it.effect("holds accepted delivery under descendant allowance without dispatching", () =>
+    Effect.gen(function* () {
+      const test = harness();
+      test.hold();
+      expect((yield* executeAcceptedWorkerMessage(test.input).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
+      expect(test.commands).toHaveLength(0);
+    }),
+  );
+  it.effect("does not manufacture a new turn for stale questions or idle steering", () =>
+    Effect.gen(function* () {
+      const test = harness("stale");
+      expect((yield* executeAcceptedWorkerMessage(test.input)).failed).toBe(true);
+      expect(
+        (yield* executeAcceptedWorkerMessage({
+          ...test.input,
+          message: { ...test.input.message, mode: "steer" },
+        })).failed,
+      ).toBe(true);
+      expect(test.commands).toHaveLength(0);
+    }),
+  );
+  it("requires exact assignment origin and separates ambiguous id pairs", () => {
+    expect(belongsToWorker(projection(), assignment, "other-company")).toBe(false);
+    expect(workerMessageCommandId("a:b", "c")).not.toBe(workerMessageCommandId("a", "b:c"));
+  });
+});

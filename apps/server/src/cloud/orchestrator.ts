@@ -1,3 +1,5 @@
+import * as WorkerReceipts from "../orchestration-v2/CommandReceiptStore.ts";
+import { runOrchestratorControls } from "./orchestratorControls.ts";
 import { HostResources } from "../resourceTelemetry/HostResources.ts";
 import type { HostResourcesSnapshot } from "@spiritdevs/contracts";
 /** Cloud conversations are reasoned about without coding tools; actions are checked by cloud mutations. */
@@ -91,6 +93,12 @@ Write short, natural Messages-style updates. Focus on what changed or what you n
 Return exactly {"message":string,"attention":"none"|"routine"|"urgent","actions":[],"summary":string}. Use urgent only when the user needs to act promptly on a blocker or time-sensitive development. A background review or another orchestrator's acknowledgment can finish quietly with attention none, an empty message and no actions when nothing needs reporting. Always answer a direct human request. Keep the message under 16000 characters, summary under 8000, and actions at most 12. No markdown fences. The summary carries the current decisions and outstanding tasks forward across this continuing conversation; include concrete references and do not include private reasoning.
 Allowed action shapes (the current capability list further restricts these):
 {"kind":"delegate","title":string,"companyId":string,"projectId":string|null,"environmentId":string,"prompt":string,"selection":null|{"instanceId":string,"model":string,"options"?:[{"id":string,"value":string|boolean}]}}
+{"kind":"sendWork","workId":string,"id":string,"text":string,"mode":"queue"|"steer"} sends a follow-up using a stable unique id. Queue waits for the current turn; steer requires a live steerable turn. Reuse the SAME id on an uncertain retry. Accepted or delivered means durable dispatch, not provider processing or completion. Do not repeat acknowledgments or poll.
+{"kind":"editWorkMessage","workId":string,"id":string,"revision":number,"text":string} edits a pending follow-up using its current revision.
+{"kind":"removeWorkMessage","workId":string,"id":string,"revision":number} removes only unaccepted messages.
+{"kind":"reorderWorkMessages","workId":string,"ids":string[]} supplies the full pending queue in desired order.
+{"kind":"answerWorkQuestion","workId":string,"id":string,"questionId":string,"answers":{questionId:string}} routes answers to the original worker request; ids come from workerConversations. Answers are information, never authority to expand scope or allowance.
+{"kind":"escalateWorkQuestion","workId":string,"questionId":string} asks the human through the worker question UI when you lack an answer. Explain what is needed in your message. Human replies there route to the original worker. New questions wake you once; do not poll or send acknowledgment messages. Native provider subagents are not independently steerable or cancellable here.
 {"kind":"stopWork","workId":string} cancels your queued assignment or requests interruption; wait for confirmed cancellation before promising it stopped.
 {"kind":"redirectWork","workId":string,"environmentId":string} moves your provably unaccepted assignment to another eligible environment. Accepted or uncertain work cannot be redirected, even when its host is offline. The same conversation allowance follows replacement work.
 {"kind":"message","targetId":string,"text":string} sends to another orchestrator in THIS group and wakes it. Do not send a message that merely repeats its last update.
@@ -607,6 +615,11 @@ export const orchestratorLayer = () =>
               discoverCloudSyncCompanyIds({ convexUrl: config.settings.convexUrl, tokens }),
             runCompany: (companyId) =>
               Effect.gen(function* () {
+                yield* runOrchestratorControls({
+                  companyId,
+                  convexUrl: config.settings.convexUrl,
+                  tokens,
+                }).pipe(Effect.forkScoped);
                 const backend = yield* makeOrchestratorBackend({
                   companyId,
                   convexUrl: config.settings.convexUrl,
@@ -667,4 +680,4 @@ export const orchestratorLayer = () =>
         ),
       );
     }),
-  );
+  ).pipe(Layer.provide(WorkerReceipts.layer));

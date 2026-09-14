@@ -196,6 +196,7 @@ private struct PathwayOrchestratorConversation: View {
             Label(item.string("title"), systemImage: "checklist").font(.headline)
             Text(item.string("status").capitalized).font(.caption).foregroundStyle(.secondary)
             Text(item.string("detail")).font(.subheadline)
+            PathwayWorkerControls(chatID: chat.id, work: item)
             if !item.string("threadId").isEmpty {
                 Button("Open thread") {
                     guard let project = appModel.cloud.projects.first(where: { $0.project.id == item.string("projectId") }) else { model.errorMessage = "This project's environment is unavailable."; return }

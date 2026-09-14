@@ -1,3 +1,4 @@
+import { WorkerConversationControls } from "./WorkerConversationControls";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ArchiveIcon,
@@ -58,6 +59,7 @@ export function WorkList({ items }: { items: readonly OrchestratorWorkItem[] }) 
                 Open thread
               </button>
             )}
+            <WorkerConversationControls work={item} />
           </div>
           <span className="pt-0.5 text-xs capitalize text-muted-foreground">{item.status}</span>
         </div>

@@ -188,8 +188,74 @@ export const COORDINATOR_DRIVERS = ["codex", "claudeAgent", "opencode"] as const
 export const DEFAULT_ORCHESTRATOR_MODEL = "gpt-6-astra";
 export const DEFAULT_ORCHESTRATOR_REASONING = "high";
 
+/** Private worker mailbox. Acceptance freezes content; receipt describes durable local dispatch. */
+export const OrchestratorWorkerAction = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("sendWork"),
+    workId: Schema.String,
+    id: Schema.String,
+    text: Schema.String,
+    mode: Schema.Literals(["queue", "steer"]),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("editWorkMessage"),
+    workId: Schema.String,
+    id: Schema.String,
+    revision: Schema.Number,
+    text: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("removeWorkMessage"),
+    workId: Schema.String,
+    id: Schema.String,
+    revision: Schema.Number,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("reorderWorkMessages"),
+    workId: Schema.String,
+    ids: Schema.Array(Schema.String),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("answerWorkQuestion"),
+    workId: Schema.String,
+    id: Schema.String,
+    questionId: Schema.String,
+    answers: Schema.Record(Schema.String, Schema.String),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("escalateWorkQuestion"),
+    workId: Schema.String,
+    questionId: Schema.String,
+  }),
+]);
+export type OrchestratorWorkerAction = typeof OrchestratorWorkerAction.Type;
+export const OrchestratorWorkerMessage = Schema.Struct({
+  id: Schema.String,
+  workId: Schema.String,
+  threadId: Schema.String,
+  revision: Schema.Number,
+  position: Schema.Number,
+  text: Schema.String,
+  mode: Schema.Literals(["queue", "steer", "answer"]),
+  questionId: Schema.optionalKey(Schema.String),
+  answers: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  state: Schema.Literals(["pending", "accepted", "delivered", "failed", "removed"]),
+  detail: Schema.String,
+});
+export type OrchestratorWorkerMessage = typeof OrchestratorWorkerMessage.Type;
+export const OrchestratorWorkerQuestion = Schema.Struct({
+  id: Schema.String,
+  workId: Schema.String,
+  threadId: Schema.String,
+  requestId: Schema.String,
+  questions: Schema.Array(Schema.Struct({ id: Schema.String, question: Schema.String })),
+  state: Schema.Literals(["open", "escalated", "answering", "resolved", "unavailable"]),
+});
+export type OrchestratorWorkerQuestion = typeof OrchestratorWorkerQuestion.Type;
+
 /** Coordinator reasoning returns intentions; only the runtime executes allowed actions. */
 export const OrchestratorAction = Schema.Union([
+  OrchestratorWorkerAction,
   Schema.Struct({ kind: Schema.Literal("readWork"), workId: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("stopWork"), workId: Schema.String }),
   Schema.Struct({

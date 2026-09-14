@@ -1,3 +1,4 @@
+import { sharedHistoryBoundary, workVisibilityForConversation } from "./aiOrchestratorContext.ts";
 // @effect-diagnostics globalDate:off -- Convex supplies transaction time.
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
@@ -212,7 +213,8 @@ export async function refreshOrchestratorWork(
     if (
       Option.isSome(shell) &&
       shell.value.activeRunId === null &&
-      shell.value.latestRunId !== null
+      shell.value.latestRunId !== null &&
+      (!work.followedRunId || shell.value.latestRunId === work.followedRunId)
     ) {
       if (shell.value.status === "completed") {
         status = "completed";
@@ -366,6 +368,7 @@ async function interruptWork(
     cloudProjectId: project?._id ?? null,
     bindingId: null,
     kind: "interrupt",
+    orchestratorId: orchestrator.id,
     args: { kind: "interrupt", threadId },
     issuedByMembershipId: scope.membership._id,
     onBehalfOfActor: { kind: "member", membershipId: scope.membership.id },
@@ -482,6 +485,13 @@ export async function controlOrchestratorWork(
     !work.companyId
   )
     return fail("Choose this orchestrator's assignment in the current conversation.");
+  const boundary = await sharedHistoryBoundary(ctx, chat, chat);
+  if (
+    boundary === null ||
+    (work.sourceSequence ?? 0) < boundary ||
+    !(await workVisibilityForConversation(ctx, chat)(work))
+  )
+    return fail("This worker is unavailable to the current conversation audience.");
   const scope = await orchestratorOwnerScope(ctx, orchestrator, work.companyId);
   if (
     !scope ||

@@ -95,15 +95,23 @@ for (const withImage of [false, true]) {
               })!,
               Buffer.from(imageBase64, "base64"),
             );
-          const answerSteps = materialized.steps.map((step) =>
-            step.type === "respond_to_next_runtime_request" && withImage
-              ? {
-                  ...step,
-                  answers: { "question-1": "" },
-                  attachmentsByQuestionId: { "question-1": [image] },
-                }
-              : step,
-          );
+          const answerSteps = materialized.steps
+            .map((original) =>
+              original.type === "respond_to_next_runtime_request" &&
+              answerAfterCompletion &&
+              !withImage
+                ? { ...original, answeredBy: "agent" as const }
+                : original,
+            )
+            .map((step) =>
+              step.type === "respond_to_next_runtime_request" && withImage
+                ? {
+                    ...step,
+                    answers: { "question-1": "" },
+                    attachmentsByQuestionId: { "question-1": [image] },
+                  }
+                : step,
+            );
           const nativeThreadId = "019db22a-e824-7ac3-bbf7-994a4aa087e5";
           const nativeTurnId = "019db22a-e831-7b60-82fd-9eb12d353264";
           const question: CodexAppServerReplayEntry = {
@@ -272,6 +280,10 @@ for (const withImage of [false, true]) {
             (message) => message.text === answerText,
           );
           assert.equal(answerMessages.length, 1);
+          assert.equal(
+            answerMessages[0]?.createdBy,
+            answerAfterCompletion && !withImage ? "agent" : "user",
+          );
           assert.deepEqual(answerMessages[0]?.attachments, withImage ? [image] : []);
           assert.deepEqual(
             projection.visibleTurnItems.find(

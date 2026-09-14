@@ -78,6 +78,7 @@ export type OrchestratorV2ScenarioStep =
     }
   | {
       readonly type: "respond_to_next_runtime_request";
+      readonly answeredBy?: "agent";
       readonly threadId: ThreadId;
       readonly commandId: CommandId;
       readonly decision?: ProviderApprovalDecision;
@@ -571,6 +572,7 @@ export function runOrchestratorV2Scenario(
             const request = yield* waitForPendingRuntimeRequest(step.threadId);
             const result = yield* orchestrator.dispatch({
               type: "runtime-request.respond",
+              ...(step.answeredBy ? { answeredBy: step.answeredBy } : {}),
               commandId: step.commandId,
               threadId: step.threadId,
               requestId: request.id,

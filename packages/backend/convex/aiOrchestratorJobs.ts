@@ -1,3 +1,5 @@
+import { OrchestratorWorkerAction } from "@spiritdevs/contracts/aiOrchestrator";
+import { applyWorkerAction, workerConversationContext } from "./aiOrchestratorControls.ts";
 import {
   readableOrchestratorEnvironment,
   notifyOrchestratorEnvironmentChange,
@@ -415,11 +417,34 @@ async function contextFor(
       }
     }
   }
+  const workerConversations = [];
+  let controlBudget = 16000;
+  for (const row of work.filter((item) => (item.sourceSequence ?? 0) >= historyStart)) {
+    if (controlBudget <= 0) break;
+    const conversation = await workerConversationContext(ctx, row);
+    const entry = {
+      workId: row.id,
+      messages: conversation.messages
+        .slice(-12)
+        .map((m) => ({ ...m, text: m.text.slice(0, 1000) })),
+      questions: conversation.questions
+        .filter((q) => ["open", "escalated", "answering"].includes(q.state))
+        .slice(-10),
+    };
+    const size = JSON.stringify(entry).length;
+    if (size <= controlBudget) {
+      workerConversations.push(entry);
+      controlBudget -= size;
+    }
+  }
   let workResultBudget = 32000;
   return JSON.stringify({
     companyId,
     chat: { id: chat.id, title: chat.title, leadId: chat.leadId },
     capabilities: orchestrator.capabilities,
+    workerConversations,
+    workerControlScope:
+      "Follow-ups target assigned Pathway root threads. Questions from Pathway-owned descendants route to their original request. Provider-native subagents have no independent steering or cancellation API here. Accepted delivery is not provider completion.",
     responsibilities: orchestrator.responsibilities,
     environmentUpdate: environmentSignalId
       ? await readableOrchestratorEnvironment(
@@ -1016,6 +1041,27 @@ export const complete = mutation({
     const results: Array<{ kind: string; detail: unknown }> = [];
     const sentMessages: Array<{ id: string; text: string }> = [];
     for (const action of result.actions) {
+      if (
+        [
+          "sendWork",
+          "editWorkMessage",
+          "removeWorkMessage",
+          "reorderWorkMessages",
+          "answerWorkQuestion",
+          "escalateWorkQuestion",
+        ].includes(action.kind)
+      ) {
+        results.push({
+          kind: action.kind,
+          detail: await applyWorkerAction(
+            ctx,
+            claim.orchestrator,
+            claim.chat,
+            Schema.decodeUnknownSync(OrchestratorWorkerAction)(action),
+          ),
+        });
+        continue;
+      }
       if (action.kind === "allocateAllowance") {
         if (
           claim.message.senderKind !== "user" ||
