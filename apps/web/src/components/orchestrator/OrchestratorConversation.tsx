@@ -188,7 +188,12 @@ export function Composer({
             .filter((contact) => activeIds.has(contact.id))
             .map((contact) => (
               <div key={contact.id} className="flex items-center gap-1.5">
-                <OrchestratorAvatar contact={contact} className="size-5" status="working" />
+                <OrchestratorAvatar
+                  contact={contact}
+                  className="size-5"
+                  status="working"
+                  showStatusBadge={false}
+                />
                 <span className="text-xs text-muted-foreground">{contact.name} is thinking</span>
               </div>
             ))}
