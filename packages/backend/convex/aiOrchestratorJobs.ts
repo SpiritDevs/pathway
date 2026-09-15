@@ -1,3 +1,5 @@
+import { assignmentForExecution } from "./lib/aiOrchestratorAuthority.ts";
+import { reconcileConversationLifecycle } from "./lib/conversationLifecycle.ts";
 import { resolveWorkAssignments } from "./lib/aiOrchestratorContext.ts";
 import { OrchestratorWorkerAction } from "@spiritdevs/contracts/aiOrchestrator";
 import { applyWorkerAction, workerConversationContext } from "./aiOrchestratorControls.ts";
@@ -42,7 +44,12 @@ import {
   orchestratorCommandAllowed,
   orchestratorOwnerScope,
 } from "./lib/aiOrchestratorAuthority.ts";
-import { appendChatMessage, canDirectOrchestrator, findOrchestrator } from "./aiOrchestrators.ts";
+import {
+  humanRecipients,
+  appendChatMessage,
+  canDirectOrchestrator,
+  findOrchestrator,
+} from "./aiOrchestrators.ts";
 import { hasRecordPermission } from "../src/permissions.ts";
 import { collaborationDirectory, startCollaboration } from "./lib/aiOrchestratorCollaboration.ts";
 import {
@@ -67,6 +74,9 @@ import {
   audienceProjectPermissions,
   workVisibilityForConversation,
   sharedHistoryBoundary,
+  discoverConversations,
+  conversationRetrievalBoundary,
+  withoutForgottenSources,
 } from "./lib/aiOrchestratorContext.ts";
 
 const LEASE_MS = 90_000;
@@ -201,6 +211,74 @@ export async function currentClaim(
   return { actor, job, orchestrator, chat, message };
 }
 
+/** Persist only retrieval requests; recheck access and forgetting at delivery time. */
+async function refreshedConversationResults(
+  ctx: QueryCtx,
+  orchestrator: Doc<"aiOrchestrators">,
+  destination: Doc<"aiOrchestratorChats">,
+  serialized?: string,
+) {
+  if (!serialized) return "";
+  const parsed: unknown = JSON.parse(serialized);
+  if (!Array.isArray(parsed)) return "";
+  const results = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") continue;
+    if (item.kind === "findConversations") {
+      if (typeof item.detail?.query !== "string") continue;
+      results.push({
+        kind: item.kind,
+        detail: await discoverConversations(
+          ctx,
+          orchestrator,
+          destination,
+          item.detail.query,
+          typeof item.detail.cursor === "string" ? item.detail.cursor : undefined,
+        ),
+      });
+    } else if (item.kind === "readConversation") {
+      if (typeof item.detail?.chatId !== "string") continue;
+      const source = await findChat(ctx, item.detail.chatId);
+      const boundary = source
+        ? await conversationRetrievalBoundary(ctx, orchestrator, source, destination)
+        : null;
+      if (!source || boundary === null) {
+        results.push({ kind: item.kind, detail: { unavailable: true } });
+        continue;
+      }
+      const messages = await ctx.db
+        .query("aiOrchestratorMessages")
+        .withIndex("by_chat_sequence", (q) =>
+          q
+            .eq("chatId", source.id)
+            .gte("sequence", boundary)
+            .lt(
+              "sequence",
+              typeof item.detail.beforeSequence === "number"
+                ? item.detail.beforeSequence
+                : Number.MAX_SAFE_INTEGER,
+            ),
+        )
+        .order("desc")
+        .take(20);
+      const retained = await withoutForgottenSources(ctx, orchestrator, messages);
+      const sourced = boundedConversationMessages(retained, undefined, 12000);
+      results.push({
+        kind: item.kind,
+        detail: {
+          chatId: source.id,
+          nextBeforeSequence:
+            messages.length === 20 || sourced.length < retained.length
+              ? (sourced[0]?.sequence ?? messages[messages.length - 1]?.sequence ?? null)
+              : null,
+          messages: sourced,
+        },
+      });
+    } else results.push(item);
+  }
+  return JSON.stringify(results);
+}
+
 async function contextFor(
   ctx: QueryCtx,
   orchestrator: Doc<"aiOrchestrators">,
@@ -221,6 +299,12 @@ async function contextFor(
     .withIndex("by_chat_sequence", (q) => q.eq("chatId", chat.id).gte("sequence", historyStart))
     .order("desc")
     .take(40);
+  const retainedMessages = await withoutForgottenSources(ctx, orchestrator, messages);
+  const retainedTrigger = await withoutForgottenSources(ctx, orchestrator, [trigger]);
+  const sourceTombstone = await ctx.db
+    .query("aiOrchestratorMemory")
+    .withIndex("by_source_forgotten", (q) => q.eq("sourceChatId", chat.id).eq("forgotten", true))
+    .first();
   const ownMemories = await ctx.db
     .query("aiOrchestratorMemory")
     .withIndex("by_orchestrator_forgotten", (q) =>
@@ -268,6 +352,15 @@ async function contextFor(
   let memoryBudget = 24000;
   for (const memory of candidates) {
     if (memory.text.length > memoryBudget || !(await memoryVisible(memory))) continue;
+    if (memory.sourceChatId && memory.sourceSequence !== undefined) {
+      const source = await ctx.db
+        .query("aiOrchestratorMessages")
+        .withIndex("by_chat_sequence", (q) =>
+          q.eq("chatId", memory.sourceChatId!).eq("sequence", memory.sourceSequence!),
+        )
+        .unique();
+      if (!source || !(await withoutForgottenSources(ctx, orchestrator, [source])).length) continue;
+    }
     memories.push(memory);
     memoryBudget -= memory.text.length;
     if (memories.length >= 40) break;
@@ -379,7 +472,7 @@ async function contextFor(
       if (
         !candidate.archived &&
         candidate.orchestratorIds.includes(orchestrator.id) &&
-        (await sharedHistoryBoundary(ctx, candidate, chat)) !== null
+        (await conversationRetrievalBoundary(ctx, orchestrator, candidate, chat)) === 0
       )
         conversations.push({ id: candidate.id, title: candidate.title });
     }
@@ -456,7 +549,10 @@ async function contextFor(
         .unique()
     : null;
   const quotedMessage =
-    quoted && quoted.chatId === chat.id && quoted.sequence >= historyStart
+    quoted &&
+    quoted.chatId === chat.id &&
+    quoted.sequence >= historyStart &&
+    (await withoutForgottenSources(ctx, orchestrator, [quoted])).length
       ? { id: quoted.id, senderName: quoted.senderName, text: quoted.text.slice(0, 4000) }
       : null;
   const workerConversations = [];
@@ -482,6 +578,7 @@ async function contextFor(
   }
   let workResultBudget = 64000;
   return JSON.stringify({
+    humanMentionRecipients: await humanRecipients(ctx, chat),
     companyId,
     chat: { id: chat.id, title: chat.title, leadId: chat.leadId },
     capabilities: orchestrator.capabilities,
@@ -526,11 +623,14 @@ async function contextFor(
       recentThreads,
       recentIssues,
     },
-    summary: chat.summaryThroughSequence < historyStart ? "" : chat.summary.slice(0, 8000),
+    summary:
+      sourceTombstone || chat.summaryThroughSequence < historyStart
+        ? ""
+        : chat.summary.slice(0, 8000),
     summaryThroughSequence: chat.summaryThroughSequence,
     messages: boundedConversationMessages(
-      messages,
-      trigger.sequence >= historyStart ? trigger : undefined,
+      retainedMessages,
+      trigger.sequence >= historyStart ? retainedTrigger[0] : undefined,
     ),
     respondingToMessageId: trigger.id,
     memories: memories.map(({ id, text, source, explicit }) => ({ id, text, source, explicit })),
@@ -924,7 +1024,15 @@ export const claim = mutation({
           chat,
           args.companyId,
           job.chatRevision === (chat.revision ?? 0) && job.configRevision === orchestrator.revision
-            ? JSON.stringify({ actions: job.contextResults ?? "", inspections })
+            ? JSON.stringify({
+                actions: await refreshedConversationResults(
+                  ctx,
+                  orchestrator,
+                  chat,
+                  job.contextResults,
+                ),
+                inspections,
+              })
             : "",
           claim.message,
           job.mailMessageId,
@@ -1007,6 +1115,8 @@ async function remember(
     !source.text.includes(action.sourceQuote)
   )
     return fail("A memory must cite a user message from this conversation.");
+  if (!(await withoutForgottenSources(ctx, claim.orchestrator, [source])).length)
+    return fail("Forgotten information cannot be learned again from old messages.");
   const memoryScope = action.scope ?? "orchestrator";
   if (
     memoryScope !== "orchestrator" &&
@@ -1288,27 +1398,32 @@ export const complete = mutation({
       }
       if (!claim.orchestrator.capabilities.includes("orchestrators.message"))
         return fail("This orchestrator cannot contact other orchestrators.");
-      if (action.kind === "readConversation") {
+      if (action.kind === "findConversations") {
+        if (!action.query.trim() || action.query.length > 200)
+          return fail("Use a search phrase of 1–200 characters.");
+        if (results.some((result) => result.kind === "findConversations"))
+          return fail("Use one conversation discovery page per decision.");
+        results.push({ kind: action.kind, detail: { query: action.query, cursor: action.cursor } });
+      } else if (action.kind === "readConversation") {
         const chat = await findChat(ctx, action.chatId);
         if (!chat || !chat.orchestratorIds.includes(claim.orchestrator.id))
           return fail("The orchestrator is not a member of that conversation.");
-        const fromSequence = await sharedHistoryBoundary(ctx, chat, claim.chat);
+        const fromSequence = await conversationRetrievalBoundary(
+          ctx,
+          claim.orchestrator,
+          chat,
+          claim.chat,
+        );
         if (fromSequence === null)
           return fail("Private conversation context cannot be shared with this audience.");
-        const messages = await ctx.db
-          .query("aiOrchestratorMessages")
-          .withIndex("by_chat_sequence", (q) =>
-            q.eq("chatId", chat.id).gte("sequence", fromSequence),
-          )
-          .order("desc")
-          .take(20);
+        if (
+          action.beforeSequence !== undefined &&
+          (!Number.isSafeInteger(action.beforeSequence) || action.beforeSequence < 0)
+        )
+          return fail("Choose a valid message sequence for pagination.");
         results.push({
           kind: action.kind,
-          detail: {
-            chatId: chat.id,
-            summary: fromSequence > 0 ? "" : chat.summary,
-            messages: boundedConversationMessages(messages, undefined, 12000),
-          },
+          detail: { chatId: chat.id, beforeSequence: action.beforeSequence },
         });
       } else if (action.kind === "message") {
         if (
@@ -1346,6 +1461,8 @@ export const complete = mutation({
             senderId: claim.orchestrator.id,
             senderName: claim.orchestrator.name,
             text: action.text,
+            coordination: true,
+            mentions: [...(result.mentions ?? [])],
             expression: normalizeAvatarExpression(result.expression),
             status: queuedTarget ? "sent" : "queued",
             replyToId: claim.message.id,
@@ -1391,6 +1508,7 @@ export const complete = mutation({
             senderId: claim.orchestrator.id,
             senderName: claim.orchestrator.name,
             text: result.message.trim(),
+            mentions: [...(result.mentions ?? [])],
             expression: normalizeAvatarExpression(result.expression),
             status: "sent",
             replyToId: claim.message.id,
@@ -1414,6 +1532,7 @@ export const complete = mutation({
         results.some((result) =>
           [
             "readConversation",
+            "findConversations",
             "collaborate",
             "allocateAllowance",
             "stopWork",
@@ -1782,11 +1901,16 @@ export const workerAccess = query({
     companyId: v.string(),
     orchestratorId: v.string(),
     commandId: v.string(),
+    execution: v.optional(
+      v.object({ threadId: v.string(), runId: v.string(), messageId: v.string() }),
+    ),
     localProjectId: v.union(v.string(), v.null()),
   },
   handler: async (ctx, args) => {
     const actor = await environmentActor(ctx, args.companyId);
     const denied = { allowed: false, capabilities: [] as string[] };
+    const work = await assignmentForExecution(ctx, args, actor.registration.environmentId);
+    if (!work || work.stopRequested) return denied;
     const command = await ctx.db
       .query("environmentCommands")
       .withIndex("by_company_and_domain_id", (q) =>
@@ -1799,7 +1923,7 @@ export const workerAccess = query({
       command.orchestratorId !== args.orchestratorId ||
       command.targetEnvironmentId !== actor.registration.environmentId ||
       !["claimed", "succeeded"].includes(command.state) ||
-      !(await orchestratorCommandAllowed(ctx, command))
+      !(await orchestratorCommandAllowed(ctx, command, work))
     )
       return denied;
     const binding = command.cloudProjectId
@@ -1821,11 +1945,6 @@ export const workerAccess = query({
         : args.localProjectId !== null
     )
       return denied;
-    const work = await ctx.db
-      .query("aiOrchestratorWork")
-      .withIndex("by_command", (q) => q.eq("commandId", command.id))
-      .unique();
-    if (!work || work.stopRequested) return denied;
     const orchestrator = await findOrchestrator(ctx, args.orchestratorId);
     if (!orchestrator) return denied;
     const scope = await orchestratorOwnerScope(ctx, orchestrator, args.companyId);
@@ -1864,5 +1983,29 @@ export const reportHostResources = mutation({
     const age = Date.now() - resources.sampledAt;
     if (age < -5000 || age > 90000) return fail("A fresh host resource observation is required.");
     await ctx.db.patch(actor.registration._id, { orchestratorResources: resources });
+  },
+});
+
+/** A receipt from the claiming environment after the reasoning scope has ended. */
+export const confirmStopped = mutation({
+  args: identityArgs,
+  handler: async (ctx, args) => {
+    const actor = await environmentActor(ctx, args.companyId);
+    const job = await ctx.db
+      .query("aiOrchestratorJobs")
+      .withIndex("by_domain_id", (q) => q.eq("id", args.jobId))
+      .unique();
+    if (
+      !job ||
+      job.companyId !== args.companyId ||
+      job.environmentId !== actor.registration.environmentId ||
+      job.generation !== args.generation ||
+      !job.stopRequested
+    )
+      return false;
+    await ctx.db.patch(job._id, { stopConfirmed: true });
+    const chat = await findChat(ctx, job.chatId);
+    if (chat) await reconcileConversationLifecycle(ctx, chat);
+    return true;
   },
 });

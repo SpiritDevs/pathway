@@ -1,3 +1,6 @@
+import { useConversationActivity } from "./useConversationActivity";
+import { ConversationRecipientInput } from "./ConversationRecipientInput";
+import { eligibleRecipients, recipientTarget } from "./conversationRecipients";
 import { mapEnvironmentControlError } from "../../cloud/environmentControl";
 import { ConversationAttachmentDrafts } from "./ConversationAttachments";
 import { shouldHandleComposerAttachmentPaste } from "../chat/composerAttachmentFiles";
@@ -47,25 +50,15 @@ export function Composer({
   chat,
   activity,
   sendMotion,
+  people,
 }: {
+  people?: readonly { id: string; name: string }[] | undefined;
   chat: OrchestratorChat;
   activity: OrchestratorActivity;
   sendMotion: RefObject<ComposerSendMotion | null>;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
-  const [now, setNow] = useState(Date.now);
-  const activeIds = new Set(
-    activity.filter((item) => item.expiresAt > Math.max(now, Date.now())).map((item) => item.id),
-  );
-  useEffect(() => {
-    const current = Date.now();
-    const nextExpiry = Math.min(
-      ...activity.map((item) => item.expiresAt).filter((time) => time > current),
-    );
-    if (!Number.isFinite(nextExpiry)) return;
-    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, nextExpiry - current));
-    return () => clearTimeout(timer);
-  }, [activity, now]);
+  const activeIds = useConversationActivity(activity);
   const state = useOrchestrators();
   const reply = state.replies[chat.id];
   useEffect(() => {
@@ -76,7 +69,7 @@ export function Composer({
   };
   const sending = state.sendingChats.includes(chat.id);
   const setSending = (value: boolean) => state.setSendingChat(chat.id, value);
-  const [target, setTarget] = useState(chat.leadId);
+
   const pending = state.pendingMessages.current;
   const fileInput = useRef<HTMLInputElement>(null);
   const drafts = reply?.kind === "edit" ? [] : (state.attachments.drafts[chat.id] ?? []);
@@ -92,18 +85,39 @@ export function Composer({
   };
   const text = state.drafts[chat.id] ?? "";
   const contacts = state.contacts.filter((contact) => chat.orchestratorIds.includes(contact.id));
-  const lead =
-    contacts.find((contact) => contact.id === reply?.orchestratorId) ??
-    contacts.find((contact) => contact.id === target) ??
-    contacts.find((contact) => contact.id === chat.leadId);
+  const recipients = [
+    ...eligibleRecipients(contacts, chat.orchestratorIds),
+    ...(reply ? [] : (people ?? [])).map((person) => ({
+      ...person,
+      id: "human:" + person.id,
+      canDirect: true,
+      recipientType: "user" as const,
+    })),
+  ];
+  const selectedRecipient = state.recipients[chat.id];
+  const human = selectedRecipient?.startsWith("human:")
+    ? people?.find((person) => "human:" + person.id === selectedRecipient)
+    : undefined;
+  const humanSelection = selectedRecipient?.startsWith("human:") ?? false;
+  const lockedRecipient = !!reply?.workId || reply?.kind === "edit";
+  const canAddressHuman = !!human && !reply;
+  const lead = recipientTarget(
+    contacts,
+    chat.leadId,
+    humanSelection ? undefined : selectedRecipient,
+    reply?.orchestratorId,
+    lockedRecipient,
+  );
+  const canSend = humanSelection ? canAddressHuman : !!lead?.canDirect;
   const send = () => {
-    if (sending || blocked || (!text.trim() && !drafts.length) || chat.archived || !lead?.canDirect)
-      return;
+    if (sending || blocked || (!text.trim() && !drafts.length) || chat.archived || !canSend) return;
     const attachmentIds = drafts.map((draft) => draft.attachment.id);
     const previous = pending.get(chat.id);
     const message =
       previous?.text === text &&
-      previous.targetId === lead.id &&
+      previous.targetId === (humanSelection ? undefined : lead?.id) &&
+      JSON.stringify(previous.mentions) ===
+        JSON.stringify(human ? [{ kind: "user", id: human.id }] : undefined) &&
       previous.replyToId === reply?.messageId &&
       previous.workId === reply?.workId &&
       JSON.stringify(previous.attachmentIds) === JSON.stringify(attachmentIds)
@@ -111,7 +125,9 @@ export function Composer({
         : {
             id: randomUUID(),
             text,
-            targetId: lead.id,
+            ...(human
+              ? { humanOnly: true, mentions: [{ kind: "user" as const, id: human.id }] }
+              : { targetId: lead!.id }),
             attachmentIds,
             ...(reply?.kind === "reply" ? { replyToId: reply.messageId } : {}),
             ...(reply?.workId ? { workId: reply.workId } : {}),
@@ -158,8 +174,14 @@ export function Composer({
   if (chat.archived)
     return (
       <div className="border-t p-5 text-center">
+        {chat.lifecycleDetail && (
+          <p role="status" className="mb-3 text-sm text-muted-foreground">
+            {chat.lifecycleDetail}
+          </p>
+        )}
         <Button
           variant="outline"
+          disabled={!!chat.lifecycle && chat.lifecycle !== "archived"}
           onClick={() => {
             void state
               .request("aiOrchestrators:updateChat", { chatId: chat.id, archived: false })
@@ -188,31 +210,16 @@ export function Composer({
             .filter((contact) => activeIds.has(contact.id))
             .map((contact) => (
               <div key={contact.id} className="flex items-center gap-1.5">
-                <OrchestratorAvatar contact={contact} className="size-5" status="working" />
-                <span className="text-xs text-muted-foreground">{contact.name} is thinking</span>
+                <OrchestratorAvatar
+                  contact={contact}
+                  className="size-5"
+                  status="working"
+                  showStatusBadge={false}
+                />
+                <span className="text-xs text-muted-foreground">{contact.name} · Typing…</span>
               </div>
             ))}
         </div>
-        {contacts.length > 1 && !reply?.workId && (
-          <label className="mb-2 flex items-center gap-1 pl-2 text-[11px] text-muted-foreground">
-            To
-            <select
-              aria-label="Address orchestrator"
-              className="max-w-52 bg-transparent text-foreground outline-none"
-              value={lead?.id ?? chat.leadId}
-              onChange={(event) => setTarget(event.target.value)}
-            >
-              {contacts
-                .filter((contact) => contact.canDirect)
-                .map((contact) => (
-                  <option key={contact.id} value={contact.id}>
-                    {contact.name}
-                    {contact.id === chat.leadId ? " · Lead" : ""}
-                  </option>
-                ))}
-            </select>
-          </label>
-        )}
         <input
           ref={fileInput}
           type="file"
@@ -283,16 +290,18 @@ export function Composer({
             >
               <PaperclipIcon className="size-5" />
             </Button>
-            <textarea
-              ref={input}
-              aria-label={`Message ${chat.title}`}
-              placeholder={`Message ${chat.title}`}
-              className="field-sizing-content max-h-40 min-h-9 min-w-0 flex-1 resize-none bg-transparent py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground"
-              rows={1}
-              value={text}
-              onChange={(event) => state.setDraft(chat.id, event.target.value)}
-              maxLength={32000}
+            <ConversationRecipientInput
+              input={input}
+              text={text}
+              title={chat.title}
+              recipients={recipients}
+              selected={recipients.find((contact) => contact.id === selectedRecipient)}
+              onSelect={(id) => state.setRecipient(chat.id, id)}
+              locked={lockedRecipient}
+              onChange={(value) => state.setDraft(chat.id, value)}
               disabled={sending}
+              onSend={send}
+              onEscape={reply ? clearReply : undefined}
               onPaste={(event) => {
                 const files = Array.from(event.clipboardData.files);
                 const plainText = event.clipboardData.getData("text/plain");
@@ -309,24 +318,13 @@ export function Composer({
                   addFiles(files);
                 }
               }}
-              onKeyDown={(event) => {
-                if (event.key === "Escape" && reply) {
-                  event.preventDefault();
-                  clearReply();
-                  return;
-                }
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  send();
-                }
-              }}
             />
             <Button
               type="submit"
               size="icon"
               className="size-9 shrink-0 rounded-full bg-blue-500 text-white hover:bg-blue-600"
               aria-label={reply?.kind === "edit" ? "Save message" : "Send message"}
-              disabled={sending || blocked || (!text.trim() && !drafts.length) || !lead?.canDirect}
+              disabled={sending || blocked || (!text.trim() && !drafts.length) || !canSend}
             >
               <ArrowUpIcon className="size-5" />
             </Button>
@@ -552,12 +550,14 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
               work={work.value ?? []}
               search={search}
               result={messages}
+              activity={activity.value ?? EMPTY_ACTIVITY}
               sendMotion={sendMotion}
             />
             <Composer
               key={`composer:${chat.id}`}
               chat={chat}
               activity={activity.value ?? EMPTY_ACTIVITY}
+              people={messages.value?.readers?.filter((reader) => reader.kind === "user")}
               sendMotion={sendMotion}
             />
           </>

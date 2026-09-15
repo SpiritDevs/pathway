@@ -4979,7 +4979,7 @@ describe("worker conversation review regressions", () => {
     ).toBe("And report the details");
   });
 
-  it("pauses queued delivery on archive while retaining accepted receipt recovery", async () => {
+  it("cancels queued delivery on archive while retaining accepted receipt recovery", async () => {
     const test = await workerControlHarness();
     await test.send("accepted-before-archive");
     await test.accept("accepted-before-archive");
@@ -5005,10 +5005,797 @@ describe("worker conversation review regressions", () => {
           .query(api.aiOrchestratorControls.environmentInbox, { companyId: "workspace" })
       ).find((row) => row.workId === "controlled-work"),
     ).toMatchObject({ message: null, stopped: true });
+    await test.environment().mutation(api.aiOrchestratorControls.reportConversationStop, {
+      companyId: "workspace",
+      workId: "controlled-work",
+      commandId: "worker-start",
+      threadId: "worker-thread",
+      confirmed: true,
+      detail: "All owned runs and descendants terminal",
+    });
     await test.owner.mutation(api.aiOrchestrators.updateChat, {
       chatId: test.chatId,
       archived: false,
     });
-    expect((await test.accept("pending-before-archive"))?.state).toBe("accepted");
+    expect(await test.accept("pending-before-archive")).toBeNull();
   });
+});
+
+describe("structured human attention", () => {
+  it("keeps coordination visible without notifications or unread counters unless mentioned", async () => {
+    const test = await businessHarness();
+    await test.t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+        .unique())!;
+      await ctx.db.patch(chat._id, { kind: "group", participantSubjects: ["owner", "colleague"] });
+      const member = (await ctx.db
+        .query("aiOrchestratorChatMembers")
+        .withIndex("by_chat_subject", (q) => q.eq("chatId", chat.id).eq("subject", "owner"))
+        .unique())!;
+      await ctx.db.patch(member._id, { readSequence: chat.lastSequence });
+      await ctx.db.insert("aiOrchestratorChatMembers", {
+        chatId: chat.id,
+        subject: "colleague",
+        fromSequence: chat.lastSequence + 1,
+        readSequence: chat.lastSequence,
+        updatedAt: Date.now(),
+      });
+      await appendChatMessage(
+        ctx,
+        { ...chat, kind: "group", participantSubjects: ["owner", "colleague"] },
+        {
+          id: "coordination",
+          senderKind: "orchestrator",
+          senderId: test.id,
+          senderName: "Chief",
+          text: "Agent coordination",
+          status: "sent",
+          replyToId: null,
+          coordination: true,
+        },
+        { enabled: true, urgent: true },
+      );
+    });
+    expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.unreadCount).toBe(0);
+    expect(
+      (await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.notification,
+    ).toBeUndefined();
+    expect(await test.relay.mutation(api.aiOrchestratorPush.claim, {})).toEqual([]);
+    expect(
+      (await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })).messages.some(
+        (m) => m.id === "coordination",
+      ),
+    ).toBe(true);
+    await test.t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+        .unique())!;
+      await appendChatMessage(
+        ctx,
+        chat,
+        {
+          id: "attention",
+          senderKind: "orchestrator",
+          senderId: test.id,
+          senderName: "Chief",
+          text: "Decision needed",
+          status: "sent",
+          replyToId: null,
+          coordination: true,
+          mentions: [{ kind: "user", id: "owner" }],
+        },
+        { enabled: true, urgent: true },
+      );
+    });
+    expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.unreadCount).toBe(1);
+    expect(
+      (await test.relay.mutation(api.aiOrchestratorPush.claim, {})).map((job) => job.subject),
+    ).toEqual(["owner"]);
+    const colleagueChat = (
+      await human(test.t, "colleague").query(api.aiOrchestrators.listChats, {})
+    ).find((chat) => chat.id === test.chatId)!;
+    expect(colleagueChat.unreadCount).toBe(0);
+    expect(colleagueChat.notification).toBeUndefined();
+  });
+
+  it("human-only sends have stable mentions, no worker job, and reject forged nonmembers", async () => {
+    const test = await businessHarness();
+    const args = {
+      chatId: test.chatId,
+      id: "human-note",
+      text: "For you",
+      humanOnly: true,
+      mentions: [{ kind: "user" as const, id: "owner" }],
+    };
+    await test.owner.mutation(api.aiOrchestrators.send, args);
+    await test.owner.mutation(api.aiOrchestrators.send, args);
+    expect(
+      await test.t.run(
+        async (ctx) =>
+          (
+            await ctx.db
+              .query("aiOrchestratorJobs")
+              .withIndex("by_message", (q) => q.eq("messageId", "human-note"))
+              .collect()
+          ).length,
+      ),
+    ).toBe(0);
+    await expect(
+      test.owner.mutation(api.aiOrchestrators.send, {
+        ...args,
+        id: "forged",
+        mentions: [{ kind: "user", id: "colleague" }],
+      }),
+    ).rejects.toThrow("current conversation participant");
+    await expect(
+      human(test.t, "colleague").query(api.aiOrchestrators.messages, { chatId: test.chatId }),
+    ).rejects.toThrow();
+    await expect(
+      human(test.t, "colleague").query(api.aiOrchestrators.mentionRecipients, {
+        chatId: test.chatId,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      test.owner.mutation(api.aiOrchestrators.send, { ...args, id: "mixed", targetId: test.id }),
+    ).rejects.toThrow("cannot dispatch");
+  });
+});
+
+describe("notification membership boundary", () => {
+  it("does not expose a conversation or push content through a stale membership and forged mention", async () => {
+    const test = await businessHarness();
+    await test.t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+        .unique())!;
+      await ctx.db.insert("aiOrchestratorChatMembers", {
+        chatId: chat.id,
+        subject: "director",
+        fromSequence: 0,
+        readSequence: 0,
+        updatedAt: Date.now(),
+      });
+      await ctx.db.patch(chat._id, {
+        notification: {
+          sequence: chat.lastSequence,
+          senderName: "Secret",
+          text: "Secret content",
+          urgent: true,
+          enabled: true,
+          createdAt: Date.now(),
+          coordination: true,
+          mentions: [{ kind: "user", id: "director" }],
+        },
+      });
+      await ctx.db.insert("aiOrchestratorPush", {
+        chatId: chat.id,
+        subject: "director",
+        sequence: chat.lastSequence,
+        generation: 0,
+        dueAt: Date.now(),
+      });
+    });
+    expect(await human(test.t, "director").query(api.aiOrchestrators.listChats, {})).toEqual([]);
+    expect(
+      (await test.relay.mutation(api.aiOrchestratorPush.claim, {})).some(
+        (job) => job.subject === "director",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("conversation lifecycle and personal menu preferences", () => {
+  it("persists personal preferences, keeps manual unread until explicit opening, and hides muted counts", async () => {
+    const test = await coordinatorHarness();
+    await test.owner.mutation(api.aiOrchestrators.setChatPreferences, {
+      chatId: test.chatId,
+      pinned: true,
+      markedUnread: true,
+    });
+    await test.owner.mutation(api.aiOrchestrators.markRead, { chatId: test.chatId, sequence: 1 });
+    let chat = (await test.owner.query(api.aiOrchestrators.listChats, {}))[0]!;
+    expect(chat).toMatchObject({ pinned: true, markedUnread: true, unreadCount: 1 });
+    await test.owner.mutation(api.aiOrchestrators.setChatPreferences, {
+      chatId: test.chatId,
+      muted: true,
+    });
+    chat = (await test.owner.query(api.aiOrchestrators.listChats, {}))[0]!;
+    expect(chat).toMatchObject({ muted: true, unreadCount: 0 });
+    expect(chat.notification).toBeUndefined();
+    await test.owner.mutation(api.aiOrchestrators.setChatPreferences, {
+      chatId: test.chatId,
+      markedUnread: false,
+      muted: false,
+      pinned: false,
+    });
+    expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]).toMatchObject({
+      pinned: false,
+      markedUnread: false,
+      muted: false,
+    });
+    await expect(
+      human(test.t, "colleague").mutation(api.aiOrchestrators.setChatPreferences, {
+        chatId: test.chatId,
+        pinned: true,
+      }),
+    ).rejects.toThrow();
+  });
+  it("requires confirmation and ownership, archives recoverably, and retains a deleted tombstone", async () => {
+    const test = await coordinatorHarness();
+    await expect(
+      test.owner.mutation(api.aiOrchestrators.deleteChat, {
+        chatId: test.chatId,
+        confirmed: false,
+      }),
+    ).rejects.toThrow("Confirm deletion");
+    expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.archived).toBe(false);
+    await expect(
+      human(test.t, "colleague").mutation(api.aiOrchestrators.deleteChat, {
+        chatId: test.chatId,
+        confirmed: true,
+      }),
+    ).rejects.toThrow();
+    await test.owner.mutation(api.aiOrchestrators.updateChat, {
+      chatId: test.chatId,
+      archived: true,
+    });
+    expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.lifecycle).toBe(
+      "archived",
+    );
+    expect(await test.claim()).toBeNull();
+    await test.owner.mutation(api.aiOrchestrators.updateChat, {
+      chatId: test.chatId,
+      archived: false,
+    });
+    expect(await test.claim()).toBeNull();
+    await test.owner.mutation(api.aiOrchestrators.deleteChat, {
+      chatId: test.chatId,
+      confirmed: true,
+    });
+    await test.owner.mutation(api.aiOrchestrators.deleteChat, {
+      chatId: test.chatId,
+      confirmed: true,
+    });
+    expect(await test.owner.query(api.aiOrchestrators.listChats, {})).toEqual([]);
+    const rows = await test.t.run((ctx) => ctx.db.query("aiOrchestratorChats").collect());
+    expect(rows.find((row) => row.id === test.chatId)?.lifecycle).toBe("deleted");
+  });
+  it("keeps offline deletion pending, fences reasoning, authenticates receipts and isolates reused threads", async () => {
+    const test = await workerControlHarness();
+    const run = (await test.claim())!;
+    await test.t.run(async (ctx) => {
+      const work = (await ctx.db.query("aiOrchestratorWork").collect())[0]!;
+      const { _id, _creationTime, ...other } = work;
+      await ctx.db.insert("aiOrchestratorWork", {
+        ...other,
+        id: "unrelated",
+        chatId: "different-chat",
+        commandId: "different-command",
+      });
+    });
+    await test.owner.mutation(api.aiOrchestrators.deleteChat, {
+      chatId: test.chatId,
+      confirmed: true,
+    });
+    await test.owner.mutation(api.aiOrchestrators.deleteChat, {
+      chatId: test.chatId,
+      confirmed: true,
+    });
+    expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.lifecycle).toBe(
+      "deleting",
+    );
+    expect(
+      await test.environment().mutation(api.aiOrchestratorJobs.renew, {
+        companyId: "workspace",
+        jobId: run.id,
+        generation: run.generation,
+      }),
+    ).toBe(false);
+    const receipt = {
+      companyId: "workspace",
+      workId: "controlled-work",
+      commandId: "worker-start",
+      threadId: "worker-thread",
+      confirmed: true,
+      detail: "Owned runs and descendants terminal",
+    };
+    await expect(
+      test
+        .environment("other")
+        .mutation(api.aiOrchestratorControls.reportConversationStop, receipt),
+    ).rejects.toThrow();
+    await expect(
+      test.owner.mutation(api.aiOrchestratorControls.reportConversationStop, receipt),
+    ).rejects.toThrow();
+    await test.environment().mutation(api.aiOrchestratorControls.reportConversationStop, {
+      ...receipt,
+      confirmed: false,
+      detail: "Offline/uncertain",
+    });
+    await expect(
+      test.owner.mutation(api.aiOrchestrators.updateChat, { chatId: test.chatId, archived: false }),
+    ).rejects.toThrow("confirmed termination");
+    await test.environment().mutation(api.aiOrchestratorControls.reportConversationStop, receipt);
+    expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.lifecycle).toBe(
+      "deleting",
+    );
+    await test.environment().mutation(api.aiOrchestratorJobs.confirmStopped, {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+    });
+    expect(await test.owner.query(api.aiOrchestrators.listChats, {})).toEqual([]);
+    const rows = await test.t.run((ctx) => ctx.db.query("aiOrchestratorWork").collect());
+    expect(rows.find((row) => row.id === "unrelated")).toMatchObject({ status: "working" });
+    expect(rows.find((row) => row.id === "unrelated")?.stopRequested).toBeUndefined();
+    expect(rows.find((row) => row.id === "controlled-work")).toMatchObject({
+      status: "cancelled",
+      stopConfirmed: true,
+    });
+  });
+});
+
+it("atomically cancels unclaimed dispatch and fences later claims without restarting on restore", async () => {
+  const test = await coordinatorHarness();
+  const run = (await test.claim())!;
+  await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+    companyId: "workspace",
+    jobId: run.id,
+    generation: run.generation,
+    result: { ...decision(), actions: [{ ...delegate("Queued task"), projectId: null }] },
+  });
+  await test.owner.mutation(api.aiOrchestrators.updateChat, {
+    chatId: test.chatId,
+    archived: true,
+  });
+  expect(
+    await test.environment().mutation(api.environmentCommands.claim, { companyId: "workspace" }),
+  ).toEqual([]);
+  const rows = await test.t.run((ctx) => ctx.db.query("aiOrchestratorWork").collect());
+  expect(rows[0]).toMatchObject({ status: "cancelled", stopConfirmed: true });
+  await test.owner.mutation(api.aiOrchestrators.updateChat, {
+    chatId: test.chatId,
+    archived: false,
+  });
+  expect(
+    await test.environment().mutation(api.environmentCommands.claim, { companyId: "workspace" }),
+  ).toEqual([]);
+});
+
+it("keeps accepted deliveries uncertain and gives late follow-up runs their own stop receipts", async () => {
+  const test = await workerControlHarness();
+  await test.send("in-flight");
+  await test.accept("in-flight");
+  await test.owner.mutation(api.aiOrchestrators.updateChat, {
+    chatId: test.chatId,
+    archived: true,
+  });
+  const receipt = {
+    companyId: "workspace",
+    workId: "controlled-work",
+    commandId: "worker-start",
+    threadId: "worker-thread",
+    confirmed: true,
+    detail: "Root terminal",
+  };
+  expect(
+    await test.environment().mutation(api.aiOrchestratorControls.reportConversationStop, receipt),
+  ).toBe(false);
+  await test.environment().mutation(api.aiOrchestratorControls.acknowledge, {
+    companyId: "workspace",
+    workId: "controlled-work",
+    id: "in-flight",
+    revision: 0,
+    failed: false,
+    detail: "Recovered",
+    runId: "late-run",
+    messageId: "late-message",
+  });
+  const inbox = await test
+    .environment()
+    .query(api.aiOrchestratorControls.environmentInbox, { companyId: "workspace" });
+  expect(
+    inbox.find((row) => row.workId === "worker-result:controlled-work:in-flight"),
+  ).toMatchObject({ cancellationRequested: true, stopRunId: "late-run" });
+  await test.environment().mutation(api.aiOrchestratorControls.reportConversationStop, receipt);
+  expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.lifecycle).toBe(
+    "archiving",
+  );
+  await test.environment().mutation(api.aiOrchestratorControls.reportConversationStop, {
+    ...receipt,
+    workId: "worker-result:controlled-work:in-flight",
+    commandId: "orchestrator-message:15:controlled-work:in-flight",
+  });
+  expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.lifecycle).toBe(
+    "archived",
+  );
+});
+
+it("keeps allowance and tool authority on an unrelated run of a reused thread", async () => {
+  const test = await businessHarness();
+  await test.t.run(async (ctx) => {
+    const work = (await ctx.db.query("aiOrchestratorWork").collect())[0]!;
+    const chat = (await ctx.db.query("aiOrchestratorChats").collect()).find(
+      (chat) => chat.id === test.chatId,
+    )!;
+    const { _id: _chatDoc, _creationTime: _chatTime, ...chatData } = chat;
+    await ctx.db.insert("aiOrchestratorChats", {
+      ...chatData,
+      id: "other-conversation",
+      lastSequence: 0,
+    });
+    const { _id, _creationTime, ...data } = work;
+    await ctx.db.insert("aiOrchestratorWork", {
+      ...data,
+      id: "other-assignment",
+      chatId: "other-conversation",
+      threadId: "shared-thread",
+      commandId: "other-command",
+      continuation: true,
+      resultRunId: "other-run",
+      resultMessageId: "other-message",
+    });
+    await ctx.db.patch(work._id, { threadId: "shared-thread" });
+  });
+  await test.owner.mutation(api.aiOrchestrators.updateChat, {
+    chatId: test.chatId,
+    archived: true,
+  });
+  const origin = {
+    ...test.delegatedOrigin,
+    execution: { threadId: "shared-thread", runId: "other-run", messageId: "other-message" },
+  };
+  expect(
+    (
+      await test
+        .environment()
+        .query(api.aiOrchestratorJobs.workerAccess, { ...origin, localProjectId: null })
+    ).allowed,
+  ).toBe(true);
+  expect(
+    await test.environment().query(api.providerAllowanceBudgets.forScopes, {
+      companyId: "workspace",
+      scopes: [],
+      origin,
+    }),
+  ).toEqual([]);
+  expect(
+    (
+      await test.environment().query(api.aiOrchestratorJobs.workerAccess, {
+        ...test.delegatedOrigin,
+        localProjectId: null,
+      })
+    ).allowed,
+  ).toBe(false);
+});
+
+it("does not confirm an unclaimed root while a separate delivery is accepted", async () => {
+  const test = await workerControlHarness();
+  await test.send("accepted");
+  await test.accept("accepted");
+  await test.t.run(async (ctx) => {
+    const company = (await ctx.db.query("companies").collect())[0]!;
+    const member = (await ctx.db.query("memberships").collect()).find(
+      (member) => member.id === "member-owner",
+    )!;
+    await ctx.db.insert("environmentCommands", {
+      id: "worker-start",
+      companyId: company._id,
+      targetEnvironmentId: "studio",
+      cloudProjectId: null,
+      bindingId: null,
+      kind: "startThread",
+      args: { kind: "startThread", prompt: "Task", modelSelection: null },
+      issuedByMembershipId: member._id,
+      orchestratorId: test.id,
+      onBehalfOfActor: {
+        kind: "agent",
+        provider: `orchestrator:${test.id}`,
+        onBehalfOfMembershipId: member.id,
+      },
+      state: "pending",
+      claimedByEnvironmentId: null,
+      claimGeneration: 0,
+      claimExpiresAt: null,
+      expiresAt: Date.now() + 60000,
+      result: null,
+      error: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  });
+  await test.owner.mutation(api.aiOrchestrators.updateChat, {
+    chatId: test.chatId,
+    archived: true,
+  });
+  const work = (await test.t.run((ctx) => ctx.db.query("aiOrchestratorWork").collect()))[0]!;
+  expect(work).toMatchObject({
+    stopRequested: true,
+    stopConfirmed: false,
+    status: "unknown",
+    controlsPending: true,
+  });
+  expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.lifecycle).toBe(
+    "archiving",
+  );
+});
+
+describe("bounded cross-conversation discovery", () => {
+  it("pages past 100 conversations and retains ambiguous matches without choosing one", async () => {
+    const test = await coordinatorHarness();
+    const { discoverConversations } = await import("../convex/lib/aiOrchestratorContext.ts");
+    await test.t.run(async (ctx) => {
+      const original = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+        .unique())!;
+      const { _id, _creationTime, ...record } = original;
+      void _id;
+      void _creationTime;
+      for (let i = 0; i < 105; i++) {
+        const id = `recall-${i}`;
+        await ctx.db.insert("aiOrchestratorChats", {
+          ...record,
+          id,
+          title: i >= 103 ? "Apollo decision" : "Other",
+        });
+        const member = (await ctx.db
+          .query("aiOrchestratorChatMembers")
+          .withIndex("by_chat_subject", (q) => q.eq("chatId", test.chatId).eq("subject", "owner"))
+          .unique())!;
+        const { _id: memberId, _creationTime: memberTime, ...fields } = member;
+        void memberId;
+        void memberTime;
+        await ctx.db.insert("aiOrchestratorChatMembers", { ...fields, chatId: id });
+      }
+    });
+    const found: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const result = await test.t.run(async (ctx) => {
+        const source = (await ctx.db
+          .query("aiOrchestratorChats")
+          .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+          .unique())!;
+        const orchestrator = (await ctx.db
+          .query("aiOrchestrators")
+          .withIndex("by_domain_id", (q) => q.eq("id", test.id))
+          .unique())!;
+        return discoverConversations(ctx, orchestrator, source, "Apollo", cursor);
+      });
+      expect(result.matches.length).toBeLessThanOrEqual(25);
+      found.push(...result.matches.map((match) => match.chatId));
+      cursor = result.nextCursor ?? undefined;
+      pages++;
+    } while (cursor && pages < 10);
+    expect(pages).toBe(5);
+    expect(found).toEqual(["recall-103", "recall-104"]);
+  });
+});
+
+describe("conversation recall visibility", () => {
+  it("rechecks source membership between a read request and its delivery", async () => {
+    const test = await coordinatorHarness();
+    const run = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+      result: { ...decision(), actions: [{ kind: "readConversation", chatId: test.chatId }] },
+    });
+    await test.t.run(async (ctx) => {
+      const member = (await ctx.db
+        .query("aiOrchestratorChatMembers")
+        .withIndex("by_chat_subject", (q) => q.eq("chatId", test.chatId).eq("subject", "owner"))
+        .unique())!;
+      await ctx.db.delete(member._id);
+    });
+    // Revoking the current audience also makes the continuation itself ineligible.
+    expect(await test.claim()).toBeNull();
+  });
+
+  it("does not disclose titles after history boundaries, membership or project changes", async () => {
+    const test = await coordinatorHarness();
+    const { discoverConversations, conversationRetrievalBoundary } =
+      await import("../convex/lib/aiOrchestratorContext.ts");
+    await test.t.run(async (ctx) => {
+      const source = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+        .unique())!;
+      const orchestrator = (await ctx.db
+        .query("aiOrchestrators")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.id))
+        .unique())!;
+      await ctx.db.patch(source._id, { title: "Confidential Apollo" });
+      const member = (await ctx.db
+        .query("aiOrchestratorChatMembers")
+        .withIndex("by_chat_subject", (q) => q.eq("chatId", test.chatId).eq("subject", "owner"))
+        .unique())!;
+      await ctx.db.patch(member._id, { fromSequence: 100 });
+      expect((await discoverConversations(ctx, orchestrator, source, "Apollo")).matches).toEqual(
+        [],
+      );
+      expect(
+        await conversationRetrievalBoundary(
+          ctx,
+          { ...orchestrator, projectId: "other" },
+          source,
+          source,
+        ),
+      ).toBeNull();
+      expect(
+        await conversationRetrievalBoundary(ctx, orchestrator, source, {
+          ...source,
+          participantSubjects: ["colleague"],
+        }),
+      ).toBeNull();
+      await ctx.db.delete(member._id);
+      expect(await conversationRetrievalBoundary(ctx, orchestrator, source, source)).toBeNull();
+    });
+  });
+
+  it("excludes forgotten sources beyond 20 tombstones and across personal/project scopes", async () => {
+    const test = await coordinatorHarness();
+    const { withoutForgottenSources } = await import("../convex/lib/aiOrchestratorContext.ts");
+    await test.t.run(async (ctx) => {
+      const orchestrator = (await ctx.db
+        .query("aiOrchestrators")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.id))
+        .unique())!;
+      const message = (await ctx.db
+        .query("aiOrchestratorMessages")
+        .withIndex("by_chat_sequence", (q) => q.eq("chatId", test.chatId))
+        .first())!;
+      for (let i = 0; i < 25; i++)
+        await ctx.db.insert("aiOrchestratorMemory", {
+          id: `forgot-${i}`,
+          orchestratorId: test.id,
+          ownerSubject: "owner",
+          text: "",
+          source: "",
+          scope: "orchestrator",
+          explicit: false,
+          forgotten: true,
+          updatedAt: i,
+          sourceChatId: test.chatId,
+          sourceSequence: i === 0 ? message.sequence : 100 + i,
+        });
+      expect(await withoutForgottenSources(ctx, orchestrator, [message])).toEqual([]);
+      const shared = {
+        ...orchestrator,
+        id: "another",
+        projectId: "project",
+        companyId: "workspace",
+      };
+      expect(await withoutForgottenSources(ctx, shared, [message])).toHaveLength(1);
+      await ctx.db.insert("aiOrchestratorMemory", {
+        id: "project-forgotten",
+        orchestratorId: test.id,
+        ownerSubject: "owner",
+        text: "",
+        source: "",
+        scope: "project",
+        explicit: false,
+        forgotten: true,
+        updatedAt: 0,
+        sourceChatId: test.chatId,
+        sourceSequence: message.sequence,
+        sharedProjectId: "project",
+        sharedCompanyId: "workspace",
+      });
+      expect(await withoutForgottenSources(ctx, shared, [message])).toEqual([]);
+      expect(
+        await withoutForgottenSources(ctx, { ...shared, projectId: "elsewhere" }, [message]),
+      ).toHaveLength(1);
+      await ctx.db.insert("aiOrchestratorMemory", {
+        id: "personal-forgotten",
+        orchestratorId: test.id,
+        ownerSubject: "owner",
+        text: "",
+        source: "",
+        scope: "personal",
+        explicit: false,
+        forgotten: true,
+        updatedAt: 0,
+        sourceChatId: test.chatId,
+        sourceSequence: message.sequence,
+      });
+      expect(await withoutForgottenSources(ctx, { ...shared, projectId: null }, [message])).toEqual(
+        [],
+      );
+    });
+  });
+});
+
+it("delivers ID-free discovery through the coordinator contract and preserves archived recall", async () => {
+  const test = await coordinatorHarness();
+  const archived = "archived-recall";
+  await test.t.run(async (ctx) => {
+    const source = (await ctx.db
+      .query("aiOrchestratorChats")
+      .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+      .unique())!;
+    const { _id, _creationTime, ...fields } = source;
+    void _id;
+    void _creationTime;
+    await ctx.db.insert("aiOrchestratorChats", {
+      ...fields,
+      id: archived,
+      title: "Apollo planning",
+      archived: true,
+      lifecycle: "archived",
+    });
+    const member = (await ctx.db
+      .query("aiOrchestratorChatMembers")
+      .withIndex("by_chat_subject", (q) => q.eq("chatId", test.chatId).eq("subject", "owner"))
+      .unique())!;
+    const { _id: memberId, _creationTime: memberTime, ...membership } = member;
+    void memberId;
+    void memberTime;
+    await ctx.db.insert("aiOrchestratorChatMembers", { ...membership, chatId: archived });
+    const original = (await ctx.db
+      .query("aiOrchestratorMessages")
+      .withIndex("by_chat_sequence", (q) => q.eq("chatId", test.chatId))
+      .first())!;
+    const { _id: messageId, _creationTime: messageTime, ...message } = original;
+    void messageId;
+    void messageTime;
+    for (let i = 1; i <= 25; i++)
+      await ctx.db.insert("aiOrchestratorMessages", {
+        ...message,
+        id: `archived-message-${i}`,
+        chatId: archived,
+        sequence: i,
+        text: i === 1 ? "Decision: use the old Apollo engine" : `Update ${i}`,
+      });
+  });
+  const run = (await test.claim())!;
+  await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+    companyId: "workspace",
+    jobId: run.id,
+    generation: run.generation,
+    result: { ...decision(), actions: [{ kind: "findConversations", query: "Apollo" }] },
+  });
+  const continued = (await test.claim())!;
+  expect(continued.context).toContain("Apollo planning");
+  expect(continued.context).toContain(archived);
+  expect(continued.context).toContain("nextCursor");
+  await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+    companyId: "workspace",
+    jobId: continued.id,
+    generation: continued.generation,
+    result: {
+      ...decision(),
+      actions: [{ kind: "readConversation", chatId: archived, beforeSequence: 6 }],
+    },
+  });
+  const older = (await test.claim())!;
+  expect(older.context).toContain("Decision: use the old Apollo engine");
+  expect(older.context).not.toContain("Update 25");
+  await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+    companyId: "workspace",
+    jobId: older.id,
+    generation: older.generation,
+    result: {
+      ...decision(),
+      actions: [{ kind: "readConversation", chatId: archived, beforeSequence: 6 }],
+    },
+  });
+  await test.t.run(async (ctx) => {
+    const member = (await ctx.db
+      .query("aiOrchestratorChatMembers")
+      .withIndex("by_chat_subject", (q) => q.eq("chatId", archived).eq("subject", "owner"))
+      .unique())!;
+    await ctx.db.delete(member._id);
+  });
+  const revoked = (await test.claim())!;
+  expect(revoked.context).not.toContain("Decision: use the old Apollo engine");
+  expect(revoked.context).not.toContain("Apollo planning");
+  expect(revoked.context).toContain("unavailable");
 });

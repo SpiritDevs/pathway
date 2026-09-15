@@ -92,6 +92,7 @@ export function OrchestratorAvatar({
   className,
   expression = "neutral",
   status: requestedStatus,
+  showStatusBadge = true,
   idle = false,
   interactive = false,
   reactionKey,
@@ -100,6 +101,7 @@ export function OrchestratorAvatar({
   className?: string | undefined;
   expression?: AvatarExpression | undefined;
   status?: AvatarWorkStatus | undefined;
+  showStatusBadge?: boolean;
   idle?: AvatarIdle;
   interactive?: boolean;
   reactionKey?: string | undefined;
@@ -297,7 +299,7 @@ export function OrchestratorAvatar({
           </g>
         </svg>
       </span>
-      {status && (
+      {showStatusBadge && status && (
         <span
           role="img"
           aria-label={STATUS_LABELS[status]}

@@ -36,6 +36,7 @@ export function OrchestratorNotificationHost() {
         const currentChat = current.state.chats.find((item) => item.id === chat.id);
         if (!currentChat) return false;
         return shouldNotifyOrchestrator({
+          accountID: state.accountID,
           chat: currentChat,
           seenSequence,
           startedAt: account.current.startedAt,
@@ -49,15 +50,29 @@ export function OrchestratorNotificationHost() {
         });
       }).then(async (claimed) => {
         const current = latest.current;
-        const isActive = () =>
-          mounted.current &&
-          latest.current.state.accountID === userId &&
-          latest.current.state.chats.some(
-            (item) =>
-              item.id === chat.id &&
-              !item.archived &&
-              item.readSequence < chat.notification!.sequence,
+        const isActive = () => {
+          const live = latest.current;
+          const currentChat = live.state.chats.find((item) => item.id === chat.id);
+          return (
+            mounted.current &&
+            live.state.accountID === userId &&
+            !!currentChat &&
+            currentChat.notification?.sequence === chat.notification!.sequence &&
+            shouldNotifyOrchestrator({
+              accountID: userId,
+              chat: currentChat,
+              seenSequence: 0,
+              startedAt: account.current.startedAt,
+              focusedChatId:
+                document.hasFocus() &&
+                document.visibilityState === "visible" &&
+                (live.state.floating || live.pathname === "/orchestrator")
+                  ? live.state.selectedId
+                  : null,
+              quiet: isInAlertQuietHours(live.settings.quietHours, new Date()),
+            })
           );
+        };
         if (!claimed || !isActive()) return;
         await Promise.allSettled([
           current.settings.osNotificationsEnabled

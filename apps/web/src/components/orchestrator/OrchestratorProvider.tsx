@@ -46,7 +46,9 @@ function useOrchestratorState() {
       {
         id: string;
         text: string;
-        targetId: string;
+        targetId?: string;
+        humanOnly?: boolean;
+        mentions?: { kind: "user"; id: string }[];
         attachmentIds: string[];
         replyToId?: string;
         workId?: string;
@@ -54,6 +56,7 @@ function useOrchestratorState() {
     >(),
   );
   const [sendingChats, setSendingChats] = useState<string[]>([]);
+  const [recipients, setRecipients] = useState<Record<string, string | undefined>>({});
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [replies, setReplies] = useState<Record<string, ConversationReply | undefined>>({});
   const scrollPositions = useRef(new Map<string, number>());
@@ -108,6 +111,7 @@ function useOrchestratorState() {
     selectChat(null);
     selectSettings(null);
     setDrafts({});
+    setRecipients({});
     setReplies({});
     pendingMessages.current.clear();
     setSendingChats([]);
@@ -179,14 +183,21 @@ function useOrchestratorState() {
     contacts,
     avatarContacts,
     chats,
-    unreadCount: chats.filter((chat) => !chat.archived && chat.lastSequence > chat.readSequence)
-      .length,
+    unreadCount: chats.filter(
+      (chat) =>
+        !chat.archived &&
+        (chat.unreadCount ?? Math.max(0, chat.lastSequence - chat.readSequence)) > 0,
+    ).length,
     loading: ownedContacts.value === undefined,
     error: error ?? ownedContacts.error ?? companyContacts.error ?? conversations.error,
     setError,
     drafts,
+    recipients,
+    setRecipient: (id: string, recipient: string | undefined) =>
+      setRecipients((current) => ({ ...current, [id]: recipient })),
     replies,
     setReply: (id: string, reply: ConversationReply | undefined) => {
+      if (reply) setRecipients((current) => ({ ...current, [id]: undefined }));
       const next = transitionConversationReply(drafts[id] ?? "", replies[id], reply);
       if (next.draft !== undefined) setDrafts((current) => ({ ...current, [id]: next.draft! }));
       setReplies((current) => ({ ...current, [id]: next.reply }));
@@ -197,7 +208,10 @@ function useOrchestratorState() {
       setSendingChats((current) =>
         sending ? [...new Set([...current, id])] : current.filter((chatId) => chatId !== id),
       ),
-    setDraft: (id: string, text: string) => setDrafts((current) => ({ ...current, [id]: text })),
+    setDraft: (id: string, text: string) => {
+      setDrafts((current) => ({ ...current, [id]: text }));
+      if (!text) setRecipients((current) => ({ ...current, [id]: undefined }));
+    },
     scrollPositions,
     personalAvatar: personalAvatar.value ?? undefined,
   };

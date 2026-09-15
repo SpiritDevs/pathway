@@ -1,3 +1,5 @@
+import { conversationWork, reconcileConversationLifecycle } from "./lib/conversationLifecycle.ts";
+import { conversationAttention, type HumanMention } from "@spiritdevs/contracts/aiOrchestrator";
 import {
   sendWorkerReply,
   decorateConversationMessage,
@@ -395,6 +397,65 @@ function conversationMessagePreview(message: {
     ""
   ).slice(0, 160);
 }
+export async function humanRecipients(ctx: QueryCtx, chat: Doc<"aiOrchestratorChats">) {
+  const recipients = [];
+  for (const subject of chat.participantSubjects) {
+    const member = await ctx.db
+      .query("aiOrchestratorChatMembers")
+      .withIndex("by_chat_subject", (q) => q.eq("chatId", chat.id).eq("subject", subject))
+      .unique();
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", subject))
+      .unique();
+    if (member && user && (await hasChatAccess(ctx, chat, user)))
+      recipients.push({ id: subject, name: user.displayName || "Participant" });
+  }
+  return recipients;
+}
+export const mentionRecipients = query({
+  args: { chatId: v.string() },
+  handler: async (ctx, args) => {
+    const { chat } = await readableChat(ctx, args.chatId);
+    return humanRecipients(ctx, chat);
+  },
+});
+
+export async function messageAttention(
+  ctx: QueryCtx,
+  chat: Doc<"aiOrchestratorChats">,
+  message: {
+    coordination?: boolean;
+    senderKind: string;
+    senderId: string;
+    replyToId: string | null;
+    mentions?: readonly HumanMention[];
+  },
+) {
+  if (
+    message.coordination !== undefined ||
+    chat.kind !== "group" ||
+    message.senderKind !== "orchestrator"
+  )
+    return {
+      coordination: message.coordination ?? false,
+      senderId: message.senderId,
+      mentions: [...(message.mentions ?? [])],
+    };
+  const original = message.replyToId
+    ? await ctx.db
+        .query("aiOrchestratorMessages")
+        .withIndex("by_domain_id", (q) => q.eq("id", message.replyToId!))
+        .unique()
+    : null;
+  const coordination =
+    message.coordination ??
+    (chat.kind === "group" &&
+      message.senderKind === "orchestrator" &&
+      original?.senderKind !== "user");
+  return { coordination, senderId: message.senderId, mentions: [...(message.mentions ?? [])] };
+}
+
 export async function appendChatMessage(
   ctx: MutationCtx,
   chat: Doc<"aiOrchestratorChats">,
@@ -408,15 +469,23 @@ export async function appendChatMessage(
     replyToId: string | null;
     attachments?: OrchestratorAttachment[];
     expression?: string;
+    coordination?: boolean;
+    mentions?: HumanMention[];
     worker?: { workId: string; questionId?: string; fieldId?: string };
   },
   notification?: { urgent: boolean; enabled: boolean },
 ) {
+  const recipients = await humanRecipients(ctx, chat);
+  const mentions = message.mentions ?? [];
+  if (mentions.some((mention) => !recipients.some((recipient) => recipient.id === mention.id)))
+    return fail("Mention a current conversation participant with access.");
+  const { coordination } = await messageAttention(ctx, chat, message);
   const latest = await ctx.db.get(chat._id);
   const sequence = (latest?.lastSequence ?? chat.lastSequence) + 1,
     now = Date.now();
   await ctx.db.insert("aiOrchestratorMessages", {
     ...message,
+    coordination,
     chatId: chat.id,
     sequence,
     createdAt: now,
@@ -430,6 +499,9 @@ export async function appendChatMessage(
       ? {
           notification: {
             ...notification,
+            coordination,
+            senderId: message.senderId,
+            ...(mentions.length ? { mentions } : {}),
             sequence,
             senderName: message.senderName,
             text: conversationMessagePreview(message),
@@ -439,7 +511,17 @@ export async function appendChatMessage(
       : {}),
   });
   for (const subject of chat.participantSubjects) {
-    if (notification?.enabled) {
+    if (
+      notification?.enabled &&
+      conversationAttention({
+        hasAccess: recipients.some((recipient) => recipient.id === subject),
+        isMember: chat.participantSubjects.includes(subject),
+        subject,
+        senderId: message.senderId,
+        coordination,
+        mentions,
+      })
+    ) {
       const pending = await ctx.db
         .query("aiOrchestratorPush")
         .withIndex("by_chat_subject", (q) => q.eq("chatId", chat.id).eq("subject", subject))
@@ -482,7 +564,13 @@ export const listChats = query({
           .query("aiOrchestratorChats")
           .withIndex("by_domain_id", (q) => q.eq("id", member.chatId))
           .unique();
-        if (!chat || !(await hasChatAccess(ctx, chat, user))) return null;
+        if (
+          !chat ||
+          chat.lifecycle === "deleted" ||
+          !chat.participantSubjects.includes(user.clerkSubject) ||
+          !(await hasChatAccess(ctx, chat, user))
+        )
+          return null;
         // Internal wake messages remain available to reasoning, not the human conversation.
         const latest = await ctx.db
           .query("aiOrchestratorMessages")
@@ -495,17 +583,32 @@ export const listChats = query({
           .order("desc")
           .first();
         // Cap the projection at 100; the client displays 99+ without loading history.
-        const unread = await ctx.db
-          .query("aiOrchestratorMessages")
-          .withIndex("by_chat_sequence", (q) =>
-            q
-              .eq("chatId", chat.id)
-              .gte("sequence", Math.max(member.fromSequence, member.readSequence + 1)),
-          )
-          .filter((q) =>
-            q.or(q.neq(q.field("senderKind"), "system"), q.eq(q.field("senderId"), "participants")),
-          )
-          .take(100);
+        let unreadCount = 0;
+        let cursor: number | null = Math.max(member.fromSequence, member.readSequence + 1);
+        do {
+          const page = await ctx.db
+            .query("aiOrchestratorMessages")
+            .withIndex("by_chat_sequence", (q) => q.eq("chatId", chat.id).gte("sequence", cursor!))
+            .filter((q) =>
+              q.or(
+                q.neq(q.field("senderKind"), "system"),
+                q.eq(q.field("senderId"), "participants"),
+              ),
+            )
+            .take(100);
+          const eligibility = await Promise.all(
+            page.map(async (message) =>
+              conversationAttention({
+                hasAccess: true,
+                isMember: true,
+                subject: user.clerkSubject,
+                ...(await messageAttention(ctx, chat, message)),
+              }),
+            ),
+          );
+          unreadCount += eligibility.filter(Boolean).length;
+          cursor = page.length < 100 ? null : page[page.length - 1]!.sequence + 1;
+        } while (cursor && unreadCount < 100);
         const {
           _id,
           _creationTime,
@@ -514,14 +617,41 @@ export const listChats = query({
           notification,
           ...record
         } = chat;
+        const notificationMessage = notification
+          ? await ctx.db
+              .query("aiOrchestratorMessages")
+              .withIndex("by_chat_sequence", (q) =>
+                q.eq("chatId", chat.id).eq("sequence", notification.sequence),
+              )
+              .unique()
+          : null;
+        const attention = notificationMessage
+          ? await messageAttention(ctx, chat, notificationMessage)
+          : null;
         return {
           ...record,
+          pinned: member.pinned ?? false,
+          muted: member.muted ?? false,
+          markedUnread: member.markedUnread ?? false,
           lastMessage: latest ? conversationMessagePreview(latest) : "",
           lastSequence: latest?.sequence ?? 0,
           readSequence: member.readSequence,
-          unreadCount: unread.length,
+          unreadCount: member.muted
+            ? 0
+            : Math.max(member.markedUnread ? 1 : 0, Math.min(100, unreadCount)),
           lastMessageAt: latest?.createdAt ?? chat.createdAt,
-          ...(notification && notification.sequence >= member.fromSequence ? { notification } : {}),
+          ...(!member.muted &&
+          notification &&
+          notification.sequence >= member.fromSequence &&
+          attention &&
+          conversationAttention({
+            hasAccess: true,
+            isMember: true,
+            subject: user.clerkSubject,
+            ...attention,
+          })
+            ? { notification: { ...notification, ...attention } }
+            : {}),
         };
       }),
     );
@@ -566,9 +696,18 @@ export const createChat = mutation({
         .query("aiOrchestratorChats")
         .withIndex("by_owner", (q) => q.eq("ownerSubject", user.clerkSubject))
         .take(200);
-      const dm = existing.find((c) => c.kind === "dm" && c.leadId === ids[0]);
+      const dm = existing.find(
+        (c) => c.kind === "dm" && c.leadId === ids[0] && c.lifecycle !== "deleted",
+      );
       if (dm) {
-        await ctx.db.patch(dm._id, { archived: false });
+        if (dm.lifecycle && dm.lifecycle !== "archived")
+          return fail("This conversation is stopping.");
+        await ctx.db.patch(dm._id, {
+          archived: false,
+          lifecycle: undefined,
+          lifecycleDetail: undefined,
+          lifecycleStartedAt: undefined,
+        });
         return dm.id;
       }
     }
@@ -834,6 +973,8 @@ export const send = mutation({
     chatId: v.string(),
     id: v.string(),
     text: v.string(),
+    mentions: v.optional(v.array(v.object({ kind: v.literal("user"), id: v.string() }))),
+    humanOnly: v.optional(v.boolean()),
     targetId: v.optional(v.string()),
     workId: v.optional(v.string()),
     replyToId: v.optional(v.string()),
@@ -843,6 +984,11 @@ export const send = mutation({
     if (chat.archived) return fail("Unarchive this conversation to send a message.");
     if ((!args.text.trim() && !args.attachmentIds?.length) || args.text.length > 32000)
       return fail("Messages must contain between 1 and 32,000 characters.");
+    if (
+      args.humanOnly &&
+      (!args.mentions?.length || args.targetId || args.workId || args.replyToId)
+    )
+      return fail("Human attention messages cannot dispatch or control agent work.");
     const existing = await ctx.db
       .query("aiOrchestratorMessages")
       .withIndex("by_domain_id", (q) => q.eq("id", args.id))
@@ -856,12 +1002,14 @@ export const send = mutation({
         existing.chatId !== chat.id ||
         existing.senderId !== user.clerkSubject ||
         existing.text !== args.text.trim() ||
+        JSON.stringify(existing.mentions ?? []) !== JSON.stringify(args.mentions ?? []) ||
         JSON.stringify(existing.attachments?.map((a) => a.id) ?? []) !==
           JSON.stringify(args.attachmentIds ?? []) ||
         existing.replyToId !== (args.replyToId ?? null) ||
         (existing.worker
           ? existing.worker.workId !== args.workId && !args.replyToId
-          : existingJob?.orchestratorId !== (args.targetId ?? chat.leadId))
+          : existingJob?.orchestratorId !==
+            (args.humanOnly ? undefined : (args.targetId ?? chat.leadId)))
       )
         return fail("That message identity is already in use.");
       return existing.sequence;
@@ -888,17 +1036,25 @@ export const send = mutation({
       ids: args.attachmentIds ?? [],
     });
     const worker = reply?.worker ? reply.worker : args.workId ? { workId: args.workId } : undefined;
-    const sequence = await appendChatMessage(ctx, chat, {
-      ...(worker ? { worker } : {}),
-      attachments,
-      id: args.id,
-      senderKind: "user",
-      senderId: user.clerkSubject,
-      senderName: user.displayName,
-      text: args.text.trim(),
-      status: "queued",
-      replyToId: args.replyToId ?? null,
-    });
+    const sequence = await appendChatMessage(
+      ctx,
+      chat,
+      {
+        ...(worker ? { worker } : {}),
+        attachments,
+        id: args.id,
+        senderKind: "user",
+        senderId: user.clerkSubject,
+        senderName: user.displayName,
+        text: args.text.trim(),
+        status: args.humanOnly ? "sent" : "queued",
+        ...(args.mentions?.length ? { mentions: args.mentions } : {}),
+        coordination: args.humanOnly === true,
+        replyToId: args.replyToId ?? null,
+      },
+      args.humanOnly ? { enabled: true, urgent: false } : undefined,
+    );
+    if (args.humanOnly) return sequence;
     if (worker) {
       await sendWorkerReply(
         ctx,
@@ -969,7 +1125,16 @@ export const updateChat = mutation({
       if (!canDirectOrchestrator(row, user.clerkSubject))
         return fail("You need permission to direct the selected lead.");
     }
+    if (args.archived === true) {
+      await beginConversationStop(ctx, chat, "archiving");
+      return null;
+    }
+    if (args.archived === false && chat.lifecycle && chat.lifecycle !== "archived")
+      return fail("Wait for confirmed termination before restoring this conversation.");
     await ctx.db.patch(chat._id, {
+      ...(args.archived === false
+        ? { lifecycle: undefined, lifecycleDetail: undefined, lifecycleStartedAt: undefined }
+        : {}),
       ...(args.title !== undefined ? { title: args.title.trim() } : {}),
       ...(args.archived !== undefined ? { archived: args.archived } : {}),
       ...(args.leadId ? { leadId: args.leadId } : {}),
@@ -1375,3 +1540,62 @@ export const conversationAvatars = query({
     return avatars.filter((avatar) => avatar !== null);
   },
 });
+
+export const setChatPreferences = mutation({
+  args: {
+    chatId: v.string(),
+    pinned: v.optional(v.boolean()),
+    muted: v.optional(v.boolean()),
+    markedUnread: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const { member } = await readableChat(ctx, args.chatId);
+    await ctx.db.patch(member._id, {
+      ...(args.pinned !== undefined ? { pinned: args.pinned } : {}),
+      ...(args.muted !== undefined ? { muted: args.muted } : {}),
+      ...(args.markedUnread !== undefined ? { markedUnread: args.markedUnread } : {}),
+    });
+  },
+});
+export const deleteChat = mutation({
+  args: { chatId: v.string(), confirmed: v.boolean() },
+  handler: async (ctx, args) => {
+    const { chat, user } = await readableChat(ctx, args.chatId);
+    if (chat.ownerSubject !== user.clerkSubject)
+      return fail("Only the conversation owner can delete it.");
+    if (!args.confirmed) return fail("Confirm deletion after reviewing unfinished work.");
+    await beginConversationStop(ctx, chat, "deleting");
+  },
+});
+export async function beginConversationStop(
+  ctx: MutationCtx,
+  chat: Doc<"aiOrchestratorChats">,
+  intent: "archiving" | "deleting",
+) {
+  if (chat.lifecycle === "deleted") return;
+  if (chat.lifecycle === "deleting" && intent === "archiving") return;
+  const now = Date.now();
+  await ctx.db.patch(chat._id, {
+    archived: true,
+    lifecycle: intent,
+    lifecycleStartedAt: chat.lifecycleStartedAt ?? now,
+  });
+  const { work, jobs } = await conversationWork(ctx, chat.id);
+  for (const job of jobs) {
+    if (job.stopRequested) continue;
+    await ctx.db.patch(job._id, {
+      stopRequested: true,
+      stopConfirmed: job.environmentId === null && job.generation === 0,
+      status: "cancelled",
+      error: "Conversation stop requested.",
+      updatedAt: now,
+    });
+  }
+  for (const assignment of work) {
+    if (assignment.stopConfirmed) continue;
+    const orchestrator = await findOrchestrator(ctx, assignment.orchestratorId);
+    await ctx.db.patch(assignment._id, { stopRequested: true, controlsPending: true });
+    if (orchestrator) await requestOrchestratorStop(ctx, orchestrator, assignment.id);
+  }
+  await reconcileConversationLifecycle(ctx, { ...chat, archived: true, lifecycle: intent });
+}

@@ -85,8 +85,22 @@ export async function eligibleOrchestratorEnvironment(
 export async function orchestratorCommandAllowed(
   ctx: QueryCtx,
   command: Doc<"environmentCommands">,
+  executionWork?: Doc<"aiOrchestratorWork">,
 ) {
   if (!command.orchestratorId) return true;
+  const ownedWork =
+    executionWork ??
+    (await ctx.db
+      .query("aiOrchestratorWork")
+      .withIndex("by_command", (q) => q.eq("commandId", command.id))
+      .unique());
+  if (ownedWork) {
+    const chat = await ctx.db
+      .query("aiOrchestratorChats")
+      .withIndex("by_domain_id", (q) => q.eq("id", ownedWork.chatId))
+      .unique();
+    if (ownedWork.stopRequested || !chat || chat.archived || chat.lifecycle) return false;
+  }
   const orchestrator = await ctx.db
     .query("aiOrchestrators")
     .withIndex("by_domain_id", (q) => q.eq("id", command.orchestratorId!))
@@ -218,4 +232,47 @@ export async function orchestratorCanReadWork(
     (!orchestrator.projectId || orchestrator.projectId === project.id) &&
     hasRecordPermission(scope.permissions, "projects.read", project.teamIds)
   );
+}
+
+/** An environment may attest an exact run on a reused thread; mentions or clients cannot grant this authority. */
+export async function assignmentForExecution(
+  ctx: QueryCtx,
+  origin: {
+    companyId: string;
+    orchestratorId: string;
+    commandId: string;
+    execution?: { threadId: string; runId: string; messageId: string };
+  },
+  environmentId: string,
+) {
+  const root = await ctx.db
+    .query("aiOrchestratorWork")
+    .withIndex("by_command", (q) => q.eq("commandId", origin.commandId))
+    .unique();
+  if (
+    !root ||
+    root.companyId !== origin.companyId ||
+    root.orchestratorId !== origin.orchestratorId ||
+    root.environmentId !== environmentId
+  )
+    return null;
+  if (!origin.execution) return root;
+  const execution = origin.execution;
+  const candidates = await ctx.db
+    .query("aiOrchestratorWork")
+    .withIndex("by_thread", (q) =>
+      q
+        .eq("companyId", origin.companyId)
+        .eq("environmentId", environmentId)
+        .eq("threadId", execution.threadId),
+    )
+    .collect();
+  const exact = candidates.find(
+    (work) =>
+      work.resultRunId === execution.runId ||
+      work.resultMessageId === execution.messageId ||
+      `${work.commandId}:message` === execution.messageId,
+  );
+  if (exact && exact.orchestratorId === origin.orchestratorId) return exact;
+  return root;
 }

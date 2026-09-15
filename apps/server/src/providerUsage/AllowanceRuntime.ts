@@ -1,3 +1,4 @@
+import { executionOrigin } from "../cloud/orchestratorExecution.ts";
 /** Shared account guards are checked by the runtime independently of open clients. */
 import { makeFunctionReference } from "convex/server";
 import { ConvexError } from "convex/values";
@@ -347,6 +348,7 @@ export const layer = Layer.effect(
         cursor = shell.lineage.parentThreadId;
       }
       if (cursor) return yield* Effect.fail("The assignment ancestry exceeds the supported depth.");
+      if (origin) origin = yield* executionOrigin(store.getThreadProjection, threadId, origin);
       const companyIds = origin ? [origin.companyId] : companyId ? [companyId] : yield* companies;
       if (!companyIds.length) return yield* Effect.fail("No registered workspace is available.");
       return companyIds.map((companyId) => ({ companyId, scopes, ...(origin ? { origin } : {}) }));

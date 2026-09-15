@@ -1,3 +1,4 @@
+import { reconcileConversationLifecycle } from "./lib/conversationLifecycle.ts";
 // @effect-diagnostics globalDate:off -- Convex transaction clock.
 /** Conversation-private worker controls; never included in company change feeds. */
 import { canonicalQueueJson } from "../src/threadQueue.ts";
@@ -244,7 +245,7 @@ export async function applyWorkerAction(
         await ctx.db.patch(question._id, { state: prompt ? "escalated" : "open" });
       }
     }
-    if ((await pendingMessagesFor(ctx, work.id)).length === 0)
+    if (!work.stopRequested && (await pendingMessagesFor(ctx, work.id)).length === 0)
       await ctx.db.patch(work._id, { controlsPending: false });
     return { id: action.id, state: action.kind === "removeWorkMessage" ? "removed" : "pending" };
   }
@@ -414,7 +415,7 @@ export const environmentInbox = query({
           .eq("environmentId", actor.registration.environmentId)
           .eq("controlsPending", true),
       )
-      .take(100);
+      .collect();
     const matching = args.threadId
       ? await ctx.db
           .query("aiOrchestratorWork")
@@ -434,7 +435,8 @@ export const environmentInbox = query({
     ];
     const result = [];
     for (const work of rows) {
-      if (!work.threadId || !work.commandId || work.controlMessageId) continue;
+      if (!work.commandId || ((!work.threadId || work.controlMessageId) && !work.stopRequested))
+        continue;
       const chat = await ctx.db
         .query("aiOrchestratorChats")
         .withIndex("by_domain_id", (q) => q.eq("id", work.chatId))
@@ -459,16 +461,21 @@ export const environmentInbox = query({
       const budgets = head
         ? await budgetsForScopes(ctx, args.companyId, [
             { kind: "chat", chatId: work.chatId },
-            { kind: "thread", environmentId: work.environmentId, threadId: work.threadId },
+            { kind: "thread", environmentId: work.environmentId, threadId: head.threadId },
           ])
         : [];
       result.push({
         allowanceRevision: budgets.map((b) => `${b.id}:${b.revision}:${b.status}`).join("|"),
         workId: work.id,
-        threadId: work.threadId,
+        threadId: work.threadId ?? "",
         commandId: work.commandId,
         orchestratorId: work.orchestratorId,
         stopped: !enabled,
+        cancellationRequested: !!work.stopRequested && !work.stopConfirmed,
+        stopRunId: work.resultRunId ?? null,
+        stopMessageId: work.continuation
+          ? (work.resultMessageId ?? work.commandId + ":message")
+          : null,
         message: head ? { id: head.id, revision: head.revision } : null,
       });
     }
@@ -587,9 +594,11 @@ export const acknowledge = mutation({
         ...(args.messageId ? { resultMessageId: args.messageId } : {}),
         title: work.title,
         prompt: row.text,
-        status: "working",
+        status: work.stopRequested ? "unknown" : "working",
         resultRunId: args.runId,
-        stopRequested: false,
+        stopRequested: !!work.stopRequested,
+        stopConfirmed: false,
+        controlsPending: !!work.stopRequested,
         readRequested: false,
         completionNotified: false,
         resultCollected: false,
@@ -598,7 +607,7 @@ export const acknowledge = mutation({
         updatedAt: Date.now(),
       });
     }
-    if ((await pendingMessagesFor(ctx, work.id)).length === 0)
+    if (!work.stopRequested && (await pendingMessagesFor(ctx, work.id)).length === 0)
       await ctx.db.patch(work._id, { controlsPending: false });
     if (row.questionId && args.failed) {
       const question = await questionById(ctx, args.workId, row.questionId);
@@ -860,5 +869,50 @@ export const attachmentDownloads = query({
         return { attachment, url };
       }),
     );
+  },
+});
+
+export const reportConversationStop = mutation({
+  args: {
+    companyId: v.string(),
+    workId: v.string(),
+    commandId: v.string(),
+    threadId: v.string(),
+    confirmed: v.boolean(),
+    detail: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireCompanyActor(ctx, args.companyId);
+    if (actor.kind !== "environment")
+      return fail("Only the assigned environment can confirm termination.");
+    const work = await workById(ctx, args.workId);
+    if (
+      !work ||
+      work.companyId !== args.companyId ||
+      work.environmentId !== actor.registration.environmentId ||
+      work.commandId !== args.commandId ||
+      (work.threadId !== null && work.threadId !== args.threadId) ||
+      !work.stopRequested
+    )
+      return fail("This termination receipt does not belong to this environment assignment.");
+    const unresolved = await ctx.db
+      .query("aiOrchestratorWorkerMessages")
+      .withIndex("by_work_state", (q) => q.eq("workId", work.id).eq("state", "accepted"))
+      .first();
+    if (args.confirmed && unresolved) return false;
+    if (!work.stopConfirmed)
+      await ctx.db.patch(work._id, {
+        threadId: args.threadId,
+        stopConfirmed: args.confirmed,
+        controlsPending: !args.confirmed,
+        status: args.confirmed ? "cancelled" : "unknown",
+        detail: args.detail.slice(0, 1000),
+        updatedAt: Date.now(),
+      });
+    const chat = await ctx.db
+      .query("aiOrchestratorChats")
+      .withIndex("by_domain_id", (q) => q.eq("id", work.chatId))
+      .unique();
+    if (chat) await reconcileConversationLifecycle(ctx, chat);
   },
 });

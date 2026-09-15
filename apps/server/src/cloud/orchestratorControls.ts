@@ -1,3 +1,4 @@
+import { reconcileOwnedStop } from "./conversationStop.ts";
 import * as Schedule from "effect/Schedule";
 import { persistThreadQueueAttachment } from "./threadQueueWorker.ts";
 import { ORCHESTRATOR_WORKER_REPORT_INSTRUCTIONS } from "@spiritdevs/contracts/orchestratorInspection";
@@ -88,7 +89,7 @@ export const reportWorkerQuestionChanges = Effect.fn("cloud.orchestrator.reportQ
     ) => Effect.Effect<unknown, WorkerControlError>;
   }) {
     for (const question of workerQuestions(input.projection)) {
-      const key = JSON.stringify([input.workId, input.projection.thread.id, question.requestId]);
+      const key = `${input.workId.length}:${input.workId}${input.projection.thread.id.length}:${input.projection.thread.id}${question.requestId}`;
       if (input.reported.get(key) === question.open) continue;
       yield* input.report(question);
       input.reported.set(key, question.open);
@@ -353,13 +354,83 @@ export const runOrchestratorControls = Effect.fn("cloud.orchestrator.controls")(
                 belongsToWorker(changed, row, input.companyId),
             )
           : rows;
-        for (const assignment of relevant) {
+        for (const candidate of relevant) {
           yield* Effect.gen(function* () {
+            let assignment = candidate;
+            if (!assignment.threadId && assignment.cancellationRequested) {
+              retryAssignments.set(assignment.workId, assignment);
+              const launch = yield* receipts.getByCommandId(CommandId.make(assignment.commandId));
+              if (Option.isNone(launch)) return;
+              assignment = { ...assignment, threadId: launch.value.threadId };
+            }
             const root =
               changed?.thread.id === assignment.threadId
                 ? changed
                 : yield* threads.getThreadProjection(ThreadId.make(assignment.threadId));
+            if (
+              !candidate.threadId &&
+              (root.thread.orchestratorOrigin?.commandId !== candidate.commandId ||
+                root.thread.orchestratorOrigin?.companyId !== input.companyId)
+            )
+              return;
             if (!belongsToWorker(root, assignment, input.companyId)) return;
+            if (assignment.cancellationRequested) {
+              retryAssignments.set(assignment.workId, assignment);
+              const receipt = yield* reconcileOwnedStop(
+                threads,
+                root,
+                "conversation-stop:" + assignment.workId,
+                assignment.stopMessageId ?? undefined,
+                assignment.stopRunId ?? undefined,
+              );
+              if (assignment.message) {
+                // Missing receipts are uncertain: an accepted delivery may still be in flight.
+                const local = yield* receipts.getByCommandId(
+                  workerMessageCommandId(assignment.workId, assignment.message.id),
+                );
+                if (Option.isNone(local)) return;
+                const accepted = yield* call(() =>
+                  client.mutation(api.aiOrchestratorControls.accept, {
+                    companyId: input.companyId,
+                    workId: assignment.workId,
+                    ...assignment.message!,
+                  }),
+                );
+                if (accepted) {
+                  const recovered = yield* executeAcceptedWorkerMessage({
+                    message: accepted,
+                    assignment,
+                    root,
+                    companyId: input.companyId,
+                    threads,
+                    receipts,
+                    recoveryOnly: true,
+                    admit: () => Effect.succeed(false),
+                  });
+                  yield* call(() =>
+                    client.mutation(api.aiOrchestratorControls.acknowledge, {
+                      companyId: input.companyId,
+                      workId: assignment.workId,
+                      ...assignment.message!,
+                      ...recovered,
+                    }),
+                  );
+                }
+                return;
+              }
+              const recorded = yield* call(() =>
+                client.mutation(api.aiOrchestratorControls.reportConversationStop, {
+                  companyId: input.companyId,
+                  workId: assignment.workId,
+                  commandId: assignment.commandId,
+                  threadId: assignment.threadId,
+                  ...receipt,
+                }),
+              );
+              if (receipt.confirmed && recorded !== false)
+                retryAssignments.delete(assignment.workId);
+              return;
+            }
 
             const targets = assignment.stopped
               ? []
@@ -468,16 +539,21 @@ export const runOrchestratorControls = Effect.fn("cloud.orchestrator.controls")(
             Effect.retry({ times: 2, schedule: Schedule.spaced("2 seconds") }),
             Effect.tap(() =>
               Effect.sync(() => {
-                retryAssignments.delete(assignment.workId);
+                if (
+                  !candidate.cancellationRequested &&
+                  !retryAssignments.get(candidate.workId)?.cancellationRequested
+                )
+                  retryAssignments.delete(candidate.workId);
               }),
             ),
             Effect.catch(() =>
               Effect.gen(function* () {
-                retryAssignments.set(assignment.workId, assignment);
+                if (!retryAssignments.get(candidate.workId)?.cancellationRequested)
+                  retryAssignments.set(candidate.workId, candidate);
                 yield* Effect.logDebug(
                   "Worker delivery remains unconfirmed; scheduled for recovery.",
                   {
-                    workId: assignment.workId,
+                    workId: candidate.workId,
                   },
                 );
               }),

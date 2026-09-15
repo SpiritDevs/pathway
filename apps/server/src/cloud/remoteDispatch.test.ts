@@ -7,6 +7,7 @@ import {
   type StoredSyncState,
 } from "@spiritdevs/client-runtime/sync";
 import {
+  MessageId,
   CloudProjectId,
   EnvironmentCommandId,
   EnvironmentId,
@@ -350,3 +351,47 @@ describe("RemoteDispatch", () => {
     }),
   );
 });
+
+it.effect("interrupt targets never fall through to an unrelated active run", () =>
+  Effect.gen(function* () {
+    for (const status of ["queued", "running", "completed", "missing"] as const) {
+      const sent: Array<{ type: string; runId: string }> = [];
+      const target = {
+        ...projection,
+        runs: [
+          { id: "owned", status, ordinal: 1 },
+          { id: "unrelated", status: "running", ordinal: 2 },
+        ],
+        messages: status === "missing" ? [] : [{ id: "owned-message", runId: "owned" }],
+      } as unknown as OrchestrationV2ThreadProjection;
+      const client = {
+        [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: () => Effect.succeed(target),
+        [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: { type: string; runId: string }) =>
+          Effect.sync(() => {
+            sent.push(command);
+            return { sequence: 0, storedEvents: [] };
+          }),
+      } as unknown as RpcSession["client"];
+      const remote = yield* makeHarness({
+        connect: () => Effect.succeed(peerHandle(client)),
+        issue: () => Effect.die("Unexpected deferred interruption"),
+      });
+      yield* remote.dispatch({
+        ...commandInput("grant"),
+        kind: "interrupt",
+        args: {
+          kind: "interrupt",
+          threadId: THREAD_ID,
+          messageId: MessageId.make("owned-message"),
+        },
+      });
+      expect(sent.map(({ type, runId }) => ({ type, runId }))).toEqual(
+        status === "queued"
+          ? [{ type: "queued-run.cancel", runId: "owned" }]
+          : status === "running"
+            ? [{ type: "run.interrupt", runId: "owned" }]
+            : [],
+      );
+    }
+  }),
+);
