@@ -1,3 +1,5 @@
+import { ConversationRecipientInput } from "./ConversationRecipientInput";
+import { eligibleRecipients, recipientTarget } from "./conversationRecipients";
 import { mapEnvironmentControlError } from "../../cloud/environmentControl";
 import { ConversationAttachmentDrafts } from "./ConversationAttachments";
 import { shouldHandleComposerAttachmentPaste } from "../chat/composerAttachmentFiles";
@@ -76,7 +78,7 @@ export function Composer({
   };
   const sending = state.sendingChats.includes(chat.id);
   const setSending = (value: boolean) => state.setSendingChat(chat.id, value);
-  const [target, setTarget] = useState(chat.leadId);
+
   const pending = state.pendingMessages.current;
   const fileInput = useRef<HTMLInputElement>(null);
   const drafts = reply?.kind === "edit" ? [] : (state.attachments.drafts[chat.id] ?? []);
@@ -92,10 +94,16 @@ export function Composer({
   };
   const text = state.drafts[chat.id] ?? "";
   const contacts = state.contacts.filter((contact) => chat.orchestratorIds.includes(contact.id));
-  const lead =
-    contacts.find((contact) => contact.id === reply?.orchestratorId) ??
-    contacts.find((contact) => contact.id === target) ??
-    contacts.find((contact) => contact.id === chat.leadId);
+  const recipients = eligibleRecipients(contacts, chat.orchestratorIds);
+  const selectedRecipient = state.recipients[chat.id];
+  const lockedRecipient = !!reply?.workId || reply?.kind === "edit";
+  const lead = recipientTarget(
+    contacts,
+    chat.leadId,
+    selectedRecipient,
+    reply?.orchestratorId,
+    lockedRecipient,
+  );
   const send = () => {
     if (sending || blocked || (!text.trim() && !drafts.length) || chat.archived || !lead?.canDirect)
       return;
@@ -198,26 +206,6 @@ export function Composer({
               </div>
             ))}
         </div>
-        {contacts.length > 1 && !reply?.workId && (
-          <label className="mb-2 flex items-center gap-1 pl-2 text-[11px] text-muted-foreground">
-            To
-            <select
-              aria-label="Address orchestrator"
-              className="max-w-52 bg-transparent text-foreground outline-none"
-              value={lead?.id ?? chat.leadId}
-              onChange={(event) => setTarget(event.target.value)}
-            >
-              {contacts
-                .filter((contact) => contact.canDirect)
-                .map((contact) => (
-                  <option key={contact.id} value={contact.id}>
-                    {contact.name}
-                    {contact.id === chat.leadId ? " · Lead" : ""}
-                  </option>
-                ))}
-            </select>
-          </label>
-        )}
         <input
           ref={fileInput}
           type="file"
@@ -288,16 +276,18 @@ export function Composer({
             >
               <PaperclipIcon className="size-5" />
             </Button>
-            <textarea
-              ref={input}
-              aria-label={`Message ${chat.title}`}
-              placeholder={`Message ${chat.title}`}
-              className="field-sizing-content max-h-40 min-h-9 min-w-0 flex-1 resize-none bg-transparent py-2 text-sm leading-5 outline-none placeholder:text-muted-foreground"
-              rows={1}
-              value={text}
-              onChange={(event) => state.setDraft(chat.id, event.target.value)}
-              maxLength={32000}
+            <ConversationRecipientInput
+              input={input}
+              text={text}
+              title={chat.title}
+              recipients={recipients}
+              selected={contacts.find((contact) => contact.id === selectedRecipient)}
+              onSelect={(id) => state.setRecipient(chat.id, id)}
+              locked={lockedRecipient}
+              onChange={(value) => state.setDraft(chat.id, value)}
               disabled={sending}
+              onSend={send}
+              onEscape={reply ? clearReply : undefined}
               onPaste={(event) => {
                 const files = Array.from(event.clipboardData.files);
                 const plainText = event.clipboardData.getData("text/plain");
@@ -312,17 +302,6 @@ export function Composer({
                 ) {
                   if (!plainText.length || hasImageFile) event.preventDefault();
                   addFiles(files);
-                }
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Escape" && reply) {
-                  event.preventDefault();
-                  clearReply();
-                  return;
-                }
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  send();
                 }
               }}
             />
