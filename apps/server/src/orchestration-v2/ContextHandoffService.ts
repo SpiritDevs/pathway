@@ -316,7 +316,16 @@ export function providerMessageWithContextHandoffs(input: {
       handoff.strategy === "fork_delta_summary"
         ? "merge_back / fork_delta_summary"
         : handoff.strategy;
-    return [`Context handoff (${label}):`, handoff.summaryText, ""];
+    return [
+      `Context handoff (${label}):`,
+      handoff.summaryText,
+      ...(handoff.compaction === undefined
+        ? []
+        : [
+            `The full conversation is preserved in Pathway thread ${handoff.threadId}. Use pathway_thread_read with that threadId to retrieve earlier messages in small pages when more detail is needed.`,
+          ]),
+      "",
+    ];
   });
   return [...handoffSections, "User message:", input.userText].join("\n");
 }

@@ -210,6 +210,13 @@ it.effect(
         "thread.interaction-mode.set",
       ]);
       assert.equal(harness.createWorktree.mock.calls.length, 0);
+      assert.deepInclude(
+        harness.commands.find((command) => command.type === "thread.fork"),
+        {
+          compactContext: true,
+          forkKind: "manual",
+        },
+      );
     }).pipe(Effect.provide(harness.layer));
   },
 );
@@ -232,6 +239,13 @@ it.effect("creates a retry-safe worktree from the exact source HEAD and runs set
     });
     assert.equal(harness.createWorktree.mock.calls.length, 1);
     assert.equal(harness.runSetup.mock.calls.length, 1);
+    assert.deepInclude(
+      harness.commands.find((command) => command.type === "thread.fork"),
+      {
+        compactContext: true,
+        forkKind: "manual",
+      },
+    );
   }).pipe(Effect.provide(harness.layer));
 });
 

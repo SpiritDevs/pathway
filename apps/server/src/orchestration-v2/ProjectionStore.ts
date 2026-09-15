@@ -785,7 +785,7 @@ export function isTurnItemAtOrBeforeRun(input: {
   return ordinal !== undefined && ordinal <= input.sourceRunOrdinal;
 }
 
-function visibleTurnItemsThroughRun(input: {
+export function visibleTurnItemsThroughRun(input: {
   readonly sourceProjection: OrchestrationV2ThreadProjection;
   readonly sourceRunId: NonNullable<OrchestrationV2TurnItem["runId"]>;
 }): Array<Omit<OrchestrationV2ProjectedTurnItem, "position">> {

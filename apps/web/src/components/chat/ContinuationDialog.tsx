@@ -77,7 +77,7 @@ export function ContinuationDialog(props: {
               ? "Choose another provider or account for the next response."
               : props.kind === "recovery"
                 ? "Choose a different model. Pathway will ask it to continue the interrupted work in this chat."
-                : "Start from this response and choose the model and checkout."}
+                : "Keep the conversation and attachments through this response. Context is prepared for the model before your first message is sent."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 px-6 pb-6">
@@ -125,15 +125,15 @@ export function ContinuationDialog(props: {
           ) : (
             <div className="grid gap-2">
               <ContinuationChoice
-                title="Use this worktree"
-                description="Continue in the current checkout"
+                title="Continue in this workspace"
+                description="Start a new chat using the current files"
                 pending={props.pending}
                 onClick={() => props.onSubmit(selection, "current")}
               />
               {props.canCreateWorktree ? (
                 <ContinuationChoice
-                  title="Use a new worktree"
-                  description="Start from the source checkout's committed HEAD"
+                  title="Create new worktree"
+                  description="Use a separate checkout of the committed files"
                   pending={props.pending}
                   onClick={() => props.onSubmit(selection, "new-worktree")}
                 />

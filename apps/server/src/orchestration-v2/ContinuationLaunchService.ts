@@ -307,6 +307,8 @@ export const make = Effect.gen(function* () {
           sourceThreadId: input.sourceThreadId,
           targetThreadId: input.targetThreadId,
           sourcePoint: { type: "run", runId: input.sourceRunId },
+          compactContext: true,
+          forkKind: "manual",
           ...(input.title === undefined ? {} : { title: input.title }),
         }),
       );

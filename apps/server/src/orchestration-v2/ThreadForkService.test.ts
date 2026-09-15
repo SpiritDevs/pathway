@@ -120,6 +120,7 @@ it.effect("keeps a fork awake when its source thread is snoozed", () =>
       transferId: ContextTransferId.make("context-transfer:fork-snoozed-source"),
       targetThreadId,
       forkKind: "side_chat",
+      compactContext: true,
       title: "Awake fork",
       createdBy: "user",
       creationSource: "mobile",
@@ -127,6 +128,7 @@ it.effect("keeps a fork awake when its source thread is snoozed", () =>
     });
 
     assert.isNull(result.targetThread.snoozedUntil);
+    assert.isTrue(result.transfer.compactContext);
     assert.isNull(result.targetThread.snoozedAt);
     assert.isFalse(result.targetThread.settleAfterCompletion);
     assert.equal(result.targetThread.projectId, sourceThread.projectId);

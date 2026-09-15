@@ -186,6 +186,25 @@ layer("CommandPolicyV2", (it) => {
     }),
   );
 
+  it.effect(
+    "uses portable context for a compact continuation even when native forking is available",
+    () =>
+      Effect.gen(function* () {
+        const policy = yield* CommandPolicyV2;
+        const result = yield* policy.decideForkExecution({
+          commandId,
+          threadId,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          capabilities: CodexProviderCapabilitiesV2,
+          sameProvider: true,
+          hasStrongNativeSource: true,
+          fromSpecificTurn: true,
+          compactContext: true,
+        });
+        assert.equal(result, "portable_context");
+      }),
+  );
+
   it.effect("falls back to portable context when Grok ACP cannot fork natively", () =>
     Effect.gen(function* () {
       const policy = yield* CommandPolicyV2;

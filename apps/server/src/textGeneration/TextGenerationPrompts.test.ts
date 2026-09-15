@@ -3,11 +3,22 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
+  buildContextCompactionPrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import { normalizeCliError, sanitizeThreadTitle } from "./TextGenerationUtils.ts";
 import { TextGenerationError } from "@spiritdevs/contracts";
+
+it("bounds compaction input while preserving the original request and latest state", () => {
+  const prompt = buildContextCompactionPrompt(
+    `Original constraint\n${"old chatter ".repeat(20_000)}\nLatest decision and next action`,
+  );
+  expect(prompt).toContain("Original constraint");
+  expect(prompt).toContain("Latest decision and next action");
+  expect(prompt).toContain("[Middle context omitted]");
+  expect(prompt.length).toBeLessThan(121_000);
+});
 
 describe("buildCommitMessagePrompt", () => {
   it("includes staged patch and summary in the prompt", () => {

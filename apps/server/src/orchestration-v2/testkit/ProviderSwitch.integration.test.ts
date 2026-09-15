@@ -17,12 +17,10 @@ import {
 } from "@spiritdevs/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
-import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ClaudeProviderCapabilitiesV2 } from "../Adapters/ClaudeAdapterV2.ts";
 import { CodexProviderCapabilitiesV2 } from "../Adapters/CodexAdapterV2.ts";
 import { CursorProviderCapabilitiesV2 } from "../Adapters/CursorAdapterV2.ts";
@@ -590,137 +588,212 @@ describe("orchestration v2 provider switching", () => {
     ),
   );
 
-  it.live("resolves a same-provider Cursor fork with portable context", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const sourceThreadId = ThreadId.make("thread:cursor-portable-fork:source");
-        const targetThreadId = ThreadId.make("thread:cursor-portable-fork:target");
-        const sourcePrompt = "Remember that the deployment marker is indigo.";
-        const sourceResponse = "I will remember indigo.";
-        const targetPrompt = "What deployment marker did we choose?";
-        const cwd = yield* checkpointWorkspace("cursor-portable-fork");
-        const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
-        const registryLayer = makeProviderAdapterRegistryLayer([
-          makeTestAdapter({
-            instanceId: ProviderInstanceId.make("cursor"),
-            driver: CURSOR_DRIVER,
-            capabilities: CursorProviderCapabilitiesV2,
-            modelSelection: CURSOR_MODEL_SELECTION,
-            responseByRunOrdinal: {},
-            responseByThreadId: {
-              [sourceThreadId]: { 1: sourceResponse },
-              [targetThreadId]: { 1: "The deployment marker is indigo." },
-            },
-            capturedTurns,
-          }),
-        ]);
-        const commands = [
-          {
-            type: "thread.create",
-            createdBy: "user",
-            creationSource: "web",
-            commandId: CommandId.make("command:cursor-portable-fork:create"),
-            threadId: sourceThreadId,
-            projectId,
-            title: "Cursor portable fork source",
-            modelSelection: CURSOR_MODEL_SELECTION,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            branch: null,
-            worktreePath: null,
-          },
-          {
-            type: "message.dispatch",
-            createdBy: "user",
-            creationSource: "web",
-            commandId: CommandId.make("command:cursor-portable-fork:source"),
-            threadId: sourceThreadId,
-            messageId: MessageId.make("message:cursor-portable-fork:source"),
-            text: sourcePrompt,
-            attachments: [],
-            modelSelection: CURSOR_MODEL_SELECTION,
-            dispatchMode: { type: "start_immediately" },
-          },
-          {
-            type: "thread.fork",
-            createdBy: "user",
-            creationSource: "web",
-            commandId: CommandId.make("command:cursor-portable-fork:fork"),
-            sourceThreadId,
-            targetThreadId,
-            sourcePoint: { type: "latest_stable" },
-            title: "Cursor portable fork target",
-          },
-          {
-            type: "message.dispatch",
-            createdBy: "user",
-            creationSource: "web",
-            commandId: CommandId.make("command:cursor-portable-fork:target"),
-            threadId: targetThreadId,
-            messageId: MessageId.make("message:cursor-portable-fork:target"),
-            text: targetPrompt,
-            attachments: [],
-            modelSelection: CURSOR_MODEL_SELECTION,
-            dispatchMode: { type: "start_immediately" },
-          },
-        ] satisfies ReadonlyArray<OrchestrationV2Command>;
-
-        const targetProjection = yield* Effect.gen(function* () {
-          const orchestrator = yield* OrchestratorV2;
-          yield* orchestrator.dispatch(commands[0]!);
-          yield* orchestrator.dispatch(commands[1]!);
-          yield* waitForIdle(sourceThreadId);
-          yield* orchestrator.dispatch(commands[2]!);
-          yield* orchestrator.dispatch(commands[3]!);
-          return yield* waitForIdle(targetThreadId);
-        }).pipe(
-          Effect.provide(
-            makeOrchestratorV2ReplayLayerWithRegistry(
-              {
-                name: "cursor-portable-fork",
-                runtimePolicyOverride: {
-                  cwd,
-                  approvalPolicy: "never",
-                  sandboxPolicy: {
-                    type: "readOnly",
-                    access: { type: "fullAccess" },
-                    networkAccess: false,
-                  },
+  for (const testCase of [
+    {
+      driver: CURSOR_DRIVER,
+      capabilities: CursorProviderCapabilitiesV2,
+      modelSelection: CURSOR_MODEL_SELECTION,
+      compactContext: false,
+    },
+    {
+      driver: CODEX_DRIVER,
+      capabilities: CodexProviderCapabilitiesV2,
+      modelSelection: CODEX_MODEL_SELECTION,
+      compactContext: true,
+    },
+  ]) {
+    it.live(
+      `resolves a ${testCase.driver} fork with portable context (compact: ${testCase.compactContext})`,
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const sourceThreadId = ThreadId.make("thread:cursor-portable-fork:source");
+            const targetThreadId = ThreadId.make("thread:cursor-portable-fork:target");
+            const sourcePrompt = "Remember that the deployment marker is indigo.";
+            const sourceResponse = "I will remember indigo.";
+            const targetPrompt = "What deployment marker did we choose?";
+            const cwd = yield* checkpointWorkspace("cursor-portable-fork");
+            const attachment = {
+              type: "file" as const,
+              id: "source-file",
+              name: "requirements.txt",
+              mimeType: "text/plain",
+              sizeBytes: 12,
+            };
+            const capturedTurns = yield* Ref.make<ReadonlyArray<CapturedTurn>>([]);
+            const registryLayer = makeProviderAdapterRegistryLayer([
+              makeTestAdapter({
+                instanceId: testCase.modelSelection.instanceId,
+                driver: testCase.driver,
+                capabilities: testCase.capabilities,
+                modelSelection: testCase.modelSelection,
+                responseByRunOrdinal: {},
+                responseByThreadId: {
+                  [sourceThreadId]: { 1: sourceResponse },
+                  [targetThreadId]: { 1: "The deployment marker is indigo." },
                 },
+                capturedTurns,
+              }),
+            ]);
+            const commands = [
+              {
+                type: "thread.create",
+                createdBy: "user",
+                creationSource: "web",
+                commandId: CommandId.make("command:cursor-portable-fork:create"),
+                threadId: sourceThreadId,
+                projectId,
+                title: "Cursor portable fork source",
+                modelSelection: testCase.modelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: null,
               },
-              registryLayer,
-            ),
-          ),
-        );
-        const turns = yield* Ref.get(capturedTurns);
-        const targetTurn = turns.find((turn) => turn.threadId === targetThreadId);
+              {
+                type: "message.dispatch",
+                createdBy: "user",
+                creationSource: "web",
+                commandId: CommandId.make("command:cursor-portable-fork:source"),
+                threadId: sourceThreadId,
+                messageId: MessageId.make("message:cursor-portable-fork:source"),
+                text: sourcePrompt,
+                attachments: [attachment],
+                modelSelection: testCase.modelSelection,
+                dispatchMode: { type: "start_immediately" },
+              },
+              {
+                type: "thread.fork",
+                createdBy: "user",
+                creationSource: "web",
+                commandId: CommandId.make("command:cursor-portable-fork:fork"),
+                sourceThreadId,
+                targetThreadId,
+                sourcePoint: { type: "latest_stable" },
+                compactContext: testCase.compactContext,
+                title: "Cursor portable fork target",
+              },
+              {
+                type: "message.dispatch",
+                createdBy: "user",
+                creationSource: "web",
+                commandId: CommandId.make("command:cursor-portable-fork:target"),
+                threadId: targetThreadId,
+                messageId: MessageId.make("message:cursor-portable-fork:target"),
+                text: targetPrompt,
+                attachments: [],
+                modelSelection: testCase.modelSelection,
+                dispatchMode: { type: "start_immediately" },
+              },
+            ] as const satisfies ReadonlyArray<OrchestrationV2Command>;
 
-        assert.deepEqual(
-          targetProjection.runs.map((run) => [run.providerInstanceId, run.status]),
-          [["cursor", "completed"]],
-        );
-        assert.lengthOf(targetProjection.providerThreads, 1);
-        assert.equal(targetProjection.providerThreads[0]?.driver, "cursor");
-        assert.isNull(targetProjection.providerThreads[0]?.forkedFrom);
-        assert.deepEqual(
-          targetProjection.contextTransfers.map((transfer) => [
-            transfer.type,
-            transfer.status,
-            transfer.resolution?.strategy,
-          ]),
-          [["fork", "consumed", "portable_context"]],
-        );
-        assert.deepEqual(
-          targetProjection.contextHandoffs.map((handoff) => handoff.strategy),
-          ["full_thread_summary"],
-        );
-        assert.include(targetTurn?.text ?? "", "Context handoff (full_thread_summary):");
-        assert.include(targetTurn?.text ?? "", sourcePrompt);
-        assert.include(targetTurn?.text ?? "", sourceResponse);
-        assert.include(targetTurn?.text ?? "", targetPrompt);
-      }),
-    ),
-  );
+            const targetProjection = yield* Effect.gen(function* () {
+              const orchestrator = yield* OrchestratorV2;
+              yield* orchestrator.dispatch(commands[0]!);
+              yield* orchestrator.dispatch(commands[1]!);
+              yield* waitForIdle(sourceThreadId);
+              const sourceBefore = yield* orchestrator.getThreadProjection(sourceThreadId);
+              yield* orchestrator.dispatch(commands[2]!);
+              const emptyContinuation = yield* orchestrator.getThreadProjection(targetThreadId);
+              assert.lengthOf(emptyContinuation.runs, 0);
+              assert.deepEqual(
+                emptyContinuation.visibleTurnItems
+                  .filter((row) => row.visibility === "inherited")
+                  .map((row) => row.item),
+                sourceBefore.visibleTurnItems.map((row) => row.item),
+              );
+              const inheritedUser = emptyContinuation.visibleTurnItems.find(
+                (row) => row.item.type === "user_message",
+              )?.item;
+              assert.isTrue(inheritedUser?.type === "user_message");
+              if (inheritedUser?.type === "user_message")
+                assert.deepEqual(inheritedUser.attachments, [attachment]);
+              yield* orchestrator.dispatch(commands[3]!);
+              const target = yield* waitForIdle(targetThreadId);
+              if (testCase.compactContext) {
+                const nestedThreadId = ThreadId.make("nested-continuation");
+                yield* orchestrator.dispatch({
+                  ...commands[2]!,
+                  commandId: CommandId.make("nested-fork"),
+                  sourceThreadId: targetThreadId,
+                  targetThreadId: nestedThreadId,
+                });
+                yield* orchestrator.dispatch({
+                  ...commands[3]!,
+                  commandId: CommandId.make("nested-message"),
+                  threadId: nestedThreadId,
+                  messageId: MessageId.make("nested-message"),
+                  text: "Continue the nested conversation",
+                });
+                const nested = yield* waitForIdle(nestedThreadId);
+                const nestedTurn = (yield* Ref.get(capturedTurns)).find(
+                  (turn) => turn.threadId === nestedThreadId,
+                );
+                assert.include(nestedTurn?.text ?? "", sourcePrompt);
+                assert.include(nestedTurn?.text ?? "", sourceResponse);
+                assert.include(nestedTurn?.text ?? "", targetPrompt);
+                assert.include(nestedTurn?.text ?? "", attachment.name);
+                assert.lengthOf(
+                  nested.visibleTurnItems.filter(
+                    (row) => row.visibility === "inherited" && row.item.type === "user_message",
+                  ),
+                  2,
+                );
+              }
+              const sourceAfter = yield* orchestrator.getThreadProjection(sourceThreadId);
+              assert.deepEqual(sourceAfter.messages, sourceBefore.messages);
+              assert.deepEqual(sourceAfter.runs, sourceBefore.runs);
+              assert.deepEqual(sourceAfter.visibleTurnItems, sourceBefore.visibleTurnItems);
+              return target;
+            }).pipe(
+              Effect.provide(
+                makeOrchestratorV2ReplayLayerWithRegistry(
+                  {
+                    name: "cursor-portable-fork",
+                    runtimePolicyOverride: {
+                      cwd,
+                      approvalPolicy: "never",
+                      sandboxPolicy: {
+                        type: "readOnly",
+                        access: { type: "fullAccess" },
+                        networkAccess: false,
+                      },
+                    },
+                  },
+                  registryLayer,
+                ),
+              ),
+            );
+            const turns = yield* Ref.get(capturedTurns);
+            const targetTurn = turns.find((turn) => turn.threadId === targetThreadId);
+
+            assert.deepEqual(
+              targetProjection.runs.map((run) => [run.providerInstanceId, run.status]),
+              [[testCase.modelSelection.instanceId, "completed"]],
+            );
+            assert.lengthOf(targetProjection.providerThreads, 1);
+            assert.equal(targetProjection.providerThreads[0]?.driver, testCase.driver);
+            assert.isNull(targetProjection.providerThreads[0]?.forkedFrom);
+            assert.deepEqual(
+              targetProjection.contextTransfers.map((transfer) => [
+                transfer.type,
+                transfer.status,
+                transfer.resolution?.strategy,
+              ]),
+              [["fork", "consumed", "portable_context"]],
+            );
+            assert.deepEqual(
+              targetProjection.contextHandoffs.map((handoff) => handoff.strategy),
+              ["full_thread_summary"],
+            );
+            assert.include(targetTurn?.text ?? "", "Context handoff (full_thread_summary):");
+            assert.include(targetTurn?.text ?? "", sourcePrompt);
+            assert.include(targetTurn?.text ?? "", sourceResponse);
+            assert.include(targetTurn?.text ?? "", targetPrompt);
+          }),
+        ),
+    );
+  }
 
   it.live("switches providers while consuming a pending cross-provider merge-back", () =>
     Effect.scoped(
