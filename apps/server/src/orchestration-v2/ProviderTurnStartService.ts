@@ -229,15 +229,24 @@ export const layer: Layer.Layer<
         const compactionEvents: Array<OrchestrationV2DomainEvent> = [];
         const prepared: Array<OrchestrationV2ContextHandoff> = [];
         for (const handoff of pendingCompactions) {
-          const sourceItems = projection.turnItems.filter((item) => {
-            if (item.runId === null || item.runId === run.id) return false;
-            const sourceOrdinal = sourceRunOrdinals.get(item.runId);
-            return (
-              sourceOrdinal !== undefined &&
-              sourceOrdinal >= handoff.coveredRunOrdinals.from &&
-              sourceOrdinal <= handoff.coveredRunOrdinals.to
-            );
-          });
+          const isForkHandoff = projection.contextTransfers.some(
+            (transfer) => transfer.id === handoff.transferId && transfer.type === "fork",
+          );
+          // Fork history belongs to the source threads, so its run ordinals
+          // must never be matched against the new thread's runs.
+          const sourceItems = isForkHandoff
+            ? projection.visibleTurnItems
+                .filter((row) => row.visibility === "inherited")
+                .map((row) => row.item)
+            : projection.turnItems.filter((item) => {
+                if (item.runId === null || item.runId === run.id) return false;
+                const sourceOrdinal = sourceRunOrdinals.get(item.runId);
+                return (
+                  sourceOrdinal !== undefined &&
+                  sourceOrdinal >= handoff.coveredRunOrdinals.from &&
+                  sourceOrdinal <= handoff.coveredRunOrdinals.to
+                );
+              });
           const sourceText = contextCompactionSourceText(sourceItems);
           const generated = yield* Effect.result(
             textGeneration

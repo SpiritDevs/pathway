@@ -561,7 +561,11 @@ it("seeds related child routing only from routable subagents", async () => {
   }).pipe(Effect.provide(testLayer), Effect.runPromise);
 });
 
-it("generates and persists a pending model-switch summary before starting the provider", async () => {
+it.each([
+  { kind: "model switch", fork: false, failSummary: false },
+  { kind: "continuation", fork: true, failSummary: false },
+  { kind: "continuation fallback", fork: true, failSummary: true },
+])("prepares $kind context before starting the provider", async ({ fork, failSummary }) => {
   const threadId = ThreadId.make("thread_provider_turn_start_compaction");
   const sourceRunId = RunId.make("run_provider_turn_start_compaction_source");
   const runId = RunId.make("run_provider_turn_start_compaction_target");
@@ -581,7 +585,7 @@ it("generates and persists a pending model-switch summary before starting the pr
     providerInstanceId,
     nativeThreadRef: { driver: "codex", nativeId: "native-target", strength: "strong" },
   };
-  const projection = {
+  let projection = {
     thread: { id: threadId, modelSelection, worktreePath: "/workspace" },
     runs: [
       {
@@ -660,6 +664,32 @@ it("generates and persists a pending model-switch summary before starting the pr
     subagents: [],
   } as unknown as OrchestrationV2ThreadProjection;
 
+  if (fork) {
+    const sourceItem = projection.turnItems[0]!;
+    const transferId = ContextTransferId.make("transfer:continuation");
+    projection = {
+      ...projection,
+      runs: projection.runs.filter((run) => run.id !== sourceRunId),
+      turnItems: projection.turnItems.filter((item) => item.id !== sourceItem.id),
+      visibleTurnItems: [
+        {
+          position: 0,
+          visibility: "inherited",
+          sourceThreadId: ThreadId.make("source-thread"),
+          sourceItemId: sourceItem.id,
+          item: sourceItem,
+        },
+      ],
+      contextHandoffs: projection.contextHandoffs.map((handoff) => ({ ...handoff, transferId })),
+      contextTransfers: [
+        {
+          id: transferId,
+          type: "fork",
+          status: "resolved_portable",
+        } as OrchestrationV2ThreadProjection["contextTransfers"][number],
+      ],
+    };
+  }
   const writes: Array<ReadonlyArray<{ readonly type: string; readonly payload: unknown }>> = [];
   const writeIfRunCurrent = vi.fn((input: { readonly events: (typeof writes)[number] }) => {
     writes.push(input.events);
@@ -667,12 +697,19 @@ it("generates and persists a pending model-switch summary before starting the pr
   });
   let startedMessage = "";
   const startRootRun = vi.fn((input: { readonly message: { readonly text: string } }) => {
+    expect(investigate).toHaveBeenCalledOnce();
+    expect(writes.flat().some((event) => event.type === "context-handoff.updated")).toBe(true);
     startedMessage = input.message.text;
     return Effect.void;
   });
-  const investigate = vi.fn(() =>
-    Effect.succeed({ text: "## Current goal and latest user intent\n- Generated summary" }),
-  );
+  const investigate = vi.fn((input: { readonly prompt: string }) => {
+    expect(startRootRun).not.toHaveBeenCalled();
+    expect(input.prompt).toContain("Important source context");
+    expect(input.prompt).not.toContain("Continue after compaction");
+    return failSummary
+      ? Effect.fail("Summary unavailable" as const)
+      : Effect.succeed({ text: "## Current goal and latest user intent\n- Generated summary" });
+  });
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -712,14 +749,16 @@ it("generates and persists a pending model-switch summary before starting the pr
   );
 
   expect(investigate).toHaveBeenCalledOnce();
-  expect(startedMessage).toContain("Generated summary");
+  expect(startedMessage).toContain(failSummary ? "deterministic fallback" : "Generated summary");
+  expect(startedMessage).not.toContain("Important source context");
+  expect(startedMessage).toContain("Continue after compaction");
   const events = writes.flat();
   expect(
     events.some(
       (event) =>
         event.type === "context-handoff.updated" &&
         (event.payload as { compaction?: { generation?: string } }).compaction?.generation ===
-          "model",
+          (failSummary ? "fallback" : "model"),
     ),
   ).toBe(true);
 });

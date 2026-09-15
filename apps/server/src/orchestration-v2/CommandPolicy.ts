@@ -147,6 +147,7 @@ export interface CommandPolicyV2Shape {
   readonly decideForkExecution: (
     input: CapabilityCheckInput & {
       readonly sameProvider: boolean;
+      readonly compactContext?: boolean;
       readonly hasStrongNativeSource: boolean;
       readonly fromSpecificTurn: boolean;
     },
@@ -304,6 +305,7 @@ const ensureContextHandoff: CommandPolicyV2Shape["ensureContextHandoff"] = (inpu
 
 const decideForkExecution: CommandPolicyV2Shape["decideForkExecution"] = (input) => {
   const canForkNatively =
+    input.compactContext !== true &&
     input.sameProvider &&
     input.hasStrongNativeSource &&
     input.capabilities.threads.canForkThread &&

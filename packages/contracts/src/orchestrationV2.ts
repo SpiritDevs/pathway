@@ -143,6 +143,8 @@ export const OrchestrationV2ContextTransfer = Schema.Struct({
   sourceThreadId: ThreadId,
   targetThreadId: ThreadId,
   sourcePoint: OrchestrationV2ContextSourcePoint,
+  // Continuations use a fresh provider session with compact portable context.
+  compactContext: Schema.optional(Schema.Boolean),
   basePoint: Schema.NullOr(OrchestrationV2ContextSourcePoint),
   sourceProviderInstanceId: Schema.NullOr(ProviderInstanceId),
   targetProviderInstanceId: Schema.NullOr(ProviderInstanceId),
@@ -2634,6 +2636,7 @@ export const OrchestrationV2Command = Schema.Union([
     sourceThreadId: ThreadId,
     targetThreadId: ThreadId,
     sourcePoint: OrchestrationV2ThreadForkSourcePoint,
+    compactContext: Schema.optional(Schema.Boolean),
     forkKind: Schema.optional(Schema.Literals(["manual", "side_chat"])),
     title: Schema.optional(TrimmedNonEmptyString),
     createdAt: Schema.optional(Schema.DateTimeUtc),

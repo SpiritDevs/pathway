@@ -15,6 +15,12 @@ import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
 const EARLIER_CONTENT_TRUNCATION_MARKER = "[Earlier content truncated]\n\n";
 
 export function buildContextCompactionPrompt(canonicalHistory: string): string {
+  // Keep the original request and latest state when a conversation exceeds
+  // the summarizer's input budget.
+  const history =
+    canonicalHistory.length <= 120_000
+      ? canonicalHistory
+      : `${canonicalHistory.slice(0, 24_000)}\n\n[Middle context omitted]\n\n${canonicalHistory.slice(-95_000)}`;
   return [
     "Summarize this Pathway thread for a fresh coding-agent session.",
     "Return markdown only, using exactly these section headings:",
@@ -34,7 +40,7 @@ export function buildContextCompactionPrompt(canonicalHistory: string): string {
     "- Keep the complete answer under 8,000 characters.",
     "",
     "Canonical thread history:",
-    limitSection(canonicalHistory, 120_000),
+    history,
   ].join("\n");
 }
 

@@ -39,6 +39,7 @@ export interface ThreadForkServiceV2Shape {
     readonly transferId: ContextTransferId;
     readonly targetThreadId: ThreadId;
     readonly forkKind?: "manual" | "side_chat";
+    readonly compactContext?: boolean;
     readonly title?: string;
     readonly createdBy: OrchestrationV2Actor;
     readonly creationSource: OrchestrationV2CreationSource;
@@ -98,6 +99,7 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
           sourceThreadId: input.sourceProjection.thread.id,
           targetThreadId: input.targetThreadId,
           sourcePoint: input.canonicalSourcePoint,
+          ...(input.compactContext === undefined ? {} : { compactContext: input.compactContext }),
           basePoint: null,
           sourceProviderInstanceId: input.sourceRun.providerInstanceId,
           targetProviderInstanceId: null,

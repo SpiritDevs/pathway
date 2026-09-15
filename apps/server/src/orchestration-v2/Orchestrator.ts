@@ -62,7 +62,7 @@ import { makeKeyedSerialExecutor } from "./KeyedSerialExecutor.ts";
 import {
   applyToProjection,
   emptyProjection,
-  isTurnItemAtOrBeforeRun,
+  visibleTurnItemsThroughRun,
   ProjectionStoreV2,
   threadShellFromProjection,
 } from "./ProjectionStore.ts";
@@ -398,7 +398,17 @@ export function planHandoffLifecycleRows(input: {
 }> {
   const contextHandoff = input.portableForkHandoff ?? input.mergeBackHandoff;
   return [
-    ...(contextHandoff === null ? [] : [{ kind: "handoff" as const, handoff: contextHandoff }]),
+    ...(contextHandoff === null
+      ? []
+      : [
+          {
+            kind:
+              contextHandoff.compaction === undefined
+                ? ("handoff" as const)
+                : ("compaction" as const),
+            handoff: contextHandoff,
+          },
+        ]),
     ...(input.providerSwitchHandoff === null
       ? []
       : [{ kind: "compaction" as const, handoff: input.providerSwitchHandoff }]),
@@ -3108,6 +3118,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         transferId,
         targetThreadId: command.targetThreadId,
         ...(command.forkKind === undefined ? {} : { forkKind: command.forkKind }),
+        ...(command.compactContext === undefined ? {} : { compactContext: command.compactContext }),
         ...(command.title === undefined ? {} : { title: command.title }),
         createdBy: command.createdBy,
         creationSource: command.creationSource,
@@ -4824,6 +4835,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 capabilities,
                 sameProvider:
                   pendingForkTransfer.sourceProviderInstanceId === modelSelection.instanceId,
+                compactContext: pendingForkTransfer.compactContext === true,
                 hasStrongNativeSource: sourceProviderThread?.nativeThreadRef?.strength === "strong",
                 fromSpecificTurn: sourceRun !== null,
               }),
@@ -4878,19 +4890,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               providerSessionId,
               updatedAt: now,
             };
-      const sourceRunOrdinalById = new Map(
-        (sourceProjection?.runs ?? []).map((run) => [run.id, run.ordinal]),
-      );
       const portableForkItems =
         !requiresPortableFork || sourceProjection === null || sourceRun === null
           ? []
-          : sourceProjection.turnItems.filter((item) =>
-              isTurnItemAtOrBeforeRun({
-                itemRunId: item.runId,
-                runOrdinalById: sourceRunOrdinalById,
-                sourceRunOrdinal: sourceRun.ordinal,
-              }),
-            );
+          : visibleTurnItemsThroughRun({
+              sourceProjection,
+              sourceRunId: sourceRun.id,
+            }).map((row) => row.item);
       const portableForkHandoff =
         !requiresPortableFork ||
         pendingForkTransfer === undefined ||
@@ -4910,6 +4916,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 coveredRunOrdinals: visibleDeltaRunOrdinals(sourceProjection, portableForkItems),
                 strategy: "full_thread_summary",
                 items: portableForkItems,
+                compactIfNeeded: pendingForkTransfer.compactContext === true,
                 maxChars: capabilities.context.maxRecommendedHandoffChars,
                 createdAt: now,
               })

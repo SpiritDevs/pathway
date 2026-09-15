@@ -99,3 +99,18 @@ it("keeps merge-back and model-switch lifecycle rows bound to their own handoffs
     ],
   );
 });
+
+it("shows the pending continuation summary as compaction", () => {
+  const handoff = {
+    id: ContextHandoffId.make("handoff:continuation"),
+    compaction: { generation: "pending" },
+  } as OrchestrationV2ContextHandoff;
+  assert.deepEqual(
+    planHandoffLifecycleRows({
+      portableForkHandoff: handoff,
+      mergeBackHandoff: null,
+      providerSwitchHandoff: null,
+    }),
+    [{ kind: "compaction", handoff }],
+  );
+});
