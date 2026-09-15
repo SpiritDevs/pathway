@@ -1,3 +1,4 @@
+import { redundantReplyPreviews } from "./conversationReplyPreviews";
 import { ConversationReaders } from "./ConversationReaders";
 import { conversationReceiptLabel, placeConversationReaders } from "./conversationReceipts";
 import { useConversationReadPosition } from "./useConversationReadPosition";
@@ -87,6 +88,7 @@ export function ConversationMessages({
           .includes(search.toLowerCase()),
       )
     : messages;
+  const hiddenReplyPreviews = redundantReplyPreviews(search ? [] : messages);
   const timeline = buildConversationTimeline(visible, search ? [] : work);
   useLayoutEffect(() => {
     const element = container.current;
@@ -275,7 +277,7 @@ export function ConversationMessages({
                           message.status === "cancelled" && "opacity-50",
                         )}
                       >
-                        {message.replyToId && (
+                        {message.replyToId && !hiddenReplyPreviews.has(message.id) && (
                           <button
                             type="button"
                             className="mb-2 block max-w-full border-l-2 border-current/30 pl-2.5 text-left text-xs opacity-75 hover:opacity-100"
