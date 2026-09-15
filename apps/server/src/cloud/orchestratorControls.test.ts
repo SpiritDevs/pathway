@@ -2,6 +2,9 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import {
   ThreadId,
   ProviderInstanceId,
@@ -15,6 +18,8 @@ import {
 } from "@spiritdevs/contracts";
 import {
   executeAcceptedWorkerMessage,
+  reportWorkerQuestionChanges,
+  workerControlRetryWakeups,
   belongsToWorker,
   workerMessageCommandId,
 } from "./orchestratorControls.ts";
@@ -261,5 +266,95 @@ it.effect(
       const recovered = yield* executeAcceptedWorkerMessage({ ...input, recoveryOnly: true });
       expect(recovered).toMatchObject({ runId: "native-run", messageId: "original-user-message" });
       expect(test.commands).toHaveLength(1);
+    }),
+);
+
+it.effect("reports each question opening and closure once across repeated thread events", () =>
+  Effect.gen(function* () {
+    const test = harness();
+    const child = {
+      ...test.child,
+      turnItems: [
+        {
+          type: "user_input_request",
+          requestId: "question",
+          questions: [
+            {
+              id: "format",
+              question: "Which format?",
+              options: [],
+              multiSelect: false,
+              isOther: false,
+            },
+          ],
+        },
+      ],
+    } as unknown as OrchestrationV2ThreadProjection;
+    const reported = new Map<string, boolean>();
+    const reports: boolean[] = [];
+    const input = {
+      projection: child,
+      workId: "work",
+      reported,
+      report: (question: { open: boolean }) =>
+        Effect.sync(() => {
+          reports.push(question.open);
+        }),
+    };
+    yield* reportWorkerQuestionChanges(input);
+    yield* reportWorkerQuestionChanges(input);
+    const closed = {
+      ...child,
+      runtimeRequests: child.runtimeRequests.map((request) => ({
+        ...request,
+        status: "resolved" as const,
+      })),
+    };
+    yield* reportWorkerQuestionChanges({ ...input, projection: closed });
+    yield* reportWorkerQuestionChanges({ ...input, projection: closed });
+    expect(reports).toEqual([true, false]);
+  }),
+);
+
+it.effect(
+  "retries unconfirmed assignments without another thread event and stops after recovery",
+  () =>
+    Effect.gen(function* () {
+      const pending = new Map<
+        string,
+        {
+          workId: string;
+          commandId: string;
+          orchestratorId: string;
+          threadId: string;
+          allowanceRevision: string;
+          stopped: boolean;
+          message: { id: string; revision: number };
+        }
+      >();
+      const wakeups: string[][] = [];
+      const fiber = yield* workerControlRetryWakeups(pending).pipe(
+        Stream.runForEach(({ rows }) =>
+          Effect.sync(() => {
+            wakeups.push(rows.map((row) => row.workId));
+          }),
+        ),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      pending.set("work", {
+        ...assignment,
+        threadId: "root",
+        allowanceRevision: "",
+        stopped: false,
+        message: { id: "unconfirmed", revision: 0 },
+      });
+      yield* TestClock.adjust("15 seconds");
+      expect(wakeups).toEqual([["work"]]);
+      yield* TestClock.adjust("15 seconds");
+      expect(wakeups).toHaveLength(2);
+      pending.delete("work");
+      yield* TestClock.adjust("30 seconds");
+      expect(wakeups).toHaveLength(2);
+      yield* Fiber.interrupt(fiber);
     }),
 );

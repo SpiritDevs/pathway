@@ -1,3 +1,4 @@
+import { resolveWorkAssignments } from "./lib/aiOrchestratorContext.ts";
 import { OrchestratorWorkerAction } from "@spiritdevs/contracts/aiOrchestrator";
 import { applyWorkerAction, workerConversationContext } from "./aiOrchestratorControls.ts";
 import { OrchestratorDelegationCatalog } from "@spiritdevs/contracts/aiOrchestrator";
@@ -460,7 +461,8 @@ async function contextFor(
       : null;
   const workerConversations = [];
   let controlBudget = 16000;
-  for (const row of work.filter((item) => (item.sourceSequence ?? 0) >= historyStart)) {
+  for (const { assignment: row } of await resolveWorkAssignments(ctx, work)) {
+    if ((row.sourceSequence ?? 0) < historyStart || !(await canSeeWork(row))) continue;
     if (controlBudget <= 0) break;
     const conversation = await workerConversationContext(ctx, row);
     const entry = {
@@ -470,7 +472,7 @@ async function contextFor(
         .map((m) => ({ ...m, text: m.text.slice(0, 1000) })),
       questions: conversation.questions
         .filter((q) => ["open", "escalated", "answering"].includes(q.state))
-        .slice(-10),
+        .slice(0, 10),
     };
     const size = JSON.stringify(entry).length;
     if (size <= controlBudget) {

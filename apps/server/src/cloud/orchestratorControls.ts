@@ -49,9 +49,10 @@ export function belongsToWorker(
   );
 }
 export function workerQuestions(projection: OrchestrationV2ThreadProjection) {
+  const requests = new Map(projection.runtimeRequests.map((request) => [request.id, request]));
   return projection.turnItems.flatMap((item) => {
     if (item.type !== "user_input_request") return [];
-    const request = projection.runtimeRequests.find((r) => r.id === item.requestId);
+    const request = requests.get(item.requestId);
     if (
       !request ||
       request.kind !== "user_input" ||
@@ -76,6 +77,35 @@ export function workerQuestions(projection: OrchestrationV2ThreadProjection) {
     ];
   });
 }
+/** Only successful reports suppress repeats; a failed transition remains retryable. */
+export const reportWorkerQuestionChanges = Effect.fn("cloud.orchestrator.reportQuestionChanges")(
+  function* (input: {
+    projection: OrchestrationV2ThreadProjection;
+    workId: string;
+    reported: Map<string, boolean>;
+    report: (
+      question: ReturnType<typeof workerQuestions>[number],
+    ) => Effect.Effect<unknown, WorkerControlError>;
+  }) {
+    for (const question of workerQuestions(input.projection)) {
+      const key = JSON.stringify([input.workId, input.projection.thread.id, question.requestId]);
+      if (input.reported.get(key) === question.open) continue;
+      yield* input.report(question);
+      input.reported.set(key, question.open);
+    }
+  },
+);
+
+/** Accepted rows remain durable in Convex; startup replay and scoped retries recover them. */
+export const workerControlRetryWakeups = (pending: ReadonlyMap<string, Assignment>) =>
+  Stream.fromEffectSchedule(
+    Effect.sync(() => [...pending.values()]),
+    Schedule.spaced("15 seconds"),
+  ).pipe(
+    Stream.filter((rows) => rows.length > 0),
+    Stream.map((rows) => ({ rows, threadId: null as string | null })),
+  );
+
 const active = (projection: OrchestrationV2ThreadProjection) =>
   projection.runs.some((run) =>
     ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
@@ -241,6 +271,8 @@ export const runOrchestratorControls = Effect.fn("cloud.orchestrator.controls")(
   const call = <A>(fn: () => Promise<A>) =>
     Effect.tryPromise({ try: fn, catch: (cause) => new WorkerControlError({ cause }) });
   const latest = yield* Ref.make<Inbox>([]);
+  const retryAssignments = new Map<string, Assignment>();
+  const reportedQuestions = new Map<string, boolean>();
   const inbox = Stream.callback<Inbox, WorkerControlError>(
     (queue) =>
       Effect.acquireRelease(
@@ -294,7 +326,10 @@ export const runOrchestratorControls = Effect.fn("cloud.orchestrator.controls")(
     ),
   );
   yield* Stream.runForEach(
-    Stream.merge(Stream.merge(inbox, events), reconnects),
+    Stream.merge(
+      Stream.merge(inbox, events),
+      Stream.merge(reconnects, workerControlRetryWakeups(retryAssignments)),
+    ),
     ({ rows, threadId }) =>
       Effect.gen(function* () {
         // Startup/reconnect scans recover requests emitted while offline. Later events read only their thread.
@@ -346,15 +381,20 @@ export const runOrchestratorControls = Effect.fn("cloud.orchestrator.controls")(
                 projection.thread.projectId !== root.thread.projectId
               )
                 continue;
-              for (const question of workerQuestions(projection))
-                yield* call(() =>
-                  client.mutation(api.aiOrchestratorControls.reportQuestion, {
-                    companyId: input.companyId,
-                    workId: assignment.workId,
-                    threadId: id,
-                    ...question,
-                  }),
-                );
+              yield* reportWorkerQuestionChanges({
+                projection,
+                workId: assignment.workId,
+                reported: reportedQuestions,
+                report: (question) =>
+                  call(() =>
+                    client.mutation(api.aiOrchestratorControls.reportQuestion, {
+                      companyId: input.companyId,
+                      workId: assignment.workId,
+                      threadId: id,
+                      ...question,
+                    }),
+                  ),
+              });
             }
             if (!assignment.message) return;
             // Read candidate without claiming it, so queued follow-ups remain editable until an idle turn.
@@ -426,18 +466,32 @@ export const runOrchestratorControls = Effect.fn("cloud.orchestrator.controls")(
             );
           }).pipe(
             Effect.retry({ times: 2, schedule: Schedule.spaced("2 seconds") }),
+            Effect.tap(() =>
+              Effect.sync(() => {
+                retryAssignments.delete(assignment.workId);
+              }),
+            ),
             Effect.catch(() =>
-              Effect.logDebug("Worker delivery remains unconfirmed; retained for recovery.", {
-                workId: assignment.workId,
+              Effect.gen(function* () {
+                retryAssignments.set(assignment.workId, assignment);
+                yield* Effect.logDebug(
+                  "Worker delivery remains unconfirmed; scheduled for recovery.",
+                  {
+                    workId: assignment.workId,
+                  },
+                );
               }),
             ),
           );
         }
       }).pipe(
         Effect.catch(() =>
-          Effect.logDebug(
-            "Worker control delivery remains unconfirmed; retained for event-driven recovery.",
-          ),
+          Effect.gen(function* () {
+            for (const assignment of rows) retryAssignments.set(assignment.workId, assignment);
+            yield* Effect.logDebug(
+              "Worker control delivery remains unconfirmed; scheduled for recovery.",
+            );
+          }),
         ),
       ),
   );

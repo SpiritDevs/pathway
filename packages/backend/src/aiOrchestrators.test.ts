@@ -4722,3 +4722,293 @@ it("targets the real answer message when stopping a resumed child", async () => 
     ),
   ).toBe(true);
 });
+
+describe("worker conversation review regressions", () => {
+  it("keeps the newest open questions and the root mailbox after many follow-up results", async () => {
+    const test = await workerControlHarness();
+    await test.send("still-pending", "Include the final report");
+    await test.t.run(async (ctx) => {
+      const root = (await ctx.db.query("aiOrchestratorWork").collect())[0]!;
+      const { _id, _creationTime, ...fields } = root;
+      await ctx.db.patch(_id, { status: "completed" });
+      for (let i = 0; i < 55; i++)
+        await ctx.db.insert("aiOrchestratorWork", {
+          ...fields,
+          id: `result-${i}`,
+          controlWorkId: root.id,
+          controlMessageId: `message-${i}`,
+          status: "completed",
+        });
+    });
+    for (let i = 0; i < 12; i++)
+      await test.environment().mutation(api.aiOrchestratorControls.reportQuestion, {
+        companyId: "workspace",
+        workId: "controlled-work",
+        threadId: `child-${i}`,
+        requestId: `request-${i}`,
+        open: true,
+        questions: [{ id: "format", question: `Question ${i}` }],
+      });
+    const run = (await test.claim())!;
+    const conversations = JSON.parse(run.context).workerConversations;
+    expect(conversations).toHaveLength(1);
+    expect(conversations[0]).toMatchObject({
+      workId: "controlled-work",
+      messages: [expect.objectContaining({ id: "still-pending" })],
+    });
+    expect(conversations[0].questions).toHaveLength(10);
+    expect(conversations[0].questions[0].requestId).toBe("request-11");
+    expect(conversations[0].questions.at(-1).requestId).toBe("request-2");
+  });
+
+  it.each(["paused", "deleted"] as const)(
+    "cancels terminal-root instructions when an orchestrator is %s with stop",
+    async (status) => {
+      const test = await workerControlHarness();
+      await test.t.run(async (ctx) => {
+        const root = (await ctx.db.query("aiOrchestratorWork").collect())[0]!;
+        await ctx.db.patch(root._id, { status: "completed" });
+      });
+      await test.owner.mutation(api.aiOrchestrators.send, {
+        chatId: test.chatId,
+        id: "pending-on-root",
+        workId: "controlled-work",
+        text: "Next task",
+      });
+      await test.owner.mutation(api.aiOrchestrators.setStatus, {
+        id: test.id,
+        status,
+        stopWork: true,
+      });
+      const rows = await test.t.run((ctx) =>
+        ctx.db.query("aiOrchestratorWorkerMessages").collect(),
+      );
+      expect(rows[0]?.state).toBe("removed");
+      if (status === "paused") {
+        await test.owner.mutation(api.aiOrchestrators.setStatus, { id: test.id, status: "active" });
+        expect(await test.accept("pending-on-root")).toBeNull();
+        expect(
+          (
+            await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })
+          ).messages.find((message) => message.id === "pending-on-root")?.status,
+        ).toBe("cancelled");
+      }
+    },
+  );
+
+  it("keeps an older active follow-up visible when newer results are completed", async () => {
+    const test = await workerControlHarness();
+    const activeId = await test.t.run(async (ctx) => {
+      const root = (await ctx.db.query("aiOrchestratorWork").collect())[0]!;
+      const { _id, _creationTime, ...fields } = root;
+      await ctx.db.patch(_id, { status: "completed" });
+      const activeId = await ctx.db.insert("aiOrchestratorWork", {
+        ...fields,
+        id: "active-child",
+        controlWorkId: root.id,
+        controlMessageId: "active-message",
+        status: "working",
+        detail: "Older child still working",
+      });
+      for (let i = 0; i < 105; i++)
+        await ctx.db.insert("aiOrchestratorWork", {
+          ...fields,
+          id: `completed-child-${i}`,
+          controlWorkId: root.id,
+          controlMessageId: `done-${i}`,
+          status: "completed",
+          detail: "Newer child finished",
+        });
+      return activeId;
+    });
+    expect(await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId })).toEqual([
+      expect.objectContaining({
+        id: "controlled-work",
+        status: "working",
+        detail: "Older child still working",
+      }),
+    ]);
+    await test.owner.mutation(api.aiOrchestratorControls.stop, {
+      chatId: test.chatId,
+      workId: "controlled-work",
+    });
+    expect((await test.t.run((ctx) => ctx.db.get(activeId)))?.stopRequested).toBe(true);
+    await test.t.run((ctx) => ctx.db.patch(activeId, { status: "completed" }));
+    expect(
+      (await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId }))[0]?.status,
+    ).toBe("completed");
+  });
+
+  it("allows a new quoted answer after cancelling the pending answer", async () => {
+    const test = await workerControlHarness();
+    await test.environment().mutation(api.aiOrchestratorControls.reportQuestion, {
+      companyId: "workspace",
+      workId: "controlled-work",
+      threadId: "worker-thread",
+      requestId: "question-retry",
+      open: true,
+      questions: [{ id: "format", question: "Which format?" }],
+    });
+    const question = (await test.read()).questions[0]!;
+    await test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: { kind: "escalateWorkQuestion", workId: "controlled-work", questionId: question.id },
+    });
+    const prompt = (
+      await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })
+    ).messages.find((message) => message.worker?.questionId === question.id)!;
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "first-answer",
+      text: "PDF",
+      replyToId: prompt.id,
+    });
+    await test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: {
+        kind: "removeWorkMessage",
+        workId: "controlled-work",
+        id: "first-answer",
+        revision: 0,
+      },
+    });
+    expect((await test.read()).questions[0]?.state).toBe("escalated");
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "second-answer",
+      text: "CSV",
+      replyToId: prompt.id,
+    });
+    expect((await test.accept("second-answer"))?.answers).toEqual({ format: "CSV" });
+  });
+
+  it.each([false, true])(
+    "rejects replies to private prompts without persisting the answer (legacy: %s)",
+    async (legacy) => {
+      const test = await workerControlHarness();
+      await test.environment().mutation(api.aiOrchestratorControls.reportQuestion, {
+        companyId: "workspace",
+        workId: "controlled-work",
+        threadId: "worker-thread",
+        requestId: "private-question",
+        open: true,
+        questions: [{ id: "password", question: "Password?", isSecret: true }],
+      });
+      const question = (await test.read()).questions[0]!;
+      await test.owner.mutation(api.aiOrchestratorControls.control, {
+        chatId: test.chatId,
+        action: {
+          kind: "escalateWorkQuestion",
+          workId: "controlled-work",
+          questionId: question.id,
+        },
+      });
+      const prompt = (
+        await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })
+      ).messages.find((message) => message.worker?.questionId === question.id)!;
+      if (legacy)
+        await test.t.run(async (ctx) => {
+          const stored = await ctx.db
+            .query("aiOrchestratorMessages")
+            .withIndex("by_domain_id", (q) => q.eq("id", prompt.id))
+            .unique();
+          await ctx.db.patch(stored!._id, { worker: { workId: "controlled-work" } });
+        });
+      const page = await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId });
+      expect(page.messages.find((message) => message.id === prompt.id)?.worker?.isSecret).toBe(
+        true,
+      );
+      await expect(
+        test.owner.mutation(api.aiOrchestrators.send, {
+          chatId: test.chatId,
+          id: "private-answer",
+          workId: "controlled-work",
+          replyToId: prompt.id,
+          text: "must-not-be-stored",
+        }),
+      ).rejects.toThrow();
+      expect(
+        await test.t.run((ctx) =>
+          ctx.db
+            .query("aiOrchestratorMessages")
+            .withIndex("by_domain_id", (q) => q.eq("id", "private-answer"))
+            .unique(),
+        ),
+      ).toBeNull();
+      expect((await test.read()).messages).toHaveLength(0);
+    },
+  );
+
+  it("routes replies to a user-authored worker message without permission to direct the group lead", async () => {
+    const test = await workerControlHarness();
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "my-worker-message",
+      workId: "controlled-work",
+      text: "Check this",
+    });
+    await test.t.run(async (ctx) => {
+      const owner = (await ctx.db.query("aiOrchestrators").collect())[0]!;
+      const { _id, _creationTime, ...fields } = owner;
+      await ctx.db.insert("aiOrchestrators", {
+        ...fields,
+        id: "unrelated-lead",
+        ownerSubject: "colleague",
+        directorSubjects: [],
+        managerSubjects: [],
+      });
+      const chat = (await ctx.db.query("aiOrchestratorChats").collect())[0]!;
+      await ctx.db.patch(chat._id, {
+        kind: "group",
+        leadId: "unrelated-lead",
+        orchestratorIds: [test.id, "unrelated-lead"],
+      });
+    });
+    const page = await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId });
+    expect(
+      page.messages.find((message) => message.id === "my-worker-message")?.worker?.orchestratorId,
+    ).toBe(test.id);
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "my-worker-reply",
+      replyToId: "my-worker-message",
+      text: "And report the details",
+    });
+    expect(
+      (await test.read()).messages.find((message) => message.id === "my-worker-reply")?.text,
+    ).toBe("And report the details");
+  });
+
+  it("pauses queued delivery on archive while retaining accepted receipt recovery", async () => {
+    const test = await workerControlHarness();
+    await test.send("accepted-before-archive");
+    await test.accept("accepted-before-archive");
+    await test.send("pending-before-archive");
+    await test.owner.mutation(api.aiOrchestrators.updateChat, {
+      chatId: test.chatId,
+      archived: true,
+    });
+    expect((await test.accept("accepted-before-archive"))?.recoveryOnly).toBe(true);
+    await test.environment().mutation(api.aiOrchestratorControls.acknowledge, {
+      companyId: "workspace",
+      workId: "controlled-work",
+      id: "accepted-before-archive",
+      revision: 0,
+      failed: false,
+      detail: "Recovered receipt",
+    });
+    expect(await test.accept("pending-before-archive")).toBeNull();
+    expect(
+      (
+        await test
+          .environment()
+          .query(api.aiOrchestratorControls.environmentInbox, { companyId: "workspace" })
+      ).find((row) => row.workId === "controlled-work"),
+    ).toMatchObject({ message: null, stopped: true });
+    await test.owner.mutation(api.aiOrchestrators.updateChat, {
+      chatId: test.chatId,
+      archived: false,
+    });
+    expect((await test.accept("pending-before-archive"))?.state).toBe("accepted");
+  });
+});

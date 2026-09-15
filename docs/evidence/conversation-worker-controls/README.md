@@ -44,3 +44,7 @@ The latest PlanLink version shows **Sending**, **Delivered** and **Read**, plus 
 135 focused tests passed for orchestrator behavior, receipts and timeline grouping after this refinement. Tests cover monotonic human read positions, joined-history boundaries, current-participant visibility, explicit orchestrator reader identities, queue-independent delivery labels and one latest outgoing placement per reader. Web and backend package typechecks and targeted lint passed.
 
 The browser verified Delivered changing to Read, both configured orchestrator avatars moving to the newest message, and the same display at 390 pixels without document overflow. Human read acknowledgements now follow messages visible in a focused conversation. Cancel and Retry moved to the message menu. The earlier queue-labelled screenshots are retained as the preceding iteration’s evidence.
+
+## Review regression checks
+
+`18-history-pending.png` and `18-history-accepted.png` show the same loaded historical message before and after a scripted acceptance in the dedicated test account. The open context menu removes edit/cancel controls reactively; no reload or pagination action intervenes. A real-client check also verified that switching from editing a pending message to replying to another restores the original unsent draft. The development-only fixture helper was removed after verification.

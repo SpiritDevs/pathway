@@ -194,9 +194,11 @@ export const OrchestratorAttachment = Schema.Union([ChatImageAttachment, ChatFil
 export type OrchestratorAttachment = typeof OrchestratorAttachment.Type;
 
 export const OrchestratorWorkerReference = Schema.Struct({
+  orchestratorId: Schema.optionalKey(Schema.String),
   workId: Schema.String,
   questionId: Schema.optionalKey(Schema.String),
   fieldId: Schema.optionalKey(Schema.String),
+  isSecret: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestratorWorkerReference = typeof OrchestratorWorkerReference.Type;
 export const OrchestratorMessage = Schema.Struct({

@@ -72,7 +72,6 @@ export function Composer({
     if (reply) input.current?.focus();
   }, [reply]);
   const clearReply = () => {
-    if (reply?.kind === "edit") state.setDraft(chat.id, reply.previousDraft ?? "");
     state.setReply(chat.id, undefined);
   };
   const sending = state.sendingChats.includes(chat.id);

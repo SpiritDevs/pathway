@@ -224,6 +224,7 @@ export const aiOrchestratorTables = {
         workId: v.string(),
         questionId: v.optional(v.string()),
         fieldId: v.optional(v.string()),
+        isSecret: v.optional(v.boolean()),
       }),
     ),
     attachments: v.optional(v.array(orchestratorAttachment)),
@@ -364,6 +365,8 @@ export const aiOrchestratorTables = {
     .index("by_chat", ["chatId"])
     .index("by_command", ["commandId"])
     .index("by_control_work", ["controlWorkId", "createdAt"])
+    .index("by_control_work_status", ["controlWorkId", "status"])
+    .index("by_orchestrator_controls", ["orchestratorId", "controlsPending"])
     .index("by_result_run", ["companyId", "environmentId", "threadId", "resultRunId"])
     .index("by_thread", ["companyId", "environmentId", "threadId"])
     .index("by_company_status", ["companyId", "status"])

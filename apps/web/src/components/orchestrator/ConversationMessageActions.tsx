@@ -18,7 +18,7 @@ import type {
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { mapEnvironmentControlError } from "../../cloud/environmentControl";
 import { useOrchestrators } from "./OrchestratorContext";
-import { replyToMessage } from "./conversationReply";
+import { canDirectMessageWorker, replyToMessage } from "./conversationReply";
 
 export function ConversationMessageActions({
   message,
@@ -31,11 +31,7 @@ export function ConversationMessageActions({
   const [point, setPoint] = useState<{ x: number; y: number }>();
   const delivery = message.delivery;
   const pending = delivery?.state === "pending";
-  const canDirect = state.contacts.some(
-    (contact) =>
-      contact.canDirect &&
-      (message.senderKind !== "orchestrator" || contact.id === message.senderId),
-  );
+  const canDirect = canDirectMessageWorker(message, state.contacts);
   const reply = () => state.setReply(message.chatId, replyToMessage(message));
   const run = async (action: OrchestratorWorkerAction) => {
     try {
@@ -128,7 +124,7 @@ export function ConversationMessageActions({
             anchor={{ getBoundingClientRect: () => new DOMRect(point.x, point.y, 0, 0) }}
             className="w-48"
           >
-            <MenuItem onClick={reply}>
+            <MenuItem onClick={reply} disabled={message.worker?.isSecret}>
               <ReplyIcon />
               Reply
             </MenuItem>
@@ -154,9 +150,8 @@ export function ConversationMessageActions({
                       workId: delivery.workId,
                       deliveryId: delivery.id,
                       revision: delivery.revision,
-                      previousDraft: state.drafts[message.chatId] ?? "",
+                      orchestratorId: message.worker?.orchestratorId,
                     });
-                    state.setDraft(message.chatId, message.text);
                   }}
                 >
                   <PencilIcon />

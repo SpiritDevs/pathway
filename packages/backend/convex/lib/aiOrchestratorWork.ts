@@ -1,3 +1,4 @@
+import { resolveWorkAssignments } from "./aiOrchestratorContext.ts";
 // @effect-diagnostics globalDate:off -- Convex supplies transaction time.
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
@@ -524,10 +525,28 @@ export async function requestOrchestratorStop(
         .take(100),
     ),
   );
-  for (const work of batches.flat()) {
+  const pendingRoots = onlyWorkId
+    ? []
+    : await ctx.db
+        .query("aiOrchestratorWork")
+        .withIndex("by_orchestrator_controls", (q) =>
+          q.eq("orchestratorId", orchestrator.id).eq("controlsPending", true),
+        )
+        .collect();
+  const roots = onlyWorkId
+    ? []
+    : (await resolveWorkAssignments(ctx, batches.flat())).map(({ assignment }) => assignment);
+  const rows = new Map(
+    [...batches.flat(), ...pendingRoots, ...roots].map((work) => [work.id, work]),
+  );
+  for (const work of rows.values()) {
     if (onlyWorkId && work.id !== onlyWorkId) continue;
     await cancelPendingWorkerMessages(ctx, work.id);
     const now = Date.now();
+    if (["completed", "failed", "cancelled"].includes(work.status)) {
+      await ctx.db.patch(work._id, { stopRequested: true, updatedAt: now });
+      continue;
+    }
     let unstarted = !work.commandId;
     if (work.companyId && work.commandId) {
       const scope = await orchestratorOwnerScope(ctx, orchestrator, work.companyId);
@@ -604,14 +623,18 @@ export async function controlOrchestratorWork(
     return fail("This assignment is outside the orchestrator's current control permission.");
   if (action.kind === "stopWork") {
     await cancelPendingWorkerMessages(ctx, work.id);
-    const followups = await ctx.db
-      .query("aiOrchestratorWork")
-      .withIndex("by_control_work", (q) => q.eq("controlWorkId", work.id))
-      .order("desc")
-      .take(100);
-    for (const followup of followups)
-      if (["queued", "working", "unknown"].includes(followup.status))
-        await requestOrchestratorStop(ctx, orchestrator, followup.id);
+    const followups = await Promise.all(
+      (["queued", "working", "unknown"] as const).map((status) =>
+        ctx.db
+          .query("aiOrchestratorWork")
+          .withIndex("by_control_work_status", (q) =>
+            q.eq("controlWorkId", work.id).eq("status", status),
+          )
+          .take(100),
+      ),
+    );
+    for (const followup of followups.flat())
+      await requestOrchestratorStop(ctx, orchestrator, followup.id);
     if (["completed", "failed", "cancelled"].includes(work.status)) {
       await ctx.db.patch(work._id, { stopRequested: true, updatedAt: Date.now() });
       return {
@@ -684,6 +707,15 @@ async function cancelPendingWorkerMessages(ctx: MutationCtx, workId: string) {
       if (visible) await ctx.db.patch(visible._id, { status: "cancelled" });
     }
   }
+  const accepted = await ctx.db
+    .query("aiOrchestratorWorkerMessages")
+    .withIndex("by_work_state", (q) => q.eq("workId", workId).eq("state", "accepted"))
+    .first();
+  const work = await ctx.db
+    .query("aiOrchestratorWork")
+    .withIndex("by_domain_id", (q) => q.eq("id", workId))
+    .unique();
+  if (work) await ctx.db.patch(work._id, { controlsPending: !!accepted });
   const questions = await ctx.db
     .query("aiOrchestratorWorkerQuestions")
     .withIndex("by_work", (q) => q.eq("workId", workId))

@@ -16,7 +16,6 @@ import { makeFunctionReference } from "convex/server";
 import { ListTodoIcon } from "lucide-react";
 import type {
   OrchestratorChat,
-  OrchestratorMessage,
   OrchestratorMessagePage,
   OrchestratorWorkItem,
 } from "@spiritdevs/contracts/aiOrchestrator";
@@ -50,7 +49,18 @@ export function ConversationMessages({
   sendMotion?: RefObject<ComposerSendMotion | null>;
 }) {
   const state = useOrchestrators();
-  const [older, setOlder] = useState<OrchestratorMessage[]>([]);
+  const [olderPages, setOlderPages] = useState<Record<number, MessagePage>>({});
+  const historySubscriptions = useRef(new Map<number, () => void>());
+  useEffect(() => {
+    const subscriptions = historySubscriptions.current;
+    setOlderPages({});
+    setNextBefore(undefined);
+    setLoadingOlder(false);
+    return () => {
+      for (const unsubscribe of subscriptions.values()) unsubscribe();
+      subscriptions.clear();
+    };
+  }, [state.client, chat.id]);
   const [nextBefore, setNextBefore] = useState<number | null | undefined>();
   const [loadingOlder, setLoadingOlder] = useState(false);
   const container = useRef<HTMLDivElement>(null);
@@ -60,7 +70,10 @@ export function ConversationMessages({
   useEffect(() => () => stopFlight.current?.(), []);
   const messages = [
     ...new Map(
-      [...older, ...(result.value?.messages ?? [])].map((message) => [message.id, message]),
+      [
+        ...Object.values(olderPages).flatMap((page) => page.messages),
+        ...(result.value?.messages ?? []),
+      ].map((message) => [message.id, message]),
     ).values(),
   ].sort((a, b) => a.sequence - b.sequence);
   const visible = search
@@ -137,23 +150,42 @@ export function ConversationMessages({
                 if (!state.client) return;
                 setLoadingOlder(true);
                 const height = container.current?.scrollHeight ?? 0;
-                void state.client
-                  .query(
-                    makeFunctionReference<"query", { chatId: string; before: number }, MessagePage>(
-                      "aiOrchestrators:messages",
-                    ),
-                    { chatId: chat.id, before },
-                  )
-                  .then((page) => {
-                    setOlder((current) => [...page.messages, ...current]);
+                let first = true;
+                let active = true;
+                const unsubscribe = state.client.onUpdate(
+                  makeFunctionReference<"query", { chatId: string; before: number }, MessagePage>(
+                    "aiOrchestrators:messages",
+                  ),
+                  { chatId: chat.id, before },
+                  (page) => {
+                    if (!active) return;
+                    setOlderPages((current) => ({ ...current, [before]: page }));
+                    if (!first) return;
+                    first = false;
+                    setLoadingOlder(false);
                     setNextBefore(page.nextBefore);
                     requestAnimationFrame(() => {
-                      if (container.current)
+                      if (active && container.current)
                         container.current.scrollTop += container.current.scrollHeight - height;
                     });
-                  })
-                  .catch((cause) => state.setError(errorMessage(cause)))
-                  .finally(() => setLoadingOlder(false));
+                  },
+                  (cause) => {
+                    if (!active) return;
+                    setLoadingOlder(false);
+                    // Withdraw stale status-dependent controls if access or the query fails.
+                    setOlderPages((current) => {
+                      const next = { ...current };
+                      delete next[before];
+                      return next;
+                    });
+                    state.setError(errorMessage(cause));
+                  },
+                );
+                historySubscriptions.current.get(before)?.();
+                historySubscriptions.current.set(before, () => {
+                  active = false;
+                  unsubscribe();
+                });
               }}
             >
               {loadingOlder ? "Loading…" : "Earlier messages"}

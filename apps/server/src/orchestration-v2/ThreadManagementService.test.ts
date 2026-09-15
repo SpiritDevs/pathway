@@ -1,8 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import {
   CommandId,
+  RuntimeRequestId,
   MessageId,
-  NodeId,
   type OrchestrationV2Command,
   type OrchestrationV2ThreadProjection,
   ProjectId,
@@ -318,4 +318,21 @@ it.effect("uses thread-not-found only after a projection loads outside the proje
     expect(error).toMatchObject({ projectId, threadId });
     expect("cause" in error).toBe(false);
   }).pipe(Effect.provide(testLayer));
+});
+
+it("overwrites client-supplied agent provenance on question answers", () => {
+  const command: OrchestrationV2Command = {
+    type: "runtime-request.respond",
+    commandId: CommandId.make("spoofed-answer"),
+    threadId: ThreadId.make("thread"),
+    requestId: RuntimeRequestId.make("question"),
+    answeredBy: "agent",
+    answers: { answer: "human response" },
+  };
+  const userAnswer = withCreationProvenance(command, { createdBy: "user", creationSource: "web" });
+  expect(userAnswer).not.toHaveProperty("answeredBy");
+  expect(userAnswer).toMatchObject({ answers: { answer: "human response" } });
+  expect(
+    withCreationProvenance(command, { createdBy: "agent", creationSource: "mcp" }),
+  ).toMatchObject({ answeredBy: "agent" });
 });

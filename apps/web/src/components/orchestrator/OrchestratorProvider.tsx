@@ -1,4 +1,4 @@
-import type { ConversationReply } from "./conversationReply";
+import { transitionConversationReply, type ConversationReply } from "./conversationReply";
 import { useAuth } from "@clerk/react";
 import { makeClerkConvexTokenFetcher } from "../../cloud/syncTransportAuth";
 import { fetchConversationAttachment } from "./conversationAttachmentDrafts";
@@ -186,8 +186,11 @@ function useOrchestratorState() {
     setError,
     drafts,
     replies,
-    setReply: (id: string, reply: ConversationReply | undefined) =>
-      setReplies((current) => ({ ...current, [id]: reply })),
+    setReply: (id: string, reply: ConversationReply | undefined) => {
+      const next = transitionConversationReply(drafts[id] ?? "", replies[id], reply);
+      if (next.draft !== undefined) setDrafts((current) => ({ ...current, [id]: next.draft! }));
+      setReplies((current) => ({ ...current, [id]: next.reply }));
+    },
     pendingMessages,
     sendingChats,
     setSendingChat: (id: string, sending: boolean) =>

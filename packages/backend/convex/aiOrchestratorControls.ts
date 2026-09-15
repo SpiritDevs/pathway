@@ -179,7 +179,9 @@ export async function applyWorkerAction(
             : field.question,
           worker: {
             workId: work.id,
-            ...(field.isSecret ? {} : { questionId: question.id, fieldId: field.id }),
+            questionId: question.id,
+            fieldId: field.id,
+            ...(field.isSecret ? { isSecret: true } : {}),
           },
           status: "sent",
           replyToId: null,
@@ -234,7 +236,13 @@ export async function applyWorkerAction(
     }
     if (action.kind === "removeWorkMessage" && existing.questionId) {
       const question = await questionById(ctx, work.id, existing.questionId);
-      if (question?.state === "answering") await ctx.db.patch(question._id, { state: "open" });
+      if (question?.state === "answering") {
+        const prompt = await chatMessage(
+          ctx,
+          `worker-question:${work.id}:${question.id}:${question.questions[0]?.id}`,
+        );
+        await ctx.db.patch(question._id, { state: prompt ? "escalated" : "open" });
+      }
     }
     if ((await pendingMessagesFor(ctx, work.id)).length === 0)
       await ctx.db.patch(work._id, { controlsPending: false });
@@ -442,15 +450,18 @@ export const environmentInbox = query({
         !!scope &&
         hasCompanyPermission(scope.permissions, "remoteAgents.control") &&
         !work.stopRequested &&
+        !chat.archived &&
         orchestrator?.status === "active" &&
         orchestrator.capabilities.includes("threads.control");
       const head = messages
         .filter((m) => m.state === "accepted" || (enabled && m.state === "pending"))
         .sort(deliveryOrder)[0];
-      const budgets = await budgetsForScopes(ctx, args.companyId, [
-        { kind: "chat", chatId: work.chatId },
-        { kind: "thread", environmentId: work.environmentId, threadId: work.threadId },
-      ]);
+      const budgets = head
+        ? await budgetsForScopes(ctx, args.companyId, [
+            { kind: "chat", chatId: work.chatId },
+            { kind: "thread", environmentId: work.environmentId, threadId: work.threadId },
+          ])
+        : [];
       result.push({
         allowanceRevision: budgets.map((b) => `${b.id}:${b.revision}:${b.status}`).join("|"),
         workId: work.id,
@@ -476,7 +487,7 @@ export const deliveryPreview = query({
 export const accept = mutation({
   args: { ...fence, rootRunId: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const { work } = await environmentWork(ctx, args.companyId, args.workId);
+    const { work, chat } = await environmentWork(ctx, args.companyId, args.workId);
     const orchestrator = await findOrchestrator(ctx, work.orchestratorId);
     const scope =
       work.companyId && orchestrator
@@ -486,6 +497,7 @@ export const accept = mutation({
       !!scope &&
       hasCompanyPermission(scope.permissions, "remoteAgents.control") &&
       !work.stopRequested &&
+      !chat.archived &&
       orchestrator?.status === "active" &&
       orchestrator.capabilities.includes("threads.control");
     const alreadyAccepted = await messageById(ctx, work.id, args.id);
@@ -770,10 +782,12 @@ export async function decorateConversationMessage(
     row.seenBy ??
     (legacyJob && !legacyJob.routingCandidateIds?.length ? [legacyJob.orchestratorId] : []);
   const source = row.replyToId ? await chatMessage(ctx, row.replyToId) : null;
-  const delivery = await ctx.db
-    .query("aiOrchestratorWorkerMessages")
-    .withIndex("by_chat_message", (q) => q.eq("chatMessageId", row.id))
-    .unique();
+  const delivery = row.worker
+    ? await ctx.db
+        .query("aiOrchestratorWorkerMessages")
+        .withIndex("by_chat_message", (q) => q.eq("chatMessageId", row.id))
+        .unique()
+    : null;
   const work = row.worker ? await workById(ctx, row.worker.workId) : null;
   const readable =
     work && (work.sourceSequence ?? 0) >= fromSequence && (await visibleWorker(ctx, work, chat));
@@ -788,7 +802,15 @@ export async function decorateConversationMessage(
   return {
     ...row,
     seenBy: seenBy.filter((id) => chat.orchestratorIds.includes(id)),
-    worker: readable ? row.worker : undefined,
+    worker: readable
+      ? {
+          ...row.worker!,
+          orchestratorId: work.orchestratorId,
+          ...(!row.worker?.questionId && row.id.startsWith(`worker-question:${work.id}:`)
+            ? { isSecret: true }
+            : {}),
+        }
+      : undefined,
     ...(source && source.chatId === chat.id && source.sequence >= fromSequence
       ? {
           reply: {

@@ -30,7 +30,10 @@ import { backendError } from "./lib/errors.ts";
 import { mintDomainId } from "./lib/domainIds.ts";
 import { orchestratorConfig, orchestratorMemoryScope } from "./lib/aiOrchestratorSchema.ts";
 import { requestOrchestratorStop } from "./lib/aiOrchestratorWork.ts";
-import { workVisibilityForConversation } from "./lib/aiOrchestratorContext.ts";
+import {
+  resolveWorkAssignments,
+  workVisibilityForConversation,
+} from "./lib/aiOrchestratorContext.ts";
 
 const fail = (message: string): never => {
   throw backendError("orchestrator-request", message);
@@ -863,12 +866,6 @@ export const send = mutation({
         return fail("That message identity is already in use.");
       return existing.sequence;
     }
-    const target = args.targetId ?? chat.leadId;
-    if (!chat.orchestratorIds.includes(target))
-      return fail("Choose an orchestrator in this conversation.");
-    const { row } = await readableOrchestrator(ctx, target);
-    if (!canDirectOrchestrator(row, user.clerkSubject))
-      return fail("You need direction permission to assign work to this orchestrator.");
     let reply: Doc<"aiOrchestratorMessages"> | null = null;
     if (args.replyToId) {
       reply = await ctx.db
@@ -878,17 +875,19 @@ export const send = mutation({
       if (!reply || reply.chatId !== chat.id || reply.sequence < member.fromSequence)
         return fail("The replied-to message is unavailable.");
     }
+    if (
+      reply?.worker &&
+      !reply.worker.questionId &&
+      reply.id.startsWith(`worker-question:${reply.worker.workId}:`)
+    )
+      return fail("Answer private questions in the original thread.");
     const attachments = await bindConversationAttachments(ctx, {
       chat,
       subject: user.clerkSubject,
       messageId: args.id,
       ids: args.attachmentIds ?? [],
     });
-    const worker = reply?.worker?.questionId
-      ? reply.worker
-      : args.workId
-        ? { workId: args.workId }
-        : undefined;
+    const worker = reply?.worker ? reply.worker : args.workId ? { workId: args.workId } : undefined;
     const sequence = await appendChatMessage(ctx, chat, {
       ...(worker ? { worker } : {}),
       attachments,
@@ -912,6 +911,12 @@ export const send = mutation({
       );
       return sequence;
     }
+    const target = args.targetId ?? chat.leadId;
+    if (!chat.orchestratorIds.includes(target))
+      return fail("Choose an orchestrator in this conversation.");
+    const { row } = await readableOrchestrator(ctx, target);
+    if (!canDirectOrchestrator(row, user.clerkSubject))
+      return fail("You need direction permission to assign work to this orchestrator.");
     const now = Date.now();
     await ctx.db.insert("aiOrchestratorJobs", {
       id: mintDomainId(Date.now()),
@@ -986,29 +991,35 @@ export const work = query({
       ...chat,
       participantSubjects: [user.clerkSubject],
     });
-    const visible = new Map<string, Doc<"aiOrchestratorWork">>();
-    for (const row of rows) {
-      const assignment = row.controlWorkId
-        ? await ctx.db
-            .query("aiOrchestratorWork")
-            .withIndex("by_domain_id", (q) => q.eq("id", row.controlWorkId!))
-            .unique()
-        : row;
-      if (
-        !assignment ||
-        visible.has(assignment.id) ||
-        (assignment.sourceSequence ?? 0) < member.fromSequence ||
-        !(await canSee(assignment))
-      )
+    const visible: Doc<"aiOrchestratorWork">[] = [];
+    for (const { assignment, latest } of await resolveWorkAssignments(ctx, rows)) {
+      if ((assignment.sourceSequence ?? 0) < member.fromSequence || !(await canSee(assignment)))
         continue;
-      visible.set(
-        assignment.id,
-        row.controlWorkId && !assignment.stopRequested
-          ? { ...assignment, status: row.status, detail: row.detail, updatedAt: row.updatedAt }
-          : assignment,
-      );
+      let current = assignment;
+      if (latest.controlWorkId && !assignment.stopRequested) {
+        const active = await Promise.all(
+          (["working", "queued", "unknown"] as const).map((status) =>
+            ctx.db
+              .query("aiOrchestratorWork")
+              .withIndex("by_control_work_status", (q) =>
+                q.eq("controlWorkId", assignment.id).eq("status", status),
+              )
+              .order("desc")
+              .first(),
+          ),
+        );
+        current = ["working", "queued", "unknown"].includes(assignment.status)
+          ? assignment
+          : (active.find((row) => row !== null) ?? latest);
+      }
+      visible.push({
+        ...assignment,
+        status: current.status,
+        detail: current.detail,
+        updatedAt: current.updatedAt,
+      });
     }
-    return [...visible.values()].map(
+    return visible.map(
       ({
         id,
         title,
