@@ -1,3 +1,4 @@
+import { useConversationActivity } from "./useConversationActivity";
 import { ConversationRecipientInput } from "./ConversationRecipientInput";
 import { eligibleRecipients, recipientTarget } from "./conversationRecipients";
 import { mapEnvironmentControlError } from "../../cloud/environmentControl";
@@ -55,19 +56,7 @@ export function Composer({
   sendMotion: RefObject<ComposerSendMotion | null>;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
-  const [now, setNow] = useState(Date.now);
-  const activeIds = new Set(
-    activity.filter((item) => item.expiresAt > Math.max(now, Date.now())).map((item) => item.id),
-  );
-  useEffect(() => {
-    const current = Date.now();
-    const nextExpiry = Math.min(
-      ...activity.map((item) => item.expiresAt).filter((time) => time > current),
-    );
-    if (!Number.isFinite(nextExpiry)) return;
-    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, nextExpiry - current));
-    return () => clearTimeout(timer);
-  }, [activity, now]);
+  const activeIds = useConversationActivity(activity);
   const state = useOrchestrators();
   const reply = state.replies[chat.id];
   useEffect(() => {
@@ -202,7 +191,7 @@ export function Composer({
                   status="working"
                   showStatusBadge={false}
                 />
-                <span className="text-xs text-muted-foreground">{contact.name} is thinking</span>
+                <span className="text-xs text-muted-foreground">{contact.name} · Typing…</span>
               </div>
             ))}
         </div>
@@ -536,6 +525,7 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
               work={work.value ?? []}
               search={search}
               result={messages}
+              activity={activity.value ?? EMPTY_ACTIVITY}
               sendMotion={sendMotion}
             />
             <Composer

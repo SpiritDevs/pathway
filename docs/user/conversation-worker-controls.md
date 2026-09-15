@@ -29,3 +29,11 @@ remove it with its close button. With an empty input, Backspace also removes the
 chip. Without a selected recipient, new messages go to the conversation lead.
 Replies keep their existing recipient unless you choose another; worker replies
 stay addressed to their work item. Selecting a recipient does not send a message.
+
+## Returning to the latest message
+
+When you scroll up in a web or desktop conversation, a floating down-arrow control
+returns you to the latest message. Incoming messages leave your reading position
+in place until you return. While an orchestrator is active, the control displays
+“Typing…”; when activity ends, it returns to the arrow. The control disappears
+when you reach the bottom. These controls work in both full and floating conversations.
