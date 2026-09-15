@@ -1,9 +1,9 @@
 import { useState, useEffect, type RefObject } from "react";
-import { ArchiveIcon, PlusIcon, SearchIcon, SquarePenIcon, PanelLeftIcon } from "lucide-react";
+import { ArchiveIcon, SearchIcon, SquarePenIcon, PanelLeftIcon } from "lucide-react";
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
 import { Button } from "../ui/button";
 import { useOrchestrators } from "./OrchestratorContext";
-import { ConversationAvatar, OrchestratorAvatar } from "./OrchestratorAvatar";
+import { ConversationAvatar } from "./OrchestratorAvatar";
 import { Dialog } from "@base-ui/react/dialog";
 import {
   unreadMessageTotal,
@@ -101,42 +101,6 @@ export function ConversationList({ onSelect }: { onSelect?: () => void }) {
                 ? "No archived conversations."
                 : "Your conversations will appear here."}
           </p>
-        )}
-        {!search && !archived && state.contacts.length > 0 && (
-          <div className="pt-5">
-            <p className="px-3 pb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              Your orchestrators
-            </p>
-            {state.contacts
-              .filter((contact) => contact.status !== "archived")
-              .map((contact) => (
-                <button
-                  key={contact.id}
-                  type="button"
-                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-muted/60"
-                  onClick={() => {
-                    void state
-                      .request("aiOrchestrators:createChat", {
-                        title: contact.name,
-                        orchestratorIds: [contact.id],
-                        leadId: contact.id,
-                        companyIds: state.companyId ? [state.companyId] : [],
-                      })
-                      .then((id) => {
-                        if (typeof id === "string") state.selectChat(id);
-                        onSelect?.();
-                      })
-                      .catch((cause: unknown) =>
-                        state.setError(cause instanceof Error ? cause.message : String(cause)),
-                      );
-                  }}
-                >
-                  <OrchestratorAvatar contact={contact} className="size-8" />
-                  <span className="flex-1 text-sm">{contact.name}</span>
-                  <PlusIcon className="size-3.5 text-muted-foreground" />
-                </button>
-              ))}
-          </div>
         )}
       </div>
       <div className="shrink-0 border-t p-2">
