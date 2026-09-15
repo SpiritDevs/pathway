@@ -331,6 +331,14 @@ export function ConversationMessages({
                               </span>
                             </button>
                           )}
+                          {message.mentions?.map((mention) => (
+                            <span key={mention.id} className="mr-1 text-blue-500">
+                              @
+                              {readers.find(
+                                (reader) => reader.kind === "user" && reader.id === mention.id,
+                              )?.name ?? "Participant"}
+                            </span>
+                          ))}
                           {message.attachments?.map((attachment) => (
                             <ConversationMessageAttachment
                               key={attachment.id}

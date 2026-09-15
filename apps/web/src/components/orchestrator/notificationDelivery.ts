@@ -1,7 +1,8 @@
-import type { OrchestratorChat } from "@spiritdevs/contracts/aiOrchestrator";
+import { conversationAttention, type OrchestratorChat } from "@spiritdevs/contracts/aiOrchestrator";
 
 /** Old, read, muted, and visible updates advance the watermark without interrupting the user. */
 export function shouldNotifyOrchestrator(input: {
+  accountID?: string;
   chat: OrchestratorChat;
   seenSequence: number;
   startedAt: number;
@@ -13,6 +14,14 @@ export function shouldNotifyOrchestrator(input: {
   return (
     !!update &&
     update.enabled &&
+    conversationAttention({
+      hasAccess: true,
+      isMember: input.accountID
+        ? chat.participantSubjects.includes(input.accountID)
+        : !update.coordination,
+      subject: input.accountID ?? "",
+      ...update,
+    }) &&
     !chat.archived &&
     !quiet &&
     focusedChatId !== chat.id &&

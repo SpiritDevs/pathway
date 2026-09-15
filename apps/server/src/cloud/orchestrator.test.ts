@@ -195,7 +195,11 @@ describe("tool-free coordinator reasoning", () => {
   });
   it.effect("keeps decisions usable when expression metadata is unknown", () =>
     Effect.gen(function* () {
-      const expressive = { ...result, expression: "curious" };
+      const expressive = {
+        ...result,
+        expression: "curious",
+        mentions: [{ kind: "user" as const, id: "stable-human-id" }],
+      };
       expect(yield* decodeOrchestratorDecision(encodeJson(expressive))).toEqual(expressive);
       const unknown = { ...result, expression: "surprised" };
       expect(yield* decodeOrchestratorDecision(encodeJson(unknown))).toEqual(unknown);

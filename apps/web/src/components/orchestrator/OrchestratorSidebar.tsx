@@ -80,7 +80,7 @@ export function ConversationList({ onSelect }: { onSelect?: () => void }) {
               >
                 {unreadLabel(chat.unreadCount!)}
               </span>
-            ) : chat.lastSequence > chat.readSequence ? (
+            ) : chat.unreadCount === undefined && chat.lastSequence > chat.readSequence ? (
               <span
                 className="size-2 shrink-0 rounded-full bg-blue-500"
                 aria-label="Unread messages"

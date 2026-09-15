@@ -50,7 +50,9 @@ export function Composer({
   chat,
   activity,
   sendMotion,
+  people,
 }: {
+  people?: readonly { id: string; name: string }[] | undefined;
   chat: OrchestratorChat;
   activity: OrchestratorActivity;
   sendMotion: RefObject<ComposerSendMotion | null>;
@@ -83,24 +85,39 @@ export function Composer({
   };
   const text = state.drafts[chat.id] ?? "";
   const contacts = state.contacts.filter((contact) => chat.orchestratorIds.includes(contact.id));
-  const recipients = eligibleRecipients(contacts, chat.orchestratorIds);
+  const recipients = [
+    ...eligibleRecipients(contacts, chat.orchestratorIds),
+    ...(reply ? [] : (people ?? [])).map((person) => ({
+      ...person,
+      id: "human:" + person.id,
+      canDirect: true,
+      recipientType: "user" as const,
+    })),
+  ];
   const selectedRecipient = state.recipients[chat.id];
+  const human = selectedRecipient?.startsWith("human:")
+    ? people?.find((person) => "human:" + person.id === selectedRecipient)
+    : undefined;
+  const humanSelection = selectedRecipient?.startsWith("human:") ?? false;
   const lockedRecipient = !!reply?.workId || reply?.kind === "edit";
+  const canAddressHuman = !!human && !reply;
   const lead = recipientTarget(
     contacts,
     chat.leadId,
-    selectedRecipient,
+    humanSelection ? undefined : selectedRecipient,
     reply?.orchestratorId,
     lockedRecipient,
   );
+  const canSend = humanSelection ? canAddressHuman : !!lead?.canDirect;
   const send = () => {
-    if (sending || blocked || (!text.trim() && !drafts.length) || chat.archived || !lead?.canDirect)
-      return;
+    if (sending || blocked || (!text.trim() && !drafts.length) || chat.archived || !canSend) return;
     const attachmentIds = drafts.map((draft) => draft.attachment.id);
     const previous = pending.get(chat.id);
     const message =
       previous?.text === text &&
-      previous.targetId === lead.id &&
+      previous.targetId === (humanSelection ? undefined : lead?.id) &&
+      JSON.stringify(previous.mentions) ===
+        JSON.stringify(human ? [{ kind: "user", id: human.id }] : undefined) &&
       previous.replyToId === reply?.messageId &&
       previous.workId === reply?.workId &&
       JSON.stringify(previous.attachmentIds) === JSON.stringify(attachmentIds)
@@ -108,7 +125,9 @@ export function Composer({
         : {
             id: randomUUID(),
             text,
-            targetId: lead.id,
+            ...(human
+              ? { humanOnly: true, mentions: [{ kind: "user" as const, id: human.id }] }
+              : { targetId: lead!.id }),
             attachmentIds,
             ...(reply?.kind === "reply" ? { replyToId: reply.messageId } : {}),
             ...(reply?.workId ? { workId: reply.workId } : {}),
@@ -270,7 +289,7 @@ export function Composer({
               text={text}
               title={chat.title}
               recipients={recipients}
-              selected={contacts.find((contact) => contact.id === selectedRecipient)}
+              selected={recipients.find((contact) => contact.id === selectedRecipient)}
               onSelect={(id) => state.setRecipient(chat.id, id)}
               locked={lockedRecipient}
               onChange={(value) => state.setDraft(chat.id, value)}
@@ -299,7 +318,7 @@ export function Composer({
               size="icon"
               className="size-9 shrink-0 rounded-full bg-blue-500 text-white hover:bg-blue-600"
               aria-label={reply?.kind === "edit" ? "Save message" : "Send message"}
-              disabled={sending || blocked || (!text.trim() && !drafts.length) || !lead?.canDirect}
+              disabled={sending || blocked || (!text.trim() && !drafts.length) || !canSend}
             >
               <ArrowUpIcon className="size-5" />
             </Button>
@@ -532,6 +551,7 @@ export function OrchestratorConversation({ floating = false }: { floating?: bool
               key={`composer:${chat.id}`}
               chat={chat}
               activity={activity.value ?? EMPTY_ACTIVITY}
+              people={messages.value?.readers?.filter((reader) => reader.kind === "user")}
               sendMotion={sendMotion}
             />
           </>

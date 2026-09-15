@@ -224,7 +224,10 @@ export function ConversationRecipientInput({
                   onMouseMove={() => setHighlight(index)}
                   onClick={() => choose(contact)}
                 >
-                  {contact.name}
+                  {contact.name}{" "}
+                  <span className="ml-2 text-xs text-muted-foreground">
+                    {contact.recipientType === "user" ? "Person" : "Agent"}
+                  </span>
                 </div>
               ))}
             </div>

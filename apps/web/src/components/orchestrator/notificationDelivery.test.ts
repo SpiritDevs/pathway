@@ -76,3 +76,36 @@ describe("orchestrator notification delivery", () => {
     expect(await claimOrchestratorNotification("owner", chat, () => true)).toBe(false);
   });
 });
+
+describe("human attention in group coordination", () => {
+  const group = {
+    ...chat,
+    kind: "group" as const,
+    notification: {
+      ...chat.notification!,
+      coordination: true,
+      senderId: "chief",
+      mentions: [{ kind: "user" as const, id: "owner" }],
+    },
+  };
+  it("gates the shared sound/banner decision on structured mention and membership", () => {
+    expect(shouldNotifyOrchestrator({ ...input, accountID: "owner", chat: group })).toBe(true);
+    expect(
+      shouldNotifyOrchestrator({
+        ...input,
+        accountID: "owner",
+        chat: { ...group, notification: { ...group.notification, mentions: [] } },
+      }),
+    ).toBe(false);
+    expect(
+      shouldNotifyOrchestrator({
+        ...input,
+        accountID: "outsider",
+        chat: {
+          ...group,
+          notification: { ...group.notification, mentions: [{ kind: "user", id: "outsider" }] },
+        },
+      }),
+    ).toBe(false);
+  });
+});

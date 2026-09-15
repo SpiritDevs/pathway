@@ -46,7 +46,9 @@ function useOrchestratorState() {
       {
         id: string;
         text: string;
-        targetId: string;
+        targetId?: string;
+        humanOnly?: boolean;
+        mentions?: { kind: "user"; id: string }[];
         attachmentIds: string[];
         replyToId?: string;
         workId?: string;
@@ -181,8 +183,11 @@ function useOrchestratorState() {
     contacts,
     avatarContacts,
     chats,
-    unreadCount: chats.filter((chat) => !chat.archived && chat.lastSequence > chat.readSequence)
-      .length,
+    unreadCount: chats.filter(
+      (chat) =>
+        !chat.archived &&
+        (chat.unreadCount ?? Math.max(0, chat.lastSequence - chat.readSequence)) > 0,
+    ).length,
     loading: ownedContacts.value === undefined,
     error: error ?? ownedContacts.error ?? companyContacts.error ?? conversations.error,
     setError,

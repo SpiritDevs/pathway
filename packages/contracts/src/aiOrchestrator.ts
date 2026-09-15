@@ -147,7 +147,11 @@ export const OrchestratorPushDestination = Schema.Struct({
   chatID: Schema.String,
   sequence: Schema.Number,
 });
+export const HumanMention = Schema.Struct({ kind: Schema.Literal("user"), id: Schema.String });
 export const OrchestratorNotification = Schema.Struct({
+  coordination: Schema.optionalKey(Schema.Boolean),
+  senderId: Schema.optionalKey(Schema.String),
+  mentions: Schema.optionalKey(Schema.Array(HumanMention)),
   sequence: Schema.Number,
   senderName: Schema.String,
   text: Schema.String,
@@ -229,6 +233,8 @@ export const OrchestratorMessage = Schema.Struct({
   createdAt: Schema.Number,
   seenAt: Schema.optionalKey(Schema.Number),
   seenBy: Schema.optionalKey(Schema.Array(Schema.String)),
+  coordination: Schema.optionalKey(Schema.Boolean),
+  mentions: Schema.optionalKey(Schema.Array(HumanMention)),
   replyToId: Schema.NullOr(Schema.String),
   attachments: Schema.optionalKey(Schema.Array(OrchestratorAttachment)),
 });
@@ -451,6 +457,7 @@ export const OrchestratorAction = Schema.Union([
 ]);
 export type OrchestratorAction = typeof OrchestratorAction.Type;
 export const OrchestratorDecision = Schema.Struct({
+  mentions: Schema.optionalKey(Schema.Array(HumanMention)),
   routeTo: Schema.optionalKey(Schema.String),
   expression: Schema.optionalKey(Schema.Unknown),
   message: Schema.String,
@@ -508,3 +515,21 @@ export const OrchestratorAssignmentOrigin = Schema.Struct({
   commandId: Schema.String,
 });
 export type OrchestratorAssignmentOrigin = typeof OrchestratorAssignmentOrigin.Type;
+
+export type HumanMention = typeof HumanMention.Type;
+/** Access is checked before attention; mentions never create membership or permission. */
+export function conversationAttention(input: {
+  hasAccess: boolean;
+  isMember: boolean;
+  subject: string;
+  senderId?: string;
+  coordination?: boolean;
+  mentions?: readonly HumanMention[];
+}) {
+  return (
+    input.hasAccess &&
+    input.isMember &&
+    input.senderId !== input.subject &&
+    (!input.coordination || !!input.mentions?.some((mention) => mention.id === input.subject))
+  );
+}

@@ -180,6 +180,9 @@ export const aiOrchestratorTables = {
     lastMessage: v.string(),
     notification: v.optional(
       v.object({
+        coordination: v.optional(v.boolean()),
+        senderId: v.optional(v.string()),
+        mentions: v.optional(v.array(v.object({ kind: v.literal("user"), id: v.string() }))),
         sequence: v.number(),
         senderName: v.string(),
         text: v.string(),
@@ -245,6 +248,8 @@ export const aiOrchestratorTables = {
     ),
     seenAt: v.optional(v.number()),
     seenBy: v.optional(v.array(v.string())),
+    coordination: v.optional(v.boolean()),
+    mentions: v.optional(v.array(v.object({ kind: v.literal("user"), id: v.string() }))),
     replyToId: v.union(v.string(), v.null()),
     createdAt: v.number(),
   })

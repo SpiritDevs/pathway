@@ -42,7 +42,12 @@ import {
   orchestratorCommandAllowed,
   orchestratorOwnerScope,
 } from "./lib/aiOrchestratorAuthority.ts";
-import { appendChatMessage, canDirectOrchestrator, findOrchestrator } from "./aiOrchestrators.ts";
+import {
+  humanRecipients,
+  appendChatMessage,
+  canDirectOrchestrator,
+  findOrchestrator,
+} from "./aiOrchestrators.ts";
 import { hasRecordPermission } from "../src/permissions.ts";
 import { collaborationDirectory, startCollaboration } from "./lib/aiOrchestratorCollaboration.ts";
 import {
@@ -482,6 +487,7 @@ async function contextFor(
   }
   let workResultBudget = 64000;
   return JSON.stringify({
+    humanMentionRecipients: await humanRecipients(ctx, chat),
     companyId,
     chat: { id: chat.id, title: chat.title, leadId: chat.leadId },
     capabilities: orchestrator.capabilities,
@@ -1346,6 +1352,8 @@ export const complete = mutation({
             senderId: claim.orchestrator.id,
             senderName: claim.orchestrator.name,
             text: action.text,
+            coordination: true,
+            mentions: [...(result.mentions ?? [])],
             expression: normalizeAvatarExpression(result.expression),
             status: queuedTarget ? "sent" : "queued",
             replyToId: claim.message.id,
@@ -1391,6 +1399,7 @@ export const complete = mutation({
             senderId: claim.orchestrator.id,
             senderName: claim.orchestrator.name,
             text: result.message.trim(),
+            mentions: [...(result.mentions ?? [])],
             expression: normalizeAvatarExpression(result.expression),
             status: "sent",
             replyToId: claim.message.id,

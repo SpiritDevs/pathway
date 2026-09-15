@@ -1,4 +1,9 @@
-export type ConversationRecipient = { id: string; name: string; canDirect: boolean };
+export type ConversationRecipient = {
+  id: string;
+  name: string;
+  canDirect: boolean;
+  recipientType?: "user";
+};
 
 export function recipientQuery(text: string, caret: number) {
   const before = text.slice(0, caret);

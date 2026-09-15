@@ -1,9 +1,10 @@
+import { conversationAttention } from "@spiritdevs/contracts/aiOrchestrator";
 // @effect-diagnostics globalDate:off -- Convex supplies transaction time for delivery leases.
 /** The relay delivers only the latest unread, currently authorized conversation update. */
 import { v } from "convex/values";
 import { mutation, query, type QueryCtx } from "./_generated/server.js";
 import { requireRelayControlPlane } from "./lib/relayIdentity.ts";
-import { hasChatAccess } from "./aiOrchestrators.ts";
+import { hasChatAccess, messageAttention } from "./aiOrchestrators.ts";
 const target = { chatId: v.string(), subject: v.string(), sequence: v.number() };
 async function current(ctx: QueryCtx, args: { chatId: string; subject: string; sequence: number }) {
   const chat = await ctx.db
@@ -34,6 +35,20 @@ async function current(ctx: QueryCtx, args: { chatId: string; subject: string; s
     member.readSequence >= args.sequence ||
     member.fromSequence > args.sequence ||
     !(await hasChatAccess(ctx, chat, user))
+  )
+    return null;
+  const message = await ctx.db
+    .query("aiOrchestratorMessages")
+    .withIndex("by_chat_sequence", (q) => q.eq("chatId", chat.id).eq("sequence", args.sequence))
+    .unique();
+  if (
+    !message ||
+    !conversationAttention({
+      hasAccess: true,
+      isMember: true,
+      subject: args.subject,
+      ...(await messageAttention(ctx, chat, message)),
+    })
   )
     return null;
   return {

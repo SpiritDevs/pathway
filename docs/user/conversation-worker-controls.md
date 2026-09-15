@@ -37,3 +37,15 @@ returns you to the latest message. Incoming messages leave your reading position
 in place until you return. While an orchestrator is active, the control displays
 “Typing…”; when activity ends, it returns to the arrow. The control disappears
 when you reach the bottom. These controls work in both full and floating conversations.
+
+## Getting a person's attention
+
+The @ picker includes people who currently belong to the conversation and have
+access, alongside agents. Selecting a person addresses a message to that person
+without starting an agent job. Removing the selection restores default lead
+routing. Replies to agent work keep their existing routing.
+
+Agent-to-agent coordination in group conversations stays in the message history
+without sounds, banners, or unread badges for unmentioned people. A coordinator
+must explicitly mention a person when their attention is needed. Mentions do not
+invite people or grant access to a conversation.

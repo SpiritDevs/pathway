@@ -5012,3 +5012,170 @@ describe("worker conversation review regressions", () => {
     expect((await test.accept("pending-before-archive"))?.state).toBe("accepted");
   });
 });
+
+describe("structured human attention", () => {
+  it("keeps coordination visible without notifications or unread counters unless mentioned", async () => {
+    const test = await businessHarness();
+    await test.t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+        .unique())!;
+      await ctx.db.patch(chat._id, { kind: "group", participantSubjects: ["owner", "colleague"] });
+      const member = (await ctx.db
+        .query("aiOrchestratorChatMembers")
+        .withIndex("by_chat_subject", (q) => q.eq("chatId", chat.id).eq("subject", "owner"))
+        .unique())!;
+      await ctx.db.patch(member._id, { readSequence: chat.lastSequence });
+      await ctx.db.insert("aiOrchestratorChatMembers", {
+        chatId: chat.id,
+        subject: "colleague",
+        fromSequence: chat.lastSequence + 1,
+        readSequence: chat.lastSequence,
+        updatedAt: Date.now(),
+      });
+      await appendChatMessage(
+        ctx,
+        { ...chat, kind: "group", participantSubjects: ["owner", "colleague"] },
+        {
+          id: "coordination",
+          senderKind: "orchestrator",
+          senderId: test.id,
+          senderName: "Chief",
+          text: "Agent coordination",
+          status: "sent",
+          replyToId: null,
+          coordination: true,
+        },
+        { enabled: true, urgent: true },
+      );
+    });
+    expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.unreadCount).toBe(0);
+    expect(
+      (await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.notification,
+    ).toBeUndefined();
+    expect(await test.relay.mutation(api.aiOrchestratorPush.claim, {})).toEqual([]);
+    expect(
+      (await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })).messages.some(
+        (m) => m.id === "coordination",
+      ),
+    ).toBe(true);
+    await test.t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+        .unique())!;
+      await appendChatMessage(
+        ctx,
+        chat,
+        {
+          id: "attention",
+          senderKind: "orchestrator",
+          senderId: test.id,
+          senderName: "Chief",
+          text: "Decision needed",
+          status: "sent",
+          replyToId: null,
+          coordination: true,
+          mentions: [{ kind: "user", id: "owner" }],
+        },
+        { enabled: true, urgent: true },
+      );
+    });
+    expect((await test.owner.query(api.aiOrchestrators.listChats, {}))[0]?.unreadCount).toBe(1);
+    expect(
+      (await test.relay.mutation(api.aiOrchestratorPush.claim, {})).map((job) => job.subject),
+    ).toEqual(["owner"]);
+    const colleagueChat = (
+      await human(test.t, "colleague").query(api.aiOrchestrators.listChats, {})
+    ).find((chat) => chat.id === test.chatId)!;
+    expect(colleagueChat.unreadCount).toBe(0);
+    expect(colleagueChat.notification).toBeUndefined();
+  });
+
+  it("human-only sends have stable mentions, no worker job, and reject forged nonmembers", async () => {
+    const test = await businessHarness();
+    const args = {
+      chatId: test.chatId,
+      id: "human-note",
+      text: "For you",
+      humanOnly: true,
+      mentions: [{ kind: "user" as const, id: "owner" }],
+    };
+    await test.owner.mutation(api.aiOrchestrators.send, args);
+    await test.owner.mutation(api.aiOrchestrators.send, args);
+    expect(
+      await test.t.run(
+        async (ctx) =>
+          (
+            await ctx.db
+              .query("aiOrchestratorJobs")
+              .withIndex("by_message", (q) => q.eq("messageId", "human-note"))
+              .collect()
+          ).length,
+      ),
+    ).toBe(0);
+    await expect(
+      test.owner.mutation(api.aiOrchestrators.send, {
+        ...args,
+        id: "forged",
+        mentions: [{ kind: "user", id: "colleague" }],
+      }),
+    ).rejects.toThrow("current conversation participant");
+    await expect(
+      human(test.t, "colleague").query(api.aiOrchestrators.messages, { chatId: test.chatId }),
+    ).rejects.toThrow();
+    await expect(
+      human(test.t, "colleague").query(api.aiOrchestrators.mentionRecipients, {
+        chatId: test.chatId,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      test.owner.mutation(api.aiOrchestrators.send, { ...args, id: "mixed", targetId: test.id }),
+    ).rejects.toThrow("cannot dispatch");
+  });
+});
+
+describe("notification membership boundary", () => {
+  it("does not expose a conversation or push content through a stale membership and forged mention", async () => {
+    const test = await businessHarness();
+    await test.t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+        .unique())!;
+      await ctx.db.insert("aiOrchestratorChatMembers", {
+        chatId: chat.id,
+        subject: "director",
+        fromSequence: 0,
+        readSequence: 0,
+        updatedAt: Date.now(),
+      });
+      await ctx.db.patch(chat._id, {
+        notification: {
+          sequence: chat.lastSequence,
+          senderName: "Secret",
+          text: "Secret content",
+          urgent: true,
+          enabled: true,
+          createdAt: Date.now(),
+          coordination: true,
+          mentions: [{ kind: "user", id: "director" }],
+        },
+      });
+      await ctx.db.insert("aiOrchestratorPush", {
+        chatId: chat.id,
+        subject: "director",
+        sequence: chat.lastSequence,
+        generation: 0,
+        dueAt: Date.now(),
+      });
+    });
+    expect(await human(test.t, "director").query(api.aiOrchestrators.listChats, {})).toEqual([]);
+    expect(
+      (await test.relay.mutation(api.aiOrchestratorPush.claim, {})).some(
+        (job) => job.subject === "director",
+      ),
+    ).toBe(false);
+  });
+});
