@@ -106,26 +106,62 @@ final class PathwayConversationUITests: XCTestCase {
     }
 
     @MainActor
+    func testWorkingReturnToLatestAndDiffBubble() {
+        let app = launchFixture(working: true, longHistory: true)
+        let latest = app.buttons["agent-thread-jump-bottom"]
+        let changes = app.buttons["agent-thread-changes"]
+        XCTAssertTrue(changes.waitForExistence(timeout: 5))
+        XCTAssertTrue(changes.label.contains("1 file"))
+        XCTAssertTrue(changes.label.contains("+68"))
+        XCTAssertTrue(changes.label.contains("−26"))
+        XCTAssertFalse(latest.exists)
+        app.scrollViews.firstMatch.swipeDown()
+        XCTAssertTrue(latest.waitForExistence(timeout: 5))
+        XCTAssertEqual(latest.value as? String, "Working…")
+        XCTAssertTrue(latest.isHittable)
+        XCTAssertLessThanOrEqual(latest.frame.maxY, changes.frame.minY)
+        capture(app, "Working return-to-latest and diff bubbles")
+
+        changes.tap()
+        XCTAssertTrue(app.navigationBars["Changes"].waitForExistence(timeout: 5))
+        capture(app, "Diff sheet while the agent works")
+        app.buttons["Done"].tap()
+        XCTAssertTrue(latest.waitForExistence(timeout: 5))
+        XCTAssertEqual(latest.value as? String, "Working…")
+        app.buttons["agent-thread-stop"].tap()
+        let idle = NSPredicate(format: "value == nil OR value == %@", "")
+        expectation(for: idle, evaluatedWith: latest)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(latest.isHittable)
+        capture(app, "Idle return-to-latest bubble")
+        latest.tap()
+        XCTAssertTrue(latest.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(changes.isHittable)
+    }
+
+    @MainActor
     func testModelFavourites() {
         let app = launchFixture()
         app.buttons["agent-thread-composer-collapsed"].tap()
-        app.buttons["agent-thread-composer-options"].tap()
+        app.buttons["agent-thread-model-picker"].tap()
         app.buttons["Favourite models"].tap()
         let toggle = app.buttons["model-favourite-codex-gpt-5.4-mini"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
         if toggle.value as? String != "Favourite" { toggle.tap() }
         capture(app, "Favourite model settings")
-        app.navigationBars.buttons["Composer options"].tap()
-        app.buttons["Done"].tap()
+        app.navigationBars.buttons["Thread settings"].tap()
+        app.buttons["Save"].tap()
         app.buttons["agent-thread-model-picker"].tap()
-        let favourite = app.buttons["gpt-5.4-mini · Codex"]
+        let favourite = app.buttons["thread-settings-favourite-codex-gpt-5.4-mini"]
         XCTAssertTrue(favourite.waitForExistence(timeout: 5))
-        XCTAssertLessThan(favourite.frame.midY, app.buttons["Codex"].frame.midY)
+        XCTAssertLessThan(favourite.frame.midY, app.buttons["thread-settings-model-codex-gpt-5.4-mini"].frame.midY)
         XCTAssertFalse(app.buttons["Edit favourites"].exists)
         capture(app, "Starred favourites above providers")
         favourite.tap()
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.buttons["agent-thread-model-picker"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons["agent-thread-model-picker"].value as? String, "gpt-5.4-mini")
-        app.buttons["agent-thread-composer-options"].tap()
+        app.buttons["agent-thread-model-picker"].tap()
         app.buttons["Favourite models"].tap()
         XCTAssertEqual(toggle.value as? String, "Favourite")
         toggle.tap()
@@ -139,8 +175,18 @@ final class PathwayConversationUITests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap(); field.typeText("Keep my draft")
         app.buttons["agent-thread-model-picker"].tap()
-        app.buttons["Codex"].tap()
-        app.buttons["gpt-5.4-mini"].tap()
+        let mini = app.buttons["thread-settings-model-codex-gpt-5.4-mini"]
+        XCTAssertTrue(mini.waitForExistence(timeout: 5))
+        mini.tap()
+        app.buttons["Cancel"].tap()
+        XCTAssertTrue(app.buttons["agent-thread-model-picker"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["agent-thread-model-picker"].value as? String, "gpt-5.4")
+        XCTAssertEqual(field.value as? String, "Keep my draft")
+        app.buttons["agent-thread-model-picker"].tap()
+        XCTAssertTrue(mini.waitForExistence(timeout: 5))
+        mini.tap()
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.buttons["agent-thread-model-picker"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons["agent-thread-model-picker"].value as? String, "gpt-5.4-mini")
         capture(app, "Conversation composer and model")
         app.buttons["agent-thread-send"].tap()
@@ -252,9 +298,10 @@ final class PathwayConversationUITests: XCTestCase {
         XCTAssertTrue((field.value as? String)?.contains("More detail") == true)
     }
 
-    @MainActor private func launchFixture(questions: Bool = false, agents: Bool = false) -> XCUIApplication {
+    @MainActor private func launchFixture(questions: Bool = false, agents: Bool = false, working: Bool = false, longHistory: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["--uitest-conversation"] + (questions ? ["--conversation-questions"] : []) + (agents ? ["--conversation-agents"] : [])
+            + (working ? ["--conversation-working"] : []) + (longHistory ? ["--conversation-long-history"] : [])
         app.launch()
         XCTAssertTrue(app.buttons["agent-thread-actions"].waitForExistence(timeout: 10))
         return app

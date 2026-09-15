@@ -72,6 +72,7 @@ struct AgentModelSettingsSheet: View {
                                         .contentShape(Rectangle())
                                     }
                                     .disabled(provider.unavailableReason != nil)
+                                    .accessibilityIdentifier("thread-settings-model-\(provider.id)-\(model.id)")
                                     .accessibilityValue(current.instanceId == provider.id && current.model == model.id ? "Selected" : "")
                                 }
                             } label: {
@@ -266,6 +267,7 @@ private struct AgentModelSettingsFavourites: View {
                             .foregroundStyle(.primary)
                         }
                         .disabled(provider.unavailableReason != nil)
+                        .accessibilityIdentifier("thread-settings-favourite-\(provider.id)-\(model.id)")
                     }
                 }
             }

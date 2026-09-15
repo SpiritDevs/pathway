@@ -83,3 +83,8 @@ You can show, hide, and reorder Pending questions in the action palette settings
 When you scroll up in a thread, a button above the composer takes you back to the end.
 It shows a down chevron while the thread is idle, or a working orb beside “working...”
 while the agent is busy. The orb respects your reduced-motion preference.
+
+On iOS, the button shows a still orb with the current activity, including “Working…”.
+Queued work and requests waiting for your response use the down chevron. Tap the button
+to return to the latest message and resume following new replies. The changed-files
+bubble remains above the composer and opens the diff sheet.

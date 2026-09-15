@@ -7,6 +7,14 @@ enum PathwayThreadActivity: String, Equatable {
     case working = "Working…"
     case waiting = "Waiting…"
 
+    /// Queued work and requests waiting for the user must not look like active progress.
+    var progressLabel: String? {
+        switch self {
+        case .sending, .preparing, .starting, .working: rawValue
+        case .queued, .waiting: nil
+        }
+    }
+
     init?(isSynchronized: Bool, isSending: Bool, runStatus: String?) {
         guard isSynchronized else { return nil }
         if isSending {

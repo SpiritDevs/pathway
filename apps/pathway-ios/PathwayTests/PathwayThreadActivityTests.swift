@@ -27,6 +27,18 @@ struct PathwayThreadActivityTests {
         #expect(activity(nil) == nil)
     }
 
+    @Test(arguments: ["queued", "waiting", "completed", "failed", "interrupted"])
+    func returnToLatestDoesNotClaimProgressForInactiveRuns(status: String) {
+        #expect(activity(status)?.progressLabel == nil)
+    }
+
+    @Test func returnToLatestDescribesActiveProgress() {
+        #expect(activity(nil, sending: true)?.progressLabel == "Sending…")
+        #expect(activity("preparing")?.progressLabel == "Preparing workspace…")
+        #expect(activity("starting")?.progressLabel == "Starting agent…")
+        #expect(activity("running")?.progressLabel == "Working…")
+    }
+
     @Test(arguments: ["queued", "preparing", "starting", "running", "waiting"])
     func disconnectHidesCachedActivityUntilSynchronized(status: String) {
         #expect(PathwayThreadActivity(isSynchronized: false, isSending: false, runStatus: status) == nil)

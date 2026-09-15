@@ -20,6 +20,19 @@ This version targets iOS, iPadOS and visionOS. Android is excluded. Code coverag
 - Unsigned simulator fixture tests bypass Clerk. For real development sign-in, keep simulator ad-hoc signing enabled so Keychain entitlements are available; an unsigned app can terminate during Clerk configuration with OSStatus -34018. Verify the built public key is `pk_test_` before unattended authentication. Use a temporary `-xcconfig` override to preserve an existing production `Config/Local.xcconfig`.
 - Run the applicable native checks locally before pushing. The native GitHub workflow is manual-only (`workflow_dispatch`); pull requests do not automatically repeat iPhone, iPad or visionOS checks. When requested, the manual workflow runs those jobs on an Apple Silicon macOS runner.
 
+## Preserve features between releases
+
+Compare the release source with the previous shipped build, including any changes made on
+a separate release branch. A successful archive does not prove that those changes reached
+main. Record the source commit with each uploaded build.
+
+For conversation changes, include the applicable `PathwayConversationUITests` checks:
+return-to-latest while working and idle, the changed-files bubble and diff sheet, model
+selection with Save and Cancel, favourites, and compact composer/navigation controls.
+Check the new-thread composer separately. Queue checks must cover both messages saved
+in Cloud and messages already queued on the environment. Compilation and data-model
+tests alone cannot confirm that a button is visible, tappable, or opens the correct sheet.
+
 ## Integrated device verification
 
 Use an isolated development environment and the provisioned Clerk development account. Keep fixture checks separate from actual cloud/relay/provider execution.

@@ -16,7 +16,6 @@ struct AgentThreadComposer: View {
     let isNavigationExpanded: Bool
     var onOpenThread: ((String) -> Void)? = nil
     var workspaceRoot: String? = nil
-    var onOpenBrowser: () -> Void = {}
 
     @Namespace private var surfaceNamespace
     @State private var showsFiles = false
@@ -272,22 +271,6 @@ struct AgentThreadComposer: View {
         HStack(spacing: 6) {
             attachmentMenu
             modelMenu
-            Button { showsSettings = true } label: {
-                Image(systemName: model.interactionMode == "plan" ? "list.bullet.clipboard" : "slider.horizontal.3")
-                    .frame(width: controlDiameter, height: controlDiameter)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Composer options")
-            .accessibilityIdentifier("agent-thread-composer-options")
-            Button { isFocused = false; onOpenBrowser() } label: {
-                Image(systemName: "globe")
-                    .frame(width: controlDiameter, height: controlDiameter)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Environment browser")
-            .accessibilityIdentifier("agent-thread-browser")
             Spacer(minLength: 0)
             if model.activeRunID != nil && hasContent { stopButton }
             sendButton

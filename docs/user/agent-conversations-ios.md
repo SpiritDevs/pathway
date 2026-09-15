@@ -4,6 +4,8 @@ Open an agent thread to read its conversation and continue working on its connec
 
 A status below the latest message shows when your message is sending, queued, preparing a workspace, starting the agent, working, or waiting. It clears when the run finishes or stops. If the connection drops, the app hides the activity status until it has the latest thread state again.
 
+When you scroll away from the latest message, a floating button above the composer returns you to it. While the agent works, it shows an orb and the current activity. When work stops, it returns to a down chevron. Tapping it resumes following new replies.
+
 Completed turns keep the final answer visible and fold intermediate work into a **Worked for…** row. Expand it to read progress updates, then expand individual search, command, tool, and file rows for details. Questions, approval requests, plans, and subagent links remain accessible in the conversation.
 
 The file count above the composer opens the changed files and available diffs. Copy an answer with its copy button, or hold a message to open its actions. Fork from an answer to continue from that turn in a separate conversation. The thread menu can also fork the latest state and copy the conversation.

@@ -38,6 +38,7 @@ private final class ConversationSimulatorWorkspace {
     private var items: [[String: JSONValue]] = []
     private var serverConfig: JSONValue = .object([:])
     private let questions = ProcessInfo.processInfo.arguments.contains("--conversation-questions")
+    private var runStatus = ProcessInfo.processInfo.arguments.contains("--conversation-working") ? "running" : "interrupted"
     private var thread: [String: JSONValue] = [
         "id": .string("sim-thread"), "projectId": .string("sim-project"),
         "title": .string("Bring conversations to mobile"), "providerInstanceId": .string("codex"),
@@ -71,6 +72,12 @@ private final class ConversationSimulatorWorkspace {
                     .object(["label": .string("Expanded"), "description": .string("Show every tool action in the timeline.")])])]),
                 .object(["id": .string("notes"), "header": .string("Details"), "question": .string("Anything else to include?"), "options": .array([])])])])
         }
+        if ProcessInfo.processInfo.arguments.contains("--conversation-long-history") {
+            for index in 0..<12 {
+                add("history-\(index)", index.isMultiple(of: 2) ? "user_message" : "assistant_message",
+                    text: "Conversation detail \(index + 1).\n\nKeep earlier work readable while the agent continues. The latest-message control returns to the end without losing the draft.")
+            }
+        }
         publish()
         serverConfig = .object(["environment": .object(["capabilities": .object(["attachmentUploads": .bool(true), "fileAttachments": .object(["maxUploadBytes": .number(52428800)])])]), "providers": .array([.object([
             "instanceId": .string("codex"), "driver": .string("codex"), "displayName": .string("Codex"),
@@ -103,7 +110,7 @@ private final class ConversationSimulatorWorkspace {
         var selectedThread = thread
         if child { selectedThread["id"] = .string(childID); selectedThread["title"] = .string("Review conversation controls"); selectedThread.removeValue(forKey: "status") }
         return .object(["thread": .object(selectedThread), "visibleTurnItems": .array((child ? [items[6]] : items).map { .object(["item": .object($0)]) }),
-            "runs": .array([.object(["id": .string("run-completed"), "ordinal": .number(1), "status": .string("completed"), "userMessageId": .string("message-user")]), .object(["id": .string("run-sent"), "ordinal": .number(2), "status": .string("interrupted"), "modelSelection": thread["modelSelection"] ?? .null])]),
+            "runs": .array([.object(["id": .string("run-completed"), "ordinal": .number(1), "status": .string("completed"), "userMessageId": .string("message-user")]), .object(["id": .string("run-sent"), "ordinal": .number(2), "status": .string(child ? "interrupted" : runStatus), "modelSelection": thread["modelSelection"] ?? .null])]),
             "subagents": child ? .array([]) : .array(extraAgents + [.object(["id": .string("agent-review"), "childThreadId": .string("sim-child"), "title": .string("Review conversation controls"), "status": .string("completed"), "origin": .string("provider_native"), "model": .string("gpt-5.4")])]),
             "runtimeRequests": questions ? .array([.object(["id": .string("request-question"), "status": .string("pending"), "responseCapability": .object(["type": .string("live"), "providerSessionId": .string("session")])])]) : .array([])])
     }
@@ -123,6 +130,7 @@ private final class ConversationSimulatorWorkspace {
         case "thread.model-selection.set": thread["modelSelection"] = command["modelSelection"]
         case "thread.runtime-mode.set": thread["runtimeMode"] = command["runtimeMode"]
         case "thread.interaction-mode.set": thread["interactionMode"] = command["interactionMode"]
+        case "run.interrupt": runStatus = "interrupted"
         case "message.dispatch": add("sent-\(items.count)", "user_message", text: command["text"]?.stringValue, extra: ["messageId": command["messageId"] ?? .null, "runId": .string("run-sent")])
         case "message.edit-and-restart":
             if let index = items.firstIndex(where: { $0["messageId"] == command["messageId"] }) { items[index]["text"] = command["text"] }

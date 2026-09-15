@@ -1026,22 +1026,15 @@ struct AgentThreadConversationView: View {
                 if followsLatest && !userIsScrolling { proxy.scrollTo("agent-transcript-bottom", anchor: .bottom) }
             }
             .overlay(alignment: .bottom) {
-                    if !isNearBottom {
-                        Button("Latest message", systemImage: "arrow.down") {
-                            followsLatest = true
-                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-                                proxy.scrollTo("agent-transcript-bottom", anchor: .bottom)
-                            }
+                if !isNearBottom {
+                    AgentThreadLatestMessageButton(activity: model.activity) {
+                        followsLatest = true
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                            proxy.scrollTo("agent-transcript-bottom", anchor: .bottom)
                         }
-                        .labelStyle(.iconOnly)
-                        #if os(visionOS)
-                        .buttonStyle(.bordered)
-                        #else
-                        .buttonStyle(.glass)
-                        #endif
-                        .buttonBorderShape(.circle)
-                        .accessibilityIdentifier("agent-thread-jump-bottom")
                     }
+                    .padding(.bottom, 8)
+                }
             }
             .contentShape(.rect)
             .simultaneousGesture(TapGesture().onEnded { collapseComposer() })
@@ -1090,7 +1083,7 @@ struct AgentThreadConversationView: View {
                     .simultaneousGesture(TapGesture().onEnded { collapseComposer() })
                     AgentThreadComposer(model: model, isExpanded: $isComposerExpanded,
                         isFocused: $isComposerFocused, modelName: model.currentModelSelection.model,
-                        usesCompactPresentation: compactThreadChrome != nil, isNavigationExpanded: compactThreadChrome?.isNavigationExpanded == true, onOpenThread: openChild, workspaceRoot: workspaceRoot, onOpenBrowser: { subscriptionLifetime.retain(.browser); showsBrowser = true })
+                        usesCompactPresentation: compactThreadChrome != nil, isNavigationExpanded: compactThreadChrome?.isNavigationExpanded == true, onOpenThread: openChild, workspaceRoot: workspaceRoot)
                 }
             }
         }
@@ -1304,6 +1297,12 @@ struct AgentThreadConversationView: View {
                     projectRoot: workspaceRoot, connect: connect, storageDirectory: model.storageDirectory)
             } label: { Label("Workspace", systemImage: "folder") }
         }
+        Button("Environment browser", systemImage: "globe") {
+            isComposerFocused = false
+            subscriptionLifetime.retain(.browser)
+            showsBrowser = true
+        }
+        .accessibilityIdentifier("agent-thread-browser")
         Button("Fork thread", systemImage: "arrow.triangle.branch") { fork() }.disabled(isForking || model.thread.shell.isTemporary)
         if model.thread.shell.isTemporary { Text("Keep conversation before forking or starting a side chat.") }
         Button("Copy conversation", systemImage: "doc.on.doc") {
