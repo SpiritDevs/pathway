@@ -1,6 +1,6 @@
 # Replying to orchestrators and delegated work
 
-Keep your instructions, questions and files in the conversation. On web and desktop, right-click a message and choose **Reply**, or use its **Reply** action. The composer shows the message you are replying to, and your sent reply keeps that quote. Cancel the quote or press Escape to return to a normal message.
+Keep your instructions, questions and files in the conversation. On web and desktop, open a message’s context menu and choose **Reply**. Right-click the message or use its menu button. The composer shows the message you are replying to, and your sent reply keeps that quote. Cancel the quote or press Escape to return to a normal message.
 
 When an orchestrator delegates work, choose **Message worker** beside the work summary to send an instruction to that work’s existing thread. You can include images, videos and other supported files. Videos play inside the conversation when you choose Play.
 

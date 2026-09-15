@@ -2,7 +2,6 @@ import { ConversationReaders } from "./ConversationReaders";
 import { conversationReceiptLabel, placeConversationReaders } from "./conversationReceipts";
 import { useConversationReadPosition } from "./useConversationReadPosition";
 import { ConversationMessageActions } from "./ConversationMessageActions";
-import { replyToMessage } from "./conversationReply";
 import { ConversationMessageAttachment } from "./ConversationAttachments";
 import {
   lazy,
@@ -311,13 +310,6 @@ export function ConversationMessages({
                         >
                           {conversationMessageTime.format(message.createdAt)}
                         </time>
-                        <button
-                          type="button"
-                          className="hover:text-foreground hover:underline"
-                          onClick={() => state.setReply(chat.id, replyToMessage(message))}
-                        >
-                          Reply
-                        </button>
                         {own && (
                           <span>
                             {conversationReceiptLabel(

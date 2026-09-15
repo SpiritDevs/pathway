@@ -4,7 +4,7 @@ This replaces the worker-control forms proposed in #173. Web and desktop use one
 
 ## Behavior
 
-- Right-click a message or use its visible Reply action to quote it in the main composer. Quotes persist and remain readable across pagination, subject to the reader’s history boundary.
+- Choose Reply from a message’s context menu to quote it in the main composer. The same menu is available through right-click and the keyboard-accessible menu button. Quotes persist and remain readable across pagination, subject to the reader’s history boundary.
 - Work summaries offer Message worker. Follow-ups target that assignment’s existing thread. Pending messages support edit, cancel, move earlier/later, and send to the active turn. No nested composer or data-entry form.
 - Workers ask the owning orchestrator first. It can answer known questions or escalate them as normal messages. Human quoted replies carry durable question and field IDs. Multi-part answers accumulate until complete; they never expand work scope. Private questions stay in the original thread.
 - The conversation keeps text, image previews and click-to-play video. Worker follow-up attachments reach the existing thread’s attachment store.
