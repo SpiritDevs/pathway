@@ -36,3 +36,11 @@ The first automation upload attempt used relative file paths and failed before s
 - Documentation: user guide and architecture note accompany the implementation.
 
 The PlanLink screenshots are embedded as lossless WebP images. The public recording uses the existing temporary review tunnel; the same MP4 is retained here for durable repository evidence. No credentials or pairing links are included.
+
+## Message receipt refinement
+
+The latest PlanLink version shows **Sending**, **Delivered** and **Read**, plus group reader avatars. Screenshots `13`–`17` and `read-receipts.mp4` capture the updated real client. The reader acknowledgements in the video are scripted development fixture updates, not live provider reads. The preceding send uses the real conversation mutation. The temporary fixture function was removed after capture.
+
+135 focused tests passed for orchestrator behavior, receipts and timeline grouping after this refinement. Tests cover monotonic human read positions, joined-history boundaries, current-participant visibility, explicit orchestrator reader identities, queue-independent delivery labels and one latest outgoing placement per reader. Web and backend package typechecks and targeted lint passed.
+
+The browser verified Delivered changing to Read, both configured orchestrator avatars moving to the newest message, and the same display at 390 pixels without document overflow. Human read acknowledgements now follow messages visible in a focused conversation. Cancel and Retry moved to the message menu. The earlier queue-labelled screenshots are retained as the preceding iteration’s evidence.

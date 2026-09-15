@@ -243,6 +243,7 @@ export const aiOrchestratorTables = {
       v.literal("cancelled"),
     ),
     seenAt: v.optional(v.number()),
+    seenBy: v.optional(v.array(v.string())),
     replyToId: v.union(v.string(), v.null()),
     createdAt: v.number(),
   })

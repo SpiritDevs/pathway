@@ -197,6 +197,26 @@ export function ConversationMessageActions({
                 )}
               </>
             )}
+            {!delivery &&
+              message.senderId === state.accountID &&
+              (message.status === "queued" || message.status === "failed") && (
+                <MenuItem
+                  variant={message.status === "queued" ? "destructive" : "default"}
+                  onClick={() => {
+                    void state
+                      .request(
+                        message.status === "queued"
+                          ? "aiOrchestrators:cancelMessage"
+                          : "aiOrchestrators:retryMessage",
+                        { chatId: message.chatId, messageId: message.id },
+                      )
+                      .catch((cause) => state.setError(mapEnvironmentControlError(cause).message));
+                  }}
+                >
+                  {message.status === "queued" ? <XIcon /> : <SendIcon />}
+                  {message.status === "queued" ? "Cancel message" : "Retry message"}
+                </MenuItem>
+              )}
             {pending && canDirect && (
               <MenuItem
                 variant="destructive"

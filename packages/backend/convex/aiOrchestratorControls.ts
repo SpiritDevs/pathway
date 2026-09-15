@@ -758,6 +758,17 @@ export async function decorateConversationMessage(
   const { _id, _creationTime, ...row } = message;
   void _id;
   void _creationTime;
+  // Older messages recorded a read time without the recipient identity.
+  const legacyJob =
+    row.seenAt !== undefined && row.seenBy === undefined
+      ? await ctx.db
+          .query("aiOrchestratorJobs")
+          .withIndex("by_message", (q) => q.eq("messageId", row.id))
+          .unique()
+      : null;
+  const seenBy =
+    row.seenBy ??
+    (legacyJob && !legacyJob.routingCandidateIds?.length ? [legacyJob.orchestratorId] : []);
   const source = row.replyToId ? await chatMessage(ctx, row.replyToId) : null;
   const delivery = await ctx.db
     .query("aiOrchestratorWorkerMessages")
@@ -776,6 +787,7 @@ export async function decorateConversationMessage(
   }
   return {
     ...row,
+    seenBy: seenBy.filter((id) => chat.orchestratorIds.includes(id)),
     worker: readable ? row.worker : undefined,
     ...(source && source.chatId === chat.id && source.sequence >= fromSequence
       ? {

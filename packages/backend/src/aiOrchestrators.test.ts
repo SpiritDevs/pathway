@@ -161,6 +161,55 @@ describe("persistent orchestrator identities and messages", () => {
       owner.mutation(api.aiOrchestrators.cancelMessage, { chatId, messageId: "second" }),
     ).rejects.toThrow("already started");
   });
+  it("exposes current readers with monotonic, history-scoped positions without unrelated user profiles", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, id, chatId } = await personalChat(t);
+    await owner.mutation(api.aiOrchestrators.send, { chatId, id: "first-read", text: "Hello" });
+    await t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", chatId))
+        .unique())!;
+      await ctx.db.patch(chat._id, { kind: "group", participantSubjects: ["owner", "colleague"] });
+      await ctx.db.insert("aiOrchestratorChatMembers", {
+        chatId,
+        subject: "colleague",
+        fromSequence: 2,
+        readSequence: 1,
+        updatedAt: Date.now(),
+      });
+    });
+    await owner.mutation(api.aiOrchestrators.send, { chatId, id: "second-read", text: "Welcome" });
+    const colleague = human(t, "colleague");
+    await colleague.mutation(api.aiOrchestrators.markRead, { chatId, sequence: 2 });
+    await colleague.mutation(api.aiOrchestrators.markRead, { chatId, sequence: 1 });
+    const page = await owner.query(api.aiOrchestrators.messages, { chatId });
+    expect(page.readers).toContainEqual({
+      id: "colleague",
+      kind: "user",
+      name: "colleague",
+      fromSequence: 2,
+      readSequence: 2,
+    });
+    expect(page.readers.some((reader) => reader.id === "director")).toBe(false);
+    expect(page.readers).toContainEqual({
+      id,
+      kind: "orchestrator",
+      name: "Chief",
+      fromSequence: 0,
+    });
+    expect(page.messages.every((message) => message.seenBy?.length === 0)).toBe(true);
+    await expect(
+      human(t, "director").query(api.aiOrchestrators.messages, { chatId }),
+    ).rejects.toThrow();
+    await owner.mutation(api.aiOrchestrators.removeParticipant, { chatId, subject: "colleague" });
+    expect(
+      (await owner.query(api.aiOrchestrators.messages, { chatId })).readers.some(
+        (reader) => reader.id === "colleague",
+      ),
+    ).toBe(false);
+  });
   it("counts only visible unread messages, respects joined history, and clears on read", async () => {
     const t = harness();
     await seed(t);
@@ -523,6 +572,7 @@ describe("coordinator reasoning claims and action boundaries", () => {
     expect(completed.messages.find((message) => message.id === "greeting")).toMatchObject({
       status: "sent",
       seenAt,
+      seenBy: [test.id],
     });
   });
 

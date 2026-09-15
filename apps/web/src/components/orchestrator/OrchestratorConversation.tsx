@@ -333,6 +333,11 @@ export function Composer({
             </Button>
           </div>
         </div>
+        {sending && reply?.kind !== "edit" && (
+          <p role="status" className="mt-2 px-3 text-right text-[11px] text-muted-foreground">
+            Sending…
+          </p>
+        )}
         {blocked && (
           <p role="status" className="mt-2 px-3 text-[11px] text-muted-foreground">
             {drafts.some((draft) => draft.status === "failed")

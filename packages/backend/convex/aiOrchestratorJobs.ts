@@ -891,7 +891,12 @@ export const claim = mutation({
       }
       await ctx.db.patch(claim.message._id, {
         status: "working",
-        seenAt: claim.message.seenAt ?? now,
+        ...(!job.routingCandidateIds?.length
+          ? {
+              seenAt: claim.message.seenAt ?? now,
+              seenBy: [...new Set([...(claim.message.seenBy ?? []), orchestrator.id])],
+            }
+          : {}),
       });
       return {
         ...(job.routingCandidateIds?.length

@@ -4,7 +4,10 @@ import {
   type WorkerMessageQueues,
 } from "./aiOrchestratorControls.ts";
 import { bindConversationAttachments } from "./aiOrchestratorAttachments.ts";
-import type { OrchestratorAttachment } from "@spiritdevs/contracts/aiOrchestrator";
+import type {
+  OrchestratorAttachment,
+  OrchestratorReader,
+} from "@spiritdevs/contracts/aiOrchestrator";
 import { nextResponsibilityReview } from "./aiOrchestratorReviews.ts";
 // @effect-diagnostics globalDate:off -- Convex supplies deterministic transaction time.
 /** Authenticated orchestration contacts and continuing conversations. */
@@ -611,8 +614,46 @@ export const messages = query({
       )
       .order("desc")
       .take(60);
+    const memberships = await ctx.db
+      .query("aiOrchestratorChatMembers")
+      .withIndex("by_chat_subject", (q) => q.eq("chatId", chat.id))
+      .collect();
+    const readers = (
+      await Promise.all([
+        ...memberships
+          .filter((participant) => chat.participantSubjects.includes(participant.subject))
+          .map(async (participant): Promise<OrchestratorReader | null> => {
+            const user = await ctx.db
+              .query("users")
+              .withIndex("by_clerk_subject", (q) => q.eq("clerkSubject", participant.subject))
+              .unique();
+            if (!user || !(await hasChatAccess(ctx, chat, user))) return null;
+            return {
+              id: participant.subject,
+              kind: "user",
+              name: user.displayName || "Participant",
+              ...(user.imageUrl ? { imageUrl: user.imageUrl } : {}),
+              fromSequence: participant.fromSequence,
+              readSequence: participant.readSequence,
+            };
+          }),
+        ...chat.orchestratorIds.map(async (id): Promise<OrchestratorReader | null> => {
+          const contact = await findOrchestrator(ctx, id);
+          if (!contact || contact.status === "deleted") return null;
+          return {
+            id,
+            kind: "orchestrator",
+            name: contact.name,
+            fromSequence:
+              chat.orchestratorHistory?.find((entry) => entry.orchestratorId === id)
+                ?.fromSequence ?? 0,
+          };
+        }),
+      ])
+    ).filter((reader) => reader !== null);
     const queues: WorkerMessageQueues = new Map();
     return {
+      readers,
       messages: await Promise.all(
         rows
           .toReversed()

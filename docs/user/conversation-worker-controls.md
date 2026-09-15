@@ -11,7 +11,7 @@ While an instruction is queued, open its message menu to:
 - **Send to active turn** to steer work that is currently running.
 - **Cancel message** before the worker accepts it.
 
-The message footer shows its delivery status and queue position. Once the worker has accepted an instruction, its contents are fixed. Send another message if you need to change direction.
+The message footer uses **Sending**, **Delivered** and **Read**. Delivered means the message is saved in the conversation; the worker may still be waiting to start. Read means a participant has viewed it or the receiving orchestrator has opened it. In groups, tiny reader avatars appear beneath the latest outgoing message each participant has read. Hover over them to see the names. Once the worker has accepted an instruction, its contents are fixed. Send another message if you need to change direction.
 
 A worker can ask its orchestrator a question. If it needs your input, the question appears as a normal chat message. Reply to that message to send the answer to the right worker. If there are several questions, reply to each one; the worker resumes when all required answers are ready. Private answers must be entered in the original thread.
 

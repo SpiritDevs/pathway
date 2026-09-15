@@ -226,11 +226,22 @@ export const OrchestratorMessage = Schema.Struct({
   status: Schema.Literals(["queued", "working", "sent", "failed", "cancelled"]),
   createdAt: Schema.Number,
   seenAt: Schema.optionalKey(Schema.Number),
+  seenBy: Schema.optionalKey(Schema.Array(Schema.String)),
   replyToId: Schema.NullOr(Schema.String),
   attachments: Schema.optionalKey(Schema.Array(OrchestratorAttachment)),
 });
 export type OrchestratorMessage = typeof OrchestratorMessage.Type;
+export const OrchestratorReader = Schema.Struct({
+  id: Schema.String,
+  kind: Schema.Literals(["user", "orchestrator"]),
+  name: Schema.String,
+  imageUrl: Schema.optionalKey(Schema.String),
+  fromSequence: Schema.Number,
+  readSequence: Schema.optionalKey(Schema.Number),
+});
+export type OrchestratorReader = typeof OrchestratorReader.Type;
 export const OrchestratorMessagePage = Schema.Struct({
+  readers: Schema.optionalKey(Schema.Array(OrchestratorReader)),
   messages: Schema.Array(OrchestratorMessage),
   nextBefore: Schema.NullOr(Schema.Number),
 });

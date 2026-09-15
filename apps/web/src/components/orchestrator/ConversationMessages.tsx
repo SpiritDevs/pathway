@@ -1,3 +1,6 @@
+import { ConversationReaders } from "./ConversationReaders";
+import { conversationReceiptLabel, placeConversationReaders } from "./conversationReceipts";
+import { useConversationReadPosition } from "./useConversationReadPosition";
 import { ConversationMessageActions } from "./ConversationMessageActions";
 import { replyToMessage } from "./conversationReply";
 import { ConversationMessageAttachment } from "./ConversationAttachments";
@@ -104,23 +107,15 @@ export function ConversationMessages({
     pinned.current = true;
     stopFlight.current = animateSentMessage(bubble, element, pending.origin);
   });
-  const lastSequence = result.value?.messages.at(-1)?.sequence;
-  useEffect(() => {
-    const client = state.client;
-    if (!client || lastSequence === undefined) return;
-    const markRead = () => {
-      if (document.visibilityState === "visible")
-        void client
-          .mutation(makeFunctionReference<"mutation">("aiOrchestrators:markRead"), {
-            chatId: chat.id,
-            sequence: lastSequence,
-          })
-          .catch((cause) => state.setError(errorMessage(cause)));
-    };
-    markRead();
-    document.addEventListener("visibilitychange", markRead);
-    return () => document.removeEventListener("visibilitychange", markRead);
-  }, [state.client, chat.id, lastSequence]);
+  const readers = result.value?.readers ?? [];
+  const readerPlacements = placeConversationReaders(visible, readers, state.accountID);
+  useConversationReadPosition(
+    container,
+    chat.id,
+    chat.readSequence,
+    visible.map((message) => message.id).join(","),
+    !!search,
+  );
   const before = nextBefore === undefined ? result.value?.nextBefore : nextBefore;
   return (
     <div
@@ -204,7 +199,11 @@ export function ConversationMessages({
           const { message, index, startsGroup, endsGroup, timeMarker } = entry;
           const own = message.senderKind === "user" && message.senderId === state.accountID;
           return (
-            <div key={message.id} className={startsGroup ? "mt-5 first:mt-0" : "mt-1.5"}>
+            <div
+              data-message-sequence={message.sequence}
+              key={message.id}
+              className={startsGroup ? "mt-5 first:mt-0" : "mt-1.5"}
+            >
               {timeMarker && (
                 <div
                   className={cn(
@@ -296,7 +295,10 @@ export function ConversationMessages({
                         )}
                       </div>
                     </ConversationMessageActions>
-                    {(endsGroup || message.status !== "sent" || message.delivery) && (
+                    {(endsGroup ||
+                      message.status !== "sent" ||
+                      message.delivery ||
+                      readerPlacements.has(message.id)) && (
                       <div
                         className={cn(
                           "mt-1.5 flex min-h-4 flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[10px] text-muted-foreground",
@@ -316,72 +318,18 @@ export function ConversationMessages({
                         >
                           Reply
                         </button>
-                        {message.delivery ? (
-                          <span title={message.delivery.detail}>
-                            {message.delivery.state === "pending"
-                              ? `Queued for worker${message.delivery.queuePosition ? ` · ${message.delivery.queuePosition} in queue` : ""}`
-                              : message.delivery.state === "accepted"
-                                ? "Sending to worker…"
-                                : message.delivery.state === "delivered"
-                                  ? "Delivered to worker"
-                                  : message.delivery.state === "removed"
-                                    ? "Cancelled"
-                                    : "Could not deliver"}
-                          </span>
-                        ) : message.status === "queued" ? (
-                          <>
-                            Queued{" "}
-                            <button
-                              type="button"
-                              className="hover:text-foreground hover:underline"
-                              onClick={() => {
-                                void state
-                                  .request("aiOrchestrators:cancelMessage", {
-                                    chatId: chat.id,
-                                    messageId: message.id,
-                                  })
-                                  .catch((cause) => state.setError(errorMessage(cause)));
-                              }}
-                            >
-                              Cancel
-                            </button>
-                          </>
-                        ) : message.status === "working" ? (
-                          own ? (
-                            "Seen"
-                          ) : (
-                            "Coordinating…"
-                          )
-                        ) : message.status === "failed" ? (
-                          <>
-                            Could not complete this request{" "}
-                            {own && (
-                              <button
-                                type="button"
-                                className="hover:text-foreground hover:underline"
-                                onClick={() => {
-                                  void state
-                                    .request("aiOrchestrators:retryMessage", {
-                                      chatId: chat.id,
-                                      messageId: message.id,
-                                    })
-                                    .catch((cause) => state.setError(errorMessage(cause)));
-                                }}
-                              >
-                                Retry
-                              </button>
+                        {own && (
+                          <span>
+                            {conversationReceiptLabel(
+                              message,
+                              readers,
+                              state.sendingChats.includes(chat.id) &&
+                                state.pendingMessages.current.get(chat.id)?.id === message.id,
                             )}
-                          </>
-                        ) : message.status === "cancelled" ? (
-                          "Cancelled"
-                        ) : own ? (
-                          message.seenAt !== undefined ? (
-                            "Seen"
-                          ) : (
-                            "Delivered"
-                          )
-                        ) : (
-                          ""
+                          </span>
+                        )}
+                        {chat.kind === "group" && readerPlacements.has(message.id) && (
+                          <ConversationReaders readers={readerPlacements.get(message.id)!} />
                         )}
                       </div>
                     )}
