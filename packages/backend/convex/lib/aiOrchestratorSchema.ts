@@ -286,6 +286,7 @@ export const aiOrchestratorTables = {
     .index("by_domain_id", ["id"])
     .index("by_orchestrator", ["orchestratorId"])
     .index("by_orchestrator_forgotten", ["orchestratorId", "forgotten", "updatedAt"])
+    .index("by_source_forgotten", ["sourceChatId", "forgotten", "sourceSequence"])
     .index("by_owner_scope", ["ownerSubject", "scope"])
     .index("by_owner_scope_forgotten", ["ownerSubject", "scope", "forgotten", "updatedAt"]),
   aiOrchestratorJobs: defineTable({

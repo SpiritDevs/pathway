@@ -451,7 +451,16 @@ export const OrchestratorAction = Schema.Union([
     orchestratorIds: Schema.Array(Schema.String),
     text: Schema.String,
   }),
-  Schema.Struct({ kind: Schema.Literal("readConversation"), chatId: Schema.String }),
+  Schema.Struct({
+    kind: Schema.Literal("readConversation"),
+    chatId: Schema.String,
+    beforeSequence: Schema.optional(Schema.Number),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("findConversations"),
+    query: Schema.String,
+    cursor: Schema.optional(Schema.String),
+  }),
   Schema.Struct({
     kind: Schema.Literal("remember"),
     scope: Schema.optionalKey(Schema.Literals(["orchestrator", "personal", "project"])),

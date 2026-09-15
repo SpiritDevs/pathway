@@ -197,6 +197,23 @@ export function memoryVisibilityForConversation(ctx: QueryCtx, chat: Doc<"aiOrch
   const permissions = new Map<string, ReturnType<typeof audienceProjectPermissions>>();
   let contactsPromise: Promise<Array<Doc<"aiOrchestrators"> | null>> | undefined;
   return async (memory: Doc<"aiOrchestratorMemory">) => {
+    // Sharing a fact does not survive losing access to its source conversation.
+    if (memory.sourceChatId) {
+      const source = await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", memory.sourceChatId!))
+        .unique();
+      if (
+        !source ||
+        source.lifecycle === "deleted" ||
+        source.lifecycle === "deleting" ||
+        !source.orchestratorIds.includes(memory.orchestratorId) ||
+        !source.participantSubjects.includes(memory.ownerSubject)
+      )
+        return false;
+      const boundary = await sharedHistoryBoundary(ctx, source, source);
+      if (boundary === null || (memory.sourceSequence ?? 0) < boundary) return false;
+    }
     // Explicitly shared facts carry their own audience; their source transcript remains private.
     if (memory.sourceChatId && memory.scope === "orchestrator") {
       if (!histories.has(memory.sourceChatId))
@@ -207,7 +224,13 @@ export function memoryVisibilityForConversation(ctx: QueryCtx, chat: Doc<"aiOrch
               .query("aiOrchestratorChats")
               .withIndex("by_domain_id", (q) => q.eq("id", memory.sourceChatId!))
               .unique();
-            return source ? await sharedHistoryBoundary(ctx, source, chat) : null;
+            const origin = await ctx.db
+              .query("aiOrchestrators")
+              .withIndex("by_domain_id", (q) => q.eq("id", memory.orchestratorId))
+              .unique();
+            return source && origin
+              ? await conversationRetrievalBoundary(ctx, origin, source, chat)
+              : null;
           })(),
         );
       const boundary = await histories.get(memory.sourceChatId)!;
@@ -232,6 +255,13 @@ export function memoryVisibilityForConversation(ctx: QueryCtx, chat: Doc<"aiOrch
     // Sharing an orchestrator later never exposes facts recorded while it was private.
     for (const contact of contacts) {
       if (!contact) return false;
+      if (
+        contact.projectId &&
+        memory.sharedProjectId &&
+        (contact.projectId !== memory.sharedProjectId ||
+          contact.companyId !== memory.sharedCompanyId)
+      )
+        return false;
       const scope = await orchestratorOwnerScope(ctx, contact, memory.sharedCompanyId);
       if (!scope) return false;
       if (memory.sharedProjectId) {
@@ -313,4 +343,127 @@ export async function resolveWorkAssignments(ctx: QueryCtx, rows: Doc<"aiOrchest
       assignments.set(id, { assignment, latest });
   }
   return [...assignments.values()];
+}
+
+/** Page before matching so old conversations remain reachable without an unbounded scan. */
+export async function discoverConversations(
+  ctx: QueryCtx,
+  orchestrator: Doc<"aiOrchestrators">,
+  destination: Doc<"aiOrchestratorChats">,
+  query: string,
+  cursor?: string,
+) {
+  const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length || query.length > 200)
+    throw new Error("Use a search phrase of 1–200 characters.");
+  const page = await ctx.db
+    .query("aiOrchestratorChats")
+    .withIndex("by_owner", (q) => q.eq("ownerSubject", destination.ownerSubject))
+    .paginate({ numItems: 25, cursor: cursor ?? null });
+  const matches = [];
+  for (const source of page.page) {
+    const boundary = await conversationRetrievalBoundary(ctx, orchestrator, source, destination);
+    if (boundary === null) continue;
+    const recent = await ctx.db
+      .query("aiOrchestratorMessages")
+      .withIndex("by_chat_sequence", (q) => q.eq("chatId", source.id).gte("sequence", boundary))
+      .order("desc")
+      .take(20);
+    const messages = await withoutForgottenSources(ctx, orchestrator, recent);
+    // A title/summary can predate a new participant's history boundary.
+    const title = boundary === 0 ? source.title : "Conversation";
+    const searchable = `${title}\n${messages.map((m) => m.text).join("\n")}`.toLocaleLowerCase();
+    if (!terms.every((term) => searchable.includes(term))) continue;
+    matches.push({
+      chatId: source.id,
+      title,
+      archived: source.archived,
+      messages: boundedConversationMessages(messages, undefined, 1500),
+    });
+  }
+  return { matches, nextCursor: page.isDone ? null : page.continueCursor, complete: page.isDone };
+}
+
+/** Apply the same source, audience and project restrictions to discovery and direct reads. */
+export async function conversationRetrievalBoundary(
+  ctx: QueryCtx,
+  orchestrator: Doc<"aiOrchestrators">,
+  source: Doc<"aiOrchestratorChats">,
+  destination: Doc<"aiOrchestratorChats">,
+) {
+  if (
+    source.lifecycle === "deleting" ||
+    source.lifecycle === "deleted" ||
+    !source.orchestratorIds.includes(orchestrator.id) ||
+    !source.participantSubjects.includes(orchestrator.ownerSubject)
+  )
+    return null;
+  if ((await sharedHistoryBoundary(ctx, source, source)) === null) return null;
+  for (const id of new Set([...source.orchestratorIds, ...destination.orchestratorIds])) {
+    const contact = await ctx.db
+      .query("aiOrchestrators")
+      .withIndex("by_domain_id", (q) => q.eq("id", id))
+      .unique();
+    if (!contact || contact.status === "deleted") return null;
+    if (contact.projectId && contact.companyId) {
+      const company = await ctx.db
+        .query("companies")
+        .withIndex("by_domain_id", (q) => q.eq("id", contact.companyId!))
+        .unique();
+      if (!company) return null;
+      const project = await ctx.db
+        .query("cloudProjects")
+        .withIndex("by_company_and_domain_id", (q) =>
+          q.eq("companyId", company._id).eq("id", contact.projectId!),
+        )
+        .unique();
+      const readers = await audienceProjectPermissions(ctx, destination, contact.companyId);
+      if (
+        !project ||
+        project.deletedAt !== null ||
+        !readers ||
+        !readers.every((reader) => hasRecordPermission(reader, "projects.read", project.teamIds))
+      )
+        return null;
+    }
+    if (
+      orchestrator.projectId &&
+      (contact.projectId !== orchestrator.projectId || contact.companyId !== orchestrator.companyId)
+    )
+      return null;
+  }
+  return sharedHistoryBoundary(ctx, source, destination);
+}
+
+/** Query tombstones by exact source, independent of memory/prompt window sizes. */
+export async function withoutForgottenSources(
+  ctx: QueryCtx,
+  orchestrator: Doc<"aiOrchestrators">,
+  messages: ReadonlyArray<Doc<"aiOrchestratorMessages">>,
+) {
+  const retained = [];
+  for (const message of messages) {
+    const exclusions = await ctx.db
+      .query("aiOrchestratorMemory")
+      .withIndex("by_source_forgotten", (q) =>
+        q
+          .eq("sourceChatId", message.chatId)
+          .eq("forgotten", true)
+          .eq("sourceSequence", message.sequence),
+      )
+      .take(81);
+    const forgotten =
+      exclusions.length > 80 ||
+      exclusions.some(
+        (memory) =>
+          memory.orchestratorId === orchestrator.id ||
+          (memory.ownerSubject === orchestrator.ownerSubject &&
+            (memory.scope === "personal" ||
+              (memory.scope === "project" &&
+                memory.sharedProjectId === orchestrator.projectId &&
+                memory.sharedCompanyId === orchestrator.companyId))),
+      );
+    if (!forgotten) retained.push(message);
+  }
+  return retained;
 }

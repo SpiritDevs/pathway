@@ -5523,3 +5523,279 @@ it("does not confirm an unclaimed root while a separate delivery is accepted", a
     "archiving",
   );
 });
+
+describe("bounded cross-conversation discovery", () => {
+  it("pages past 100 conversations and retains ambiguous matches without choosing one", async () => {
+    const test = await coordinatorHarness();
+    const { discoverConversations } = await import("../convex/lib/aiOrchestratorContext.ts");
+    await test.t.run(async (ctx) => {
+      const original = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+        .unique())!;
+      const { _id, _creationTime, ...record } = original;
+      void _id;
+      void _creationTime;
+      for (let i = 0; i < 105; i++) {
+        const id = `recall-${i}`;
+        await ctx.db.insert("aiOrchestratorChats", {
+          ...record,
+          id,
+          title: i >= 103 ? "Apollo decision" : "Other",
+        });
+        const member = (await ctx.db
+          .query("aiOrchestratorChatMembers")
+          .withIndex("by_chat_subject", (q) => q.eq("chatId", test.chatId).eq("subject", "owner"))
+          .unique())!;
+        const { _id: memberId, _creationTime: memberTime, ...fields } = member;
+        void memberId;
+        void memberTime;
+        await ctx.db.insert("aiOrchestratorChatMembers", { ...fields, chatId: id });
+      }
+    });
+    const found: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const result = await test.t.run(async (ctx) => {
+        const source = (await ctx.db
+          .query("aiOrchestratorChats")
+          .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+          .unique())!;
+        const orchestrator = (await ctx.db
+          .query("aiOrchestrators")
+          .withIndex("by_domain_id", (q) => q.eq("id", test.id))
+          .unique())!;
+        return discoverConversations(ctx, orchestrator, source, "Apollo", cursor);
+      });
+      expect(result.matches.length).toBeLessThanOrEqual(25);
+      found.push(...result.matches.map((match) => match.chatId));
+      cursor = result.nextCursor ?? undefined;
+      pages++;
+    } while (cursor && pages < 10);
+    expect(pages).toBe(5);
+    expect(found).toEqual(["recall-103", "recall-104"]);
+  });
+});
+
+describe("conversation recall visibility", () => {
+  it("rechecks source membership between a read request and its delivery", async () => {
+    const test = await coordinatorHarness();
+    const run = (await test.claim())!;
+    await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+      companyId: "workspace",
+      jobId: run.id,
+      generation: run.generation,
+      result: { ...decision(), actions: [{ kind: "readConversation", chatId: test.chatId }] },
+    });
+    await test.t.run(async (ctx) => {
+      const member = (await ctx.db
+        .query("aiOrchestratorChatMembers")
+        .withIndex("by_chat_subject", (q) => q.eq("chatId", test.chatId).eq("subject", "owner"))
+        .unique())!;
+      await ctx.db.delete(member._id);
+    });
+    // Revoking the current audience also makes the continuation itself ineligible.
+    expect(await test.claim()).toBeNull();
+  });
+
+  it("does not disclose titles after history boundaries, membership or project changes", async () => {
+    const test = await coordinatorHarness();
+    const { discoverConversations, conversationRetrievalBoundary } =
+      await import("../convex/lib/aiOrchestratorContext.ts");
+    await test.t.run(async (ctx) => {
+      const source = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+        .unique())!;
+      const orchestrator = (await ctx.db
+        .query("aiOrchestrators")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.id))
+        .unique())!;
+      await ctx.db.patch(source._id, { title: "Confidential Apollo" });
+      const member = (await ctx.db
+        .query("aiOrchestratorChatMembers")
+        .withIndex("by_chat_subject", (q) => q.eq("chatId", test.chatId).eq("subject", "owner"))
+        .unique())!;
+      await ctx.db.patch(member._id, { fromSequence: 100 });
+      expect((await discoverConversations(ctx, orchestrator, source, "Apollo")).matches).toEqual(
+        [],
+      );
+      expect(
+        await conversationRetrievalBoundary(
+          ctx,
+          { ...orchestrator, projectId: "other" },
+          source,
+          source,
+        ),
+      ).toBeNull();
+      expect(
+        await conversationRetrievalBoundary(ctx, orchestrator, source, {
+          ...source,
+          participantSubjects: ["colleague"],
+        }),
+      ).toBeNull();
+      await ctx.db.delete(member._id);
+      expect(await conversationRetrievalBoundary(ctx, orchestrator, source, source)).toBeNull();
+    });
+  });
+
+  it("excludes forgotten sources beyond 20 tombstones and across personal/project scopes", async () => {
+    const test = await coordinatorHarness();
+    const { withoutForgottenSources } = await import("../convex/lib/aiOrchestratorContext.ts");
+    await test.t.run(async (ctx) => {
+      const orchestrator = (await ctx.db
+        .query("aiOrchestrators")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.id))
+        .unique())!;
+      const message = (await ctx.db
+        .query("aiOrchestratorMessages")
+        .withIndex("by_chat_sequence", (q) => q.eq("chatId", test.chatId))
+        .first())!;
+      for (let i = 0; i < 25; i++)
+        await ctx.db.insert("aiOrchestratorMemory", {
+          id: `forgot-${i}`,
+          orchestratorId: test.id,
+          ownerSubject: "owner",
+          text: "",
+          source: "",
+          scope: "orchestrator",
+          explicit: false,
+          forgotten: true,
+          updatedAt: i,
+          sourceChatId: test.chatId,
+          sourceSequence: i === 0 ? message.sequence : 100 + i,
+        });
+      expect(await withoutForgottenSources(ctx, orchestrator, [message])).toEqual([]);
+      const shared = {
+        ...orchestrator,
+        id: "another",
+        projectId: "project",
+        companyId: "workspace",
+      };
+      expect(await withoutForgottenSources(ctx, shared, [message])).toHaveLength(1);
+      await ctx.db.insert("aiOrchestratorMemory", {
+        id: "project-forgotten",
+        orchestratorId: test.id,
+        ownerSubject: "owner",
+        text: "",
+        source: "",
+        scope: "project",
+        explicit: false,
+        forgotten: true,
+        updatedAt: 0,
+        sourceChatId: test.chatId,
+        sourceSequence: message.sequence,
+        sharedProjectId: "project",
+        sharedCompanyId: "workspace",
+      });
+      expect(await withoutForgottenSources(ctx, shared, [message])).toEqual([]);
+      expect(
+        await withoutForgottenSources(ctx, { ...shared, projectId: "elsewhere" }, [message]),
+      ).toHaveLength(1);
+      await ctx.db.insert("aiOrchestratorMemory", {
+        id: "personal-forgotten",
+        orchestratorId: test.id,
+        ownerSubject: "owner",
+        text: "",
+        source: "",
+        scope: "personal",
+        explicit: false,
+        forgotten: true,
+        updatedAt: 0,
+        sourceChatId: test.chatId,
+        sourceSequence: message.sequence,
+      });
+      expect(await withoutForgottenSources(ctx, { ...shared, projectId: null }, [message])).toEqual(
+        [],
+      );
+    });
+  });
+});
+
+it("delivers ID-free discovery through the coordinator contract and preserves archived recall", async () => {
+  const test = await coordinatorHarness();
+  const archived = "archived-recall";
+  await test.t.run(async (ctx) => {
+    const source = (await ctx.db
+      .query("aiOrchestratorChats")
+      .withIndex("by_domain_id", (q) => q.eq("id", test.chatId))
+      .unique())!;
+    const { _id, _creationTime, ...fields } = source;
+    void _id;
+    void _creationTime;
+    await ctx.db.insert("aiOrchestratorChats", {
+      ...fields,
+      id: archived,
+      title: "Apollo planning",
+      archived: true,
+      lifecycle: "archived",
+    });
+    const member = (await ctx.db
+      .query("aiOrchestratorChatMembers")
+      .withIndex("by_chat_subject", (q) => q.eq("chatId", test.chatId).eq("subject", "owner"))
+      .unique())!;
+    const { _id: memberId, _creationTime: memberTime, ...membership } = member;
+    void memberId;
+    void memberTime;
+    await ctx.db.insert("aiOrchestratorChatMembers", { ...membership, chatId: archived });
+    const original = (await ctx.db
+      .query("aiOrchestratorMessages")
+      .withIndex("by_chat_sequence", (q) => q.eq("chatId", test.chatId))
+      .first())!;
+    const { _id: messageId, _creationTime: messageTime, ...message } = original;
+    void messageId;
+    void messageTime;
+    for (let i = 1; i <= 25; i++)
+      await ctx.db.insert("aiOrchestratorMessages", {
+        ...message,
+        id: `archived-message-${i}`,
+        chatId: archived,
+        sequence: i,
+        text: i === 1 ? "Decision: use the old Apollo engine" : `Update ${i}`,
+      });
+  });
+  const run = (await test.claim())!;
+  await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+    companyId: "workspace",
+    jobId: run.id,
+    generation: run.generation,
+    result: { ...decision(), actions: [{ kind: "findConversations", query: "Apollo" }] },
+  });
+  const continued = (await test.claim())!;
+  expect(continued.context).toContain("Apollo planning");
+  expect(continued.context).toContain(archived);
+  expect(continued.context).toContain("nextCursor");
+  await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+    companyId: "workspace",
+    jobId: continued.id,
+    generation: continued.generation,
+    result: {
+      ...decision(),
+      actions: [{ kind: "readConversation", chatId: archived, beforeSequence: 6 }],
+    },
+  });
+  const older = (await test.claim())!;
+  expect(older.context).toContain("Decision: use the old Apollo engine");
+  expect(older.context).not.toContain("Update 25");
+  await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+    companyId: "workspace",
+    jobId: older.id,
+    generation: older.generation,
+    result: {
+      ...decision(),
+      actions: [{ kind: "readConversation", chatId: archived, beforeSequence: 6 }],
+    },
+  });
+  await test.t.run(async (ctx) => {
+    const member = (await ctx.db
+      .query("aiOrchestratorChatMembers")
+      .withIndex("by_chat_subject", (q) => q.eq("chatId", archived).eq("subject", "owner"))
+      .unique())!;
+    await ctx.db.delete(member._id);
+  });
+  const revoked = (await test.claim())!;
+  expect(revoked.context).not.toContain("Decision: use the old Apollo engine");
+  expect(revoked.context).not.toContain("Apollo planning");
+  expect(revoked.context).toContain("unavailable");
+});
