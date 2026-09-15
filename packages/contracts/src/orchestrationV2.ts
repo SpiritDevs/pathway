@@ -2612,6 +2612,7 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("runtime-request.respond"),
+    answeredBy: Schema.optional(Schema.Literal("agent")),
     commandId: CommandId,
     threadId: ThreadId,
     requestId: RuntimeRequestId,

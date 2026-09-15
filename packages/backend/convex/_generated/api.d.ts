@@ -10,6 +10,7 @@
 
 import type * as agentThreads from "../agentThreads.js";
 import type * as aiOrchestratorAttachments from "../aiOrchestratorAttachments.js";
+import type * as aiOrchestratorControls from "../aiOrchestratorControls.js";
 import type * as aiOrchestratorEvents from "../aiOrchestratorEvents.js";
 import type * as aiOrchestratorJobs from "../aiOrchestratorJobs.js";
 import type * as aiOrchestratorPush from "../aiOrchestratorPush.js";
@@ -86,6 +87,7 @@ import type { ApiFromModules, FilterApi, FunctionReference } from "convex/server
 declare const fullApi: ApiFromModules<{
   agentThreads: typeof agentThreads;
   aiOrchestratorAttachments: typeof aiOrchestratorAttachments;
+  aiOrchestratorControls: typeof aiOrchestratorControls;
   aiOrchestratorEvents: typeof aiOrchestratorEvents;
   aiOrchestratorJobs: typeof aiOrchestratorJobs;
   aiOrchestratorPush: typeof aiOrchestratorPush;

@@ -291,6 +291,7 @@ export async function refreshOrchestratorWork(
     if (
       !work.continuation &&
       Option.isSome(shell) &&
+      (!work.resultRunId || shell.value.latestRunId === work.resultRunId) &&
       shell.value.activeRunId === null &&
       shell.value.latestRunId !== null
     ) {
@@ -474,7 +475,9 @@ async function interruptWork(
     args: {
       kind: "interrupt",
       threadId,
-      ...(work.continuation ? { messageId: `${work.commandId}:message` } : {}),
+      ...(work.continuation
+        ? { messageId: work.resultMessageId ?? `${work.commandId}:message` }
+        : {}),
     },
     issuedByMembershipId: scope.membership._id,
     onBehalfOfActor: { kind: "member", membershipId: scope.membership.id },
@@ -523,6 +526,7 @@ export async function requestOrchestratorStop(
   );
   for (const work of batches.flat()) {
     if (onlyWorkId && work.id !== onlyWorkId) continue;
+    await cancelPendingWorkerMessages(ctx, work.id);
     const now = Date.now();
     let unstarted = !work.commandId;
     if (work.companyId && work.commandId) {
@@ -599,6 +603,15 @@ export async function controlOrchestratorWork(
   )
     return fail("This assignment is outside the orchestrator's current control permission.");
   if (action.kind === "stopWork") {
+    await cancelPendingWorkerMessages(ctx, work.id);
+    const followups = await ctx.db
+      .query("aiOrchestratorWork")
+      .withIndex("by_control_work", (q) => q.eq("controlWorkId", work.id))
+      .order("desc")
+      .take(100);
+    for (const followup of followups)
+      if (["queued", "working", "unknown"].includes(followup.status))
+        await requestOrchestratorStop(ctx, orchestrator, followup.id);
     if (["completed", "failed", "cancelled"].includes(work.status)) {
       await ctx.db.patch(work._id, { stopRequested: true, updatedAt: Date.now() });
       return {
@@ -650,4 +663,33 @@ export async function controlOrchestratorWork(
         ? replacement.detail
         : "The previous command was cancelled before acceptance. Replacement work is queued under the same conversation limits.",
   };
+}
+
+async function cancelPendingWorkerMessages(ctx: MutationCtx, workId: string) {
+  const messages = await ctx.db
+    .query("aiOrchestratorWorkerMessages")
+    .withIndex("by_work_state", (q) => q.eq("workId", workId).eq("state", "pending"))
+    .take(101);
+  for (const message of messages) {
+    await ctx.db.patch(message._id, {
+      state: "removed",
+      revision: message.revision + 1,
+      detail: "Cancelled when this work was stopped.",
+    });
+    if (message.chatMessageId) {
+      const visible = await ctx.db
+        .query("aiOrchestratorMessages")
+        .withIndex("by_domain_id", (q) => q.eq("id", message.chatMessageId!))
+        .unique();
+      if (visible) await ctx.db.patch(visible._id, { status: "cancelled" });
+    }
+  }
+  const questions = await ctx.db
+    .query("aiOrchestratorWorkerQuestions")
+    .withIndex("by_work", (q) => q.eq("workId", workId))
+    .order("desc")
+    .take(100);
+  for (const question of questions)
+    if (["open", "escalated", "answering"].includes(question.state))
+      await ctx.db.patch(question._id, { state: "unavailable" });
 }

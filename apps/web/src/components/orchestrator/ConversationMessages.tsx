@@ -1,3 +1,5 @@
+import { ConversationMessageActions } from "./ConversationMessageActions";
+import { replyToMessage } from "./conversationReply";
 import { ConversationMessageAttachment } from "./ConversationAttachments";
 import {
   lazy,
@@ -190,7 +192,7 @@ export function ConversationMessages({
         {timeline.map((entry) => {
           if (entry.kind === "work") {
             return (
-              <div key={entry.id} className="my-5 max-w-lg rounded-2xl border p-4">
+              <div key={entry.id} className="my-5 max-w-lg">
                 <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
                   <ListTodoIcon className="size-4" />
                   Delegated work
@@ -227,36 +229,74 @@ export function ConversationMessages({
                         {own ? "You" : message.senderName}
                       </p>
                     )}
-                    <div
-                      data-message-id={message.id}
-                      style={
-                        sendMotion?.current?.messageId === message.id && !sendMotion.current.ready
-                          ? { opacity: 0 }
-                          : undefined
-                      }
-                      className={cn(
-                        "rounded-[22px] px-4 py-2.5 text-left text-sm leading-relaxed break-words",
-                        own
-                          ? "bg-foreground text-background whitespace-pre-wrap"
-                          : "bg-foreground/5 text-foreground",
-                        message.status === "cancelled" && "opacity-50",
-                      )}
-                    >
-                      {message.attachments?.map((attachment) => (
-                        <ConversationMessageAttachment
-                          key={attachment.id}
-                          attachment={attachment}
-                        />
-                      ))}
-                      {own ? (
-                        message.text
-                      ) : (
-                        <Suspense fallback={<p className="whitespace-pre-wrap">{message.text}</p>}>
-                          <ChatMarkdown text={message.text} cwd={undefined} />
-                        </Suspense>
-                      )}
-                    </div>
-                    {(endsGroup || message.status !== "sent") && (
+                    <ConversationMessageActions message={message}>
+                      <div
+                        data-message-id={message.id}
+                        style={
+                          sendMotion?.current?.messageId === message.id && !sendMotion.current.ready
+                            ? { opacity: 0 }
+                            : undefined
+                        }
+                        className={cn(
+                          "rounded-[22px] px-4 py-2.5 text-left text-sm leading-relaxed break-words",
+                          own
+                            ? "bg-foreground text-background whitespace-pre-wrap"
+                            : "bg-foreground/5 text-foreground",
+                          message.status === "cancelled" && "opacity-50",
+                        )}
+                      >
+                        {message.replyToId && (
+                          <button
+                            type="button"
+                            className="mb-2 block max-w-full border-l-2 border-current/30 pl-2.5 text-left text-xs opacity-75 hover:opacity-100"
+                            onClick={() => {
+                              container.current
+                                ?.querySelector<HTMLElement>(
+                                  `[data-message-id="${CSS.escape(message.replyToId!)}"]`,
+                                )
+                                ?.scrollIntoView({
+                                  block: "center",
+                                  behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+                                    .matches
+                                    ? "instant"
+                                    : "smooth",
+                                });
+                            }}
+                            disabled={
+                              !visible.some((original) => original.id === message.replyToId)
+                            }
+                            aria-label={
+                              visible.some((original) => original.id === message.replyToId)
+                                ? "Show original message"
+                                : "Quoted message"
+                            }
+                          >
+                            <span className="block font-medium">
+                              {message.reply?.senderName ?? "Earlier message"}
+                            </span>
+                            <span className="mt-0.5 block line-clamp-2">
+                              {message.reply?.text ?? "The original message is unavailable."}
+                            </span>
+                          </button>
+                        )}
+                        {message.attachments?.map((attachment) => (
+                          <ConversationMessageAttachment
+                            key={attachment.id}
+                            attachment={attachment}
+                          />
+                        ))}
+                        {own ? (
+                          message.text
+                        ) : (
+                          <Suspense
+                            fallback={<p className="whitespace-pre-wrap">{message.text}</p>}
+                          >
+                            <ChatMarkdown text={message.text} cwd={undefined} />
+                          </Suspense>
+                        )}
+                      </div>
+                    </ConversationMessageActions>
+                    {(endsGroup || message.status !== "sent" || message.delivery) && (
                       <div
                         className={cn(
                           "mt-1.5 flex min-h-4 flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[10px] text-muted-foreground",
@@ -269,7 +309,26 @@ export function ConversationMessages({
                         >
                           {conversationMessageTime.format(message.createdAt)}
                         </time>
-                        {message.status === "queued" ? (
+                        <button
+                          type="button"
+                          className="hover:text-foreground hover:underline"
+                          onClick={() => state.setReply(chat.id, replyToMessage(message))}
+                        >
+                          Reply
+                        </button>
+                        {message.delivery ? (
+                          <span title={message.delivery.detail}>
+                            {message.delivery.state === "pending"
+                              ? `Queued for worker${message.delivery.queuePosition ? ` · ${message.delivery.queuePosition} in queue` : ""}`
+                              : message.delivery.state === "accepted"
+                                ? "Sending to worker…"
+                                : message.delivery.state === "delivered"
+                                  ? "Delivered to worker"
+                                  : message.delivery.state === "removed"
+                                    ? "Cancelled"
+                                    : "Could not deliver"}
+                          </span>
+                        ) : message.status === "queued" ? (
                           <>
                             Queued{" "}
                             <button

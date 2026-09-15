@@ -165,16 +165,31 @@ export function boundedConversationMessages(
   }
   return [...selected.values()]
     .sort((a, b) => a.sequence - b.sequence)
-    .map(({ id, senderId, senderKind, senderName, text, status, sequence, attachments }) => ({
-      ...(attachments?.length ? { attachments } : {}),
-      id,
-      senderId,
-      senderKind,
-      senderName,
-      text,
-      status,
-      sequence,
-    }));
+    .map(
+      ({
+        id,
+        senderId,
+        senderKind,
+        senderName,
+        text,
+        status,
+        sequence,
+        attachments,
+        replyToId,
+        worker,
+      }) => ({
+        replyToId,
+        ...(worker ? { worker } : {}),
+        ...(attachments?.length ? { attachments } : {}),
+        id,
+        senderId,
+        senderKind,
+        senderName,
+        text,
+        status,
+        sequence,
+      }),
+    );
 }
 
 export function memoryVisibilityForConversation(ctx: QueryCtx, chat: Doc<"aiOrchestratorChats">) {

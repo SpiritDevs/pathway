@@ -1,3 +1,5 @@
+import { OrchestratorWorkerAction } from "@spiritdevs/contracts/aiOrchestrator";
+import { applyWorkerAction, workerConversationContext } from "./aiOrchestratorControls.ts";
 import { OrchestratorDelegationCatalog } from "@spiritdevs/contracts/aiOrchestrator";
 import { normalizeAvatarExpression } from "@spiritdevs/contracts/orchestratorAvatar";
 import {
@@ -68,6 +70,7 @@ import {
 
 const LEASE_MS = 90_000;
 const identityArgs = { companyId: v.string(), jobId: v.string(), generation: v.number() };
+const decodeWorkerAction = Schema.decodeUnknownSync(OrchestratorWorkerAction);
 const decodeDecision = Schema.decodeUnknownSync(OrchestratorDecision);
 const decodeSelection = Schema.decodeUnknownSync(ModelSelection);
 const inspectResources = Schema.decodeUnknownExit(HostResourcesSnapshot);
@@ -445,11 +448,43 @@ async function contextFor(
       }
     }
   }
+  const quoted = trigger.replyToId
+    ? await ctx.db
+        .query("aiOrchestratorMessages")
+        .withIndex("by_domain_id", (q) => q.eq("id", trigger.replyToId!))
+        .unique()
+    : null;
+  const quotedMessage =
+    quoted && quoted.chatId === chat.id && quoted.sequence >= historyStart
+      ? { id: quoted.id, senderName: quoted.senderName, text: quoted.text.slice(0, 4000) }
+      : null;
+  const workerConversations = [];
+  let controlBudget = 16000;
+  for (const row of work.filter((item) => (item.sourceSequence ?? 0) >= historyStart)) {
+    if (controlBudget <= 0) break;
+    const conversation = await workerConversationContext(ctx, row);
+    const entry = {
+      workId: row.id,
+      messages: conversation.messages
+        .slice(-12)
+        .map((m) => ({ ...m, text: m.text.slice(0, 1000) })),
+      questions: conversation.questions
+        .filter((q) => ["open", "escalated", "answering"].includes(q.state))
+        .slice(-10),
+    };
+    const size = JSON.stringify(entry).length;
+    if (size <= controlBudget) {
+      workerConversations.push(entry);
+      controlBudget -= size;
+    }
+  }
   let workResultBudget = 64000;
   return JSON.stringify({
     companyId,
     chat: { id: chat.id, title: chat.title, leadId: chat.leadId },
     capabilities: orchestrator.capabilities,
+    workerConversations,
+    quotedMessage,
     responsibilities: orchestrator.responsibilities,
     environmentUpdate: environmentSignalId
       ? await readableOrchestratorEnvironment(
@@ -1119,6 +1154,27 @@ export const complete = mutation({
         queuedInspection = true;
         continue;
       }
+      if (
+        [
+          "sendWork",
+          "editWorkMessage",
+          "removeWorkMessage",
+          "reorderWorkMessages",
+          "answerWorkQuestion",
+          "escalateWorkQuestion",
+        ].includes(action.kind)
+      ) {
+        results.push({
+          kind: action.kind,
+          detail: await applyWorkerAction(
+            ctx,
+            claim.orchestrator,
+            claim.chat,
+            decodeWorkerAction(action),
+          ),
+        });
+        continue;
+      }
       if (action.kind === "allocateAllowance") {
         if (
           claim.message.senderKind !== "user" ||
@@ -1537,7 +1593,7 @@ export const pendingWorkResults = query({
       )
     )
       .flat()
-      .filter((work) => work.continuation && work.commandId);
+      .filter((work) => (work.continuation || work.resultRunId) && work.commandId);
     const pending = [];
     for (const work of [...reads, ...rows.flat(), ...continuations]) {
       if (!work.threadId) continue;
@@ -1553,7 +1609,7 @@ export const pendingWorkResults = query({
             ? { readRequestId: work.readRequestId }
             : {}),
           ...(work.resultRunId ? { runId: work.resultRunId } : {}),
-          ...(work.continuation && !reads.includes(work)
+          ...(work.continuation && !work.controlMessageId && !reads.includes(work)
             ? { messageId: `${work.commandId}:message` }
             : {}),
         });
@@ -1588,7 +1644,10 @@ export const collectWorkResult = mutation({
       work.threadId !== args.threadId ||
       (!args.readRequestId &&
         ((!["completed", "failed", "cancelled"].includes(work.status) &&
-          !(work.continuation && ["working", "unknown"].includes(work.status))) ||
+          !(
+            (work.continuation || work.resultRunId) &&
+            ["working", "unknown"].includes(work.status)
+          )) ||
           work.resultCollected))
     )
       return false;
@@ -1666,7 +1725,15 @@ export const collectWorkResult = mutation({
       .unique();
     if (!thread) return false;
     const shell = decodeThreadShell(thread.shell);
-    if (work.continuation) {
+    if (work.controlWorkId && work.controlMessageId) {
+      const delivery = await ctx.db
+        .query("aiOrchestratorWorkerMessages")
+        .withIndex("by_work_id", (q) =>
+          q.eq("workId", work.controlWorkId!).eq("id", work.controlMessageId!),
+        )
+        .unique();
+      if (delivery?.state !== "delivered" || work.resultRunId !== args.runId) return false;
+    } else if (work.continuation) {
       const command = await ctx.db
         .query("environmentCommands")
         .withIndex("by_company_and_domain_id", (q) =>

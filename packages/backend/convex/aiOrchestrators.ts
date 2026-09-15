@@ -1,3 +1,8 @@
+import {
+  sendWorkerReply,
+  decorateConversationMessage,
+  type WorkerMessageQueues,
+} from "./aiOrchestratorControls.ts";
 import { bindConversationAttachments } from "./aiOrchestratorAttachments.ts";
 import type { OrchestratorAttachment } from "@spiritdevs/contracts/aiOrchestrator";
 import { nextResponsibilityReview } from "./aiOrchestratorReviews.ts";
@@ -397,10 +402,12 @@ export async function appendChatMessage(
     replyToId: string | null;
     attachments?: OrchestratorAttachment[];
     expression?: string;
+    worker?: { workId: string; questionId?: string; fieldId?: string };
   },
   notification?: { urgent: boolean; enabled: boolean },
 ) {
-  const sequence = chat.lastSequence + 1,
+  const latest = await ctx.db.get(chat._id);
+  const sequence = (latest?.lastSequence ?? chat.lastSequence) + 1,
     now = Date.now();
   await ctx.db.insert("aiOrchestratorMessages", {
     ...message,
@@ -590,7 +597,7 @@ export const createChat = mutation({
 export const messages = query({
   args: { chatId: v.string(), before: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    const { member } = await readableChat(ctx, args.chatId);
+    const { member, chat } = await readableChat(ctx, args.chatId);
     const rows = await ctx.db
       .query("aiOrchestratorMessages")
       .withIndex("by_chat_sequence", (q) =>
@@ -604,8 +611,13 @@ export const messages = query({
       )
       .order("desc")
       .take(60);
+    const queues: WorkerMessageQueues = new Map();
     return {
-      messages: rows.toReversed().map(({ _id, _creationTime, ...m }) => m),
+      messages: await Promise.all(
+        rows
+          .toReversed()
+          .map((m) => decorateConversationMessage(ctx, chat, member.fromSequence, m, queues)),
+      ),
       nextBefore: rows.length === 60 ? rows.at(-1)!.sequence : null,
     };
   },
@@ -779,6 +791,7 @@ export const send = mutation({
     id: v.string(),
     text: v.string(),
     targetId: v.optional(v.string()),
+    workId: v.optional(v.string()),
     replyToId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -802,7 +815,9 @@ export const send = mutation({
         JSON.stringify(existing.attachments?.map((a) => a.id) ?? []) !==
           JSON.stringify(args.attachmentIds ?? []) ||
         existing.replyToId !== (args.replyToId ?? null) ||
-        existingJob?.orchestratorId !== (args.targetId ?? chat.leadId)
+        (existing.worker
+          ? existing.worker.workId !== args.workId && !args.replyToId
+          : existingJob?.orchestratorId !== (args.targetId ?? chat.leadId))
       )
         return fail("That message identity is already in use.");
       return existing.sequence;
@@ -813,8 +828,9 @@ export const send = mutation({
     const { row } = await readableOrchestrator(ctx, target);
     if (!canDirectOrchestrator(row, user.clerkSubject))
       return fail("You need direction permission to assign work to this orchestrator.");
+    let reply: Doc<"aiOrchestratorMessages"> | null = null;
     if (args.replyToId) {
-      const reply = await ctx.db
+      reply = await ctx.db
         .query("aiOrchestratorMessages")
         .withIndex("by_domain_id", (q) => q.eq("id", args.replyToId!))
         .unique();
@@ -827,7 +843,13 @@ export const send = mutation({
       messageId: args.id,
       ids: args.attachmentIds ?? [],
     });
+    const worker = reply?.worker?.questionId
+      ? reply.worker
+      : args.workId
+        ? { workId: args.workId }
+        : undefined;
     const sequence = await appendChatMessage(ctx, chat, {
+      ...(worker ? { worker } : {}),
       attachments,
       id: args.id,
       senderKind: "user",
@@ -837,6 +859,18 @@ export const send = mutation({
       status: "queued",
       replyToId: args.replyToId ?? null,
     });
+    if (worker) {
+      await sendWorkerReply(
+        ctx,
+        chat,
+        member.fromSequence,
+        user.clerkSubject,
+        args.id,
+        args.text.trim(),
+        worker,
+      );
+      return sequence;
+    }
     const now = Date.now();
     await ctx.db.insert("aiOrchestratorJobs", {
       id: mintDomainId(Date.now()),
@@ -911,11 +945,29 @@ export const work = query({
       ...chat,
       participantSubjects: [user.clerkSubject],
     });
-    const visible = [];
-    for (const row of rows)
-      if ((row.sourceSequence ?? 0) >= member.fromSequence && (await canSee(row)))
-        visible.push(row);
-    return visible.map(
+    const visible = new Map<string, Doc<"aiOrchestratorWork">>();
+    for (const row of rows) {
+      const assignment = row.controlWorkId
+        ? await ctx.db
+            .query("aiOrchestratorWork")
+            .withIndex("by_domain_id", (q) => q.eq("id", row.controlWorkId!))
+            .unique()
+        : row;
+      if (
+        !assignment ||
+        visible.has(assignment.id) ||
+        (assignment.sourceSequence ?? 0) < member.fromSequence ||
+        !(await canSee(assignment))
+      )
+        continue;
+      visible.set(
+        assignment.id,
+        row.controlWorkId && !assignment.stopRequested
+          ? { ...assignment, status: row.status, detail: row.detail, updatedAt: row.updatedAt }
+          : assignment,
+      );
+    }
+    return [...visible.values()].map(
       ({
         id,
         title,

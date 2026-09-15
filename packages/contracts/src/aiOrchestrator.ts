@@ -193,7 +193,28 @@ export type OrchestratorWorkItem = typeof OrchestratorWorkItem.Type;
 export const OrchestratorAttachment = Schema.Union([ChatImageAttachment, ChatFileAttachment]);
 export type OrchestratorAttachment = typeof OrchestratorAttachment.Type;
 
+export const OrchestratorWorkerReference = Schema.Struct({
+  workId: Schema.String,
+  questionId: Schema.optionalKey(Schema.String),
+  fieldId: Schema.optionalKey(Schema.String),
+});
+export type OrchestratorWorkerReference = typeof OrchestratorWorkerReference.Type;
 export const OrchestratorMessage = Schema.Struct({
+  worker: Schema.optionalKey(OrchestratorWorkerReference),
+  reply: Schema.optionalKey(
+    Schema.Struct({ id: Schema.String, senderName: Schema.String, text: Schema.String }),
+  ),
+  delivery: Schema.optionalKey(
+    Schema.Struct({
+      id: Schema.String,
+      workId: Schema.String,
+      revision: Schema.Number,
+      queuePosition: Schema.optionalKey(Schema.Number),
+      mode: Schema.Literals(["queue", "steer", "answer"]),
+      state: Schema.Literals(["pending", "accepted", "delivered", "failed", "removed"]),
+      detail: Schema.String,
+    }),
+  ),
   expression: Schema.optionalKey(AvatarExpression),
   id: Schema.String,
   chatId: Schema.String,
@@ -280,6 +301,78 @@ export const COORDINATOR_DRIVERS = ["codex", "claudeAgent", "opencode"] as const
 export const DEFAULT_ORCHESTRATOR_MODEL = "gpt-6-astra";
 export const DEFAULT_ORCHESTRATOR_REASONING = "high";
 
+/** Private worker mailbox. Acceptance freezes content; receipt describes durable local dispatch. */
+export const OrchestratorWorkerAction = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("sendWork"),
+    workId: Schema.String,
+    id: Schema.String,
+    text: Schema.String,
+    mode: Schema.Literals(["queue", "steer"]),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("editWorkMessage"),
+    workId: Schema.String,
+    id: Schema.String,
+    revision: Schema.Number,
+    text: Schema.String,
+    mode: Schema.optionalKey(Schema.Literals(["queue", "steer"])),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("removeWorkMessage"),
+    workId: Schema.String,
+    id: Schema.String,
+    revision: Schema.Number,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("reorderWorkMessages"),
+    workId: Schema.String,
+    queue: Schema.Array(Schema.Struct({ id: Schema.String, revision: Schema.Number })),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("answerWorkQuestion"),
+    workId: Schema.String,
+    id: Schema.String,
+    questionId: Schema.String,
+    answers: Schema.Record(Schema.String, Schema.String),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("escalateWorkQuestion"),
+    workId: Schema.String,
+    questionId: Schema.String,
+  }),
+]);
+export type OrchestratorWorkerAction = typeof OrchestratorWorkerAction.Type;
+export const OrchestratorWorkerMessage = Schema.Struct({
+  id: Schema.String,
+  workId: Schema.String,
+  threadId: Schema.String,
+  revision: Schema.Number,
+  position: Schema.Number,
+  text: Schema.String,
+  mode: Schema.Literals(["queue", "steer", "answer"]),
+  questionId: Schema.optionalKey(Schema.String),
+  answers: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  state: Schema.Literals(["pending", "accepted", "delivered", "failed", "removed"]),
+  detail: Schema.String,
+});
+export type OrchestratorWorkerMessage = typeof OrchestratorWorkerMessage.Type;
+export const OrchestratorWorkerQuestion = Schema.Struct({
+  id: Schema.String,
+  workId: Schema.String,
+  threadId: Schema.String,
+  requestId: Schema.String,
+  questions: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      question: Schema.String,
+      isSecret: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
+  state: Schema.Literals(["open", "escalated", "answering", "resolved", "unavailable"]),
+});
+export type OrchestratorWorkerQuestion = typeof OrchestratorWorkerQuestion.Type;
+
 /** Coordinator reasoning returns intentions; only the runtime executes allowed actions. */
 const WorkerActionSelection = Schema.Struct({
   instanceId: ProviderInstanceId,
@@ -287,6 +380,7 @@ const WorkerActionSelection = Schema.Struct({
   options: Schema.optionalKey(Schema.Array(ProviderOptionSelection)),
 });
 export const OrchestratorAction = Schema.Union([
+  OrchestratorWorkerAction,
   Schema.Struct({
     kind: Schema.Literal("inspect"),
     companyId: Schema.String,
