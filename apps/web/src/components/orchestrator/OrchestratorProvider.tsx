@@ -1,3 +1,4 @@
+import { transitionConversationReply, type ConversationReply } from "./conversationReply";
 import { useAuth } from "@clerk/react";
 import { makeClerkConvexTokenFetcher } from "../../cloud/syncTransportAuth";
 import { fetchConversationAttachment } from "./conversationAttachmentDrafts";
@@ -40,10 +41,21 @@ function useOrchestratorState() {
   const [settingsId, selectSettings] = useState<string | null>(null);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const pendingMessages = useRef(
-    new Map<string, { id: string; text: string; targetId: string; attachmentIds: string[] }>(),
+    new Map<
+      string,
+      {
+        id: string;
+        text: string;
+        targetId: string;
+        attachmentIds: string[];
+        replyToId?: string;
+        workId?: string;
+      }
+    >(),
   );
   const [sendingChats, setSendingChats] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [replies, setReplies] = useState<Record<string, ConversationReply | undefined>>({});
   const scrollPositions = useRef(new Map<string, number>());
   const [error, setError] = useState<string>();
   const enabled =
@@ -96,6 +108,7 @@ function useOrchestratorState() {
     selectChat(null);
     selectSettings(null);
     setDrafts({});
+    setReplies({});
     pendingMessages.current.clear();
     setSendingChats([]);
     scrollPositions.current.clear();
@@ -172,6 +185,12 @@ function useOrchestratorState() {
     error: error ?? ownedContacts.error ?? companyContacts.error ?? conversations.error,
     setError,
     drafts,
+    replies,
+    setReply: (id: string, reply: ConversationReply | undefined) => {
+      const next = transitionConversationReply(drafts[id] ?? "", replies[id], reply);
+      if (next.draft !== undefined) setDrafts((current) => ({ ...current, [id]: next.draft! }));
+      setReplies((current) => ({ ...current, [id]: next.reply }));
+    },
     pendingMessages,
     sendingChats,
     setSendingChat: (id: string, sending: boolean) =>

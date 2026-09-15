@@ -15,6 +15,7 @@ import {
 process.env.PATHWAY_RELAY_JWT_ISSUER = "https://relay.example.test";
 process.env.PATHWAY_RELAY_JWKS_URL = "https://relay.example.test/.well-known/jwks.json";
 const modules = {
+  "../convex/aiOrchestratorControls.ts": () => import("../convex/aiOrchestratorControls.ts"),
   "../convex/aiOrchestratorAttachments.ts": () => import("../convex/aiOrchestratorAttachments.ts"),
   "../convex/http.ts": () => import("../convex/http.ts"),
   "../convex/aiOrchestratorPush.ts": () => import("../convex/aiOrchestratorPush.ts"),
@@ -159,6 +160,55 @@ describe("persistent orchestrator identities and messages", () => {
     await expect(
       owner.mutation(api.aiOrchestrators.cancelMessage, { chatId, messageId: "second" }),
     ).rejects.toThrow("already started");
+  });
+  it("exposes current readers with monotonic, history-scoped positions without unrelated user profiles", async () => {
+    const t = harness();
+    await seed(t);
+    const { owner, id, chatId } = await personalChat(t);
+    await owner.mutation(api.aiOrchestrators.send, { chatId, id: "first-read", text: "Hello" });
+    await t.run(async (ctx) => {
+      const chat = (await ctx.db
+        .query("aiOrchestratorChats")
+        .withIndex("by_domain_id", (q) => q.eq("id", chatId))
+        .unique())!;
+      await ctx.db.patch(chat._id, { kind: "group", participantSubjects: ["owner", "colleague"] });
+      await ctx.db.insert("aiOrchestratorChatMembers", {
+        chatId,
+        subject: "colleague",
+        fromSequence: 2,
+        readSequence: 1,
+        updatedAt: Date.now(),
+      });
+    });
+    await owner.mutation(api.aiOrchestrators.send, { chatId, id: "second-read", text: "Welcome" });
+    const colleague = human(t, "colleague");
+    await colleague.mutation(api.aiOrchestrators.markRead, { chatId, sequence: 2 });
+    await colleague.mutation(api.aiOrchestrators.markRead, { chatId, sequence: 1 });
+    const page = await owner.query(api.aiOrchestrators.messages, { chatId });
+    expect(page.readers).toContainEqual({
+      id: "colleague",
+      kind: "user",
+      name: "colleague",
+      fromSequence: 2,
+      readSequence: 2,
+    });
+    expect(page.readers.some((reader) => reader.id === "director")).toBe(false);
+    expect(page.readers).toContainEqual({
+      id,
+      kind: "orchestrator",
+      name: "Chief",
+      fromSequence: 0,
+    });
+    expect(page.messages.every((message) => message.seenBy?.length === 0)).toBe(true);
+    await expect(
+      human(t, "director").query(api.aiOrchestrators.messages, { chatId }),
+    ).rejects.toThrow();
+    await owner.mutation(api.aiOrchestrators.removeParticipant, { chatId, subject: "colleague" });
+    expect(
+      (await owner.query(api.aiOrchestrators.messages, { chatId })).readers.some(
+        (reader) => reader.id === "colleague",
+      ),
+    ).toBe(false);
   });
   it("counts only visible unread messages, respects joined history, and clears on read", async () => {
     const t = harness();
@@ -522,6 +572,7 @@ describe("coordinator reasoning claims and action boundaries", () => {
     expect(completed.messages.find((message) => message.id === "greeting")).toMatchObject({
       status: "sent",
       seenAt,
+      seenBy: [test.id],
     });
   });
 
@@ -4116,5 +4167,848 @@ describe("conversation attachments", () => {
     expect((await test.owner.fetch("/orchestrator-attachments?id=attachment-file")).status).toBe(
       403,
     );
+  });
+});
+
+async function workerControlHarness() {
+  const test = await coordinatorHarness();
+  await test.t.run(async (ctx) => {
+    await ctx.db.insert("aiOrchestratorWork", {
+      id: "controlled-work",
+      chatId: test.chatId,
+      orchestratorId: test.id,
+      title: "Worker",
+      environmentId: "studio",
+      projectId: null,
+      threadId: "worker-thread",
+      commandId: "worker-start",
+      companyId: "workspace",
+      status: "working",
+      detail: "Running",
+      prompt: "Implement",
+      sourceSequence: 1,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  });
+  const send = (id: string, text = "Follow up") =>
+    test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: { kind: "sendWork", workId: "controlled-work", id, text, mode: "queue" },
+    });
+  const read = () =>
+    test.owner.query(api.aiOrchestratorControls.conversation, {
+      chatId: test.chatId,
+      workId: "controlled-work",
+    });
+  const accept = (id: string, revision = 0) =>
+    test.environment().mutation(api.aiOrchestratorControls.accept, {
+      companyId: "workspace",
+      workId: "controlled-work",
+      id,
+      revision,
+    });
+  return { ...test, send, read, accept };
+}
+describe("private orchestrator worker conversations", () => {
+  it("fences edits and reordered delivery, preserves idempotency, and freezes accepted content", async () => {
+    const test = await workerControlHarness();
+    await test.send("first");
+    await test.send("second", "Second");
+    await test.send("first");
+    expect((await test.read()).messages).toHaveLength(2);
+    await expect(test.send("first", "Changed")).rejects.toThrow("already used");
+    await test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: {
+        kind: "editWorkMessage",
+        workId: "controlled-work",
+        id: "first",
+        revision: 0,
+        text: "Revised",
+      },
+    });
+    expect(await test.accept("first")).toBeNull();
+    await test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: {
+        kind: "reorderWorkMessages",
+        workId: "controlled-work",
+        queue: [
+          { id: "second", revision: 0 },
+          { id: "first", revision: 1 },
+        ],
+      },
+    });
+    expect(await test.accept("first", 2)).toBeNull();
+    expect((await test.accept("second", 1))?.text).toBe("Second");
+    await expect(
+      test.owner.mutation(api.aiOrchestratorControls.control, {
+        chatId: test.chatId,
+        action: { kind: "removeWorkMessage", workId: "controlled-work", id: "second", revision: 1 },
+      }),
+    ).rejects.toThrow("delivery already accepted");
+    expect((await test.accept("second", 1))?.id).toBe("second");
+    await test.environment().mutation(api.aiOrchestratorControls.acknowledge, {
+      companyId: "workspace",
+      workId: "controlled-work",
+      id: "second",
+      revision: 1,
+      failed: false,
+      detail: "Durable dispatch",
+    });
+    expect((await test.accept("first", 2))?.text).toBe("Revised");
+    expect((await test.read()).messages.find((m) => m.id === "second")?.state).toBe("delivered");
+  });
+  it("removes only pending content and rejects stale queue snapshots", async () => {
+    const test = await workerControlHarness();
+    await test.send("first");
+    await test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: { kind: "removeWorkMessage", workId: "controlled-work", id: "first", revision: 0 },
+    });
+    expect(await test.accept("first")).toBeNull();
+    await expect(
+      test.owner.mutation(api.aiOrchestratorControls.control, {
+        chatId: test.chatId,
+        action: {
+          kind: "reorderWorkMessages",
+          workId: "controlled-work",
+          queue: [{ id: "first", revision: 0 }],
+        },
+      }),
+    ).rejects.toThrow("queue changed");
+    expect((await test.send("first")).state).toBe("removed");
+  });
+  it("routes descendant questions once, escalates, answers the original request and avoids wakeup loops", async () => {
+    const test = await workerControlHarness();
+    const report = {
+      companyId: "workspace",
+      workId: "controlled-work",
+      threadId: "child-thread",
+      requestId: "question-request",
+      questions: [{ id: "choice", question: "Which format?" }],
+      open: true,
+    };
+    await test.environment().mutation(api.aiOrchestratorControls.reportQuestion, report);
+    await test.environment().mutation(api.aiOrchestratorControls.reportQuestion, report);
+    const before = await test.t.run((ctx) => ctx.db.query("aiOrchestratorJobs").collect());
+    expect(before.filter((j) => j.id.startsWith("worker-question:"))).toHaveLength(1);
+    const question = (await test.read()).questions[0]!;
+    await test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: { kind: "escalateWorkQuestion", workId: "controlled-work", questionId: question.id },
+    });
+    expect((await test.read()).questions[0]?.state).toBe("escalated");
+    const answer = {
+      kind: "answerWorkQuestion",
+      workId: "controlled-work",
+      id: "answer",
+      questionId: question.id,
+      answers: { choice: "JSON" },
+    };
+    await test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: answer,
+    });
+    await test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: answer,
+    });
+    const accepted = await test.accept("answer");
+    expect(accepted).toMatchObject({
+      threadId: "child-thread",
+      requestId: "question-request",
+      answers: { choice: "JSON" },
+    });
+    await test
+      .environment()
+      .mutation(api.aiOrchestratorControls.reportQuestion, { ...report, open: false });
+    expect((await test.read()).questions[0]?.state).toBe("resolved");
+    const after = await test.t.run((ctx) => ctx.db.query("aiOrchestratorJobs").collect());
+    expect(after.length).toBe(before.length);
+    await expect(
+      test.owner.mutation(api.aiOrchestratorControls.control, {
+        chatId: test.chatId,
+        action: { ...answer, id: "new-answer" },
+      }),
+    ).rejects.toThrow("no longer open");
+  });
+  it("delivers answers ahead of follow-ups waiting for a blocked turn", async () => {
+    const test = await workerControlHarness();
+    await test.send("followup");
+    await test.environment().mutation(api.aiOrchestratorControls.reportQuestion, {
+      companyId: "workspace",
+      workId: "controlled-work",
+      threadId: "worker-thread",
+      requestId: "blocking",
+      questions: [{ id: "format", question: "Which format?" }],
+      open: true,
+    });
+    const question = (await test.read()).questions[0]!;
+    await test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: {
+        kind: "answerWorkQuestion",
+        workId: "controlled-work",
+        id: "reply",
+        questionId: question.id,
+        answers: { format: "JSON" },
+      },
+    });
+    expect(await test.accept("followup")).toBeNull();
+    expect((await test.accept("reply"))?.requestId).toBe("blocking");
+  });
+  it("tracks the new follow-up run instead of recycling an older completed result", async () => {
+    const test = await workerControlHarness();
+    await test.send("followup");
+    await test.accept("followup");
+    await test.t.run(async (ctx) => {
+      const work = (await ctx.db.query("aiOrchestratorWork").collect())[0]!;
+      await ctx.db.patch(work._id, {
+        status: "completed",
+        resultRunId: "old-run",
+        resultCollected: true,
+        completionNotified: true,
+        resultText: "Old result",
+      });
+    });
+    await test.environment().mutation(api.aiOrchestratorControls.acknowledge, {
+      companyId: "workspace",
+      workId: "controlled-work",
+      id: "followup",
+      revision: 0,
+      failed: false,
+      detail: "Dispatched",
+      runId: "new-run",
+    });
+    const work = await test.t.run((ctx) => ctx.db.query("aiOrchestratorWork").collect());
+    expect(work[1]).toMatchObject({
+      status: "working",
+      resultRunId: "new-run",
+      resultCollected: false,
+      completionNotified: false,
+    });
+    expect(work[0]?.resultText).toBe("Old result");
+    expect(work[1]?.resultText).toBeUndefined();
+  });
+  it("rejects foreign environment, conversation audience, revoked capability and stopped authority", async () => {
+    const test = await workerControlHarness();
+    await test.send("first");
+    await expect(
+      test.environment("laptop").mutation(api.aiOrchestratorControls.accept, {
+        companyId: "workspace",
+        workId: "controlled-work",
+        id: "first",
+        revision: 0,
+      }),
+    ).rejects.toThrow("cannot access");
+    await expect(
+      human(test.t, "colleague").query(api.aiOrchestratorControls.conversation, {
+        chatId: test.chatId,
+        workId: "controlled-work",
+      }),
+    ).rejects.toThrow("access");
+    await test.t.run(async (ctx) => {
+      const row = (await ctx.db.query("aiOrchestrators").collect())[0]!;
+      await ctx.db.patch(row._id, {
+        capabilities: row.capabilities.filter((c) => c !== "threads.control"),
+      });
+    });
+    expect(await test.accept("first")).toBeNull();
+    await expect(test.send("second")).rejects.toThrow("not enabled");
+    await test.t.run(async (ctx) => {
+      const row = (await ctx.db.query("aiOrchestrators").collect())[0]!;
+      await ctx.db.patch(row._id, { capabilities: config().capabilities });
+      const work = (await ctx.db.query("aiOrchestratorWork").collect())[0]!;
+      await ctx.db.patch(work._id, { stopRequested: true });
+    });
+    await expect(test.send("second")).rejects.toThrow("cannot renew");
+    expect(await test.accept("first")).toBeNull();
+  });
+  it("keeps requested stop uncertain until a terminal worker observation", async () => {
+    const test = await workerControlHarness();
+    const result = await test.owner.mutation(api.aiOrchestratorControls.stop, {
+      chatId: test.chatId,
+      workId: "controlled-work",
+    });
+    expect(result.detail).toContain("Waiting");
+    const work = await test.t.run((ctx) => ctx.db.query("aiOrchestratorWork").collect());
+    expect(work[0]).toMatchObject({ stopRequested: true, status: "unknown" });
+    const commands = await test.t.run((ctx) => ctx.db.query("environmentCommands").collect());
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ kind: "interrupt" });
+    await test.owner.mutation(api.aiOrchestratorControls.stop, {
+      chatId: test.chatId,
+      workId: "controlled-work",
+    });
+    expect(await test.t.run((ctx) => ctx.db.query("environmentCommands").collect())).toHaveLength(
+      1,
+    );
+  });
+  it("accepts coordinator follow-up actions and exposes their receipts in context without a reasoning loop", async () => {
+    const test = await workerControlHarness();
+    const run = (await test.claim())!;
+    expect(
+      await test.environment().mutation(api.aiOrchestratorJobs.complete, {
+        companyId: "workspace",
+        jobId: run.id,
+        generation: run.generation,
+        result: {
+          ...decision(),
+          actions: [
+            {
+              kind: "sendWork",
+              workId: "controlled-work",
+              id: "coordinator-followup",
+              text: "Check errors",
+              mode: "queue",
+            },
+          ],
+        },
+      }),
+    ).toBe(true);
+    expect((await test.read()).messages[0]?.state).toBe("pending");
+    const jobs = await test.t.run((ctx) => ctx.db.query("aiOrchestratorJobs").collect());
+    expect(jobs.find((j) => j.id === run.id)?.status).toBe("completed");
+  });
+});
+
+describe("conversation replies to delegated work", () => {
+  it("sends through the existing composer without another orchestrator job or thread", async () => {
+    const test = await workerControlHarness();
+    const before = await test.t.run((ctx) => ctx.db.query("aiOrchestratorJobs").collect());
+    const args = {
+      chatId: test.chatId,
+      id: "human-followup",
+      workId: "controlled-work",
+      text: "Please include the screenshots.",
+    };
+    await test.owner.mutation(api.aiOrchestrators.send, args);
+    await test.owner.mutation(api.aiOrchestrators.send, args);
+    const messages = (await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId }))
+      .messages;
+    expect(messages.filter((m) => m.id === args.id)).toHaveLength(1);
+    expect(messages.find((m) => m.id === args.id)).toMatchObject({
+      worker: { workId: "controlled-work" },
+      delivery: { state: "pending" },
+      text: args.text,
+    });
+    expect((await test.read()).messages[0]).toMatchObject({
+      threadId: "worker-thread",
+      text: args.text,
+    });
+    expect(await test.t.run((ctx) => ctx.db.query("aiOrchestratorJobs").collect())).toHaveLength(
+      before.length,
+    );
+    expect(await test.t.run((ctx) => ctx.db.query("environmentCommands").collect())).toHaveLength(
+      0,
+    );
+    await test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: {
+        kind: "editWorkMessage",
+        workId: "controlled-work",
+        id: args.id,
+        revision: 0,
+        text: "Include images and video.",
+      },
+    });
+    expect(
+      (await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })).messages.find(
+        (m) => m.id === args.id,
+      )?.text,
+    ).toBe("Include images and video.");
+  });
+  it("escalates as normal messages and routes multipart quoted replies to one original request", async () => {
+    const test = await workerControlHarness();
+    await test.environment().mutation(api.aiOrchestratorControls.reportQuestion, {
+      companyId: "workspace",
+      workId: "controlled-work",
+      threadId: "worker-thread",
+      requestId: "choose",
+      open: true,
+      questions: [
+        { id: "format", question: "Which format?" },
+        { id: "audience", question: "Who is this for?" },
+      ],
+    });
+    const question = (await test.read()).questions[0]!;
+    await test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: { kind: "escalateWorkQuestion", workId: "controlled-work", questionId: question.id },
+    });
+    const page = await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId });
+    const fields = page.messages.filter((m) => m.worker?.questionId === question.id);
+    expect(fields.map((m) => m.text)).toEqual(["Which format?", "Who is this for?"]);
+    expect(new Set(fields.map((m) => m.sequence)).size).toBe(2);
+    for (const [index, field] of fields.entries()) {
+      await test.owner.mutation(api.aiOrchestrators.send, {
+        chatId: test.chatId,
+        id: `answer-${index}`,
+        text: index === 0 ? "PDF" : "The board",
+        replyToId: field.id,
+      });
+      if (index === 0) expect((await test.read()).messages).toHaveLength(0);
+    }
+    expect((await test.read()).messages[0]).toMatchObject({
+      mode: "answer",
+      threadId: "worker-thread",
+      answers: { format: "PDF", audience: "The board" },
+    });
+    const latest = await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId });
+    expect(latest.messages.at(-1)?.reply).toMatchObject({ text: "Who is this for?" });
+    const jobs = await test.t.run((ctx) => ctx.db.query("aiOrchestratorJobs").collect());
+    expect(jobs.filter((j) => j.id.startsWith("worker-question:"))).toHaveLength(1);
+    expect(jobs.filter((j) => j.messageId.startsWith("answer-"))).toHaveLength(0);
+  });
+  it("keeps secret answers out of the conversation mailbox", async () => {
+    const test = await workerControlHarness();
+    await test.environment().mutation(api.aiOrchestratorControls.reportQuestion, {
+      companyId: "workspace",
+      workId: "controlled-work",
+      threadId: "worker-thread",
+      requestId: "secret",
+      open: true,
+      questions: [{ id: "password", question: "Password?", isSecret: true }],
+    });
+    const question = (await test.read()).questions[0]!;
+    expect(question.questions[0]?.isSecret).toBe(true);
+    await expect(
+      test.owner.mutation(api.aiOrchestratorControls.control, {
+        chatId: test.chatId,
+        action: {
+          kind: "answerWorkQuestion",
+          workId: "controlled-work",
+          id: "answer",
+          questionId: question.id,
+          answers: { password: "not-for-chat" },
+        },
+      }),
+    ).rejects.toThrow("private questions");
+    expect((await test.read()).messages).toHaveLength(0);
+  });
+  it("rejects stale reorders even when the queue still contains the same IDs", async () => {
+    const test = await workerControlHarness();
+    await test.send("first");
+    await test.send("second");
+    const action = {
+      kind: "reorderWorkMessages",
+      workId: "controlled-work",
+      queue: [
+        { id: "second", revision: 0 },
+        { id: "first", revision: 0 },
+      ],
+    };
+    await test.owner.mutation(api.aiOrchestratorControls.control, { chatId: test.chatId, action });
+    await expect(
+      test.owner.mutation(api.aiOrchestratorControls.control, { chatId: test.chatId, action }),
+    ).rejects.toThrow("queue changed");
+  });
+  it("cancels pending visible messages when work stops", async () => {
+    const test = await workerControlHarness();
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "pending-stop",
+      workId: "controlled-work",
+      text: "Next task",
+    });
+    await test.owner.mutation(api.aiOrchestratorControls.stop, {
+      chatId: test.chatId,
+      workId: "controlled-work",
+    });
+    expect((await test.read()).messages[0]?.state).toBe("removed");
+    expect(
+      (await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })).messages.find(
+        (m) => m.id === "pending-stop",
+      )?.status,
+    ).toBe("cancelled");
+  });
+  it("recovers accepted delivery after pausing without authorizing a new message", async () => {
+    const test = await workerControlHarness();
+    await test.send("accepted");
+    await test.accept("accepted");
+    await test.t.run(async (ctx) => {
+      const contact = await ctx.db
+        .query("aiOrchestrators")
+        .withIndex("by_domain_id", (q) => q.eq("id", test.id))
+        .unique();
+      await ctx.db.patch(contact!._id, { status: "paused" });
+    });
+    expect((await test.accept("accepted"))?.state).toBe("accepted");
+    const inbox = await test
+      .environment()
+      .query(api.aiOrchestratorControls.environmentInbox, { companyId: "workspace" });
+    expect(inbox.find((i) => i.workId === "controlled-work")).toMatchObject({
+      stopped: true,
+      message: { id: "accepted" },
+    });
+    await expect(test.send("new")).rejects.toThrow("not enabled");
+  });
+});
+
+it("pins the original uncollected run before dispatching and shares one report owner for steering", async () => {
+  const test = await workerControlHarness();
+  await test.send("steer");
+  await test.environment().mutation(api.aiOrchestratorControls.accept, {
+    companyId: "workspace",
+    workId: "controlled-work",
+    id: "steer",
+    revision: 0,
+    rootRunId: "original-run",
+  });
+  await test.environment().mutation(api.aiOrchestratorControls.acknowledge, {
+    companyId: "workspace",
+    workId: "controlled-work",
+    id: "steer",
+    revision: 0,
+    failed: false,
+    detail: "Steered",
+    runId: "original-run",
+    messageId: "steered-message",
+  });
+  let work = await test.t.run((ctx) => ctx.db.query("aiOrchestratorWork").collect());
+  expect(work).toHaveLength(1);
+  expect(work[0]?.resultRunId).toBe("original-run");
+  await test.send("followup");
+  await test.accept("followup");
+  await test.environment().mutation(api.aiOrchestratorControls.acknowledge, {
+    companyId: "workspace",
+    workId: "controlled-work",
+    id: "followup",
+    revision: 0,
+    failed: false,
+    detail: "Dispatched",
+    runId: "next-run",
+    messageId: "next-message",
+  });
+  work = await test.t.run((ctx) => ctx.db.query("aiOrchestratorWork").collect());
+  expect(work.map((w) => w.resultRunId)).toEqual(["original-run", "next-run"]);
+  const pending = await test
+    .environment()
+    .query(api.aiOrchestratorJobs.pendingWorkResults, { companyId: "workspace" });
+  expect(pending.map((item) => item.runId)).toEqual(
+    expect.arrayContaining(["original-run", "next-run"]),
+  );
+  const visible = await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId });
+  expect(visible).toHaveLength(1);
+  expect(visible[0]?.id).toBe("controlled-work");
+});
+
+it("targets the real answer message when stopping a resumed child", async () => {
+  const test = await workerControlHarness();
+  await test.send("answer");
+  await test.accept("answer");
+  await test.environment().mutation(api.aiOrchestratorControls.acknowledge, {
+    companyId: "workspace",
+    workId: "controlled-work",
+    id: "answer",
+    revision: 0,
+    failed: false,
+    detail: "Resumed",
+    runId: "resumed-run",
+    messageId: "message:question-answer:request",
+  });
+  await test.owner.mutation(api.aiOrchestratorControls.stop, {
+    chatId: test.chatId,
+    workId: "controlled-work",
+  });
+  const commands = await test.t.run((ctx) => ctx.db.query("environmentCommands").collect());
+  expect(
+    commands.some(
+      (command) =>
+        command.args.kind === "interrupt" &&
+        command.args.messageId === "message:question-answer:request",
+    ),
+  ).toBe(true);
+});
+
+describe("worker conversation review regressions", () => {
+  it("keeps the newest open questions and the root mailbox after many follow-up results", async () => {
+    const test = await workerControlHarness();
+    await test.send("still-pending", "Include the final report");
+    await test.t.run(async (ctx) => {
+      const root = (await ctx.db.query("aiOrchestratorWork").collect())[0]!;
+      const { _id, _creationTime, ...fields } = root;
+      await ctx.db.patch(_id, { status: "completed" });
+      for (let i = 0; i < 55; i++)
+        await ctx.db.insert("aiOrchestratorWork", {
+          ...fields,
+          id: `result-${i}`,
+          controlWorkId: root.id,
+          controlMessageId: `message-${i}`,
+          status: "completed",
+        });
+    });
+    for (let i = 0; i < 12; i++)
+      await test.environment().mutation(api.aiOrchestratorControls.reportQuestion, {
+        companyId: "workspace",
+        workId: "controlled-work",
+        threadId: `child-${i}`,
+        requestId: `request-${i}`,
+        open: true,
+        questions: [{ id: "format", question: `Question ${i}` }],
+      });
+    const run = (await test.claim())!;
+    const conversations = JSON.parse(run.context).workerConversations;
+    expect(conversations).toHaveLength(1);
+    expect(conversations[0]).toMatchObject({
+      workId: "controlled-work",
+      messages: [expect.objectContaining({ id: "still-pending" })],
+    });
+    expect(conversations[0].questions).toHaveLength(10);
+    expect(conversations[0].questions[0].requestId).toBe("request-11");
+    expect(conversations[0].questions.at(-1).requestId).toBe("request-2");
+  });
+
+  it.each(["paused", "deleted"] as const)(
+    "cancels terminal-root instructions when an orchestrator is %s with stop",
+    async (status) => {
+      const test = await workerControlHarness();
+      await test.t.run(async (ctx) => {
+        const root = (await ctx.db.query("aiOrchestratorWork").collect())[0]!;
+        await ctx.db.patch(root._id, { status: "completed" });
+      });
+      await test.owner.mutation(api.aiOrchestrators.send, {
+        chatId: test.chatId,
+        id: "pending-on-root",
+        workId: "controlled-work",
+        text: "Next task",
+      });
+      await test.owner.mutation(api.aiOrchestrators.setStatus, {
+        id: test.id,
+        status,
+        stopWork: true,
+      });
+      const rows = await test.t.run((ctx) =>
+        ctx.db.query("aiOrchestratorWorkerMessages").collect(),
+      );
+      expect(rows[0]?.state).toBe("removed");
+      if (status === "paused") {
+        await test.owner.mutation(api.aiOrchestrators.setStatus, { id: test.id, status: "active" });
+        expect(await test.accept("pending-on-root")).toBeNull();
+        expect(
+          (
+            await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })
+          ).messages.find((message) => message.id === "pending-on-root")?.status,
+        ).toBe("cancelled");
+      }
+    },
+  );
+
+  it("keeps an older active follow-up visible when newer results are completed", async () => {
+    const test = await workerControlHarness();
+    const activeId = await test.t.run(async (ctx) => {
+      const root = (await ctx.db.query("aiOrchestratorWork").collect())[0]!;
+      const { _id, _creationTime, ...fields } = root;
+      await ctx.db.patch(_id, { status: "completed" });
+      const activeId = await ctx.db.insert("aiOrchestratorWork", {
+        ...fields,
+        id: "active-child",
+        controlWorkId: root.id,
+        controlMessageId: "active-message",
+        status: "working",
+        detail: "Older child still working",
+      });
+      for (let i = 0; i < 105; i++)
+        await ctx.db.insert("aiOrchestratorWork", {
+          ...fields,
+          id: `completed-child-${i}`,
+          controlWorkId: root.id,
+          controlMessageId: `done-${i}`,
+          status: "completed",
+          detail: "Newer child finished",
+        });
+      return activeId;
+    });
+    expect(await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId })).toEqual([
+      expect.objectContaining({
+        id: "controlled-work",
+        status: "working",
+        detail: "Older child still working",
+      }),
+    ]);
+    await test.owner.mutation(api.aiOrchestratorControls.stop, {
+      chatId: test.chatId,
+      workId: "controlled-work",
+    });
+    expect((await test.t.run((ctx) => ctx.db.get(activeId)))?.stopRequested).toBe(true);
+    await test.t.run((ctx) => ctx.db.patch(activeId, { status: "completed" }));
+    expect(
+      (await test.owner.query(api.aiOrchestrators.work, { chatId: test.chatId }))[0]?.status,
+    ).toBe("completed");
+  });
+
+  it("allows a new quoted answer after cancelling the pending answer", async () => {
+    const test = await workerControlHarness();
+    await test.environment().mutation(api.aiOrchestratorControls.reportQuestion, {
+      companyId: "workspace",
+      workId: "controlled-work",
+      threadId: "worker-thread",
+      requestId: "question-retry",
+      open: true,
+      questions: [{ id: "format", question: "Which format?" }],
+    });
+    const question = (await test.read()).questions[0]!;
+    await test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: { kind: "escalateWorkQuestion", workId: "controlled-work", questionId: question.id },
+    });
+    const prompt = (
+      await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })
+    ).messages.find((message) => message.worker?.questionId === question.id)!;
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "first-answer",
+      text: "PDF",
+      replyToId: prompt.id,
+    });
+    await test.owner.mutation(api.aiOrchestratorControls.control, {
+      chatId: test.chatId,
+      action: {
+        kind: "removeWorkMessage",
+        workId: "controlled-work",
+        id: "first-answer",
+        revision: 0,
+      },
+    });
+    expect((await test.read()).questions[0]?.state).toBe("escalated");
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "second-answer",
+      text: "CSV",
+      replyToId: prompt.id,
+    });
+    expect((await test.accept("second-answer"))?.answers).toEqual({ format: "CSV" });
+  });
+
+  it.each([false, true])(
+    "rejects replies to private prompts without persisting the answer (legacy: %s)",
+    async (legacy) => {
+      const test = await workerControlHarness();
+      await test.environment().mutation(api.aiOrchestratorControls.reportQuestion, {
+        companyId: "workspace",
+        workId: "controlled-work",
+        threadId: "worker-thread",
+        requestId: "private-question",
+        open: true,
+        questions: [{ id: "password", question: "Password?", isSecret: true }],
+      });
+      const question = (await test.read()).questions[0]!;
+      await test.owner.mutation(api.aiOrchestratorControls.control, {
+        chatId: test.chatId,
+        action: {
+          kind: "escalateWorkQuestion",
+          workId: "controlled-work",
+          questionId: question.id,
+        },
+      });
+      const prompt = (
+        await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId })
+      ).messages.find((message) => message.worker?.questionId === question.id)!;
+      if (legacy)
+        await test.t.run(async (ctx) => {
+          const stored = await ctx.db
+            .query("aiOrchestratorMessages")
+            .withIndex("by_domain_id", (q) => q.eq("id", prompt.id))
+            .unique();
+          await ctx.db.patch(stored!._id, { worker: { workId: "controlled-work" } });
+        });
+      const page = await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId });
+      expect(page.messages.find((message) => message.id === prompt.id)?.worker?.isSecret).toBe(
+        true,
+      );
+      await expect(
+        test.owner.mutation(api.aiOrchestrators.send, {
+          chatId: test.chatId,
+          id: "private-answer",
+          workId: "controlled-work",
+          replyToId: prompt.id,
+          text: "must-not-be-stored",
+        }),
+      ).rejects.toThrow();
+      expect(
+        await test.t.run((ctx) =>
+          ctx.db
+            .query("aiOrchestratorMessages")
+            .withIndex("by_domain_id", (q) => q.eq("id", "private-answer"))
+            .unique(),
+        ),
+      ).toBeNull();
+      expect((await test.read()).messages).toHaveLength(0);
+    },
+  );
+
+  it("routes replies to a user-authored worker message without permission to direct the group lead", async () => {
+    const test = await workerControlHarness();
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "my-worker-message",
+      workId: "controlled-work",
+      text: "Check this",
+    });
+    await test.t.run(async (ctx) => {
+      const owner = (await ctx.db.query("aiOrchestrators").collect())[0]!;
+      const { _id, _creationTime, ...fields } = owner;
+      await ctx.db.insert("aiOrchestrators", {
+        ...fields,
+        id: "unrelated-lead",
+        ownerSubject: "colleague",
+        directorSubjects: [],
+        managerSubjects: [],
+      });
+      const chat = (await ctx.db.query("aiOrchestratorChats").collect())[0]!;
+      await ctx.db.patch(chat._id, {
+        kind: "group",
+        leadId: "unrelated-lead",
+        orchestratorIds: [test.id, "unrelated-lead"],
+      });
+    });
+    const page = await test.owner.query(api.aiOrchestrators.messages, { chatId: test.chatId });
+    expect(
+      page.messages.find((message) => message.id === "my-worker-message")?.worker?.orchestratorId,
+    ).toBe(test.id);
+    await test.owner.mutation(api.aiOrchestrators.send, {
+      chatId: test.chatId,
+      id: "my-worker-reply",
+      replyToId: "my-worker-message",
+      text: "And report the details",
+    });
+    expect(
+      (await test.read()).messages.find((message) => message.id === "my-worker-reply")?.text,
+    ).toBe("And report the details");
+  });
+
+  it("pauses queued delivery on archive while retaining accepted receipt recovery", async () => {
+    const test = await workerControlHarness();
+    await test.send("accepted-before-archive");
+    await test.accept("accepted-before-archive");
+    await test.send("pending-before-archive");
+    await test.owner.mutation(api.aiOrchestrators.updateChat, {
+      chatId: test.chatId,
+      archived: true,
+    });
+    expect((await test.accept("accepted-before-archive"))?.recoveryOnly).toBe(true);
+    await test.environment().mutation(api.aiOrchestratorControls.acknowledge, {
+      companyId: "workspace",
+      workId: "controlled-work",
+      id: "accepted-before-archive",
+      revision: 0,
+      failed: false,
+      detail: "Recovered receipt",
+    });
+    expect(await test.accept("pending-before-archive")).toBeNull();
+    expect(
+      (
+        await test
+          .environment()
+          .query(api.aiOrchestratorControls.environmentInbox, { companyId: "workspace" })
+      ).find((row) => row.workId === "controlled-work"),
+    ).toMatchObject({ message: null, stopped: true });
+    await test.owner.mutation(api.aiOrchestrators.updateChat, {
+      chatId: test.chatId,
+      archived: false,
+    });
+    expect((await test.accept("pending-before-archive"))?.state).toBe("accepted");
   });
 });

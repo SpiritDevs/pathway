@@ -20,6 +20,7 @@ import { ConversationParticipants } from "./ConversationParticipants";
 
 export function WorkList({ items }: { items: readonly OrchestratorWorkItem[] }) {
   const navigate = useNavigate();
+  const state = useOrchestrators();
   return (
     <div className="divide-y">
       {items.map((item) => (
@@ -51,23 +52,59 @@ export function WorkList({ items }: { items: readonly OrchestratorWorkItem[] }) 
               <p className="mt-1 text-xs text-muted-foreground">{item.selectionReason}</p>
             )}
             {item.threadId && (
-              <button
-                type="button"
-                className="mt-1 text-xs text-blue-500 hover:underline"
-                onClick={() => {
-                  void navigate({
-                    to: "/$environmentId/$threadId",
-                    params: buildThreadRouteParams(
-                      scopeThreadRef(
-                        EnvironmentId.make(item.environmentId),
-                        ThreadId.make(item.threadId!),
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 [&>button]:whitespace-nowrap">
+                <button
+                  type="button"
+                  className="text-xs text-blue-500 hover:underline"
+                  onClick={() =>
+                    state.selectedId &&
+                    state.setReply(state.selectedId, {
+                      kind: "worker",
+                      name: item.title,
+                      text: "Your message will go to this worker’s existing thread.",
+                      workId: item.id,
+                      orchestratorId: item.orchestratorId,
+                    })
+                  }
+                >
+                  Message worker
+                </button>
+                {["working", "queued", "unknown"].includes(item.status) && (
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground hover:text-destructive"
+                    onClick={() => {
+                      void state
+                        .request("aiOrchestratorControls:stop", {
+                          chatId: state.selectedId,
+                          workId: item.id,
+                        })
+                        .catch((cause) =>
+                          state.setError(cause instanceof Error ? cause.message : String(cause)),
+                        );
+                    }}
+                  >
+                    Stop work
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="text-xs text-blue-500 hover:underline"
+                  onClick={() => {
+                    void navigate({
+                      to: "/$environmentId/$threadId",
+                      params: buildThreadRouteParams(
+                        scopeThreadRef(
+                          EnvironmentId.make(item.environmentId),
+                          ThreadId.make(item.threadId!),
+                        ),
                       ),
-                    ),
-                  });
-                }}
-              >
-                Open thread
-              </button>
+                    });
+                  }}
+                >
+                  Open thread
+                </button>
+              </div>
             )}
           </div>
           <span className="pt-0.5 text-xs capitalize text-muted-foreground">{item.status}</span>

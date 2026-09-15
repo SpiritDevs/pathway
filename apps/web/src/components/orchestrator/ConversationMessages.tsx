@@ -1,3 +1,7 @@
+import { ConversationReaders } from "./ConversationReaders";
+import { conversationReceiptLabel, placeConversationReaders } from "./conversationReceipts";
+import { useConversationReadPosition } from "./useConversationReadPosition";
+import { ConversationMessageActions } from "./ConversationMessageActions";
 import { ConversationMessageAttachment } from "./ConversationAttachments";
 import {
   lazy,
@@ -12,7 +16,6 @@ import { makeFunctionReference } from "convex/server";
 import { ListTodoIcon } from "lucide-react";
 import type {
   OrchestratorChat,
-  OrchestratorMessage,
   OrchestratorMessagePage,
   OrchestratorWorkItem,
 } from "@spiritdevs/contracts/aiOrchestrator";
@@ -46,7 +49,18 @@ export function ConversationMessages({
   sendMotion?: RefObject<ComposerSendMotion | null>;
 }) {
   const state = useOrchestrators();
-  const [older, setOlder] = useState<OrchestratorMessage[]>([]);
+  const [olderPages, setOlderPages] = useState<Record<number, MessagePage>>({});
+  const historySubscriptions = useRef(new Map<number, () => void>());
+  useEffect(() => {
+    const subscriptions = historySubscriptions.current;
+    setOlderPages({});
+    setNextBefore(undefined);
+    setLoadingOlder(false);
+    return () => {
+      for (const unsubscribe of subscriptions.values()) unsubscribe();
+      subscriptions.clear();
+    };
+  }, [state.client, chat.id]);
   const [nextBefore, setNextBefore] = useState<number | null | undefined>();
   const [loadingOlder, setLoadingOlder] = useState(false);
   const container = useRef<HTMLDivElement>(null);
@@ -56,7 +70,10 @@ export function ConversationMessages({
   useEffect(() => () => stopFlight.current?.(), []);
   const messages = [
     ...new Map(
-      [...older, ...(result.value?.messages ?? [])].map((message) => [message.id, message]),
+      [
+        ...Object.values(olderPages).flatMap((page) => page.messages),
+        ...(result.value?.messages ?? []),
+      ].map((message) => [message.id, message]),
     ).values(),
   ].sort((a, b) => a.sequence - b.sequence);
   const visible = search
@@ -102,23 +119,15 @@ export function ConversationMessages({
     pinned.current = true;
     stopFlight.current = animateSentMessage(bubble, element, pending.origin);
   });
-  const lastSequence = result.value?.messages.at(-1)?.sequence;
-  useEffect(() => {
-    const client = state.client;
-    if (!client || lastSequence === undefined) return;
-    const markRead = () => {
-      if (document.visibilityState === "visible")
-        void client
-          .mutation(makeFunctionReference<"mutation">("aiOrchestrators:markRead"), {
-            chatId: chat.id,
-            sequence: lastSequence,
-          })
-          .catch((cause) => state.setError(errorMessage(cause)));
-    };
-    markRead();
-    document.addEventListener("visibilitychange", markRead);
-    return () => document.removeEventListener("visibilitychange", markRead);
-  }, [state.client, chat.id, lastSequence]);
+  const readers = result.value?.readers ?? [];
+  const readerPlacements = placeConversationReaders(visible, readers, state.accountID);
+  useConversationReadPosition(
+    container,
+    chat.id,
+    chat.readSequence,
+    visible.map((message) => message.id).join(","),
+    !!search,
+  );
   const before = nextBefore === undefined ? result.value?.nextBefore : nextBefore;
   return (
     <div
@@ -141,23 +150,42 @@ export function ConversationMessages({
                 if (!state.client) return;
                 setLoadingOlder(true);
                 const height = container.current?.scrollHeight ?? 0;
-                void state.client
-                  .query(
-                    makeFunctionReference<"query", { chatId: string; before: number }, MessagePage>(
-                      "aiOrchestrators:messages",
-                    ),
-                    { chatId: chat.id, before },
-                  )
-                  .then((page) => {
-                    setOlder((current) => [...page.messages, ...current]);
+                let first = true;
+                let active = true;
+                const unsubscribe = state.client.onUpdate(
+                  makeFunctionReference<"query", { chatId: string; before: number }, MessagePage>(
+                    "aiOrchestrators:messages",
+                  ),
+                  { chatId: chat.id, before },
+                  (page) => {
+                    if (!active) return;
+                    setOlderPages((current) => ({ ...current, [before]: page }));
+                    if (!first) return;
+                    first = false;
+                    setLoadingOlder(false);
                     setNextBefore(page.nextBefore);
                     requestAnimationFrame(() => {
-                      if (container.current)
+                      if (active && container.current)
                         container.current.scrollTop += container.current.scrollHeight - height;
                     });
-                  })
-                  .catch((cause) => state.setError(errorMessage(cause)))
-                  .finally(() => setLoadingOlder(false));
+                  },
+                  (cause) => {
+                    if (!active) return;
+                    setLoadingOlder(false);
+                    // Withdraw stale status-dependent controls if access or the query fails.
+                    setOlderPages((current) => {
+                      const next = { ...current };
+                      delete next[before];
+                      return next;
+                    });
+                    state.setError(errorMessage(cause));
+                  },
+                );
+                historySubscriptions.current.get(before)?.();
+                historySubscriptions.current.set(before, () => {
+                  active = false;
+                  unsubscribe();
+                });
               }}
             >
               {loadingOlder ? "Loading…" : "Earlier messages"}
@@ -190,7 +218,7 @@ export function ConversationMessages({
         {timeline.map((entry) => {
           if (entry.kind === "work") {
             return (
-              <div key={entry.id} className="my-5 max-w-lg rounded-2xl border p-4">
+              <div key={entry.id} className="my-5 max-w-lg">
                 <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
                   <ListTodoIcon className="size-4" />
                   Delegated work
@@ -202,7 +230,11 @@ export function ConversationMessages({
           const { message, index, startsGroup, endsGroup, timeMarker } = entry;
           const own = message.senderKind === "user" && message.senderId === state.accountID;
           return (
-            <div key={message.id} className={startsGroup ? "mt-5 first:mt-0" : "mt-1.5"}>
+            <div
+              data-message-sequence={message.sequence}
+              key={message.id}
+              className={startsGroup ? "mt-5 first:mt-0" : "mt-1.5"}
+            >
               {timeMarker && (
                 <div
                   className={cn(
@@ -227,36 +259,77 @@ export function ConversationMessages({
                         {own ? "You" : message.senderName}
                       </p>
                     )}
-                    <div
-                      data-message-id={message.id}
-                      style={
-                        sendMotion?.current?.messageId === message.id && !sendMotion.current.ready
-                          ? { opacity: 0 }
-                          : undefined
-                      }
-                      className={cn(
-                        "rounded-[22px] px-4 py-2.5 text-left text-sm leading-relaxed break-words",
-                        own
-                          ? "bg-foreground text-background whitespace-pre-wrap"
-                          : "bg-foreground/5 text-foreground",
-                        message.status === "cancelled" && "opacity-50",
-                      )}
-                    >
-                      {message.attachments?.map((attachment) => (
-                        <ConversationMessageAttachment
-                          key={attachment.id}
-                          attachment={attachment}
-                        />
-                      ))}
-                      {own ? (
-                        message.text
-                      ) : (
-                        <Suspense fallback={<p className="whitespace-pre-wrap">{message.text}</p>}>
-                          <ChatMarkdown text={message.text} cwd={undefined} />
-                        </Suspense>
-                      )}
-                    </div>
-                    {(endsGroup || message.status !== "sent") && (
+                    <ConversationMessageActions message={message}>
+                      <div
+                        data-message-id={message.id}
+                        style={
+                          sendMotion?.current?.messageId === message.id && !sendMotion.current.ready
+                            ? { opacity: 0 }
+                            : undefined
+                        }
+                        className={cn(
+                          "rounded-[22px] px-4 py-2.5 text-left text-sm leading-relaxed break-words",
+                          own
+                            ? "bg-foreground text-background whitespace-pre-wrap"
+                            : "bg-foreground/5 text-foreground",
+                          message.status === "cancelled" && "opacity-50",
+                        )}
+                      >
+                        {message.replyToId && (
+                          <button
+                            type="button"
+                            className="mb-2 block max-w-full border-l-2 border-current/30 pl-2.5 text-left text-xs opacity-75 hover:opacity-100"
+                            onClick={() => {
+                              container.current
+                                ?.querySelector<HTMLElement>(
+                                  `[data-message-id="${CSS.escape(message.replyToId!)}"]`,
+                                )
+                                ?.scrollIntoView({
+                                  block: "center",
+                                  behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+                                    .matches
+                                    ? "instant"
+                                    : "smooth",
+                                });
+                            }}
+                            disabled={
+                              !visible.some((original) => original.id === message.replyToId)
+                            }
+                            aria-label={
+                              visible.some((original) => original.id === message.replyToId)
+                                ? "Show original message"
+                                : "Quoted message"
+                            }
+                          >
+                            <span className="block font-medium">
+                              {message.reply?.senderName ?? "Earlier message"}
+                            </span>
+                            <span className="mt-0.5 block line-clamp-2">
+                              {message.reply?.text ?? "The original message is unavailable."}
+                            </span>
+                          </button>
+                        )}
+                        {message.attachments?.map((attachment) => (
+                          <ConversationMessageAttachment
+                            key={attachment.id}
+                            attachment={attachment}
+                          />
+                        ))}
+                        {own ? (
+                          message.text
+                        ) : (
+                          <Suspense
+                            fallback={<p className="whitespace-pre-wrap">{message.text}</p>}
+                          >
+                            <ChatMarkdown text={message.text} cwd={undefined} />
+                          </Suspense>
+                        )}
+                      </div>
+                    </ConversationMessageActions>
+                    {(endsGroup ||
+                      message.status !== "sent" ||
+                      message.delivery ||
+                      readerPlacements.has(message.id)) && (
                       <div
                         className={cn(
                           "mt-1.5 flex min-h-4 flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[10px] text-muted-foreground",
@@ -269,60 +342,18 @@ export function ConversationMessages({
                         >
                           {conversationMessageTime.format(message.createdAt)}
                         </time>
-                        {message.status === "queued" ? (
-                          <>
-                            Queued{" "}
-                            <button
-                              type="button"
-                              className="hover:text-foreground hover:underline"
-                              onClick={() => {
-                                void state
-                                  .request("aiOrchestrators:cancelMessage", {
-                                    chatId: chat.id,
-                                    messageId: message.id,
-                                  })
-                                  .catch((cause) => state.setError(errorMessage(cause)));
-                              }}
-                            >
-                              Cancel
-                            </button>
-                          </>
-                        ) : message.status === "working" ? (
-                          own ? (
-                            "Seen"
-                          ) : (
-                            "Coordinating…"
-                          )
-                        ) : message.status === "failed" ? (
-                          <>
-                            Could not complete this request{" "}
-                            {own && (
-                              <button
-                                type="button"
-                                className="hover:text-foreground hover:underline"
-                                onClick={() => {
-                                  void state
-                                    .request("aiOrchestrators:retryMessage", {
-                                      chatId: chat.id,
-                                      messageId: message.id,
-                                    })
-                                    .catch((cause) => state.setError(errorMessage(cause)));
-                                }}
-                              >
-                                Retry
-                              </button>
+                        {own && (
+                          <span>
+                            {conversationReceiptLabel(
+                              message,
+                              readers,
+                              state.sendingChats.includes(chat.id) &&
+                                state.pendingMessages.current.get(chat.id)?.id === message.id,
                             )}
-                          </>
-                        ) : message.status === "cancelled" ? (
-                          "Cancelled"
-                        ) : own ? (
-                          message.seenAt !== undefined ? (
-                            "Seen"
-                          ) : (
-                            "Delivered"
-                          )
-                        ) : (
-                          ""
+                          </span>
+                        )}
+                        {chat.kind === "group" && readerPlacements.has(message.id) && (
+                          <ConversationReaders readers={readerPlacements.get(message.id)!} />
                         )}
                       </div>
                     )}

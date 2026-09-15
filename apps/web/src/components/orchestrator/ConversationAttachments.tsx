@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { DownloadIcon, FileTextIcon, XIcon } from "lucide-react";
+import { DownloadIcon, PlayIcon, FileTextIcon, XIcon } from "lucide-react";
 import type { OrchestratorAttachment } from "@spiritdevs/contracts/aiOrchestrator";
 import { formatAttachmentSizeLabel } from "../../lib/attachmentSize";
 import { formatAttachmentUploadProgress } from "../../lib/attachmentUploadState";
@@ -108,6 +108,9 @@ export function ConversationMessageAttachment({
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const video =
+    attachment.type === "file" &&
+    ["video/mp4", "video/webm", "video/quicktime"].includes(attachment.mimeType);
   const shouldLoad = attachment.type === "image" ? visible || preview : attempt > 0;
   useEffect(() => {
     setUrl(undefined);
@@ -122,11 +125,12 @@ export function ConversationMessageAttachment({
       if (controller.signal.aborted) return;
       objectUrl = URL.createObjectURL(
         new Blob([blob], {
-          type: attachment.type === "image" ? attachment.mimeType : "application/octet-stream",
+          type:
+            attachment.type === "image" || video ? attachment.mimeType : "application/octet-stream",
         }),
       );
       setUrl(objectUrl);
-      if (attachment.type === "file") {
+      if (attachment.type === "file" && !video) {
         const link = document.createElement("a");
         link.href = objectUrl;
         link.download = attachment.name;
@@ -153,6 +157,7 @@ export function ConversationMessageAttachment({
     attachment.name,
     attempt,
     shouldLoad,
+    video,
     downloadAttachment,
   ]);
   return (
@@ -167,7 +172,16 @@ export function ConversationMessageAttachment({
             : undefined
         }
       >
-        {attachment.type === "image" && url ? (
+        {video && url ? (
+          <video
+            src={url}
+            controls
+            playsInline
+            preload="metadata"
+            aria-label={attachment.name}
+            className="max-h-72 max-w-full rounded"
+          />
+        ) : attachment.type === "image" && url ? (
           <button
             type="button"
             aria-label={`Preview ${attachment.name}`}
@@ -187,11 +201,11 @@ export function ConversationMessageAttachment({
             className="max-w-full justify-start"
             disabled={loading}
             onClick={() => setAttempt((value) => value + 1)}
-            aria-label={`Download ${attachment.name}`}
+            aria-label={`${video ? "Play" : "Download"} ${attachment.name}`}
           >
             <FileTextIcon />
             <span className="truncate">{attachment.name}</span>
-            <DownloadIcon />
+            {video ? <PlayIcon /> : <DownloadIcon />}
           </Button>
         )}
       </div>

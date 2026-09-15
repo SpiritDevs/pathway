@@ -80,6 +80,53 @@ export const orchestratorMemoryScope = v.union(
   v.literal("project"),
 );
 export const aiOrchestratorTables = {
+  aiOrchestratorWorkerMessages: defineTable({
+    id: v.string(),
+    workId: v.string(),
+    threadId: v.string(),
+    revision: v.number(),
+    position: v.number(),
+    text: v.string(),
+    mode: v.union(v.literal("queue"), v.literal("steer"), v.literal("answer")),
+    questionId: v.optional(v.string()),
+    answers: v.optional(v.record(v.string(), v.string())),
+    state: v.union(
+      v.literal("pending"),
+      v.literal("accepted"),
+      v.literal("delivered"),
+      v.literal("failed"),
+      v.literal("removed"),
+    ),
+    detail: v.string(),
+    fingerprint: v.string(),
+    chatMessageId: v.optional(v.string()),
+    attachments: v.optional(v.array(orchestratorAttachment)),
+  })
+    .index("by_work", ["workId"])
+    .index("by_work_id", ["workId", "id"])
+    .index("by_chat_message", ["chatMessageId"])
+    .index("by_work_state", ["workId", "state"]),
+  aiOrchestratorWorkerQuestions: defineTable({
+    id: v.string(),
+    workId: v.string(),
+    threadId: v.string(),
+    requestId: v.string(),
+    questions: v.array(
+      v.object({ id: v.string(), question: v.string(), isSecret: v.optional(v.boolean()) }),
+    ),
+    humanAnswers: v.optional(v.record(v.string(), v.string())),
+    state: v.union(
+      v.literal("open"),
+      v.literal("escalated"),
+      v.literal("answering"),
+      v.literal("resolved"),
+      v.literal("unavailable"),
+    ),
+  })
+    .index("by_work", ["workId"])
+    .index("by_work_id", ["workId", "id"])
+    .index("by_request", ["threadId", "requestId"]),
+
   aiOrchestratorSignalDeliveries: defineTable({
     id: v.string(),
     createdAt: v.number(),
@@ -172,6 +219,14 @@ export const aiOrchestratorTables = {
     .index("by_storage", ["storageId"])
     .index("by_expiry", ["expiresAt"]),
   aiOrchestratorMessages: defineTable({
+    worker: v.optional(
+      v.object({
+        workId: v.string(),
+        questionId: v.optional(v.string()),
+        fieldId: v.optional(v.string()),
+        isSecret: v.optional(v.boolean()),
+      }),
+    ),
     attachments: v.optional(v.array(orchestratorAttachment)),
     expression: v.optional(v.string()),
     id: v.string(),
@@ -189,6 +244,7 @@ export const aiOrchestratorTables = {
       v.literal("cancelled"),
     ),
     seenAt: v.optional(v.number()),
+    seenBy: v.optional(v.array(v.string())),
     replyToId: v.union(v.string(), v.null()),
     createdAt: v.number(),
   })
@@ -293,6 +349,10 @@ export const aiOrchestratorTables = {
     resultCollected: v.optional(v.boolean()),
     resultText: v.optional(v.string()),
     resultRunId: v.optional(v.string()),
+    controlsPending: v.optional(v.boolean()),
+    controlWorkId: v.optional(v.string()),
+    controlMessageId: v.optional(v.string()),
+    resultMessageId: v.optional(v.string()),
     stopRequested: v.optional(v.boolean()),
     interruptCommandId: v.optional(v.string()),
     createdAt: v.number(),
@@ -300,8 +360,14 @@ export const aiOrchestratorTables = {
   })
     .index("by_domain_id", ["id"])
     .index("by_company_environment_status", ["companyId", "environmentId", "status"])
+    .index("by_company_environment_updated", ["companyId", "environmentId", "updatedAt"])
+    .index("by_pending_controls", ["companyId", "environmentId", "controlsPending"])
     .index("by_chat", ["chatId"])
     .index("by_command", ["commandId"])
+    .index("by_control_work", ["controlWorkId", "createdAt"])
+    .index("by_control_work_status", ["controlWorkId", "status"])
+    .index("by_orchestrator_controls", ["orchestratorId", "controlsPending"])
+    .index("by_result_run", ["companyId", "environmentId", "threadId", "resultRunId"])
     .index("by_thread", ["companyId", "environmentId", "threadId"])
     .index("by_company_status", ["companyId", "status"])
     .index("by_environment_read", ["companyId", "environmentId", "readRequested"])

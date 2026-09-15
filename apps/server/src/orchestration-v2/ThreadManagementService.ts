@@ -43,6 +43,10 @@ export function withCreationProvenance(
   provenance: ThreadManagementProvenance,
 ): OrchestrationV2Command {
   switch (command.type) {
+    case "runtime-request.respond": {
+      const { answeredBy: _untrusted, ...response } = command;
+      return provenance.createdBy === "agent" ? { ...response, answeredBy: "agent" } : response;
+    }
     case "thread.create":
     case "message.dispatch":
     case "thread.fork":

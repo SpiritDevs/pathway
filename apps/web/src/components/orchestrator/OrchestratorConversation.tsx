@@ -1,3 +1,4 @@
+import { mapEnvironmentControlError } from "../../cloud/environmentControl";
 import { ConversationAttachmentDrafts } from "./ConversationAttachments";
 import { shouldHandleComposerAttachmentPaste } from "../chat/composerAttachmentFiles";
 import { useEffect, useRef, useState, type RefObject } from "react";
@@ -41,7 +42,7 @@ import { ConversationMetadata } from "./ConversationMetadata";
 import type { ComposerSendMotion } from "./messageSendMotion";
 
 const EMPTY_ACTIVITY: OrchestratorActivity = [];
-const errorMessage = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
+const errorMessage = (cause: unknown) => mapEnvironmentControlError(cause).message;
 export function Composer({
   chat,
   activity,
@@ -66,15 +67,22 @@ export function Composer({
     return () => clearTimeout(timer);
   }, [activity, now]);
   const state = useOrchestrators();
+  const reply = state.replies[chat.id];
+  useEffect(() => {
+    if (reply) input.current?.focus();
+  }, [reply]);
+  const clearReply = () => {
+    state.setReply(chat.id, undefined);
+  };
   const sending = state.sendingChats.includes(chat.id);
   const setSending = (value: boolean) => state.setSendingChat(chat.id, value);
   const [target, setTarget] = useState(chat.leadId);
   const pending = state.pendingMessages.current;
   const fileInput = useRef<HTMLInputElement>(null);
-  const drafts = state.attachments.drafts[chat.id] ?? [];
+  const drafts = reply?.kind === "edit" ? [] : (state.attachments.drafts[chat.id] ?? []);
   const blocked = drafts.some((draft) => draft.status !== "ready");
   const addFiles = (files: File[]) => {
-    if (sending || !lead?.canDirect) return;
+    if (sending || !lead?.canDirect || reply?.kind === "edit") return;
     try {
       state.attachments.add(chat.id, lead.id, files);
       state.setError(undefined);
@@ -85,6 +93,7 @@ export function Composer({
   const text = state.drafts[chat.id] ?? "";
   const contacts = state.contacts.filter((contact) => chat.orchestratorIds.includes(contact.id));
   const lead =
+    contacts.find((contact) => contact.id === reply?.orchestratorId) ??
     contacts.find((contact) => contact.id === target) ??
     contacts.find((contact) => contact.id === chat.leadId);
   const send = () => {
@@ -95,11 +104,20 @@ export function Composer({
     const message =
       previous?.text === text &&
       previous.targetId === lead.id &&
+      previous.replyToId === reply?.messageId &&
+      previous.workId === reply?.workId &&
       JSON.stringify(previous.attachmentIds) === JSON.stringify(attachmentIds)
         ? previous
-        : { id: randomUUID(), text, targetId: lead.id, attachmentIds };
+        : {
+            id: randomUUID(),
+            text,
+            targetId: lead.id,
+            attachmentIds,
+            ...(reply?.kind === "reply" ? { replyToId: reply.messageId } : {}),
+            ...(reply?.workId ? { workId: reply.workId } : {}),
+          };
     pending.set(chat.id, message);
-    if (input.current)
+    if (input.current && reply?.kind !== "edit")
       sendMotion.current = {
         chatId: chat.id,
         messageId: message.id,
@@ -109,10 +127,25 @@ export function Composer({
     setSending(true);
     state.setError(undefined);
     void state
-      .request("aiOrchestrators:send", { chatId: chat.id, ...message })
+      .request(
+        reply?.kind === "edit" ? "aiOrchestratorControls:control" : "aiOrchestrators:send",
+        reply?.kind === "edit"
+          ? {
+              chatId: chat.id,
+              action: {
+                kind: "editWorkMessage",
+                workId: reply.workId,
+                id: reply.deliveryId,
+                revision: reply.revision,
+                text,
+              },
+            }
+          : { chatId: chat.id, ...message },
+      )
       .then(() => {
         if (sendMotion.current?.messageId === message.id) sendMotion.current.ready = true;
-        state.setDraft(chat.id, "");
+        state.setDraft(chat.id, reply?.kind === "edit" ? (reply.previousDraft ?? "") : "");
+        state.setReply(chat.id, undefined);
         state.attachments.sent(chat.id, message.attachmentIds);
         pending.delete(chat.id);
       })
@@ -160,7 +193,7 @@ export function Composer({
               </div>
             ))}
         </div>
-        {contacts.length > 1 && (
+        {contacts.length > 1 && !reply?.workId && (
           <label className="mb-2 flex items-center gap-1 pl-2 text-[11px] text-muted-foreground">
             To
             <select
@@ -187,7 +220,7 @@ export function Composer({
           className="sr-only"
           tabIndex={-1}
           aria-label="Attach images and files"
-          disabled={sending || !lead?.canDirect}
+          disabled={sending || !lead?.canDirect || reply?.kind === "edit"}
           onChange={(event) => {
             addFiles(Array.from(event.target.files ?? []));
             event.target.value = "";
@@ -205,6 +238,29 @@ export function Composer({
             }
           }}
         >
+          {reply && (
+            <div className="flex items-center gap-3 border-b border-border/60 px-4 py-3">
+              <div className="min-w-0 flex-1 border-l-2 border-blue-500 pl-3 text-xs">
+                <p className="font-medium text-blue-500">
+                  {reply.kind === "edit"
+                    ? "Editing message"
+                    : reply.kind === "worker"
+                      ? `To ${reply.name}`
+                      : `Replying to ${reply.name}`}
+                </p>
+                <p className="mt-0.5 truncate text-muted-foreground">{reply.text}</p>
+              </div>
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-label={reply.kind === "edit" ? "Cancel editing" : "Cancel reply"}
+                onClick={clearReply}
+              >
+                <XIcon />
+              </Button>
+            </div>
+          )}
           {drafts.length > 0 && (
             <ConversationAttachmentDrafts
               drafts={drafts}
@@ -222,7 +278,7 @@ export function Composer({
               size="icon"
               className="mb-0.5 rounded-full"
               aria-label="Attach images and files"
-              disabled={sending || !lead?.canDirect}
+              disabled={sending || !lead?.canDirect || reply?.kind === "edit"}
               onClick={() => fileInput.current?.click()}
             >
               <PaperclipIcon className="size-5" />
@@ -254,6 +310,11 @@ export function Composer({
                 }
               }}
               onKeyDown={(event) => {
+                if (event.key === "Escape" && reply) {
+                  event.preventDefault();
+                  clearReply();
+                  return;
+                }
                 if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
                   send();
@@ -264,13 +325,18 @@ export function Composer({
               type="submit"
               size="icon"
               className="size-9 shrink-0 rounded-full bg-blue-500 text-white hover:bg-blue-600"
-              aria-label="Send message"
+              aria-label={reply?.kind === "edit" ? "Save message" : "Send message"}
               disabled={sending || blocked || (!text.trim() && !drafts.length) || !lead?.canDirect}
             >
               <ArrowUpIcon className="size-5" />
             </Button>
           </div>
         </div>
+        {sending && reply?.kind !== "edit" && (
+          <p role="status" className="mt-2 px-3 text-right text-[11px] text-muted-foreground">
+            Sending…
+          </p>
+        )}
         {blocked && (
           <p role="status" className="mt-2 px-3 text-[11px] text-muted-foreground">
             {drafts.some((draft) => draft.status === "failed")

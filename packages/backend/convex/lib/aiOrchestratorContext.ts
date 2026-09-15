@@ -165,16 +165,31 @@ export function boundedConversationMessages(
   }
   return [...selected.values()]
     .sort((a, b) => a.sequence - b.sequence)
-    .map(({ id, senderId, senderKind, senderName, text, status, sequence, attachments }) => ({
-      ...(attachments?.length ? { attachments } : {}),
-      id,
-      senderId,
-      senderKind,
-      senderName,
-      text,
-      status,
-      sequence,
-    }));
+    .map(
+      ({
+        id,
+        senderId,
+        senderKind,
+        senderName,
+        text,
+        status,
+        sequence,
+        attachments,
+        replyToId,
+        worker,
+      }) => ({
+        replyToId,
+        ...(worker ? { worker } : {}),
+        ...(attachments?.length ? { attachments } : {}),
+        id,
+        senderId,
+        senderKind,
+        senderName,
+        text,
+        status,
+        sequence,
+      }),
+    );
 }
 
 export function memoryVisibilityForConversation(ctx: QueryCtx, chat: Doc<"aiOrchestratorChats">) {
@@ -277,4 +292,25 @@ export async function conversationReasoningAttachments(
     }
   }
   return [...attachments.values()];
+}
+
+/** Follow-up results share the original assignment's mailbox and authority. */
+export async function resolveWorkAssignments(ctx: QueryCtx, rows: Doc<"aiOrchestratorWork">[]) {
+  const assignments = new Map<
+    string,
+    { assignment: Doc<"aiOrchestratorWork">; latest: Doc<"aiOrchestratorWork"> }
+  >();
+  for (const latest of rows) {
+    const id = latest.controlWorkId ?? latest.id;
+    if (assignments.has(id)) continue;
+    const assignment = latest.controlWorkId
+      ? await ctx.db
+          .query("aiOrchestratorWork")
+          .withIndex("by_domain_id", (q) => q.eq("id", id))
+          .unique()
+      : latest;
+    if (assignment && assignment.chatId === latest.chatId)
+      assignments.set(id, { assignment, latest });
+  }
+  return [...assignments.values()];
 }
