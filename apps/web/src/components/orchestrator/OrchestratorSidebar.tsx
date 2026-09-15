@@ -1,12 +1,5 @@
 import { useState, useEffect, type RefObject } from "react";
-import {
-  ArchiveIcon,
-  PlusIcon,
-  SearchIcon,
-  SquarePenIcon,
-  PanelLeftIcon,
-  XIcon,
-} from "lucide-react";
+import { ArchiveIcon, PlusIcon, SearchIcon, SquarePenIcon, PanelLeftIcon } from "lucide-react";
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
 import { Button } from "../ui/button";
 import { useOrchestrators } from "./OrchestratorContext";
@@ -276,17 +269,9 @@ export function FloatingConversationSwitcher({
                 >
                   <SquarePenIcon className="size-4" />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Close conversations"
-                  onClick={() => setOpen(false)}
-                >
-                  <XIcon className="size-4" />
-                </Button>
               </div>
             </div>
-            <ConversationList onSelect={() => setOpen(false)} />
+            <ConversationList />
           </Dialog.Popup>
         </Dialog.Viewport>
       </Dialog.Portal>
