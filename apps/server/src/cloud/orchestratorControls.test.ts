@@ -329,6 +329,9 @@ it.effect(
           threadId: string;
           allowanceRevision: string;
           stopped: boolean;
+          cancellationRequested: boolean;
+          stopMessageId: string | null;
+          stopRunId: string | null;
           message: { id: string; revision: number };
         }
       >();
@@ -346,6 +349,9 @@ it.effect(
         threadId: "root",
         allowanceRevision: "",
         stopped: false,
+        cancellationRequested: false,
+        stopMessageId: null,
+        stopRunId: null,
         message: { id: "unconfirmed", revision: 0 },
       });
       yield* TestClock.adjust("15 seconds");

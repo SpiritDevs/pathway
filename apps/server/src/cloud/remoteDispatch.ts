@@ -394,10 +394,19 @@ const executeDirect = Effect.fn("cloud.remote_dispatch.execute_direct")(function
           const projection = yield* client[ORCHESTRATION_V2_WS_METHODS.getThreadProjection]({
             threadId: input.args.threadId,
           });
-          const run = activeRun(projection);
-          if (run !== undefined) {
+          const targetMessageId = input.args.messageId;
+          const message = targetMessageId
+            ? projection.messages.find((message) => message.id === targetMessageId)
+            : undefined;
+          const run = input.args.messageId
+            ? projection.runs.find((run) => run.id === message?.runId)
+            : activeRun(projection);
+          if (
+            run !== undefined &&
+            !["completed", "failed", "cancelled", "interrupted", "rolled_back"].includes(run.status)
+          ) {
             yield* client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand]({
-              type: "run.interrupt",
+              type: run.status === "queued" ? "queued-run.cancel" : "run.interrupt",
               commandId,
               threadId: input.args.threadId,
               runId: run.id,

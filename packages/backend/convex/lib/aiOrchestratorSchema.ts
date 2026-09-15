@@ -176,6 +176,16 @@ export const aiOrchestratorTables = {
     participantSubjects: v.array(v.string()),
     companyIds: v.array(v.string()),
     archived: v.boolean(),
+    lifecycle: v.optional(
+      v.union(
+        v.literal("archiving"),
+        v.literal("archived"),
+        v.literal("deleting"),
+        v.literal("deleted"),
+      ),
+    ),
+    lifecycleStartedAt: v.optional(v.number()),
+    lifecycleDetail: v.optional(v.string()),
     lastSequence: v.number(),
     lastMessage: v.string(),
     notification: v.optional(
@@ -204,6 +214,9 @@ export const aiOrchestratorTables = {
     subject: v.string(),
     fromSequence: v.number(),
     readSequence: v.number(),
+    pinned: v.optional(v.boolean()),
+    muted: v.optional(v.boolean()),
+    markedUnread: v.optional(v.boolean()),
     updatedAt: v.number(),
   })
     .index("by_subject", ["subject", "updatedAt"])
@@ -276,6 +289,8 @@ export const aiOrchestratorTables = {
     .index("by_owner_scope", ["ownerSubject", "scope"])
     .index("by_owner_scope_forgotten", ["ownerSubject", "scope", "forgotten", "updatedAt"]),
   aiOrchestratorJobs: defineTable({
+    stopRequested: v.optional(v.boolean()),
+    stopConfirmed: v.optional(v.boolean()),
     routingCandidateIds: v.optional(v.array(v.string())),
     routingTopic: v.optional(v.string()),
     inspectionIds: v.optional(v.array(v.string())),
@@ -359,6 +374,7 @@ export const aiOrchestratorTables = {
     controlMessageId: v.optional(v.string()),
     resultMessageId: v.optional(v.string()),
     stopRequested: v.optional(v.boolean()),
+    stopConfirmed: v.optional(v.boolean()),
     interruptCommandId: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),

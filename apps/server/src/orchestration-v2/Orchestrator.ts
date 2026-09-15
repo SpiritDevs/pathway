@@ -7311,6 +7311,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     Effect.gen(function* () {
       const projection = yield* loadProjectionForCommand(command);
       const run = projection.runs.find((candidate) => candidate.id === command.runId);
+      // A completed parent can still have a pending descendant-completion wake.
+      // Persist its stop fence without attempting to interrupt a newer run on this thread.
+      if (run && isTerminalRun(run)) {
+        yield* disposeDelegatedCompletionCohort({
+          command,
+          events,
+          projection,
+          parentRunId: run.id,
+          disposition: "stopped",
+          now: yield* DateTime.now,
+        });
+        return;
+      }
       const rootNode =
         run?.rootNodeId === null
           ? undefined

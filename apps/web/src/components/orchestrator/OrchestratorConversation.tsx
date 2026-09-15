@@ -174,8 +174,14 @@ export function Composer({
   if (chat.archived)
     return (
       <div className="border-t p-5 text-center">
+        {chat.lifecycleDetail && (
+          <p role="status" className="mb-3 text-sm text-muted-foreground">
+            {chat.lifecycleDetail}
+          </p>
+        )}
         <Button
           variant="outline"
+          disabled={!!chat.lifecycle && chat.lifecycle !== "archived"}
           onClick={() => {
             void state
               .request("aiOrchestrators:updateChat", { chatId: chat.id, archived: false })

@@ -32,6 +32,7 @@ async function current(ctx: QueryCtx, args: { chatId: string; subject: string; s
   if (
     !user ||
     !member ||
+    member.muted ||
     member.readSequence >= args.sequence ||
     member.fromSequence > args.sequence ||
     !(await hasChatAccess(ctx, chat, user))

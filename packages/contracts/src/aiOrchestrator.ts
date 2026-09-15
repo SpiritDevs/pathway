@@ -160,6 +160,11 @@ export const OrchestratorNotification = Schema.Struct({
   createdAt: Schema.Number,
 });
 export const OrchestratorChat = Schema.Struct({
+  pinned: Schema.optionalKey(Schema.Boolean),
+  muted: Schema.optionalKey(Schema.Boolean),
+  markedUnread: Schema.optionalKey(Schema.Boolean),
+  lifecycle: Schema.optionalKey(Schema.Literals(["archiving", "archived", "deleting", "deleted"])),
+  lifecycleDetail: Schema.optionalKey(Schema.String),
   id: Schema.String,
   title: Schema.String,
   kind: Schema.Literals(["dm", "group"]),
@@ -510,6 +515,9 @@ export type OrchestratorWorkResult = typeof OrchestratorWorkResult.Type;
 
 /** Durable origin inherited by worker threads, forks, and subagents. */
 export const OrchestratorAssignmentOrigin = Schema.Struct({
+  execution: Schema.optional(
+    Schema.Struct({ threadId: Schema.String, runId: Schema.String, messageId: Schema.String }),
+  ),
   orchestratorId: Schema.String,
   companyId: Schema.String,
   commandId: Schema.String,

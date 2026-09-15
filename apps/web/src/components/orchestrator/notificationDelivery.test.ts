@@ -36,6 +36,7 @@ describe("orchestrator notification delivery", () => {
       { focusedChatId: "chat" },
       { quiet: true },
       { chat: { ...chat, archived: true } },
+      { chat: { ...chat, muted: true } },
       { chat: { ...chat, readSequence: 8 } },
       { chat: { ...chat, notification: { ...chat.notification!, enabled: false } } },
     ])

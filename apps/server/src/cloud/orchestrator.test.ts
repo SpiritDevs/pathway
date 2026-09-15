@@ -535,15 +535,33 @@ describe("tool-free coordinator reasoning", () => {
       const started = yield* Deferred.make<void>();
       const renew = yield* Deferred.make<void>();
       let attempts = 0;
+      let scopeEnded = false;
+      const stopReceipts: boolean[] = [];
       const fiber = yield* executeOrchestratorRun(
-        { ...test.api, renew: () => Effect.sync(() => ++attempts === 1) },
+        {
+          ...test.api,
+          renew: () => Effect.sync(() => ++attempts === 1),
+          confirmStopped: () =>
+            Effect.sync(() => {
+              stopReceipts.push(scopeEnded);
+            }),
+        },
         job,
-        () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+        () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(
+              Effect.sync(() => {
+                scopeEnded = true;
+              }),
+            ),
+          ),
         Deferred.await(renew),
       ).pipe(Effect.forkChild);
       yield* Deferred.await(started);
       yield* Deferred.succeed(renew, undefined);
       expect(yield* Fiber.join(fiber)).toBe("abandoned");
+      expect(stopReceipts).toEqual([true]);
       expect(test.completions).toEqual([]);
       expect(test.failures).toEqual([]);
     }),

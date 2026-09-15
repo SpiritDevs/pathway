@@ -1,3 +1,5 @@
+import { assignmentForExecution } from "./lib/aiOrchestratorAuthority.ts";
+import { reconcileConversationLifecycle } from "./lib/conversationLifecycle.ts";
 import { resolveWorkAssignments } from "./lib/aiOrchestratorContext.ts";
 import { OrchestratorWorkerAction } from "@spiritdevs/contracts/aiOrchestrator";
 import { applyWorkerAction, workerConversationContext } from "./aiOrchestratorControls.ts";
@@ -1791,11 +1793,16 @@ export const workerAccess = query({
     companyId: v.string(),
     orchestratorId: v.string(),
     commandId: v.string(),
+    execution: v.optional(
+      v.object({ threadId: v.string(), runId: v.string(), messageId: v.string() }),
+    ),
     localProjectId: v.union(v.string(), v.null()),
   },
   handler: async (ctx, args) => {
     const actor = await environmentActor(ctx, args.companyId);
     const denied = { allowed: false, capabilities: [] as string[] };
+    const work = await assignmentForExecution(ctx, args, actor.registration.environmentId);
+    if (!work || work.stopRequested) return denied;
     const command = await ctx.db
       .query("environmentCommands")
       .withIndex("by_company_and_domain_id", (q) =>
@@ -1808,7 +1815,7 @@ export const workerAccess = query({
       command.orchestratorId !== args.orchestratorId ||
       command.targetEnvironmentId !== actor.registration.environmentId ||
       !["claimed", "succeeded"].includes(command.state) ||
-      !(await orchestratorCommandAllowed(ctx, command))
+      !(await orchestratorCommandAllowed(ctx, command, work))
     )
       return denied;
     const binding = command.cloudProjectId
@@ -1830,11 +1837,6 @@ export const workerAccess = query({
         : args.localProjectId !== null
     )
       return denied;
-    const work = await ctx.db
-      .query("aiOrchestratorWork")
-      .withIndex("by_command", (q) => q.eq("commandId", command.id))
-      .unique();
-    if (!work || work.stopRequested) return denied;
     const orchestrator = await findOrchestrator(ctx, args.orchestratorId);
     if (!orchestrator) return denied;
     const scope = await orchestratorOwnerScope(ctx, orchestrator, args.companyId);
@@ -1873,5 +1875,29 @@ export const reportHostResources = mutation({
     const age = Date.now() - resources.sampledAt;
     if (age < -5000 || age > 90000) return fail("A fresh host resource observation is required.");
     await ctx.db.patch(actor.registration._id, { orchestratorResources: resources });
+  },
+});
+
+/** A receipt from the claiming environment after the reasoning scope has ended. */
+export const confirmStopped = mutation({
+  args: identityArgs,
+  handler: async (ctx, args) => {
+    const actor = await environmentActor(ctx, args.companyId);
+    const job = await ctx.db
+      .query("aiOrchestratorJobs")
+      .withIndex("by_domain_id", (q) => q.eq("id", args.jobId))
+      .unique();
+    if (
+      !job ||
+      job.companyId !== args.companyId ||
+      job.environmentId !== actor.registration.environmentId ||
+      job.generation !== args.generation ||
+      !job.stopRequested
+    )
+      return false;
+    await ctx.db.patch(job._id, { stopConfirmed: true });
+    const chat = await findChat(ctx, job.chatId);
+    if (chat) await reconcileConversationLifecycle(ctx, chat);
+    return true;
   },
 });

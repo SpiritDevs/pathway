@@ -1,5 +1,13 @@
+import { ConversationRowMenu } from "./ConversationRowMenu";
 import { useState, useEffect, type RefObject } from "react";
-import { ArchiveIcon, SearchIcon, SquarePenIcon, PanelLeftIcon } from "lucide-react";
+import {
+  ArchiveIcon,
+  SearchIcon,
+  SquarePenIcon,
+  PanelLeftIcon,
+  PinIcon,
+  BellOffIcon,
+} from "lucide-react";
 import { ContextualSidebarHeader } from "../sidebar/ContextualSidebarHeader";
 import { Button } from "../ui/button";
 import { useOrchestrators } from "./OrchestratorContext";
@@ -18,7 +26,11 @@ export function ConversationList({ onSelect }: { onSelect?: () => void }) {
   const [search, setSearch] = useState("");
   const [archived, setArchived] = useState(false);
   const chats = state.chats
-    .toSorted((a, b) => (b.lastMessageAt ?? b.updatedAt) - (a.lastMessageAt ?? a.updatedAt))
+    .toSorted(
+      (a, b) =>
+        Number(!!b.pinned) - Number(!!a.pinned) ||
+        (b.lastMessageAt ?? b.updatedAt) - (a.lastMessageAt ?? a.updatedAt),
+    )
     .filter(
       (chat) =>
         chat.archived === archived &&
@@ -40,53 +52,68 @@ export function ConversationList({ onSelect }: { onSelect?: () => void }) {
       </div>
       <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2">
         {chats.map((chat) => (
-          <button
-            key={chat.id}
-            type="button"
-            onClick={() => {
-              state.selectChat(chat.id);
-              onSelect?.();
-            }}
-            aria-current={chat.id === state.selectedId ? "true" : undefined}
-            className={cn(
-              "flex w-full items-center gap-3 rounded-xl px-3 py-3.5 text-left hover:bg-muted/60",
-              chat.id === state.selectedId && "bg-blue-500/10 hover:bg-blue-500/10",
-            )}
-          >
-            <ConversationAvatar
-              contacts={state.avatarContacts.filter((contact) =>
-                chat.orchestratorIds.includes(contact.id ?? ""),
+          <ConversationRowMenu key={chat.id} chat={chat}>
+            <button
+              type="button"
+              onClick={() => {
+                if (chat.markedUnread)
+                  void state
+                    .request("aiOrchestrators:setChatPreferences", {
+                      chatId: chat.id,
+                      markedUnread: false,
+                    })
+                    .catch(() => state.setError("Could not mark conversation as read."));
+                state.selectChat(chat.id);
+                onSelect?.();
+              }}
+              aria-current={chat.id === state.selectedId ? "true" : undefined}
+              className={cn(
+                "flex w-full items-center gap-3 rounded-xl px-3 py-3.5 text-left hover:bg-muted/60",
+                chat.id === state.selectedId && "bg-blue-500/10 hover:bg-blue-500/10",
               )}
-            />
-            <span className="min-w-0 flex-1">
-              <span className="flex items-baseline gap-2">
-                <span className="truncate text-sm font-semibold">{chat.title}</span>
-                <time
-                  className="ml-auto shrink-0 text-[10px] text-muted-foreground"
-                  dateTime={new Date(chat.lastMessageAt ?? chat.updatedAt).toISOString()}
-                  title={new Date(chat.lastMessageAt ?? chat.updatedAt).toLocaleString()}
-                >
-                  {conversationTime(chat.lastMessageAt ?? chat.updatedAt)}
-                </time>
-              </span>
-              <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-                {chat.lastMessage || "Start a conversation"}
-              </span>
-            </span>
-            {(chat.unreadCount ?? 0) > 0 ? (
-              <span
-                className="inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground"
-                aria-label={`${unreadLabel(chat.unreadCount!)} unread messages`}
-              >
-                {unreadLabel(chat.unreadCount!)}
-              </span>
-            ) : chat.unreadCount === undefined && chat.lastSequence > chat.readSequence ? (
-              <span
-                className="size-2 shrink-0 rounded-full bg-blue-500"
-                aria-label="Unread messages"
+            >
+              <ConversationAvatar
+                contacts={state.avatarContacts.filter((contact) =>
+                  chat.orchestratorIds.includes(contact.id ?? ""),
+                )}
               />
-            ) : null}
-          </button>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline gap-2">
+                  {chat.pinned && <PinIcon className="size-3 shrink-0" aria-label="Pinned" />}
+                  {chat.muted && (
+                    <BellOffIcon
+                      className="size-3 shrink-0 text-muted-foreground"
+                      aria-label="Alerts hidden"
+                    />
+                  )}
+                  <span className="truncate text-sm font-semibold">{chat.title}</span>
+                  <time
+                    className="ml-auto shrink-0 text-[10px] text-muted-foreground"
+                    dateTime={new Date(chat.lastMessageAt ?? chat.updatedAt).toISOString()}
+                    title={new Date(chat.lastMessageAt ?? chat.updatedAt).toLocaleString()}
+                  >
+                    {conversationTime(chat.lastMessageAt ?? chat.updatedAt)}
+                  </time>
+                </span>
+                <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+                  {chat.lifecycleDetail || chat.lastMessage || "Start a conversation"}
+                </span>
+              </span>
+              {(chat.unreadCount ?? 0) > 0 ? (
+                <span
+                  className="inline-flex min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground"
+                  aria-label={`${unreadLabel(chat.unreadCount!)} unread messages`}
+                >
+                  {unreadLabel(chat.unreadCount!)}
+                </span>
+              ) : chat.unreadCount === undefined && chat.lastSequence > chat.readSequence ? (
+                <span
+                  className="size-2 shrink-0 rounded-full bg-blue-500"
+                  aria-label="Unread messages"
+                />
+              ) : null}
+            </button>
+          </ConversationRowMenu>
         ))}
         {state.loading && (
           <p className="px-3 py-8 text-center text-sm text-muted-foreground">

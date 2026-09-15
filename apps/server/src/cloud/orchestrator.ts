@@ -216,6 +216,7 @@ export interface OrchestratorBackend {
     result: OrchestratorWorkResult,
   ) => Effect.Effect<boolean, OrchestratorError>;
   readonly claim: Effect.Effect<OrchestratorRun | null, OrchestratorError>;
+  readonly confirmStopped?: (job: OrchestratorRun) => Effect.Effect<void, OrchestratorError>;
   readonly renew: (job: OrchestratorRun) => Effect.Effect<boolean, OrchestratorError>;
   readonly complete: (
     job: OrchestratorRun,
@@ -350,7 +351,10 @@ export const executeOrchestratorRun = Effect.fn("cloud.orchestrator.execute")(fu
   ) => Effect.Effect<AllowanceExecution | undefined, OrchestratorError> = () =>
     Effect.succeed(undefined),
 ) {
-  if (!(yield* backend.renew(job))) return "abandoned" as const;
+  if (!(yield* backend.renew(job))) {
+    yield* backend.confirmStopped?.(job) ?? Effect.void;
+    return "abandoned" as const;
+  }
   const outcome = yield* Effect.scoped(
     Effect.gen(function* () {
       const lost = yield* Deferred.make<void>();
@@ -371,12 +375,14 @@ export const executeOrchestratorRun = Effect.fn("cloud.orchestrator.execute")(fu
       );
     }),
   );
+  yield* backend.confirmStopped?.(job) ?? Effect.void;
   if (Exit.isFailure(outcome)) {
     const error = Cause.squash(outcome.cause);
     if (error instanceof OrchestratorError && error.reason === "claim-lost")
       return "abandoned" as const;
     if (error instanceof OrchestratorError && error.reason.startsWith("allowance:")) {
       yield* backend.holdForAllowance(job, error.reason.slice("allowance:".length));
+      yield* backend.confirmStopped?.(job) ?? Effect.void;
       return "held" as const;
     }
     // Provider errors can echo message content or local credential paths; never publish them.
@@ -385,11 +391,16 @@ export const executeOrchestratorRun = Effect.fn("cloud.orchestrator.execute")(fu
         ? error.reason
         : "Coordinator reasoning failed. Check the selected provider and model, then retry.";
     yield* backend.fail(job, reason);
+    yield* backend.confirmStopped?.(job) ?? Effect.void;
     return "failed" as const;
   }
   return yield* allowanceExecution(job, outcome.value).pipe(
     Effect.flatMap((proof) => backend.complete(job, outcome.value, proof)),
-    Effect.map((accepted) => (accepted ? ("completed" as const) : ("abandoned" as const))),
+    Effect.flatMap((accepted) =>
+      accepted
+        ? Effect.succeed("completed" as const)
+        : (backend.confirmStopped?.(job) ?? Effect.void).pipe(Effect.as("abandoned" as const)),
+    ),
     Effect.catch((error) =>
       error.reason.startsWith("allowance:")
         ? backend
@@ -506,6 +517,22 @@ export const makeOrchestratorBackend = Effect.fn("cloud.orchestrator.backend")(f
         () => new OrchestratorError({ reason: "Coordinator service request failed." }),
       ),
     );
+  const stopReceipts = new Map<string, OrchestratorRun>();
+  const confirmStopped = (job: OrchestratorRun) =>
+    Effect.gen(function* () {
+      stopReceipts.set(job.id, job);
+      yield* call(() =>
+        client.mutation(
+          makeFunctionReference<
+            "mutation",
+            { companyId: string; jobId: string; generation: number },
+            boolean
+          >("aiOrchestratorJobs:confirmStopped"),
+          identity(job),
+        ),
+      );
+      stopReceipts.delete(job.id);
+    }).pipe(Effect.catch(() => Effect.void));
   let publishedCatalog = "";
   let catalogPublishedAt = 0;
   const identity = (job: OrchestratorRun) => ({
@@ -579,9 +606,11 @@ export const makeOrchestratorBackend = Effect.fn("cloud.orchestrator.backend")(f
     ),
     collectResult: (result) =>
       call(() => client.mutation(collectResultRef, { companyId: options.companyId, ...result })),
+    confirmStopped,
     claim: options.providers.pipe(
       Effect.flatMap((providers) =>
         Effect.gen(function* () {
+          yield* Effect.forEach([...stopReceipts.values()], confirmStopped, { discard: true });
           const catalog = options.delegationCatalog ? yield* options.delegationCatalog : undefined;
           const fingerprint = catalog ? encodeCatalog(catalog) : "";
           const now = yield* Clock.currentTimeMillis;

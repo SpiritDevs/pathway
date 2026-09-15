@@ -1,3 +1,4 @@
+import { assertConversationDispatch } from "./conversationLifecycle.ts";
 import { resolveWorkAssignments } from "./aiOrchestratorContext.ts";
 // @effect-diagnostics globalDate:off -- Convex supplies transaction time.
 import * as Schema from "effect/Schema";
@@ -37,6 +38,7 @@ export async function queueOrchestratorWork(
   action: Extract<OrchestratorAction, { kind: "delegate" }>,
   continuationThreadId?: string,
 ) {
+  await assertConversationDispatch(ctx, chat.id);
   if (!orchestrator.capabilities.includes("threads.delegate"))
     return fail("This orchestrator cannot delegate work.");
   if (
@@ -319,13 +321,17 @@ export async function refreshOrchestratorWork(
       detail = shell.value.allowanceHold;
       if (shell.value.status === "starting") status = "queued";
     }
-    if (work.stopRequested && !["completed", "failed", "cancelled"].includes(status)) {
+    if (work.stopRequested && !work.stopConfirmed) {
       status = "unknown";
-      if (threadId && !work.interruptCommandId)
+      if (threadId && !work.controlsPending && !work.interruptCommandId)
         await interruptWork(ctx, orchestrator, work, threadId);
       detail = offline
         ? "Stop requested. The offline environment has not confirmed interruption."
         : "Stop requested. Waiting for the delegated thread to confirm it stopped.";
+    }
+    if (work.stopConfirmed) {
+      status = "cancelled";
+      detail = work.detail;
     }
     const resolvedSelection = Option.isSome(shell) ? shell.value.modelSelection : null;
     if (
@@ -360,6 +366,11 @@ export async function refreshOrchestratorWork(
     return;
   for (const work of queued.filter((work) => !work.commandId && !work.stopRequested)) {
     if (occupied >= orchestrator.maxAssignments) break;
+    const dispatchChat = await ctx.db
+      .query("aiOrchestratorChats")
+      .withIndex("by_domain_id", (q) => q.eq("id", work.chatId))
+      .unique();
+    if (!dispatchChat || dispatchChat.archived || dispatchChat.lifecycle) continue;
     const scope = work.companyId
       ? await orchestratorOwnerScope(ctx, orchestrator, work.companyId)
       : null;
@@ -539,14 +550,19 @@ export async function requestOrchestratorStop(
   const rows = new Map(
     [...batches.flat(), ...pendingRoots, ...roots].map((work) => [work.id, work]),
   );
+  if (onlyWorkId) {
+    const selected = await ctx.db
+      .query("aiOrchestratorWork")
+      .withIndex("by_domain_id", (q) => q.eq("id", onlyWorkId))
+      .unique();
+    rows.clear();
+    if (selected && selected.orchestratorId === orchestrator.id) rows.set(selected.id, selected);
+  }
   for (const work of rows.values()) {
     if (onlyWorkId && work.id !== onlyWorkId) continue;
     await cancelPendingWorkerMessages(ctx, work.id);
     const now = Date.now();
-    if (["completed", "failed", "cancelled"].includes(work.status)) {
-      await ctx.db.patch(work._id, { stopRequested: true, updatedAt: now });
-      continue;
-    }
+
     let unstarted = !work.commandId;
     if (work.companyId && work.commandId) {
       const scope = await orchestratorOwnerScope(ctx, orchestrator, work.companyId);
@@ -581,15 +597,26 @@ export async function requestOrchestratorStop(
         });
       }
     }
+    // A separately accepted follow-up may outlive an unclaimed initial dispatch.
+    if (
+      unstarted &&
+      (await ctx.db
+        .query("aiOrchestratorWorkerMessages")
+        .withIndex("by_work_state", (q) => q.eq("workId", work.id).eq("state", "accepted"))
+        .first())
+    )
+      unstarted = false;
     await ctx.db.patch(work._id, {
       stopRequested: true,
+      stopConfirmed: unstarted,
+      controlsPending: !unstarted,
       status: unstarted ? "cancelled" : "unknown",
       detail: unstarted
         ? "Cancelled before starting."
         : "Stop requested. Waiting for the environment to confirm interruption.",
       updatedAt: now,
     });
-    if (!unstarted && work.threadId && !work.interruptCommandId)
+    if (!unstarted && !work.controlsPending && work.threadId && !work.interruptCommandId)
       await interruptWork(ctx, orchestrator, work, work.threadId);
   }
 }

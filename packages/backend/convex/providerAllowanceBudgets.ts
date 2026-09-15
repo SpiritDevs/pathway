@@ -1,3 +1,4 @@
+import { assignmentForExecution } from "./lib/aiOrchestratorAuthority.ts";
 // @effect-diagnostics globalDate:off -- Convex's transaction clock fences quota observations.
 import { v } from "convex/values";
 import * as Schema from "effect/Schema";
@@ -38,7 +39,14 @@ const allocationRequest = v.object({
 });
 const budgetArgs = { companyId: v.string(), budgetId: v.string() };
 const assignmentOrigin = v.optional(
-  v.object({ companyId: v.string(), orchestratorId: v.string(), commandId: v.string() }),
+  v.object({
+    companyId: v.string(),
+    orchestratorId: v.string(),
+    commandId: v.string(),
+    execution: v.optional(
+      v.object({ threadId: v.string(), runId: v.string(), messageId: v.string() }),
+    ),
+  }),
 );
 
 async function findBudget(ctx: QueryCtx, id: string) {
@@ -609,15 +617,17 @@ async function assignmentScopes(
   ctx: QueryCtx,
   actor: CompanyActor,
   scopes: ProviderAllowanceScope[],
-  origin?: { companyId: string; orchestratorId: string; commandId: string },
+  origin?: {
+    companyId: string;
+    orchestratorId: string;
+    commandId: string;
+    execution?: { threadId: string; runId: string; messageId: string };
+  },
 ) {
   if (!origin) return scopes;
   if (actor.kind !== "environment" || origin.companyId !== actor.company.id)
     return fail("Invalid allowance assignment origin.");
-  const work = await ctx.db
-    .query("aiOrchestratorWork")
-    .withIndex("by_command", (q) => q.eq("commandId", origin.commandId))
-    .unique();
+  const work = await assignmentForExecution(ctx, origin, actor.registration.environmentId);
   if (
     !work ||
     work.companyId !== origin.companyId ||
@@ -631,7 +641,7 @@ async function assignmentScopes(
       q.eq("companyId", actor.company._id).eq("id", origin.commandId),
     )
     .unique();
-  if (work.stopRequested || !command || !(await orchestratorCommandAllowed(ctx, command)))
+  if (work.stopRequested || !command || !(await orchestratorCommandAllowed(ctx, command, work)))
     return fail("This assignment was stopped or its orchestrator permission changed.");
   return [...scopes, { kind: "chat" as const, chatId: work.chatId }];
 }

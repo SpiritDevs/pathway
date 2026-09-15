@@ -1,3 +1,4 @@
+import { conversationWork, reconcileConversationLifecycle } from "./lib/conversationLifecycle.ts";
 import { conversationAttention, type HumanMention } from "@spiritdevs/contracts/aiOrchestrator";
 import {
   sendWorkerReply,
@@ -565,6 +566,7 @@ export const listChats = query({
           .unique();
         if (
           !chat ||
+          chat.lifecycle === "deleted" ||
           !chat.participantSubjects.includes(user.clerkSubject) ||
           !(await hasChatAccess(ctx, chat, user))
         )
@@ -628,12 +630,18 @@ export const listChats = query({
           : null;
         return {
           ...record,
+          pinned: member.pinned ?? false,
+          muted: member.muted ?? false,
+          markedUnread: member.markedUnread ?? false,
           lastMessage: latest ? conversationMessagePreview(latest) : "",
           lastSequence: latest?.sequence ?? 0,
           readSequence: member.readSequence,
-          unreadCount: Math.min(100, unreadCount),
+          unreadCount: member.muted
+            ? 0
+            : Math.max(member.markedUnread ? 1 : 0, Math.min(100, unreadCount)),
           lastMessageAt: latest?.createdAt ?? chat.createdAt,
-          ...(notification &&
+          ...(!member.muted &&
+          notification &&
           notification.sequence >= member.fromSequence &&
           attention &&
           conversationAttention({
@@ -688,9 +696,18 @@ export const createChat = mutation({
         .query("aiOrchestratorChats")
         .withIndex("by_owner", (q) => q.eq("ownerSubject", user.clerkSubject))
         .take(200);
-      const dm = existing.find((c) => c.kind === "dm" && c.leadId === ids[0]);
+      const dm = existing.find(
+        (c) => c.kind === "dm" && c.leadId === ids[0] && c.lifecycle !== "deleted",
+      );
       if (dm) {
-        await ctx.db.patch(dm._id, { archived: false });
+        if (dm.lifecycle && dm.lifecycle !== "archived")
+          return fail("This conversation is stopping.");
+        await ctx.db.patch(dm._id, {
+          archived: false,
+          lifecycle: undefined,
+          lifecycleDetail: undefined,
+          lifecycleStartedAt: undefined,
+        });
         return dm.id;
       }
     }
@@ -1108,7 +1125,16 @@ export const updateChat = mutation({
       if (!canDirectOrchestrator(row, user.clerkSubject))
         return fail("You need permission to direct the selected lead.");
     }
+    if (args.archived === true) {
+      await beginConversationStop(ctx, chat, "archiving");
+      return null;
+    }
+    if (args.archived === false && chat.lifecycle && chat.lifecycle !== "archived")
+      return fail("Wait for confirmed termination before restoring this conversation.");
     await ctx.db.patch(chat._id, {
+      ...(args.archived === false
+        ? { lifecycle: undefined, lifecycleDetail: undefined, lifecycleStartedAt: undefined }
+        : {}),
       ...(args.title !== undefined ? { title: args.title.trim() } : {}),
       ...(args.archived !== undefined ? { archived: args.archived } : {}),
       ...(args.leadId ? { leadId: args.leadId } : {}),
@@ -1514,3 +1540,62 @@ export const conversationAvatars = query({
     return avatars.filter((avatar) => avatar !== null);
   },
 });
+
+export const setChatPreferences = mutation({
+  args: {
+    chatId: v.string(),
+    pinned: v.optional(v.boolean()),
+    muted: v.optional(v.boolean()),
+    markedUnread: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const { member } = await readableChat(ctx, args.chatId);
+    await ctx.db.patch(member._id, {
+      ...(args.pinned !== undefined ? { pinned: args.pinned } : {}),
+      ...(args.muted !== undefined ? { muted: args.muted } : {}),
+      ...(args.markedUnread !== undefined ? { markedUnread: args.markedUnread } : {}),
+    });
+  },
+});
+export const deleteChat = mutation({
+  args: { chatId: v.string(), confirmed: v.boolean() },
+  handler: async (ctx, args) => {
+    const { chat, user } = await readableChat(ctx, args.chatId);
+    if (chat.ownerSubject !== user.clerkSubject)
+      return fail("Only the conversation owner can delete it.");
+    if (!args.confirmed) return fail("Confirm deletion after reviewing unfinished work.");
+    await beginConversationStop(ctx, chat, "deleting");
+  },
+});
+export async function beginConversationStop(
+  ctx: MutationCtx,
+  chat: Doc<"aiOrchestratorChats">,
+  intent: "archiving" | "deleting",
+) {
+  if (chat.lifecycle === "deleted") return;
+  if (chat.lifecycle === "deleting" && intent === "archiving") return;
+  const now = Date.now();
+  await ctx.db.patch(chat._id, {
+    archived: true,
+    lifecycle: intent,
+    lifecycleStartedAt: chat.lifecycleStartedAt ?? now,
+  });
+  const { work, jobs } = await conversationWork(ctx, chat.id);
+  for (const job of jobs) {
+    if (job.stopRequested) continue;
+    await ctx.db.patch(job._id, {
+      stopRequested: true,
+      stopConfirmed: job.environmentId === null && job.generation === 0,
+      status: "cancelled",
+      error: "Conversation stop requested.",
+      updatedAt: now,
+    });
+  }
+  for (const assignment of work) {
+    if (assignment.stopConfirmed) continue;
+    const orchestrator = await findOrchestrator(ctx, assignment.orchestratorId);
+    await ctx.db.patch(assignment._id, { stopRequested: true, controlsPending: true });
+    if (orchestrator) await requestOrchestratorStop(ctx, orchestrator, assignment.id);
+  }
+  await reconcileConversationLifecycle(ctx, { ...chat, archived: true, lifecycle: intent });
+}

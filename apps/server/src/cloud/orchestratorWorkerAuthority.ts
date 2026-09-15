@@ -1,3 +1,5 @@
+import { executionOrigin } from "./orchestratorExecution.ts";
+import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
 /** Live Pathway privileges for work delegated by an AI contact. */
 import { makeFunctionReference } from "convex/server";
 import type { OrchestratorAssignmentOrigin } from "@spiritdevs/contracts/aiOrchestrator";
@@ -128,6 +130,7 @@ export class OrchestratorWorkerAuthority extends Context.Service<
 export const layer = Layer.effect(
   OrchestratorWorkerAuthority,
   Effect.gen(function* () {
+    const projections = yield* ThreadManagementService;
     const secrets = yield* ServerSecretStore.ServerSecretStore;
     const environment = yield* ServerEnvironment.ServerEnvironment;
     const config = yield* resolveCloudSyncConfig;
@@ -154,6 +157,18 @@ export const layer = Layer.effect(
       authorize: (invocation, name, payload) =>
         Effect.gen(function* () {
           if (!invocation.orchestratorOrigin) return;
+          const origin = yield* executionOrigin(
+            projections.getThreadProjection,
+            invocation.threadId,
+            invocation.orchestratorOrigin,
+          ).pipe(
+            Effect.mapError(
+              () =>
+                new OrchestratorWorkerPermissionError({
+                  message: "Could not identify the calling assignment.",
+                }),
+            ),
+          );
           const backend = yield* connect;
           const token = yield* backend.tokens.token;
           const response = yield* backend.lock.withPermits(1)(
@@ -161,7 +176,7 @@ export const layer = Layer.effect(
               try: () => {
                 backend.client.setAuth(token);
                 return backend.client.query(accessRef, {
-                  ...invocation.orchestratorOrigin!,
+                  ...origin,
                   localProjectId: invocation.projectId ?? null,
                 });
               },

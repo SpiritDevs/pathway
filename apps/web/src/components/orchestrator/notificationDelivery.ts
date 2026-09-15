@@ -10,6 +10,7 @@ export function shouldNotifyOrchestrator(input: {
   quiet: boolean;
 }) {
   const { chat, seenSequence, startedAt, focusedChatId, quiet } = input;
+  if (chat.muted) return false;
   const update = chat.notification;
   return (
     !!update &&

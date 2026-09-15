@@ -276,6 +276,59 @@ const seedParentWithTerminalTask = (input: {
   });
 
 it.layer(TestLayer)("delegated completion delivery repairs", (it) => {
+  it.effect(
+    "durably stops a completed parent's pending wake without needing a live provider session",
+    () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* OrchestratorV2;
+        const threadId = ThreadId.make("thread:stop-completed-parent");
+        const runId = RunId.make("run:stop-completed-parent");
+        yield* seedParentWithTerminalTask({
+          threadId,
+          runId,
+          projectId: ProjectId.make("project:stop-completed-parent"),
+          rootNodeId: NodeId.make("node:stop-root"),
+          taskId: NodeId.make("task:stop-child"),
+          deliveryState: "claimed",
+          completionWake: "always",
+          now: yield* DateTime.now,
+        });
+        const before = yield* orchestrator.getThreadProjection(threadId);
+        const sink = yield* EventSinkV2;
+        yield* sink.write({
+          commandId: CommandId.make("command:seed-stop-terminal"),
+          events: [
+            {
+              id: EventId.make("event:stop-parent-completed"),
+              type: "run.updated",
+              threadId,
+              runId,
+              occurredAt: yield* DateTime.now,
+              payload: {
+                ...before.runs.find((run) => run.id === runId)!,
+                status: "completed",
+                completedAt: yield* DateTime.now,
+              },
+            },
+          ],
+        });
+        const command = {
+          type: "run.interrupt" as const,
+          commandId: CommandId.make("command:stop-completed-parent"),
+          threadId,
+          runId,
+        };
+        yield* orchestrator.dispatch(command);
+        yield* orchestrator.dispatch(command);
+        const projection = yield* orchestrator.getThreadProjection(threadId);
+        assert.equal(projection.runs.find((run) => run.id === runId)?.status, "completed");
+        assert.equal(
+          projection.runs.find((run) => run.id === runId)?.delegatedCompletion?.disposition,
+          "stopped",
+        );
+        assert.equal(projection.subagents[0]?.completionDelivery?.state, "disposed");
+      }),
+  );
   it.effect("builds completion text and metadata from the same live cohort", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
