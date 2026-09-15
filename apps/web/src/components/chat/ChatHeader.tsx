@@ -286,7 +286,7 @@ export const ChatHeader = memo(function ChatHeader({
                       }}
                       className={cn(
                         "min-w-0 truncate text-sm font-medium text-foreground",
-                        onRenameThread !== undefined && "cursor-text",
+                        onRenameThread !== undefined && "cursor-text [-webkit-app-region:no-drag]",
                       )}
                     >
                       {activeThreadTitle}
