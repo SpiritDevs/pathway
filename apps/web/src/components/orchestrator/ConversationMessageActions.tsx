@@ -150,7 +150,9 @@ export function ConversationMessageActions({
                       workId: delivery.workId,
                       deliveryId: delivery.id,
                       revision: delivery.revision,
-                      orchestratorId: message.worker?.orchestratorId,
+                      ...(message.worker?.orchestratorId
+                        ? { orchestratorId: message.worker.orchestratorId }
+                        : {}),
                     });
                   }}
                 >
