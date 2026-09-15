@@ -256,7 +256,20 @@ export function FloatingConversationSwitcher({
             )}
           >
             <div className="flex h-14 shrink-0 items-center justify-between border-b px-4">
-              <Dialog.Title className="text-sm font-semibold">Conversations</Dialog.Title>
+              <div className="flex items-center gap-2">
+                {!docked && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Toggle conversations"
+                    aria-expanded={open}
+                    onClick={() => setOpen(false)}
+                  >
+                    <PanelLeftIcon className="size-4" />
+                  </Button>
+                )}
+                <Dialog.Title className="text-sm font-semibold">Conversations</Dialog.Title>
+              </div>
               <div className="flex gap-1">
                 <Button
                   variant="ghost"
