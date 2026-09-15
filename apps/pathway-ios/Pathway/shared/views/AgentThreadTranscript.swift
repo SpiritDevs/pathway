@@ -10,16 +10,9 @@ struct AgentThreadTranscript: View {
     @State private var preparingEditID: String?
     @State private var layoutCache = AgentThreadTranscriptLayoutCache()
 
-    private var transcriptItems: [PathwayTimelineItem] {
-        let visibleEnvironmentIDs = Set(model.transcriptItems.map(\.id))
-        return model.conversationItems.filter {
-            $0.fields["queueCommandId"]?.stringValue != nil || visibleEnvironmentIDs.contains($0.id)
-        }
-    }
-
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 22) {
-            ForEach(layoutCache.rows(transcriptItems, activeRunID: model.activeRunID)) { row in
+            ForEach(layoutCache.rows(model.transcriptItems, activeRunID: model.activeRunID)) { row in
                 switch row.content {
                 case .item(let item):
                     itemView(item)
@@ -69,22 +62,6 @@ struct AgentThreadTranscript: View {
                     if model.thread.shell.isTemporary { Text("Keep conversation before forking this thread.") }
                 }
             }
-            if let message = model.cloudQueueMessage(for: item) {
-                HStack(spacing: 14) {
-                    Text(cloudMessageStatus(message)).font(.caption).foregroundStyle(.secondary)
-                    if ["blocked", "canceled"].contains(message["state"]?.stringValue ?? "") {
-                        Button("Retry", systemImage: "arrow.clockwise") { mutateCloudMessage(item, action: "retry") }
-                    }
-                    if model.canEditCloudQueueMessage(item) {
-                        Button("Edit", systemImage: "pencil") { beginEditing(item) }
-                    }
-                    if model.canCancelCloudQueueMessage(item) {
-                        Button("Cancel", systemImage: "xmark") { mutateCloudMessage(item, action: "cancel") }
-                    }
-                }
-                .font(.caption).buttonStyle(.plain)
-                if let error = message["error"]?.stringValue { Text(error).font(.footnote).foregroundStyle(.red) }
-            }
         } else if item.type == "approval_request" {
             AgentTranscriptApproval(item: item, model: model)
         } else if item.type == "user_input_request" {
@@ -113,24 +90,6 @@ struct AgentThreadTranscript: View {
                 try await model.interrupt()
                 editingItem = item
             } catch { errorMessage = error.localizedDescription }
-        }
-    }
-
-    private func cloudMessageStatus(_ message: [String: JSONValue]) -> String {
-        switch message["state"]?.stringValue {
-        case "local": "Waiting to sync"
-        case "accepted": "Starting"
-        case "blocked": "Needs attention"
-        case "canceled": "Canceled"
-        case "delivered": "Sent to environment"
-        default: "Queued · Saved to cloud"
-        }
-    }
-
-    private func mutateCloudMessage(_ item: PathwayTimelineItem, action: String) {
-        Task {
-            do { try await model.mutateCloudQueueMessage(item, action: action) }
-            catch { errorMessage = error.localizedDescription }
         }
     }
 
@@ -670,7 +629,7 @@ private struct AgentTranscriptCodeBlock: View {
     }
 }
 
-private struct AgentTranscriptMessageEditor: View {
+struct AgentTranscriptMessageEditor: View {
     let item: PathwayTimelineItem
     let model: PathwayAgentThreadModel
     @Environment(\.dismiss) private var dismiss

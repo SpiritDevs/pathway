@@ -1307,3 +1307,92 @@ describe("durable thread queue", () => {
     expect(candidate?.issuedByMembershipId).toBe(DISPATCHER_MEMBERSHIP_ID);
   });
 });
+
+describe("queue sheet actions", () => {
+  async function pendingFollowups() {
+    const t = harness();
+    await seed(t);
+    await enqueue(t);
+    const client = asMember(t, "manager");
+    for (const command of ["one", "two", "three"]) {
+      await client.mutation(api.threadQueue.enqueue, {
+        ...queueIdentity,
+        environmentId: ENVIRONMENT_ONE,
+        submission: followup(command),
+        attachmentIds: [],
+      });
+    }
+    return { t, client };
+  }
+
+  it("reorders pending messages, preserves launch, and invalidates stale claims", async () => {
+    const { t, client } = await pendingFollowups();
+    await client.mutation(api.threadQueue.reorder, {
+      ...queueIdentity,
+      commandId: "three",
+      revision: 1,
+      beforeCommandId: "one",
+    });
+    const detail = await client.query(api.threadQueue.getThread, queueIdentity);
+    expect(detail.messages.map((message) => message.commandId)).toEqual([
+      "launch-one",
+      "three",
+      "one",
+      "two",
+    ]);
+    expect(detail.messages.find((message) => message.commandId === "three")?.revision).toBe(2);
+    await expect(
+      client.mutation(api.threadQueue.reorder, {
+        ...queueIdentity,
+        commandId: "three",
+        revision: 1,
+        beforeCommandId: null,
+      }),
+    ).rejects.toThrow("stale-command-claim");
+    await expect(
+      client.mutation(api.threadQueue.reorder, {
+        ...queueIdentity,
+        commandId: "three",
+        revision: 2,
+        beforeCommandId: "launch-one",
+      }),
+    ).rejects.toThrow("first message");
+    await asEnvironment(t).mutation(api.threadQueue.accept, firstFence);
+    await expect(
+      client.mutation(api.threadQueue.reorder, {
+        ...firstFence,
+        beforeCommandId: null,
+      }),
+    ).rejects.toThrow("already-accepted");
+  });
+
+  it("promotes a saved follow-up to steer without losing its body or changing accepted work", async () => {
+    const { t, client } = await pendingFollowups();
+    await asEnvironment(t).mutation(api.threadQueue.accept, firstFence);
+    await asEnvironment(t).mutation(api.threadQueue.acknowledge, firstFence);
+    await client.mutation(api.threadQueue.steer, {
+      ...queueIdentity,
+      commandId: "three",
+      revision: 1,
+      targetRunId: "active-run",
+    });
+    const detail = await client.query(api.threadQueue.getThread, queueIdentity);
+    expect(detail.messages.map((message) => message.commandId)).toEqual(["three", "one", "two"]);
+    expect(detail.messages[0]?.submission).toMatchObject({
+      kind: "message",
+      input: {
+        text: "Add tests",
+        messageId: "message-three",
+        dispatchMode: { type: "steer_active", targetRunId: "active-run" },
+      },
+    });
+    await expect(
+      asMember(t, "dispatcher").mutation(api.threadQueue.steer, {
+        ...queueIdentity,
+        commandId: "one",
+        revision: 2,
+        targetRunId: "active-run",
+      }),
+    ).rejects.toThrow();
+  });
+});

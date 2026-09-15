@@ -10,9 +10,9 @@ struct AgentThreadQueueControl: View {
 
     var body: some View {
         Group {
-            if !model.queuedRuns.isEmpty {
+            if !model.queuedRuns.isEmpty || !model.cloudPendingItems.isEmpty {
                 Button { isPresented = true } label: {
-                    Label("\(model.queuedRuns.count) queued", systemImage: "text.line.first.and.arrowtriangle.forward")
+                    Label("\(model.queuedRuns.count + model.cloudPendingItems.count) queued", systemImage: "text.line.first.and.arrowtriangle.forward")
                         .font(.caption).monospacedDigit()
                 }
                 #if os(visionOS)
@@ -47,6 +47,7 @@ private struct AgentThreadQueueSheet: View {
     @State private var editing = false
     @State private var errorMessage: String?
     @State private var reorderedIDs: [String]?
+    @State private var editingCloudItem: PathwayTimelineItem?
 
     private var queue: [PathwayThreadRun] {
         let runs = model.queuedRuns
@@ -89,15 +90,20 @@ private struct AgentThreadQueueSheet: View {
                         }
                         .tint(.red)
                     }
+                    .disabled(!model.isSubscriptionReady)
                     .moveDisabled(busy || !model.isSubscriptionReady || queue.count < 2)
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 8))
                     .accessibilityIdentifier("agent-thread-queue-row-\(run.id)")
                 }
                 .onMove(perform: move)
+                ForEach(model.cloudPendingItems) { item in
+                    cloudRow(item)
+                }
+                .onMove(perform: moveCloudMessage)
             }
             .listStyle(.plain)
             .environment(\.editMode, .constant(.active))
-            .disabled(busy || !model.isSubscriptionReady)
+            .disabled(busy)
             .navigationTitle("Queued messages")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -108,15 +114,87 @@ private struct AgentThreadQueueSheet: View {
             } message: { Text(errorMessage ?? "") }
             .onChange(of: model.queuedRuns, initial: true) { _, runs in
                 reorderedIDs = nil
-                if runs.isEmpty && !editing { dismiss() }
+                if runs.isEmpty && model.cloudPendingItems.isEmpty && !editing && editingCloudItem == nil { dismiss() }
             }
             .onChange(of: editing) { _, value in
-                if !value && model.queuedRuns.isEmpty { dismiss() }
+                if !value && model.queuedRuns.isEmpty && model.cloudPendingItems.isEmpty { dismiss() }
+            }
+            .onChange(of: model.cloudPendingItems.map(\.id)) { _, ids in
+                if ids.isEmpty && model.queuedRuns.isEmpty && !editing && editingCloudItem == nil { dismiss() }
+            }
+            .sheet(item: $editingCloudItem, onDismiss: {
+                if model.cloudPendingItems.isEmpty && model.queuedRuns.isEmpty { dismiss() }
+            }) { item in
+                AgentTranscriptMessageEditor(item: item, model: model)
             }
             .interactiveDismissDisabled(busy)
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+    }
+
+    private func cloudRow(_ item: PathwayTimelineItem) -> some View {
+        let message = model.cloudQueueMessage(for: item) ?? [:]
+        let editable = model.canEditCloudQueueMessage(item)
+        let isFollowUp = message["submission"]?.objectValue?["kind"]?.stringValue == "message"
+        return HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.text?.isEmpty == false ? AgentTranscriptMessageEditor.editableText(item.text ?? "") : "Queued message")
+                    .font(.subheadline).lineLimit(2)
+                if !item.attachments.isEmpty {
+                    Label("\(item.attachments.count) attachments", systemImage: "paperclip")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if let error = message["error"]?.stringValue {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                } else if !editable {
+                    Text("Sending to environment").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if message["state"]?.stringValue == "blocked" {
+                Button {
+                    perform { try await model.mutateCloudQueueMessage(item, action: "retry") }
+                } label: {
+                    Image(systemName: "arrow.clockwise").frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("Retry queued message")
+            }
+            Button { editingCloudItem = item } label: {
+                Image(systemName: "pencil").frame(width: 44, height: 44)
+            }
+            .disabled(!editable)
+            .accessibilityLabel("Edit queued message")
+            Button {
+                perform { try await model.mutateCloudQueueMessage(item, action: "steer", targetRunID: model.activeRunID) }
+            } label: {
+                Image(systemName: "arrow.turn.up.right").frame(width: 44, height: 44)
+            }
+            .disabled(!editable || !isFollowUp || message["state"]?.stringValue == "blocked" || model.activeRunID == nil || !model.isSubscriptionReady)
+            .accessibilityLabel("Steer queued message")
+            Button {
+                perform { try await model.mutateCloudQueueMessage(item, action: "cancel") }
+            } label: {
+                Image(systemName: "trash").frame(width: 44, height: 44)
+            }
+            .tint(.red)
+            .disabled(!model.canCancelCloudQueueMessage(item))
+            .accessibilityLabel("Delete queued message")
+        }
+        .buttonStyle(.borderless)
+        .moveDisabled(busy || !editable || !isFollowUp || model.cloudPendingItems.count < 2)
+        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 8))
+        .accessibilityIdentifier("agent-thread-queue-row-\(item.id)")
+    }
+
+    private func moveCloudMessage(from source: IndexSet, to destination: Int) {
+        var items = model.cloudPendingItems
+        guard source.count == 1, let index = source.first, items.indices.contains(index) else { return }
+        let item = items[index]
+        items.move(fromOffsets: source, toOffset: destination)
+        guard let newIndex = items.firstIndex(where: { $0.id == item.id }), newIndex != index else { return }
+        let nextID = newIndex + 1 < items.count ? items[newIndex + 1].fields["queueCommandId"]?.stringValue : nil
+        perform { try await model.mutateCloudQueueMessage(item, action: "reorder", beforeCommandID: nextID) }
     }
 
     private func action(_ title: String, symbol: String, id: String, run: PathwayThreadRun, perform: @escaping () -> Void) -> some View {

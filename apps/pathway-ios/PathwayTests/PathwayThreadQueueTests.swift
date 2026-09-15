@@ -228,12 +228,14 @@ extension PathwayThreadQueueTests {
         #expect(thread.shell.interactionMode == "plan")
     }
 
-    @Test func queuedMessagesUseNormalTimelineAndDeduplicateAsEnvironmentHistoryArrives() throws {
+    @Test func cloudQueuedMessagesStayInQueueAndDeduplicateAsEnvironmentHistoryArrives() throws {
         let model = queueConversationModel()
         model.cloudQueueMessages = [.object(["commandId": .string("command"), "state": .string("queued"), "acceptedAt": .null,
                                              "submission": .object(["kind": .string("message"), "input": .object(["messageId": .string("message"), "text": .string("Saved prompt"),
                                                                                                                   "attachments": .array([.object(["id": .string("file"), "type": .string("file"), "name": .string("context.txt"), "mimeType": .string("text/plain"), "sizeBytes": .number(7)])])])])])]
-        let item = try #require(model.conversationItems.first)
+        let item = try #require(model.cloudPendingItems.first)
+        #expect(model.conversationItems.isEmpty)
+        #expect(model.transcriptItems.isEmpty)
         #expect(item.isUserMessage)
         #expect(item.text == "Saved prompt")
         #expect(item.attachments.first?.name == "context.txt")
@@ -242,11 +244,63 @@ extension PathwayThreadQueueTests {
         canceled["state"] = .string("canceled")
         model.cloudQueueMessages[0] = .object(canceled)
         #expect(model.canEditCloudQueueMessage(item))
+        #expect(model.cloudPendingItems.isEmpty)
         model.installSnapshot(.object(["thread": .object(["id": .string(model.threadID)]), "visibleTurnItems": .array([
             .object(["item": .object(["id": .string("environment-item"), "type": .string("user_message"), "messageId": .string("message"), "text": .string("Saved prompt")])])
         ])]), sequence: 1)
+        #expect(model.cloudPendingItems.isEmpty)
         #expect(model.conversationItems.count == 1)
         #expect(model.conversationItems.first?.id == "environment-item")
+    }
+
+    @Test func cloudQueueUsesServerOrderAndHidesDeliveredEnvironmentQueueFromTranscript() {
+        let model = queueConversationModel()
+        let queued = PathwayQueuedThread(companyID: "company", fields: ["threadId": .string(model.threadID), "environmentId": .string("environment")])
+        func message(_ id: String) -> JSONValue {
+            .object(["commandId": .string(id), "state": .string("queued"), "acceptedAt": .null,
+                     "submission": .object(["kind": .string("message"), "input": .object(["messageId": .string(id), "text": .string(id)])])])
+        }
+        model.cloudQueueMessages = [message("one"), message("two")]
+        model.installCloudQueueDetail(queued, detail: .object(["messages": .array([message("two"), message("one")])]))
+        #expect(model.cloudPendingItems.map(\.messageID) == ["two", "one"])
+        model.installSnapshot(.object([
+            "runs": .array([.object(["id": .string("run"), "status": .string("queued"), "userMessageId": .string("two")])]),
+            "visibleTurnItems": .array([.object(["item": .object(["id": .string("received"), "type": .string("user_message"),
+                "messageId": .string("two"), "runId": .string("run"), "text": .string("two")])])])
+        ]))
+        #expect(model.cloudPendingItems.map(\.messageID) == ["one"])
+        #expect(model.queuedRuns.count == 1)
+        #expect(model.conversationItems.isEmpty)
+    }
+
+    @Test(arguments: ["reorder", "steer"])
+    func localQueueActionsPersistBeforeSync(operation: String) async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PathwayThreadQueueStore(directory: directory)
+        let entries = ["one", "two"].map { id in
+            PathwayLocalQueueEntry(companyID: "company", environmentID: "offline", threadID: "thread", commandID: id,
+                submission: .object(["kind": .string("message"), "input": .object(["commandId": .string(id), "text": .string(id),
+                    "dispatchMode": .object(["type": .string("queue_after_active")])])]), files: [])
+        }
+        try await store.save(entries)
+        let queue = PathwayThreadQueueModel(request: { _, _, _ in throw URLError(.notConnectedToInternet) },
+                                            subscribe: { _, _ in AsyncThrowingStream { _ in } })
+        await queue.configure(directory: directory)
+        queue.observe(companies: ["company"])
+        let thread = try #require(queue.threads.first)
+        try await queue.mutate(operation, thread: thread, fields: ["commandId": .string("two"), "revision": .number(0),
+            "beforeCommandId": .string("one"), "targetRunId": .string("active")])
+        queue.stop(clear: true)
+        let saved = try await store.load()
+        let edited = try #require(saved.first { $0.commandID == "two" })
+        #expect(edited.submission.objectValue?["input"]?.objectValue?["text"] == .string("two"))
+        #expect(edited.localRevision == 1)
+        if operation == "reorder" { #expect(saved.map(\.commandID) == ["two", "one"]) }
+        else {
+            #expect(edited.submission.objectValue?["input"]?.objectValue?["dispatchMode"] == .object([
+                "type": .string("steer_active"), "targetRunId": .string("active")]))
+        }
     }
 
     @Test func ordinaryComposerQueuesOfflineWithSelectedSettingsAndAttachmentBytes() async throws {

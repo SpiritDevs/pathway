@@ -3,6 +3,7 @@ import SwiftUI
 struct NewAgentThreadSettings<Tools: View>: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var model: PathwayAgentThreadCreationModel
+    @State private var showsModelSettings = false
 
     var title = "Thread Settings"
     @ViewBuilder var tools: () -> Tools
@@ -12,20 +13,10 @@ struct NewAgentThreadSettings<Tools: View>: View {
             Form {
                 tools()
                 Section("Agent") {
-                    Picker("Provider", selection: $model.selectedProviderID) {
-                        ForEach(model.providers) { provider in
-                            Text(provider.name).tag(provider.id)
-                        }
-                    }
-
-                    Picker("Model", selection: $model.selectedModelID) {
-                        ForEach(model.selectedProvider?.models ?? []) { availableModel in
-                            Text(availableModel.name).tag(availableModel.id)
-                        }
-                    }
-
-                    ForEach(model.selectedModel?.optionDescriptors ?? []) { descriptor in
-                        optionControl(descriptor)
+                    Button {
+                        showsModelSettings = true
+                    } label: {
+                        LabeledContent("Model and options", value: model.selectedModel?.name ?? "Choose model")
                     }
                 }
 
@@ -72,6 +63,9 @@ struct NewAgentThreadSettings<Tools: View>: View {
             .onChange(of: model.runtimeMode) { _, _ in model.pinPlacement() }
             .onChange(of: model.interactionMode) { _, _ in model.pinPlacement() }
             .onChange(of: model.startFromOrigin) { _, _ in model.pinPlacement() }
+            .sheet(isPresented: $showsModelSettings) {
+                NewAgentModelSettingsSheet(model: model)
+            }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -82,30 +76,7 @@ struct NewAgentThreadSettings<Tools: View>: View {
         }
     }
 
-    @ViewBuilder
-    private func optionControl(_ descriptor: PathwayProviderOptionDescriptor) -> some View {
-        if descriptor.type == "boolean" {
-            Toggle(
-                descriptor.label,
-                isOn: Binding(
-                    get: { model.optionValues[descriptor.id]?.boolValue ?? false },
-                    set: { model.setOption(descriptor, value: .bool($0)) }
-                )
-            )
-        } else {
-            Picker(
-                descriptor.label,
-                selection: Binding(
-                    get: { model.optionValues[descriptor.id]?.stringValue ?? "" },
-                    set: { model.setOption(descriptor, value: .string($0)) }
-                )
-            ) {
-                ForEach(descriptor.choices) { choice in
-                    Text(choice.label).tag(choice.id)
-                }
-            }
-        }
-    }
+
 }
 
 extension NewAgentThreadSettings where Tools == EmptyView {

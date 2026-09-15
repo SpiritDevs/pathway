@@ -39,6 +39,7 @@ final class PathwayAgentThreadCreationModel {
     private(set) var providers: [PathwayServerProvider] = []
     private(set) var serverConfig: [String: JSONValue] = [:]
     let attachments: PathwayNewThreadAttachments
+    var environmentID: String { environment.environment.environmentId }
     var workspaceRoot: String { binding?.binding.localWorkspaceRoot ?? "" }
     var bindingID: String { binding?.id ?? Self.conversationDraftKey(environment) }
     var isConversation: Bool { binding == nil }

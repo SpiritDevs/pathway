@@ -5,6 +5,7 @@ import { paginationOptsValidator } from "convex/server";
 import type {
   ChatAttachment,
   ModelSelection,
+  RunId,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
 } from "@spiritdevs/contracts";
 import type {
@@ -913,6 +914,96 @@ export const edit = mutation({
     return null;
   },
 });
+async function pendingMessages(ctx: QueryCtx, thread: Doc<"threadQueueThreads">) {
+  const rows = await Promise.all([
+    threadMessageStateQuery(ctx, thread, "queued").collect(),
+    threadMessageStateQuery(ctx, thread, "blocked").collect(),
+  ]);
+  return rows
+    .flat()
+    .filter((row) => row.acceptedAt === null)
+    .sort((a, b) => a.sequence - b.sequence);
+}
+
+/** Reuse existing sequence slots so accepted work and future enqueues keep their order. */
+async function movePendingMessage(
+  ctx: MutationCtx,
+  thread: Doc<"threadQueueThreads">,
+  message: Doc<"threadQueueMessages">,
+  beforeCommandId: string | null,
+) {
+  requireEditable(message);
+  if (message.state !== "queued" && message.state !== "blocked")
+    throw invalid("Only pending messages can be reordered.");
+  if ((message.submission as ThreadQueueSubmission).kind === "launch")
+    throw invalid("The thread's first message must stay first.");
+  const rows = await pendingMessages(ctx, thread);
+  const reordered = rows.filter((row) => row._id !== message._id);
+  if (beforeCommandId === message.commandId) return;
+  const destination =
+    beforeCommandId === null
+      ? reordered.length
+      : reordered.findIndex((row) => row.commandId === beforeCommandId);
+  if (destination < 0) throw invalid("The destination message is no longer queued.");
+  reordered.splice(destination, 0, message);
+  if (
+    reordered.some(
+      (row, index) => (row.submission as ThreadQueueSubmission).kind === "launch" && index !== 0,
+    )
+  )
+    throw invalid("The thread's first message must stay first.");
+  for (const [index, row] of reordered.entries()) {
+    const sequence = rows[index]!.sequence;
+    if (row.sequence !== sequence) {
+      await ctx.db.patch(row._id, { sequence, revision: row.revision + 1, updatedAt: Date.now() });
+    }
+  }
+  await refreshThread(ctx, thread);
+}
+
+export const reorder = mutation({
+  args: { ...fenceArgs, beforeCommandId: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const { actor, thread, message } = await queuedMessage(ctx, args);
+    member(actor);
+    requirePermission(actor, "remoteAgents.control");
+    requireRevision(message, args.revision);
+    await movePendingMessage(ctx, thread, message, args.beforeCommandId);
+    return null;
+  },
+});
+
+export const steer = mutation({
+  args: { ...fenceArgs, targetRunId: v.string() },
+  handler: async (ctx, args) => {
+    const { actor, thread, message } = await queuedMessage(ctx, args);
+    member(actor);
+    requirePermission(actor, "remoteAgents.control");
+    requireRevision(message, args.revision);
+    requireEditable(message);
+    const original = message.submission as ThreadQueueSubmission;
+    if (original.kind !== "message" || message.state !== "queued")
+      throw invalid("Only queued follow-up messages can steer an active turn.");
+    const submission: ThreadQueueSubmission = {
+      ...original,
+      input: {
+        ...original.input,
+        dispatchMode: { type: "steer_active" as const, targetRunId: args.targetRunId as RunId },
+      },
+    };
+    validate(() => decodeQueueSubmission(submission, thread.threadId));
+    const head = (await pendingMessages(ctx, thread)).find((row) => row._id !== message._id);
+    await movePendingMessage(ctx, thread, message, head?.commandId ?? null);
+    const moved = (await ctx.db.get(message._id))!;
+    await ctx.db.patch(message._id, {
+      submission,
+      revision: moved.revision + 1,
+      updatedAt: Date.now(),
+    });
+    return null;
+  },
+});
+
 export const cancel = mutation({
   args: fenceArgs,
   handler: async (ctx, args) => {

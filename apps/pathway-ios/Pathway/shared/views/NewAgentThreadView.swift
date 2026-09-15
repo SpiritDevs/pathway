@@ -384,6 +384,7 @@ private struct NewAgentThreadComposer: View {
     @State private var promptFocused = false
     @State private var showsOptions = false
     @State private var showsBranches = false
+    @State private var showsModelSettings = false
 
     var body: some View {
         ZStack {
@@ -418,6 +419,8 @@ private struct NewAgentThreadComposer: View {
             .multilineTextAlignment(.center)
             .padding(.horizontal, 24)
         }
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture().onEnded { promptFocused = false })
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 4) {
                 if let model {
@@ -438,7 +441,10 @@ private struct NewAgentThreadComposer: View {
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 12)
-            .background(.background)
+            .background {
+                dismissKeyboardBackground
+                    .background(.background)
+            }
         }
         .sheet(isPresented: $showsBranches) {
             if let model { NewAgentThreadBranchPicker(model: model).presentationDetents([.medium, .large]) }
@@ -522,6 +528,8 @@ private struct NewAgentThreadComposer: View {
         .foregroundStyle(.secondary)
         .frame(minHeight: 44)
         .padding(.horizontal, 8)
+        .contentShape(Rectangle())
+        .simultaneousGesture(TapGesture().onEnded { promptFocused = false })
         .disabled(model.isLaunching)
     }
 
@@ -543,9 +551,26 @@ private struct NewAgentThreadComposer: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("new-agent-thread-options")
 
-                Text(model.selectedModel?.name ?? "Choose model")
+                Button {
+                    promptFocused = false
+                    showsModelSettings = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(model.selectedModel?.name ?? "Choose model").lineLimit(1)
+                        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                    }
                     .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(model.isLaunching)
+                .accessibilityLabel("Thread model")
+                .accessibilityValue(model.selectedModel?.name ?? "Choose model")
+                .accessibilityIdentifier("new-agent-thread-model-picker")
+                .sheet(isPresented: $showsModelSettings) {
+                    NewAgentModelSettingsSheet(model: model)
+                }
 
                 Spacer(minLength: 0)
 
@@ -565,6 +590,8 @@ private struct NewAgentThreadComposer: View {
                 .disabled(!model.canLaunch)
                 .accessibilityLabel("Start agent thread")
             }
+            .contentShape(Rectangle())
+            .simultaneousGesture(TapGesture().onEnded { promptFocused = false })
 
             if model.isImportingCapture { ProgressView("Importing shared draft…").font(.caption) }
             if let statusMessage = statusMessage(model) {
@@ -576,9 +603,18 @@ private struct NewAgentThreadComposer: View {
         }
         .padding(14)
         .background {
-            RoundedRectangle(cornerRadius: 26).fill(.regularMaterial)
-                .overlay { RoundedRectangle(cornerRadius: 26).strokeBorder(.primary.opacity(0.10), lineWidth: 0.5) }
+            dismissKeyboardBackground
+                .background(.regularMaterial, in: .rect(cornerRadius: 26))
+                .overlay { RoundedRectangle(cornerRadius: 26).strokeBorder(.primary.opacity(0.10), lineWidth: 0.5).allowsHitTesting(false) }
         }
+    }
+
+    private var dismissKeyboardBackground: some View {
+        Button { promptFocused = false } label: {
+            Color.clear.contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHidden(true)
     }
 
     private func statusMessage(_ model: PathwayAgentThreadCreationModel) -> String? {

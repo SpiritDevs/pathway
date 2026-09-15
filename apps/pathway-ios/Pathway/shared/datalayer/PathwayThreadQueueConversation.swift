@@ -28,11 +28,13 @@ extension PathwayQueuedThread {
 }
 
 extension PathwayAgentThreadModel {
-    /// The ordinary transcript joins cloud submissions to environment history by message identity.
-    var conversationItems: [PathwayTimelineItem] {
+    /// Cloud submissions stay in the queue until environment history confirms they have started.
+    var conversationItems: [PathwayTimelineItem] { transcriptItems }
+
+    var cloudPendingItems: [PathwayTimelineItem] {
         let received = Set(items.compactMap(\.messageID))
-        let pending = cloudQueueMessages.compactMap { value -> PathwayTimelineItem? in
-            guard let fields = value.objectValue,
+        return cloudQueueMessages.compactMap { value -> PathwayTimelineItem? in
+            guard let fields = value.objectValue, fields["state"]?.stringValue != "canceled",
                   let submission = fields["submission"]?.objectValue,
                   let input = submission["input"]?.objectValue else { return nil }
             let message = submission["kind"]?.stringValue == "launch" ? input["initialMessage"]?.objectValue ?? [:] : input
@@ -45,7 +47,6 @@ extension PathwayAgentThreadModel {
                 "createdBy": .string("user"), "queueCommandId": fields["commandId"] ?? .null
             ]))
         }
-        return items + pending
     }
 
     func cloudQueueMessage(for item: PathwayTimelineItem) -> [String: JSONValue]? {
@@ -82,10 +83,8 @@ extension PathwayAgentThreadModel {
             guard let command = value.objectValue?["commandId"]?.stringValue else { return nil }
             return (command, value)
         }, uniquingKeysWith: { _, latest in latest })
-        let previous = Set(cloudQueueMessages.compactMap { $0.objectValue?["commandId"]?.stringValue })
         let received = Set(items.compactMap(\.messageID))
-        // Keep the existing chronological position while replacing local copies with cloud
-        // copies. A delayed cloud snapshot must not move a just-sent message above its parent.
+        // Preserve unconfirmed submissions after the cloud's authoritative queue order.
         let retained = cloudQueueMessages.compactMap { value -> JSONValue? in
             var fields = value.objectValue ?? [:]
             if let command = fields["commandId"]?.stringValue, let replacement = incoming[command] { return replacement }
@@ -95,7 +94,8 @@ extension PathwayAgentThreadModel {
             if authoritative { fields["state"] = .string("delivered"); fields["editable"] = .bool(false) }
             return .object(fields)
         }
-        cloudQueueMessages = retained + messages.filter { !previous.contains($0.objectValue?["commandId"]?.stringValue ?? "") }
+        let missing = retained.filter { incoming[$0.objectValue?["commandId"]?.stringValue ?? ""] == nil }
+        cloudQueueMessages = messages + missing
         for (id, value) in detail.objectValue?["attachmentUrls"]?.objectValue ?? [:] {
             if let text = value.stringValue, let url = URL(string: text) { cloudQueueAttachmentURLs[id] = url }
         }
@@ -117,12 +117,22 @@ extension PathwayAgentThreadModel {
         modelCatalog = providers
     }
 
-    func mutateCloudQueueMessage(_ item: PathwayTimelineItem, action: String, text: String? = nil) async throws {
+    func mutateCloudQueueMessage(_ item: PathwayTimelineItem, action: String, text: String? = nil,
+                                 beforeCommandID: String? = nil, targetRunID: String? = nil) async throws {
         guard let threadQueue, let queued = cloudQueuedThread, let message = cloudQueueMessage(for: item),
               let command = message["commandId"] else { throw PathwayThreadConversationError.message("This message has changed. Refresh the conversation before trying again.") }
         var fields: [String: JSONValue] = ["commandId": command, "revision": message["revision"] ?? .number(0)]
         if let text { fields["text"] = .string(text) }
+        if action == "reorder" { fields["beforeCommandId"] = beforeCommandID.map(JSONValue.string) ?? .null }
+        if let targetRunID { fields["targetRunId"] = .string(targetRunID) }
         try await threadQueue.mutate(action, thread: queued, fields: fields)
+        if action == "cancel" {
+            if message["submission"]?.objectValue?["kind"]?.stringValue == "launch" {
+                cloudQueueMessages.removeAll()
+            } else {
+                cloudQueueMessages.removeAll { $0.objectValue?["commandId"] == command }
+            }
+        }
         await updateCloudQueue(queued)
     }
 }

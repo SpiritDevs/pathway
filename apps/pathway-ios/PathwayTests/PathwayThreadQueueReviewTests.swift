@@ -115,7 +115,7 @@ extension PathwayThreadQueueTests {
         let model = queueConversationModel()
         model.cloudQueueMessages = [.object(["commandId": .string("command"), "state": .string("blocked"), "acceptedAt": .number(1), "rejection": .string("command"),
                                              "submission": .object(["kind": .string("message"), "input": .object(["messageId": .string("message"), "text": .string("Rejected")])])])]
-        let item = try #require(model.conversationItems.first)
+        let item = try #require(model.cloudPendingItems.first)
         #expect(!model.canEditCloudQueueMessage(item))
         #expect(model.canCancelCloudQueueMessage(item))
         var fields = try #require(model.cloudQueueMessages.first?.objectValue)

@@ -464,6 +464,30 @@ final class PathwayThreadQueueModel {
                 local[index].submission = .object(submission)
                 local[index].localRevision = (local[index].localRevision ?? 0) + 1
                 local[index].error = nil
+            } else if operation == "steer", let target = fields["targetRunId"]?.stringValue {
+                guard var submission = local[index].submission.objectValue, submission["kind"]?.stringValue == "message",
+                      var input = submission["input"]?.objectValue else {
+                    throw PathwayThreadConversationError.message("Only follow-up messages can steer an active turn.")
+                }
+                input["dispatchMode"] = .object(["type": .string("steer_active"), "targetRunId": .string(target)])
+                submission["input"] = .object(input)
+                local[index].submission = .object(submission)
+                local[index].localRevision = (local[index].localRevision ?? 0) + 1
+            } else if operation == "reorder" {
+                let sameThread: (PathwayLocalQueueEntry) -> Bool = {
+                    $0.companyID == thread.companyID && $0.threadID == thread.threadID && $0.environmentID == thread.environmentID
+                }
+                let before = fields["beforeCommandId"]?.stringValue
+                guard local[index].submission.objectValue?["kind"]?.stringValue == "message",
+                      !local.contains(where: { sameThread($0) && $0.submissionStarted == true }),
+                      before == nil || local.contains(where: { sameThread($0) && $0.commandID == before && $0.submission.objectValue?["kind"]?.stringValue == "message" }) else {
+                    throw PathwayThreadConversationError.message("Wait for these messages to finish syncing before changing their order.")
+                }
+                var moved = local.remove(at: index)
+                moved.localRevision = (moved.localRevision ?? 0) + 1
+                let destination = before.flatMap { id in local.firstIndex { sameThread($0) && $0.commandID == id } }
+                    ?? local.lastIndex(where: sameThread).map { $0 + 1 } ?? local.count
+                local.insert(moved, at: destination)
             } else if operation == "cancel" {
                 let launch = local[index].submission.objectValue?["kind"]?.stringValue == "launch"
                 local.removeAll { $0.companyID == thread.companyID && $0.threadID == thread.threadID && $0.environmentID == thread.environmentID && (launch || $0.commandID == commandID) }

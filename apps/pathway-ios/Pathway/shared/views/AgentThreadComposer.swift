@@ -28,7 +28,6 @@ struct AgentThreadComposer: View {
     @State private var showsSettings = false
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var errorMessage: String?
-    @State private var isChangingModel = false
     @State private var isInterrupting = false
     @State private var showsQuestions = false
     @State private var showsQueuedEditRecovery = false
@@ -154,8 +153,6 @@ struct AgentThreadComposer: View {
         #endif
         .sheet(isPresented: $showsSettings) {
             AgentThreadComposerSettings(model: model)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showsStash, onDismiss: {
             Task { await reloadStashCount() }
@@ -336,26 +333,21 @@ struct AgentThreadComposer: View {
     }
 
     private var modelMenu: some View {
-        Menu {
-            AgentThreadModelMenuContent(
-                providers: model.modelCatalog.isEmpty ? model.providers : model.modelCatalog,
-                selection: model.currentModelSelection,
-                environmentID: model.thread.environmentId,
-                onSelect: changeModel
-            )
+        Button {
+            isFocused = false
+            showsSettings = true
         } label: {
             HStack(spacing: 4) {
                 Text(selectedModelName.isEmpty ? modelName : selectedModelName).lineLimit(1)
-                if isChangingModel || (model.providers.isEmpty && model.connectionState == .connecting) { ProgressView().controlSize(.mini) }
+                if model.providers.isEmpty && model.connectionState == .connecting { ProgressView().controlSize(.mini) }
                 else { Image(systemName: "chevron.down").font(.caption2.weight(.semibold)) }
             }
             .font(.subheadline)
             .frame(minHeight: controlDiameter)
             .contentShape(Rectangle())
         }
-        .menuOrder(.fixed)
         .buttonStyle(.plain)
-        .disabled((model.providers.isEmpty && model.modelCatalog.isEmpty) || isChangingModel || model.isSending || model.isConfigurationLocked)
+        .disabled((model.providers.isEmpty && model.modelCatalog.isEmpty) || model.isSending || model.isConfigurationLocked)
         .accessibilityLabel("Thread model")
         .accessibilityValue(selectedModelName)
         .accessibilityIdentifier("agent-thread-model-picker")
@@ -567,16 +559,6 @@ struct AgentThreadComposer: View {
                 } catch is CancellationError { return }
                 catch { errorMessage = error.localizedDescription }
             }
-        }
-    }
-
-    private func changeModel(providerID: String, modelID: String) {
-        guard providerID != model.currentModelSelection.instanceId || modelID != model.currentModelSelection.model else { return }
-        isChangingModel = true
-        Task {
-            defer { isChangingModel = false }
-            do { try await model.changeModelSelection(.init(instanceId: providerID, model: modelID, options: nil)) }
-            catch { errorMessage = error.localizedDescription }
         }
     }
 
