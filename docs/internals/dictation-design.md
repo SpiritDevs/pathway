@@ -108,11 +108,15 @@ of retaining audio for retry.
 
 ## Bar and text delivery
 
-The idle bar is static and visible by default. Hover reveals Record, Settings, History, and Hide.
+The idle bar is static and visible by default, with Record, Settings, History, and Hide always available.
 Quick hide is local to the overlay and resets when recording starts; it does not disable shortcuts
 or change the persistent idle-bar preference. The tray can also show it again. History
 opens five recent entries with Copy actions and View all history. Hiding the idle bar keeps active
 recording and processing feedback visible.
+
+Overlay panels keep a fixed bottom edge above the bottom of the current display work area and grow
+upward. Work area and display removal events refresh placement without moving a recording to the
+pointer's display. On macOS, the panel's window level keeps a revealed Dock from covering controls.
 
 The recording view shows microphone levels. Locked recording adds Cancel and Accept. Processing,
 result, and error views are distinct. Meter messages update the overlay separately from the main

@@ -62,7 +62,8 @@ const make = Effect.gen(function* () {
   let quitting = false;
   let widgetLoading = false;
   let idleBarHidden = false;
-  let display: Electron.Display | undefined;
+  let displayId: number | undefined;
+  let widgetSize = { width: 296, height: 72 };
   let controller: DictationController | undefined;
   const boundOwners = new Set<number>();
 
@@ -126,30 +127,37 @@ const make = Effect.gen(function* () {
     ]);
   const position = (width: number, height: number) => {
     if (!overlay || overlay.isDestroyed()) return;
-    const targetDisplay =
-      display ?? Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint());
-    const area = targetDisplay.workArea;
-    const phase = controller?.getState().phase;
-    const lowerBar =
-      phase === "recording" || phase === "starting" || (phase === "idle" && height <= 100);
-    const bottom = lowerBar
-      ? Math.min(area.y + area.height + 50, targetDisplay.bounds.y + targetDisplay.bounds.height)
-      : area.y + area.height;
+    widgetSize = { width, height };
+    // Keep the chosen display, but refresh its work area when the Dock or taskbar changes.
+    const display =
+      Electron.screen.getAllDisplays().find((candidate) => candidate.id === displayId) ??
+      Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint());
+    displayId = display.id;
+    const area = display.workArea;
+    const bottomGap = Math.min(18, Math.max(0, area.height - 24));
     const safeWidth = Math.min(area.width, Math.max(80, Math.round(width)));
-    const safeHeight = Math.min(area.height, Math.max(24, Math.round(height)));
-    overlay.setBounds({
+    const safeHeight = Math.min(area.height - bottomGap, Math.max(24, Math.round(height)));
+    const bounds = {
       x: Math.round(area.x + (area.width - safeWidth) / 2),
-      y: bottom - safeHeight,
+      y: area.y + area.height - bottomGap - safeHeight,
       width: safeWidth,
       height: safeHeight,
-    });
+    };
+    const current = overlay.getBounds();
+    if (
+      current.x !== bounds.x ||
+      current.y !== bounds.y ||
+      current.width !== bounds.width ||
+      current.height !== bounds.height
+    )
+      overlay.setBounds(bounds, false);
   };
+  const reposition = () => position(widgetSize.width, widgetSize.height);
   const createOverlay = async () => {
     if (overlay || widgetLoading || quitting) return;
     widgetLoading = true;
     const panel = new Electron.BrowserWindow({
-      width: 620,
-      height: 330,
+      ...widgetSize,
       frame: false,
       transparent: true,
       resizable: false,
@@ -176,7 +184,8 @@ const make = Effect.gen(function* () {
       // Process transformation hides the entire macOS app when this panel opens.
       skipTransformProcessType: true,
     });
-    panel.setAlwaysOnTop(true, "floating");
+    // Floating windows sit below the macOS Dock, including when it is revealed by hover.
+    panel.setAlwaysOnTop(true, environment.platform === "darwin" ? "pop-up-menu" : "floating");
     panel.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     panel.webContents.on("will-navigate", (event) => event.preventDefault());
     panel.on("closed", () => {
@@ -198,7 +207,7 @@ const make = Effect.gen(function* () {
     if ((!state.authenticated || state.phase === "disabled") && overlay && !overlay.isDestroyed()) {
       overlay.destroy();
       overlay = undefined;
-      display = undefined;
+      displayId = undefined;
     }
     const visible =
       state.authenticated &&
@@ -207,11 +216,13 @@ const make = Effect.gen(function* () {
       state.mode !== "test";
     if (visible && !overlay) void createOverlay().catch(() => {});
     if (overlay && !overlay.isDestroyed()) {
-      if (state.phase === "starting" || !display)
-        display = Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint());
+      if (state.phase === "starting" || displayId === undefined)
+        displayId = Electron.screen.getDisplayNearestPoint(
+          Electron.screen.getCursorScreenPoint(),
+        ).id;
       overlay.webContents.send(channels.DICTATION_STATE, state);
       if (visible && !widgetLoading) {
-        position(overlay.getBounds().width, overlay.getBounds().height);
+        reposition();
         overlay.showInactive();
       } else if (!visible) overlay.hide();
     }
@@ -403,6 +414,8 @@ const make = Effect.gen(function* () {
     Electron.powerMonitor.on("lock-screen", suspend);
     Electron.ipcMain.on(channels.DICTATION_RESIZE, resize);
     Electron.ipcMain.on(channels.DICTATION_HIDE, hide);
+    Electron.screen.on("display-metrics-changed", reposition);
+    Electron.screen.on("display-removed", reposition);
     // Hashing previously downloaded weights must not delay opening the main window.
     void ownedController
       .initialize()
@@ -420,6 +433,8 @@ const make = Effect.gen(function* () {
       Electron.powerMonitor.removeListener("lock-screen", suspend);
       Electron.ipcMain.removeListener(channels.DICTATION_RESIZE, resize);
       Electron.ipcMain.removeListener(channels.DICTATION_HIDE, hide);
+      Electron.screen.removeListener("display-metrics-changed", reposition);
+      Electron.screen.removeListener("display-removed", reposition);
       overlay?.destroy();
       tray?.destroy();
       await ownedController.dispose();
