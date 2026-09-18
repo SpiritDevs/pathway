@@ -508,6 +508,49 @@ jobs:
 
           vp run dist:desktop:artifact "${args[@]}"
 
+      - name: Verify signed and notarized macOS release
+        if: matrix.platform == 'mac'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          RELEASE_ARCH: ${{ matrix.arch }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          archive="$GITHUB_WORKSPACE/release/Pathway-Code-${RELEASE_VERSION}-${RELEASE_ARCH}.zip"
+          test -f "$archive" || { echo "Expected release ZIP is missing." >&2; exit 1; }
+          test -n "$APPLE_TEAM_ID" || { echo "Expected Apple team is missing." >&2; exit 1; }
+          verification_dir="$(mktemp -d "$RUNNER_TEMP/pathway-release-check.XXXXXX")"
+          trap 'rm -rf "$verification_dir"' EXIT
+          /usr/bin/ditto -x -k "$archive" "$verification_dir"
+
+          shopt -s nullglob
+          apps=("$verification_dir"/*.app)
+          if [[ "${#apps[@]}" -ne 1 ]]; then
+            echo "Release ZIP must contain exactly one app." >&2
+            exit 1
+          fi
+          app="${apps[0]}"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$app"
+          signature="$(/usr/bin/codesign --display --verbose=4 "$app" 2>&1)"
+          if ! /usr/bin/grep -q '^Authority=Developer ID Application: ' <<< "$signature"; then
+            echo "Release app must have a Developer ID Application signature." >&2
+            exit 1
+          fi
+          if ! /usr/bin/grep -Fxq "TeamIdentifier=$APPLE_TEAM_ID" <<< "$signature"; then
+            echo "Release app was signed by an unexpected Apple team." >&2
+            exit 1
+          fi
+          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+          actual_arch="$(/usr/bin/lipo -archs "$app/Contents/MacOS/$executable")"
+          if [[ "$actual_arch" != "$RELEASE_ARCH" ]]; then
+            echo "Release app has unexpected architecture: $actual_arch" >&2
+            exit 1
+          fi
+          xcrun stapler validate "$app"
+          echo "Verified Developer ID signature, Apple team, $RELEASE_ARCH architecture, and stapled notarization ticket."
+
       - name: Collect release assets
         shell: bash
         run: |

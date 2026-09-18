@@ -23,6 +23,11 @@ vi.mock("react/compiler-runtime", async () => {
   const { reactHookHarness } = await import("~/test/reactHookHarness");
   return { c: reactHookHarness.useMemoCache };
 });
+vi.mock("./ImageLightbox", () => ({ ImageLightbox: () => null }));
+vi.mock("~/assets/assetUrls", async () => {
+  const { resolveAssetUrl } = await import("@spiritdevs/client-runtime/state/assets");
+  return { resolveAssetUrl };
+});
 vi.mock("~/state/session", () => ({
   usePreparedConnection: () => ({ _tag: "Some", value: { httpBaseUrl: "https://remote.example" } }),
 }));

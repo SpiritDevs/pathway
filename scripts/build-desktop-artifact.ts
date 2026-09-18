@@ -1801,6 +1801,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
 
   if (platform === "mac") {
     buildConfig.mac = {
+      forceCodeSigning: signed,
+      ...(signed ? { type: "distribution" } : {}),
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
