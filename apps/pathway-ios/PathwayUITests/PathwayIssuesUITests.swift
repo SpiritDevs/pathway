@@ -17,7 +17,7 @@ final class PathwayIssuesUITests: XCTestCase {
         XCTAssertFalse(app.buttons["agent-orchestrator-button"].isHittable)
         capture(app, name: "Issue detail navigation screen")
         app.buttons["issue-detail-actions"].tap()
-        app.buttons["Edit issue"].tap()
+        app.buttons["Edit task"].tap()
         let input = app.descendants(matching: .any).matching(identifier: "issue-title-input").firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 5))
         capture(app, name: "Edit issue sheet from detail")
@@ -30,8 +30,8 @@ final class PathwayIssuesUITests: XCTestCase {
     @MainActor
     func testCreateIssue() throws {
         let app = launchFixture()
-        XCTAssertTrue(app.buttons["New issue"].waitForExistence(timeout: 10))
-        app.buttons["New issue"].tap()
+        XCTAssertTrue(app.buttons["New task"].waitForExistence(timeout: 10))
+        app.buttons["New task"].tap()
         let title = app.descendants(matching: .any).matching(identifier: "issue-title-input").firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         title.tap()
@@ -43,8 +43,8 @@ final class PathwayIssuesUITests: XCTestCase {
     @MainActor
     func testComposerFormattingAndCancel() throws {
         let app = launchFixture()
-        XCTAssertTrue(app.buttons["New issue"].waitForExistence(timeout: 10))
-        app.buttons["New issue"].tap()
+        XCTAssertTrue(app.buttons["New task"].waitForExistence(timeout: 10))
+        app.buttons["New task"].tap()
         let title = app.descendants(matching: .any).matching(identifier: "issue-title-input").firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         title.typeText("Discard this draft")
@@ -56,7 +56,7 @@ final class PathwayIssuesUITests: XCTestCase {
         XCTAssertEqual(description.value as? String, "- [ ] Check the keyboard")
         app.buttons["Cancel"].tap()
         XCTAssertFalse(app.staticTexts["Discard this draft"].exists)
-        app.buttons["New issue"].tap()
+        app.buttons["New task"].tap()
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         XCTAssertEqual(title.value as? String, "")
         XCTAssertFalse(app.buttons["issue-save"].isEnabled)
@@ -65,8 +65,8 @@ final class PathwayIssuesUITests: XCTestCase {
     @MainActor
     func testComposerPropertyCardsPreserveDraft() throws {
         let app = launchFixture()
-        XCTAssertTrue(app.buttons["New issue"].waitForExistence(timeout: 10))
-        app.buttons["New issue"].tap()
+        XCTAssertTrue(app.buttons["New task"].waitForExistence(timeout: 10))
+        app.buttons["New task"].tap()
         let title = app.descendants(matching: .any).matching(identifier: "issue-title-input").firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["issue-save"].isEnabled)
@@ -117,7 +117,7 @@ final class PathwayIssuesUITests: XCTestCase {
         XCTAssertTrue(created.waitForExistence(timeout: 5))
         created.tap()
         app.buttons["issue-detail-actions"].tap()
-        app.buttons["Edit issue"].tap()
+        app.buttons["Edit task"].tap()
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["issue-property-priority"].label.contains("High"))
         XCTAssertTrue(app.buttons["issue-property-assignee"].label.contains("Corey"))

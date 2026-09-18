@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct PathwayIssueDragPayload: Codable, Equatable, Sendable {
+nonisolated struct PathwayIssueDragPayload: Codable, Equatable, Sendable {
     let companyID: String
     let issueID: String
 
@@ -24,13 +24,20 @@ struct PathwayIssueDragPayload: Codable, Equatable, Sendable {
               provider.hasItemConformingToTypeIdentifier(contentType.identifier) else {
             return false
         }
-        provider.loadDataRepresentation(forTypeIdentifier: contentType.identifier) { @Sendable data, _ in
+        provider.loadDataRepresentation(forTypeIdentifier: contentType.identifier,
+                                        completionHandler: completion(perform: perform))
+        return true
+    }
+
+    // Foundation invokes this callback on its item-provider queue, not the UI actor.
+    private nonisolated static func completion(perform: @escaping @MainActor @Sendable (Self) -> Void)
+        -> @Sendable (Data?, (any Error)?) -> Void {
+        { data, _ in
             guard let data, let payload = try? JSONDecoder().decode(Self.self, from: data) else {
                 return
             }
             Task { @MainActor in perform(payload) }
         }
-        return true
     }
 }
 

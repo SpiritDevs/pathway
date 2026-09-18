@@ -53,6 +53,7 @@ struct PathwaySettingsView: View {
                     NavigationLink(company.name) {
                         PathwayEmailSettingsDestination(companyID: company.id)
                     }
+                    .accessibilityIdentifier("settings-email-\(company.id)")
                 }
                 companyEmptyState
             }
