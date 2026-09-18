@@ -1,16 +1,16 @@
-import fs from "node:fs/promises";
-import { createRequire } from "node:module";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeModule from "node:module";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 
 // Keep native Focus assets and identifiers aligned with the desktop picker.
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const require = createRequire(path.join(root, "apps/web/package.json"));
+const root = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "../..");
+const require = NodeModule.createRequire(NodePath.join(root, "apps/web/package.json"));
 const React = require("react");
 const { renderToStaticMarkup } = require("react-dom/server");
 const icons = require("lucide-react");
-const source = await fs.readFile(
-  path.join(root, "apps/web/src/components/focus/FocusIcon.tsx"),
+const source = await NodeFSP.readFile(
+  NodePath.join(root, "apps/web/src/components/focus/FocusIcon.tsx"),
   "utf8",
 );
 const options = [...source.matchAll(/\{ name: "([^"]+)", label: "([^"]+)", icon: (\w+) \}/g)].map(
@@ -71,16 +71,16 @@ ${options.map(({ name, label }) => `        .init(name: "${name}", label: "${lab
 );
 outputs.set(
   "apps/pathway-ios/Pathway/Resources/LUCIDE-LICENSE.txt",
-  await fs.readFile(require.resolve("lucide-react/LICENSE"), "utf8"),
+  await NodeFSP.readFile(require.resolve("lucide-react/LICENSE"), "utf8"),
 );
 for (const [relative, contents] of outputs) {
-  const output = path.join(root, relative);
+  const output = NodePath.join(root, relative);
   if (process.argv.includes("--check")) {
-    if ((await fs.readFile(output, "utf8")) !== contents)
+    if ((await NodeFSP.readFile(output, "utf8")) !== contents)
       throw new Error(`Stale Focus asset: ${relative}`);
   } else {
-    await fs.mkdir(path.dirname(output), { recursive: true });
-    await fs.writeFile(output, contents);
+    await NodeFSP.mkdir(NodePath.dirname(output), { recursive: true });
+    await NodeFSP.writeFile(output, contents);
   }
 }
 console.log(

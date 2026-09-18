@@ -90,7 +90,7 @@ npm stage approve STAGE_ID
 npm view @spiritdevs/pathway@VERSION version os cpu dist-tags --json
 ```
 
-Inspect the downloaded archive's version, Apple Silicon metadata, bundled client/server files, and `dist/resource-monitor/darwin-arm64/pathway-resource-monitor` before approval. Approval prompts for 2FA. Staged versions occupy their version number; on a rerun, inspect an existing stage rather than assuming another upload can replace it. [npm staged publishing reference](https://docs.npmjs.com/cli/v11/commands/npm-stage/).
+Inspect the downloaded archive's version, Apple Silicon metadata, bundled client/server files, and `dist/resource-monitor/darwin-arm64/pathway-resource-monitor` before approval. Wait for npm’s automated review to change the stage status from `validating` to `staged` before approving; an early approval returns HTTP 409 and must be retried after review. Approval prompts for 2FA. Staged versions occupy their version number; on a rerun, inspect an existing stage rather than assuming another upload can replace it. [npm staged publishing reference](https://docs.npmjs.com/cli/v11/commands/npm-stage/).
 
 ## Activation order
 
