@@ -96,3 +96,26 @@ before the listing-expiration index, run `vp exec convex run threadQueue:migrate
 from `packages/backend` against that deployment. The internal migration backfills 128 rows per
 batch and schedules the remaining batches. Existing message ownership and receipt identities are
 preserved; ambiguous legacy lookups require a destination or stable queue ID.
+
+## Removing orphaned delivery records
+
+A delivered queue with no pending or canceled messages is a receipt, not pending work. Web and
+Electron do not render it as a queued sidebar placeholder. Opening an old queue link resolves the
+canonical thread when available; otherwise it explains that the conversation is unavailable.
+Canceled content remains visible and retryable.
+
+Deleting a published thread schedules removal of its completed queue and message receipts. An
+hourly, paginated sweep repairs missed deletes after a 24-hour shell-publication grace period.
+Each deletion rechecks that the canonical thread is absent and that there are no queued,
+accepted, blocked, or canceled messages. Receipt deletion is scoped to the queue identity and
+runs in batches of 32; receipts for existing threads retain their replay protection. This cleanup
+is cloud-owned and applies regardless of client, provider, or connection mode.
+
+Queue uploads have indexed message references so shared files survive deletion of one queue.
+The upload sweep first backfills references for pre-existing messages, then deletes unreferenced
+uploads older than seven days. It preserves storage still registered by issues, calendar events,
+or orchestrator conversations. Fresh uploads have a grace period to finish enqueueing. Both
+sweeps resume through scheduled pages, so retained rows cannot starve later cleanup candidates.
+
+Deploy the backend schema and functions before updated clients. The hourly sweeps also repair
+existing orphaned data; hiding an expired listing alone does not delete its stored records.

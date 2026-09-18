@@ -1,12 +1,16 @@
 // @effect-diagnostics globalDate:off -- Fixtures and queue transitions use Convex epoch milliseconds.
 /** Durable intent, permanent acceptance fencing, recovery, and authorization coverage. */
 import { convexTest } from "convex-test";
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { api, internal } from "../convex/_generated/api.js";
 import type { Id } from "../convex/_generated/dataModel.js";
 import schema from "../convex/schema.ts";
 import type { ThreadQueuePage } from "@spiritdevs/contracts/threadQueue";
+import {
+  QUEUE_ORPHAN_GRACE_MS,
+  QUEUE_DELIVERED_RETENTION_MS,
+} from "../convex/lib/threadQueueRetention.ts";
 
 const RELAY_ISSUER = "https://relay.example.test";
 const CLERK_ISSUER = "https://clerk.example.test";
@@ -934,6 +938,9 @@ describe("durable thread queue", () => {
       submission: withFile,
       attachmentIds: [attachmentId],
     });
+    expect(await t.run((ctx) => ctx.db.query("threadQueueAttachmentReferences").collect())).toEqual(
+      [expect.objectContaining({ attachmentId })],
+    );
     const expectedUrl = await t.run((ctx) => ctx.storage.getUrl(storageId));
     expect((await client.query(api.threadQueue.getThread, queueIdentity)).attachmentUrls).toEqual({
       file_one: expectedUrl,
@@ -1394,5 +1401,168 @@ describe("queue sheet actions", () => {
         targetRunId: "active-run",
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe("orphaned queue cleanup", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  async function delivered(t: Harness) {
+    await seed(t);
+    const saved = await enqueue(t);
+    await asEnvironment(t).mutation(api.threadQueue.accept, firstFence);
+    await asEnvironment(t).mutation(api.threadQueue.acknowledge, firstFence);
+    return saved.thread.queueId! as Id<"threadQueueThreads">;
+  }
+
+  it("removes the queue and its receipts after the publication grace period", async () => {
+    const t = harness();
+    const queueId = await delivered(t);
+    await t.mutation(internal.threadQueue.pruneOrphans, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.run((ctx) => ctx.db.get(queueId))).not.toBeNull();
+    vi.setSystemTime(Date.now() + QUEUE_ORPHAN_GRACE_MS + 1);
+    await t.mutation(internal.threadQueue.pruneOrphans, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.run((ctx) => ctx.db.get(queueId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.query("threadQueueMessages").collect())).toEqual([]);
+  });
+
+  it("cleans up immediately when the owning environment confirms deletion", async () => {
+    const t = harness();
+    const queueId = await delivered(t);
+    await t.run(async (ctx) => {
+      const role = (await ctx.db.query("roles").collect()).find(
+        (row) => row.id === MANAGER_ROLE_ID,
+      )!;
+      await ctx.db.patch(role._id, { permissions: [...role.permissions, "projects.manage"] });
+      const environment = (await ctx.db.query("environmentRegistrations").collect()).find(
+        (row) => row.environmentId === ENVIRONMENT_ONE,
+      )!;
+      await ctx.db.patch(environment._id, { serviceRoleIds: [role.id] });
+    });
+    await asEnvironment(t).mutation(api.agentThreads.remove, {
+      companyId: COMPANY_ID,
+      environmentId: ENVIRONMENT_ONE,
+      threadId: "thread-one",
+    });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.run((ctx) => ctx.db.get(queueId))).toBeNull();
+  });
+
+  it.each(["queued", "accepted", "blocked", "canceled"] as const)(
+    "preserves %s messages even with an inconsistent completed summary",
+    async (state) => {
+      const t = harness();
+      const queueId = await delivered(t);
+      await t.run(async (ctx) => {
+        const message = (await ctx.db.query("threadQueueMessages").first())!;
+        await ctx.db.patch(message._id, { state });
+      });
+      await t.mutation(internal.threadQueue.pruneOrphan, { queueId, confirmedDeletion: true });
+      expect(await t.run((ctx) => ctx.db.get(queueId))).not.toBeNull();
+    },
+  );
+
+  it("preserves receipts when the canonical thread still exists", async () => {
+    const t = harness();
+    const queueId = await delivered(t);
+    await t.run(async (ctx) => {
+      const row = (await ctx.db.get(queueId))!;
+      await ctx.db.insert("agentThreads", {
+        id: `${ENVIRONMENT_ONE}:thread-one`,
+        companyId: row.companyId,
+        environmentId: ENVIRONMENT_ONE,
+        threadId: "thread-one",
+        cloudProjectId: null,
+        localProjectId: null,
+        shell: {},
+        updatedAt: Date.now(),
+      });
+    });
+    vi.setSystemTime(Date.now() + QUEUE_ORPHAN_GRACE_MS + 1);
+    await t.mutation(internal.threadQueue.pruneOrphans, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.run((ctx) => ctx.db.get(queueId))).not.toBeNull();
+  });
+
+  it("drains large queues in bounded batches and preserves the same thread ID on another environment", async () => {
+    const t = harness();
+    const queueId = await delivered(t);
+    const otherId = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...row } = (await ctx.db.get(queueId))!;
+      const otherId = await ctx.db.insert("threadQueueThreads", {
+        ...row,
+        environmentId: ENVIRONMENT_TWO,
+      });
+      const {
+        _id: _messageId,
+        _creationTime: _messageCreated,
+        ...message
+      } = (await ctx.db.query("threadQueueMessages").first())!;
+      for (let i = 0; i < 40; i++)
+        await ctx.db.insert("threadQueueMessages", {
+          ...message,
+          sequence: i + 2,
+          commandId: `command-${i}`,
+          messageId: `message-${i}`,
+        });
+      await ctx.db.insert("threadQueueMessages", { ...message, queueThreadId: otherId });
+      return otherId;
+    });
+    await t.mutation(internal.threadQueue.pruneOrphan, { queueId, confirmedDeletion: true });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.run((ctx) => ctx.db.get(queueId))).toBeNull();
+    expect(await t.run((ctx) => ctx.db.get(otherId))).not.toBeNull();
+    expect(await t.run((ctx) => ctx.db.query("threadQueueMessages").collect())).toHaveLength(1);
+  });
+
+  it("backfills shared attachment references and deletes bytes only after the last message is removed", async () => {
+    const t = harness();
+    const queueId = await delivered(t);
+    const { attachmentId, storageId, otherMessageId } = await t.run(async (ctx) => {
+      const { _id, _creationTime, ...message } = (await ctx.db
+        .query("threadQueueMessages")
+        .first())!;
+      const storageId = await ctx.storage.store(new Blob(["hello"], { type: "text/plain" }));
+      const attachmentId = await ctx.db.insert("threadQueueAttachments", {
+        companyId: message.companyId,
+        issuedByMembershipId: message.issuedByMembershipId,
+        storageId,
+        attachment: {},
+        createdAt: Date.now(),
+      });
+      await ctx.db.patch(_id, {
+        attachmentIds: [attachmentId],
+        attachmentReferencesTracked: undefined,
+      });
+      const {
+        queueThreadId: _queue,
+        attachmentReferencesTracked: _tracked,
+        ...legacyMessage
+      } = message;
+      const otherMessageId = await ctx.db.insert("threadQueueMessages", {
+        ...legacyMessage,
+        threadId: "other-thread",
+        attachmentIds: [attachmentId],
+        state: "queued",
+      });
+      return { attachmentId, storageId, otherMessageId };
+    });
+    vi.setSystemTime(Date.now() + QUEUE_DELIVERED_RETENTION_MS + 1);
+    await t.mutation(internal.threadQueue.pruneAttachments, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await t.mutation(internal.threadQueue.pruneOrphan, { queueId, confirmedDeletion: true });
+    await t.mutation(internal.threadQueue.pruneAttachments, {});
+    expect(await t.run(async (ctx) => (await ctx.storage.get(storageId)) !== null)).toBe(true);
+    await t.run(async (ctx) => {
+      for (const ref of await ctx.db.query("threadQueueAttachmentReferences").collect())
+        if (ref.messageId === otherMessageId) await ctx.db.delete(ref._id);
+      await ctx.db.delete(otherMessageId);
+    });
+    await t.mutation(internal.threadQueue.pruneAttachments, {});
+    expect(await t.run((ctx) => ctx.db.get(attachmentId))).toBeNull();
+    expect(await t.run((ctx) => ctx.storage.get(storageId))).toBeNull();
   });
 });

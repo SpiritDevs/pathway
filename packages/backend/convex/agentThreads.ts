@@ -15,7 +15,10 @@ import {
   requireRecordPermission,
 } from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
-import { finishQueueListingHandoff } from "./lib/threadQueueRetention.ts";
+import {
+  finishQueueListingHandoff,
+  scheduleOrphanQueueCleanup,
+} from "./lib/threadQueueRetention.ts";
 
 const MAX_RECONCILE_REMOVALS = 100;
 /** Must cover every field of the contracts `CloudAgentThreadShell`; upserts with unknown fields are rejected. */
@@ -278,6 +281,7 @@ async function removeRows(
     const project = row.cloudProjectId === null ? null : await ctx.db.get(row.cloudProjectId);
     await deleteThreadAlertPolicies(ctx, row.environmentId, row.threadId);
     await ctx.db.delete(row._id);
+    await scheduleOrphanQueueCleanup(ctx, row.companyId, row.environmentId, row.threadId);
     changes.push({
       entityKind: "agentThread" as const,
       entityId: row.id,
@@ -312,7 +316,10 @@ export const remove = mutation({
           .eq("threadId", threadId),
       )
       .unique();
-    if (row === null) await deleteThreadAlertPolicies(ctx, environmentId, threadId);
+    if (row === null) {
+      await deleteThreadAlertPolicies(ctx, environmentId, threadId);
+      await scheduleOrphanQueueCleanup(ctx, actor.company._id, environmentId, threadId);
+    }
     await removeRows(ctx, actor, row === null ? [] : [row]);
     return null;
   },

@@ -7,6 +7,7 @@ import {
   parseQueuedThreadSearch,
   mergeThreadQueueEntries,
   reconcileQueuedThreadReceipts,
+  isCompletedQueueEntry,
 } from "./threadQueueState";
 const cloud: ThreadQueueThread = {
   threadId: "thread",
@@ -48,6 +49,13 @@ const pending = {
   ),
 };
 describe("queued sidebar handoff", () => {
+  it("hides completed receipts but preserves pending local messages and canceled content", () => {
+    expect(isCompletedQueueEntry(cloud)).toBe(true);
+    expect(isCompletedQueueEntry({ ...cloud, waitingToSync: true })).toBe(false);
+    expect(isCompletedQueueEntry({ ...cloud, queuedCount: 1 })).toBe(false);
+    for (const state of ["queued", "accepted", "blocked", "canceled"] as const)
+      expect(isCompletedQueueEntry({ ...cloud, state })).toBe(false);
+  });
   it("keeps stable queue identities in canonical links and rejects malformed search values", () => {
     expect(parseQueuedThreadSearch({ queueId: "durable-queue", unrelated: true })).toEqual({
       queueId: "durable-queue",

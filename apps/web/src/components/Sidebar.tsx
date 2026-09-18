@@ -4,6 +4,7 @@ import {
   threadQueueEntriesAtom,
   threadQueueDestinationsAtom,
   queuedThreadEnvironmentKeys,
+  isCompletedQueueEntry,
 } from "../cloud/threadQueueState";
 import { CONVERSATIONS_FOCUS_ID } from "@spiritdevs/client-runtime/state/focuses";
 import { GitPullRequestArrowIcon } from "lucide-react";
@@ -2509,7 +2510,8 @@ export default function Sidebar() {
   const routeDraftIdForRows = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
   const queuedThreadRows = useAtomValue(threadQueueEntriesAtom);
   const queuedThreadKeys = useMemo(
-    () => queuedThreadEnvironmentKeys(queuedThreadRows),
+    () =>
+      queuedThreadEnvironmentKeys(queuedThreadRows.filter((row) => !isCompletedQueueEntry(row))),
     [queuedThreadRows],
   );
   const queuedStatusByThreadId = useMemo(
@@ -2530,11 +2532,13 @@ export default function Sidebar() {
       ),
     [queuedThreadRows],
   );
-  const visibleQueuedThreadCount = queuedThreadRows.filter((row) =>
-    row.localProjectId === null
-      ? includeConversations
-      : scopedProjectKeys === null ||
-        scopedProjectKeys.has(`${row.environmentId}:${row.localProjectId}`),
+  const visibleQueuedThreadCount = queuedThreadRows.filter(
+    (row) =>
+      !isCompletedQueueEntry(row) &&
+      (row.localProjectId === null
+        ? includeConversations
+        : scopedProjectKeys === null ||
+          scopedProjectKeys.has(`${row.environmentId}:${row.localProjectId}`)),
   ).length;
   const visibleDraftSessionCount = useComposerDraftStore((store) => {
     let count = 0;

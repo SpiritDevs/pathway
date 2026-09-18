@@ -14,6 +14,12 @@ export const localThreadQueueAtom = Atom.make<
 export const threadQueueSessionRevisionAtom = Atom.make(0).pipe(Atom.keepAlive);
 export const threadQueueHydratedAtom = Atom.make(false).pipe(Atom.keepAlive);
 
+export function isCompletedQueueEntry(
+  row: Pick<ThreadQueueThread, "state" | "queuedCount"> & { waitingToSync?: boolean },
+) {
+  return row.state === "delivered" && row.queuedCount === 0 && !row.waitingToSync;
+}
+
 export function queuedThreadKey(row: {
   queueId?: string;
   environmentId: string;

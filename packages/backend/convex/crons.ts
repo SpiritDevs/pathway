@@ -5,6 +5,19 @@ import { internal } from "./_generated/api.js";
 const crons = cronJobs();
 
 crons.hourly(
+  "prune orphaned delivered thread queues",
+  { minuteUTC: 7 },
+  internal.threadQueue.pruneOrphans,
+  {},
+);
+crons.hourly(
+  "prune unused thread queue uploads",
+  { minuteUTC: 12 },
+  internal.threadQueue.pruneAttachments,
+  {},
+);
+
+crons.hourly(
   "delete abandoned issue attachment uploads",
   { minuteUTC: 17 },
   internal.issueAttachments.gcPending,

@@ -1241,6 +1241,7 @@ export default defineSchema({
     .index("by_company", ["companyId"])
     .index("by_company_and_listing_expiration", ["companyId", "listingExpiresAt"])
     .index("by_listing_expiration", ["listingExpiresAt"])
+    .index("by_state_and_updated", ["state", "updatedAt"])
     .index("by_company_and_thread", ["companyId", "threadId"])
     .index("by_company_and_member", ["companyId", "issuedByMembershipId"])
     .index("by_company_and_environment", ["companyId", "environmentId"])
@@ -1274,6 +1275,7 @@ export default defineSchema({
     /** Immutable original request fingerprint keeps retries safe after edits and moves. */
     submissionFingerprint: v.string(),
     attachmentIds: v.array(v.string()),
+    attachmentReferencesTracked: v.optional(v.boolean()),
     acceptedAt: v.union(v.number(), v.null()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -1284,6 +1286,7 @@ export default defineSchema({
     .index("by_queue_and_state", ["companyId", "threadId", "queueThreadId", "state", "sequence"])
     .index("by_company_and_command", ["companyId", "commandId"])
     .index("by_company_and_message", ["companyId", "messageId"])
+    .index("by_attachment_tracking", ["attachmentReferencesTracked"])
     .index("by_company_thread_and_sequence", ["companyId", "threadId", "sequence"])
     .index("by_company_thread_and_state", ["companyId", "threadId", "state", "sequence"]),
 
@@ -1297,6 +1300,14 @@ export default defineSchema({
   })
     .index("by_storage", ["storageId"])
     .index("by_company_and_member", ["companyId", "issuedByMembershipId"]),
+
+  /** Shared uploads remain alive until their last queued message is removed. */
+  threadQueueAttachmentReferences: defineTable({
+    attachmentId: v.id("threadQueueAttachments"),
+    messageId: v.id("threadQueueMessages"),
+  })
+    .index("by_attachment", ["attachmentId"])
+    .index("by_message", ["messageId"]),
 
   /** Durable Agent Thread metadata. `shell` omits message text and other rich thread content. */
   agentThreads: defineTable({

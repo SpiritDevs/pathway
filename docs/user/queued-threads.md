@@ -52,3 +52,9 @@ history stored on an unavailable environment is not copied by moving queued work
 
 All clients and environments need a version that supports cloud queued delivery. An older
 environment keeps the work queued until it is updated and connected.
+
+Completed deliveries no longer appear as queued threads. If an old link has no available
+conversation, Pathway explains this and offers a way back to your threads. Deleting a thread
+also cleans up its completed cloud delivery records. Missed cleanup is repaired automatically;
+pending work and canceled messages you can retry are preserved. Unused queue uploads are
+removed after seven days.

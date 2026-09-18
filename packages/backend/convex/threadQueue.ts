@@ -45,7 +45,15 @@ import {
 } from "./lib/identity.ts";
 import { domainIdArg } from "./lib/validators.ts";
 import { internal } from "./_generated/api.js";
-import { KEEP_QUEUE_LISTED, QUEUE_DELIVERED_RETENTION_MS } from "./lib/threadQueueRetention.ts";
+import {
+  KEEP_QUEUE_LISTED,
+  QUEUE_DELIVERED_RETENTION_MS,
+  QUEUE_ORPHAN_GRACE_MS,
+  QUEUE_CLEANUP_BATCH_SIZE,
+  trackQueueAttachments,
+  pruneOrphanQueue,
+  pruneQueueAttachment,
+} from "./lib/threadQueueRetention.ts";
 
 const identityArgs = {
   companyId: domainIdArg,
@@ -255,7 +263,10 @@ async function wireThread(
     cloudProjectId: project?.id ?? null,
     title: row.title,
     launch: row.launch,
-    state: row.state,
+    state:
+      row.state === "delivered" && (await threadMessageStateQuery(ctx, row, "canceled").first())
+        ? "canceled"
+        : row.state,
     error: row.error,
     revision: row.revision,
     acceptedAt: row.acceptedAt,
@@ -544,6 +555,7 @@ export const enqueue = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    await trackQueueAttachments(ctx, (await ctx.db.get(messageId))!);
     await ctx.db.patch(thread._id, {
       nextSequence: thread.nextSequence + 1,
       queuedCount: thread.queuedCount + 1,
@@ -1306,5 +1318,57 @@ export const migrateListing = internalMutation({
     if (rows.length === 128)
       await ctx.scheduler.runAfter(0, internal.threadQueue.migrateListing, {});
     return rows.length;
+  },
+});
+
+export const pruneOrphan = internalMutation({
+  args: { queueId: v.id("threadQueueThreads"), confirmedDeletion: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<number> =>
+    pruneOrphanQueue(ctx, args.queueId, args.confirmedDeletion ?? false),
+});
+
+/** Paginated sweep repairs missed removals without expiring offline or accepted work. */
+export const pruneOrphans = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<void> => {
+    const page = await ctx.db
+      .query("threadQueueThreads")
+      .withIndex("by_state_and_updated", (q) =>
+        q.eq("state", "delivered").lt("updatedAt", Date.now() - QUEUE_ORPHAN_GRACE_MS),
+      )
+      .paginate({ cursor: args.cursor ?? null, numItems: QUEUE_CLEANUP_BATCH_SIZE });
+    for (const row of page.page)
+      await ctx.scheduler.runAfter(0, internal.threadQueue.pruneOrphan, { queueId: row._id });
+    if (!page.isDone)
+      await ctx.scheduler.runAfter(0, internal.threadQueue.pruneOrphans, {
+        cursor: page.continueCursor,
+      });
+  },
+});
+
+/** Backfill old message references before collecting any unreferenced uploads. */
+export const pruneAttachments = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<void> => {
+    const untracked = await ctx.db
+      .query("threadQueueMessages")
+      .withIndex("by_attachment_tracking", (q) => q.eq("attachmentReferencesTracked", undefined))
+      .take(QUEUE_CLEANUP_BATCH_SIZE);
+    if (untracked.length > 0) {
+      for (const message of untracked) await trackQueueAttachments(ctx, message);
+      await ctx.scheduler.runAfter(0, internal.threadQueue.pruneAttachments, args);
+      return;
+    }
+    const page = await ctx.db
+      .query("threadQueueAttachments")
+      .withIndex("by_creation_time", (q) =>
+        q.lt("_creationTime", Date.now() - QUEUE_DELIVERED_RETENTION_MS),
+      )
+      .paginate({ cursor: args.cursor ?? null, numItems: QUEUE_CLEANUP_BATCH_SIZE });
+    for (const row of page.page) await pruneQueueAttachment(ctx, row);
+    if (!page.isDone)
+      await ctx.scheduler.runAfter(0, internal.threadQueue.pruneAttachments, {
+        cursor: page.continueCursor,
+      });
   },
 });

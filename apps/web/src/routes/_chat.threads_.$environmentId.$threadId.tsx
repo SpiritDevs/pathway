@@ -4,8 +4,9 @@ import {
   threadQueueHydratedAtom,
   findQueuedThread,
   parseQueuedThreadSearch,
+  isCompletedQueueEntry,
 } from "../cloud/threadQueueState";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import { useEffect } from "react";
 
@@ -38,6 +39,11 @@ function ChatThreadRouteView() {
     : findQueuedThread(queuedThreads, threadRef?.environmentId, threadRef?.threadId);
   const serverThreadShell = useThreadShell(threadRef);
   const serverThreadStatus = useThreadStatus(threadRef);
+  const completedQueue = queuedThread !== undefined && isCompletedQueueEntry(queuedThread);
+  const unavailableQueue =
+    queueHydrated &&
+    serverThreadShell === null &&
+    (completedQueue || (queueId !== undefined && !queuedThread));
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
   const draftThreadExists = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) !== null : false,
@@ -77,10 +83,10 @@ function ChatThreadRouteView() {
       return;
     }
 
-    if (renderState === "missing" && !queuedThread && (!queueId || queueHydrated)) {
+    if (renderState === "missing" && !queuedThread && !queueId) {
       void navigate({ to: "/threads", replace: true });
     }
-  }, [bootstrapComplete, navigate, renderState, threadRef, queuedThread, queueId, queueHydrated]);
+  }, [bootstrapComplete, navigate, renderState, threadRef, queuedThread, queueId]);
 
   useEffect(() => {
     if (!threadRef || !serverThreadStarted || !draftThread) {
@@ -95,11 +101,26 @@ function ChatThreadRouteView() {
 
   return (
     <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
-      {(
-        queuedThread
-          ? queuedThread.environmentId === threadRef.environmentId
-          : renderState === "ready" || (renderState === "loading" && serverThreadShell !== null)
-      ) ? (
+      {unavailableQueue ? (
+        <div
+          className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center"
+          role="status"
+        >
+          <h1 className="text-lg font-medium">This thread is not available</h1>
+          <p className="max-w-md text-sm text-muted-foreground">
+            {completedQueue
+              ? "Your message was delivered, but its conversation is not currently available. There is no work waiting in this queue."
+              : "This saved queue entry is no longer available."}
+          </p>
+          <Link to="/threads" className="text-sm underline underline-offset-4">
+            Back to threads
+          </Link>
+        </div>
+      ) : (
+          queuedThread
+            ? queuedThread.environmentId === threadRef.environmentId
+            : renderState === "ready" || (renderState === "loading" && serverThreadShell !== null)
+        ) ? (
         <ChatView
           environmentId={threadRef.environmentId}
           threadId={threadRef.threadId}

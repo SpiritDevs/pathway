@@ -1,6 +1,10 @@
 import { useAtomValue } from "@effect/atom-react";
 import { Link } from "@tanstack/react-router";
-import { threadQueueEntriesAtom, threadQueueDestinationsAtom } from "../cloud/threadQueueState";
+import {
+  threadQueueEntriesAtom,
+  threadQueueDestinationsAtom,
+  isCompletedQueueEntry,
+} from "../cloud/threadQueueState";
 import { useThreadRefs } from "../state/entities";
 
 export function QueuedThreadSidebar(props: {
@@ -13,6 +17,7 @@ export function QueuedThreadSidebar(props: {
   const existing = new Set(refs.map((ref) => `${ref.environmentId}:${ref.threadId}`));
   const visible = entries.filter(
     (row) =>
+      !isCompletedQueueEntry(row) &&
       !existing.has(`${row.environmentId}:${row.threadId}`) &&
       (row.localProjectId === null
         ? props.includeConversations
