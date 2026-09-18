@@ -9,6 +9,7 @@ import { CheckIcon, ChevronDownIcon, XIcon } from "lucide-react";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { cn } from "~/lib/utils";
 import { shortcutScopeOwnsEvent } from "../ChatView.logic";
+import ChatMarkdown from "../ChatMarkdown";
 
 interface PendingUserInputPanelProps {
   shortcutScope?: "page" | "side-chat";
@@ -245,7 +246,15 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
           that padding or their focus rings get shaved off at the edges. */}
       <CollapsiblePanel className="px-4 sm:px-5">
         <div className="pt-2 pb-0.5">
-          <p className="text-sm text-foreground/90">{activeQuestion.question}</p>
+          <div className="max-h-[min(40dvh,24rem)] overflow-y-auto overscroll-contain">
+            <ChatMarkdown
+              text={activeQuestion.question}
+              cwd={undefined}
+              lineBreaks
+              parseRawHtml={false}
+              className="text-foreground/90"
+            />
+          </div>
           {!canRespond ? (
             <p className="mt-1 text-xs text-muted-foreground">
               This request belonged to a provider process that is no longer available. Interrupt or

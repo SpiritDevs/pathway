@@ -1,6 +1,12 @@
 import { RuntimeRequestId } from "@spiritdevs/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
+import {
+  createRootRoute,
+  createRouter,
+  createMemoryHistory,
+  RouterContextProvider,
+} from "@tanstack/react-router";
 
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import type { PendingUserInput } from "../../session-logic";
@@ -24,20 +30,46 @@ const prompt: PendingUserInput = {
 };
 
 function renderPanel(request = prompt, onDismiss?: () => void) {
+  const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory() });
   return renderToStaticMarkup(
-    <ComposerPendingUserInputPanel
-      pendingUserInputs={[request]}
-      respondingRequestIds={[]}
-      answers={{}}
-      questionIndex={0}
-      onToggleOption={() => {}}
-      onAdvance={() => {}}
-      onDismiss={onDismiss}
-    />,
+    <RouterContextProvider router={router}>
+      <ComposerPendingUserInputPanel
+        pendingUserInputs={[request]}
+        respondingRequestIds={[]}
+        answers={{}}
+        questionIndex={0}
+        onToggleOption={() => {}}
+        onAdvance={() => {}}
+        onDismiss={onDismiss}
+      />
+    </RouterContextProvider>,
   );
 }
 
 describe("ComposerPendingUserInputPanel", () => {
+  it.each([true, false])("renders Markdown in questions (blocking: %s)", (isBlocking) => {
+    const markup = renderPanel({
+      ...prompt,
+      isBlocking,
+      questions: [
+        {
+          ...prompt.questions[0]!,
+          question:
+            "Open [settings](https://example.com/settings).\nKeep this line break.\n\n- Choose **Read and write**.\n- Run `gh secret set TOKEN`.\n\nTell me when you are done.",
+        },
+      ],
+    });
+
+    expect(markup).toContain("<strong>Read and write</strong>");
+    expect(markup).toMatch(/<code[^>]*>gh secret set TOKEN<\/code>/);
+    expect(markup).toContain("<ul>");
+    expect(markup).toContain("<li>");
+    expect(markup).toContain('href="https://example.com/settings"');
+    expect(markup).toContain("<br/>");
+    expect(markup).toContain("<p>Tell me when you are done.</p>");
+    expect(markup).not.toContain("**Read and write**");
+  });
+
   it("renders the header as a disclosure control for the question body", () => {
     const markup = renderPanel();
 
