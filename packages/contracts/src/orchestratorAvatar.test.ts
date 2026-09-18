@@ -35,9 +35,8 @@ describe("orchestrator personality compatibility", () => {
     });
     const changed = { ...personality, shared: { ...personality.shared, curiosity: 90 } };
     expect(resolvePersonality(changed, "replies").curiosity).toBe(90);
-    expect(
-      resolvePersonality({ shared: changed.shared, avatar: changed.avatar }, "replies"),
-    ).toEqual(changed.shared);
+    const { replies: _replies, ...resetReplies } = changed;
+    expect(resolvePersonality(resetReplies, "replies")).toEqual(changed.shared);
     expect(personalityPrompt(personality)).toContain("Energy 80");
     expect(personalityPrompt(personality)).toContain(`Warmth ${DEFAULT_PERSONALITY.warmth}`);
   });

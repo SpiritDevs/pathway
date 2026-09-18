@@ -1,3 +1,4 @@
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import type { ServerProviderUsageSnapshot } from "./providerUsage.ts";
@@ -15,16 +16,16 @@ const sample = (usedPercent = 40, at = now): ServerProviderUsageSnapshot => ({
   accountKey: "account",
   status: "ok",
   source: "provider",
-  fetchedAt: new Date(at).toISOString(),
-  updatedAt: new Date(at).toISOString(),
+  fetchedAt: DateTime.formatIso(DateTime.makeUnsafe(at)),
+  updatedAt: DateTime.formatIso(DateTime.makeUnsafe(at)),
   usageLines: [],
   limits: [
     {
       window: "Weekly",
       windowKey: "weekly",
       usedPercent,
-      fetchedAt: new Date(at).toISOString(),
-      resetsAt: new Date(reset).toISOString(),
+      fetchedAt: DateTime.formatIso(DateTime.makeUnsafe(at)),
+      resetsAt: DateTime.formatIso(DateTime.makeUnsafe(reset)),
     },
   ],
 });
@@ -66,7 +67,7 @@ describe("provider allowance allocation", () => {
       null,
       { ...sample(), stale: true },
       { ...sample(), accountKey: "another-account" },
-      { ...sample(), rateLimitedUntil: new Date(now + 60_000).toISOString() },
+      { ...sample(), rateLimitedUntil: DateTime.formatIso(DateTime.makeUnsafe(now + 60_000)) },
     ]) {
       const waiting = observeProviderAllowance(used, snapshot, now + 2000);
       expect(waiting.state).toBe("unavailable");
@@ -89,7 +90,10 @@ describe("provider allowance allocation", () => {
     const resetSnapshot = {
       ...sample(0, reset),
       limits: [
-        { ...sample(0, reset).limits[0]!, resetsAt: new Date(reset + 3_600_000).toISOString() },
+        {
+          ...sample(0, reset).limits[0]!,
+          resetsAt: DateTime.formatIso(DateTime.makeUnsafe(reset + 3_600_000)),
+        },
       ],
     };
     const expired = observeProviderAllowance(used, resetSnapshot, reset);

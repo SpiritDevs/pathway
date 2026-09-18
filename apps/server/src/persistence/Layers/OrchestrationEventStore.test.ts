@@ -76,6 +76,10 @@ layer("OrchestrationEventStore", (it) => {
       const sql = yield* SqlClient.SqlClient;
       const now = "2026-01-01T00:00:00.000Z";
 
+      // Model stored corruption from before the JSON expression index existed;
+      // otherwise SQLite rejects the fixture before replay reaches its decoder.
+      yield* sql`DROP INDEX idx_orch_events_entity_maintenance`;
+
       yield* sql`
         INSERT INTO orchestration_events (
           event_id,

@@ -128,6 +128,22 @@ const TestLayer = Layer.mergeAll(
 );
 const QuestionDeliveryTestLayer = TestLayer.pipe(Layer.provideMerge(questionAnswerDeliveryLayer));
 
+const seedProject = Effect.fn("seedProject")(function* (projectId: ProjectId) {
+  const projects = yield* ProjectionProjectRepository;
+  yield* projects.upsert({
+    projectId,
+    title: "Lifecycle test project",
+    workspaceRoot: process.cwd(),
+    defaultModelSelection: modelSelection,
+    defaultThreadEnvMode: null,
+    scripts: [],
+    createdAt: "2026-06-22T00:00:00.000Z",
+    updatedAt: "2026-06-22T00:00:00.000Z",
+    deletedAt: null,
+  });
+  return projectId;
+});
+
 const SharedApplicationDataPlaneTestLayer = Layer.merge(
   OrchestrationLayerLive,
   OrchestrationV2LayerLive,
@@ -681,13 +697,15 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
       const threadId = ThreadId.make("runtime-layer-source-control-thread");
+      const projectId = yield* seedProject(ProjectId.make("runtime-layer-source-control-project"));
+
       yield* orchestrator.dispatch({
         type: "thread.create",
         createdBy: "user",
         creationSource: "web",
         commandId: CommandId.make("runtime-layer-source-control-create"),
         threadId,
-        projectId: ProjectId.make("runtime-layer-source-control-project"),
+        projectId,
         title: "Source control marker",
         modelSelection,
         runtimeMode: "full-access",
@@ -748,13 +766,15 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const threadId = ThreadId.make("runtime-layer-edit-restart-thread");
       const originalMessageId = MessageId.make("runtime-layer-edit-restart-original");
 
+      const projectId = yield* seedProject(ProjectId.make("runtime-layer-edit-restart-project"));
+
       yield* orchestrator.dispatch({
         type: "thread.create",
         createdBy: "user",
         creationSource: "web",
         commandId: CommandId.make("runtime-layer-edit-restart-create"),
         threadId,
-        projectId: ProjectId.make("runtime-layer-edit-restart-project"),
+        projectId,
         title: "Edit and restart",
         modelSelection,
         runtimeMode: "full-access",
@@ -1119,13 +1139,15 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const orchestrator = yield* OrchestratorV2;
       const threadId = ThreadId.make("runtime-layer-active-settle-thread");
 
+      const projectId = yield* seedProject(ProjectId.make("runtime-layer-active-settle-project"));
+
       yield* orchestrator.dispatch({
         type: "thread.create",
         createdBy: "user",
         creationSource: "web",
         commandId: CommandId.make("runtime-layer-active-settle-create"),
         threadId,
-        projectId: ProjectId.make("runtime-layer-active-settle-project"),
+        projectId,
         title: "Active settle",
         modelSelection,
         runtimeMode: "full-access",
@@ -1295,13 +1317,17 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const eventSink = yield* EventSinkV2;
       const threadId = ThreadId.make("runtime-layer-settle-after-completion-thread");
 
+      const projectId = yield* seedProject(
+        ProjectId.make("runtime-layer-settle-after-completion-project"),
+      );
+
       yield* orchestrator.dispatch({
         type: "thread.create",
         createdBy: "user",
         creationSource: "web",
         commandId: CommandId.make("runtime-layer-settle-after-completion-create"),
         threadId,
-        projectId: ProjectId.make("runtime-layer-settle-after-completion-project"),
+        projectId,
         title: "Settle after completion",
         modelSelection,
         runtimeMode: "full-access",
@@ -1429,13 +1455,17 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const eventSink = yield* EventSinkV2;
       const threadId = ThreadId.make("runtime-layer-raced-settle-after-completion-thread");
 
+      const projectId = yield* seedProject(
+        ProjectId.make("runtime-layer-raced-settle-after-completion-project"),
+      );
+
       yield* orchestrator.dispatch({
         type: "thread.create",
         createdBy: "user",
         creationSource: "web",
         commandId: CommandId.make("runtime-layer-raced-settle-after-completion-create"),
         threadId,
-        projectId: ProjectId.make("runtime-layer-raced-settle-after-completion-project"),
+        projectId,
         title: "Raced settle after completion",
         modelSelection,
         runtimeMode: "full-access",
@@ -1514,13 +1544,17 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const eventSink = yield* EventSinkV2;
       const threadId = ThreadId.make("runtime-layer-recovered-settle-thread");
 
+      const projectId = yield* seedProject(
+        ProjectId.make("runtime-layer-recovered-settle-project"),
+      );
+
       yield* orchestrator.dispatch({
         type: "thread.create",
         createdBy: "user",
         creationSource: "web",
         commandId: CommandId.make("runtime-layer-recovered-settle-create"),
         threadId,
-        projectId: ProjectId.make("runtime-layer-recovered-settle-project"),
+        projectId,
         title: "Recovered settle after completion",
         modelSelection,
         runtimeMode: "full-access",
@@ -1600,13 +1634,17 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const eventSink = yield* EventSinkV2;
       const threadId = ThreadId.make("runtime-layer-background-only-settle-thread");
 
+      const projectId = yield* seedProject(
+        ProjectId.make("runtime-layer-background-only-settle-project"),
+      );
+
       yield* orchestrator.dispatch({
         type: "thread.create",
         createdBy: "user",
         creationSource: "web",
         commandId: CommandId.make("runtime-layer-background-only-settle-create"),
         threadId,
-        projectId: ProjectId.make("runtime-layer-background-only-settle-project"),
+        projectId,
         title: "Background-only settle after completion",
         modelSelection,
         runtimeMode: "full-access",
@@ -1806,13 +1844,17 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const orchestrator = yield* OrchestratorV2;
       const threadId = ThreadId.make("runtime-layer-cancel-settle-after-completion-thread");
 
+      const projectId = yield* seedProject(
+        ProjectId.make("runtime-layer-cancel-settle-after-completion-project"),
+      );
+
       yield* orchestrator.dispatch({
         type: "thread.create",
         createdBy: "user",
         creationSource: "web",
         commandId: CommandId.make("runtime-layer-cancel-settle-after-completion-create"),
         threadId,
-        projectId: ProjectId.make("runtime-layer-cancel-settle-after-completion-project"),
+        projectId,
         title: "Cancel settle after completion",
         modelSelection,
         runtimeMode: "full-access",
@@ -1872,13 +1914,15 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const orchestrator = yield* OrchestratorV2;
       const threadId = ThreadId.make("runtime-layer-archive-queued-thread");
 
+      const projectId = yield* seedProject(ProjectId.make("runtime-layer-archive-queued-project"));
+
       yield* orchestrator.dispatch({
         type: "thread.create",
         createdBy: "user",
         creationSource: "web",
         commandId: CommandId.make("runtime-layer-archive-queued-create"),
         threadId,
-        projectId: ProjectId.make("runtime-layer-archive-queued-project"),
+        projectId,
         title: "Archive queued work",
         modelSelection,
         runtimeMode: "full-access",
@@ -2164,13 +2208,15 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const orchestrator = yield* OrchestratorV2;
       const threadId = ThreadId.make("runtime-layer-queued-edit-thread");
 
+      const projectId = yield* seedProject(ProjectId.make("runtime-layer-queued-edit-project"));
+
       yield* orchestrator.dispatch({
         type: "thread.create",
         createdBy: "user",
         creationSource: "web",
         commandId: CommandId.make("runtime-layer-queued-edit-create"),
         threadId,
-        projectId: ProjectId.make("runtime-layer-queued-edit-project"),
+        projectId,
         title: "Edit queued work",
         modelSelection,
         runtimeMode: "full-access",

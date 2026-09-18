@@ -388,6 +388,9 @@ it.effect("SQLite: a malformed payload does not hide other recovery candidates",
       store.apply,
       { discard: true },
     );
+    // Model pre-index corruption so the recovery query sees malformed payloads.
+    // The allowance index would otherwise reject the deliberately invalid run.
+    yield* sql`DROP INDEX orchestration_v2_runs_allowance_hold`;
     yield* sql`
       UPDATE orchestration_v2_projection_messages SET payload_json = '{'
       WHERE thread_id = ${badMessage.threadId}

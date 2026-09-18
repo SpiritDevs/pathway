@@ -305,7 +305,7 @@ describe("issue import", () => {
         version: 0,
       });
     });
-    await expect(start(other)).rejects.toThrow("no issue data or workflow edits");
+    await expect(start(other)).rejects.toThrow("no task data or workflow edits");
     expect(seeded.registrationOne).toBeTruthy();
   });
 
