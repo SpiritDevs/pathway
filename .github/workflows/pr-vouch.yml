@@ -2,6 +2,16 @@ name: PR Vouch
 
 on:
   workflow_dispatch:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+  issue_comment:
+    types: [created]
+  push:
+    branches:
+      - main
+    paths:
+      - .github/VOUCHED.td
+      - .github/workflows/pr-vouch.yml
 
 permissions:
   contents: read
@@ -11,7 +21,7 @@ permissions:
 jobs:
   collect-targets:
     name: Collect PR targets
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
     outputs:
       targets: ${{ steps.collect.outputs.targets }}
     steps:
@@ -57,7 +67,7 @@ jobs:
     name: Label PR ${{ matrix.target.number }}
     needs: collect-targets
     if: ${{ needs.collect-targets.outputs.targets != '[]' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ fromJSON(vars.FLEET_MACOS_RUNNER || '["self-hosted","fleet-macos-arm64"]') }}
     concurrency:
       group: pr-vouch-${{ matrix.target.number }}
       cancel-in-progress: true

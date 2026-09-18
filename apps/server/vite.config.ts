@@ -32,7 +32,7 @@ export default mergeConfig(
       },
     },
     pack: {
-      entry: ["src/bin.ts"],
+      entry: ["src/bin.ts", "src/service-launcher.ts"],
       outDir: "dist",
       sourcemap: true,
       clean: true,
@@ -45,6 +45,9 @@ export default mergeConfig(
       },
       define: {
         __PATHWAY_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
+        __PATHWAY_BUILD_HOSTED_APP_URL__: JSON.stringify(
+          repoEnv.PATHWAY_HOSTED_APP_URL?.trim() ?? "",
+        ),
         __PATHWAY_BUILD_RELAY_URL__: JSON.stringify(repoEnv.PATHWAY_RELAY_URL?.trim() ?? ""),
         __PATHWAY_BUILD_CONVEX_URL__: JSON.stringify(repoEnv.PATHWAY_CONVEX_URL?.trim() ?? ""),
         __PATHWAY_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(

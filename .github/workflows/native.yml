@@ -1,6 +1,16 @@
 name: Native Apple clients
 
 on:
+  pull_request:
+    paths:
+      - "apps/pathway-ios/**"
+      - "packages/contracts/**"
+      - "packages/backend/convex/**"
+      - "scripts/ios/**"
+      - "apps/web/src/terminal/ghostty/**"
+      - "native/libghostty-vt/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/native.yml"
   workflow_dispatch:
 
 permissions:
@@ -13,7 +23,7 @@ concurrency:
 jobs:
   native:
     name: ${{ matrix.surface }}
-    runs-on: macos-26
+    runs-on: ${{ fromJSON(vars.FLEET_APPLE_RUNNER || '["self-hosted","fleet-macos-arm64","xcode"]') }}
     timeout-minutes: 35
     strategy:
       fail-fast: false
